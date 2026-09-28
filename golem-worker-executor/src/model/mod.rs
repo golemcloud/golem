@@ -592,6 +592,7 @@ pub enum LookupResult {
 pub struct InvocationContext {
     pub trace_id: TraceId,
     pub spans: HashMap<SpanId, Arc<InvocationContextSpan>>,
+    span_traces: HashMap<SpanId, (TraceId, Vec<String>)>,
     pub root: Arc<InvocationContextSpan>,
     pub trace_states: Vec<String>,
 }
@@ -602,9 +603,11 @@ impl InvocationContext {
         let root = InvocationContextSpan::local().build();
         let mut spans = HashMap::new();
         spans.insert(root.span_id().clone(), root.clone());
+        let span_traces = HashMap::from([(root.span_id().clone(), (trace_id.clone(), Vec::new()))]);
         Self {
             trace_id,
             spans,
+            span_traces,
             root,
             trace_states: Vec::new(),
         }
@@ -619,9 +622,20 @@ impl InvocationContext {
             spans.insert(span.span_id().clone(), span);
         }
 
+        let span_traces = spans
+            .keys()
+            .cloned()
+            .map(|span_id| {
+                (
+                    span_id,
+                    (value.trace_id.clone(), value.trace_states.clone()),
+                )
+            })
+            .collect();
         let result = Self {
             trace_id: value.trace_id,
             spans,
+            span_traces,
             root,
             trace_states: value.trace_states,
         };
@@ -633,6 +647,9 @@ impl InvocationContext {
     pub fn switch_to(&mut self, new_invocation_context: InvocationContext) {
         self.trace_id = new_invocation_context.trace_id;
         self.trace_states = new_invocation_context.trace_states;
+        for (span_id, origin) in new_invocation_context.span_traces {
+            self.span_traces.entry(span_id).or_insert(origin);
+        }
 
         let root_span_id = new_invocation_context.root.span_id();
         let mut reassigned = HashSet::new();
@@ -714,11 +731,34 @@ impl InvocationContext {
         let current_span = self.span(current_span_id)?;
         let span = current_span.start_span(new_span_id);
         self.add_span(span.clone());
+        self.span_traces.insert(
+            span.span_id().clone(),
+            (self.trace_id.clone(), self.trace_states.clone()),
+        );
         Ok(span)
     }
 
     pub fn add_span(&mut self, span: Arc<InvocationContextSpan>) {
+        self.span_traces
+            .entry(span.span_id().clone())
+            .or_insert_with(|| (self.trace_id.clone(), self.trace_states.clone()));
         self.spans.insert(span.span_id().clone(), span);
+    }
+
+    pub fn add_span_with_origin(
+        &mut self,
+        span: Arc<InvocationContextSpan>,
+        trace_id: TraceId,
+        trace_states: Vec<String>,
+    ) {
+        self.span_traces
+            .entry(span.span_id().clone())
+            .or_insert((trace_id, trace_states));
+        self.spans.insert(span.span_id().clone(), span);
+    }
+
+    pub fn span_origin(&self, span_id: &SpanId) -> Option<(TraceId, Vec<String>)> {
+        self.span_traces.get(span_id).cloned()
     }
 
     pub fn finish_span(&mut self, span_id: &SpanId) -> Result<Option<SpanId>, String> {
@@ -728,6 +768,7 @@ impl InvocationContext {
             .as_ref()
             .map(|parent| parent.span_id().clone());
         self.spans.remove(span_id);
+        self.span_traces.remove(span_id);
         Ok(parent_id)
     }
 
@@ -1372,6 +1413,8 @@ mod tests {
     fn switch_to() {
         let stack1 = example_stack_1();
         let (mut ctx, _current_id) = InvocationContext::from_stack(stack1.clone()).unwrap();
+        let retained_span_id = stack1.spans.last().span_id().clone();
+        let retained_origin = ctx.span_origin(&retained_span_id).unwrap();
 
         let mut stack2 = InvocationContextStack::new(
             example_trace_id_2(),
@@ -1391,6 +1434,7 @@ mod tests {
         assert_eq!(ctx.trace_id, example_trace_id_2());
         assert_eq!(ctx.trace_states, vec!["state3=z".to_string()]);
         assert_eq!(ctx.root.span_id(), &example_span_id_1());
+        assert_eq!(ctx.span_origin(&retained_span_id), Some(retained_origin));
 
         let x = ctx.get_attribute_chain(&current_id2, "x").unwrap();
         let y = ctx.get_attribute_chain(&current_id2, "y").unwrap();

@@ -23,7 +23,8 @@ use golem_common::model::http_api_deployment::{
 use golem_common::model::invocation_context::{SpanId, TraceId};
 use golem_test_framework::components::jaeger::{DockerJaeger, Jaeger, JaegerQueryClient};
 use golem_test_framework::components::otel_collector::{
-    DockerOtelCollector, OtelCollector, wait_for_otlp_logs, wait_for_otlp_metrics,
+    DockerOtelCollector, OtelCollector, OtlpKeyValue, OtlpTraceRecord, wait_for_otlp_logs_matching,
+    wait_for_otlp_metrics, wait_for_otlp_traces,
 };
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
@@ -219,6 +220,7 @@ async fn otlp_all_signals_export(
     let mut plugin_params = BTreeMap::new();
     plugin_params.insert("endpoint".to_string(), otel_collector.otlp_http_endpoint());
     plugin_params.insert("signals".to_string(), "traces,logs,metrics".to_string());
+    plugin_params.insert("service-name-mode".to_string(), "agent-type".to_string());
 
     let _component = user
         .component(&env.id, "golem_it_agent_invocation_context_release")
@@ -264,14 +266,109 @@ async fn otlp_all_signals_export(
     let status = response.status();
     let body = response.text().await?;
     info!("HTTP response: {status} - {body}");
+    assert!(
+        status.is_success(),
+        "HTTP invocation failed: {status} - {body}"
+    );
 
     let output_dir = otel_collector.output_dir();
 
-    // Wait for log records — the test component uses println! which produces
-    // OplogEntry::Log entries, converted to OTLP log records by the plugin.
-    // We expect at least 2: "Sending context ... through HTTP" and a broadcast result.
+    let trace_id = trace_id.to_string();
+    let parent_span_id = parent_span_id.to_string();
+    let traces = wait_for_otlp_traces(output_dir, Duration::from_secs(90), |records| {
+        invocation_context_trace_ready(records, &trace_id, &parent_span_id)
+    })
+    .await?;
+    let trace: Vec<_> = traces
+        .iter()
+        .filter(|record| record.span.trace_id == trace_id)
+        .collect();
+    let span_ids: HashSet<_> = trace
+        .iter()
+        .map(|record| record.span.span_id.as_str())
+        .collect();
+
+    for record in &trace {
+        assert_eq!(
+            attribute(&record.resource.attributes, "service.name"),
+            Some("InvocationContextAgent")
+        );
+        assert!(
+            attribute(&record.resource.attributes, "golem.agent.id")
+                .is_some_and(|id| id.contains("InvocationContextAgent(")),
+            "resource should retain the full agent identity: {record:?}"
+        );
+        assert_ne!(
+            record.span.status.as_ref().map(|status| status.code),
+            Some(2)
+        );
+        assert!(
+            record.span.start_time_unix_nano.parse::<u128>()?
+                <= record.span.end_time_unix_nano.parse::<u128>()?,
+            "span has a negative duration: {record:?}"
+        );
+        assert_eq!(record.span.trace_state.as_deref(), Some("test=value"));
+        if let Some(parent) = record.span.parent_span_id.as_deref() {
+            assert!(
+                parent == parent_span_id || span_ids.contains(parent),
+                "span has a parent outside the exported trace: {record:?}"
+            );
+        }
+    }
+
+    for (name, kind) in [
+        ("custom", 1),
+        ("custom2", 1),
+        ("rpc-connection", 3),
+        ("rpc-invocation", 3),
+    ] {
+        assert!(
+            trace
+                .iter()
+                .any(|record| record.span.name == name && record.span.kind == kind),
+            "missing {name} span with OTLP kind {kind}: {trace:?}"
+        );
+    }
+
+    let custom = trace
+        .iter()
+        .find(|record| record.span.name == "custom")
+        .unwrap();
+    let custom2 = trace
+        .iter()
+        .find(|record| record.span.name == "custom2")
+        .unwrap();
+    assert_eq!(
+        custom2.span.parent_span_id.as_deref(),
+        Some(custom.span.span_id.as_str())
+    );
+    assert_eq!(attribute(&custom.span.attributes, "x"), Some("1"));
+    assert_eq!(attribute(&custom.span.attributes, "y"), Some("2"));
+    assert_eq!(attribute(&custom2.span.attributes, "z"), Some("3"));
+
+    for rpc in trace
+        .iter()
+        .filter(|record| record.span.name == "rpc-invocation")
+    {
+        let parent = rpc.span.parent_span_id.as_deref().unwrap();
+        assert!(
+            trace
+                .iter()
+                .any(|record| record.span.span_id == parent && record.span.name == "rpc-connection"),
+            "RPC invocation is not parented by its connection: {rpc:?}"
+        );
+        assert!(attribute(&rpc.span.attributes, "function_name").is_some());
+    }
+
     info!("Waiting for OTLP log records");
-    let logs = wait_for_otlp_logs(output_dir, 2, Duration::from_secs(90)).await?;
+    let logs = wait_for_otlp_logs_matching(output_dir, Duration::from_secs(90), |records| {
+        records
+            .iter()
+            .filter(|record| log_body(record).is_some_and(|body| body.contains("Sending context")))
+            .count()
+            >= 3
+    })
+    .await?;
     info!("Collected {} OTLP log records", logs.len());
 
     let has_sending_context = logs.iter().any(|r| {
@@ -292,6 +389,19 @@ async fn otlp_all_signals_export(
         has_stdout_severity,
         "Expected at least one log record with severity_text=STDOUT (from println!), got: {logs:?}"
     );
+
+    for log in logs
+        .iter()
+        .filter(|record| log_body(record).is_some_and(|body| body.contains("Sending context")))
+    {
+        assert_eq!(log.trace_id.as_deref(), Some(trace_id.as_str()));
+        assert!(
+            log.span_id
+                .as_deref()
+                .is_some_and(|span_id| span_ids.contains(span_id)),
+            "persisted log was not correlated with its emit-time span: {log:?}"
+        );
+    }
 
     // Wait for metric records — the invocation produces many metrics from
     // Create, AgentInvocationStarted/Finished, Start/End (real host calls),
@@ -317,4 +427,112 @@ async fn otlp_all_signals_export(
     }
 
     Ok(())
+}
+
+fn invocation_context_trace_ready(
+    records: &[OtlpTraceRecord],
+    trace_id: &str,
+    parent_span_id: &str,
+) -> bool {
+    let trace: Vec<_> = records
+        .iter()
+        .filter(|record| record.span.trace_id == trace_id)
+        .collect();
+    let span_ids: HashSet<_> = trace
+        .iter()
+        .map(|record| record.span.span_id.as_str())
+        .collect();
+    ["test1", "test2", "test3"].iter().all(|method| {
+        trace.iter().any(|record| {
+            record.span.name == "invoke-exported-function"
+                && attribute(&record.span.attributes, "function_name") == Some(*method)
+        })
+    }) && [
+        ("custom", 1),
+        ("custom2", 1),
+        ("rpc-connection", 2),
+        ("rpc-invocation", 2),
+    ]
+    .iter()
+    .all(|(name, count)| {
+        trace
+            .iter()
+            .filter(|record| record.span.name == *name)
+            .count()
+            >= *count
+    }) && trace.iter().all(|record| {
+        record
+            .span
+            .parent_span_id
+            .as_deref()
+            .is_none_or(|parent| parent == parent_span_id || span_ids.contains(parent))
+    })
+}
+
+#[test]
+fn trace_readiness_waits_for_leaf_method_not_initializations() {
+    fn record(id: &str, parent: &str, name: &str, method: &str) -> OtlpTraceRecord {
+        OtlpTraceRecord {
+            resource: Default::default(),
+            span: serde_json::from_value(serde_json::json!({
+                "traceId": "trace",
+                "spanId": id,
+                "parentSpanId": parent,
+                "name": name,
+                "kind": 1,
+                "startTimeUnixNano": "1",
+                "endTimeUnixNano": "2",
+                "attributes": [{"key": "function_name", "value": {"stringValue": method}}]
+            }))
+            .unwrap(),
+        }
+    }
+
+    let mut records = vec![
+        record("i1", "external", "invoke-exported-function", "initialize"),
+        record("t1", "external", "invoke-exported-function", "test1"),
+        record("c1", "t1", "rpc-connection", ""),
+        record("r1", "c1", "rpc-invocation", ""),
+        record("i2", "r1", "invoke-exported-function", "initialize"),
+        record("t2", "r1", "invoke-exported-function", "test2"),
+        record("s1", "t2", "custom", ""),
+        record("s2", "s1", "custom2", ""),
+        record("c2", "s2", "rpc-connection", ""),
+        record("r2", "c2", "rpc-invocation", ""),
+        record("i3", "r2", "invoke-exported-function", "initialize"),
+    ];
+    assert!(!invocation_context_trace_ready(
+        &records, "trace", "external"
+    ));
+
+    let mut leaf = record("t3", "r2", "invoke-exported-function", "test3");
+    leaf.span.trace_id = "other-trace".to_string();
+    records.push(leaf);
+    assert!(!invocation_context_trace_ready(
+        &records, "trace", "external"
+    ));
+
+    records.last_mut().unwrap().span.trace_id = "trace".to_string();
+    assert!(invocation_context_trace_ready(
+        &records, "trace", "external"
+    ));
+
+    records.last_mut().unwrap().span.parent_span_id = Some("missing-parent".to_string());
+    assert!(!invocation_context_trace_ready(
+        &records, "trace", "external"
+    ));
+}
+
+fn attribute<'a>(attributes: &'a [OtlpKeyValue], key: &str) -> Option<&'a str> {
+    attributes
+        .iter()
+        .find(|attribute| attribute.key == key)
+        .and_then(|attribute| attribute.value.as_ref())
+        .and_then(|value| value.string_value.as_deref())
+}
+
+fn log_body(
+    record: &golem_test_framework::components::otel_collector::OtlpLogRecord,
+) -> Option<&str> {
+    record.body.as_ref()?.string_value.as_deref()
 }

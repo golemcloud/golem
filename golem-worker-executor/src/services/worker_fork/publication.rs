@@ -121,12 +121,15 @@ pub(crate) async fn write_guest_result(
                 observational_owner: None,
                 request: Some(request_payload),
                 durable_function_type: DurableFunctionType::WriteRemote,
+                span_started: None,
             },
             Box::new(move |start_index| OplogEntry::End {
                 timestamp: now,
                 start_index,
                 response: Some(response_payload),
                 forced_commit: false,
+                span_finished: None,
+                span_attributes: None,
             }),
         )
         .await;
@@ -137,6 +140,8 @@ pub(crate) async fn write_guest_result(
                 start_index,
                 response: None,
                 forced_commit: true,
+                span_finished: None,
+                span_attributes: None,
             })
             .await;
     }
@@ -307,6 +312,7 @@ mod tests {
                 timestamp: Timestamp::now_utc(),
                 entity_parent_start_index: None,
                 record,
+                summary: None,
             })
             .await;
         write_guest_result(stage.as_ref(), None, phantom)

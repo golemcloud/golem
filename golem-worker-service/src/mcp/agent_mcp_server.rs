@@ -20,6 +20,7 @@ use crate::mcp::{McpCapabilityLookup, invoke};
 use crate::service::worker::WorkerService;
 use dashmap::DashMap;
 use golem_common::base_model::domain_registration::Domain;
+use golem_common::schema::AgentTypeKind;
 use golem_service_base::mcp::CompiledMcp;
 use poem::http;
 use rmcp::{
@@ -207,6 +208,10 @@ fn agent_capabilities_from_deployment(compiled_mcp: &CompiledMcp) -> AgentCapabi
     );
 
     for registered_agent_type in &compiled_mcp.registered_agent_types {
+        if registered_agent_type.agent_type.kind == AgentTypeKind::HttpRouter {
+            continue;
+        }
+
         tracing::debug!(
             "Processing agent type {} for domain {}: implemented by component {}, methods: {:?}",
             registered_agent_type.agent_type.type_name.0,
@@ -486,5 +491,115 @@ impl ServerHandler for GolemAgentMcpServer {
         self.refresh_tools(authenticated_deployment(&context)?)
             .await?;
         Ok(self.get_info())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::agent_capabilities_from_deployment;
+    use golem_common::model::Empty;
+    use golem_common::model::account::{AccountEmail, AccountId};
+    use golem_common::model::agent::{
+        AgentMode, AgentTypeName, RegisteredAgentTypeImplementer, Snapshotting,
+    };
+    use golem_common::model::application::ApplicationName;
+    use golem_common::model::component::{ComponentId, ComponentRevision};
+    use golem_common::model::deployment::DeploymentRevision;
+    use golem_common::model::domain_registration::Domain;
+    use golem_common::model::environment::{EnvironmentId, EnvironmentName};
+    use golem_common::schema::{
+        AgentConstructorSchema, AgentMethodSchema, AgentTypeKind, AgentTypeSchema, InputSchema,
+        OutputSchema, RegisteredAgentTypeSchema, SchemaGraph,
+    };
+    use golem_service_base::mcp::CompiledMcp;
+    use test_r::test;
+
+    fn agent_type(kind: AgentTypeKind, name: &str) -> RegisteredAgentTypeSchema {
+        RegisteredAgentTypeSchema {
+            agent_type: AgentTypeSchema {
+                kind,
+                type_name: AgentTypeName(name.to_string()),
+                description: String::new(),
+                source_language: String::new(),
+                schema: SchemaGraph::empty(),
+                constructor: AgentConstructorSchema {
+                    name: None,
+                    description: String::new(),
+                    prompt_hint: Some("constructor prompt".to_string()),
+                    input_schema: InputSchema::Parameters(vec![]),
+                },
+                methods: vec![AgentMethodSchema {
+                    name: "call".to_string(),
+                    description: String::new(),
+                    prompt_hint: Some("method prompt".to_string()),
+                    input_schema: InputSchema::Parameters(vec![]),
+                    output_schema: OutputSchema::Unit,
+                    http_endpoint: vec![],
+                    read_only: None,
+                }],
+                dependencies: vec![],
+                mode: AgentMode::Durable,
+                http_mount: None,
+                snapshotting: Snapshotting::Disabled(Empty {}),
+                config: vec![],
+            },
+            implemented_by: RegisteredAgentTypeImplementer {
+                component_id: ComponentId::new(),
+                component_revision: ComponentRevision::INITIAL,
+                component_name: "component".to_string(),
+                account_id: AccountId::new(),
+                account_email: AccountEmail::new("owner@example.com"),
+            },
+        }
+    }
+
+    fn deployment(agent_type: RegisteredAgentTypeSchema) -> CompiledMcp {
+        CompiledMcp {
+            account_id: AccountId::new(),
+            account_email: AccountEmail::new("owner@example.com"),
+            environment_id: EnvironmentId::new(),
+            application_name: ApplicationName("app".to_string()),
+            environment_name: EnvironmentName("dev".to_string()),
+            deployment_revision: DeploymentRevision::INITIAL,
+            domain: Domain("mcp.example.com".to_string()),
+            security_scheme_name: None,
+            security_scheme: None,
+            registered_agent_types: vec![agent_type],
+            tools: vec![],
+        }
+    }
+
+    #[test]
+    fn tooling_corpus_controls_mcp_agent_discovery_by_kind() {
+        let corpus: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../golem-service-base/tests/fixtures/http-handlers/corpus.json"
+        ))
+        .unwrap();
+
+        for id in ["tooling-router-discovery", "tooling-name-not-kind"] {
+            let case = corpus["cases"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|case| case["id"] == id)
+                .unwrap();
+            let kind = match case["input"]["kind"].as_str().unwrap() {
+                "regular" => AgentTypeKind::Regular,
+                "http-router" => AgentTypeKind::HttpRouter,
+                other => panic!("{id}: unsupported agent kind {other}"),
+            };
+            let name = case["input"]["name"].as_str().unwrap_or("Router");
+            let capabilities =
+                agent_capabilities_from_deployment(&deployment(agent_type(kind, name)));
+            let included = !capabilities.tools.is_empty()
+                || !capabilities.resources.is_empty()
+                || !capabilities.prompts.is_empty();
+
+            assert_eq!(
+                included,
+                case["expect"]["included"].as_bool().unwrap(),
+                "{id}"
+            );
+        }
     }
 }

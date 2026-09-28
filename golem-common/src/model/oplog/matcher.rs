@@ -114,6 +114,71 @@ impl PublicOplogEntry {
                             )
                         })
                         .unwrap_or(false)
+                    || params
+                        .span_started
+                        .as_ref()
+                        .map(|span| {
+                            Self::string_match(
+                                &span.span_id.to_string(),
+                                &["span-started".into(), "span-id".into()],
+                                query_path,
+                                query,
+                            ) || Self::string_match(
+                                &span.trace_id.to_string(),
+                                &["span-started".into(), "trace-id".into()],
+                                query_path,
+                                query,
+                            ) || span.trace_states.iter().any(|trace_state| {
+                                Self::string_match(
+                                    trace_state,
+                                    &["span-started".into(), "trace-states".into()],
+                                    query_path,
+                                    query,
+                                )
+                            }) || span.parent_span_id.as_ref().is_some_and(|parent_span_id| {
+                                Self::string_match(
+                                    &parent_span_id.to_string(),
+                                    &["span-started".into(), "parent-span-id".into()],
+                                    query_path,
+                                    query,
+                                )
+                            }) || span.links.iter().any(|link| {
+                                let link_path: [String; 2] =
+                                    ["span-started".into(), "links".into()];
+                                Self::string_match(
+                                    &link.trace_id.to_string(),
+                                    &[
+                                        link_path[0].clone(),
+                                        link_path[1].clone(),
+                                        "trace-id".into(),
+                                    ],
+                                    query_path,
+                                    query,
+                                ) || Self::string_match(
+                                    &link.span_id.to_string(),
+                                    &[link_path[0].clone(), link_path[1].clone(), "span-id".into()],
+                                    query_path,
+                                    query,
+                                ) || link.trace_states.iter().any(|trace_state| {
+                                    Self::string_match(
+                                        trace_state,
+                                        &[
+                                            link_path[0].clone(),
+                                            link_path[1].clone(),
+                                            "trace-states".into(),
+                                        ],
+                                        query_path,
+                                        query,
+                                    )
+                                })
+                            }) || Self::span_attribute_match(
+                                &span.attributes,
+                                &["span-started".into(), "attributes".into()],
+                                query_path,
+                                query,
+                            )
+                        })
+                        .unwrap_or(false)
             }
             PublicOplogEntry::End(params) => {
                 Self::string_match("End", &[], query_path, query)
@@ -130,6 +195,35 @@ impl PublicOplogEntry {
                             )
                         })
                         .unwrap_or(false)
+                    || params
+                        .span_finished
+                        .as_ref()
+                        .map(|span| {
+                            Self::string_match(
+                                &span.span_id.to_string(),
+                                &["span-finished".into(), "span-id".into()],
+                                query_path,
+                                query,
+                            )
+                        })
+                        .unwrap_or(false)
+                    || params
+                        .span_attributes
+                        .as_ref()
+                        .map(|span| {
+                            Self::string_match(
+                                &span.span_id.to_string(),
+                                &["span-attributes".into(), "span-id".into()],
+                                query_path,
+                                query,
+                            ) || Self::span_attribute_match(
+                                &span.attributes,
+                                &["span-attributes".into(), "attributes".into()],
+                                query_path,
+                                query,
+                            )
+                        })
+                        .unwrap_or(false)
             }
             PublicOplogEntry::Cancelled(params) => {
                 Self::string_match("Cancelled", &[], query_path, query)
@@ -141,6 +235,18 @@ impl PublicOplogEntry {
                             Self::match_typed_schema_value(
                                 partial,
                                 &["partial".to_string()],
+                                query_path,
+                                query,
+                            )
+                        })
+                        .unwrap_or(false)
+                    || params
+                        .span_finished
+                        .as_ref()
+                        .map(|span| {
+                            Self::string_match(
+                                &span.span_id.to_string(),
+                                &["span-finished".into(), "span-id".into()],
                                 query_path,
                                 query,
                             )
@@ -378,47 +484,6 @@ impl PublicOplogEntry {
                 Self::string_match("cancel", &[], query_path, query)
                     || Self::string_match("cancel-invocation", &[], query_path, query)
                     || Self::string_match(&params.idempotency_key.value, &[], query_path, query)
-            }
-            PublicOplogEntry::StartSpan(params) => {
-                Self::string_match("startspan", &[], query_path, query)
-                    || Self::string_match("start-span", &[], query_path, query)
-                    || Self::string_match(&params.span_id.to_string(), &[], query_path, query)
-                    || Self::string_match(
-                        &params
-                            .parent_id
-                            .as_ref()
-                            .map(|id| id.to_string())
-                            .unwrap_or_default(),
-                        &[],
-                        query_path,
-                        query,
-                    )
-                    || Self::string_match(
-                        &params
-                            .linked_context
-                            .as_ref()
-                            .map(|id| id.to_string())
-                            .unwrap_or_default(),
-                        &[],
-                        query_path,
-                        query,
-                    )
-                    || Self::span_attribute_match(&params.attributes, &[], query_path, query)
-            }
-            PublicOplogEntry::FinishSpan(params) => {
-                Self::string_match("finishspan", &[], query_path, query)
-                    || Self::string_match("finish-span", &[], query_path, query)
-                    || Self::string_match(&params.span_id.to_string(), &[], query_path, query)
-            }
-            PublicOplogEntry::SetSpanAttribute(params) => {
-                let attributes = vec![PublicAttribute {
-                    key: params.key.clone(),
-                    value: params.value.clone(),
-                }];
-                Self::string_match("setspanattribute", &[], query_path, query)
-                    || Self::string_match("set-span-attribute", &[], query_path, query)
-                    || Self::string_match(&params.key, &[], query_path, query)
-                    || Self::span_attribute_match(&attributes, &[], query_path, query)
             }
             PublicOplogEntry::BeginRemoteTransaction(_params) => {
                 Self::string_match("beginremotetransaction", &[], query_path, query)

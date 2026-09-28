@@ -87,7 +87,7 @@ use golem_common::base_model::oplog::OplogEntry;
 use golem_common::base_model::{AgentFingerprint, AgentId, OplogIndex};
 use golem_common::model::OwnedAgentId;
 use golem_common::model::agent::{AgentError, AgentMode};
-use golem_common::model::oplog::payload::OplogPayload;
+use golem_common::model::oplog::{DurableStreamEventSummary, payload::OplogPayload};
 use golem_schema::schema::{
     SchemaFingerprintV1, SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue,
 };

@@ -1007,13 +1007,6 @@ impl DeploymentContext {
             let mut registered_agent_types = Vec::new();
             let mut native_tools = Vec::new();
 
-            if mcp_deployment.agents.is_empty() && mcp_deployment.tools.is_empty() {
-                errors.push(DeployValidationError::McpDeploymentEmpty {
-                    mcp_deployment_domain: domain.clone(),
-                });
-                continue;
-            }
-
             let mut unique_scheme_names: HashSet<&SecuritySchemeName> = HashSet::new();
             for (agent_type, agent_options) in &mcp_deployment.agents {
                 let registered_agent_type = ok_or_continue!(
@@ -1025,6 +1018,12 @@ impl DeploymentContext {
                     ),
                     errors
                 );
+
+                if registered_agent_type.agent_type.kind
+                    == golem_common::schema::AgentTypeKind::HttpRouter
+                {
+                    continue;
+                }
 
                 registered_agent_types.push(RegisteredAgentTypeSchema {
                     agent_type: registered_agent_type.agent_type.clone(),
@@ -1118,10 +1117,15 @@ impl DeploymentContext {
                 }
             }
 
-            let mut names = mcp_deployment
-                .agents
-                .keys()
-                .filter_map(|agent_name| self.registered_agent_types.get(agent_name))
+            if registered_agent_types.is_empty() && native_tools.is_empty() {
+                errors.push(DeployValidationError::McpDeploymentEmpty {
+                    mcp_deployment_domain: domain.clone(),
+                });
+                continue;
+            }
+
+            let mut names = registered_agent_types
+                .iter()
                 .flat_map(|agent| {
                     agent.agent_type.methods.iter().filter_map(|method| {
                         let has_user_input = method.input_schema.fields().iter().any(|field| {

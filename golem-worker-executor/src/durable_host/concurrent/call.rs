@@ -56,6 +56,13 @@ pub struct LeaveIncompleteOnDrop;
 /// unfinished is a bug (default-deny).
 pub struct NotCancellable;
 
+/// Host-owned span bookkeeping. Notifications do not select call outcomes or affect replay
+/// matching; they transfer the tracing ownership of records selected by the ordinary call path.
+pub(crate) trait CallSpanObserver: std::fmt::Debug + Send + Sync {
+    fn started(self: Arc<Self>, index: OplogIndex, entry: &OplogEntry, replay: bool);
+    fn closed(&self, finished: &golem_common::model::oplog::SpanFinished);
+}
+
 impl DropPolicy for Cancellable {
     fn production_drop_sink(
         sink: Option<UnboundedSender<DropEvent>>,
@@ -65,6 +72,7 @@ impl DropPolicy for Cancellable {
 
     fn unfinished_drop(call: DroppedCall, sink: Option<&UnboundedSender<DropEvent>>) {
         if let Some(sink) = sink {
+            call.notify_span_closed();
             let _ = sink.send(DropEvent::UnfinishedCancellable { call });
         } else {
             // Production always attaches the worker's dropped-call event sink; a missing sink
@@ -137,6 +145,9 @@ pub struct DurableCallSession<Pair: HostPayloadPair, P: DropPolicy> {
     /// Replay-side resolver receiver; `Some` only for replay handles.
     pub(super) replay: Option<ReplayCallHandle>,
     pub(super) finished: bool,
+    /// Span closed by a guest cancellation of this call, including a dropped host future.
+    pub(super) cancellation_span_id: Option<SpanId>,
+    pub(super) span_observer: Option<Arc<dyn CallSpanObserver>>,
     /// `true` when this replay handle parked on a recorded terminal that was never delivered to
     /// the guest — a `Cancelled { partial: None }` or an `End` marked `CompletionDiscarded` —
     /// waiting for the deterministic guest to drop it at the same point it did live. Makes that
@@ -731,6 +742,14 @@ pub(crate) enum ReplayAccessStartOutcome<H> {
     ReplayEnded,
 }
 
+/// Builds a call's span metadata from the assigned durable `Start` index during the oplog's
+/// serialized writer step.
+pub(crate) type BuildSpanCallback = Box<
+    dyn FnOnce(OplogIndex) -> Result<golem_common::model::oplog::SpanStarted, WorkerExecutorError>
+        + Send,
+>;
+
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum ResolvedCall<Pair: HostPayloadPair, P: DropPolicy> {
     Replay(DurableCallSession<Pair, P>),
     Live(BegunCall<Pair, P>),
@@ -903,6 +922,17 @@ impl<H: DurabilityHost + Send + Sync> DurabilityHost for ScopedRetryHost<'_, H> 
             .await
     }
 
+    async fn begin_durable_function_with_span(
+        &mut self,
+        function_type: &DurableFunctionType,
+        host_function: &str,
+        span_started: golem_common::model::oplog::SpanStarted,
+    ) -> Result<(OplogIndex, golem_common::model::oplog::SpanStarted), WorkerExecutorError> {
+        self.inner
+            .begin_durable_function_with_span(function_type, host_function, span_started)
+            .await
+    }
+
     async fn end_durable_function(
         &mut self,
         function_type: &DurableFunctionType,
@@ -911,6 +941,23 @@ impl<H: DurabilityHost + Send + Sync> DurabilityHost for ScopedRetryHost<'_, H> 
     ) -> Result<(), WorkerExecutorError> {
         self.inner
             .end_durable_function(function_type, begin_index, forced_commit)
+            .await
+    }
+
+    async fn end_durable_function_with_span(
+        &mut self,
+        function_type: &DurableFunctionType,
+        begin_index: OplogIndex,
+        forced_commit: bool,
+        span_finished: golem_common::model::oplog::SpanFinished,
+    ) -> Result<(), WorkerExecutorError> {
+        self.inner
+            .end_durable_function_with_span(
+                function_type,
+                begin_index,
+                forced_commit,
+                span_finished,
+            )
             .await
     }
 
@@ -1062,12 +1109,9 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
 
     /// Like [`Self::start_access`], but the request payload is built by `build_request` *between*
     /// the durable-scope open and the host-call `Start` write/claim. This is the accessor
-    /// counterpart of the two-step [`Self::begin`] + [`BegunCall::start_live`] flow: it exists for
-    /// calls that must interleave other positional oplog entries (e.g. a `StartSpan`) between the
-    /// scope `Start` and the host-call `Start`.
+    /// counterpart of the two-step [`Self::begin`] + [`BegunCall::start_live`] flow.
     ///
-    /// The builder runs on **both** the live and the replay path (so positional side entries it
-    /// replays, like `StartSpan`, are consumed in the same order they were written), but its
+    /// The builder runs on **both** the live and the replay path, but its
     /// returned request is only persisted on the live path. It receives an [`AccessStartContext`]
     /// with the liveness flag.
     ///
@@ -1111,6 +1155,109 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         Ctx: WorkerCtx,
         F: AsyncFnOnce(AccessStartContext) -> Result<Pair::Req, WorkerExecutorError>,
     {
+        let mut handle = Self::start_access_with_options_and_span_builder(
+            store,
+            get_ctx,
+            function_type,
+            claim_options,
+            build_request,
+            None,
+            None,
+        )
+        .await?;
+        handle
+            .supersede_prior_completion_delivery(store, get_ctx)
+            .await?;
+        Ok(handle)
+    }
+
+    /// Starts an accessor call with metadata prepared before its immutable `Start` is appended.
+    pub(crate) async fn start_access_with_options_and_span<T, D, Ctx, F>(
+        store: &Accessor<T, D>,
+        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+        function_type: DurableFunctionType,
+        claim_options: AccessClaimOptions,
+        build_request: F,
+        span_started: golem_common::model::oplog::SpanStarted,
+    ) -> Result<Self, WorkerExecutorError>
+    where
+        T: 'static,
+        D: HasData + ?Sized,
+        Ctx: WorkerCtx,
+        F: AsyncFnOnce(AccessStartContext) -> Result<Pair::Req, WorkerExecutorError>,
+    {
+        let mut handle = Self::start_access_with_options_and_span_builder(
+            store,
+            get_ctx,
+            function_type,
+            claim_options,
+            build_request,
+            Some(Box::new(move |_| Ok(span_started))),
+            None,
+        )
+        .await?;
+        handle
+            .supersede_prior_completion_delivery(store, get_ctx)
+            .await?;
+        Ok(handle)
+    }
+
+    /// Starts an accessor call whose opening span identity is derived from the reserved host-call
+    /// `Start` index. The span metadata is constructed inside the same serialized oplog step that
+    /// appends the immutable `Start`; replay claims the call by its ordinary execution identity
+    /// and reads the recorded metadata afterwards.
+    pub(crate) async fn start_access_with_options_and_indexed_span<T, D, Ctx, F, S>(
+        store: &Accessor<T, D>,
+        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+        function_type: DurableFunctionType,
+        claim_options: AccessClaimOptions,
+        build_request: F,
+        build_span: S,
+        span_observer: Arc<dyn CallSpanObserver>,
+    ) -> Result<Self, WorkerExecutorError>
+    where
+        T: 'static,
+        D: HasData + ?Sized,
+        Ctx: WorkerCtx,
+        F: AsyncFnOnce(AccessStartContext) -> Result<Pair::Req, WorkerExecutorError>,
+        S: FnOnce(
+                OplogIndex,
+            )
+                -> Result<golem_common::model::oplog::SpanStarted, WorkerExecutorError>
+            + Send
+            + 'static,
+    {
+        let mut handle = Self::start_access_with_options_and_span_builder(
+            store,
+            get_ctx,
+            function_type,
+            claim_options,
+            build_request,
+            Some(Box::new(build_span)),
+            Some(span_observer.clone()),
+        )
+        .await?;
+        // This entry point's caller registers its own early terminal observer after checking
+        // for a prior one. Clearing here would destroy the current call's span observer.
+        handle.span_observer = Some(span_observer);
+        Ok(handle)
+    }
+
+    async fn start_access_with_options_and_span_builder<T, D, Ctx, F>(
+        store: &Accessor<T, D>,
+        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+        function_type: DurableFunctionType,
+        claim_options: AccessClaimOptions,
+        build_request: F,
+        build_span: Option<BuildSpanCallback>,
+        span_observer: Option<Arc<dyn CallSpanObserver>>,
+    ) -> Result<Self, WorkerExecutorError>
+    where
+        T: 'static,
+        D: HasData + ?Sized,
+        Ctx: WorkerCtx,
+        F: AsyncFnOnce(AccessStartContext) -> Result<Pair::Req, WorkerExecutorError>,
+    {
         // Capture the immutable task-context snapshot synchronously, before the first await. The
         // store window below validates it against worker state and moves the owner into the call's
         // execution scope.
@@ -1139,7 +1286,16 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             return Err(err.source);
         }
 
-        match Self::execute_access_start(store, get_ctx, prepared, build_request).await {
+        match Self::execute_access_start(
+            store,
+            get_ctx,
+            prepared,
+            build_request,
+            build_span,
+            span_observer,
+        )
+        .await
+        {
             Ok(executed) => {
                 let result = store.with(|mut access| {
                     let ctx = get_ctx(access.data_mut());
@@ -1148,11 +1304,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 if result.is_ok() {
                     start_guard.disarm();
                 }
-                let mut handle = result?;
-                handle
-                    .supersede_prior_completion_delivery(store, get_ctx)
-                    .await?;
-                Ok(handle)
+                result
             }
             Err((err, cleanup)) => {
                 store.with(|mut access| {
@@ -1681,6 +1833,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
         mut prepared: PreparedAccessStart<Pair, P, Ctx>,
         build_request: F,
+        build_span: Option<BuildSpanCallback>,
+        span_observer: Option<Arc<dyn CallSpanObserver>>,
     ) -> Result<ExecutedAccessStart<Pair, P>, (WorkerExecutorError, AccessStartCleanup)>
     where
         T: 'static,
@@ -1765,9 +1919,23 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                                 },
                             )
                         })?;
+                let observer = span_observer.clone().map(|observer| {
+                    let activity = store.with(|mut access| {
+                        get_ctx(access.data_mut()).tail_work_tracker().activity()
+                    });
+                    (observer, Arc::new(activity))
+                });
                 let outcome = prepared
                     .replay_state
-                    .claim_start_for_store(claim, store_continued_live)
+                    .claim_start_for_store_observed(
+                        claim,
+                        store_continued_live,
+                        move |index, entry| {
+                            if let Some((observer, _activity)) = &observer {
+                                observer.clone().started(index, entry, true);
+                            }
+                        },
+                    )
                     .await
                     .map_err(|err| {
                         (
@@ -1952,19 +2120,48 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 let function_type = retry.function_type().clone();
                 let parent_start_index = execution_scope.parent_start_index;
                 let observational_owner = execution_scope.observational_owner;
+                let span_started = Arc::new(std::sync::Mutex::new((OplogIndex::INITIAL, None)));
+                let built_span = span_started.clone();
+                let span_activity = span_observer.as_ref().map(|_| {
+                    store.with(|mut access| {
+                        get_ctx(access.data_mut()).tail_work_tracker().activity()
+                    })
+                });
                 let (start_idx, request_upload) = prepared
                     .oplog
-                    .add_start_with_reserved_payload(request, move |request_payload| {
-                        OplogEntry::Start {
-                            timestamp: Timestamp::now_utc(),
-                            parent_start_index,
-                            function_name: Pair::HOST_FUNCTION_NAME,
-                            invocation_id: None,
-                            observational_owner,
-                            request: Some(request_payload),
-                            durable_function_type: function_type,
-                        }
-                    })
+                    .add_start_with_indexed_reserved_payload(
+                        move |start_index| {
+                            let started = build_span
+                                .map(|builder| builder(start_index).map(Box::new))
+                                .transpose()
+                                .map_err(|error| error.to_string())?;
+                            *built_span.lock().unwrap() = (start_index, started);
+                            Ok(request)
+                        },
+                        move |request_payload| {
+                            let (start_index, span_started) = {
+                                let mut built = span_started.lock().unwrap();
+                                (built.0, built.1.take())
+                            };
+                            let entry = OplogEntry::Start {
+                                timestamp: Timestamp::now_utc(),
+                                parent_start_index,
+                                function_name: Pair::HOST_FUNCTION_NAME,
+                                invocation_id: None,
+                                observational_owner,
+                                request: Some(request_payload),
+                                durable_function_type: function_type,
+                                span_started,
+                            };
+                            // All fallible preparation is complete. The actor pushes this entry
+                            // without yielding; cleanup enqueued here follows the current job.
+                            if let Some(observer) = span_observer {
+                                observer.started(start_index, &entry, false);
+                            }
+                            drop(span_activity);
+                            entry
+                        },
+                    )
                     .await
                     .map_err(|err| {
                         (
@@ -2555,6 +2752,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 observational_owner: prepared.execution_scope.observational_owner,
                 request: None,
                 durable_function_type: function_type,
+                span_started: None,
             })
             .await
     }
@@ -2585,6 +2783,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             request_upload: executed.request_upload,
             replay: executed.replay,
             finished: false,
+            cancellation_span_id: None,
+            span_observer: None,
             parked_undelivered_replay: false,
             execution_scope: executed.execution_scope,
             retry: executed.retry,
@@ -2737,6 +2937,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             boundary,
             execution_scope,
             retry,
+            request_identity: None,
             requires_agent_authority,
             agent_auth_ctx,
             drop_sink: P::production_drop_sink(ctx.state.dropped_call_event_sender()),
@@ -2751,6 +2952,10 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
 
     pub fn start_index(&self) -> OplogIndex {
         self.start_idx
+    }
+
+    pub(crate) fn is_persisted(&self) -> bool {
+        self.persisted || !self.is_live
     }
 
     pub(crate) fn take_historical_reconstruction(&mut self) -> Option<HistoricalReconstruction> {
@@ -2793,8 +2998,40 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         })
     }
 
-    pub(crate) fn parent_start_index(&self) -> Option<OplogIndex> {
-        self.execution_scope.durable_scope
+    /// Returns tracing metadata carried by the claimed `Start`. This is deliberately loaded only
+    /// after the ordinary call claim has selected the operation; tracing metadata never
+    /// participates in request matching or cursor routing.
+    pub async fn recorded_span_started<Ctx: WorkerCtx>(
+        &self,
+        ctx: &DurableWorkerCtx<Ctx>,
+    ) -> Result<Option<golem_common::model::oplog::SpanStarted>, WorkerExecutorError> {
+        match ctx.state.oplog.read(self.start_idx).await {
+            OplogEntry::Start { span_started, .. } => Ok(span_started.map(|span| *span)),
+            entry => Err(WorkerExecutorError::unexpected_oplog_entry(
+                format!("Start at {}", self.start_idx),
+                format!("{entry:?}"),
+            )),
+        }
+    }
+
+    pub(crate) async fn recorded_span_started_access<T, D, Ctx>(
+        &self,
+        store: &Accessor<T, D>,
+        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+    ) -> Result<Option<golem_common::model::oplog::SpanStarted>, WorkerExecutorError>
+    where
+        T: 'static,
+        D: HasData + ?Sized,
+        Ctx: WorkerCtx,
+    {
+        let oplog = store.with(|mut access| get_ctx(access.data_mut()).state.oplog.clone());
+        match oplog.read(self.start_idx).await {
+            OplogEntry::Start { span_started, .. } => Ok(span_started.map(|span| *span)),
+            entry => Err(WorkerExecutorError::unexpected_oplog_entry(
+                format!("Start at {}", self.start_idx),
+                format!("{entry:?}"),
+            )),
+        }
     }
 
     /// The index returned by `begin_durable_function`: the durable scope `Start` for a
@@ -2823,6 +3060,10 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
 
     pub(crate) fn is_observational(&self) -> bool {
         self.observational_owner().is_some()
+    }
+
+    pub(crate) fn close_span_on_cancellation(&mut self, span_id: SpanId) {
+        self.cancellation_span_id = Some(span_id);
     }
 
     /// Low-level abandon: marks the call as finished without writing anything to the oplog, leaving
@@ -2870,6 +3111,14 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             atomic_lease: self.execution_scope.atomic_lease.clone(),
             trap_context: self.trap_context(),
             live_call_permit,
+            span_observer: self.span_observer.clone(),
+            span_finished: self.cancellation_span_id.as_ref().map(|span_id| {
+                golem_common::model::oplog::SpanFinished {
+                    span_id: span_id.clone(),
+                    finished_at: Timestamp::now_utc(),
+                    outcome: golem_common::model::oplog::SpanOutcome::Cancelled,
+                }
+            }),
         }
     }
 
@@ -3221,7 +3470,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     {
         match live_action().await {
             Ok(response) => self
-                .complete_access_deferred(store, get_ctx, response, None)
+                .complete_access_deferred(store, get_ctx, response)
                 .await
                 .map_err(|error| E::from_durable_call_trap(error.into_marked_anyhow())),
             Err(error) => Err(E::from_durable_call_trap(self.trap(error))),
@@ -3267,7 +3516,39 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             self.abandon_for_trap();
             return Err(err);
         }
-        self.complete_impl(ctx, response)
+        self.complete_impl(ctx, response, None, None)
+            .await
+            .map_err(|source| TerminalCallError::new(source, context))
+    }
+
+    pub async fn complete_with_span<Ctx: WorkerCtx>(
+        mut self,
+        ctx: &mut DurableWorkerCtx<Ctx>,
+        response: Pair::Resp,
+        span_finished: golem_common::model::oplog::SpanFinished,
+    ) -> Result<Pair::Resp, TerminalCallError> {
+        let context = self.trap_context();
+        if let Err(err) = drain_queued_dropped_call_events(ctx).await {
+            self.abandon_for_trap();
+            return Err(err);
+        }
+        self.complete_impl(ctx, response, Some(span_finished), None)
+            .await
+            .map_err(|source| TerminalCallError::new(source, context))
+    }
+
+    pub async fn complete_with_span_attributes<Ctx: WorkerCtx>(
+        mut self,
+        ctx: &mut DurableWorkerCtx<Ctx>,
+        response: Pair::Resp,
+        span_attributes: golem_common::model::oplog::SpanAttributes,
+    ) -> Result<Pair::Resp, TerminalCallError> {
+        let context = self.trap_context();
+        if let Err(err) = drain_queued_dropped_call_events(ctx).await {
+            self.abandon_for_trap();
+            return Err(err);
+        }
+        self.complete_impl(ctx, response, None, Some(span_attributes))
             .await
             .map_err(|source| TerminalCallError::new(source, context))
     }
@@ -3276,6 +3557,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         mut self,
         ctx: &mut DurableWorkerCtx<Ctx>,
         response: Pair::Resp,
+        span_finished: Option<golem_common::model::oplog::SpanFinished>,
+        span_attributes: Option<golem_common::model::oplog::SpanAttributes>,
     ) -> Result<Pair::Resp, WorkerExecutorError> {
         debug_assert!(self.is_live, "complete() called on a replay handle");
         // This is the call's legitimate terminal; mark it finished up front so that a failure of the
@@ -3289,6 +3572,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 &self.request_upload,
                 self.start_idx,
                 response,
+                span_finished,
+                span_attributes,
             )
             .await
             {
@@ -3312,7 +3597,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             oplog.add(end).await;
             self.execution_scope.release_atomic_lease();
             DurableCallCoordinator::new(ctx)
-                .finish(self.retry.function_type(), self.boundary, false)
+                .finish(self.retry.function_type(), self.boundary, false, None)
                 .await?;
             response
         } else {
@@ -3342,7 +3627,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             return Err(err);
         }
         let (response, delivery) = self
-            .complete_access_impl(store, get_ctx, response, None)
+            .complete_access_impl(store, get_ctx, response)
             .await
             .map_err(|source| TerminalCallError::new(source, context))?;
         // Non-deferred boundary: no fallible guest-facing work follows the host return, so hand
@@ -3356,24 +3641,41 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         Ok(response)
     }
 
+    /// Completes at the ordinary accessor boundary with a span transition on the terminal.
+    pub(crate) async fn complete_access_with_span<T, D, Ctx>(
+        self,
+        store: &Accessor<T, D>,
+        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+        response: Pair::Resp,
+        span_finished: golem_common::model::oplog::SpanFinished,
+    ) -> Result<Pair::Resp, TerminalCallError>
+    where
+        T: 'static,
+        D: HasData + ?Sized,
+        Ctx: WorkerCtx,
+    {
+        let context = self.trap_context();
+        let (response, delivery) = self
+            .complete_access_deferred_with_span(store, get_ctx, response, span_finished)
+            .await?;
+        delivery
+            .deliver_at_accessor_terminal(store)
+            .await
+            .map_err(|source| TerminalCallError::new(source, context))?;
+        Ok(response)
+    }
+
     /// Like [`Self::complete_access`], but for call sites whose response crosses one more
     /// fallible/cancellable boundary after the durable terminal (a second-stage channel send, a
     /// span finish before the host method returns, a wire conversion). Returns the response
     /// together with an armed [`CompletionDelivery`] token; the caller must consume the token at
     /// the real guest-facing boundary (`delivered` / `suppress` / `discarded`), and a torn future
     /// in between records the `CompletionDiscarded` marker via the token's drop.
-    ///
-    /// `post_end_entry` (e.g. the call's durable `FinishSpan`) is appended by the same owned task
-    /// as the terminal `End`, so it is recorded even when this future is torn mid-completion:
-    /// replay can then rely on the entry unconditionally following the `End` — the recorded
-    /// discard marker (a hint entry) always sorts after both. Callers passing it must *not*
-    /// append the entry themselves and only perform its in-memory effect.
     pub async fn complete_access_deferred<T, D, Ctx>(
         mut self,
         store: &Accessor<T, D>,
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
         response: Pair::Resp,
-        post_end_entry: Option<OplogEntry>,
     ) -> Result<(Pair::Resp, CompletionDelivery), TerminalCallError>
     where
         T: 'static,
@@ -3385,17 +3687,54 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             self.abandon_for_trap();
             return Err(err);
         }
-        self.complete_access_impl(store, get_ctx, response, post_end_entry)
+        self.complete_access_impl(store, get_ctx, response)
+            .await
+            .map_err(|source| TerminalCallError::new(source, context))
+    }
+
+    pub async fn complete_access_deferred_with_span<T, D, Ctx>(
+        mut self,
+        store: &Accessor<T, D>,
+        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+        response: Pair::Resp,
+        span_finished: golem_common::model::oplog::SpanFinished,
+    ) -> Result<(Pair::Resp, CompletionDelivery), TerminalCallError>
+    where
+        T: 'static,
+        D: HasData + ?Sized,
+        Ctx: WorkerCtx,
+    {
+        let context = self.trap_context();
+        if let Err(err) = drain_dropped_call_events_access(store, get_ctx).await {
+            self.abandon_for_trap();
+            return Err(err);
+        }
+        self.complete_access_impl_with_span(store, get_ctx, response, Some(span_finished))
             .await
             .map_err(|source| TerminalCallError::new(source, context))
     }
 
     async fn complete_access_impl<T, D, Ctx>(
+        self,
+        store: &Accessor<T, D>,
+        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+        response: Pair::Resp,
+    ) -> Result<(Pair::Resp, CompletionDelivery), WorkerExecutorError>
+    where
+        T: 'static,
+        D: HasData + ?Sized,
+        Ctx: WorkerCtx,
+    {
+        self.complete_access_impl_with_span(store, get_ctx, response, None)
+            .await
+    }
+
+    async fn complete_access_impl_with_span<T, D, Ctx>(
         mut self,
         store: &Accessor<T, D>,
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
         response: Pair::Resp,
-        post_end_entry: Option<OplogEntry>,
+        span_finished: Option<golem_common::model::oplog::SpanFinished>,
     ) -> Result<(Pair::Resp, CompletionDelivery), WorkerExecutorError>
     where
         T: 'static,
@@ -3422,6 +3761,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 self.dropped_call_snapshot(self.live_call_permit.clone()),
                 self.drop_sink.clone(),
                 self.cleanup_sink.clone(),
+                self.runtime_teardown.clone(),
             );
             self.finished = true;
             let persist_result: Result<Pair::Resp, WorkerExecutorError> = if self.persisted {
@@ -3431,7 +3771,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     &mut guard,
                     self.start_idx,
                     response,
-                    post_end_entry,
+                    span_finished,
                 )
                 .await
             } else {
@@ -3500,7 +3840,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         guard: &mut AccessTerminalGuard<P>,
         start_idx: OplogIndex,
         response: Pair::Resp,
-        post_end_entry: Option<OplogEntry>,
+        span_finished: Option<golem_common::model::oplog::SpanFinished>,
     ) -> Result<Pair::Resp, WorkerExecutorError> {
         let (response, end) = prepare_end_entry::<Pair>(
             &oplog,
@@ -3510,22 +3850,24 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 .request_upload,
             start_idx,
             response,
+            span_finished,
+            None,
         )
         .await?;
-        // Reserve both entries synchronously in oplog order before arming the terminal guard. A
+        // Reserve the terminal synchronously in oplog order before arming the terminal guard. A
         // tear may queue a completion marker immediately, and that marker must never overtake an
         // unpolled spawned append task.
+        if let OplogEntry::End {
+            span_finished: Some(finished),
+            ..
+        } = &end
+            && let Some(observer) = &guard.call().expect("terminal guard is armed").span_observer
+        {
+            observer.closed(finished);
+        }
         let end_append = oplog.enqueue_add(end);
-        let post_end_append = post_end_entry.map(|entry| oplog.enqueue_add(entry));
         let terminal = tokio::spawn(async move {
             end_append.await;
-            // A deferred-delivery call's mandatory post-`End` entry (e.g. its durable
-            // `FinishSpan`) is appended by the same owned task: it is recorded even when the
-            // completing future is torn right after the `End`, so replay can rely on it
-            // unconditionally following the `End` (any discard marker chains after this task).
-            if let Some(append) = post_end_append {
-                append.await;
-            }
             Ok(())
         });
         // Arm the discard marker together with the owned `End` append: from this point a torn
@@ -3540,18 +3882,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         );
         guard.wait_terminal().await?;
         Ok(response)
-    }
-
-    /// Checks for a terminal or replay tail without waiting on positional entries owned by this
-    /// call's continuation. A ready call still needs `replay` to validate and settle its outcome.
-    pub(crate) async fn replay_ready<Ctx: WorkerCtx>(
-        &self,
-        ctx: &DurableWorkerCtx<Ctx>,
-    ) -> Result<bool, WorkerExecutorError> {
-        ctx.state
-            .replay_state
-            .resolution_ready(self.replay.as_ref().expect("replay_ready on a live handle"))
-            .await
     }
 
     /// Replays a call: drive the cursor until the call resolves, decode its response, then close the
@@ -3602,7 +3932,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 let oplog = ctx.state.oplog.clone();
                 let response = decode_replayed_payload::<Pair>(&oplog, payload).await?;
                 DurableCallCoordinator::new(ctx)
-                    .finish(self.retry.function_type(), self.boundary, false)
+                    .finish(self.retry.function_type(), self.boundary, false, None)
                     .await?;
                 Ok(CallReplayOutcome::Replayed(response))
             }
@@ -3914,7 +4244,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     /// completion. For a recorded `CompletionDiscarded` marker this decodes the persisted
     /// response and closes the durable scope — mirroring exactly what live did before its token
     /// was armed — and the *caller* parks at its own delivery boundary after performing its
-    /// deterministic post-`End` continuation (e.g. consuming a positional `FinishSpan`).
+    /// deterministic post-`End` continuation (e.g. restoring resource state).
     pub async fn replay_access_deferred<T, D, Ctx>(
         mut self,
         store: &Accessor<T, D>,
@@ -4085,7 +4415,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     {
         let context = self.trap_context();
         if self.is_live() {
-            self.complete_access_deferred(store, get_ctx, response, None)
+            self.complete_access_deferred(store, get_ctx, response)
                 .await
         } else {
             match self
@@ -4095,7 +4425,38 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             {
                 DeferredCallReplayOutcome::Replayed(recorded, delivery) => Ok((recorded, delivery)),
                 DeferredCallReplayOutcome::Incomplete(call) => {
-                    call.complete_access_deferred(store, get_ctx, response, None)
+                    call.complete_access_deferred(store, get_ctx, response)
+                        .await
+                }
+            }
+        }
+    }
+
+    pub(crate) async fn finish_access_deferred_with_span<T, D, Ctx>(
+        self,
+        store: &Accessor<T, D>,
+        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+        response: Pair::Resp,
+        span_finished: golem_common::model::oplog::SpanFinished,
+    ) -> Result<(Pair::Resp, CompletionDelivery), TerminalCallError>
+    where
+        T: 'static,
+        D: HasData + ?Sized,
+        Ctx: WorkerCtx,
+    {
+        let context = self.trap_context();
+        if self.is_live() {
+            self.complete_access_deferred_with_span(store, get_ctx, response, span_finished)
+                .await
+        } else {
+            match self
+                .replay_access_deferred(store, get_ctx)
+                .await
+                .map_err(|source| TerminalCallError::new(source, context))?
+            {
+                DeferredCallReplayOutcome::Replayed(recorded, delivery) => Ok((recorded, delivery)),
+                DeferredCallReplayOutcome::Incomplete(call) => {
+                    call.complete_access_deferred_with_span(store, get_ctx, response, span_finished)
                         .await
                 }
             }
@@ -4180,7 +4541,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     .await?;
                 dropped_call.release_atomic_lease();
                 DurableCallCoordinator::new(ctx)
-                    .finish(self.retry.function_type(), self.boundary, false)
+                    .finish(self.retry.function_type(), self.boundary, false, None)
                     .await?;
             }
         } else {
@@ -4191,7 +4552,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             let resolution = ctx.state.replay_state.await_resolution(replay).await?;
             expect_cancelled_resolution(&resolution)?;
             DurableCallCoordinator::new(ctx)
-                .finish(self.retry.function_type(), self.boundary, false)
+                .finish(self.retry.function_type(), self.boundary, false, None)
                 .await?;
         }
         Ok(())
@@ -4241,6 +4602,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     self.dropped_call_snapshot(self.live_call_permit.clone()),
                     self.drop_sink.clone(),
                     self.cleanup_sink.clone(),
+                    self.runtime_teardown.clone(),
                 );
                 let result = async {
                     guard
@@ -4616,6 +4978,8 @@ async fn prepare_end_entry<Pair: HostPayloadPair>(
     request_upload: &PendingUpload,
     start_idx: OplogIndex,
     response: Pair::Resp,
+    span_finished: Option<golem_common::model::oplog::SpanFinished>,
+    span_attributes: Option<golem_common::model::oplog::SpanAttributes>,
 ) -> Result<(Pair::Resp, OplogEntry), WorkerExecutorError> {
     // Surface a deferred request-upload failure here, at the call site, before recording the
     // `End` that references the request. The leaf oplog's commit barrier is the backstop, but
@@ -4661,6 +5025,8 @@ async fn prepare_end_entry<Pair: HostPayloadPair>(
             start_index: start_idx,
             response: Some(response_payload),
             forced_commit: false,
+            span_finished,
+            span_attributes,
         },
     ))
 }
@@ -4851,6 +5217,30 @@ where
     D: HasData + ?Sized,
     Ctx: WorkerCtx,
 {
+    end_durable_function_access_with_span(
+        store,
+        get_ctx,
+        function_type,
+        begin_index,
+        forced_commit,
+        None,
+    )
+    .await
+}
+
+pub(crate) async fn end_durable_function_access_with_span<T, D, Ctx>(
+    store: &Accessor<T, D>,
+    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+    function_type: DurableFunctionType,
+    begin_index: OplogIndex,
+    forced_commit: bool,
+    span_finished: Option<golem_common::model::oplog::SpanFinished>,
+) -> Result<(), WorkerExecutorError>
+where
+    T: 'static,
+    D: HasData + ?Sized,
+    Ctx: WorkerCtx,
+{
     let (opens_scope, is_live, snapshotting_mode, replay_handle, replay_state, oplog, public_state) =
         store.with(|mut access| {
             let ctx = get_ctx(access.data_mut());
@@ -4884,6 +5274,8 @@ where
                     start_index: begin_index,
                     response: None,
                     forced_commit: true,
+                    span_finished: span_finished.clone(),
+                    span_attributes: None,
                 })
                 .await;
         } else if let Some(handle) = replay_handle {
@@ -4917,6 +5309,8 @@ where
                             start_index: begin_index,
                             response: None,
                             forced_commit: true,
+                            span_finished: span_finished.clone(),
+                            span_attributes: None,
                         })
                         .await;
                 }
@@ -4984,10 +5378,41 @@ where
     }
 }
 
+pub(crate) async fn end_durable_function_access_if_open_with_span<T, D, Ctx>(
+    store: &Accessor<T, D>,
+    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+    function_type: DurableFunctionType,
+    begin_index: OplogIndex,
+    forced_commit: bool,
+    span_finished: Option<golem_common::model::oplog::SpanFinished>,
+) -> Result<bool, WorkerExecutorError>
+where
+    T: 'static,
+    D: HasData + ?Sized,
+    Ctx: WorkerCtx,
+{
+    let is_open = store.with(|mut access| {
+        get_ctx(access.data_mut())
+            .state
+            .is_durable_scope_open(begin_index)
+    });
+    if is_open {
+        end_durable_function_access_with_span(
+            store,
+            get_ctx,
+            function_type,
+            begin_index,
+            forced_commit,
+            span_finished,
+        )
+        .await?;
+    }
+    Ok(is_open)
+}
+
 /// Finishes a span in the in-memory invocation context only, without writing or consuming any
 /// oplog entry: pops the current-span pointer if it points at this span, then marks the span
-/// finished. This is the non-durable half of [`finish_span_access`], used directly for spans
-/// whose identity is derived from durable records (no `StartSpan`/`FinishSpan` entries exist).
+/// finished. The owning durable operation records the span transition separately.
 pub(crate) fn finish_span_in_memory<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     span_id: &SpanId,
@@ -5009,74 +5434,6 @@ pub(crate) fn finish_span_in_memory<Ctx: WorkerCtx>(
         .finish_span(span_id)
         .map_err(WorkerExecutorError::runtime);
     Ok(())
-}
-
-pub(crate) async fn finish_span_access<T, D, Ctx>(
-    store: &Accessor<T, D>,
-    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
-    span_id: &SpanId,
-) -> Result<(), WorkerExecutorError>
-where
-    T: 'static,
-    D: HasData + ?Sized,
-    Ctx: WorkerCtx,
-{
-    let (mut is_live, worker, replay_state, parent_start_index) = store.with(|mut access| {
-        let ctx = get_ctx(access.data_mut());
-        (
-            ctx.state.is_live(),
-            ctx.public_state.worker(),
-            ctx.state.replay_state.clone(),
-            ctx.entity_parent_start_index(),
-        )
-    });
-
-    while !is_live {
-        match replay_state
-            .get_oplog_entry_or_replay_end_owned(parent_start_index)
-            .await?
-        {
-            crate::durable_host::PositionalRead::Entry(_, entry) => {
-                if !matches!(entry, OplogEntry::FinishSpan { .. }) {
-                    return Err(WorkerExecutorError::unexpected_oplog_entry(
-                        "FinishSpan",
-                        format!("{entry:?}"),
-                    ));
-                }
-                break;
-            }
-            crate::durable_host::PositionalRead::ReplayEnded => {
-                let (transition, primary_runtime) = store.with(|mut access| {
-                    let ctx = get_ctx(access.data_mut());
-                    (
-                        ctx.prepare_live_continuation_at_replay_tail(
-                            true,
-                            "FinishSpan".to_string(),
-                        ),
-                        ctx.runtime == OwnerRuntime::Agent,
-                    )
-                });
-                let pending = match transition.await? {
-                    BeginReplayToLive::ReplayResumed => continue,
-                    BeginReplayToLive::Pending(pending) => pending,
-                };
-                finish_prepared_access_to_live(pending, primary_runtime, store, get_ctx)
-                    .await?
-                    .require_live()?;
-                is_live = true;
-            }
-        }
-    }
-    if is_live {
-        worker
-            .add_to_oplog(OplogEntry::finish_span(parent_start_index, span_id.clone()))
-            .await;
-    }
-
-    store.with(|mut access| {
-        let ctx = get_ctx(access.data_mut());
-        finish_span_in_memory(ctx, span_id)
-    })
 }
 
 fn is_accessor_supported_function_type(function_type: &DurableFunctionType) -> bool {
@@ -5123,6 +5480,7 @@ pub struct BegunCall<Pair: HostPayloadPair, P: DropPolicy> {
     boundary: DurableCallBoundary,
     execution_scope: BegunCallExecutionScope,
     retry: InFunctionRetryController,
+    request_identity: Option<HostRequest>,
     requires_agent_authority: bool,
     agent_auth_ctx: Option<AuthCtx>,
     drop_sink: Option<UnboundedSender<DropEvent>>,
@@ -5133,6 +5491,11 @@ pub struct BegunCall<Pair: HostPayloadPair, P: DropPolicy> {
 impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
     fn is_live(&self) -> bool {
         self.retry.durable_execution_state().is_live
+    }
+
+    pub(crate) fn matching_request(mut self, request: Pair::Req) -> Self {
+        self.request_identity = Some(request.into());
+        self
     }
 
     pub fn agent_auth_ctx(&self) -> &AuthCtx {
@@ -5155,25 +5518,41 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
         request: Pair::Req,
     ) -> Result<DurableCallSession<Pair, P>, WorkerExecutorError> {
         let request: HostRequest = request.into();
-        self.start_live_with_host_request_index(ctx, move |_| Ok(request))
+        self.start_live_with_host_request_index(ctx, move |_| Ok((request, None)))
+            .await
+    }
+
+    pub(crate) async fn start_live_with_span<Ctx: WorkerCtx>(
+        self,
+        ctx: &mut DurableWorkerCtx<Ctx>,
+        request: Pair::Req,
+        span_started: golem_common::model::oplog::SpanStarted,
+    ) -> Result<DurableCallSession<Pair, P>, WorkerExecutorError> {
+        let request: HostRequest = request.into();
+        self.start_live_with_host_request_index(ctx, move |_| Ok((request, Some(span_started))))
             .await
     }
 
     /// Second phase on the live path for requests whose durable identity depends on the exact
     /// host-call `Start` index. The builder runs inside the oplog's serialized writer step after
-    /// that index is assigned and before the `Start` is appended.
-    pub(crate) async fn start_live_with_index<Ctx: WorkerCtx>(
+    /// that index is assigned and before the `Start` is appended, and records the call's span
+    /// metadata on the appended `Start`.
+    pub(crate) async fn start_live_with_index_and_span<Ctx: WorkerCtx>(
         self,
         ctx: &mut DurableWorkerCtx<Ctx>,
-        build_request: impl FnOnce(OplogIndex) -> Result<Pair::Req, WorkerExecutorError>
-        + Send
+        build: impl FnOnce(
+            OplogIndex,
+        ) -> Result<
+            (Pair::Req, golem_common::model::oplog::SpanStarted),
+            WorkerExecutorError,
+        > + Send
         + 'static,
     ) -> Result<DurableCallSession<Pair, P>, WorkerExecutorError>
     where
         Pair::Req: Send + 'static,
     {
         self.start_live_with_host_request_index(ctx, move |start_index| {
-            build_request(start_index).map(Into::into)
+            build(start_index).map(|(request, span)| (request.into(), Some(span)))
         })
         .await
     }
@@ -5181,8 +5560,12 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
     async fn start_live_with_host_request_index<Ctx: WorkerCtx>(
         self,
         ctx: &mut DurableWorkerCtx<Ctx>,
-        build_request: impl FnOnce(OplogIndex) -> Result<HostRequest, WorkerExecutorError>
-        + Send
+        build_request: impl FnOnce(
+            OplogIndex,
+        ) -> Result<
+            (HostRequest, Option<golem_common::model::oplog::SpanStarted>),
+            WorkerExecutorError,
+        > + Send
         + 'static,
     ) -> Result<DurableCallSession<Pair, P>, WorkerExecutorError> {
         debug_assert!(self.is_live(), "start_live() called on a replay handle");
@@ -5202,6 +5585,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
             let function_type = self.retry.function_type().clone();
             let oplog = ctx.state.oplog.clone();
             let observational_owner = self.execution_scope.observational_owner;
+            let span_started = std::sync::Arc::new(std::sync::Mutex::new(None));
+            let built_span = span_started.clone();
             // Reserve the request payload and append the `Start` in one guarded step: a big request
             // blob's upload is *begun* but not awaited, so the `Start` is appended in initiation
             // order before the (potentially slow) upload finishes. `add_start_with_reserved_payload`
@@ -5211,7 +5596,10 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
             let (idx, request_upload) = oplog
                 .add_start_with_indexed_reserved_payload(
                     move |start_index| {
-                        build_request(start_index).map_err(|error| error.to_string())
+                        let (request, span) =
+                            build_request(start_index).map_err(|error| error.to_string())?;
+                        *built_span.lock().unwrap() = span.map(Box::new);
+                        Ok(request)
                     },
                     move |request_payload| OplogEntry::Start {
                         timestamp: Timestamp::now_utc(),
@@ -5221,6 +5609,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
                         observational_owner,
                         request: Some(request_payload),
                         durable_function_type: function_type,
+                        span_started: span_started.lock().unwrap().take(),
                     },
                 )
                 .await
@@ -5263,6 +5652,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
             request_upload,
             replay: None,
             finished: false,
+            cancellation_span_id: None,
+            span_observer: None,
             parked_undelivered_replay: false,
             execution_scope,
             retry: self.retry,
@@ -5334,13 +5725,29 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
     }
 
     fn replay_claim(&self) -> StartClaim {
-        let claim = match self.execution_scope.parent_start_index {
-            Some(parent_start_index) => StartClaim::owned(
+        let claim = match (
+            self.execution_scope.parent_start_index,
+            &self.request_identity,
+        ) {
+            (Some(parent_start_index), Some(request)) => StartClaim::owned_matching_request(
+                &Pair::HOST_FUNCTION_NAME,
+                self.retry.function_type(),
+                parent_start_index,
+                request,
+            ),
+            (None, Some(request)) => StartClaim::unowned_matching_request(
+                &Pair::HOST_FUNCTION_NAME,
+                self.retry.function_type(),
+                request,
+            ),
+            (Some(parent_start_index), None) => StartClaim::owned(
                 &Pair::HOST_FUNCTION_NAME,
                 self.retry.function_type(),
                 parent_start_index,
             ),
-            None => StartClaim::unowned(&Pair::HOST_FUNCTION_NAME, self.retry.function_type()),
+            (None, None) => {
+                StartClaim::unowned(&Pair::HOST_FUNCTION_NAME, self.retry.function_type())
+            }
         };
         claim.with_observational_owner(self.execution_scope.observational_owner)
     }
@@ -5366,6 +5773,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
             request_upload: PendingUpload::already_durable(),
             replay: Some(replay),
             finished: false,
+            cancellation_span_id: None,
+            span_observer: None,
             parked_undelivered_replay: false,
             execution_scope,
             retry: self.retry,
@@ -5413,7 +5822,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> Drop for DurableCallSession<Pair, P> 
                 let _ = sink.send(DropEvent::CloseDurableScope {
                     function_type: self.retry.function_type().clone(),
                     begin_index: self.begin_index(),
-                    span_id: None,
+                    span_finished: None,
                 });
             }
             if self.parked_undelivered_replay {
@@ -5441,6 +5850,106 @@ mod tests {
     use super::*;
     use crate::durable_host::{atomic_region_surviving_members, close_atomic_region};
     use test_r::test;
+
+    #[test]
+    #[test_r::timeout("10s")]
+    async fn direct_request_claim_rejects_wrong_resource_without_consuming_start() {
+        use super::super::tests::InMemoryOplog;
+        use golem_common::model::oplog::HostRequestGolemRpcResource;
+        use golem_common::model::oplog::host_functions::GolemRpcWasmRpcDrop;
+
+        for parent_start_index in [None, Some(OplogIndex::from_u64(19))] {
+            let request = HostRequestGolemRpcResource {
+                creation_index: OplogIndex::from_u64(7),
+            };
+            let oplog = Arc::new(InMemoryOplog::new());
+            oplog
+                .add(OplogEntry::NoOp {
+                    timestamp: Timestamp::now_utc(),
+                    entity_parent_start_index: None,
+                })
+                .await;
+            let start_index = oplog
+                .add(OplogEntry::Start {
+                    timestamp: Timestamp::now_utc(),
+                    parent_start_index,
+                    function_name: GolemRpcWasmRpcDrop::HOST_FUNCTION_NAME,
+                    invocation_id: None,
+                    observational_owner: None,
+                    request: Some(OplogPayload::Inline(Box::new(request.clone().into()))),
+                    durable_function_type: DurableFunctionType::ReadLocal,
+                    span_started: None,
+                })
+                .await;
+            oplog
+                .add(OplogEntry::End {
+                    timestamp: Timestamp::now_utc(),
+                    start_index,
+                    response: None,
+                    forced_commit: false,
+                    span_finished: None,
+                    span_attributes: None,
+                })
+                .await;
+            let replay_state = ReplayState::new_for_owner(
+                golem_common::model::OwnedAgentId {
+                    environment_id: golem_common::model::environment::EnvironmentId::new(),
+                    agent_id: golem_common::model::AgentId {
+                        component_id: golem_common::model::component::ComponentId::new(),
+                        agent_id: "direct-claim-test".to_string(),
+                    },
+                },
+                oplog,
+                golem_common::model::regions::DeletedRegions::default(),
+                None,
+                crate::durable_host::tool::operation::OwnerToolOperations::new(),
+            )
+            .await
+            .unwrap();
+            let begun = BegunCall::<GolemRpcWasmRpcDrop, NotCancellable> {
+                boundary: DurableCallBoundary::from_begin_index(OplogIndex::from_u64(1)),
+                execution_scope: BegunCallExecutionScope {
+                    entity_parent_start_index: parent_start_index,
+                    parent_start_index,
+                    atomic_region: None,
+                    observational_owner: None,
+                },
+                retry: InFunctionRetryController::new(
+                    DurableFunctionType::ReadLocal,
+                    DurableExecutionState {
+                        is_live: false,
+                        snapshotting_mode: false,
+                        assume_idempotence: false,
+                        max_in_function_retry_delay: std::time::Duration::ZERO,
+                    },
+                    GolemRpcWasmRpcDrop::FQFN,
+                ),
+                request_identity: None,
+                requires_agent_authority: false,
+                agent_auth_ctx: None,
+                drop_sink: None,
+                cleanup_sink: None,
+                _phantom: PhantomData,
+            }
+            .matching_request(HostRequestGolemRpcResource {
+                creation_index: OplogIndex::from_u64(8),
+            });
+            assert!(
+                replay_state
+                    .claim_start_or_replay_end(begun.replay_claim())
+                    .await
+                    .is_err()
+            );
+            let claimed = replay_state
+                .claim_start_or_replay_end(begun.matching_request(request).replay_claim())
+                .await
+                .expect("wrong resource claim must leave the recorded operation available");
+            let ReplayStartClaimOutcome::Claimed { handle, .. } = claimed else {
+                panic!("expected the matching Start to remain available");
+            };
+            assert_eq!(handle.start_idx(), start_index);
+        }
+    }
 
     #[test]
     fn repair_lease_parent_transfer() {

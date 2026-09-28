@@ -1363,6 +1363,7 @@ fn agent_oplog_structured_output_exposes_secret_metadata_without_stdout_bytes() 
             observational_owner: None,
             request: Some(request),
             durable_function_type: PublicDurableFunctionType::WriteLocal(Empty {}),
+            span_started: None,
         }),
     })
     .expect("agent.oplog should serialize");
@@ -2003,6 +2004,23 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
         Timestamp::from(0)
     }
 
+    fn span_id(value: &str) -> SpanId {
+        SpanId::from_string(value).unwrap()
+    }
+
+    fn trace_id(value: &str) -> TraceId {
+        TraceId::from_string(value).unwrap()
+    }
+
+    fn span_attribute(key: &str, value: &str) -> PublicAttribute {
+        PublicAttribute {
+            key: key.to_string(),
+            value: PublicAttributeValue::String(StringAttributeValue {
+                value: value.to_string(),
+            }),
+        }
+    }
+
     fn component_id() -> ComponentId {
         ComponentId(Uuid::parse_str("13a5c8d4-f05e-4e23-b982-f4d413e181cb").unwrap())
     }
@@ -2153,17 +2171,45 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
                     index: Some(OplogIndex::from_u64(1)),
                 },
             ),
+            span_started: Some(PublicSpanStarted {
+                span_id: span_id("0000000000000001"),
+                trace_id: trace_id("00000000000000000000000000000002"),
+                trace_states: vec!["vendor=started".to_string()],
+                parent_span_id: Some(span_id("0000000000000003")),
+                links: vec![PublicSpanLink {
+                    trace_id: trace_id("00000000000000000000000000000004"),
+                    span_id: span_id("0000000000000005"),
+                    trace_states: vec!["vendor=linked".to_string()],
+                }],
+                started_at: timestamp(),
+                attributes: vec![span_attribute("span.start", "recorded")],
+                kind: PublicSpanKind::Client,
+            }),
         }),
         PublicOplogEntry::End(EndParams {
             timestamp: timestamp(),
             start_index: OplogIndex::from_u64(1),
             response: Some(typed_u64_list_value(vec![1])),
             forced_commit: false,
+            span_finished: Some(PublicSpanFinished {
+                span_id: span_id("0000000000000001"),
+                finished_at: timestamp(),
+                outcome: PublicSpanOutcome::Failed,
+            }),
+            span_attributes: Some(PublicSpanAttributes {
+                span_id: span_id("0000000000000001"),
+                attributes: vec![span_attribute("span.end", "recorded")],
+            }),
         }),
         PublicOplogEntry::Cancelled(CancelledParams {
             timestamp: timestamp(),
             start_index: OplogIndex::from_u64(2),
             partial: Some(typed_string_value("partial")),
+            span_finished: Some(PublicSpanFinished {
+                span_id: span_id("0000000000000006"),
+                finished_at: timestamp(),
+                outcome: PublicSpanOutcome::Cancelled,
+            }),
         }),
         PublicOplogEntry::AgentInvocationStarted(AgentInvocationStartedParams {
             timestamp: timestamp(),
@@ -2272,6 +2318,10 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
             level: LogLevel::Info,
             context: "generated".to_string(),
             message: "message".to_string(),
+            trace_context: Some(LogTraceContext {
+                trace_id: TraceId::from_string("00112233445566778899aabbccddeeff").unwrap(),
+                span_id: SpanId::from_string("0123456789abcdef").unwrap(),
+            }),
         }),
         PublicOplogEntry::Restart(RestartParams {
             timestamp: timestamp(),
@@ -2297,30 +2347,6 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
         PublicOplogEntry::CancelPendingInvocation(CancelPendingInvocationParams {
             timestamp: timestamp(),
             idempotency_key: IdempotencyKey::new("cancel-key".to_string()),
-        }),
-        PublicOplogEntry::StartSpan(StartSpanParams {
-            timestamp: timestamp(),
-            span_id: SpanId::generate(),
-            parent_id: Some(SpanId::generate()),
-            linked_context: Some(SpanId::generate()),
-            attributes: vec![PublicAttribute {
-                key: "http.method".to_string(),
-                value: PublicAttributeValue::String(StringAttributeValue {
-                    value: "GET".to_string(),
-                }),
-            }],
-        }),
-        PublicOplogEntry::FinishSpan(FinishSpanParams {
-            timestamp: timestamp(),
-            span_id: SpanId::generate(),
-        }),
-        PublicOplogEntry::SetSpanAttribute(SetSpanAttributeParams {
-            timestamp: timestamp(),
-            span_id: SpanId::generate(),
-            key: "http.status_code".to_string(),
-            value: PublicAttributeValue::String(StringAttributeValue {
-                value: "200".to_string(),
-            }),
         }),
         PublicOplogEntry::BeginRemoteTransaction(BeginRemoteTransactionParams {
             timestamp: timestamp(),
@@ -3282,6 +3308,8 @@ fn arb_typed_value_oplog_entry() -> BoxedStrategy<golem_common::model::oplog::Pu
                     start_index: golem_common::model::oplog::OplogIndex::from_u64(1),
                     response: Some(response),
                     forced_commit: false,
+                    span_finished: None,
+                    span_attributes: None,
                 },
             )
         })
