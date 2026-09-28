@@ -125,7 +125,7 @@ forecast := weather.GetWeatherAgent(weather.WeatherAgentId{City: "London"}).Fore
 - Each method on the client calls `MethodDef.Call` underneath, so a failed call panics with the SDK's own error, exactly as a same-component call does.
 - The `.local` module path can never be fetched from a module proxy, so a missing `replace` fails the build rather than silently resolving something else.
 - The client's types are the callee's, generated from its schema: records become structs, variants sealed interfaces with one type per case, enums integer constants with a `String()` method.
-- Methods that take or return a stream are not generated yet.
+- Methods that take or return a stream are left out of the client for now; its doc comment names them, and `golem build` warns.
 
 ## Key Constraints
 

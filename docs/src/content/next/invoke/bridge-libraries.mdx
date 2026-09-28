@@ -147,7 +147,7 @@ func run(ctx context.Context) error {
 Generated clients preserve streams wherever they occur in a method's typed input or output, including nested values and multiple sibling streams. The examples below assume a `MediaAgent` with input-only `upload`, output-only `transcribe`, and mixed `transform` methods. The generated method names and parameter order follow the agent definition; there is no separate streaming method suffix.
 
 <Callout type="info">
-Go clients do not generate stream-bearing methods yet: generating a Go client for an agent that has one fails with an error naming the agent.
+Go clients do not include stream-bearing methods yet: the rest of the agent's client is generated, the generated client's documentation names the methods it leaves out, and `golem build` warns about them.
 </Callout>
 
 <Tabs items={["Rust", "TypeScript", "Effect TypeScript", "Scala", "MoonBit"]} storageKey="bridge-streaming-languages-effect">

@@ -57,13 +57,15 @@ use crate::bridge_gen::{
     validate_host_managed_agent_bridge_policy,
 };
 use crate::fs;
+use crate::log::log_warn;
 use crate::sdk_overrides::{GO_CORE_MODULE, GO_SDK_MODULE, sdk_overrides};
 use crate::versions;
 use anyhow::{Context, bail};
 use camino::{Utf8Path, Utf8PathBuf};
 use golem_common::schema::agent::contains_stream_in_graph;
+use golem_common::schema::graph::SchemaGraph;
 use golem_common::schema::schema_type::{DiscriminatorRule, SchemaType};
-use golem_common::schema::{AgentTypeSchema, InputSchema, OutputSchema};
+use golem_common::schema::{AgentMethodSchema, AgentTypeSchema, InputSchema, OutputSchema};
 
 /// Import path of the guest SDK.
 pub const GOLEM_PKG: &str = GO_SDK_MODULE;
@@ -89,6 +91,9 @@ pub struct GoBridgeGenerator {
     mode: GoBridgeMode,
     type_naming: TypeNaming<GoTypeName>,
     names: AgentNames,
+    /// Methods left out of the client because they take or return a stream,
+    /// which the Go bridge does not generate yet.
+    omitted: Vec<String>,
 }
 
 /// The package-level names the generator emits for the agent itself. They
@@ -157,6 +162,13 @@ impl BridgeGenerator for GoBridgeGenerator {
         if !self.target_path.exists() {
             fs::create_dir_all(&self.target_path)?;
         }
+        if !self.omitted.is_empty() {
+            log_warn(format!(
+                "The Go client for {} leaves out {}: they take or return a stream, which the Go bridge does not generate yet",
+                self.agent_type.type_name.as_str(),
+                self.omitted.join(", ")
+            ));
+        }
         match self.mode {
             GoBridgeMode::GuestWasmRpc => {
                 self.write_file("go.mod", self.go_mod()?)?;
@@ -184,12 +196,21 @@ impl GoBridgeGenerator {
         mode: GoBridgeMode,
     ) -> anyhow::Result<Self> {
         validate_host_managed_agent_bridge_policy(&agent_type, mode.bridge_mode())?;
-        if agent_uses_streams(&agent_type) {
+        let mut agent_type = agent_type;
+        if input_uses_streams(&agent_type.schema, &agent_type.constructor.input_schema) {
             bail!(
-                "the Go bridge does not generate stream-bearing methods yet ({})",
+                "the Go bridge cannot generate a client for {}: its constructor takes a stream",
                 agent_type.type_name.as_str()
             );
         }
+        // Stream-bearing methods are left out rather than failing the whole
+        // client, so the agent's other methods stay callable. Dropping them
+        // before naming also drops the types only they use.
+        let (methods, streaming): (Vec<_>, Vec<_>) = std::mem::take(&mut agent_type.methods)
+            .into_iter()
+            .partition(|m| !method_uses_streams(&agent_type.schema, m));
+        agent_type.methods = methods;
+        let omitted = streaming.into_iter().map(|m| m.name).collect::<Vec<_>>();
 
         let names = AgentNames::new(&agent_type);
         let same_language = agent_type.source_language.eq_ignore_ascii_case("go");
@@ -205,6 +226,7 @@ impl GoBridgeGenerator {
             mode,
             type_naming,
             names,
+            omitted,
         })
     }
 
@@ -431,8 +453,9 @@ impl GoBridgeGenerator {
         // The client.
         writer.doc(&format!(
             "{} calls a {agent_name} agent. A failed call panics with the SDK's own\n\
-             error, the same as golem.MethodDef.Call, so its classification survives.",
-            n.client
+             error, the same as golem.MethodDef.Call, so its classification survives.{}",
+            n.client,
+            self.omitted_note()
         ));
         writer.line(format!(
             "type {} struct{{ client golem.Client[{}] }}",
@@ -591,19 +614,31 @@ impl GoBridgeGenerator {
     }
 }
 
-/// True when any constructor or method schema of the agent carries a stream.
-fn agent_uses_streams(agent_type: &AgentTypeSchema) -> bool {
-    let graph = &agent_type.schema;
-    let in_input = |input: &InputSchema| {
-        user_supplied_fields(input)
-            .iter()
-            .any(|f| contains_stream_in_graph(graph, &f.schema))
-    };
-    in_input(&agent_type.constructor.input_schema)
-        || agent_type.methods.iter().any(|m| {
-            in_input(&m.input_schema)
-                || matches!(&m.output_schema, OutputSchema::Single(t) if contains_stream_in_graph(graph, t))
-        })
+/// True when a user-supplied field of the input carries a stream.
+fn input_uses_streams(graph: &SchemaGraph, input: &InputSchema) -> bool {
+    user_supplied_fields(input)
+        .iter()
+        .any(|f| contains_stream_in_graph(graph, &f.schema))
+}
+
+/// True when a method takes or returns a stream anywhere in its schema.
+fn method_uses_streams(graph: &SchemaGraph, method: &AgentMethodSchema) -> bool {
+    input_uses_streams(graph, &method.input_schema)
+        || matches!(&method.output_schema, OutputSchema::Single(t) if contains_stream_in_graph(graph, t))
+}
+
+impl GoBridgeGenerator {
+    /// A doc paragraph naming the methods the client leaves out, or "".
+    fn omitted_note(&self) -> String {
+        if self.omitted.is_empty() {
+            return String::new();
+        }
+        format!(
+            "\n\nNot generated: {} — they take or return a stream, which the Go\n\
+             bridge does not generate yet.",
+            self.omitted.join(", ")
+        )
+    }
 }
 
 /// The per-case type names a variant or union declaration emits, which the

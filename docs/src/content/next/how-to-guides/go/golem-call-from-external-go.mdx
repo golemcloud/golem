@@ -103,7 +103,7 @@ Every method has three forms — `M(ctx, …)`, `TriggerM(ctx, …)` and `Schedu
 
 Parameter and return types are generated in the client package, using the same Go spelling a Go agent would: records are structs, enums are `uint32` constants (`StatusInTransit`), flags are structs of `bool`, and variants and unions are sealed interfaces with one struct per case (`EventNote{Value: "hi"}`; a case without a payload is an empty struct). Options, results and tuples are `values.Option[T]`, `values.Result[T, E]` and `values.Tuple2[A, B]`… from `github.com/golemcloud/golem/sdks/go/core/values`; `text`, `char`, `binary`, `path` and `url` are `values.Text`, `values.Char`, `values.Binary`, `values.Path`, `values.URL`; datetimes and durations are `time.Time` and `time.Duration`.
 
-Methods that take or return streams are not generated for Go yet — generation fails with an error naming the agent.
+Methods that take or return streams are not generated for Go yet: the client leaves them out (its doc comment names them, and `golem build` prints a warning), and the agent's other methods are generated as usual.
 
 ## Approach 2: the CLI
 
@@ -207,7 +207,7 @@ curl -X POST \
 - Every invocation carries an idempotency key (auto-generated if not supplied), giving at-most-once execution even if the client retries.
 - Constructor arguments in the agent ID must match the Go `ID` struct fields in order.
 - A generated Go client is its own module (`golem.local/bridge/<client-dir>`); the consuming `go.mod` needs the `require` and a `replace` pointing at the generated directory.
-- Generated clients do not yet cover stream-bearing methods.
+- Generated clients leave out stream-bearing methods for now (named in the client's doc comment).
 - HTTP-endpoint access requires both a `Spec.HTTP` mount and an `httpApi` deployment declaration.
 
 ### Related Guides

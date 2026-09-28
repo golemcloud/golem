@@ -724,3 +724,91 @@ fn go_external_method_names_do_not_collide(env: &GoEnv) {
         "{client}"
     );
 }
+
+/// An agent whose methods partly take or return streams. The stream-bearing
+/// ones are left out of Go clients — including a record type only they use —
+/// and the client says so; the rest is generated and builds.
+fn partly_streaming_agent() -> AgentTypeSchema {
+    agent(
+        "MediaAgent",
+        "rust",
+        vec![field("name", SchemaType::string())],
+        vec![
+            method("count", vec![], Some(SchemaType::u64())),
+            method(
+                "upload",
+                vec![field(
+                    "chunks",
+                    SchemaType::stream(Some(SchemaType::list(SchemaType::u8()))),
+                )],
+                Some(SchemaType::u64()),
+            ),
+            method("feed", vec![], Some(ref_to("media.Feed"))),
+        ],
+        vec![def(
+            "media.Feed",
+            SchemaType::record(vec![named_field(
+                "items",
+                SchemaType::stream(Some(SchemaType::string())),
+            )]),
+        )],
+        AgentMode::Durable,
+    )
+}
+
+fn assert_stream_methods_left_out(generated: &GeneratedGo) {
+    let client = generated.read("client.go");
+    assert!(
+        client.contains("// Not generated: upload, feed — they take or return a stream"),
+        "{client}"
+    );
+    assert!(client.contains(") Count("), "{client}");
+    assert!(!client.contains(") Upload("), "{client}");
+    assert!(!client.contains(") Feed("), "{client}");
+    let types = generated.read("types.go");
+    assert!(!types.contains("MediaFeed"), "{types}");
+}
+
+#[test]
+fn go_guest_client_leaves_out_stream_bearing_methods(env: &GoEnv) {
+    let generated = GeneratedGo::guest(env, partly_streaming_agent());
+    assert_stream_methods_left_out(&generated);
+    generated.assert_gofmt_clean(env);
+    generated.assert_vets_for_wasip1(env);
+}
+
+#[test]
+fn go_external_client_leaves_out_stream_bearing_methods(env: &GoEnv) {
+    let generated = GeneratedGo::external(env, partly_streaming_agent());
+    assert_stream_methods_left_out(&generated);
+    generated.assert_gofmt_clean(env);
+    generated.assert_vets_natively(env);
+}
+
+/// A constructor stream cannot be left out: without it there is no client.
+#[test]
+fn go_client_refuses_a_constructor_stream() {
+    let streaming_id = agent(
+        "Tail",
+        "rust",
+        vec![field(
+            "source",
+            SchemaType::stream(Some(SchemaType::string())),
+        )],
+        vec![method("count", vec![], Some(SchemaType::u64()))],
+        vec![],
+        AgentMode::Durable,
+    );
+    let dir = TempDir::new().unwrap();
+    let err = GoBridgeGenerator::new_with_mode(
+        streaming_id,
+        Utf8Path::from_path(dir.path()).unwrap(),
+        GoBridgeMode::ExternalRest,
+    )
+    .err()
+    .expect("a constructor stream is refused");
+    assert!(
+        err.to_string().contains("its constructor takes a stream"),
+        "{err}"
+    );
+}

@@ -620,8 +620,9 @@ impl GoBridgeGenerator {
         w.doc(&format!(
             "{} calls a {agent_name} agent through the Golem REST API.\n\
              Every call returns an error rather than panicking: a transport failure,\n\
-             an error status and a result that does not decode are all reported.",
-            n.client
+             an error status and a result that does not decode are all reported.{}",
+            n.client,
+            self.omitted_note()
         ));
         w.line(format!("type {} struct{{ agent *bridge.Agent }}", n.client));
         w.blank();
