@@ -14,8 +14,9 @@
 
 use crate::metrics::oplog::record_oplog_call;
 use crate::services::oplog::multilayer::{
-    BackgroundTransferMessage, InstrumentedOplogArchive, MultiLayerOplogService, OplogArchive,
-    OplogArchiveResult, TransferFiber, WrappedOplogArchive, transfer_between_lower_layers,
+    ArchiveSource, BackgroundTransferMessage, InstrumentedOplogArchive, MultiLayerOplogService,
+    OplogArchive, OplogArchiveResult, TransferFiber, WrappedOplogArchive,
+    transfer_between_lower_layers,
 };
 use crate::services::oplog::reader::{
     OplogRead, OplogReadError, OplogReadSource, checked_range_end, fail_stop,
@@ -569,6 +570,16 @@ impl EphemeralOplog {
 
         let result = if let Some(source) = first_non_empty {
             let last_idx = self.lower[source].current_oplog_index().await?;
+            if !self
+                .multi_layer_oplog_service
+                .begin_archive_attempt(&self.owned_agent_id, ArchiveSource::Lower(source))
+            {
+                return if blocking {
+                    Err("Oplog archive retry is backed off after a previous failure".to_string())
+                } else {
+                    Ok(true)
+                };
+            }
             info!(
                 "Transferring oplog entries up to index {last_idx} of ephemeral oplog layer {source} to the next layer"
             );
@@ -603,12 +614,14 @@ impl EphemeralOplog {
     pub fn spawn_background_transfer(
         owned_agent_id: OwnedAgentId,
         lower: NEVec<Arc<dyn OplogArchive + Send + Sync>>,
+        multi_layer_oplog_service: MultiLayerOplogService,
         rx: UnboundedReceiver<BackgroundTransferMessage>,
         start: tokio::sync::oneshot::Receiver<()>,
     ) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             if start.await.is_ok() {
-                Self::background_transfer(owned_agent_id, lower, rx).await;
+                Self::background_transfer(owned_agent_id, lower, multi_layer_oplog_service, rx)
+                    .await;
             }
         })
     }
@@ -616,6 +629,7 @@ impl EphemeralOplog {
     async fn background_transfer(
         owned_agent_id: OwnedAgentId,
         lower: NEVec<Arc<dyn OplogArchive + Send + Sync>>,
+        multi_layer_oplog_service: MultiLayerOplogService,
         mut rx: UnboundedReceiver<BackgroundTransferMessage>,
     ) {
         while let Some(msg) = rx.recv().await {
@@ -640,6 +654,12 @@ impl EphemeralOplog {
                             return;
                         }
 
+                        multi_layer_oplog_service
+                            .wait_until_archive_ready(
+                                &owned_agent_id,
+                                ArchiveSource::Lower(source),
+                            )
+                            .await;
                         info!(
                             "Transferring oplog entries up to index {last_transferred_idx} of ephemeral oplog layer {source} to the next layer"
                         );
@@ -652,16 +672,32 @@ impl EphemeralOplog {
                         )
                         .await;
 
-                        if result.is_ok() && drain && let Some(oplog) = keep_alive.as_ref() {
-                            let _ = EphemeralOplog::try_archive_background(oplog).await;
+                        match &result {
+                            Ok(()) => {
+                                multi_layer_oplog_service
+                                    .record_archive_success(
+                                        &owned_agent_id,
+                                        ArchiveSource::Lower(source),
+                                    );
+                                if drain && let Some(oplog) = keep_alive.as_ref() {
+                                    let _ = EphemeralOplog::try_archive_background(oplog).await;
+                                }
+                            }
+                            Err(error) => {
+                                multi_layer_oplog_service
+                                    .record_archive_failure(
+                                        &owned_agent_id,
+                                        ArchiveSource::Lower(source),
+                                    );
+                                crate::metrics::oplog::record_archive_maintenance_failure(
+                                    "ephemeral_transfer",
+                                );
+                                warn!(error = %error, "Failed to archive ephemeral oplog; the source entries remain available for retry");
+                            }
                         }
-
                         let _ = keep_alive.take();
                         if let Some(done) = done {
-                            let _ = done.send(result.clone());
-                        }
-                        if let Err(error) = result {
-                            warn!(error = %error, "Failed to archive ephemeral oplog; the source entries remain available for retry");
+                            let _ = done.send(result);
                         }
                     }
                     .instrument(related_span!(
@@ -714,6 +750,7 @@ impl EphemeralOplog {
         account_id: golem_common::model::account::AccountId,
         entry_count_limit: u64,
         transfer_tx: &UnboundedSender<BackgroundTransferMessage>,
+        multi_layer_oplog_service: &MultiLayerOplogService,
         fresh: bool,
     ) -> NEVec<Arc<dyn OplogArchive + Send + Sync>> {
         let mut lower: Vec<Arc<dyn OplogArchive + Send + Sync>> = Vec::new();
@@ -734,6 +771,8 @@ impl EphemeralOplog {
                         i,
                         instrumented,
                         transfer_tx.clone(),
+                        owned_agent_id.clone(),
+                        multi_layer_oplog_service.clone(),
                         entry_count_limit,
                     )
                 } else {
@@ -741,6 +780,8 @@ impl EphemeralOplog {
                         i,
                         instrumented,
                         transfer_tx.clone(),
+                        owned_agent_id.clone(),
+                        multi_layer_oplog_service.clone(),
                         entry_count_limit,
                     )
                     .await

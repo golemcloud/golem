@@ -703,7 +703,7 @@ impl OplogArchive for BlobOplogArchive {
                 sub_chunk.iter().map(|(_, entry)| entry.clone()).collect();
 
             let compressed_chunk = CompressedOplogChunk::compress(entries)
-                .unwrap_or_else(|err| panic!("failed to compress oplog chunk: {err}"));
+                .map_err(|error| format!("failed to compress oplog chunk: {error}"))?;
 
             let namespace = BlobStorageNamespace::CompressedOplog {
                 environment_id: self.owned_agent_id.environment_id(),
@@ -871,17 +871,40 @@ impl OplogArchive for BlobOplogArchive {
                 }
                 Err(error) => {
                     *self.cache.lock().unwrap() = EvictingCacheMap::new();
-                    return Err(format!(
-                        "failed to drop compressed oplog chunk for worker {} in blob storage: {error}",
-                        self.owned_agent_id.agent_id
-                    ));
+                    match self
+                        .blob_storage
+                        .with("blob_oplog", "drop_prefix_reconcile")
+                        .get_raw(ns.clone(), path)
+                        .await
+                    {
+                        Ok(None) => {
+                            self.entries.lock().unwrap().remove(idx);
+                            self.deleting.lock().unwrap().remove(idx);
+                            dropped += 1;
+                        }
+                        Ok(Some(_)) => {
+                            self.deleting.lock().unwrap().remove(idx);
+                            return Err(format!(
+                                "failed to drop compressed oplog chunk for worker {} in blob storage: {error}",
+                                self.owned_agent_id.agent_id
+                            ));
+                        }
+                        Err(reconcile_error) => {
+                            return Err(format!(
+                                "failed to drop compressed oplog chunk for worker {} in blob storage: {error}; failed to reconcile the delete: {reconcile_error}",
+                                self.owned_agent_id.agent_id
+                            ));
+                        }
+                    }
                 }
             }
         }
 
         let is_empty = self.entries.lock().unwrap().is_empty();
 
-        if is_empty {
+        // Ephemeral archive appends are performed by an independent writer. Recursive directory
+        // cleanup after observing it empty can race a newly committed chunk and remove it.
+        if is_empty && self.agent_mode == AgentMode::Durable {
             let was_created = self.created.swap(false, Ordering::AcqRel);
             if was_created
                 && let Err(error) = self

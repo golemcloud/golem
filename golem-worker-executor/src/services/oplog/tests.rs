@@ -591,6 +591,7 @@ pub(crate) struct ReadCountingIndexedStorage {
     fail_delete_once: AtomicBool,
     fail_drop_prefix_once: AtomicBool,
     fail_length_once: AtomicBool,
+    fail_exists_once: AtomicBool,
 }
 
 impl ReadCountingIndexedStorage {
@@ -659,6 +660,10 @@ impl ReadCountingIndexedStorage {
         self.fail_length_once.store(true, Ordering::Relaxed);
     }
 
+    pub(crate) fn fail_next_exists(&self) {
+        self.fail_exists_once.store(true, Ordering::Relaxed);
+    }
+
     fn append_attempts(&self) -> usize {
         self.append_attempts.load(Ordering::Relaxed)
     }
@@ -702,6 +707,11 @@ impl IndexedStorage for ReadCountingIndexedStorage {
         key: &str,
     ) -> Result<bool, IndexedStorageError> {
         self.count_read();
+        if self.fail_exists_once.swap(false, Ordering::Relaxed) {
+            return Err(IndexedStorageError::Other(
+                "injected indexed exists failure".to_string(),
+            ));
+        }
         self.inner.exists(svc_name, api_name, namespace, key).await
     }
 
@@ -5822,6 +5832,101 @@ async fn permanent_archive_failure_isolated_from_other_agents(_tracing: &Tracing
 }
 
 #[test]
+async fn background_archive_failure_isolated_from_other_open_agent_oplogs(_tracing: &Tracing) {
+    let primary = Arc::new(
+        PrimaryOplogService::new(
+            Arc::new(InMemoryIndexedStorage::new()),
+            Arc::new(InMemoryBlobStorage::new()),
+            100,
+            100,
+            100,
+            RetryConfig::default(),
+        )
+        .await,
+    );
+    let archive_storage = Arc::new(ReadCountingIndexedStorage::new());
+    let archive = Arc::new(CompressedOplogArchiveService::new(
+        archive_storage.clone(),
+        1,
+        immediate_archive_retry_config(1),
+    ));
+    let service = MultiLayerOplogService::new(primary, nev![archive], 100, 100);
+    let environment_id = EnvironmentId::new();
+    let component_id = ComponentId::new();
+    let account_id = AccountId::new();
+
+    async fn create_agent(
+        service: &MultiLayerOplogService,
+        environment_id: EnvironmentId,
+        component_id: ComponentId,
+        account_id: AccountId,
+        name: &str,
+    ) -> Arc<dyn Oplog> {
+        let agent_id = AgentId {
+            component_id,
+            agent_id: name.to_string(),
+        };
+        let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+        service
+            .create(
+                &mut service.lock_lifecycle(&owned_agent_id.agent_id).await,
+                &owned_agent_id,
+                AgentMode::Durable,
+                create_test_entry(
+                    agent_id.clone(),
+                    AgentMode::Durable,
+                    ComponentRevision::new(1).unwrap(),
+                    environment_id,
+                    account_id,
+                    Uuid::new_v4(),
+                ),
+                make_agent_metadata(agent_id, account_id, environment_id),
+                default_last_known_status(),
+                default_execution_status(AgentMode::Durable),
+            )
+            .await
+    }
+
+    let failed = create_agent(
+        &service,
+        environment_id,
+        component_id,
+        account_id,
+        "failed-background-archive",
+    )
+    .await;
+    failed.commit(CommitLevel::Always).await;
+    archive_storage.inject_append_failure(InjectedAppendFailure::PermanentBeforeWrite);
+    assert!(
+        MultiLayerOplog::try_archive_blocking(&failed)
+            .await
+            .unwrap_err()
+            .contains("injected permanent failure")
+    );
+    let failed_index = failed.add(OplogEntry::no_op(None)).await;
+    failed.commit(CommitLevel::Always).await;
+    assert_eq!(failed_index, OplogIndex::from_u64(2));
+
+    let healthy = create_agent(
+        &service,
+        environment_id,
+        component_id,
+        account_id,
+        "healthy-background-archive",
+    )
+    .await;
+    healthy.commit(CommitLevel::Always).await;
+    assert_eq!(
+        MultiLayerOplog::try_archive_blocking(&healthy).await,
+        Ok(Some(false))
+    );
+    assert!(matches!(
+        healthy.read(OplogIndex::INITIAL).await,
+        OplogEntry::Create { .. }
+    ));
+}
+
+#[test]
 async fn primary_archive_drop_failure_does_not_stop_the_agent_oplog(_tracing: &Tracing) {
     let indexed_storage = Arc::new(ReadCountingIndexedStorage::new());
     let oplog_service = PrimaryOplogService::new(
@@ -5995,6 +6100,52 @@ async fn blob_archive_failed_prefix_drop_remains_retryable(_tracing: &Tracing) {
 }
 
 #[test]
+async fn definite_blob_delete_failure_does_not_mask_later_corruption(_tracing: &Tracing) {
+    let storage = Arc::new(ReadCountingBlobStorage::new());
+    let service = BlobOplogArchiveService::new(storage.clone(), 1);
+    let owned_agent_id = OwnedAgentId::new(
+        EnvironmentId::new(),
+        &AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "blob-delete-marker-reconciliation".to_string(),
+        },
+    );
+    let archive = service
+        .open_fresh(&owned_agent_id, AgentMode::Durable)
+        .await;
+    archive
+        .append(&transfer_test_entries().into_iter().collect::<Vec<_>>())
+        .await
+        .unwrap();
+    storage.fail_next_delete();
+    assert!(archive.drop_prefix(OplogIndex::from_u64(2)).await.is_err());
+
+    storage
+        .delete(
+            "blob_oplog",
+            "test",
+            BlobStorageNamespace::CompressedOplog {
+                environment_id: owned_agent_id.environment_id(),
+                component_id: owned_agent_id.component_id(),
+                agent_mode: AgentMode::Durable,
+                level: 1,
+            },
+            &PathBuf::from(owned_agent_id.agent_name()).join("2"),
+        )
+        .await
+        .unwrap();
+
+    assert!(
+        archive
+            .read_source(OplogIndex::INITIAL, 2)
+            .await
+            .unwrap_err()
+            .contains("is missing"),
+        "a later missing object must be reported as corruption, not mistaken for the old delete"
+    );
+}
+
+#[test]
 async fn blob_archive_partial_drop_retry_preserves_wider_destination(_tracing: &Tracing) {
     let expected = [
         (OplogIndex::INITIAL, OplogEntry::no_op(None).rounded()),
@@ -6055,7 +6206,7 @@ async fn blob_archive_partial_drop_retry_preserves_wider_destination(_tracing: &
 }
 
 #[test]
-async fn blob_archive_indeterminate_drop_reconciles_on_same_handle(_tracing: &Tracing) {
+async fn blob_archive_indeterminate_drop_reconciles_before_returning(_tracing: &Tracing) {
     let expected = transfer_test_entries();
     let storage = Arc::new(ReadCountingBlobStorage::new());
     let source_service = BlobOplogArchiveService::new(storage.clone(), 1);
@@ -6079,15 +6230,6 @@ async fn blob_archive_indeterminate_drop_reconciles_on_same_handle(_tracing: &Tr
         .unwrap();
     storage.fail_delete_after_commit(0);
 
-    assert!(
-        transfer_between_lower_layers(
-            0,
-            OplogIndex::from_u64(2),
-            nev![source.clone(), target.clone()],
-        )
-        .await
-        .is_err()
-    );
     transfer_between_lower_layers(
         0,
         OplogIndex::from_u64(2),
@@ -6210,6 +6352,98 @@ async fn compressed_archive_cleanup_failure_does_not_fail_completed_drop(_tracin
 }
 
 #[test]
+async fn ephemeral_compressed_prefix_drop_does_not_delete_the_whole_key(_tracing: &Tracing) {
+    let entries = transfer_test_entries();
+    let storage = Arc::new(ReadCountingIndexedStorage::new());
+    let service =
+        CompressedOplogArchiveService::new(storage.clone(), 1, immediate_archive_retry_config(1));
+    let owned_agent_id = OwnedAgentId::new(
+        EnvironmentId::new(),
+        &AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "ephemeral-compressed-prefix".to_string(),
+        },
+    );
+    let target = service
+        .open_fresh(&owned_agent_id, AgentMode::Ephemeral)
+        .await;
+    target
+        .append(&entries.into_iter().collect::<Vec<_>>())
+        .await
+        .unwrap();
+    storage.fail_next_delete();
+
+    target.drop_prefix(OplogIndex::from_u64(2)).await.unwrap();
+    assert!(
+        service
+            .delete(&owned_agent_id, AgentMode::Ephemeral)
+            .await
+            .is_err(),
+        "the injected whole-key delete failure must remain unused by prefix cleanup"
+    );
+}
+
+#[test]
+async fn emptied_compressed_archive_accepts_the_same_chunk_id_on_retry(_tracing: &Tracing) {
+    let entries = transfer_test_entries().into_iter().collect::<Vec<_>>();
+    let storage = Arc::new(ReadCountingIndexedStorage::new());
+    let service = CompressedOplogArchiveService::new(storage, 1, immediate_archive_retry_config(1));
+    let owned_agent_id = OwnedAgentId::new(
+        EnvironmentId::new(),
+        &AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "compressed-same-id-retry".to_string(),
+        },
+    );
+    let target = service
+        .open_fresh(&owned_agent_id, AgentMode::Ephemeral)
+        .await;
+
+    target.append(&entries).await.unwrap();
+    target.drop_prefix(OplogIndex::from_u64(2)).await.unwrap();
+    target.append(&entries).await.unwrap();
+
+    assert_eq!(
+        target
+            .read_source(OplogIndex::INITIAL, entries.len() as u64)
+            .await
+            .unwrap(),
+        entries.into_iter().collect()
+    );
+}
+
+#[test]
+async fn ephemeral_blob_prefix_drop_does_not_delete_the_whole_directory(_tracing: &Tracing) {
+    let entries = transfer_test_entries();
+    let storage = Arc::new(ReadCountingBlobStorage::new());
+    let service = BlobOplogArchiveService::new(storage.clone(), 1);
+    let owned_agent_id = OwnedAgentId::new(
+        EnvironmentId::new(),
+        &AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "ephemeral-blob-prefix".to_string(),
+        },
+    );
+    let target = service
+        .open_fresh(&owned_agent_id, AgentMode::Ephemeral)
+        .await;
+    target
+        .append(&entries.into_iter().collect::<Vec<_>>())
+        .await
+        .unwrap();
+    storage.fail_next_delete_dir();
+
+    target.drop_prefix(OplogIndex::from_u64(2)).await.unwrap();
+    assert!(
+        service
+            .delete(&owned_agent_id, AgentMode::Ephemeral)
+            .await
+            .is_err(),
+        "the injected recursive delete failure must remain unused by prefix cleanup"
+    );
+}
+
+#[test]
 async fn archive_service_delete_failures_are_returned_for_retry(_tracing: &Tracing) {
     let environment_id = EnvironmentId::new();
     let agent_id = AgentId {
@@ -6252,6 +6486,69 @@ async fn archive_service_delete_failures_are_returned_for_retry(_tracing: &Traci
 }
 
 #[test]
+async fn multilayer_partial_delete_stays_retryable(_tracing: &Tracing) {
+    let primary = Arc::new(
+        PrimaryOplogService::new(
+            Arc::new(InMemoryIndexedStorage::new()),
+            Arc::new(InMemoryBlobStorage::new()),
+            100,
+            100,
+            100,
+            RetryConfig::default(),
+        )
+        .await,
+    );
+    let archive_storage = Arc::new(ReadCountingIndexedStorage::new());
+    let archive = Arc::new(CompressedOplogArchiveService::new(
+        archive_storage.clone(),
+        1,
+        immediate_archive_retry_config(1),
+    ));
+    let service = MultiLayerOplogService::new(primary, nev![archive.clone()], 100, 100);
+    let owned_agent_id = OwnedAgentId::new(
+        EnvironmentId::new(),
+        &AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "partial-multilayer-delete".to_string(),
+        },
+    );
+    archive
+        .open_fresh(&owned_agent_id, AgentMode::Durable)
+        .await
+        .append(&transfer_test_entries().into_iter().collect::<Vec<_>>())
+        .await
+        .unwrap();
+    archive_storage.fail_next_delete();
+
+    let mut lifecycle = service.lock_lifecycle(&owned_agent_id.agent_id).await;
+    assert!(
+        service
+            .delete(&mut lifecycle, &owned_agent_id, AgentMode::Durable)
+            .await
+            .unwrap_err()
+            .contains("injected indexed delete failure")
+    );
+    assert!(
+        service
+            .try_exists(&owned_agent_id, AgentMode::Durable)
+            .await
+            .unwrap(),
+        "failed cleanup remains fenced and discoverable for explicit retry"
+    );
+
+    service
+        .delete(&mut lifecycle, &owned_agent_id, AgentMode::Durable)
+        .await
+        .unwrap();
+    assert!(
+        !service
+            .try_exists(&owned_agent_id, AgentMode::Durable)
+            .await
+            .unwrap()
+    );
+}
+
+#[test]
 async fn malformed_blob_archive_object_name_is_scoped_error(_tracing: &Tracing) {
     let storage = Arc::new(ReadCountingBlobStorage::new());
     let environment_id = EnvironmentId::new();
@@ -6281,11 +6578,42 @@ async fn malformed_blob_archive_object_name_is_scoped_error(_tracing: &Tracing) 
     let archive = BlobOplogArchiveService::new(storage, 1)
         .open(&owned_agent_id, AgentMode::Durable)
         .await;
-    let error = archive
-        .read_source(OplogIndex::INITIAL, 1)
-        .await
-        .unwrap_err();
+    let bad_target = Arc::new(TransferTestArchive::new(
+        "bad-target",
+        BTreeMap::new(),
+        Arc::new(StdMutex::new(Vec::new())),
+    ));
+    let error = transfer_between_lower_layers(
+        0,
+        OplogIndex::INITIAL,
+        nev![archive, bad_target as Arc<dyn OplogArchive + Send + Sync>],
+    )
+    .await
+    .unwrap_err();
     assert!(error.contains("failed to parse oplog index"));
+
+    let healthy_entries = transfer_test_entries();
+    let healthy_source = Arc::new(TransferTestArchive::new(
+        "healthy-source",
+        healthy_entries.clone(),
+        Arc::new(StdMutex::new(Vec::new())),
+    ));
+    let healthy_target = Arc::new(TransferTestArchive::new(
+        "healthy-target",
+        BTreeMap::new(),
+        Arc::new(StdMutex::new(Vec::new())),
+    ));
+    transfer_between_lower_layers(
+        0,
+        OplogIndex::from_u64(2),
+        nev![
+            healthy_source as Arc<dyn OplogArchive + Send + Sync>,
+            healthy_target.clone()
+        ],
+    )
+    .await
+    .unwrap();
+    assert_eq!(*healthy_target.entries.lock().unwrap(), healthy_entries);
 }
 
 #[test]

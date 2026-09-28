@@ -223,6 +223,7 @@ async fn fixture(threshold: u64) -> Fixture {
     let transfer = EphemeralOplog::spawn_background_transfer(
         owned_agent_id.clone(),
         lower.clone(),
+        service.clone(),
         transfer_rx,
         start_rx,
     );

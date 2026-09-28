@@ -2632,13 +2632,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ));
         }
         drop(instance);
-        if self
+        let current_oplog_index = self
             .oplog_service()
             .try_get_last_index(&self.owned_agent_id, self.agent_mode())
             .await
-            .map_err(WorkerExecutorError::runtime)?
-            != last_oplog_index
-        {
+            .map_err(WorkerExecutorError::runtime)?;
+        if !scheduled_archive_is_current(current_oplog_index, last_oplog_index) {
             return Ok(None);
         }
         let result = match wait {
@@ -9555,6 +9554,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 }
 
+// A scheduled archive may outlive later commits. Archiving the current prefix preserves the
+// retry; an index behind the scheduled one indicates stale or recreated state.
+fn scheduled_archive_is_current(current: OplogIndex, scheduled: OplogIndex) -> bool {
+    current >= scheduled
+}
+
 #[derive(Debug)]
 struct WorkerStatusMetric {
     status: StdMutex<AgentStatus>,
@@ -11231,6 +11236,20 @@ mod tests {
     use golem_common::model::oplog::AgentError;
     use std::path::Path;
     use test_r::test;
+
+    #[test]
+    fn scheduled_archive_remains_valid_after_the_oplog_advances() {
+        let scheduled = OplogIndex::from_u64(10);
+        assert!(scheduled_archive_is_current(scheduled, scheduled));
+        assert!(scheduled_archive_is_current(
+            OplogIndex::from_u64(11),
+            scheduled
+        ));
+        assert!(!scheduled_archive_is_current(
+            OplogIndex::from_u64(9),
+            scheduled
+        ));
+    }
 
     #[test]
     fn cancelled_resident_requests_are_pruned_without_dropping_snapshots() {

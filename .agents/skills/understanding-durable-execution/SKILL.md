@@ -216,7 +216,8 @@ drains the resident stream producer before running maintenance on a private prod
 maintenance is drained before a retry; only deletion closes the oplog generation permanently.
 Archive transfers append and verify the destination before dropping the source. Archive storage
 failures therefore fail only that maintenance attempt: they are logged, never fail the agent,
-queued archival retries run later, and the authoritative source remains intact.
+the authoritative source remains intact, and threshold, scheduled or sweep maintenance retries
+with per-agent backoff. A scheduled retry remains valid when later commits advance the oplog tip.
 An archive read needed for replay still fails recovery rather than being treated as absent data.
 
 Cold acquisition reserves one unresolved `Worker` in `ActiveAgents`. `initialize_with` owns one

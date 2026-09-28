@@ -49,7 +49,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::fmt::{Debug, Formatter};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::sync::oneshot::Sender;
 use tracing::{Instrument, Level, debug, info, warn};
@@ -57,6 +57,28 @@ use tracing::{Instrument, Level, debug, info, warn};
 pub(crate) type TransferFiber = Arc<Mutex<TransferFiberState>>;
 pub type OplogArchiveResult<T> = Result<T, String>;
 type TransferFibers = Arc<Mutex<HashMap<AgentId, Weak<Mutex<TransferFiberState>>>>>;
+type ArchiveFailures = Arc<Mutex<HashMap<(OwnedAgentId, ArchiveSource), ArchiveFailureState>>>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum ArchiveSource {
+    Primary,
+    Lower(usize),
+}
+
+const ARCHIVE_RETRY_BASE_DELAY: Duration = Duration::from_secs(1);
+const ARCHIVE_RETRY_MAX_DELAY: Duration = Duration::from_secs(5 * 60);
+
+#[derive(Debug, Clone, Copy)]
+struct ArchiveFailureState {
+    failures: u32,
+    retry_at: Instant,
+}
+
+fn archive_retry_delay(failures: u32) -> Duration {
+    ARCHIVE_RETRY_BASE_DELAY
+        .saturating_mul(1 << failures.saturating_sub(1).min(9))
+        .min(ARCHIVE_RETRY_MAX_DELAY)
+}
 
 pub(crate) struct TransferFiberState {
     transfer_fiber: Option<tokio::task::AbortHandle>,
@@ -288,6 +310,7 @@ pub struct MultiLayerOplogService {
 
     oplogs: OpenOplogs,
     transfer_fibers: TransferFibers,
+    archive_failures: ArchiveFailures,
 
     entry_count_limit: u64,
     max_operations_before_commit_ephemeral: u64,
@@ -305,8 +328,82 @@ impl MultiLayerOplogService {
             lower,
             oplogs: OpenOplogs::new("multi-layer oplog"),
             transfer_fibers: Arc::new(Mutex::new(HashMap::new())),
+            archive_failures: Arc::new(Mutex::new(HashMap::new())),
             entry_count_limit,
             max_operations_before_commit_ephemeral,
+        }
+    }
+
+    pub(crate) fn begin_archive_attempt(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        source: ArchiveSource,
+    ) -> bool {
+        self.archive_attempt_ready(owned_agent_id, source)
+    }
+
+    pub(crate) fn record_archive_failure(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        source: ArchiveSource,
+    ) {
+        let mut failures = self.archive_failures.lock().unwrap();
+        let key = (owned_agent_id.clone(), source);
+        let failure_count = failures
+            .get(&key)
+            .map_or(1, |state| state.failures.saturating_add(1));
+        failures.insert(
+            key,
+            ArchiveFailureState {
+                failures: failure_count,
+                retry_at: Instant::now() + archive_retry_delay(failure_count),
+            },
+        );
+    }
+
+    pub(crate) fn record_archive_success(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        source: ArchiveSource,
+    ) {
+        self.archive_failures
+            .lock()
+            .unwrap()
+            .remove(&(owned_agent_id.clone(), source));
+    }
+
+    fn archive_retry_due(&self, owned_agent_id: &OwnedAgentId, source: ArchiveSource) -> bool {
+        self.archive_failures
+            .lock()
+            .unwrap()
+            .get(&(owned_agent_id.clone(), source))
+            .is_some_and(|state| Instant::now() >= state.retry_at)
+    }
+
+    fn archive_attempt_ready(&self, owned_agent_id: &OwnedAgentId, source: ArchiveSource) -> bool {
+        self.archive_failures
+            .lock()
+            .unwrap()
+            .get(&(owned_agent_id.clone(), source))
+            .is_none_or(|state| Instant::now() >= state.retry_at)
+    }
+
+    pub(crate) async fn wait_until_archive_ready(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        source: ArchiveSource,
+    ) {
+        loop {
+            let wait = self
+                .archive_failures
+                .lock()
+                .unwrap()
+                .get(&(owned_agent_id.clone(), source))
+                .and_then(|state| state.retry_at.checked_duration_since(Instant::now()));
+            match wait {
+                Some(wait) if !wait.is_zero() => tokio::time::sleep(wait).await,
+                _ => return,
+            }
         }
     }
 
@@ -444,6 +541,7 @@ impl Clone for MultiLayerOplogService {
             lower: self.lower.clone(),
             oplogs: self.oplogs.clone(),
             transfer_fibers: self.transfer_fibers.clone(),
+            archive_failures: self.archive_failures.clone(),
             entry_count_limit: self.entry_count_limit,
             max_operations_before_commit_ephemeral: self.max_operations_before_commit_ephemeral,
         }
@@ -574,6 +672,7 @@ impl OplogConstructor for CreateOplogConstructor {
                     account_id,
                     self.service.entry_count_limit,
                     &tx,
+                    &self.service,
                     self.fresh,
                 )
                 .await;
@@ -595,6 +694,7 @@ impl OplogConstructor for CreateOplogConstructor {
                 let transfer = EphemeralOplog::spawn_background_transfer(
                     self.owned_agent_id.clone(),
                     lower.clone(),
+                    self.service.clone(),
                     rx,
                     start_rx,
                 );
@@ -826,12 +926,26 @@ impl OplogService for MultiLayerOplogService {
     ) -> Result<(), String> {
         lifecycle.assert_agent(&owned_agent_id.agent_id);
         self.abort_transfer(&owned_agent_id.agent_id).await;
-        self.primary
+        if let Err(error) = self
+            .primary
             .delete(lifecycle, owned_agent_id, agent_mode)
-            .await?;
-        for layer in &self.lower {
-            layer.delete(owned_agent_id, agent_mode).await?;
+            .await
+        {
+            crate::metrics::oplog::record_archive_maintenance_failure("delete");
+            warn!(agent_id = %owned_agent_id, error = %error, "Failed to delete primary oplog storage; deletion remains fenced for retry");
+            return Err(error);
         }
+        for (level, layer) in self.lower.iter().enumerate() {
+            if let Err(error) = layer.delete(owned_agent_id, agent_mode).await {
+                crate::metrics::oplog::record_archive_maintenance_failure("delete");
+                warn!(agent_id = %owned_agent_id, level, error = %error, "Failed to delete archived oplog storage; deletion remains fenced for retry");
+                return Err(error);
+            }
+        }
+        self.archive_failures
+            .lock()
+            .unwrap()
+            .retain(|(failed_agent_id, _), _| failed_agent_id != owned_agent_id);
         Ok(())
     }
 
@@ -1042,6 +1156,8 @@ impl MultiLayerOplog {
                         i,
                         instrumented,
                         tx.clone(),
+                        owned_agent_id.clone(),
+                        multi_layer_oplog_service.clone(),
                         multi_layer_oplog_service.entry_count_limit,
                     )
                     .await,
@@ -1094,10 +1210,17 @@ impl MultiLayerOplog {
             &result.transfer_fiber,
         );
         let (start_tx, start_rx) = tokio::sync::oneshot::channel();
+        let transfer_service = multi_layer_oplog_service.clone();
         let transfer_fiber = tokio::spawn(async move {
             if start_rx.await.is_ok() {
-                Self::background_transfer(owned_agent_id, Arc::downgrade(&result_oplog), lower, rx)
-                    .await;
+                Self::background_transfer(
+                    owned_agent_id,
+                    Arc::downgrade(&result_oplog),
+                    lower,
+                    transfer_service,
+                    rx,
+                )
+                .await;
             }
         });
         result
@@ -1115,6 +1238,7 @@ impl MultiLayerOplog {
         owned_agent_id: OwnedAgentId,
         primary: Weak<dyn Oplog>,
         lower: NEVec<Arc<dyn OplogArchive + Send + Sync>>,
+        multi_layer_oplog_service: MultiLayerOplogService,
         mut rx: UnboundedReceiver<BackgroundTransferMessage>,
     ) {
         // TODO: monitor queue length
@@ -1128,6 +1252,12 @@ impl MultiLayerOplog {
                     transfer_origin,
                 } => {
                     async {
+                        multi_layer_oplog_service
+                            .wait_until_archive_ready(
+                                &owned_agent_id,
+                                ArchiveSource::Primary,
+                            )
+                            .await;
                         info!(
                             "Transferring oplog entries up to index {last_transferred_idx} of the primary oplog to the next layer"
                         );
@@ -1142,14 +1272,24 @@ impl MultiLayerOplog {
                             let result = transfer.run().await;
                             let _ = keep_alive.take();
 
-                            if let Some(done) = done {
-                                let _ = done.send(result.clone());
+                            match &result {
+                                Ok(()) => multi_layer_oplog_service.record_archive_success(
+                                    &owned_agent_id,
+                                    ArchiveSource::Primary,
+                                ),
+                                Err(error) => {
+                                    multi_layer_oplog_service.record_archive_failure(
+                                        &owned_agent_id,
+                                        ArchiveSource::Primary,
+                                    );
+                                    crate::metrics::oplog::record_archive_maintenance_failure(
+                                        "primary_transfer",
+                                    );
+                                    warn!(error = %error, "Failed to archive oplog; the source entries remain available for retry");
+                                }
                             }
-                            if let Err(error) = result {
-                                crate::metrics::oplog::record_archive_maintenance_failure(
-                                    "primary_transfer",
-                                );
-                                warn!(error = %error, "Failed to archive oplog; the source entries remain available for retry");
+                            if let Some(done) = done {
+                                let _ = done.send(result);
                             }
                         }
                     }
@@ -1172,6 +1312,12 @@ impl MultiLayerOplog {
                     transfer_origin,
                 } => {
                     async {
+                        multi_layer_oplog_service
+                            .wait_until_archive_ready(
+                                &owned_agent_id,
+                                ArchiveSource::Lower(source),
+                            )
+                            .await;
                         info!(
                             "Transferring oplog entries up to index {last_transferred_idx} of oplog layer {source} to the next layer"
                         );
@@ -1185,14 +1331,24 @@ impl MultiLayerOplog {
                         .await;
                         let _ = keep_alive.take();
 
-                        if let Some(done) = done {
-                            let _ = done.send(result.clone());
+                        match &result {
+                            Ok(()) => multi_layer_oplog_service.record_archive_success(
+                                &owned_agent_id,
+                                ArchiveSource::Lower(source),
+                            ),
+                            Err(error) => {
+                                multi_layer_oplog_service.record_archive_failure(
+                                    &owned_agent_id,
+                                    ArchiveSource::Lower(source),
+                                );
+                                crate::metrics::oplog::record_archive_maintenance_failure(
+                                    "lower_layer_transfer",
+                                );
+                                warn!(error = %error, "Failed to archive oplog; the source entries remain available for retry");
+                            }
                         }
-                        if let Err(error) = result {
-                            crate::metrics::oplog::record_archive_maintenance_failure(
-                                "lower_layer_transfer",
-                            );
-                            warn!(error = %error, "Failed to archive oplog; the source entries remain available for retry");
+                        if let Some(done) = done {
+                            let _ = done.send(result);
                         }
                     }
                     .instrument(related_span!(
@@ -1239,6 +1395,16 @@ impl MultiLayerOplog {
             if last_transferred_idx == OplogIndex::NONE {
                 return Ok(true);
             }
+            if !this
+                .multi_layer_oplog_service
+                .begin_archive_attempt(&this.owned_agent_id, ArchiveSource::Primary)
+            {
+                return if blocking {
+                    Err("Oplog archive retry is backed off after a previous failure".to_string())
+                } else {
+                    Ok(true)
+                };
+            }
             this.transfer
                 .send(TransferFromPrimary {
                     last_transferred_idx,
@@ -1268,12 +1434,23 @@ impl MultiLayerOplog {
 
             if let Some(first_non_empty) = first_non_empty {
                 // transferring the whole non-empty lower layer to the next layer
+                let last_transferred_idx =
+                    this.lower[first_non_empty].current_oplog_index().await?;
+                if !this.multi_layer_oplog_service.begin_archive_attempt(
+                    &this.owned_agent_id,
+                    ArchiveSource::Lower(first_non_empty),
+                ) {
+                    return if blocking {
+                        Err("Oplog archive retry is backed off after a previous failure"
+                            .to_string())
+                    } else {
+                        Ok(true)
+                    };
+                }
                 this.transfer
                     .send(TransferFromLower {
                         source: first_non_empty,
-                        last_transferred_idx: this.lower[first_non_empty]
-                            .current_oplog_index()
-                            .await?,
+                        last_transferred_idx,
                         keep_alive: Some(this.clone()),
                         done: done_tx,
                         drain: false,
@@ -1384,7 +1561,17 @@ impl Oplog for MultiLayerOplog {
         let last_committed_idx = self.last_reported_commit_index.get();
         let last_transferred_idx = self.last_transfer_point.get();
         let count = u64::from(last_committed_idx).saturating_sub(u64::from(last_transferred_idx));
-        if count >= self.multi_layer_oplog_service.entry_count_limit {
+        if count >= self.multi_layer_oplog_service.entry_count_limit
+            || self
+                .multi_layer_oplog_service
+                .archive_retry_due(&self.owned_agent_id, ArchiveSource::Primary)
+        {
+            if !self
+                .multi_layer_oplog_service
+                .begin_archive_attempt(&self.owned_agent_id, ArchiveSource::Primary)
+            {
+                return result;
+            }
             debug!(
                 "Enqueuing transfer of {count} oplog entries from the primary oplog to the next layer up to {last_committed_idx}"
             );
@@ -1568,6 +1755,8 @@ pub struct WrappedOplogArchive {
     archive: Arc<dyn OplogArchive + Send + Sync>,
     entry_count: AtomicU64,
     transfer: UnboundedSender<BackgroundTransferMessage>,
+    owned_agent_id: OwnedAgentId,
+    multi_layer_oplog_service: MultiLayerOplogService,
     entry_count_limit: u64,
 }
 
@@ -1576,6 +1765,8 @@ impl WrappedOplogArchive {
         layer: usize,
         archive: Arc<dyn OplogArchive + Send + Sync>,
         transfer: UnboundedSender<BackgroundTransferMessage>,
+        owned_agent_id: OwnedAgentId,
+        multi_layer_oplog_service: MultiLayerOplogService,
         entry_count_limit: u64,
     ) -> Self {
         let initial_entry_count = archive.length().await.unwrap_or_else(|error| {
@@ -1591,6 +1782,8 @@ impl WrappedOplogArchive {
             archive,
             entry_count: AtomicU64::new(initial_entry_count),
             transfer,
+            owned_agent_id,
+            multi_layer_oplog_service,
             entry_count_limit,
         }
     }
@@ -1599,6 +1792,8 @@ impl WrappedOplogArchive {
         layer: usize,
         archive: Arc<dyn OplogArchive + Send + Sync>,
         transfer: UnboundedSender<BackgroundTransferMessage>,
+        owned_agent_id: OwnedAgentId,
+        multi_layer_oplog_service: MultiLayerOplogService,
         entry_count_limit: u64,
     ) -> Self {
         Self {
@@ -1606,6 +1801,8 @@ impl WrappedOplogArchive {
             archive,
             entry_count: AtomicU64::new(0),
             transfer,
+            owned_agent_id,
+            multi_layer_oplog_service,
             entry_count_limit,
         }
     }
@@ -1627,7 +1824,11 @@ impl OplogArchive for WrappedOplogArchive {
             let bytes = self.archive.append(chunk).await?;
             let old_count = self.entry_count.fetch_add(1, Ordering::AcqRel); // Note: the whole chunk is stored as one entry, so incrementing only by one
             let count = old_count + 1;
-            if count >= self.entry_count_limit {
+            if count >= self.entry_count_limit
+                && self
+                    .multi_layer_oplog_service
+                    .archive_attempt_ready(&self.owned_agent_id, ArchiveSource::Lower(self.layer))
+            {
                 debug!(
                     "Enqueuing transfer of oplog entries from the oplog layer {} to the next layer up to {last_idx}",
                     self.layer
@@ -1828,6 +2029,68 @@ mod transfer_lifecycle_tests {
     test_r::enable!();
 
     #[test]
+    fn archive_failure_backoff_grows_and_is_capped() {
+        assert_eq!(archive_retry_delay(1), Duration::from_secs(1));
+        assert_eq!(archive_retry_delay(2), Duration::from_secs(2));
+        assert_eq!(archive_retry_delay(3), Duration::from_secs(4));
+        assert_eq!(archive_retry_delay(32), ARCHIVE_RETRY_MAX_DELAY);
+    }
+
+    #[test]
+    async fn archive_failure_backoff_is_per_agent_and_resets_on_success() {
+        let indexed = Arc::new(InMemoryIndexedStorage::new());
+        let primary: Arc<dyn OplogService> = Arc::new(
+            PrimaryOplogService::new(
+                indexed.clone(),
+                Arc::new(InMemoryBlobStorage::new()),
+                100,
+                100,
+                100,
+                RetryConfig::default(),
+            )
+            .await,
+        );
+        let archive: Arc<dyn OplogArchiveService> = Arc::new(CompressedOplogArchiveService::new(
+            indexed,
+            1,
+            RetryConfig::default(),
+        ));
+        let service = MultiLayerOplogService::new(primary, nev![archive], 100, 100);
+        let environment_id = EnvironmentId::new();
+        let component_id = ComponentId::new();
+        let failed = OwnedAgentId::new(
+            environment_id,
+            &AgentId {
+                component_id,
+                agent_id: "failed".to_string(),
+            },
+        );
+        let healthy = OwnedAgentId::new(
+            environment_id,
+            &AgentId {
+                component_id,
+                agent_id: "healthy".to_string(),
+            },
+        );
+
+        service.record_archive_failure(&failed, ArchiveSource::Lower(0));
+        assert!(!service.begin_archive_attempt(&failed, ArchiveSource::Lower(0)));
+        assert!(service.begin_archive_attempt(&failed, ArchiveSource::Primary));
+        assert!(service.begin_archive_attempt(&healthy, ArchiveSource::Lower(0)));
+
+        service
+            .archive_failures
+            .lock()
+            .unwrap()
+            .get_mut(&(failed.clone(), ArchiveSource::Lower(0)))
+            .unwrap()
+            .retry_at = Instant::now();
+        assert!(service.begin_archive_attempt(&failed, ArchiveSource::Lower(0)));
+        service.record_archive_success(&failed, ArchiveSource::Lower(0));
+        assert!(service.begin_archive_attempt(&failed, ArchiveSource::Lower(0)));
+    }
+
+    #[test]
     async fn observer_open_preserves_cursor_when_primary_grows() {
         observer_open_after_primary_growth(0).await;
     }
@@ -1908,7 +2171,7 @@ mod transfer_lifecycle_tests {
                 .enumerate()
                 .map(|(index, entry)| (OplogIndex::from_u64(index as u64 + 1), entry.clone()))
                 .collect::<Vec<_>>();
-            deep_archive.append(&prefix).await;
+            deep_archive.append(&prefix).await.unwrap();
             writer.drop_prefix(OplogIndex::from_u64(archived)).await;
         }
         let observer = observer_service
@@ -1963,7 +2226,7 @@ mod transfer_lifecycle_tests {
         );
         assert_eq!(writer.length().await, 10);
         assert_eq!(
-            deep_archive.get_last_index().await,
+            deep_archive.get_last_index().await.unwrap(),
             OplogIndex::from_u64(archived)
         );
     }

@@ -369,8 +369,8 @@ pub trait WorkerService: Send + Sync {
 
     /// Deletes the worker: its oplog, its cached status and its entry in the recovery index.
     ///
-    /// Returns `Err` when the storage could not be reached. Delete is not retried by the caller:
-    /// a retry would re-run the oplog delete, so the error is reported instead.
+    /// Returns `Err` when storage cleanup fails. The current call does not loop; the worker remains
+    /// fenced, and a later explicit deletion retries the unfinished idempotent cleanup.
     async fn remove(
         &self,
         lifecycle: &mut OplogLifecycleGuard,
@@ -907,11 +907,10 @@ impl DefaultWorkerService {
         fingerprint.0.to_string()
     }
 
-    /// Key holding only the worker's immutable `AgentMode`, stored separately from the status
-    /// so `get_agent_mode` can resolve the oplog namespace without reading the whole
-    /// `AgentStatusRecord`. Populated lazily on a `get_agent_mode` cache miss (durable workers
-    /// only); never written on the per-commit hot path. The value never changes for the life of
-    /// the worker. Lives in the `Worker` namespace (not `AgentStatus`) since it has an independent
+    /// Key holding the worker's immutable mode and fingerprint as a hint for identity resolution,
+    /// stored separately from `AgentStatusRecord`. Populated lazily for durable workers and never
+    /// written on the per-commit hot path. The `Create` entry remains authoritative, so stale hints
+    /// are replaced or removed. This lives in the `Worker` namespace because it has an independent
     /// lifecycle from the status fields.
     fn agent_mode_key(agent_id: &AgentId) -> String {
         format!("worker:agent_mode:{}", agent_id.to_redis_key())
@@ -1667,7 +1666,11 @@ impl WorkerService for DefaultWorkerService {
             Some(identity) => {
                 identity.fingerprint == fingerprint && identity.agent_mode == agent_mode
             }
-            None => false,
+            // A previous deletion attempt may already have removed the Create entry while deeper
+            // archive storage still needs cleanup. The lifecycle fence excludes a concurrent new
+            // incarnation, so absence means this deletion must continue rather than declare the
+            // partial cleanup complete.
+            None => true,
         };
 
         self.remove_cached_status(owned_agent_id, fingerprint)
@@ -2378,12 +2381,12 @@ mod tests {
     use golem_common::model::regions::{DeletedRegions, OplogRegion};
     use golem_common::model::{
         AgentInvocationPayload, AgentInvocationResult, AgentMetadata, PendingInvocationRef,
-        PendingUpdateKind, PendingUpdateRef, ScanCursor, ShardLeaseRevision,
+        PendingUpdateKind, PendingUpdateRef, ScanCursor, ShardEpoch, ShardLeaseRevision,
     };
     use golem_common::read_only_lock;
     use golem_service_base::model::component::Component;
     use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use test_r::test;
     use tokio::sync::Notify;
     use uuid::Uuid;
@@ -4235,7 +4238,9 @@ mod tests {
     struct FakeOplogService {
         existing: Vec<OwnedAgentId>,
         initial_entries: HashMap<(OwnedAgentId, AgentMode), OplogEntry>,
-        fail_exists_once: AtomicBool,
+        fail_delete_once: AtomicBool,
+        hide_identity_after_delete_attempt: bool,
+        delete_attempts: AtomicUsize,
     }
 
     #[async_trait]
@@ -4312,7 +4317,12 @@ mod tests {
             _owned_agent_id: &OwnedAgentId,
             _agent_mode: AgentMode,
         ) -> Result<(), String> {
-            unreachable!()
+            self.delete_attempts.fetch_add(1, Ordering::Relaxed);
+            if self.fail_delete_once.swap(false, Ordering::Relaxed) {
+                Err("injected oplog delete failure".to_string())
+            } else {
+                Ok(())
+            }
         }
 
         async fn read_exact(
@@ -4332,6 +4342,11 @@ mod tests {
             _idx: OplogIndex,
             _n: u64,
         ) -> BTreeMap<OplogIndex, OplogEntry> {
+            if self.hide_identity_after_delete_attempt
+                && self.delete_attempts.load(Ordering::Relaxed) > 0
+            {
+                return BTreeMap::new();
+            }
             self.initial_entries
                 .get(&(owned_agent_id.clone(), agent_mode))
                 .cloned()
@@ -4341,18 +4356,6 @@ mod tests {
 
         async fn exists(&self, owned_agent_id: &OwnedAgentId, _agent_mode: AgentMode) -> bool {
             self.existing.contains(owned_agent_id)
-        }
-
-        async fn try_exists(
-            &self,
-            owned_agent_id: &OwnedAgentId,
-            agent_mode: AgentMode,
-        ) -> Result<bool, String> {
-            if self.fail_exists_once.swap(false, Ordering::Relaxed) {
-                Err("injected oplog existence failure".to_string())
-            } else {
-                Ok(self.exists(owned_agent_id, agent_mode).await)
-            }
         }
 
         async fn scan_for_component(
@@ -4479,9 +4482,16 @@ mod tests {
         key_value_storage: Arc<dyn KeyValueStorage + Send + Sync>,
         oplog_service: Arc<dyn OplogService>,
     ) -> DefaultWorkerService {
+        let shard_service = Arc::new(ShardServiceDefault::new());
+        shard_service.register(
+            1,
+            &HashMap::from([(ShardId::new(0), ShardEpoch(0))]),
+            None,
+            ShardLeaseRevision::default(),
+        );
         DefaultWorkerService::new(
             key_value_storage,
-            Arc::new(ShardServiceDefault::new()),
+            shard_service,
             oplog_service,
             Arc::new(UnusedComponentService),
             Arc::new(GolemConfig::default()),
@@ -4663,31 +4673,48 @@ mod tests {
     }
 
     #[test]
-    async fn mode_lookup_archive_failure_is_scoped_and_service_recovers() {
-        let failed_agent_id = test_owned_agent_id("mode-probe-failure");
-        let healthy_agent_id = test_owned_agent_id("healthy-mode-probe");
+    async fn oplog_delete_failure_is_returned_and_explicit_remove_retry_completes() {
+        let owned_agent_id = test_owned_agent_id("retry-oplog-delete");
+        let fingerprint = AgentFingerprint(Uuid::new_v4());
         let oplog_service = Arc::new(FakeOplogService {
-            existing: vec![failed_agent_id.clone(), healthy_agent_id.clone()],
-            fail_exists_once: AtomicBool::new(true),
+            initial_entries: HashMap::from([(
+                (owned_agent_id.clone(), AgentMode::Durable),
+                test_create_entry(&owned_agent_id, AgentMode::Durable, fingerprint),
+            )]),
+            fail_delete_once: AtomicBool::new(true),
+            hide_identity_after_delete_attempt: true,
+            ..FakeOplogService::default()
         });
-        let service = test_worker_service(Arc::new(InMemoryKeyValueStorage::new()), oplog_service);
+        let service = test_worker_service(
+            Arc::new(InMemoryKeyValueStorage::new()),
+            oplog_service.clone(),
+        );
+        let lifecycle_locks = crate::services::oplog::OpenOplogs::new("delete-test");
+        let mut lifecycle = lifecycle_locks
+            .lock_lifecycle(&owned_agent_id.agent_id)
+            .await;
 
-        let error = service.get_agent_mode(&failed_agent_id).await.unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("injected oplog existence failure")
-        );
-        assert_eq!(
-            service.get_agent_mode(&healthy_agent_id).await.unwrap(),
-            Some(AgentMode::Durable),
-            "one agent's infrastructure failure must not affect another agent"
-        );
-        assert_eq!(
-            service.get_agent_mode(&failed_agent_id).await.unwrap(),
-            Some(AgentMode::Durable),
-            "a later operation must recover after the infrastructure failure"
-        );
+        let error = service
+            .remove(
+                &mut lifecycle,
+                &owned_agent_id,
+                AgentMode::Durable,
+                fingerprint,
+            )
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("injected oplog delete failure"));
+
+        service
+            .remove(
+                &mut lifecycle,
+                &owned_agent_id,
+                AgentMode::Durable,
+                fingerprint,
+            )
+            .await
+            .unwrap();
+        assert_eq!(oplog_service.delete_attempts.load(Ordering::Relaxed), 2);
     }
 
     #[test]

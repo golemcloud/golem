@@ -485,15 +485,23 @@ impl IndexedStorage for RedisIndexedStorage {
         key: &str,
         last_dropped_id: u64,
     ) -> Result<(), IndexedStorageError> {
-        let _: u64 = self
-            .redis
-            .with(svc_name, api_name)
-            .xtrim(
-                Self::composite_key(namespace, key),
-                (XCapKind::MinID, last_dropped_id + 1),
-            )
-            .await
-            .map_err(|e| IndexedStorageError::Other(e.to_string()))?;
+        let delete_if_empty = matches!(&namespace, IndexedStorageNamespace::CompressedOpLog { .. });
+        let composite_key = Self::composite_key(namespace, key);
+        if delete_if_empty {
+            let _: u64 = self
+                .redis
+                .with(svc_name, api_name)
+                .xtrim_and_delete_if_empty(composite_key, last_dropped_id + 1)
+                .await
+                .map_err(|e| IndexedStorageError::Other(e.to_string()))?;
+        } else {
+            let _: u64 = self
+                .redis
+                .with(svc_name, api_name)
+                .xtrim(composite_key, (XCapKind::MinID, last_dropped_id + 1))
+                .await
+                .map_err(|e| IndexedStorageError::Other(e.to_string()))?;
+        }
         Ok(())
     }
 }

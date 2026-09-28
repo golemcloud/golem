@@ -2996,7 +2996,8 @@ async fn stale_mode_hint_accepts_a_same_mode_recreated_fingerprint() {
             &id,
             AgentMode::Durable,
         )
-        .await;
+        .await
+        .unwrap();
     let second =
         create_oplog_with_fingerprint(oplog_service.as_ref(), &id, second_fingerprint).await;
     second.commit(CommitLevel::Always).await;

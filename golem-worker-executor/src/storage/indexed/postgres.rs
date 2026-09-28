@@ -589,6 +589,7 @@ impl IndexedStorage for PostgresIndexedStorage {
         last_dropped_id: u64,
     ) -> Result<(), IndexedStorageError> {
         let _permit = self.acquire_permit().await;
+        let delete_if_empty = matches!(&namespace, IndexedStorageNamespace::CompressedOpLog { .. });
         let namespace = Self::namespace(namespace);
         let key = key.to_string();
         let last_dropped_id = Self::to_i64(last_dropped_id, "last_dropped_id")?;
@@ -615,6 +616,18 @@ impl IndexedStorage for PostgresIndexedStorage {
                         .bind(batch_size_i64);
 
                         deleted_rows = tx.execute(query).await?.rows_affected();
+                    }
+
+                    if delete_if_empty {
+                        tx.execute(
+                            sqlx::query(
+                                "DELETE FROM index_storage WHERE namespace = $1 AND key = $2 AND NOT EXISTS (SELECT 1 FROM index_storage WHERE namespace = $3 AND key = $2);",
+                            )
+                            .bind(format!("{namespace}-present"))
+                            .bind(&key)
+                            .bind(&namespace),
+                        )
+                        .await?;
                     }
 
                     Ok(())

@@ -521,7 +521,7 @@ impl OplogArchive for CompressedOplogArchive {
                 sub_chunk.iter().map(|(_, entry)| entry.clone()).collect();
 
             let compressed_chunk = CompressedOplogChunk::compress(entries)
-                .unwrap_or_else(|err| panic!("failed to compress oplog chunk: {err}"));
+                .map_err(|error| format!("failed to compress oplog chunk: {error}"))?;
 
             total_bytes += compressed_chunk.compressed_data.len() as u64;
 
@@ -684,7 +684,9 @@ impl OplogArchive for CompressedOplogArchive {
             })?;
         }
         let remaining = self.length().await?;
-        if remaining == 0 {
+        // Ephemeral archive appends are performed by an independent writer. Deleting the whole key
+        // after observing it empty can race a newly committed append and remove those entries.
+        if remaining == 0 && self.agent_mode == AgentMode::Durable {
             let is = self.indexed_storage.clone();
             let agent_id = self.agent_id.clone();
             let agent_mode = self.agent_mode;
@@ -714,7 +716,8 @@ impl OplogArchive for CompressedOplogArchive {
                 );
             }
         }
-        Ok(before - remaining)
+        // Ephemeral writers may append newer chunks while this maintenance operation is in flight.
+        Ok(before.saturating_sub(remaining))
     }
 
     async fn length(&self) -> OplogArchiveResult<u64> {

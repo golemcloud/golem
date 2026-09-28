@@ -26,16 +26,16 @@
 //! `ScheduledAction::ArchiveOplog`, so the sweep is what moves an oplog a crashed pod stranded.
 //!
 //! Durable oplogs are not swept. An archive step interrupted between its append and its
-//! `drop_prefix` leaves that prefix to be appended again, and in an indexed layer the repeated
-//! `INSERT` hits a unique violation. A blob target, which the ephemeral hop uses in the default
-//! stack, appends with a `put` keyed by the chunk's last index, so a repeat is harmless. A stack
-//! with more than one indexed archive layer gives ephemeral agents the same hazard, which a
-//! re-invocation racing the teardown drain can hit with or without the sweep.
+//! `drop_prefix` leaves that prefix to be appended again. Indexed archives reconcile an append
+//! error by reading the persisted chunk and accepting it only when its contents match; blob
+//! targets use a `put` keyed by the chunk's last index and perform the same content check. A
+//! retry therefore drops the source only after the destination is known to contain that prefix.
 //!
 //! # Failure
 //!
-//! Storage failures fail that agent's maintenance attempt and produce an `archive_failed`
-//! outcome. Its authoritative source remains available for a later sweep.
+//! A failure while inspecting or archiving one agent produces an `archive_failed` outcome. A
+//! namespace scan failure truncates that route's tick instead because no agent key was selected.
+//! In both cases the authoritative source remains available for a later, backed-off attempt.
 //!
 //! # Memory
 //!
@@ -395,6 +395,22 @@ struct Route {
     source: Arc<dyn OplogArchiveService>,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct InspectionFailure {
+    failures: u32,
+    retry_pass: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ScanFailure {
+    failures: u32,
+    retry_at: Instant,
+}
+
+fn inspection_backoff_passes(failures: u32) -> u64 {
+    1_u64 << failures.saturating_sub(1).min(6)
+}
+
 pub struct OplogSweeper {
     config: OplogSweepConfig,
     indexed_storage: Arc<dyn IndexedStorage + Send + Sync>,
@@ -408,6 +424,10 @@ pub struct OplogSweeper {
     /// A completed pass drops what it did not see, since ephemeral ids are unbounded and a drained
     /// agent never returns. Losing an entry costs a pass of latency, never a stranded oplog.
     memo: Mutex<HashMap<(RouteId, AgentId), Seen>>,
+    /// Per-agent inspection failures. Permanent storage errors must not be retried every pass.
+    inspection_failures: Mutex<HashMap<(RouteId, AgentId), InspectionFailure>>,
+    /// Per-route namespace scan failures. One unavailable route must not hot-loop or delay others.
+    scan_failures: Mutex<HashMap<RouteId, ScanFailure>>,
     /// Where each route's scan stopped. Absent means the start of the namespace.
     cursors: Mutex<HashMap<RouteId, ScanResume>>,
     /// Which scan pass each route is on. Bumped when a pass reaches the end of the namespace.
@@ -468,6 +488,8 @@ impl OplogSweeper {
             worker_access,
             max_archive_steps: archives.len().saturating_add(ARCHIVE_STEP_SLACK) as u32,
             memo: Mutex::new(HashMap::new()),
+            inspection_failures: Mutex::new(HashMap::new()),
+            scan_failures: Mutex::new(HashMap::new()),
             cursors: Mutex::new(HashMap::new()),
             passes: Mutex::new(HashMap::new()),
             environments: Mutex::new(HashMap::new()),
@@ -609,6 +631,9 @@ impl OplogSweeper {
         share: RouteShare,
     ) -> RouteReport {
         let started = Instant::now();
+        if self.scan_is_backed_off(route.id).await {
+            return RouteReport::default();
+        }
         let mut resume = self.cursors.lock().await.get(&route.id).cloned();
         let pass = self
             .passes
@@ -621,6 +646,7 @@ impl OplogSweeper {
         let mut report = RouteReport::default();
         let mut truncated = false;
         let mut exhausted = false;
+        let mut scan_failed = false;
         let mut archive_allowance = share.archives;
         let mut walked: u64 = 0;
         let mut pages: u64 = 0;
@@ -659,7 +685,10 @@ impl OplogSweeper {
             let (next, keys) = match page {
                 Ok(page) => page,
                 Err(error) => {
+                    self.record_scan_failure(route.id).await;
+                    crate::metrics::oplog::record_archive_maintenance_failure("sweep_scan");
                     warn!(route = %route.id, error = %error, "Oplog sweep scan failed");
+                    scan_failed = true;
                     truncated = true;
                     break;
                 }
@@ -704,6 +733,9 @@ impl OplogSweeper {
         if exhausted {
             self.finish_pass(route.id, pass).await;
         }
+        if !scan_failed {
+            self.scan_failures.lock().await.remove(&route.id);
+        }
         self.forget_stale(route.id, assignment).await;
 
         report.scanned = walked;
@@ -744,6 +776,13 @@ impl OplogSweeper {
             return Some(Outcome::Resident);
         }
 
+        if self
+            .inspection_is_backed_off(route.id, &agent_id, pass)
+            .await
+        {
+            return Some(Outcome::Waiting);
+        }
+
         let current = match route
             .source
             .try_get_last_index(&owned_agent_id, AgentMode::Ephemeral)
@@ -751,10 +790,14 @@ impl OplogSweeper {
         {
             Ok(current) => current,
             Err(error) => {
+                self.record_inspection_failure(route.id, &agent_id, pass)
+                    .await;
+                crate::metrics::oplog::record_archive_maintenance_failure("sweep_inspection");
                 warn!(agent_id = %owned_agent_id, error = %error, "Failed to inspect oplog archive during sweep");
                 return Some(Outcome::ArchiveFailed);
             }
         };
+        self.clear_inspection_failure(route.id, &agent_id).await;
         if current == OplogIndex::NONE {
             self.forget(route.id, &agent_id).await;
             return Some(Outcome::Empty);
@@ -913,6 +956,68 @@ impl OplogSweeper {
         memo.insert(key, Seen { index, pass });
     }
 
+    async fn inspection_is_backed_off(
+        &self,
+        route: RouteId,
+        agent_id: &AgentId,
+        pass: u64,
+    ) -> bool {
+        self.inspection_failures
+            .lock()
+            .await
+            .get(&(route, agent_id.clone()))
+            .is_some_and(|failure| pass < failure.retry_pass)
+    }
+
+    async fn scan_is_backed_off(&self, route: RouteId) -> bool {
+        self.scan_failures
+            .lock()
+            .await
+            .get(&route)
+            .is_some_and(|failure| Instant::now() < failure.retry_at)
+    }
+
+    async fn record_scan_failure(&self, route: RouteId) {
+        let mut failures = self.scan_failures.lock().await;
+        let count = failures
+            .get(&route)
+            .map_or(1, |failure| failure.failures.saturating_add(1));
+        let intervals = 1_u32 << count.saturating_sub(1).min(6);
+        let intervals = intervals.min(self.config.max_backoff_intervals.max(1));
+        failures.insert(
+            route,
+            ScanFailure {
+                failures: count,
+                retry_at: Instant::now() + self.config.interval.saturating_mul(intervals),
+            },
+        );
+    }
+
+    async fn record_inspection_failure(&self, route: RouteId, agent_id: &AgentId, pass: u64) {
+        let mut failures = self.inspection_failures.lock().await;
+        let key = (route, agent_id.clone());
+        if failures.len() >= self.config.max_tracked_agents.max(1) && !failures.contains_key(&key) {
+            return;
+        }
+        let count = failures
+            .get(&key)
+            .map_or(1, |failure| failure.failures.saturating_add(1));
+        failures.insert(
+            key,
+            InspectionFailure {
+                failures: count,
+                retry_pass: pass.saturating_add(inspection_backoff_passes(count)),
+            },
+        );
+    }
+
+    async fn clear_inspection_failure(&self, route: RouteId, agent_id: &AgentId) {
+        self.inspection_failures
+            .lock()
+            .await
+            .remove(&(route, agent_id.clone()));
+    }
+
     /// Closes a scan pass: entries the pass did not touch belong to agents that have left the
     /// layer, so they are dropped and the route moves on to the next pass.
     async fn finish_pass(&self, route: RouteId, pass: u64) {
@@ -924,6 +1029,12 @@ impl OplogSweeper {
             memo.retain(|(memo_route, _), seen| *memo_route != route || seen.pass + 1 >= pass);
             before - memo.len()
         };
+        self.inspection_failures
+            .lock()
+            .await
+            .retain(|(failure_route, _), failure| {
+                *failure_route != route || failure.retry_pass.saturating_add(1) >= pass
+            });
         self.passes.lock().await.insert(route, pass + 1);
         if dropped > 0 {
             debug!(
@@ -936,6 +1047,7 @@ impl OplogSweeper {
 
     async fn forget(&self, route: RouteId, agent_id: &AgentId) {
         self.memo.lock().await.remove(&(route, agent_id.clone()));
+        self.clear_inspection_failure(route, agent_id).await;
     }
 
     /// Drops memo entries for agents this executor no longer owns, so a reshard does not leave them
@@ -945,6 +1057,12 @@ impl OplogSweeper {
             .lock()
             .await
             .retain(|(memo_route, agent_id), _| *memo_route != route || owns(assignment, agent_id));
+        self.inspection_failures
+            .lock()
+            .await
+            .retain(|(failure_route, agent_id), _| {
+                *failure_route != route || owns(assignment, agent_id)
+            });
     }
 }
 
@@ -985,6 +1103,14 @@ mod tests {
     use uuid::Uuid;
 
     const EPHEMERAL_L1: RouteId = RouteId { source_level: 1 };
+
+    #[test]
+    fn inspection_failure_backoff_grows_and_is_capped() {
+        assert_eq!(inspection_backoff_passes(1), 1);
+        assert_eq!(inspection_backoff_passes(2), 2);
+        assert_eq!(inspection_backoff_passes(3), 4);
+        assert_eq!(inspection_backoff_passes(32), 64);
+    }
 
     fn agent(name: &str, component_id: ComponentId) -> AgentId {
         AgentId {

@@ -413,12 +413,18 @@ impl IndexedStorage for InMemoryIndexedStorage {
         key: &str,
         last_dropped_id: u64,
     ) -> Result<(), IndexedStorageError> {
+        let delete_if_empty = matches!(&namespace, IndexedStorageNamespace::CompressedOpLog { .. });
         let composite_key = Self::composite_key(namespace, key);
         self.data
             .update_async(&composite_key, |_, entry| {
                 entry.retain(|k, _| *k > last_dropped_id);
             })
             .await;
+        if delete_if_empty {
+            self.data
+                .remove_if_async(&composite_key, |entry| entry.is_empty())
+                .await;
+        }
         Ok(())
     }
 }
