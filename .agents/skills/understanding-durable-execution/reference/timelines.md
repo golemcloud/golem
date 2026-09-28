@@ -212,13 +212,14 @@ A cursor rewind cannot do this: the component revision and metadata come from in
 creation in the outer loop, not from the cursor.
 
 With no update pending, failure to load an automatic snapshot or divergence while replaying its
-recorded suffix abandons it and returns `RetryDecision::Immediate`. The outer loop recreates the
-full Store and revision/plugin context from the authoritative manual-update baseline, so history
-before that migration is never replayed. Once this fallback has succeeded,
-`prepare_instance` persists the monotonic `rejected_periodic_snapshot_through` watermark under the
-worker's `AgentFingerprint` before publishing readiness. A payload-download failure is different:
-an in-memory unavailable watermark skips it only for that startup attempt and is cleared after a
-successful preparation. A manual-update snapshot load failure is terminal and retains its cause.
+recorded suffix rejects that exact record and returns `RetryDecision::Immediate`. The outer loop
+recreates the full Store and revision/plugin context and selects again: the previous usable
+record, the manual-update baseline, or a full replay, so history before a migration is never
+replayed. Once preparation has succeeded, `prepare_instance` merges the rejected indexes into the
+set stored under the worker's `AgentFingerprint` before publishing readiness. A payload-download
+failure, or a filesystem snapshot that does not restore, is different: an in-memory unavailable
+set skips the record only for that startup attempt and is cleared after a successful
+preparation. A manual-update snapshot load failure is terminal and retains its cause.
 
 ## 10. Suspend, interrupt/resume, evict, restart: one path
 

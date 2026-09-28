@@ -1653,6 +1653,13 @@ pub struct TestExecutorOverrides {
     /// should expose to running agents (mirrors `retryPolicyDefaults` in
     /// `golem.yaml`).  When `None`, an empty policy list is used.
     pub retry_policies: Option<Vec<NamedRetryPolicy>>,
+    /// Keeps filesystem snapshots in this store, on any storage mode. A test keeps the store
+    /// across restarts of the executor. When `None`, the configuration decides.
+    pub filesystem_snapshot_store:
+        Option<golem_worker_executor::filesystem_snapshot_testing::TestFilesystemSnapshotStore>,
+    /// The upload settings of `filesystem_snapshot_store`. When `None`, the defaults.
+    pub filesystem_snapshot_uploads:
+        Option<golem_worker_executor::services::golem_config::FilesystemSnapshotUploadConfig>,
 }
 
 fn make_base_test_config(deps: &WorkerExecutorTestDependencies) -> GolemConfig {
@@ -2903,6 +2910,32 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
         }
     }
 
+    fn create_agent_filesystem_snapshots(
+        &self,
+        golem_config: &GolemConfig,
+        blob_storage: Arc<dyn golem_service_base::storage::blob::BlobStorage>,
+        active_agents: &Arc<ActiveAgents<TestWorkerCtx>>,
+        shutdown: &golem_worker_executor::services::shutdown::Shutdown,
+    ) -> anyhow::Result<
+        Arc<golem_worker_executor::services::agent_filesystem_snapshots::AgentFilesystemSnapshots>,
+    > {
+        match &self.overrides.filesystem_snapshot_store {
+            Some(store) => Ok(store.service(
+                self.overrides
+                    .filesystem_snapshot_uploads
+                    .clone()
+                    .unwrap_or_default(),
+                shutdown,
+            )),
+            None => golem_worker_executor::bind_agent_filesystem_snapshots(
+                golem_config,
+                blob_storage,
+                active_agents,
+                shutdown,
+            ),
+        }
+    }
+
     fn create_environment_state_service(
         &self,
         _config: &EnvironmentStateServiceConfig,
@@ -3553,6 +3586,37 @@ pub async fn start_with_agent_storage_quota(
         TestExecutorOverrides::default(),
         None,
         "Timeout waiting for agent-storage-quota server to start",
+    )
+    .await
+}
+
+/// Starts an executor on managed XFS that takes a snapshot after each invocation, with the
+/// filesystem snapshot settings `filesystem_snapshots`.
+#[cfg(target_os = "linux")]
+pub async fn start_with_filesystem_snapshots_on_managed_xfs(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    max_disk_space_bytes: u64,
+    managed_xfs_root: PathBuf,
+    filesystem_snapshots: golem_worker_executor::services::golem_config::FilesystemSnapshotsConfig,
+) -> anyhow::Result<TestWorkerExecutor> {
+    run_production_context_bootstrap(
+        deps,
+        context,
+        Arc::new(FixedFilesystemStorageQuotaResourceLimits {
+            max_disk_space_bytes,
+        }),
+        TestExecutorOverrides {
+            configure: Some(Arc::new(move |config| {
+                config.filesystem_storage.managed_xfs_root_dir = Some(managed_xfs_root.clone());
+                config.filesystem_snapshots = filesystem_snapshots.clone();
+                config.oplog.default_snapshotting = SnapshotPolicy::EveryNInvocation { count: 1 };
+                config.oplog.oplog_processor_snapshotting = SnapshotPolicy::Disabled;
+            })),
+            ..Default::default()
+        },
+        None,
+        "Timeout waiting for managed filesystem snapshot server to start",
     )
     .await
 }

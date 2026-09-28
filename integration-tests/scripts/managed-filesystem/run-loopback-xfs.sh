@@ -743,4 +743,14 @@ run_privileged_test \
 run_privileged_test \
   integration \
   "${integration_test_binary}" \
+  filesystem_snapshots::managed_xfs_restart_from_a_snapshot_gives_the_tree_of_a_full_replay
+
+run_privileged_test \
+  integration \
+  "${integration_test_binary}" \
+  filesystem_snapshots::managed_xfs_manual_update_brings_the_files_into_the_target_revision
+
+run_privileged_test \
+  integration \
+  "${integration_test_binary}" \
   wasi::filesystem_downgrade_blocks_guest_until_limit_recovers

@@ -4364,13 +4364,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// When an upload of the snapshot runs on this executor and holds a slot of the uploads, the
     /// start first waits for its decision, for at most `confirmation_wait`. Then, unless the
     /// upload gave `Superseded`, the start asks the store once whether it holds the whole
-    /// snapshot. When it does, the start writes the confirmation record as the owner of the
+    /// snapshot, for at most what is left of `confirmation_wait` after a wait, or at most
+    /// `store_check_limit` without one. When it does, the start writes the confirmation record as the owner of the
     /// agent, while the instance waits for its permits with this start attempt. A terminal
     /// interrupt ends the wait and the check. This start holds no slot, no memory and no lock
     /// while it waits.
     async fn confirm_filesystem_snapshot_before_start(self: &Arc<Self>, start_attempt: Uuid) {
         let snapshots = self.agent_filesystem_snapshots();
-        let Some(limit) = snapshots.confirmation_wait() else {
+        let Some((limit, check_limit)) = snapshots
+            .confirmation_wait()
+            .zip(snapshots.store_check_limit())
+        else {
             return;
         };
         let status = self.last_known_status.load_full();
@@ -4433,7 +4437,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let stat_limit = if waited {
             limit.saturating_sub(started.elapsed())
         } else {
-            FILESYSTEM_SNAPSHOT_START_CHECK_LIMIT
+            check_limit
         };
         let stored = tokio::select! {
             stored = tokio::time::timeout(stat_limit, snapshots.is_stored(&scope, &name)) => stored,
@@ -9106,10 +9110,6 @@ struct RunningAgentRuntime<Ctx: WorkerCtx> {
 }
 
 type WorkerRunningAgent<Ctx> = RunningAgent<RunningAgentRuntime<Ctx>>;
-
-/// The longest time that a start that did not wait for an upload asks the store about the
-/// filesystem snapshot of its last automatic snapshot record.
-const FILESYSTEM_SNAPSHOT_START_CHECK_LIMIT: Duration = Duration::from_secs(5);
 
 /// The baseline that a start selected, with its restore.
 struct StartBaseline {

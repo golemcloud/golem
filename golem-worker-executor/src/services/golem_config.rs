@@ -2406,9 +2406,13 @@ pub struct FilesystemSnapshotUploadConfig {
     max_concurrent_uploads: NonZeroUsize,
     /// The number of restores that run at the same time on one executor.
     max_concurrent_restores: NonZeroUsize,
-    /// How long the executor keeps a stopped worker in memory for an upload in progress.
+    /// How long a start of an agent waits for an upload of the same agent on this executor.
     #[serde(with = "humantime_serde")]
     confirmation_wait: Duration,
+    /// How long a start checks the store for the snapshot of its newest record when it did not
+    /// wait for an upload.
+    #[serde(with = "humantime_serde")]
+    store_check_limit: Duration,
     /// How long a capture waits for open file calls before it gives up.
     #[serde(with = "humantime_serde")]
     capture_wait: Duration,
@@ -2427,6 +2431,8 @@ const DEFAULT_FILESYSTEM_SNAPSHOT_MAX_CONCURRENT_UPLOADS: usize = 4;
 const DEFAULT_FILESYSTEM_SNAPSHOT_MAX_CONCURRENT_RESTORES: usize = 8;
 /// The default of [`FilesystemSnapshotUploadConfig::confirmation_wait`].
 const DEFAULT_FILESYSTEM_SNAPSHOT_CONFIRMATION_WAIT: Duration = Duration::from_secs(60);
+/// The default of [`FilesystemSnapshotUploadConfig::store_check_limit`].
+const DEFAULT_FILESYSTEM_SNAPSHOT_STORE_CHECK_LIMIT: Duration = Duration::from_secs(5);
 /// The default of [`FilesystemSnapshotUploadConfig::capture_wait`].
 const DEFAULT_FILESYSTEM_SNAPSHOT_CAPTURE_WAIT: Duration = Duration::from_secs(5);
 /// The default of [`FilesystemSnapshotUploadConfig::retained_periodic_snapshots`] and of
@@ -2449,6 +2455,7 @@ impl FilesystemSnapshotUploadConfig {
         max_concurrent_uploads: usize,
         max_concurrent_restores: usize,
         confirmation_wait: Duration,
+        store_check_limit: Duration,
         capture_wait: Duration,
         retained_periodic_snapshots: usize,
         retained_update_snapshots: usize,
@@ -2477,6 +2484,7 @@ impl FilesystemSnapshotUploadConfig {
             max_concurrent_uploads: count(max_concurrent_uploads, "max_concurrent_uploads")?,
             max_concurrent_restores: count(max_concurrent_restores, "max_concurrent_restores")?,
             confirmation_wait: wait(confirmation_wait, "confirmation_wait")?,
+            store_check_limit: wait(store_check_limit, "store_check_limit")?,
             capture_wait: wait(capture_wait, "capture_wait")?,
             retained_periodic_snapshots: count(
                 retained_periodic_snapshots,
@@ -2502,6 +2510,10 @@ impl FilesystemSnapshotUploadConfig {
         self.confirmation_wait
     }
 
+    pub const fn store_check_limit(&self) -> Duration {
+        self.store_check_limit
+    }
+
     pub const fn capture_wait(&self) -> Duration {
         self.capture_wait
     }
@@ -2525,6 +2537,7 @@ impl Default for FilesystemSnapshotUploadConfig {
             DEFAULT_FILESYSTEM_SNAPSHOT_MAX_CONCURRENT_UPLOADS,
             DEFAULT_FILESYSTEM_SNAPSHOT_MAX_CONCURRENT_RESTORES,
             DEFAULT_FILESYSTEM_SNAPSHOT_CONFIRMATION_WAIT,
+            DEFAULT_FILESYSTEM_SNAPSHOT_STORE_CHECK_LIMIT,
             DEFAULT_FILESYSTEM_SNAPSHOT_CAPTURE_WAIT,
             DEFAULT_FILESYSTEM_SNAPSHOT_RETAINED,
             DEFAULT_FILESYSTEM_SNAPSHOT_RETAINED,
@@ -2551,6 +2564,11 @@ impl SafeDisplay for FilesystemSnapshotUploadConfig {
             &mut result,
             "confirmation wait: {:?}",
             self.confirmation_wait
+        );
+        let _ = writeln!(
+            &mut result,
+            "store check limit: {:?}",
+            self.store_check_limit
         );
         let _ = writeln!(&mut result, "capture wait: {:?}", self.capture_wait);
         let _ = writeln!(
@@ -2596,6 +2614,11 @@ struct RawFilesystemSnapshotStoreConfig {
     confirmation_wait: Duration,
     #[serde(
         with = "humantime_serde",
+        default = "default_filesystem_snapshot_store_check_limit"
+    )]
+    store_check_limit: Duration,
+    #[serde(
+        with = "humantime_serde",
         default = "default_filesystem_snapshot_capture_wait"
     )]
     capture_wait: Duration,
@@ -2617,6 +2640,10 @@ fn default_filesystem_snapshot_max_concurrent_restores() -> usize {
 
 fn default_filesystem_snapshot_confirmation_wait() -> Duration {
     DEFAULT_FILESYSTEM_SNAPSHOT_CONFIRMATION_WAIT
+}
+
+fn default_filesystem_snapshot_store_check_limit() -> Duration {
+    DEFAULT_FILESYSTEM_SNAPSHOT_STORE_CHECK_LIMIT
 }
 
 fn default_filesystem_snapshot_capture_wait() -> Duration {
@@ -2699,6 +2726,7 @@ impl<'de> Deserialize<'de> for FilesystemSnapshotStoreConfig {
             raw.max_concurrent_uploads,
             raw.max_concurrent_restores,
             raw.confirmation_wait,
+            raw.store_check_limit,
             raw.capture_wait,
             raw.retained_periodic_snapshots,
             raw.retained_update_snapshots,
@@ -3260,6 +3288,7 @@ mod tests {
             "max_concurrent_uploads": 3,
             "max_concurrent_restores": 5,
             "confirmation_wait": "10s",
+            "store_check_limit": "3s",
             "capture_wait": "2s",
             "retained_periodic_snapshots": 4,
             "retained_update_snapshots": 6,
@@ -3278,6 +3307,7 @@ mod tests {
                 uploads.max_concurrent_uploads().get(),
                 uploads.max_concurrent_restores().get(),
                 uploads.confirmation_wait(),
+                uploads.store_check_limit(),
                 uploads.capture_wait(),
                 uploads.retained_periodic_snapshots().get(),
                 uploads.retained_update_snapshots().get(),
@@ -3287,6 +3317,7 @@ mod tests {
                 3,
                 5,
                 Duration::from_secs(10),
+                Duration::from_secs(3),
                 Duration::from_secs(2),
                 4,
                 6,
@@ -3311,6 +3342,7 @@ mod tests {
                 uploads.max_concurrent_uploads().get(),
                 uploads.max_concurrent_restores().get(),
                 uploads.confirmation_wait(),
+                uploads.store_check_limit(),
                 uploads.capture_wait(),
                 uploads.retained_periodic_snapshots().get(),
                 uploads.retained_update_snapshots().get(),
@@ -3320,6 +3352,7 @@ mod tests {
                 4,
                 8,
                 Duration::from_secs(60),
+                Duration::from_secs(5),
                 Duration::from_secs(5),
                 2,
                 2,
@@ -3359,6 +3392,10 @@ mod tests {
             (
                 json!({ "repository_key": KEY, "confirmation_wait": "0s" }),
                 "confirmation_wait must be greater than zero",
+            ),
+            (
+                json!({ "repository_key": KEY, "store_check_limit": "0s" }),
+                "store_check_limit must be greater than zero",
             ),
             (
                 json!({ "repository_key": KEY, "capture_wait": "0s" }),

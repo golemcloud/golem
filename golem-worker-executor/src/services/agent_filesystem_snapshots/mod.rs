@@ -176,10 +176,10 @@ pub(crate) trait VolumeRoom: Send + Sync {
 }
 
 /// A volume that always has room.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 pub(crate) struct UnlimitedRoom;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 #[async_trait]
 impl VolumeRoom for UnlimitedRoom {
     async fn has_room(&self) -> bool {
@@ -477,6 +477,14 @@ impl AgentFilesystemSnapshots {
         self.inner
             .as_ref()
             .map(|inner| inner.settings.confirmation_wait())
+    }
+
+    /// How long a start that did not wait for an upload asks the store for its snapshot, or
+    /// `None` when the service is disabled.
+    pub(crate) fn store_check_limit(&self) -> Option<Duration> {
+        self.inner
+            .as_ref()
+            .map(|inner| inner.settings.store_check_limit())
     }
 
     /// Asks for an upload of the agent of `scope`, before the guest saves.

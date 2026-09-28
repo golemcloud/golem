@@ -410,6 +410,7 @@ fn settings(
         max_restores,
         Duration::from_secs(60),
         Duration::from_secs(5),
+        Duration::from_secs(5),
         2,
         2,
         retry(max_attempts),
@@ -706,6 +707,7 @@ async fn after_older_uploads(outcome: ConfirmOutcome) -> (Vec<String>, String, b
         settings.max_concurrent_uploads().get(),
         settings.max_concurrent_restores().get(),
         settings.confirmation_wait(),
+        settings.store_check_limit(),
         settings.capture_wait(),
         3,
         2,
@@ -876,7 +878,7 @@ fn info_at(minutes: u64) -> SnapshotInfo {
     }
 }
 
-fn names(names: Box<[SnapshotName]>) -> Vec<String> {
+fn names(names: &[SnapshotName]) -> Vec<String> {
     names.iter().map(|name| name.as_str().to_string()).collect()
 }
 
@@ -896,8 +898,8 @@ fn retention_keeps_the_own_snapshot_and_the_newest_older_ones_of_its_kind() {
     .map(|(name, minutes)| (SnapshotName::new(name).unwrap(), info_at(minutes)));
     let own = SnapshotName::new("p-own").unwrap();
 
-    let periodic = names(retention::victims(&listing, &own, &info_at(100), 2));
-    let only_own = names(retention::victims(&listing, &own, &info_at(100), 1));
+    let periodic = names(&retention::victims(&listing, &own, &info_at(100), 2));
+    let only_own = names(&retention::victims(&listing, &own, &info_at(100), 1));
 
     assert_eq!(periodic, vec!["p-2", "p-1"]);
     assert_eq!(only_own, vec!["p-3", "p-2", "p-1"]);
@@ -909,7 +911,7 @@ fn retention_counts_update_snapshots_apart_from_periodic_ones() {
         .map(|(name, minutes)| (SnapshotName::new(name).unwrap(), info_at(minutes)));
     let own = SnapshotName::new("u-own").unwrap();
 
-    let victims = names(retention::victims(&listing, &own, &info_at(100), 2));
+    let victims = names(&retention::victims(&listing, &own, &info_at(100), 2));
 
     assert_eq!(victims, vec!["u-1"]);
 }
