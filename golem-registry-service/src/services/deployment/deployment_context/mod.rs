@@ -58,7 +58,7 @@ use golem_common::model::tool_middleware_release::{
     ToolMiddlewareReleaseSource, tool_middleware_metadata_digest,
 };
 use golem_common::model::tool_release::ToolReleaseId;
-use golem_common::schema::agent::reachable_defs;
+use golem_common::schema::agent::agent_secret_value_schema;
 use golem_common::schema::graph::SchemaGraph;
 use golem_common::schema::schema_type::SchemaType;
 use golem_common::schema::tool::validation::validate_tool;
@@ -1589,45 +1589,10 @@ fn stored_agent_secret_schema(
     agent_graph: &SchemaGraph,
     config_type: &SchemaType,
 ) -> Result<SchemaGraph, DeployValidationError> {
-    let root = match resolve_schema_ref(agent_graph, config_type) {
-        SchemaType::Secret { spec, .. } => (*spec.inner).clone(),
-        SchemaType::Option { inner, .. } => match resolve_schema_ref(agent_graph, inner) {
-            SchemaType::Secret { spec, .. } => (*spec.inner).clone(),
-            _ => {
-                return Err(DeployValidationError::AgentSecretInvalidConfigType {
-                    path: path.clone(),
-                });
-            }
-        },
-        _ => {
-            return Err(DeployValidationError::AgentSecretInvalidConfigType { path: path.clone() });
-        }
-    };
-
-    let schema = SchemaGraph {
-        defs: reachable_defs(agent_graph, &root),
-        root,
-    };
-
-    if schema_contains_host_managed_capability(&schema) {
-        Err(DeployValidationError::AgentSecretInvalidConfigType { path: path.clone() })
-    } else {
-        Ok(schema)
+    match agent_secret_value_schema(agent_graph, config_type) {
+        Some(schema) if !schema_contains_host_managed_capability(&schema) => Ok(schema),
+        _ => Err(DeployValidationError::AgentSecretInvalidConfigType { path: path.clone() }),
     }
-}
-
-fn resolve_schema_ref<'a>(graph: &'a SchemaGraph, mut ty: &'a SchemaType) -> &'a SchemaType {
-    let mut seen = std::collections::HashSet::new();
-    while let SchemaType::Ref { id, .. } = ty {
-        if !seen.insert(id.clone()) {
-            break;
-        }
-        match graph.lookup(id) {
-            Some(def) => ty = &def.body,
-            None => break,
-        }
-    }
-    ty
 }
 
 pub fn extract_registered_agent_types(

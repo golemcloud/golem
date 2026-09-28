@@ -2710,7 +2710,11 @@ fn optional_secret_default_creation_stores_plaintext_inner_schema_not_option_sch
         creations[0].secret_value,
         Some(SchemaValue::String("s3cr3t".to_string()))
     );
-    match resolve_schema_ref(&creations[0].secret_type, &creations[0].secret_type.root) {
+    match creations[0]
+        .secret_type
+        .resolve_ref(&creations[0].secret_type.root)
+        .unwrap()
+    {
         SchemaType::String { .. } => {}
         other => {
             panic!("deployment-created agent secrets must be stored as plaintext T, not {other:?}")
