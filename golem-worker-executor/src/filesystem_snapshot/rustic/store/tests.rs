@@ -3548,7 +3548,7 @@ async fn a_blob_call_of_a_cancelled_operation_does_not_start() {
     };
 
     let read = files
-        .get("read_ledger", Path::new("golem/prune-ledger"))
+        .get("read_ledger", Path::new("golem/prune-ledgers/1000-0-0f0f"))
         .await;
 
     assert!(read.is_err(), "{read:?}");

@@ -31,7 +31,7 @@ const DEADLINE: Duration = Duration::from_secs(2);
 const REPOSITORY: [(&str, &str); 6] = [
     ("config", "config"),
     ("data/ab/abab", "pack"),
-    ("golem/prune-ledger", "ledger"),
+    ("golem/prune-ledgers/1000-0-0f0f", "ledger"),
     ("index/cdcd", "index"),
     ("keys/efef", "key"),
     ("snapshots/0101", "snapshot"),
