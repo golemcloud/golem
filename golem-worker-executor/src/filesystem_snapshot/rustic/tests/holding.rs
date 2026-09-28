@@ -40,7 +40,7 @@ type Rule = Box<dyn Fn(&str, &Path) -> bool + Send + Sync>;
 ///
 /// A held call waits until its gate opens, and then goes to the in-memory storage. Only the
 /// [`Gate`] of the storage opens the gate, so a held call waits until the test drops that value.
-pub(super) struct HoldingBlobStorage {
+pub(crate) struct HoldingBlobStorage {
     inner: Arc<InMemoryBlobStorage>,
     rule: Rule,
     gate: CancellationToken,
@@ -51,7 +51,7 @@ pub(super) struct HoldingBlobStorage {
 /// The gate of the held calls of a [`HoldingBlobStorage`].
 ///
 /// The gate opens when the test drops this value, also when the test fails.
-pub(super) struct Gate {
+pub(crate) struct Gate {
     _open_on_drop: DropGuard,
 }
 
@@ -60,7 +60,7 @@ pub(super) struct Gate {
 ///
 /// So the receiver resolves only when no value holds a copy of the storage, for example a backend
 /// on a thread of rustic.
-pub(super) fn holding_storage(
+pub(crate) fn holding_storage(
     inner: Arc<InMemoryBlobStorage>,
     rule: impl Fn(&str, &Path) -> bool + Send + Sync + 'static,
 ) -> (Arc<HoldingBlobStorage>, Gate, oneshot::Receiver<()>) {
@@ -82,7 +82,7 @@ pub(super) fn holding_storage(
 
 /// Tells whether the error or an error in its chain of sources is tokio's `Elapsed`, which is the
 /// root cause of the error of a call that got no answer within its deadline.
-pub(super) fn reached_deadline(error: &(dyn std::error::Error + 'static)) -> bool {
+pub(crate) fn reached_deadline(error: &(dyn std::error::Error + 'static)) -> bool {
     std::iter::successors(Some(error), |error| error.source()).any(|error| error.is::<Elapsed>())
 }
 

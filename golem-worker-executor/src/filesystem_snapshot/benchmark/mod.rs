@@ -39,9 +39,10 @@ mod volume;
 
 use super::rustic::{
     ChangeDetection, Chunking, Compression, InspectReport, PhaseTime, Repository, RepositoryKey,
-    RepositorySettings, STORAGE_CALL_DEADLINE, SaveSettings,
+    RepositorySettings, SaveSettings,
 };
 use super::{SnapshotName, SnapshotScope};
+use crate::services::golem_config::DEFAULT_FILESYSTEM_SNAPSHOT_STORAGE_CALL_DEADLINE as STORAGE_CALL_DEADLINE;
 use agents::{AgentStorage, FIRST_AGENT};
 use golem_common::model::environment::EnvironmentId;
 use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace};

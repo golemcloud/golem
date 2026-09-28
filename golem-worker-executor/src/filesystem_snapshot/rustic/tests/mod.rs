@@ -18,19 +18,23 @@
 //! keeps the gate of the held calls closed until the storage is dropped. So the threads of rustic
 //! stop because of the deadline, and not because the gate opens.
 
+pub(super) mod holding;
+pub(super) mod scripted;
+
+use self::holding::{holding_storage, reached_deadline};
+use self::scripted::{Script, ScriptedBlobStorage};
 use super::backend::BlobBackend;
-use super::holding::{holding_storage, reached_deadline};
 use super::{
     ChangeDetection, Chunking, Compression, OperationPhase, PruneSettings, RepackLimits,
-    Repository, RepositoryKey, RepositorySettings, STORAGE_CALL_DEADLINE, SaveSettings,
-    backup_options, config_options, open_existing, prune_options, repository_options, run_blocking,
-    unopened,
+    Repository, RepositoryKey, RepositorySettings, SaveSettings, backup_options, config_options,
+    open_existing, prune_options, repository_options, run_blocking, unopened,
 };
 use crate::filesystem_snapshot::contract_tests::fixture::{
     Scratch, Spec, fixture, listing, write_tree,
 };
 use crate::filesystem_snapshot::contract_tests::new_scope;
 use crate::filesystem_snapshot::{SnapshotName, SnapshotScope};
+use crate::services::golem_config::DEFAULT_FILESYSTEM_SNAPSHOT_STORAGE_CALL_DEADLINE as STORAGE_CALL_DEADLINE;
 use anyhow::Context;
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -48,7 +52,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
-use test_r::test;
+use test_r::{test, timeout};
 use tokio::runtime::Handle;
 use tokio::sync::{Notify, oneshot, watch};
 use tokio::time::error::Elapsed;
@@ -140,6 +144,52 @@ async fn data_packs(storage: &Arc<InMemoryBlobStorage>, scope: &SnapshotScope) -
     .unwrap()
 }
 
+/// Gives the id in hex of each pack of tree blobs in the repository of the scope.
+async fn tree_packs(storage: &Arc<InMemoryBlobStorage>, scope: &SnapshotScope) -> Box<[Box<str>]> {
+    with_existing_repository(
+        storage.clone(),
+        scope,
+        STORAGE_CALL_DEADLINE,
+        |repository| {
+            let indexes = repository
+                .stream_files::<IndexFile>()?
+                .collect::<RusticResult<Vec<_>>>()?;
+            Ok(indexes
+                .into_iter()
+                .flat_map(|(_, index)| index.packs)
+                .filter(|pack| pack.blob_type() == BlobType::Tree)
+                .map(|pack| Box::from(pack.id.to_hex().as_str()))
+                .collect())
+        },
+    )
+    .await
+    .unwrap()
+}
+
+/// Writes a tree of `count` directories, each with one small file, into a new directory.
+fn many_directories_tree(count: usize) -> Scratch {
+    let tree = Scratch::new();
+    let names = (0..count)
+        .flat_map(|index| [format!("dir-{index}"), format!("dir-{index}/file.txt")])
+        .collect::<Vec<_>>();
+    let entries = names
+        .iter()
+        .map(|name| {
+            let spec = if name.ends_with(".txt") {
+                Spec::File {
+                    content: Box::from(name.as_bytes()),
+                    mode: 0o644,
+                }
+            } else {
+                Spec::Directory { mode: 0o755 }
+            };
+            (name.as_str(), spec)
+        })
+        .collect::<Vec<_>>();
+    write_tree(tree.path(), &entries);
+    tree
+}
+
 /// Prunes the repository of the scope with the options, on a blocking thread. Each call on the
 /// storage waits for at most `deadline`.
 async fn prune(
@@ -191,6 +241,7 @@ async fn dropped_within_limit(dropped: oneshot::Receiver<()>) -> bool {
 }
 
 #[test]
+#[timeout("60s")]
 async fn a_saved_tree_comes_back_the_same() {
     let storage = Arc::new(InMemoryBlobStorage::new());
     let repository = repository(&storage, &new_scope());
@@ -210,6 +261,79 @@ async fn a_saved_tree_comes_back_the_same() {
 }
 
 #[test]
+#[timeout("60s")]
+async fn a_restore_report_gives_each_phase_of_the_restore_in_order() {
+    let storage = Arc::new(InMemoryBlobStorage::new());
+    let repository = repository(&storage, &new_scope());
+    let tree = fixture_tree();
+    let into = Scratch::new();
+    repository.save(&name("first"), tree.path()).await.unwrap();
+
+    let restored = repository
+        .restore(&name("first"), into.path(), None)
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(
+        restored
+            .phases
+            .iter()
+            .map(|phase| phase.phase)
+            .collect::<Vec<_>>(),
+        vec![
+            OperationPhase::Open,
+            OperationPhase::Lookup,
+            OperationPhase::IndexLoad,
+            OperationPhase::RestorePlan,
+            OperationPhase::Restore,
+        ]
+    );
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_restore_reads_each_tree_pack_one_time_in_full_and_no_range_of_a_tree_pack() {
+    let inner = Arc::new(InMemoryBlobStorage::new());
+    let scope = new_scope();
+    let tree = many_directories_tree(60);
+    repository(&inner, &scope)
+        .save(&name("first"), tree.path())
+        .await
+        .unwrap();
+    let tree_packs = tree_packs(&inner, &scope).await;
+    let storage = ScriptedBlobStorage::new(inner.clone(), |_, _| Script::Pass);
+    let into = Scratch::new();
+
+    Repository::new(storage.clone(), scope.clone(), key(), STORAGE_CALL_DEADLINE)
+        .restore(&name("first"), into.path(), None)
+        .await
+        .unwrap();
+    let calls_on_tree_packs = |op: &str| {
+        tree_packs
+            .iter()
+            .map(|pack| {
+                storage
+                    .calls()
+                    .iter()
+                    .filter(|(op_label, path)| *op_label == op && path.ends_with(&**pack))
+                    .count()
+            })
+            .collect::<Vec<_>>()
+    };
+
+    assert_eq!(
+        (
+            calls_on_tree_packs("read"),
+            calls_on_tree_packs("read_range").iter().sum::<usize>(),
+            listing(into.path())
+        ),
+        (vec![1; tree_packs.len()], 0, listing(tree.path()))
+    );
+}
+
+#[test]
+#[timeout("60s")]
 async fn a_second_save_has_the_first_as_parent_and_reads_only_the_changed_file() {
     let storage = Arc::new(InMemoryBlobStorage::new());
     let repository = repository(&storage, &new_scope());
@@ -251,6 +375,7 @@ async fn a_second_save_has_the_first_as_parent_and_reads_only_the_changed_file()
 }
 
 #[test]
+#[timeout("60s")]
 async fn a_forgotten_name_does_not_restore_and_the_other_names_do() {
     let storage = Arc::new(InMemoryBlobStorage::new());
     let repository = repository(&storage, &new_scope());
@@ -284,6 +409,7 @@ async fn a_forgotten_name_does_not_restore_and_the_other_names_do() {
 }
 
 #[test]
+#[timeout("60s")]
 async fn the_first_save_creates_the_repository_with_no_key_file_and_later_saves_open_it() {
     let storage = Arc::new(InMemoryBlobStorage::new());
     let scope = new_scope();
@@ -329,6 +455,7 @@ async fn the_first_save_creates_the_repository_with_no_key_file_and_later_saves_
 }
 
 #[test]
+#[timeout("60s")]
 async fn each_scope_is_its_own_repository() {
     let storage = Arc::new(InMemoryBlobStorage::new());
     let (one, other) = (new_scope(), new_scope());
@@ -360,6 +487,7 @@ async fn each_scope_is_its_own_repository() {
 }
 
 #[test]
+#[timeout("60s")]
 async fn a_restore_reads_data_on_at_most_its_reader_threads() {
     // Each save adds one pack with the data of its new file. The restore of the second snapshot
     // reads the data of both packs, one read for each pack.
@@ -632,6 +760,7 @@ impl BlobStorage for OverlapCountingStorage {
 }
 
 #[test]
+#[timeout("60s")]
 async fn a_save_whose_pack_write_gets_no_answer_fails_with_no_snapshot_and_its_threads_stop() {
     let inner = Arc::new(InMemoryBlobStorage::new());
     let scope = new_scope();
@@ -657,6 +786,7 @@ async fn a_save_whose_pack_write_gets_no_answer_fails_with_no_snapshot_and_its_t
 }
 
 #[test]
+#[timeout("60s")]
 async fn a_save_whose_pack_writes_answer_before_the_deadline_succeeds_and_restores() {
     let inner = Arc::new(InMemoryBlobStorage::new());
     let scope = new_scope();
@@ -698,6 +828,7 @@ async fn a_save_whose_pack_writes_answer_before_the_deadline_succeeds_and_restor
 }
 
 #[test]
+#[timeout("60s")]
 async fn a_restore_whose_data_pack_reads_get_no_answer_fails_and_stops_its_threads() {
     let inner = Arc::new(InMemoryBlobStorage::new());
     let scope = new_scope();
@@ -755,7 +886,8 @@ async fn a_restore_whose_data_pack_reads_get_no_answer_fails_and_stops_its_threa
 }
 
 #[test]
-async fn a_prune_whose_pack_reads_get_no_answer_fails_and_stops_its_threads() {
+#[timeout("60s")]
+async fn a_prune_whose_tree_pack_reads_get_no_answer_fails_and_stops_its_threads() {
     let inner = Arc::new(InMemoryBlobStorage::new());
     let scope = new_scope();
     let tree = fixture_tree();
@@ -763,8 +895,9 @@ async fn a_prune_whose_pack_reads_get_no_answer_fails_and_stops_its_threads() {
         .save(&name("first"), tree.path())
         .await
         .unwrap();
+    // A prune reads the trees of the snapshots, and each tree read is a full read of a pack.
     let (storage, _gate, dropped) = holding_storage(inner, |op_label, path| {
-        op_label == "read_range" && path.starts_with("data")
+        op_label == "read" && path.starts_with("data")
     });
 
     let pruned = tokio::time::timeout(
@@ -778,6 +911,7 @@ async fn a_prune_whose_pack_reads_get_no_answer_fails_and_stops_its_threads() {
 }
 
 #[test]
+#[timeout("60s")]
 async fn a_prune_after_a_forget_deletes_the_packs_of_that_name_and_the_other_name_restores() {
     let inner = Arc::new(InMemoryBlobStorage::new());
     let scope = new_scope();
@@ -849,7 +983,7 @@ fn set_modified(path: &Path, time: std::time::SystemTime) {
 
 /// Copies each file of the flat tree `from` into the new directory `to`, with its modification
 /// time. Each copy is a new inode with a new change time, as a capture gives.
-fn copy_flat_tree(from: &Path, to: &Path) {
+pub(super) fn copy_flat_tree(from: &Path, to: &Path) {
     std::fs::read_dir(from).unwrap().for_each(|entry| {
         let entry = entry.unwrap();
         let target = to.join(entry.file_name());
@@ -874,7 +1008,7 @@ const CHANGE_TIME_WAIT: Duration = Duration::from_secs(10);
 /// changes within one tick get the same change time. The wait changes a probe file in its own
 /// directory until the change time of the probe is later than the latest change time of the
 /// files. It fails the test when that does not happen within [`CHANGE_TIME_WAIT`].
-fn wait_past_change_times(files: &[PathBuf]) {
+pub(super) fn wait_past_change_times(files: &[PathBuf]) {
     let latest = files.iter().map(|file| changed_at(file)).max().unwrap();
     let probe_directory = Scratch::new();
     let probe = probe_directory.path().join("probe");
@@ -892,7 +1026,7 @@ fn wait_past_change_times(files: &[PathBuf]) {
 }
 
 /// Gives the path of each entry of the directory, in the order of the names.
-fn entries(directory: &Path) -> Vec<PathBuf> {
+pub(super) fn entries(directory: &Path) -> Vec<PathBuf> {
     let mut paths = std::fs::read_dir(directory)
         .unwrap()
         .map(|entry| entry.unwrap().path())
@@ -902,7 +1036,7 @@ fn entries(directory: &Path) -> Vec<PathBuf> {
 }
 
 /// Writes a tree of three files into a new directory, and gives the directory.
-fn three_file_tree() -> Scratch {
+pub(super) fn three_file_tree() -> Scratch {
     let tree = Scratch::new();
     ["a.txt", "b.txt", "c.txt"]
         .iter()
@@ -1138,6 +1272,7 @@ async fn inspect_gives_the_snapshots_the_name_and_the_phases_and_nothing_without
 }
 
 #[test]
+#[timeout("60s")]
 async fn a_size_and_mtime_save_of_a_copied_tree_reads_no_file_and_a_ctime_save_reads_each() {
     // A copy gives each file a new inode and a new change time, and keeps its size and its
     // modification time. The size-and-mtime form must also not compare inodes: in rustic,
@@ -1185,6 +1320,7 @@ async fn a_size_and_mtime_save_of_a_copied_tree_reads_no_file_and_a_ctime_save_r
 }
 
 #[test]
+#[timeout("60s")]
 async fn a_size_and_mtime_save_misses_a_rewrite_of_the_same_size_with_the_old_mtime() {
     let storage = Arc::new(InMemoryBlobStorage::new());
     let size_mtime = SaveSettings {
@@ -1237,6 +1373,7 @@ async fn a_size_and_mtime_save_misses_a_rewrite_of_the_same_size_with_the_old_mt
 }
 
 #[test]
+#[timeout("60s")]
 async fn two_prunes_without_a_grace_period_give_back_the_data_that_no_snapshot_uses() {
     // The first save puts both files in one pack. The second save rewrites one of them. After the
     // forget, that pack holds a used and an unused blob, so a prune without limits repacks it.
@@ -1317,6 +1454,7 @@ async fn two_prunes_without_a_grace_period_give_back_the_data_that_no_snapshot_u
 }
 
 #[test]
+#[timeout("60s")]
 async fn a_prune_of_a_scope_without_a_repository_gives_nothing() {
     let storage = Arc::new(InMemoryBlobStorage::new());
 

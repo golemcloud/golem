@@ -31,9 +31,13 @@ pub(crate) mod benchmark;
 mod contract_tests;
 mod memory;
 mod rustic;
+#[cfg(test)]
+mod time_zone_tests;
 
 #[allow(unused_imports)]
 pub(crate) use memory::InMemorySnapshotStore;
+#[allow(unused_imports)]
+pub(crate) use rustic::RusticSnapshotStore;
 
 /// The place of the filesystem snapshots of one agent.
 ///
@@ -115,6 +119,15 @@ pub(crate) struct SnapshotInfo {
     pub files: u64,
     /// The sum of the sizes of the regular files in the tree, in bytes. Each name counts.
     pub bytes: u64,
+}
+
+/// How a save with a parent finds the files that did not change since the parent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ChangeDetection {
+    /// Compares each file with the parent by size and modification time.
+    SizeMtime,
+    /// Reads every file.
+    Full,
 }
 
 /// Why a call on a [`FilesystemSnapshotStore`] failed.
@@ -206,11 +219,19 @@ pub(crate) trait FilesystemSnapshotStore: Send + Sync {
     /// The result gives the number of files, the size of the tree, and the time of the
     /// snapshot. That time is later than the time of each snapshot that the scope held when the
     /// save started.
+    ///
+    /// `parent` names the snapshot that the save can compare with. With `SizeMtime`, the store can
+    /// keep the content of the parent for a file whose size and modification time equal those of
+    /// the same path in the parent, and then it does not read that file. So such a file that
+    /// changed can keep the content of the parent. A store can also read each file. With `Full`,
+    /// the save reads every file. A parent that the scope does not hold gives a save that reads
+    /// every file.
     async fn save(
         &self,
         scope: &SnapshotScope,
         name: &SnapshotName,
         tree: &Path,
+        parent: Option<(&SnapshotName, ChangeDetection)>,
     ) -> Result<SnapshotInfo, SnapshotStoreError>;
 
     /// Rebuilds a saved tree in the empty directory `into`.

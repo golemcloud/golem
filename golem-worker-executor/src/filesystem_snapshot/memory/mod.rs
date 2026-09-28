@@ -25,8 +25,8 @@ mod tree;
 mod tests;
 
 use super::{
-    FilesystemSnapshotStore, SnapshotInfo, SnapshotName, SnapshotScope, SnapshotStoreError,
-    newest_first, snapshot_time,
+    ChangeDetection, FilesystemSnapshotStore, SnapshotInfo, SnapshotName, SnapshotScope,
+    SnapshotStoreError, newest_first, snapshot_time,
 };
 use async_trait::async_trait;
 use golem_common::model::Timestamp;
@@ -120,6 +120,7 @@ impl FilesystemSnapshotStore for InMemorySnapshotStore {
         scope: &SnapshotScope,
         name: &SnapshotName,
         tree: &Path,
+        _parent: Option<(&SnapshotName, ChangeDetection)>,
     ) -> Result<SnapshotInfo, SnapshotStoreError> {
         let snapshots = self.snapshots_of(scope);
         if found(&snapshots, name).is_some() {
