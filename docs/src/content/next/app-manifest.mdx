@@ -1583,6 +1583,9 @@ For registry-backed tools, the generator reads only the release's safe tool defi
     since: Release.R_1_5_0
   }}>
     ***Optional template name or list of template names*** which will be used for creating the agent fields.
+
+    As for components, every template may be inherited only through a single path: e.g. listing a template
+    together with another template that inherits it is rejected.
   </Field>
 
   <Field meta={{

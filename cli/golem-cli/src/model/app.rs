@@ -21,6 +21,7 @@ use crate::fs;
 use crate::log::LogColorize;
 use crate::model::app::app_builder::{build_application, build_application_preload};
 use crate::model::app_raw;
+use crate::model::cascade::error::StoreGetValueError;
 use crate::model::cascade::layer::Layer;
 use crate::model::cascade::property::Property;
 use crate::model::cascade::property::json::JsonProperty;
@@ -1124,8 +1125,15 @@ impl Application {
                         .map(|component_dir| self.cargo_manifest_dir_for(component_dir)),
                 );
 
+                let template_names = agent.templates.clone().into_vec();
+                check_template_list_ancestry(
+                    &self.component_layer_store,
+                    &format!("agent {}", agent_type_name.0),
+                    &template_names,
+                )?;
+
                 let mut latest_parent_id = base_component_id.clone();
-                for template_name in agent.templates.clone().into_vec() {
+                for template_name in template_names {
                     let template_layer_id =
                         ComponentLayerId::TemplateCustomPresets(template_name.clone());
                     let template_layer_props = self
@@ -1342,7 +1350,14 @@ impl Application {
             ),
         };
 
-        for template_name in declaration.value.templates.clone().into_vec() {
+        let template_names = declaration.value.templates.clone().into_vec();
+        check_template_list_ancestry(
+            &self.component_layer_store,
+            &format!("tool {tool_name}"),
+            &template_names,
+        )?;
+
+        for template_name in template_names {
             let component_template_id =
                 ComponentLayerId::TemplateCustomPresets(template_name.clone());
             let template = self
@@ -3647,12 +3662,61 @@ impl PluginInstallation {
     }
 }
 
+/// Error message for a template inherited through multiple template paths by `consumer`.
+fn multiple_template_paths_error(
+    consumer: &str,
+    layer: &ComponentLayerId,
+    first_path: &[ComponentLayerId],
+    second_path: &[ComponentLayerId],
+) -> String {
+    let render_path = |path: &[ComponentLayerId]| {
+        path.iter()
+            .filter_map(|id| id.template_name())
+            .dedup()
+            .join(" -> ")
+    };
+    format!(
+        "Template {} is inherited by {} through multiple paths: {} and {}. Remove one of the references.",
+        layer.name().log_color_highlight(),
+        consumer.log_color_highlight(),
+        render_path(first_path).log_color_highlight(),
+        render_path(second_path).log_color_highlight(),
+    )
+}
+
+/// Checks that the templates listed by an agent or a tool do not inherit a template through
+/// multiple paths, as it is required for components.
+fn check_template_list_ancestry(
+    component_layer_store: &Store<ComponentLayer>,
+    consumer: &str,
+    template_names: &[String],
+) -> anyhow::Result<()> {
+    let roots = template_names
+        .iter()
+        .map(|name| ComponentLayerId::TemplateCustomPresets(name.clone()))
+        .collect::<Vec<_>>();
+    match component_layer_store.check_single_path_ancestry(&roots) {
+        Ok(()) => Ok(()),
+        Err(StoreGetValueError::MultipleParentPaths {
+            layer,
+            first_path,
+            second_path,
+        }) => Err(anyhow!(multiple_template_paths_error(
+            consumer,
+            &layer,
+            &first_path,
+            &second_path
+        ))),
+        Err(err) => Err(anyhow!(err.to_string())),
+    }
+}
+
 mod app_builder {
     use super::ResourceDefinitionCreation;
     use super::ResourceName;
     use super::{
         ToolEntityPath, ToolName, ToolValidationCode, ToolValidationIssue, ToolValidationPhase,
-        add_tool_issues,
+        add_tool_issues, multiple_template_paths_error,
     };
     use crate::app::edit;
     use crate::fuzzy::FuzzySearch;
@@ -5393,21 +5457,12 @@ mod app_builder {
                     layer,
                     first_path,
                     second_path,
-                }) => {
-                    let render_path = |path: &[ComponentLayerId]| {
-                        path.iter()
-                            .filter_map(|id| id.template_name())
-                            .dedup()
-                            .join(" -> ")
-                    };
-                    validation.add_error(format!(
-                        "Template {} is inherited by {} through multiple paths: {} and {}. Remove one of the references.",
-                        layer.name().log_color_highlight(),
-                        component_name.as_str().log_color_highlight(),
-                        render_path(&first_path).log_color_highlight(),
-                        render_path(&second_path).log_color_highlight(),
-                    ))
-                }
+                }) => validation.add_error(multiple_template_paths_error(
+                    component_name.as_str(),
+                    &layer,
+                    &first_path,
+                    &second_path,
+                )),
                 Err(err) => validation.add_error(format!("Failed to resolve component: {err}")),
             }
         }
@@ -6535,6 +6590,85 @@ mod test {
             ),
             "unexpected error: {}",
             errors[0]
+        );
+    }
+
+    #[test]
+    fn test_agent_templates_with_shared_parent_are_rejected() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            componentTemplates:
+              base:
+                env:
+                  BASE: base
+              derived:
+                templates: base
+
+            components:
+              app:main:
+                componentWasm: main.wasm
+
+            agents:
+              FooAgent:
+                templates: [base, derived]
+        "# };
+
+        let (app, _tmp_dir) = load_app_for_env(source, "local", &[]);
+        let err = resolve_agents_for(&app, "app:main", "FooAgent").unwrap_err();
+
+        assert!(
+            format!("{err:#}").contains(
+                "Template base is inherited by agent FooAgent through multiple paths: \
+                 base and derived -> base"
+            ),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[test]
+    fn test_tool_templates_with_shared_parent_are_rejected() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            componentTemplates:
+              base:
+                env:
+                  BASE: base
+              derived:
+                templates: base
+
+            components:
+              app:main:
+                componentWasm: main.wasm
+
+            tools:
+              grep:
+                templates: [base, derived]
+        "# };
+
+        let (app, _tmp_dir) = load_app_for_env(source, "local", &[]);
+        let err = app
+            .resolve_tool_provision(
+                &ToolName::try_from("grep").unwrap(),
+                &parse_component_name("app:main"),
+            )
+            .unwrap_err();
+
+        assert!(
+            format!("{err:#}").contains(
+                "Template base is inherited by tool grep through multiple paths: \
+                 base and derived -> base"
+            ),
+            "unexpected error: {err:#}"
         );
     }
 
@@ -8097,12 +8231,10 @@ mod test {
         let err = resolve_agents_for(&app, "app:main", "test-agent").unwrap_err();
         let message = format!("{err:#}");
         assert!(
-            message.contains("Layer already exists") || message.contains("already exists"),
-            "error should mention duplicate layer: {message}"
-        );
-        assert!(
-            message.contains("shared-template"),
-            "error should mention duplicate template name: {message}"
+            message.contains(
+                "Template shared-template is inherited by agent test-agent through multiple paths"
+            ),
+            "error should mention the duplicate template: {message}"
         );
     }
 
