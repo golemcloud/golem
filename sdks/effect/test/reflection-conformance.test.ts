@@ -3,6 +3,8 @@ import { describe, expect, it } from "@effect/vitest"
 import { SchemaRef, type JsonValue } from "../src/SchemaRef.js"
 import { field, t, type SchemaGraph, type SchemaType } from "../src/internal/schema-model/model.js"
 import { schemaGraphToWit } from "../src/internal/schema-model/wit.js"
+import { fromCanonicalJson } from "../src/internal/reflection/schemaRender.js"
+import { schemaValueConforms } from "../src/internal/reflection/schemaValidation.js"
 
 interface ConformanceCase {
   id: string
@@ -259,14 +261,18 @@ function executeCase(testCase: ConformanceCase): void {
     case "reject": {
       for (const input of testCase.inputs ?? [testCase.input!]) {
         const schema = fixture(testCase.fixture)
-        let packed: ReturnType<typeof schema.packJson>
+        expect(
+          () => schema.packJson(input),
+          `${testCase.id}: direct packing accepted the input`,
+        ).toThrow()
+        let packed: ReturnType<typeof fromCanonicalJson>
         try {
-          packed = schema.packJson(input)
+          packed = fromCanonicalJson(schema.graph, schema.root, input)
         } catch {
           expect("invalid-json").toBe((testCase.expected as { readonly kind: string }).kind)
           continue
         }
-        if (schema.validateValue(packed).success)
+        if (schemaValueConforms(schema.graph, schema.root, packed))
           throw new Error(`accepted ${JSON.stringify(input)}`)
         expect("constraint-violation").toBe((testCase.expected as { readonly kind: string }).kind)
       }

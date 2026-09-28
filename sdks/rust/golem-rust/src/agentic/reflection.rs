@@ -2043,6 +2043,10 @@ mod tests {
                         .cloned()
                         .unwrap_or_else(|| vec![case["input"].clone()]);
                     for input in inputs {
+                        assert!(
+                            schema.pack_json(&input).is_err(),
+                            "{id}: direct packing accepted {input}"
+                        );
                         let actual = match from_json_value(schema.graph(), schema.root(), &input) {
                             Err(_) => "invalid-json",
                             Ok(value)

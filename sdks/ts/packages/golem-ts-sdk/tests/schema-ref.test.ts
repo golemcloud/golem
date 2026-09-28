@@ -141,10 +141,11 @@ describe('SchemaRef canonical JSON', () => {
     expect(ref.validateJson(['admin']).success).toBe(false);
   });
 
-  it('keeps structural packing separate from full restriction validation', () => {
+  it('validates restrictions while packing canonical JSON', () => {
     const ref = schema(t.u32({ min: { tag: 'unsigned', val: 5n } }));
 
-    expect(ref.packJson(3)).toEqual(v.u32(3));
+    expect(() => ref.packJson(3)).toThrow(/does not conform/);
+    expect(ref.packJson(5)).toEqual(v.u32(5));
     expect(ref.validateJson(3)).toEqual({
       success: false,
       issues: [{ path: [], message: 'schema value does not conform to the expected schema' }],

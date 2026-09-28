@@ -16,6 +16,7 @@ import {
   type SchemaType,
 } from '../src/internal/schema-model';
 import { SchemaRef, type JsonValue } from '../src/schema/ref';
+import { fromCanonicalJson } from '../src/schema/render';
 
 interface ConformanceCase {
   id: string;
@@ -280,9 +281,13 @@ function executeCase(testCase: ConformanceCase): void {
     case 'reject': {
       const ref = fixture(testCase.fixture);
       for (const input of testCase.inputs ?? [testCase.input!]) {
-        let packed: ReturnType<typeof ref.packJson>;
+        expect(
+          () => ref.packJson(input),
+          `${testCase.id}: direct packing accepted the input`,
+        ).toThrow();
+        let packed: ReturnType<typeof fromCanonicalJson>;
         try {
-          packed = ref.packJson(input);
+          packed = fromCanonicalJson(ref.graph, ref.root, input);
         } catch {
           expect('invalid-json').toBe((testCase.expected as { readonly kind: string }).kind);
           continue;

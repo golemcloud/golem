@@ -44,9 +44,12 @@ export class SchemaRef {
     })
     return Object.freeze(ref)
   }
-  /** Pack canonical JSON into the native schema-value carrier. @since 1.6.0 @category conversions */
+  /** Pack canonical JSON and validate it against the complete schema. @since 1.6.0 @category conversions */
   packJson(value: JsonValue): CoreTypes.SchemaValueTree {
-    return schemaValueToWit(packJson(this.graph, this.root, value))
+    const model = packJson(this.graph, this.root, value)
+    if (!schemaValueConforms(this.graph, this.root, model))
+      throw new SchemaRenderError([], "schema value does not conform to the expected schema")
+    return schemaValueToWit(model)
   }
   /** Unpack a native schema value into canonical JSON. @since 1.6.0 @category conversions */
   unpackJson(value: CoreTypes.SchemaValueTree): JsonValue {
@@ -58,10 +61,7 @@ export class SchemaRef {
   /** Explicitly validate canonical JSON. @since 1.6.0 @category validation */
   validateJson(value: JsonValue): ValidationResult<CoreTypes.SchemaValueTree> {
     try {
-      const model = packJson(this.graph, this.root, value)
-      if (!schemaValueConforms(this.graph, this.root, model))
-        return invalid("schema value does not conform to the expected schema")
-      return { success: true, value: schemaValueToWit(model) }
+      return { success: true, value: this.packJson(value) }
     } catch (error) {
       return invalid(error)
     }

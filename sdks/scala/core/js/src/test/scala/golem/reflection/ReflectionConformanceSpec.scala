@@ -320,7 +320,8 @@ object ReflectionConformanceSpec extends ZIOSpecDefault {
           val inputs = testCase.get("inputs").map(elements).getOrElse(List(testCase("input")))
           inputs.foreach { input =>
             val schema = fixture(name)
-            val actual = schema.packJson(input) match {
+            Predef.assert(schema.packJson(input).isLeft, s"$id: direct packing accepted $input")
+            val actual = CanonicalJson.pack(schema.graph, schema.root, input) match {
               case Left(_)                                            => "invalid-json"
               case Right(value) if schema.validateValue(value).isLeft => "constraint-violation"
               case Right(value)                                       => throw new AssertionError(s"$id accepted $input as $value")

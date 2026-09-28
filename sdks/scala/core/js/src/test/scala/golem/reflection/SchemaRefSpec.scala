@@ -140,7 +140,17 @@ object SchemaRefSpec extends ZIOSpecDefault {
           )
         )
       )
-      val rendered         = restricted.toJsonSchema()
+      val rendered  = restricted.toJsonSchema()
+      val validJson = Json.Object(
+        "count"   -> Json.Number(BigDecimal(3)),
+        "message" -> Json.Object("text" -> Json.String("https://golem"), "language" -> Json.String("en")),
+        "content" -> Json.Object("bytes" -> Json.String("AQID"), "mimeType" -> Json.String("image/png"))
+      )
+      val invalidJson = Json.Object(
+        "count"   -> Json.Number(BigDecimal(4)),
+        "message" -> Json.Object("text" -> Json.String("https://golem"), "language" -> Json.String("en")),
+        "content" -> Json.Object("bytes" -> Json.String("AQID"), "mimeType" -> Json.String("image/png"))
+      )
       val properties       = rendered.get("properties").one.toOption.get
       val count            = properties.get("count").one.toOption.get
       val textSchema       = properties.get("message").one.toOption.get
@@ -157,6 +167,9 @@ object SchemaRefSpec extends ZIOSpecDefault {
       val canonical    = List("", "AQ", "AQI", "AQID", "-_8").forall(value => pattern.r.pattern.matcher(value).matches())
       val nonCanonical = List("+/8", "AQ==", "-_9", "A").forall(value => !pattern.r.pattern.matcher(value).matches())
       assertTrue(
+        restricted.packJson(validJson).isRight,
+        restricted.packJson(invalidJson).isLeft,
+        restricted.validateJson(invalidJson).isLeft,
         count.get("maximum").one == Right(Json.Number(BigDecimal(3))),
         text.flatMap(_.get("minLength").one) == Right(Json.Number(BigDecimal(12))),
         text.flatMap(_.get("pattern").one) == Right(Json.String("^https://")),

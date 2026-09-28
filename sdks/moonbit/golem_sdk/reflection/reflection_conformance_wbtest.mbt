@@ -436,6 +436,11 @@ fn conformance_reject_kind(
   input : Json,
   id : String,
 ) -> String raise {
+  try schema.pack_json(input) catch {
+    _ => ()
+  } noraise {
+    _ => fail(id + ": direct packing accepted the input")
+  }
   let packed = try schema.pack(schema.resolve(schema.root), input) catch {
     _ => None
   } noraise {

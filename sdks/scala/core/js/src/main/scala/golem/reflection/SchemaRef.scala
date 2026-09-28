@@ -32,16 +32,19 @@ final class SchemaRef private (val graph: SchemaGraph, val root: SchemaType) {
       .map(_ => value)
 
   def validateJson(value: Json): Either[List[SchemaIssue], SchemaValue] =
-    packJson(value).left.map(error => List(error)).flatMap(validateValue)
+    packAndValidateJson(value)
 
   def packJson(value: Json): Either[SchemaIssue, SchemaValue] =
-    CanonicalJson.pack(graph, root, value)
+    packAndValidateJson(value).left.map(_.head)
 
   def unpackJson(value: SchemaValue): Either[SchemaIssue, Json] =
     validateValue(value).left.map(_.head).flatMap(_ => CanonicalJson.unpack(graph, root, value))
 
   def toJsonSchema(includeDraftMarker: Boolean = true): Json =
     CanonicalJson.jsonSchema(graph, root, includeDraftMarker)
+
+  private def packAndValidateJson(value: Json): Either[List[SchemaIssue], SchemaValue] =
+    CanonicalJson.pack(graph, root, value).left.map(error => List(error)).flatMap(validateValue)
 }
 
 object SchemaRef {
@@ -51,7 +54,7 @@ object SchemaRef {
     new SchemaRef(SchemaGraph(graph.defs, root), root)
 }
 
-private object CanonicalJson {
+private[reflection] object CanonicalJson {
   private val SignedIntegerPattern   = "^(?:0|-[1-9][0-9]*|[1-9][0-9]*)$".r
   private val UnsignedIntegerPattern = "^(?:0|[1-9][0-9]*)$".r
   private val MimeTypePattern        = "^[A-Za-z0-9!#$&^_.+\\-]+\\/[A-Za-z0-9!#$&^_.+\\-]+$".r

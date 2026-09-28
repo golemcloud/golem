@@ -68,6 +68,12 @@ describe("SchemaRef", () => {
 
   it("rejects native values outside declared restrictions before unpacking", () => {
     const schema = ref(t.u32({ min: { tag: "unsigned", val: 10n } }))
+    expect(() => schema.packJson(1)).toThrow(/does not conform/)
+    expect(schema.packJson(10)).toEqual({
+      root: 0,
+      valueNodes: [{ tag: "u32-value", val: 10 }],
+    })
+    expect(schema.validateJson(1).success).toBe(false)
     expect(() =>
       schema.unpackJson({ root: 0, valueNodes: [{ tag: "u32-value", val: 1 }] }),
     ).toThrow(/does not conform/)
