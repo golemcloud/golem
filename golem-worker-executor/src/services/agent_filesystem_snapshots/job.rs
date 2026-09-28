@@ -45,7 +45,7 @@ enum SaveOutcome {
     Saved(SnapshotInfo, OwnedSemaphorePermit),
     /// The save failed, after the retries when the error allows them.
     Failed(SnapshotStoreError),
-    /// `forget_scope` or a shutdown stopped the upload.
+    /// `forget_scope`, a shutdown or the stop of the caller stopped the upload.
     Stopped,
 }
 
@@ -114,20 +114,24 @@ impl Upload {
         stop: impl Future<Output = ()> + Send,
     ) -> Result<(SnapshotInfo, Self), SnapshotStoreError> {
         let started = Instant::now();
-        let result = match self.save(capture, None, stop).await {
-            SaveOutcome::Saved(info, _) => Ok(info),
-            SaveOutcome::Failed(error) => Err(error),
-            SaveOutcome::Stopped => Err(SnapshotStoreError::Storage {
-                retryable: true,
-                source: anyhow::anyhow!("the upload of the filesystem snapshot was stopped"),
-            }),
+        let (result, outcome) = match self.save(capture, None, stop).await {
+            SaveOutcome::Saved(info, _) => (Ok(info), Some("saved")),
+            SaveOutcome::Failed(error) => (Err(error), Some("failed")),
+            SaveOutcome::Stopped => (
+                Err(SnapshotStoreError::Storage {
+                    retryable: true,
+                    source: anyhow::anyhow!("the upload of the filesystem snapshot was stopped"),
+                }),
+                None,
+            ),
         };
-        let outcome = if result.is_ok() { "saved" } else { "failed" };
-        crate::metrics::filesystem_snapshots::record_upload(
-            self.kind.label(),
-            outcome,
-            started.elapsed(),
-        );
+        if let Some(outcome) = outcome {
+            crate::metrics::filesystem_snapshots::record_upload(
+                self.kind.label(),
+                outcome,
+                started.elapsed(),
+            );
+        }
         if let Ok(info) = &result {
             crate::metrics::filesystem_snapshots::record_uploaded_bytes(
                 self.kind.label(),
@@ -163,8 +167,8 @@ impl Upload {
         }
     }
 
-    /// Waits for a slot, saves with retries, and discards the capture in each case. `stop`, as
-    /// `forget_scope` or a shutdown, ends the save with `Stopped`.
+    /// Waits for a slot, saves with retries, and discards the capture in each case. `stop`,
+    /// `forget_scope` or a shutdown ends the save with `Stopped`.
     async fn save(
         &self,
         capture: impl CapturedTree,
@@ -211,6 +215,7 @@ impl Upload {
             .store(true, std::sync::atomic::Ordering::Release);
         let parent = parent.as_ref().map(|(name, detection)| (name, *detection));
         let saved = tokio::select! {
+            biased;
             saved = retrying(
                 self.inner.settings.upload_retry(),
                 self.inner.clock.as_ref(),
