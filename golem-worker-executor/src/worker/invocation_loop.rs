@@ -13,18 +13,28 @@
 // limitations under the License.
 
 use crate::durable_host::tool::operation::OwnerFailureWinner;
+use crate::filesystem_snapshot::SnapshotScope;
 use crate::model::{LookupResult, ReadFileResult, TrapType};
 use crate::sandbox_filesystem::{SandboxFilesystem, SandboxFilesystemAdapter};
 use crate::services::agent_filesystem::{
-    DeleteFailure, LimitTransition, ResidentFilesystem, ResidentFilesystemActivity,
-    SealedFilesystem, drain_sealed_filesystem, filesystem_activity, seal, set_limits,
+    CaptureError, CaptureOutcome, DeleteFailure, FilesystemCapture, LimitTransition,
+    ResidentFilesystem, ResidentFilesystemActivity, SealedFilesystem, TreeMark, capture,
+    drain_sealed_filesystem, filesystem_activity, seal, set_limits,
+};
+use crate::services::agent_filesystem_snapshots::{
+    SnapshotConfirmer, SnapshotKind, SnapshotSkip, UploadAdmission,
 };
 use crate::services::golem_config::SnapshotPolicy;
 use crate::services::oplog::plugin::ForwardingOplog;
 use crate::services::oplog::{CommitLevel, EphemeralOplog, OplogOps, downcast_oplog};
 use crate::services::resource_usage_metering::{ResourceUsageMeteringWindow, close_window};
 use crate::services::{
-    HasActiveAgents, HasExtraDeps, HasOplog, HasOplogService, HasShardService, HasWorker,
+    HasActiveAgents, HasAgentFilesystemSnapshots, HasExtraDeps, HasOplog, HasOplogService,
+    HasShardService, HasWorker,
+};
+use crate::worker::filesystem_snapshots::{
+    CaptureFinding, ConfirmedFilesystemSnapshot, PeriodicRecord, WorkerConfirmer,
+    plan_periodic_record,
 };
 use crate::worker::invocation::{
     GuestCallSettlementError, InvocationMode, InvokeResult, invocation_uses_streams,
@@ -46,6 +56,7 @@ use futures::channel::oneshot::Sender;
 use futures::future::{BoxFuture, Shared};
 use golem_common::model::agent::{AgentMode, ParsedAgentId};
 use golem_common::model::component::{CanonicalFilePath, ComponentRevision};
+use golem_common::model::oplog::FilesystemSnapshotName;
 use golem_common::model::oplog::{AgentError, OplogEntry};
 use golem_common::model::{
     AgentId, AgentInvocation, AgentInvocationKind, AgentInvocationOutput, AgentInvocationResult,
@@ -313,6 +324,13 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     }
                 }
             }
+            if let Some(interrupt) = self.pending_interrupt().await
+                && self
+                    .handle_unloaded_interrupt(interrupt, retry_was_live)
+                    .await
+            {
+                break 'outer;
+            }
             let permit = self
                 .permit_state
                 .take_permit()
@@ -506,6 +524,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                 }
                                 // Cleanup runs independently of this wait. Retain its final result
                                 // so deletion can still join it if the unload deadline expires.
+                                self.parent.end_filesystem_snapshot_generation();
                                 let unloading = unload_sealed_agent_ownership(
                                     SealedAgentOwnership {
                                         runtime: RunningAgentRuntime { instance, store },
@@ -633,6 +652,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 let owned_agent_id = self.owned_agent_id.clone();
                 async move { hook.before_filesystem_cleanup(&owned_agent_id).await }.boxed()
             });
+            self.parent.end_filesystem_snapshot_generation();
             let unloading = Self::unload_running_agent(
                 agent,
                 unload_request.reason,
@@ -1786,6 +1806,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                         parent: self.parent.clone(),
                         instance: self.instance,
                         store: store.deref_mut(),
+                        filesystem: self.filesystem,
                         uses_streams: false,
                     };
                     invocation.external_invocation(timestamped_invocation).await
@@ -1923,6 +1944,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
             parent: self.parent.clone(),
             instance: self.instance,
             store,
+            filesystem: self.filesystem,
             uses_streams: false,
         };
         invocation.process(message).await
@@ -2223,6 +2245,7 @@ struct Invocation<'a, Ctx: WorkerCtx> {
     parent: Arc<Worker<Ctx>>, // parent must not be dropped until the invocation_loop is running
     instance: &'a Instance,
     store: &'a mut Store<Ctx>,
+    filesystem: &'a ResidentFilesystem,
     uses_streams: bool,
 }
 
@@ -2770,6 +2793,20 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 )
                 .await;
         }
+        let snapshots = self.parent.agent_filesystem_snapshots();
+        let scope = SnapshotScope::agent(&self.owned_agent_id);
+        let admission = match snapshots.admit(&scope, SnapshotKind::Update).await {
+            Ok(admission) => Some(admission),
+            Err(SnapshotSkip::Disabled) => None,
+            Err(skip) => {
+                return self
+                    .fail_update(
+                        target_revision,
+                        format!("cannot take a filesystem snapshot for the update: {skip}"),
+                    )
+                    .await;
+            }
+        };
 
         let idempotency_key = {
             let ctx = self.store.data_mut();
@@ -2839,6 +2876,13 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 result: AgentInvocationResult::SaveSnapshot { snapshot },
                 ..
             }) => {
+                let filesystem_snapshot = match admission {
+                    Some(admission) => match self.upload_update_filesystem(admission).await {
+                        Ok(filesystem_snapshot) => filesystem_snapshot,
+                        Err(error) => return self.fail_update(target_revision, error).await,
+                    },
+                    None => None,
+                };
                 match self
                     .store
                     .data()
@@ -2848,6 +2892,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                         target_revision,
                         snapshot.data,
                         snapshot.mime_type,
+                        filesystem_snapshot,
                     )
                     .await
                 {
@@ -2983,6 +3028,73 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     }
 
     /// Records an attempted worker update as failed
+    /// Captures the agent filesystem at a boundary, against the confirmed mark `since`. Gives
+    /// `None` when the capture failed: the loop then writes no record.
+    async fn capture_filesystem(
+        &self,
+        wait: Option<std::time::Duration>,
+        since: Option<TreeMark>,
+    ) -> Option<CaptureOutcome> {
+        let started = std::time::Instant::now();
+        let wait = wait.unwrap_or(std::time::Duration::from_secs(5));
+        match capture(self.filesystem, wait, since).await {
+            Ok(outcome) => {
+                crate::metrics::filesystem_snapshots::record_capture(
+                    match &outcome {
+                        CaptureOutcome::Unchanged => "unchanged",
+                        CaptureOutcome::InitialFiles => "initial_files",
+                        CaptureOutcome::Captured { .. } => "captured",
+                    },
+                    started.elapsed(),
+                );
+                Some(outcome)
+            }
+            Err(error) => {
+                crate::metrics::filesystem_snapshots::record_capture(
+                    match &error {
+                        CaptureError::Busy => "busy",
+                        CaptureError::Invalidated => "invalidated",
+                        CaptureError::Sandbox(_) => "failed",
+                    },
+                    started.elapsed(),
+                );
+                warn!("Skipping the snapshot: the agent filesystem was not captured: {error}");
+                None
+            }
+        }
+    }
+
+    /// Captures the agent filesystem for a manual update and waits for its upload. Gives the name
+    /// of the filesystem snapshot, or `None` when the tree is a tree of initial files. The capture
+    /// compares with no mark, so a manual-update record never reuses a name.
+    async fn upload_update_filesystem(
+        &self,
+        admission: UploadAdmission,
+    ) -> Result<Option<FilesystemSnapshotName>, String> {
+        let snapshots = self.parent.agent_filesystem_snapshots();
+        match self
+            .capture_filesystem(snapshots.capture_wait(), None)
+            .await
+        {
+            None => Err("failed to capture the agent filesystem for the update".to_string()),
+            Some(CaptureOutcome::InitialFiles) => Ok(None),
+            Some(CaptureOutcome::Unchanged) => Err(
+                "the capture of the agent filesystem for the update found no change without a mark"
+                    .to_string(),
+            ),
+            Some(CaptureOutcome::Captured { capture, .. }) => {
+                let name = admission.name().clone();
+                admission
+                    .upload_now(capture)
+                    .await
+                    .map(|_| Some(name))
+                    .map_err(|error| {
+                        format!("failed to upload the filesystem snapshot for the update: {error}")
+                    })
+            }
+        }
+    }
+
     async fn fail_update(
         &self,
         target_revision: ComponentRevision,
@@ -3048,6 +3160,16 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             warn!("Skipping periodic snapshot: {blocker}");
             return CommandOutcome::Continue;
         }
+        let snapshots = self.parent.agent_filesystem_snapshots();
+        let scope = SnapshotScope::agent(&self.owned_agent_id);
+        let admission = match snapshots.admit(&scope, SnapshotKind::Periodic).await {
+            Ok(admission) => Some(admission),
+            Err(SnapshotSkip::Disabled) => None,
+            Err(skip) => {
+                debug!("Skipping periodic snapshot: {skip}");
+                return CommandOutcome::Continue;
+            }
+        };
 
         let idempotency_key = IdempotencyKey::fresh();
         self.store
@@ -3123,6 +3245,23 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 result: AgentInvocationResult::SaveSnapshot { snapshot },
                 ..
             }) => {
+                let capture = match admission {
+                    Some(admission) => {
+                        let since = self.parent.filesystem_snapshot_since();
+                        match self
+                            .capture_filesystem(
+                                snapshots.capture_wait(),
+                                since.as_ref().map(|since| since.mark),
+                            )
+                            .await
+                        {
+                            Some(outcome) => Some((admission, since, outcome)),
+                            None => return CommandOutcome::Continue,
+                        }
+                    }
+                    None => None,
+                };
+                let record = PeriodicSnapshotRecord::new(capture);
                 let serialized = golem_common::serialization::serialize(&snapshot.data);
                 match serialized {
                     Ok(serialized_bytes) => {
@@ -3136,14 +3275,36 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                                         .agent_wallet_cards_snapshot();
                                     let wallet_generation =
                                         self.store.data().durable_ctx().wallet_generation();
+                                    let entry = OplogEntry::snapshot(
+                                        payload,
+                                        snapshot.mime_type,
+                                        active_cards,
+                                        wallet_generation,
+                                        record.name(),
+                                    );
+                                    let appended = match record.confirmed_at_once() {
+                                        Some(name) => self
+                                            .parent
+                                            .oplog
+                                            .fallible_add_pair(
+                                                entry,
+                                                OplogEntry::snapshot_confirmed(name),
+                                            )
+                                            .await
+                                            .map(drop),
+                                        None => self.parent.oplog.fallible_add(entry).await,
+                                    };
+                                    if let Err(error) = appended {
+                                        warn!(
+                                            "Failed to append the periodic snapshot record: {error}"
+                                        );
+                                        record.abandon().await;
+                                        return CommandOutcome::BreakInnerLoop(
+                                            RetryDecision::Immediate,
+                                        );
+                                    }
                                     self.parent
-                                        .add_and_commit_oplog(OplogEntry::snapshot(
-                                            payload,
-                                            snapshot.mime_type,
-                                            active_cards,
-                                            wallet_generation,
-                                            None,
-                                        ))
+                                        .commit_oplog_and_update_state(CommitLevel::Always)
                                         .await;
                                     debug!("Periodic snapshot saved successfully");
 
@@ -3155,18 +3316,22 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                                             status_checkpointer::CheckpointReason::Snapshot,
                                         )
                                         .await;
+                                    record.submit(&self.parent);
                                 }
                                 Err(err) => {
                                     warn!("Failed to convert snapshot payload: {err}");
+                                    record.abandon().await;
                                 }
                             },
                             Err(err) => {
                                 warn!("Failed to upload periodic snapshot payload: {err}");
+                                record.abandon().await;
                             }
                         }
                     }
                     Err(err) => {
                         warn!("Failed to serialize snapshot data: {err}");
+                        record.abandon().await;
                     }
                 }
                 CommandOutcome::Continue
@@ -3286,6 +3451,98 @@ fn snapshot_action_at(
         PeriodicSnapshotAction::DueNow
     } else {
         PeriodicSnapshotAction::Wait(Duration::from_millis((due_at - now) as u64))
+    }
+}
+
+/// The filesystem part of a periodic snapshot record, from the admission and the capture to the
+/// submit of the upload.
+struct PeriodicSnapshotRecord {
+    plan: PeriodicRecord,
+    /// The admission, the capture and its mark, when the record uploads a capture.
+    upload: Option<(UploadAdmission, FilesystemCapture, TreeMark)>,
+}
+
+impl PeriodicSnapshotRecord {
+    /// Decides the record from the admission, the confirmed snapshot that the capture compared
+    /// with, and the outcome of the capture. Without an admission the record has no name. The
+    /// admission is dropped unless the record uploads the capture.
+    fn new(
+        capture: Option<(
+            UploadAdmission,
+            Option<ConfirmedFilesystemSnapshot>,
+            CaptureOutcome,
+        )>,
+    ) -> Self {
+        match capture {
+            None => Self {
+                plan: PeriodicRecord::WithoutName,
+                upload: None,
+            },
+            Some((admission, since, outcome)) => {
+                let (finding, upload) = match outcome {
+                    CaptureOutcome::Unchanged => (CaptureFinding::Unchanged, None),
+                    CaptureOutcome::InitialFiles => (CaptureFinding::InitialFiles, None),
+                    CaptureOutcome::Captured {
+                        capture,
+                        mark,
+                        detection,
+                    } => (
+                        CaptureFinding::Captured(detection),
+                        Some((admission, capture, mark)),
+                    ),
+                };
+                Self {
+                    plan: plan_periodic_record(finding, since.as_ref()),
+                    upload,
+                }
+            }
+        }
+    }
+
+    /// The filesystem snapshot name of the record.
+    fn name(&self) -> Option<FilesystemSnapshotName> {
+        match &self.plan {
+            PeriodicRecord::WithoutName => None,
+            PeriodicRecord::Uploaded { .. } => self
+                .upload
+                .as_ref()
+                .map(|(admission, _, _)| admission.name().clone()),
+            PeriodicRecord::Reused(name) => Some(name.clone()),
+        }
+    }
+
+    /// The name whose confirmation record follows the record at once, in one append.
+    fn confirmed_at_once(&self) -> Option<FilesystemSnapshotName> {
+        match &self.plan {
+            PeriodicRecord::Reused(name) => Some(name.clone()),
+            PeriodicRecord::WithoutName | PeriodicRecord::Uploaded { .. } => None,
+        }
+    }
+
+    /// Drops the admission and discards the capture of a record that was not written.
+    async fn abandon(self) {
+        if let Some((admission, capture, _)) = self.upload {
+            drop(admission);
+            if let Err(error) = capture.discard().await {
+                warn!("Failed to discard a filesystem capture: {error}");
+            }
+        }
+    }
+
+    /// Starts the upload of the capture of a written record.
+    fn submit<Ctx: WorkerCtx>(self, worker: &Arc<Worker<Ctx>>) {
+        if let (PeriodicRecord::Uploaded { parent }, Some((admission, capture, mark))) =
+            (self.plan, self.upload)
+        {
+            admission.submit(
+                capture,
+                parent,
+                SnapshotConfirmer::new(Arc::new(WorkerConfirmer::new(
+                    Arc::downgrade(worker),
+                    mark,
+                ))),
+            );
+        }
     }
 }
 

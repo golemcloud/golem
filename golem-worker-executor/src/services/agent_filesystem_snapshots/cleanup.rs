@@ -34,10 +34,12 @@ enum Cleanup {
         scope: SnapshotScope,
         names: Box<[FilesystemSnapshotName]>,
     },
-    /// Deletes a scope, after the job that `after` marks ended.
+    /// Deletes a scope, after the job that `after` marks ended. The mark goes away with the
+    /// clean-up, on each exit.
     DeleteScope {
         scope: SnapshotScope,
         after: Option<CancellationToken>,
+        mark: super::DeletingMark,
     },
 }
 
@@ -90,8 +92,13 @@ impl CleanupQueue {
         self.send(Cleanup::Delete { scope, names }, "delete");
     }
 
-    pub(super) fn delete_scope(&self, scope: SnapshotScope, after: Option<CancellationToken>) {
-        self.send(Cleanup::DeleteScope { scope, after }, "delete_scope");
+    pub(super) fn delete_scope(
+        &self,
+        scope: SnapshotScope,
+        after: Option<CancellationToken>,
+        mark: super::DeletingMark,
+    ) {
+        self.send(Cleanup::DeleteScope { scope, after, mark }, "delete_scope");
     }
 
     fn send(&self, cleanup: Cleanup, operation: &'static str) {
@@ -113,7 +120,11 @@ impl Cleaner {
                     .for_each(|name| self.delete(&scope, name))
                     .await
             }
-            Cleanup::DeleteScope { scope, after } => {
+            Cleanup::DeleteScope {
+                scope,
+                after,
+                mark: _mark,
+            } => {
                 if let Some(after) = after {
                     after.cancelled().await;
                 }

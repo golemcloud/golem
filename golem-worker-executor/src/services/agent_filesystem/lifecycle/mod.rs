@@ -1342,10 +1342,23 @@ impl TreeMark {
     }
 
     /// Whether `self` and `other` are marks of one generation.
-    #[allow(dead_code)]
     pub(crate) fn same_generation(&self, other: &TreeMark) -> bool {
         self.generation == other.generation
     }
+}
+
+/// Gives a mark of a new generation and a later mark of the same generation, for tests of the
+/// callers of the lifecycle.
+#[cfg(test)]
+pub(crate) async fn test_tree_marks() -> (TreeMark, TreeMark) {
+    let generation = NEXT_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let mark = |changes| TreeMark {
+        generation,
+        changes,
+        carried: 0,
+        saved_times: true,
+    };
+    (mark(0), mark(1))
 }
 
 /// The source of the generation numbers of [`TreeMark`].

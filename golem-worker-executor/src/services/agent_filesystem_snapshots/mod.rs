@@ -73,6 +73,8 @@ pub(crate) enum SnapshotSkip {
     UploadInFlight,
     /// The volume has less free space than the pressure target. The loop skips the snapshot.
     VolumeUnderPressure,
+    /// A delete of the scope is queued or runs. The loop skips the snapshot.
+    ScopeDeleting,
 }
 
 impl std::fmt::Display for SnapshotSkip {
@@ -81,6 +83,7 @@ impl std::fmt::Display for SnapshotSkip {
             Self::Disabled => "filesystem snapshots are disabled on this executor",
             Self::UploadInFlight => "an upload of a filesystem snapshot of the agent runs now",
             Self::VolumeUnderPressure => "the volume of the agent filesystems is under pressure",
+            Self::ScopeDeleting => "the filesystem snapshots of the agent are being deleted",
         })
     }
 }
@@ -103,12 +106,12 @@ impl std::fmt::Display for SnapshotsDisabled {
 pub(crate) enum ConfirmOutcome {
     /// The confirmation record is in the oplog.
     Confirmed,
-    /// The status of the worker no longer holds the snapshot record with the name, because an
-    /// update or a revert cleared it. Nothing is written.
+    /// The last automatic snapshot record of the agent does not have the name, because an update
+    /// or a revert cleared it. Nothing was written, and no start selects the snapshot.
     Superseded,
-    /// The worker is not in the memory of this executor, or this executor no longer owns it.
-    /// Nothing is written.
-    Gone,
+    /// The confirmation was not written now: the agent does not run, or its state was not known.
+    /// A later start of the agent can confirm the snapshot, so the snapshot stays.
+    Deferred,
 }
 
 impl ConfirmOutcome {
@@ -116,9 +119,20 @@ impl ConfirmOutcome {
         match self {
             Self::Confirmed => "confirmed",
             Self::Superseded => "superseded",
-            Self::Gone => "gone",
+            Self::Deferred => "deferred",
         }
     }
+}
+
+/// How an upload job ended its work on the snapshot, before retention or a delete.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum JobDecision {
+    /// The confirmation gave this outcome.
+    Confirmed(ConfirmOutcome),
+    /// The save failed after its retries. The store does not hold the snapshot.
+    SaveFailed,
+    /// `forget_scope` or a shutdown stopped the job, or the admission ended without an upload.
+    Stopped,
 }
 
 /// Writes the confirmation record of a filesystem snapshot.
@@ -162,8 +176,10 @@ pub(crate) trait VolumeRoom: Send + Sync {
 }
 
 /// A volume that always has room.
+#[cfg(test)]
 pub(crate) struct UnlimitedRoom;
 
+#[cfg(test)]
 #[async_trait]
 impl VolumeRoom for UnlimitedRoom {
     async fn has_room(&self) -> bool {
@@ -255,8 +271,9 @@ struct Inner {
     uploads: Arc<Semaphore>,
     /// The slots of the restores.
     restores: Arc<Semaphore>,
-    /// The job of each scope that has an admission or an upload.
-    scopes: Mutex<HashMap<SnapshotScope, ScopeJob>>,
+    /// The job of each scope that has an admission or an upload, and the scopes whose delete is
+    /// queued or runs.
+    scopes: Arc<Mutex<Scopes>>,
     next_job: AtomicU64,
     clock: Arc<dyn SnapshotClock>,
     room: Arc<dyn VolumeRoom>,
@@ -267,14 +284,79 @@ struct Inner {
     jobs: TaskTracker,
 }
 
+/// The jobs of the scopes, and the scopes whose delete is queued or runs.
+#[derive(Default)]
+struct Scopes {
+    jobs: HashMap<SnapshotScope, ScopeJob>,
+    /// The number of queued or running deletes of each scope.
+    deleting: HashMap<SnapshotScope, usize>,
+}
+
+/// Gives the scopes behind `scopes`. No lock is held across an await, so the scopes of a
+/// poisoned lock are used as they are.
+fn scopes_of(scopes: &Mutex<Scopes>) -> MutexGuard<'_, Scopes> {
+    scopes.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
 /// The job of one scope, from its admission to its end.
 #[derive(Clone)]
 struct ScopeJob {
     id: u64,
+    /// The name of the snapshot of the job.
+    name: FilesystemSnapshotName,
     /// Cancelled by `forget_scope`. The job stops and writes nothing.
     cancel: CancellationToken,
     /// Cancelled when the job ended.
     ended: CancellationToken,
+    /// Set while the save of the job holds a slot of the uploads.
+    holds_slot: Arc<std::sync::atomic::AtomicBool>,
+    /// The decision of the job, sent once, before its retention or delete.
+    decided: Arc<tokio::sync::watch::Sender<Option<JobDecision>>>,
+}
+
+impl ScopeJob {
+    /// Records the decision of the job. A later decision does not replace the first one.
+    fn decide(&self, decision: JobDecision) {
+        self.decided.send_if_modified(|current| {
+            let first = current.is_none();
+            if first {
+                *current = Some(decision);
+            }
+            first
+        });
+    }
+}
+
+/// What a start can see of an upload of its agent.
+pub(crate) struct UploadView {
+    /// Whether the save holds a slot of the uploads. A job that waits for a slot is not waited
+    /// for.
+    pub(crate) holds_slot: bool,
+    /// The decision of the job, once it is known.
+    pub(crate) decided: tokio::sync::watch::Receiver<Option<JobDecision>>,
+}
+
+/// The mark of a scope whose delete is queued or runs. Dropping it removes the mark.
+pub(super) struct DeletingMark {
+    scopes: Arc<Mutex<Scopes>>,
+    scope: SnapshotScope,
+}
+
+impl Drop for DeletingMark {
+    fn drop(&mut self) {
+        let mut scopes = scopes_of(&self.scopes);
+        let left = scopes
+            .deleting
+            .get_mut(&self.scope)
+            .map(|count| {
+                *count = count.saturating_sub(1);
+                *count
+            })
+            .unwrap_or(0);
+        if left == 0 {
+            scopes.deleting.remove(&self.scope);
+        }
+    }
 }
 
 impl AgentFilesystemSnapshots {
@@ -333,7 +415,7 @@ impl AgentFilesystemSnapshots {
                 store,
                 settings,
                 uploads,
-                scopes: Mutex::default(),
+                scopes: Arc::default(),
                 next_job: AtomicU64::new(1),
                 clock,
                 room,
@@ -349,6 +431,39 @@ impl AgentFilesystemSnapshots {
         self.inner.is_some()
     }
 
+    /// Gives the upload of the snapshot `name` of `scope` that runs on this executor now.
+    pub(crate) fn upload_of(
+        &self,
+        scope: &SnapshotScope,
+        name: &FilesystemSnapshotName,
+    ) -> Option<UploadView> {
+        let inner = self.inner.as_ref()?;
+        let scopes = inner.jobs_of_scope();
+        let job = scopes.jobs.get(scope).filter(|job| &job.name == name)?;
+        Some(UploadView {
+            holds_slot: job.holds_slot.load(Ordering::Acquire),
+            decided: job.decided.subscribe(),
+        })
+    }
+
+    /// Tells whether the store holds the whole snapshot `name` of `scope`.
+    pub(crate) async fn is_stored(
+        &self,
+        scope: &SnapshotScope,
+        name: &FilesystemSnapshotName,
+    ) -> Result<bool, SnapshotStoreError> {
+        let inner = self.inner.as_ref().ok_or(SnapshotStoreError::NotFound)?;
+        let name = store_name(name).map_err(|error| SnapshotStoreError::Storage {
+            retryable: false,
+            source: anyhow::Error::new(error),
+        })?;
+        inner
+            .store
+            .stat(scope, &name)
+            .await
+            .map(|info| info.is_some())
+    }
+
     /// How long a capture waits for open file calls, or `None` when the service is disabled.
     pub(crate) fn capture_wait(&self) -> Option<Duration> {
         self.inner
@@ -356,7 +471,7 @@ impl AgentFilesystemSnapshots {
             .map(|inner| inner.settings.capture_wait())
     }
 
-    /// How long a stopped worker stays in memory for an upload in progress, or `None` when the
+    /// How long a start waits for an upload of its agent in progress, or `None` when the
     /// service is disabled.
     pub(crate) fn confirmation_wait(&self) -> Option<Duration> {
         self.inner
@@ -378,11 +493,11 @@ impl AgentFilesystemSnapshots {
         if !inner.room.has_room().await {
             return Err(SnapshotSkip::VolumeUnderPressure);
         }
-        let job = inner.reserve(scope)?;
         let name = match kind {
             SnapshotKind::Periodic => FilesystemSnapshotName::periodic(),
             SnapshotKind::Update => FilesystemSnapshotName::update(),
         };
+        let job = inner.reserve(scope, &name)?;
         Ok(UploadAdmission {
             inner: Arc::clone(inner),
             scope: scope.clone(),
@@ -412,6 +527,7 @@ impl AgentFilesystemSnapshots {
     /// Deletes the filesystem snapshots `names` of `scope` in the background. The call returns at
     /// once and cannot fail. The clean-up retries, and after the retries it logs and counts the
     /// names that stay.
+    #[allow(dead_code)]
     pub(crate) fn forget(&self, scope: &SnapshotScope, names: Box<[FilesystemSnapshotName]>) {
         if let Some(inner) = &self.inner {
             inner.cleanup.delete(scope.clone(), names);
@@ -420,19 +536,35 @@ impl AgentFilesystemSnapshots {
 
     /// Deletes the scope in the background, after the job of the scope ended. The call cancels
     /// that job first, so it writes nothing more. The call returns at once and cannot fail.
+    ///
+    /// Until the delete ends, with success or with an error, an admission of the scope gives
+    /// [`SnapshotSkip::ScopeDeleting`].
+    #[allow(dead_code)]
     pub(crate) fn forget_scope(&self, scope: &SnapshotScope) {
         if let Some(inner) = &self.inner {
-            let job = inner.jobs_of_scope().get(scope).cloned();
+            let (job, mark) = {
+                let mut scopes = scopes_of(&inner.scopes);
+                let job = scopes.jobs.get(scope).cloned();
+                *scopes.deleting.entry(scope.clone()).or_insert(0) += 1;
+                (
+                    job,
+                    DeletingMark {
+                        scopes: Arc::clone(&inner.scopes),
+                        scope: scope.clone(),
+                    },
+                )
+            };
             if let Some(job) = &job {
                 job.cancel.cancel();
             }
             inner
                 .cleanup
-                .delete_scope(scope.clone(), job.map(|job| job.ended));
+                .delete_scope(scope.clone(), job.map(|job| job.ended), mark);
         }
     }
 
     /// Copies each filesystem snapshot of `from` into the empty scope `to`.
+    #[allow(dead_code)]
     pub(crate) async fn duplicate_scope(
         &self,
         from: &SnapshotScope,
@@ -446,11 +578,12 @@ impl AgentFilesystemSnapshots {
 
     /// Waits until the job of `scope` ended, for at most `limit`. Gives `true` when no job of the
     /// scope runs at the return.
+    #[allow(dead_code)]
     pub(crate) async fn wait_for_pending(&self, scope: &SnapshotScope, limit: Duration) -> bool {
         let Some(inner) = &self.inner else {
             return true;
         };
-        let Some(job) = inner.jobs_of_scope().get(scope).cloned() else {
+        let Some(job) = inner.jobs_of_scope().jobs.get(scope).cloned() else {
             return true;
         };
         tokio::select! {
@@ -473,35 +606,48 @@ impl AgentFilesystemSnapshots {
 impl Inner {
     /// Gives the jobs of the scopes. No lock is held across an await, so the map of a poisoned
     /// lock is used as it is.
-    fn jobs_of_scope(&self) -> MutexGuard<'_, HashMap<SnapshotScope, ScopeJob>> {
-        self.scopes.lock().unwrap_or_else(PoisonError::into_inner)
+    fn jobs_of_scope(&self) -> MutexGuard<'_, Scopes> {
+        scopes_of(&self.scopes)
     }
 
-    /// Reserves `scope` for a new job, or gives `UploadInFlight` when a job of the scope exists.
-    fn reserve(&self, scope: &SnapshotScope) -> Result<ScopeJob, SnapshotSkip> {
+    /// Reserves `scope` for a new job with the snapshot `name`. Gives `UploadInFlight` when a job
+    /// of the scope exists, and `ScopeDeleting` when a delete of the scope is queued or runs.
+    fn reserve(
+        &self,
+        scope: &SnapshotScope,
+        name: &FilesystemSnapshotName,
+    ) -> Result<ScopeJob, SnapshotSkip> {
         let mut scopes = self.jobs_of_scope();
-        if scopes.contains_key(scope) {
+        if scopes.deleting.contains_key(scope) {
+            return Err(SnapshotSkip::ScopeDeleting);
+        }
+        if scopes.jobs.contains_key(scope) {
             return Err(SnapshotSkip::UploadInFlight);
         }
         let job = ScopeJob {
             id: self.next_job.fetch_add(1, Ordering::Relaxed),
+            name: name.clone(),
             cancel: CancellationToken::new(),
             ended: CancellationToken::new(),
+            holds_slot: Arc::default(),
+            decided: Arc::new(tokio::sync::watch::channel(None).0),
         };
-        scopes.insert(scope.clone(), job.clone());
+        scopes.jobs.insert(scope.clone(), job.clone());
         Ok(job)
     }
 
-    /// Frees `scope` when `job` is its job, and marks the job as ended.
+    /// Frees `scope` when `job` is its job, and marks the job as decided and ended.
     fn end(&self, scope: &SnapshotScope, job: &ScopeJob) {
         let mut scopes = self.jobs_of_scope();
         if scopes
+            .jobs
             .get(scope)
             .is_some_and(|current| current.id == job.id)
         {
-            scopes.remove(scope);
+            scopes.jobs.remove(scope);
         }
         drop(scopes);
+        job.decide(JobDecision::Stopped);
         job.ended.cancel();
     }
 }
@@ -526,10 +672,10 @@ impl UploadAdmission {
     /// Uploads `capture` in the background, then confirms it with `confirmer`.
     ///
     /// The job waits for a slot of the uploads, saves with retries, discards the capture, and
-    /// confirms. On `Confirmed` it applies retention. On `Superseded` or `Gone` it deletes the
-    /// snapshot, runs no retention, and counts a dropped confirmation. When the retries are used
-    /// up, it confirms nothing. A job that `forget_scope` or a shutdown stops writes and deletes
-    /// nothing.
+    /// confirms. On `Confirmed` it applies retention. On `Superseded` it deletes the snapshot and
+    /// runs no retention. On `Deferred` it keeps the snapshot and runs no retention, because a
+    /// later start can confirm it. When the retries are used up, it confirms nothing. A job that
+    /// `forget_scope` or a shutdown stops writes and deletes nothing.
     pub(crate) fn submit(
         mut self,
         capture: impl CapturedTree,

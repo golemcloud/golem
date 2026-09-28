@@ -15,7 +15,6 @@
 pub mod active_agents;
 pub(crate) mod activity;
 pub mod agent_filesystem;
-#[allow(dead_code)]
 pub mod agent_filesystem_snapshots;
 pub mod agent_memory_meter;
 pub mod agent_types;

@@ -25,6 +25,7 @@ pub use durable_stream_slots::{
 };
 pub mod entity_invocation;
 pub mod entity_slot;
+pub(crate) mod filesystem_snapshots;
 pub mod instance;
 pub mod invocation;
 mod invocation_loop;
@@ -68,12 +69,13 @@ use crate::services::active_agents::{
 use crate::services::agent_filesystem::{
     AccessMode, FilesystemGenerationHandle, Follow, ObjectKind, OpenOptions, PathTarget,
     ReconstructingFilesystem, ResidentFilesystem, ResidentFilesystemActivity, SealedFilesystem,
-    abort_reconstruction, bind_configured_resource_usage_metering,
+    TreeMark, abort_reconstruction, bind_configured_resource_usage_metering,
     delete as delete_agent_filesystem, delete_created, finish_reconstruction, finish_replay,
     materialize_baseline, open as open_agent_filesystem, open_resource_usage_window,
     prepare_initial_files, provision_initial_files, reconstruction_generation_handle,
-    resident_generation_handle,
+    resident_generation_handle, tree_mark,
 };
+use crate::services::agent_filesystem_snapshots;
 use crate::services::card_interest::CardInterestIndex;
 use crate::services::events::{Event, EventsSubscription};
 use crate::services::golem_config::SnapshotPolicy;
@@ -91,13 +93,14 @@ use crate::services::worker::{
 };
 use crate::services::worker_event::{WorkerEventService, WorkerEventServiceDefault};
 use crate::services::{
-    All, HasActiveAgents, HasAgentTypesService, HasAgentWebhooksService, HasAll,
-    HasBlobStoreService, HasCardService, HasComponentService, HasConfig,
-    HasEnvironmentStateService, HasEvents, HasExtraDeps, HasFileLoader, HasHttpConnectionPool,
-    HasKeyValueService, HasNativeToolCatalog, HasOplog, HasOplogService, HasPromiseService,
-    HasQuotaService, HasRdbmsService, HasResourceLimits, HasRpc, HasSchedulerService,
-    HasShardService, HasWasmtimeEngine, HasWebSocketConnectionPool, HasWorkerEnumerationService,
-    HasWorkerForkService, HasWorkerProxy, HasWorkerService, UsesAllDeps,
+    All, HasActiveAgents, HasAgentFilesystemSnapshots, HasAgentTypesService,
+    HasAgentWebhooksService, HasAll, HasBlobStoreService, HasCardService, HasComponentService,
+    HasConfig, HasEnvironmentStateService, HasEvents, HasExtraDeps, HasFileLoader,
+    HasHttpConnectionPool, HasKeyValueService, HasNativeToolCatalog, HasOplog, HasOplogService,
+    HasPromiseService, HasQuotaService, HasRdbmsService, HasResourceLimits, HasRpc,
+    HasSchedulerService, HasShardService, HasWasmtimeEngine, HasWebSocketConnectionPool,
+    HasWorkerEnumerationService, HasWorkerForkService, HasWorkerProxy, HasWorkerService,
+    UsesAllDeps,
 };
 use crate::worker::instance::{OwnerExecution, OwnerRuntimeResources};
 use crate::worker::invocation_loop::{
@@ -143,8 +146,8 @@ use golem_common::model::entity::{
 };
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{
-    AgentError, OplogEntry, OplogErrorKind, OplogIndex, OplogPayload, ReadOnlyViolationError,
-    TimestampedUpdateDescription, UpdateDescription,
+    AgentError, FilesystemSnapshotName, OplogEntry, OplogErrorKind, OplogIndex, OplogPayload,
+    ReadOnlyViolationError, TimestampedUpdateDescription, UpdateDescription,
 };
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::worker::{
@@ -640,11 +643,15 @@ pub struct ResolvedWorkerData<Ctx: WorkerCtx> {
     /// Prevents weak-reference background work from starting while an unloaded
     /// worker is being conditionally removed from `ActiveAgents`.
     cache_retirement_in_progress: AtomicBool,
+    /// The filesystem snapshots of the current generation.
+    filesystem_snapshot_slot: StdMutex<filesystem_snapshots::FilesystemSnapshotSlot>,
     startup_attempt: StartupAttemptTracker,
     linear_memory_grant: StdMutex<Option<Arc<StdMutex<MemoryGrant>>>>,
     /// Lifecycle request shared across resident worker generations. A terminal request is retained
     /// until the worker stops so permit reacquisition cannot lose it between `RunningWorker`s.
     interrupt_signal: Arc<async_lock::Mutex<WorkerInterruptState>>,
+    /// Notified after an interrupt request is queued.
+    interrupt_queued: Arc<tokio::sync::Notify>,
     oom_retry_config: RetryConfig,
     snapshot_policy: SnapshotPolicy,
 
@@ -993,10 +1000,7 @@ fn is_infrastructure_recovery_error(error: &WorkerExecutorError) -> bool {
 impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Whether this executor restores filesystem snapshots.
     fn filesystem_snapshots_enabled(&self) -> bool {
-        matches!(
-            self.deps.config().filesystem_snapshots,
-            crate::services::golem_config::FilesystemSnapshotsConfig::Managed(_)
-        )
+        self.agent_filesystem_snapshots().is_enabled()
     }
 
     pub(crate) async fn ensure_not_failed<T: HasAll<Ctx> + Send + Sync>(
@@ -1874,9 +1878,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 EphemeralInvocationState::Available
             }),
             cache_retirement_in_progress: AtomicBool::new(false),
+            filesystem_snapshot_slot: StdMutex::default(),
             startup_attempt: StartupAttemptTracker::default(),
             linear_memory_grant: StdMutex::new(None),
             interrupt_signal: Arc::new(async_lock::Mutex::new(WorkerInterruptState::default())),
+            interrupt_queued: Arc::new(tokio::sync::Notify::new()),
             execution_status,
             initial_worker_metadata,
             resource_entry,
@@ -3111,11 +3117,16 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 return false;
             }
             if let Some(mut state) = self.interrupt_signal.try_lock() {
-                return state.queue(PendingWorkerInterrupt {
+                let queued = state.queue(PendingWorkerInterrupt {
                     kind: interrupt_kind,
                     reacquire_permits,
                     unload_request: UnloadRequest::ordinary(unload_reason),
                 });
+                drop(state);
+                if queued {
+                    self.interrupt_queued.notify_waiters();
+                }
+                return queued;
             }
             drop(lifecycle);
             tokio::task::yield_now().await;
@@ -4283,6 +4294,227 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     fn cache_retirement_in_progress(&self) -> bool {
         self.cache_retirement_in_progress.load(Ordering::Acquire)
+    }
+
+    /// Writes the confirmation record of the filesystem snapshot `name` while the instance of the
+    /// generation of `mark` runs. It answers [`state_actor::ConfirmationReply::Deferred`] without a
+    /// write when the status is detached, when the instance does not run or runs another
+    /// generation, when the owner retires, or when this executor no longer admits work of the
+    /// agent. Otherwise one status job, which holds the instance lock, checks and appends. So a
+    /// stop waits for at most that one job.
+    pub(crate) async fn confirm_filesystem_snapshot(
+        self: &Arc<Self>,
+        name: FilesystemSnapshotName,
+        mark: TreeMark,
+    ) -> state_actor::ConfirmationReply {
+        let deferred = state_actor::ConfirmationReply::Deferred;
+        if self.last_known_status_detached.load(Ordering::Acquire) {
+            return deferred;
+        }
+        let instance_guard = self.instance.clone().lock_owned().await;
+        let same_generation = self
+            .filesystem_snapshot_slot
+            .lock()
+            .unwrap()
+            .is_generation(&mark);
+        if !matches!(&*instance_guard, WorkerInstance::Running(_))
+            || !same_generation
+            || self.last_known_status_detached.load(Ordering::Acquire)
+            || self.owner_retirement_requested.is_cancelled()
+            || self
+                .shard_service()
+                .check_admission(&self.owned_agent_id.agent_id)
+                .is_err()
+        {
+            return deferred;
+        }
+        self.state_actor
+            .confirm_filesystem_snapshot(name, instance_guard)
+            .await
+    }
+
+    /// Whether a terminal interrupt request waits for this worker.
+    async fn terminal_interrupt_pending(&self) -> bool {
+        matches!(
+            &*self.interrupt_signal.lock().await,
+            WorkerInterruptState::Pending(interrupt) if interrupt.is_terminal()
+        )
+    }
+
+    /// Completes when a terminal interrupt request waits for this worker. It does not take the
+    /// request.
+    async fn terminal_interrupt_queued(self: Arc<Self>) {
+        let rounds = futures::stream::unfold(self, |worker| async move {
+            let queued = Arc::clone(&worker.interrupt_queued);
+            let notified = queued.notified();
+            let mut notified = std::pin::pin!(notified);
+            notified.as_mut().enable();
+            if worker.terminal_interrupt_pending().await {
+                return None;
+            }
+            notified.await;
+            Some(((), worker))
+        });
+        futures::StreamExt::for_each(rounds, |()| std::future::ready(())).await;
+    }
+
+    /// Confirms the filesystem snapshot of the last automatic snapshot record before a start, when
+    /// the start would select that record if it were confirmed.
+    ///
+    /// When an upload of the snapshot runs on this executor and holds a slot of the uploads, the
+    /// start first waits for its decision, for at most `confirmation_wait`. Then, unless the
+    /// upload gave `Superseded`, the start asks the store once whether it holds the whole
+    /// snapshot. When it does, the start writes the confirmation record as the owner of the
+    /// agent, while the instance waits for its permits with this start attempt. A terminal
+    /// interrupt ends the wait and the check. This start holds no slot, no memory and no lock
+    /// while it waits.
+    async fn confirm_filesystem_snapshot_before_start(self: &Arc<Self>, start_attempt: Uuid) {
+        let snapshots = self.agent_filesystem_snapshots();
+        let Some(limit) = snapshots.confirmation_wait() else {
+            return;
+        };
+        let status = self.last_known_status.load_full();
+        let (Some(name), Some(index)) = (
+            status.last_automatic_snapshot_filesystem_snapshot.clone(),
+            status.last_automatic_snapshot_index,
+        ) else {
+            return;
+        };
+        if status.last_automatic_snapshot_confirmed {
+            return;
+        }
+        let rejected = self.rejected_periodic_snapshots.lock().unwrap().clone();
+        let unavailable = self.unavailable_periodic_snapshots.lock().unwrap().clone();
+        let as_confirmed = AgentStatusRecord {
+            last_automatic_snapshot_confirmed: true,
+            ..(*status).clone()
+        };
+        let selected = select_automatic_snapshot(
+            &as_confirmed,
+            AutomaticSnapshotFilter {
+                has_pending_update: !status.pending_updates.is_empty(),
+                rejected: &rejected,
+                unavailable: &unavailable,
+                filesystem_snapshots_enabled: true,
+            },
+        );
+        if selected.map(|selected| selected.index) != Some(index) {
+            return;
+        }
+        let scope = crate::filesystem_snapshot::SnapshotScope::agent(&self.owned_agent_id);
+        let started = std::time::Instant::now();
+        let interrupted = Arc::clone(self).terminal_interrupt_queued();
+        let mut interrupted = std::pin::pin!(interrupted);
+        let upload = snapshots
+            .upload_of(&scope, &name)
+            .filter(|upload| upload.holds_slot);
+        let (waited, decision) = match upload {
+            Some(mut upload) if upload.decided.borrow().is_none() => {
+                let decided = tokio::select! {
+                    decided = upload.decided.wait_for(|decision| decision.is_some()) => {
+                        decided.ok().and_then(|decision| *decision)
+                    }
+                    () = tokio::time::sleep(limit) => None,
+                    () = &mut interrupted => return,
+                };
+                (true, decided)
+            }
+            Some(upload) => (false, *upload.decided.borrow()),
+            None => (false, None),
+        };
+        if decision
+            == Some(agent_filesystem_snapshots::JobDecision::Confirmed(
+                agent_filesystem_snapshots::ConfirmOutcome::Superseded,
+            ))
+            || self.terminal_interrupt_pending().await
+        {
+            return;
+        }
+        let stat_limit = if waited {
+            limit.saturating_sub(started.elapsed())
+        } else {
+            FILESYSTEM_SNAPSHOT_START_CHECK_LIMIT
+        };
+        let stored = tokio::select! {
+            stored = tokio::time::timeout(stat_limit, snapshots.is_stored(&scope, &name)) => stored,
+            () = &mut interrupted => return,
+        };
+        match stored {
+            Ok(Ok(true)) => {}
+            Ok(Ok(false)) => return,
+            Ok(Err(error)) => {
+                warn!(error = %error, "Failed to check a filesystem snapshot before a start");
+                return;
+            }
+            Err(_) => return,
+        }
+        let instance_guard = self.instance.clone().lock_owned().await;
+        if !matches!(
+            &*instance_guard,
+            WorkerInstance::WaitingForPermit(waiting) if waiting.start_attempt == start_attempt
+        ) || self.terminal_interrupt_pending().await
+            || self.last_known_status_detached.load(Ordering::Acquire)
+            || self
+                .shard_service()
+                .check_admission(&self.owned_agent_id.agent_id)
+                .is_err()
+        {
+            return;
+        }
+        let reply = self
+            .state_actor
+            .confirm_filesystem_snapshot(name, instance_guard)
+            .await;
+        debug!(?reply, "Confirmed a filesystem snapshot before a start");
+    }
+
+    /// Ends the filesystem snapshots of the current generation. A confirmation of that generation
+    /// that comes later writes nothing.
+    pub(crate) fn end_filesystem_snapshot_generation(&self) {
+        *self.filesystem_snapshot_slot.lock().unwrap() =
+            filesystem_snapshots::FilesystemSnapshotSlot::default();
+    }
+
+    /// Records the confirmation of `name`, whose capture has `mark`.
+    pub(crate) fn record_confirmed_filesystem_snapshot(
+        &self,
+        name: FilesystemSnapshotName,
+        mark: TreeMark,
+    ) {
+        self.filesystem_snapshot_slot
+            .lock()
+            .unwrap()
+            .confirm(name, mark);
+    }
+
+    /// Records the filesystem snapshots of a new generation.
+    fn start_filesystem_snapshot_slot(&self, slot: filesystem_snapshots::FilesystemSnapshotSlot) {
+        *self.filesystem_snapshot_slot.lock().unwrap() = slot;
+    }
+
+    /// Gives the confirmed filesystem snapshot that a periodic capture compares with, while a
+    /// start would restore its name now.
+    pub(crate) fn filesystem_snapshot_since(
+        &self,
+    ) -> Option<filesystem_snapshots::ConfirmedFilesystemSnapshot> {
+        let status = self.last_known_status.load();
+        let rejected = self.rejected_periodic_snapshots.lock().unwrap().clone();
+        let unavailable = self.unavailable_periodic_snapshots.lock().unwrap().clone();
+        let selected = select_automatic_snapshot(
+            &status,
+            AutomaticSnapshotFilter {
+                has_pending_update: !status.pending_updates.is_empty(),
+                rejected: &rejected,
+                unavailable: &unavailable,
+                filesystem_snapshots_enabled: self.filesystem_snapshots_enabled(),
+            },
+        );
+        let slot = self.filesystem_snapshot_slot.lock().unwrap();
+        filesystem_snapshots::since(
+            slot.confirmed(),
+            selected.as_ref(),
+            status.last_manual_update_snapshot_index,
+        )
     }
 
     /// Classifies the worker for eviction ordering under memory pressure.
@@ -8621,6 +8853,9 @@ impl WaitingWorker {
             // for as long as resolution keeps failing, and never close to export
             // them. The retry events stay in the logs, and how long the wait took
             // is recorded as a metric rather than a span.
+            parent
+                .confirm_filesystem_snapshot_before_start(start_attempt)
+                .await;
             let phase_start = std::time::Instant::now();
             let requirement = parent.startup_component_charge_requirement().await;
             parent
@@ -8872,6 +9107,58 @@ struct RunningAgentRuntime<Ctx: WorkerCtx> {
 
 type WorkerRunningAgent<Ctx> = RunningAgent<RunningAgentRuntime<Ctx>>;
 
+/// The longest time that a start that did not wait for an upload asks the store about the
+/// filesystem snapshot of its last automatic snapshot record.
+const FILESYSTEM_SNAPSHOT_START_CHECK_LIMIT: Duration = Duration::from_secs(5);
+
+/// The baseline that a start selected, with its restore.
+struct StartBaseline {
+    kind: BaselineKind,
+    restore: Option<filesystem_snapshots::StartRestore>,
+}
+
+/// The record that the baseline of a start comes from.
+#[derive(Clone, Debug)]
+enum BaselineKind {
+    /// No snapshot record: the initial files of the replay revision.
+    InitialFiles,
+    /// The automatic snapshot record at `index`.
+    Periodic {
+        index: OplogIndex,
+        name: Option<FilesystemSnapshotName>,
+    },
+    /// The manual-update record at `index`, which is still pending when `pending` is true.
+    ManualUpdate {
+        index: OplogIndex,
+        target_revision: ComponentRevision,
+        pending: bool,
+        name: Option<FilesystemSnapshotName>,
+    },
+}
+
+impl BaselineKind {
+    /// The named filesystem snapshot that the baseline restored.
+    fn restored(
+        &self,
+    ) -> Option<(
+        FilesystemSnapshotName,
+        filesystem_snapshots::ConfirmedBaseline,
+    )> {
+        match self {
+            Self::InitialFiles => None,
+            Self::Periodic { name, .. } => name
+                .clone()
+                .map(|name| (name, filesystem_snapshots::ConfirmedBaseline::Periodic)),
+            Self::ManualUpdate { index, name, .. } => name.clone().map(|name| {
+                (
+                    name,
+                    filesystem_snapshots::ConfirmedBaseline::ManualUpdate(*index),
+                )
+            }),
+        }
+    }
+}
+
 pub(crate) struct CreateWorkerInstanceError {
     pub(crate) error: WorkerExecutorError,
     pub(crate) filesystem_cleanup_failure: Option<UnloadCleanupFailure>,
@@ -9031,6 +9318,223 @@ impl RunningWorker {
         self.handle.take().unwrap()
     }
 
+    /// Gives the baseline of a start: the restore of the selected automatic snapshot record, or of
+    /// the manual-update record, when the record names a filesystem snapshot. A manual-update
+    /// record without a name restores the initial files of its source revision, so the
+    /// initial-file rule then gives what the update gave. A record that names a filesystem
+    /// snapshot on an executor without filesystem snapshots fails the start with a visible cause.
+    async fn start_baseline<Ctx: WorkerCtx>(
+        parent: &Arc<Worker<Ctx>>,
+        status: &AgentStatusRecord,
+        automatic_snapshot: Option<&golem_common::model::UsableAutomaticSnapshot>,
+        pending_update: Option<&TimestampedUpdateDescription>,
+    ) -> Result<StartBaseline, WorkerExecutorError> {
+        let scope = crate::filesystem_snapshot::SnapshotScope::agent(&parent.owned_agent_id);
+        let snapshots = parent.agent_filesystem_snapshots();
+        if let Some(snapshot) = automatic_snapshot {
+            let restore = match &snapshot.filesystem_snapshot {
+                Some(name) => Some(filesystem_snapshots::StartRestore::Store(
+                    snapshots
+                        .restore(&scope, name)
+                        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?,
+                )),
+                None => None,
+            };
+            return Ok(StartBaseline {
+                kind: BaselineKind::Periodic {
+                    index: snapshot.index,
+                    name: snapshot.filesystem_snapshot.clone(),
+                },
+                restore,
+            });
+        }
+        let manual_update = match pending_update.filter(|pending| {
+            matches!(pending.description, UpdateDescription::SnapshotBased { .. })
+        }) {
+            Some(pending) => Some((pending.clone(), true)),
+            None => match status.last_manual_update_snapshot_index {
+                Some(index) => match parent.oplog.read(index).await {
+                    OplogEntry::PendingUpdate {
+                        timestamp,
+                        description,
+                        ..
+                    } => Some((
+                        TimestampedUpdateDescription {
+                            timestamp,
+                            oplog_index: index,
+                            description,
+                        },
+                        false,
+                    )),
+                    _ => None,
+                },
+                None => None,
+            },
+        };
+        let Some((
+            TimestampedUpdateDescription {
+                timestamp,
+                oplog_index,
+                description:
+                    UpdateDescription::SnapshotBased {
+                        target_revision,
+                        filesystem_snapshot,
+                        ..
+                    },
+            },
+            pending,
+        )) = manual_update
+        else {
+            return Ok(StartBaseline {
+                kind: BaselineKind::InitialFiles,
+                restore: None,
+            });
+        };
+        let kind = BaselineKind::ManualUpdate {
+            index: oplog_index,
+            target_revision,
+            pending,
+            name: filesystem_snapshot.clone(),
+        };
+        let restore = match filesystem_snapshot {
+            Some(name) => Some(filesystem_snapshots::StartRestore::Store(
+                snapshots.restore(&scope, &name).map_err(|error| {
+                    WorkerExecutorError::failed_to_resume_worker(
+                        parent.owned_agent_id.agent_id.clone(),
+                        WorkerExecutorError::invalid_request(error.to_string()),
+                    )
+                })?,
+            )),
+            None => {
+                let source_revision = if pending {
+                    status.component_revision
+                } else {
+                    Self::revision_before(parent, status, timestamp).await
+                };
+                let source_files = Self::initial_files_of(parent, source_revision).await?;
+                // Only a tree of read-only initial files gives a record without a name. A record
+                // without a name and with other declarations comes from an executor without
+                // filesystem snapshots, and its start seeds the initial files of the target
+                // revision.
+                (!source_files.is_empty()
+                    && source_files.iter().all(|file| {
+                        file.permissions
+                            == golem_common::model::component::AgentFilePermissions::ReadOnly
+                    }))
+                .then(|| {
+                    filesystem_snapshots::StartRestore::InitialFiles(
+                        crate::services::agent_filesystem::InitialFilesRestore::new(source_files),
+                    )
+                })
+            }
+        };
+        Ok(StartBaseline { kind, restore })
+    }
+
+    /// Gives the component revision of the agent just before `timestamp`: the target of the last
+    /// successful update before it, or the revision of the `Create` entry.
+    async fn revision_before<Ctx: WorkerCtx>(
+        parent: &Arc<Worker<Ctx>>,
+        status: &AgentStatusRecord,
+        timestamp: Timestamp,
+    ) -> ComponentRevision {
+        match status
+            .successful_updates
+            .iter()
+            .rfind(|update| update.timestamp < timestamp)
+        {
+            Some(update) => update.target_revision,
+            None => match parent.oplog.read(OplogIndex::INITIAL).await {
+                OplogEntry::Create {
+                    component_revision, ..
+                } => component_revision,
+                _ => status.component_revision_for_replay,
+            },
+        }
+    }
+
+    /// Gives the initial files of the agent in the component revision `revision`.
+    async fn initial_files_of<Ctx: WorkerCtx>(
+        parent: &Arc<Worker<Ctx>>,
+        revision: ComponentRevision,
+    ) -> Result<Vec<golem_common::model::component::InitialAgentFile>, WorkerExecutorError> {
+        let metadata = parent
+            .component_service()
+            .get_metadata(parent.owned_agent_id.component_id(), Some(revision))
+            .await?;
+        Ok(parent
+            .parsed_agent_id
+            .as_ref()
+            .and_then(|agent_id| {
+                metadata
+                    .metadata
+                    .agent_type_provision_configs()
+                    .get(&agent_id.agent_type)
+            })
+            .map(|config| config.files.clone())
+            .unwrap_or_default())
+    }
+
+    /// Gives the error of a start whose baseline failed.
+    ///
+    /// A filesystem snapshot of an automatic snapshot record that does not restore makes the
+    /// start skip that record: the start ends with a restart, and the next start selects the
+    /// usable record before it. A conflict of the initial-file rule at the start of a pending
+    /// manual update records a failed update and restarts on the current revision. A
+    /// manual-update baseline that does not restore fails the start with a visible cause, which a
+    /// new start can retry when the store error allows it.
+    async fn baseline_failure<Ctx: WorkerCtx>(
+        parent: &Arc<Worker<Ctx>>,
+        kind: BaselineKind,
+        error: crate::services::agent_filesystem::Error,
+    ) -> WorkerExecutorError {
+        use crate::services::agent_filesystem::Error;
+        let restart = WorkerExecutorError::Interrupted {
+            kind: InterruptKind::Restart,
+        };
+        match (kind, error) {
+            (BaselineKind::Periodic { index, .. }, Error::Baseline(error)) => {
+                warn!(
+                    snapshot_index = %index,
+                    error = %error,
+                    "The filesystem snapshot of an automatic snapshot record does not restore; the start uses the usable record before it"
+                );
+                parent
+                    .unavailable_periodic_snapshots
+                    .lock()
+                    .unwrap()
+                    .insert(index);
+                restart
+            }
+            (
+                BaselineKind::ManualUpdate {
+                    target_revision,
+                    pending: true,
+                    ..
+                },
+                Error::InitialFileConflict(conflict),
+            ) => {
+                warn!(
+                    "Manual update to revision {target_revision} failed with a conflict of the initial files: {conflict}"
+                );
+                parent
+                    .add_and_commit_oplog(OplogEntry::failed_update(
+                        target_revision,
+                        Some(conflict.to_string()),
+                    ))
+                    .await;
+                restart
+            }
+            (BaselineKind::ManualUpdate { .. }, Error::Baseline(error)) if !error.retryable => {
+                WorkerExecutorError::failed_to_resume_worker(
+                    parent.owned_agent_id.agent_id.clone(),
+                    WorkerExecutorError::invalid_request(error.to_string()),
+                )
+            }
+            (_, error) => reconstruction_startup_error(error),
+        }
+    }
+
     async fn create_instance<Ctx: WorkerCtx>(
         parent: Arc<Worker<Ctx>>,
         concurrent_agent_permit: crate::services::active_agents::ConcurrentAgentPermit,
@@ -9186,6 +9690,14 @@ impl RunningWorker {
             None => golem_common::model::card::EffectiveSurface::default(),
         };
 
+        let start_baseline = Self::start_baseline(
+            &parent,
+            &worker_metadata.last_known_status,
+            automatic_snapshot.as_ref(),
+            pending_update.as_ref(),
+        )
+        .await?;
+
         let mut skipped_regions = worker_metadata.last_known_status.skipped_regions;
         let mut last_snapshot_index = worker_metadata
             .last_known_status
@@ -9322,21 +9834,29 @@ impl RunningWorker {
                 .await);
             }
         };
-        let reconstructing =
-            match materialize_baseline(reconstructing, prepared, None::<std::convert::Infallible>)
-                .await
-            {
-                Ok(filesystem) => filesystem,
-                Err(failure) => {
-                    let startup_error = reconstruction_startup_error(failure.source);
-                    return Err(cleanup_open_agent_filesystem(
-                        failure.filesystem,
-                        window,
-                        startup_error,
-                    )
-                    .await);
-                }
-            };
+        let StartBaseline {
+            restore,
+            kind: baseline_kind,
+        } = start_baseline;
+        let reconstructing = match materialize_baseline(reconstructing, prepared, restore).await {
+            Ok(filesystem) => filesystem,
+            Err(failure) => {
+                let startup_error =
+                    Self::baseline_failure(&parent, baseline_kind, failure.source).await;
+                return Err(cleanup_open_agent_filesystem(
+                    failure.filesystem,
+                    window,
+                    startup_error,
+                )
+                .await);
+            }
+        };
+        parent.start_filesystem_snapshot_slot(
+            filesystem_snapshots::FilesystemSnapshotSlot::at_start(
+                tree_mark(&reconstructing),
+                baseline_kind.restored(),
+            ),
+        );
         let reconstruction_generation_handle =
             match reconstruction_generation_handle(&reconstructing) {
                 Ok(generation_handle) => generation_handle,

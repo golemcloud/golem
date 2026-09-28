@@ -46,7 +46,6 @@ impl RestoreTree for Infallible {
 #[derive(Debug)]
 pub(crate) struct RestoreError {
     /// Whether a new attempt can succeed without a change.
-    #[allow(dead_code)]
     pub(crate) retryable: bool,
     /// The cause of the failure.
     pub(crate) source: anyhow::Error,
@@ -77,7 +76,6 @@ pub(crate) struct InitialFilesRestore {
 }
 
 impl InitialFilesRestore {
-    #[allow(dead_code)]
     pub(crate) fn new(files: impl IntoIterator<Item = InitialAgentFile>) -> Self {
         Self {
             files: files.into_iter().collect(),
@@ -137,12 +135,10 @@ impl RestoreTree for InitialFilesRestore {
 ///
 /// The directory holds `tree/` and `record.json`. The capture does not depend on the generation
 /// that made it. The directory goes away when the capture is discarded or dropped.
-#[allow(dead_code)]
 pub(crate) struct FilesystemCapture {
     directory: HostDirectory,
 }
 
-#[allow(dead_code)]
 impl FilesystemCapture {
     /// The host directory that holds `tree/` and `record.json`.
     pub(crate) fn directory(&self) -> &Path {
@@ -168,7 +164,6 @@ pub(crate) enum ChangeDetection {
 }
 
 /// What a capture found.
-#[allow(dead_code)]
 pub(crate) enum CaptureOutcome {
     /// The tree is the tree of the mark that the caller gave. The capture copied nothing.
     Unchanged,
@@ -191,7 +186,6 @@ const TIMESTAMP_SETTLE: Duration = Duration::from_millis(20);
 
 /// Gives the mark of the tree of `filesystem` now. Use it for the baseline of a start, before any
 /// call runs.
-#[allow(dead_code)]
 pub(crate) fn tree_mark<Stage: FilesystemStage, Adapter: SandboxFilesystemAdapter>(
     filesystem: &AgentFilesystem<Stage, Adapter>,
 ) -> TreeMark {
@@ -307,7 +301,6 @@ fn record_error(source: anyhow::Error) -> Error {
 /// always uses `blocking-write-and-flush`, so guests built on it do not do this. A hand-written
 /// component or a faulty SDK can. The limit turns a stopped agent into a skipped capture. Keep
 /// the limit also if the stream later takes its lease at the first poll.
-#[allow(dead_code)]
 pub(crate) fn capture<Adapter: SandboxFilesystemAdapter>(
     filesystem: &ResidentFilesystem<Adapter>,
     wait: Duration,

@@ -15,8 +15,8 @@
 //! One upload: save, discard, confirm, then retention or a delete.
 
 use super::{
-    CapturedTree, ConfirmOutcome, Inner, ScopeJob, SnapshotClock, SnapshotConfirmer, SnapshotKind,
-    retention, store_name,
+    CapturedTree, ConfirmOutcome, Inner, JobDecision, ScopeJob, SnapshotClock, SnapshotConfirmer,
+    SnapshotKind, retention, store_name,
 };
 use crate::filesystem_snapshot::{
     ChangeDetection, SnapshotInfo, SnapshotName, SnapshotScope, SnapshotStoreError,
@@ -61,6 +61,7 @@ impl Upload {
         let (info, permit) = match self.save(capture, parent).await {
             SaveOutcome::Saved(info, permit) => (info, permit),
             SaveOutcome::Failed(error) => {
+                self.job.decide(JobDecision::SaveFailed);
                 tracing::warn!(
                     error = %error,
                     name = %self.name,
@@ -83,6 +84,7 @@ impl Upload {
             outcome = confirmer.0.confirm(&self.name) => outcome,
             () = self.stopped() => return,
         };
+        self.job.decide(JobDecision::Confirmed(outcome));
         crate::metrics::filesystem_snapshots::record_upload(
             self.kind.label(),
             outcome.label(),
@@ -91,12 +93,15 @@ impl Upload {
         match outcome {
             ConfirmOutcome::Confirmed => {
                 if self.kind == SnapshotKind::Periodic {
-                    self.apply_retention().await;
+                    self.apply_retention(&info).await;
                 }
             }
-            ConfirmOutcome::Superseded | ConfirmOutcome::Gone => {
+            ConfirmOutcome::Superseded => {
                 crate::metrics::filesystem_snapshots::record_dropped_confirmation(outcome.label());
                 self.delete_own_snapshot().await;
+            }
+            ConfirmOutcome::Deferred => {
+                crate::metrics::filesystem_snapshots::record_dropped_confirmation(outcome.label());
             }
         }
         drop(permit);
@@ -182,6 +187,9 @@ impl Upload {
             () = self.stopped() => return SaveOutcome::Stopped,
         };
         crate::metrics::filesystem_snapshots::inc_uploads_in_progress();
+        self.job
+            .holds_slot
+            .store(true, std::sync::atomic::Ordering::Release);
         let parent = parent.as_ref().map(|(name, detection)| (name, *detection));
         let saved = tokio::select! {
             saved = retrying(
@@ -199,8 +207,12 @@ impl Upload {
         }
     }
 
-    /// Keeps the newest snapshots of each kind in the scope and deletes the rest.
-    async fn apply_retention(&self) {
+    /// Keeps the own snapshot and the newest older snapshots of its kind, and deletes the rest of
+    /// its kind that are older than it. `info` is the info of the own snapshot.
+    async fn apply_retention(&self, info: &SnapshotInfo) {
+        let Ok(own) = store_name(&self.name) else {
+            return;
+        };
         let listing = match self.inner.store.list(&self.scope).await {
             Ok(listing) => listing,
             Err(error) => {
@@ -208,11 +220,11 @@ impl Upload {
                 return;
             }
         };
-        let victims = retention::victims(
-            &listing,
-            self.inner.settings.retained_periodic_snapshots().get(),
-            self.inner.settings.retained_update_snapshots().get(),
-        );
+        let keep = match self.kind {
+            SnapshotKind::Periodic => self.inner.settings.retained_periodic_snapshots(),
+            SnapshotKind::Update => self.inner.settings.retained_update_snapshots(),
+        };
+        let victims = retention::victims(&listing, &own, info, keep.get());
         futures::stream::iter(victims.iter())
             .for_each(|name| async move {
                 if let Err(error) = retrying(

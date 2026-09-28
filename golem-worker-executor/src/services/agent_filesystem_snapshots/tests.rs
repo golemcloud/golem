@@ -20,7 +20,7 @@ use golem_common::model::RetryConfig;
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{AgentId, OwnedAgentId};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::AtomicUsize;
 use test_r::{test, timeout};
 use tokio::sync::Notify;
@@ -53,7 +53,15 @@ struct ScriptedStore {
     most_restores_at_once: AtomicUsize,
     store_calls_now: AtomicUsize,
     most_store_calls_at_once: AtomicUsize,
+    /// The time of each saved name. Each save is ten minutes after the one before it, so
+    /// retention sees times that are far apart.
+    times: Mutex<HashMap<String, golem_common::model::Timestamp>>,
 }
+
+/// The time of the first save of a scripted store.
+const FIRST_SAVE_MILLIS: u64 = 1_800_000_000_000;
+/// The time between two saves of a scripted store.
+const SAVE_SPACING_MILLIS: u64 = 10 * 60 * 1000;
 
 /// A gate that holds each caller until the test opens it.
 struct Gate {
@@ -91,6 +99,16 @@ impl Gate {
 }
 
 impl ScriptedStore {
+    /// Gives `info` with the time of the save of `name`, which the store gives to a new name.
+    fn timed(&self, name: &SnapshotName, info: SnapshotInfo) -> SnapshotInfo {
+        let mut times = self.times.lock().unwrap();
+        let count = times.len() as u64;
+        let created_at = *times.entry(name.as_str().to_string()).or_insert_with(|| {
+            golem_common::model::Timestamp::from(FIRST_SAVE_MILLIS + count * SAVE_SPACING_MILLIS)
+        });
+        SnapshotInfo { created_at, ..info }
+    }
+
     fn saved_names(&self) -> Vec<String> {
         self.saved
             .lock()
@@ -164,7 +182,8 @@ impl FilesystemSnapshotStore for ScriptedStore {
             }
             return Err(retryable("the publish failed"));
         }
-        self.inner.save(scope, name, tree, parent).await
+        let info = self.inner.save(scope, name, tree, parent).await?;
+        Ok(self.timed(name, info))
     }
 
     async fn restore(
@@ -200,7 +219,23 @@ impl FilesystemSnapshotStore for ScriptedStore {
         &self,
         scope: &SnapshotScope,
     ) -> Result<Box<[(SnapshotName, SnapshotInfo)]>, SnapshotStoreError> {
-        self.inner.list(scope).await
+        let times = self.times.lock().unwrap().clone();
+        Ok(self
+            .inner
+            .list(scope)
+            .await?
+            .iter()
+            .map(|(name, info)| {
+                let created_at = times.get(name.as_str()).copied().unwrap_or(info.created_at);
+                (
+                    name.clone(),
+                    SnapshotInfo {
+                        created_at,
+                        ..*info
+                    },
+                )
+            })
+            .collect())
     }
 
     async fn delete(
@@ -425,7 +460,7 @@ async fn ended(snapshots: &AgentFilesystemSnapshots, scope: &SnapshotScope) {
     let job = snapshots
         .inner
         .as_ref()
-        .and_then(|inner| inner.jobs_of_scope().get(scope).cloned());
+        .and_then(|inner| inner.jobs_of_scope().jobs.get(scope).cloned());
     if let Some(job) = job {
         assert!(
             tokio::time::timeout(Duration::from_secs(5), job.ended.cancelled())
@@ -661,83 +696,117 @@ async fn an_error_that_allows_no_retry_ends_the_job_after_one_attempt() {
     assert!(confirm.names().is_empty());
 }
 
-#[test]
-#[timeout("10s")]
-async fn superseded_and_gone_delete_the_snapshot_and_run_no_retention() {
-    let outcomes = [ConfirmOutcome::Superseded, ConfirmOutcome::Gone];
-    let results = futures::stream::iter(outcomes)
-        .then(|outcome| async move {
-            let store = Arc::new(ScriptedStore::default());
-            let snapshots = service(&store, settings(4, 4, 1), ManualClock::immediate());
-            let scope = scope("dropped-confirmation");
-            let discarded = Arc::new(AtomicUsize::new(0));
-            // Three older periodic snapshots, which retention by count would delete.
-            let confirmed = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
-            let older = futures::stream::iter(0..3)
-                .then(|index| {
-                    let snapshots = &snapshots;
-                    let scope = &scope;
-                    let discarded = &discarded;
-                    let confirmed = &confirmed;
-                    async move {
-                        let admission = snapshots
-                            .admit(scope, SnapshotKind::Periodic)
-                            .await
-                            .unwrap();
-                        let name = admission.name().clone();
-                        admission.submit(
-                            TestCapture::with(format!("older-{index}").as_bytes(), discarded),
-                            None,
-                            confirmer(confirmed),
-                        );
-                        ended(snapshots, scope).await;
-                        name
-                    }
-                })
-                .collect::<Vec<_>>()
-                .await;
-            let deletes_before = store.deletes.lock().unwrap().clone();
-            let confirm = ScriptedConfirmer::answering(outcome);
-
-            let admission = snapshots
-                .admit(&scope, SnapshotKind::Periodic)
-                .await
-                .unwrap();
-            let name = admission.name().clone();
-            admission.submit(
-                TestCapture::with(b"newest", &discarded),
-                None,
-                confirmer(&confirm),
-            );
-            ended(&snapshots, &scope).await;
-
-            let deletes_after = store.deletes.lock().unwrap().clone();
-            (
-                deletes_after[deletes_before.len()..].to_vec(),
-                vec![name.as_str().to_string()],
-                store
-                    .inner
-                    .stat(&scope, &store_name(&name).unwrap())
+/// Uploads three older periodic snapshots that the confirmer confirms, then one that it answers
+/// with `outcome`. Gives the deletes that the last job made, its name, whether the store holds it,
+/// and whether the store holds each older one.
+async fn after_older_uploads(outcome: ConfirmOutcome) -> (Vec<String>, String, bool, Vec<bool>) {
+    let store = Arc::new(ScriptedStore::default());
+    let mut settings = settings(4, 4, 1);
+    settings = FilesystemSnapshotUploadConfig::new(
+        settings.max_concurrent_uploads().get(),
+        settings.max_concurrent_restores().get(),
+        settings.confirmation_wait(),
+        settings.capture_wait(),
+        3,
+        2,
+        settings.upload_retry().clone(),
+    )
+    .unwrap();
+    let snapshots = service(&store, settings, ManualClock::immediate());
+    let scope = scope("dropped-confirmation");
+    let discarded = Arc::new(AtomicUsize::new(0));
+    let confirmed = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
+    let older = futures::stream::iter(0..3)
+        .then(|index| {
+            let snapshots = &snapshots;
+            let scope = &scope;
+            let discarded = &discarded;
+            let confirmed = &confirmed;
+            async move {
+                let admission = snapshots
+                    .admit(scope, SnapshotKind::Periodic)
                     .await
-                    .unwrap(),
-                store
-                    .inner
-                    .stat(&scope, &store_name(&older[2]).unwrap())
-                    .await
-                    .unwrap()
-                    .is_some(),
-            )
+                    .unwrap();
+                let name = admission.name().clone();
+                admission.submit(
+                    TestCapture::with(format!("older-{index}").as_bytes(), discarded),
+                    None,
+                    confirmer(confirmed),
+                );
+                ended(snapshots, scope).await;
+                name
+            }
         })
         .collect::<Vec<_>>()
         .await;
+    let deletes_before = store.deletes.lock().unwrap().len();
+    let confirm = ScriptedConfirmer::answering(outcome);
 
-    results
-        .into_iter()
-        .for_each(|(new_deletes, expected, stat, older_kept)| {
-            assert_eq!(new_deletes, expected);
-            assert_eq!(stat, None);
-            assert!(older_kept);
-        });
+    let admission = snapshots
+        .admit(&scope, SnapshotKind::Periodic)
+        .await
+        .unwrap();
+    let name = admission.name().clone();
+    admission.submit(
+        TestCapture::with(b"newest", &discarded),
+        None,
+        confirmer(&confirm),
+    );
+    ended(&snapshots, &scope).await;
+
+    let deletes = store.deletes.lock().unwrap()[deletes_before..].to_vec();
+    let held = store
+        .inner
+        .stat(&scope, &store_name(&name).unwrap())
+        .await
+        .unwrap()
+        .is_some();
+    let older_held = futures::stream::iter(older.iter())
+        .then(|older| {
+            let store = &store;
+            let scope = &scope;
+            async move {
+                store
+                    .inner
+                    .stat(scope, &store_name(older).unwrap())
+                    .await
+                    .unwrap()
+                    .is_some()
+            }
+        })
+        .collect::<Vec<_>>()
+        .await;
+    (deletes, name.as_str().to_string(), held, older_held)
+}
+
+#[test]
+#[timeout("10s")]
+async fn superseded_deletes_the_snapshot_and_runs_no_retention() {
+    let (deletes, name, held, older_held) = after_older_uploads(ConfirmOutcome::Superseded).await;
+
+    assert_eq!(deletes, vec![name]);
+    assert!(!held);
+    assert_eq!(older_held, vec![true, true, true]);
+}
+
+#[test]
+#[timeout("10s")]
+async fn deferred_keeps_the_snapshot_and_runs_no_retention() {
+    let (deletes, _, held, older_held) = after_older_uploads(ConfirmOutcome::Deferred).await;
+
+    assert!(deletes.is_empty());
+    assert!(held);
+    assert_eq!(older_held, vec![true, true, true]);
+}
+
+#[test]
+#[timeout("10s")]
+async fn confirmed_runs_retention_after_the_confirmation() {
+    let (deletes, _, held, older_held) = after_older_uploads(ConfirmOutcome::Confirmed).await;
+
+    assert_eq!(deletes.len(), 1);
+    assert!(held);
+    assert_eq!(older_held, vec![false, true, true]);
 }
 
 #[test]
@@ -793,28 +862,126 @@ async fn a_confirmed_periodic_upload_keeps_the_newest_by_kind() {
         .collect::<std::collections::BTreeSet<_>>();
     let expected = periodic[2..]
         .iter()
-        .chain(&updates[1..])
+        .chain(&updates)
         .map(|name| name.as_str().to_string())
         .collect::<std::collections::BTreeSet<_>>();
     assert_eq!(kept, expected);
 }
 
-#[test]
-fn retention_keeps_the_newest_of_each_kind_and_names_of_other_kinds() {
-    let info = SnapshotInfo {
-        created_at: golem_common::model::Timestamp::now_utc(),
+fn info_at(minutes: u64) -> SnapshotInfo {
+    SnapshotInfo {
+        created_at: golem_common::model::Timestamp::from(FIRST_SAVE_MILLIS + minutes * 60 * 1000),
         files: 0,
         bytes: 0,
+    }
+}
+
+fn names(names: Box<[SnapshotName]>) -> Vec<String> {
+    names.iter().map(|name| name.as_str().to_string()).collect()
+}
+
+#[test]
+fn retention_keeps_the_own_snapshot_and_the_newest_older_ones_of_its_kind() {
+    let listing = [
+        ("p-own", 100),
+        ("p-newer", 130),
+        ("p-close", 99),
+        ("p-3", 90),
+        ("p-2", 80),
+        ("p-1", 70),
+        ("u-2", 60),
+        ("u-1", 50),
+        ("x-1", 40),
+    ]
+    .map(|(name, minutes)| (SnapshotName::new(name).unwrap(), info_at(minutes)));
+    let own = SnapshotName::new("p-own").unwrap();
+
+    let periodic = names(retention::victims(&listing, &own, &info_at(100), 2));
+    let only_own = names(retention::victims(&listing, &own, &info_at(100), 1));
+
+    assert_eq!(periodic, vec!["p-2", "p-1"]);
+    assert_eq!(only_own, vec!["p-3", "p-2", "p-1"]);
+}
+
+#[test]
+fn retention_counts_update_snapshots_apart_from_periodic_ones() {
+    let listing = [("u-own", 100), ("u-2", 90), ("u-1", 80), ("p-1", 70)]
+        .map(|(name, minutes)| (SnapshotName::new(name).unwrap(), info_at(minutes)));
+    let own = SnapshotName::new("u-own").unwrap();
+
+    let victims = names(retention::victims(&listing, &own, &info_at(100), 2));
+
+    assert_eq!(victims, vec!["u-1"]);
+}
+
+#[test]
+#[timeout("10s")]
+async fn an_admission_during_a_scope_delete_gets_scope_deleting_until_the_delete_ends() {
+    let store = Arc::new(ScriptedStore::default());
+    store.scope_deletes_fail.store(true, Ordering::SeqCst);
+    let clock = ManualClock::held();
+    let snapshots = service(&store, settings(4, 4, 2), Arc::clone(&clock));
+    let scope = scope("deleting");
+
+    snapshots.forget_scope(&scope);
+    eventually(|| store.scope_deletes.load(Ordering::SeqCst) == 1).await;
+    let while_deleting = snapshots.admit(&scope, SnapshotKind::Periodic).await.err();
+    eventually(|| !clock.sleeps().is_empty()).await;
+    clock.release();
+    eventually(|| store.scope_deletes.load(Ordering::SeqCst) == 2).await;
+    let after = {
+        let admitted = snapshots.admit(&scope, SnapshotKind::Periodic).await;
+        let retried = futures::stream::repeat(())
+            .then(|()| tokio::time::sleep(Duration::from_millis(5)))
+            .then(|()| snapshots.admit(&scope, SnapshotKind::Periodic))
+            .filter(|admitted| std::future::ready(admitted.is_ok()));
+        match admitted {
+            Ok(_) => true,
+            Err(_) => tokio::time::timeout(Duration::from_secs(5), std::pin::pin!(retried).next())
+                .await
+                .is_ok(),
+        }
     };
-    let listing = ["p-4", "u-3", "p-3", "x-1", "u-2", "p-2", "u-1", "p-1"]
-        .map(|name| (SnapshotName::new(name).unwrap(), info));
 
-    let victims = retention::victims(&listing, 2, 1)
-        .iter()
-        .map(|name| name.as_str().to_string())
-        .collect::<Vec<_>>();
+    assert_eq!(while_deleting, Some(SnapshotSkip::ScopeDeleting));
+    assert!(after);
+}
 
-    assert_eq!(victims, vec!["p-2", "p-1", "u-2", "u-1"]);
+#[test]
+#[timeout("10s")]
+async fn the_decision_of_a_job_carries_its_outcome_before_the_job_ends() {
+    let store = Arc::new(ScriptedStore::default());
+    let snapshots = service(&store, settings(4, 4, 1), ManualClock::immediate());
+    let scope = scope("decided");
+    let discarded = Arc::new(AtomicUsize::new(0));
+    let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Deferred);
+    let admission = snapshots
+        .admit(&scope, SnapshotKind::Periodic)
+        .await
+        .unwrap();
+    let job = snapshots
+        .inner
+        .as_ref()
+        .and_then(|inner| inner.jobs_of_scope().jobs.get(&scope).cloned())
+        .unwrap();
+    let mut decided = job.decided.subscribe();
+
+    admission.submit(
+        TestCapture::with(b"tree", &discarded),
+        None,
+        confirmer(&confirm),
+    );
+    let decision = *decided
+        .wait_for(|decision| decision.is_some())
+        .await
+        .unwrap();
+    ended(&snapshots, &scope).await;
+
+    assert_eq!(
+        decision,
+        Some(JobDecision::Confirmed(ConfirmOutcome::Deferred))
+    );
+    assert!(job.holds_slot.load(Ordering::SeqCst));
 }
 
 #[test]

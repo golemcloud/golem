@@ -45,11 +45,6 @@ impl StoreRestore {
             restores,
         }
     }
-
-    /// The name of the filesystem snapshot that this restore gives.
-    pub(crate) fn name(&self) -> &FilesystemSnapshotName {
-        &self.name
-    }
 }
 
 impl RestoreTree for StoreRestore {
