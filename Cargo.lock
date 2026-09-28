@@ -4563,6 +4563,7 @@ dependencies = [
  "include_dir",
  "indexmap 2.14.0",
  "jsonschema",
+ "libsqlite3-sys",
  "mime",
  "mime_guess",
  "openidconnect",

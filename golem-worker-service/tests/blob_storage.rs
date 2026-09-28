@@ -39,6 +39,7 @@ use std::fmt::Debug;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
+use std::time::Duration;
 use tempfile::{TempDir, tempdir};
 use test_r::{define_matrix_dimension, test, test_dep};
 use uuid::Uuid;
