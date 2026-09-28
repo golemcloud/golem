@@ -28,6 +28,8 @@ use std::path::{Path, PathBuf};
 
 const ON_DEMAND_COMMON_HASH_FILE_NAME: &str = ".golem-template-content-hash";
 
+const GO_SDK_SUM: &str = include_str!("../../../../../sdks/go/golem/go.sum");
+
 pub trait TemplateGeneratorTargetFs {
     type Output;
 
@@ -323,6 +325,7 @@ fn generate_directory<T: TemplateGeneratorTargetFs>(
                     }
                     (false, "package.json") => vec![Transform::TsSdk],
                     (false, "go.mod") => vec![Transform::ComponentName, Transform::GoSdk],
+                    (false, "go.sum") => vec![Transform::GoSdk],
                     (false, "Cargo.toml") => vec![Transform::ComponentName, Transform::RustSdk],
                     (false, "build.sbt") => vec![
                         Transform::ComponentName,
@@ -494,6 +497,10 @@ fn transform(
                     "GOLEM_GO_DEP_GO_VERSION",
                     versions::build_tool::GO_MIN.to_string(),
                 );
+                // The SDK's own checksums cover every third-party module a new
+                // component needs, so its first `go mod tidy` verifies them
+                // locally instead of querying the checksum database.
+                replacements.insert("GOLEM_GO_DEP_SUM", GO_SDK_SUM.to_string());
                 replacements.insert(
                     "GOLEM_GO_DEP_COMPONENTIZE_GO_VERSION",
                     versions::go_dep::COMPONENTIZE_GO.to_string(),
@@ -632,7 +639,8 @@ fn transform_file_name(
 ) -> anyhow::Result<String> {
     Ok(transform(ctx, file_name, &[Transform::ComponentName])?
         .replace("Cargo.toml._", "Cargo.toml")
-        .replace("go.mod._", "go.mod"))
+        .replace("go.mod._", "go.mod")
+        .replace("go.sum._", "go.sum"))
 }
 
 fn transform_target_file_path(

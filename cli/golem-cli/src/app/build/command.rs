@@ -680,8 +680,8 @@ async fn ensure_go_dependencies(
         )
     };
 
-    // Up to date only if go.sum exists too: a fresh module has a go.mod but no
-    // go.sum, and componentize-go refuses to build without it.
+    // Up to date only if go.sum exists too: componentize-go refuses to build
+    // without it.
     if go_mod_deps_marker(module_root)?.is_up_to_date() && go_sum_path.exists() {
         return Ok(());
     }

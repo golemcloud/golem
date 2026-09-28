@@ -444,7 +444,9 @@ jobs:
           # Host Go for `go test`/tooling. Components are built with the Go
           # toolchain the CLI installs (cached below), not with this one.
           go-version-file: sdks/go/golem/go.mod
-          cache-dependency-path: sdks/go/golem/go.sum
+          cache-dependency-path: |
+            sdks/go/*/go.sum
+            test-components/**/go.sum
 
       - name: Cache componentize-go toolchain
         uses: actions/cache@v5
@@ -886,7 +888,9 @@ jobs:
           # Tracks the version pinned in the module (currently go 1.27.1); stock
           # Go only — the SDK deliberately does not use TinyGo.
           go-version-file: sdks/go/golem/go.mod
-          cache-dependency-path: sdks/go/golem/go.sum
+          cache-dependency-path: |
+            sdks/go/*/go.sum
+            test-components/**/go.sum
 
       # cargo-make drives the WIT dep sync and the go-bindgen-fixup step that the
       # bindings regeneration runs. componentize-go itself is a pinned `go tool`
@@ -1283,7 +1287,9 @@ jobs:
           # Host Go for tooling; components are built with the Go toolchain the
           # CLI installs (cached below).
           go-version-file: sdks/go/golem/go.mod
-          cache-dependency-path: sdks/go/golem/go.sum
+          cache-dependency-path: |
+            sdks/go/*/go.sum
+            test-components/**/go.sum
 
       - name: Cache componentize-go toolchain
         if: matrix.chunk.needs-go
