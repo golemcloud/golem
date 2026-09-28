@@ -2424,9 +2424,8 @@ async fn drop_prefix_full(
 // ---------------------------------------------------------------------------------------------
 // The shard-epoch fence.
 //
-// Every test below runs against all five backends. The ones that cannot fence (redis, in-memory)
-// must behave exactly as they did before the epoch argument existed - accept the write and ignore
-// the epoch - so each test asserts both halves rather than being skipped for them.
+// Every test below runs against all five backends, and every backend fences, so each expects the
+// same refusal from all of them.
 // ---------------------------------------------------------------------------------------------
 
 fn assert_fenced(
