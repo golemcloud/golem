@@ -19,22 +19,23 @@ use super::file_loader::FileLoader;
 use super::{HasAgentWebhooksService, HasEnvironmentStateService, HasWebSocketConnectionPool};
 use crate::durable_host::websocket::WebSocketConnectionPool;
 use crate::grpc::{build_durable_streaming_request, decode_invocation_input};
+use crate::services::agent_filesystem_snapshots::AgentFilesystemSnapshots;
 use crate::services::events::Events;
 use crate::services::oplog::plugin::OplogProcessorPlugin;
 use crate::services::resource_limits::ResourceLimits;
 use crate::services::shard::ShardService;
 use crate::services::worker_proxy::{InvocationResponseStream, WorkerProxy, WorkerProxyError};
 use crate::services::{
-    HasActiveAgents, HasAgentTypesService, HasBlobStoreService, HasCardService,
-    HasComponentService, HasConfig, HasEvents, HasExtraDeps, HasFileLoader, HasHttpConnectionPool,
-    HasKeyValueService, HasLeakSentinel, HasNativeToolCatalog, HasOplogProcessorPlugin,
-    HasOplogService, HasPromiseService, HasQuotaService, HasRdbmsService, HasResourceLimits,
-    HasRpc, HasRunningWorkerEnumerationService, HasSchedulerService, HasShardManagerService,
-    HasShardService, HasShutdownToken, HasWasmtimeEngine, HasWorkerActivator,
-    HasWorkerEnumerationService, HasWorkerForkService, HasWorkerProxy, HasWorkerService,
-    active_agents, agent_types, blob_store, card, component, golem_config, key_value, oplog,
-    promise, rdbms, scheduler, shard_manager, worker, worker_activator, worker_enumeration,
-    worker_fork,
+    HasActiveAgents, HasAgentFilesystemSnapshots, HasAgentTypesService, HasBlobStoreService,
+    HasCardService, HasComponentService, HasConfig, HasEvents, HasExtraDeps, HasFileLoader,
+    HasHttpConnectionPool, HasKeyValueService, HasLeakSentinel, HasNativeToolCatalog,
+    HasOplogProcessorPlugin, HasOplogService, HasPromiseService, HasQuotaService, HasRdbmsService,
+    HasResourceLimits, HasRpc, HasRunningWorkerEnumerationService, HasSchedulerService,
+    HasShardManagerService, HasShardService, HasShutdownToken, HasWasmtimeEngine,
+    HasWorkerActivator, HasWorkerEnumerationService, HasWorkerForkService, HasWorkerProxy,
+    HasWorkerService, active_agents, agent_types, blob_store, card, component, golem_config,
+    key_value, oplog, promise, rdbms, scheduler, shard_manager, worker, worker_activator,
+    worker_enumeration, worker_fork,
 };
 use crate::worker::Worker;
 use crate::worker::invocation::validate_agent_method_invocation;
@@ -881,6 +882,7 @@ pub struct DirectWorkerInvocationRpc<Ctx: WorkerCtx> {
     resource_limits: Arc<dyn ResourceLimits>,
     shutdown_token: tokio_util::sync::CancellationToken,
     environment_state_service: Arc<dyn EnvironmentStateService>,
+    agent_filesystem_snapshots: Arc<AgentFilesystemSnapshots>,
     native_tool_catalog: Arc<crate::native_tool::NativeToolCatalog<Ctx>>,
     agent_types_service: Arc<dyn agent_types::AgentTypesService>,
     agent_webhooks_service: Arc<AgentWebhooksService>,
@@ -922,6 +924,7 @@ impl<Ctx: WorkerCtx> Clone for DirectWorkerInvocationRpc<Ctx> {
             resource_limits: self.resource_limits.clone(),
             shutdown_token: self.shutdown_token.clone(),
             environment_state_service: self.environment_state_service.clone(),
+            agent_filesystem_snapshots: self.agent_filesystem_snapshots.clone(),
             native_tool_catalog: self.native_tool_catalog.clone(),
             agent_types_service: self.agent_types_service.clone(),
             agent_webhooks_service: self.agent_webhooks_service.clone(),
@@ -1135,6 +1138,12 @@ impl<Ctx: WorkerCtx> HasWebSocketConnectionPool for DirectWorkerInvocationRpc<Ct
     }
 }
 
+impl<Ctx: WorkerCtx> HasAgentFilesystemSnapshots for DirectWorkerInvocationRpc<Ctx> {
+    fn agent_filesystem_snapshots(&self) -> Arc<AgentFilesystemSnapshots> {
+        self.agent_filesystem_snapshots.clone()
+    }
+}
+
 impl<Ctx: WorkerCtx> HasEnvironmentStateService for DirectWorkerInvocationRpc<Ctx> {
     fn environment_state_service(&self) -> Arc<dyn EnvironmentStateService> {
         self.environment_state_service.clone()
@@ -1182,6 +1191,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
         resource_limits: Arc<dyn ResourceLimits>,
         shutdown_token: tokio_util::sync::CancellationToken,
         environment_state_service: Arc<dyn EnvironmentStateService>,
+        agent_filesystem_snapshots: Arc<AgentFilesystemSnapshots>,
         native_tool_catalog: Arc<crate::native_tool::NativeToolCatalog<Ctx>>,
         agent_types_service: Arc<dyn agent_types::AgentTypesService>,
         agent_webhooks_service: Arc<AgentWebhooksService>,
@@ -1220,6 +1230,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
             resource_limits,
             shutdown_token,
             environment_state_service,
+            agent_filesystem_snapshots,
             native_tool_catalog,
             agent_types_service,
             agent_webhooks_service,

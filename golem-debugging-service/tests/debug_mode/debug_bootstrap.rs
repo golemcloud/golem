@@ -12,6 +12,7 @@ use golem_service_base::storage::blob::BlobStorage;
 use golem_worker_executor::Bootstrap;
 use golem_worker_executor::services::All;
 use golem_worker_executor::services::active_agents::ActiveAgents;
+use golem_worker_executor::services::agent_filesystem_snapshots::AgentFilesystemSnapshots;
 use golem_worker_executor::services::agent_types::AgentTypesService;
 use golem_worker_executor::services::agent_webhooks::AgentWebhooksService;
 use golem_worker_executor::services::blob_store::BlobStoreService;
@@ -177,6 +178,7 @@ impl Bootstrap<DebugContext> for TestDebuggingServerBootStrap {
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
         agent_types_service: Arc<dyn AgentTypesService>,
         environment_state_service: Arc<dyn EnvironmentStateService>,
+        agent_filesystem_snapshots: Arc<AgentFilesystemSnapshots>,
         agent_webhooks_service: Arc<AgentWebhooksService>,
         resource_limits: Arc<dyn ResourceLimits>,
         quota_service: Arc<dyn QuotaService>,
@@ -213,6 +215,7 @@ impl Bootstrap<DebugContext> for TestDebuggingServerBootStrap {
             oplog_processor_plugin,
             agent_types_service,
             environment_state_service,
+            agent_filesystem_snapshots,
             agent_webhooks_service,
             resource_limits,
             quota_service,

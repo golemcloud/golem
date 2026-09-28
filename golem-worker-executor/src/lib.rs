@@ -55,14 +55,15 @@ use self::services::worker_fork::DefaultWorkerFork;
 use self::wasi_host::create_linker;
 use crate::grpc::WorkerExecutorImpl;
 use crate::services::active_agents::{ActiveAgents, InvocationLoops};
+use crate::services::agent_filesystem_snapshots::{AgentFilesystemSnapshots, PressureTargetRoom};
 use crate::services::agent_types::AgentTypesService;
 use crate::services::blob_store::{BlobStoreService, DefaultBlobStoreService};
 use crate::services::card::{CardService, CardServiceDefault};
 use crate::services::component::ComponentService;
 use crate::services::events::Events;
 use crate::services::golem_config::{
-    GolemConfig, HttpClientConfig, IndexedStorageConfig, KeyValueStorageConfig,
-    KeyValueStorageInnerConfig, SchedulerStorageConfig,
+    FilesystemSnapshotsConfig, GolemConfig, HttpClientConfig, IndexedStorageConfig,
+    KeyValueStorageConfig, KeyValueStorageInnerConfig, SchedulerStorageConfig,
 };
 use crate::services::key_value::{DefaultKeyValueService, KeyValueService};
 use crate::services::oplog::plugin::{
@@ -353,6 +354,54 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         rpc
     }
 
+    /// Creates the service of the filesystem snapshots, from the configuration. The default binds
+    /// the configuration, builds the rustic store on `blob_storage` when the service is enabled,
+    /// and stops the service and the store when the executor shuts down.
+    fn create_agent_filesystem_snapshots(
+        &self,
+        golem_config: &GolemConfig,
+        blob_storage: Arc<dyn BlobStorage>,
+        active_agents: &Arc<ActiveAgents<Ctx>>,
+        shutdown: &services::shutdown::Shutdown,
+    ) -> anyhow::Result<Arc<AgentFilesystemSnapshots>> {
+        let filesystems = active_agents.agent_filesystems();
+        let stores = Arc::new(std::sync::Mutex::new(None));
+        let snapshots = AgentFilesystemSnapshots::bind(
+            &golem_config.filesystem_snapshots,
+            filesystems.provisioning().uses_managed_storage(),
+            || {
+                let store = match &golem_config.filesystem_snapshots {
+                    FilesystemSnapshotsConfig::Managed(config) => Arc::new(
+                        filesystem_snapshot::RusticSnapshotStore::new(blob_storage, config),
+                    ),
+                    FilesystemSnapshotsConfig::Disabled(_) => {
+                        unreachable!("a disabled service builds no store")
+                    }
+                };
+                *stores.lock().unwrap() = Some(Arc::clone(&store));
+                store
+            },
+            Arc::new(PressureTargetRoom::new(
+                filesystems.volume().clone(),
+                filesystems.pressure_policy().clone(),
+            )),
+            shutdown.token(),
+        )
+        .map_err(|error| anyhow!(error))?;
+        let snapshots = Arc::new(snapshots);
+        let store = stores.lock().unwrap().take();
+        let token = shutdown.token();
+        let stopping = Arc::clone(&snapshots);
+        shutdown.spawn(async move {
+            token.cancelled().await;
+            stopping.shut_down().await;
+            if let Some(store) = store {
+                store.shut_down().await;
+            }
+        });
+        Ok(snapshots)
+    }
+
     async fn create_services(
         &self,
         direct_invocation_auth_service: Arc<dyn DirectInvocationAuthService>,
@@ -381,6 +430,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
         agent_types_service: Arc<dyn AgentTypesService>,
         environment_state_service: Arc<dyn EnvironmentStateService>,
+        agent_filesystem_snapshots: Arc<AgentFilesystemSnapshots>,
         agent_webhooks_service: Arc<AgentWebhooksService>,
         resource_limits: Arc<dyn ResourceLimits>,
         quota_service: Arc<dyn QuotaService>,
@@ -422,6 +472,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
             environment_state_service.clone(),
+            agent_filesystem_snapshots.clone(),
             native_tool_catalog.clone(),
             agent_types_service.clone(),
             agent_webhooks_service.clone(),
@@ -465,6 +516,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             resource_limits.clone(),
             shutdown_token.clone(),
             environment_state_service.clone(),
+            agent_filesystem_snapshots.clone(),
             native_tool_catalog.clone(),
             agent_types_service.clone(),
             agent_webhooks_service.clone(),
@@ -509,6 +561,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             http_connection_pool,
             websocket_connection_pool.clone(),
             environment_state_service.clone(),
+            agent_filesystem_snapshots.clone(),
             native_tool_catalog,
             additional_deps,
             leak_sentinel,
@@ -1027,6 +1080,13 @@ pub async fn create_worker_executor_impl<
 
     let additional_deps = bootstrap.create_additional_deps(registry_service.clone());
 
+    let agent_filesystem_snapshots = bootstrap.create_agent_filesystem_snapshots(
+        &golem_config,
+        blob_storage.clone(),
+        &active_agents,
+        &shutdown,
+    )?;
+
     let direct_invocation_auth_service =
         bootstrap.create_direct_invocation_auth_service(registry_service.clone(), &golem_config);
 
@@ -1062,6 +1122,7 @@ pub async fn create_worker_executor_impl<
             oplog_processor_plugin,
             agent_type_service,
             environment_state_service,
+            agent_filesystem_snapshots,
             agent_webhooks_service,
             resource_limits,
             quota_service,

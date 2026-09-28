@@ -36,6 +36,7 @@ pub use golem_worker_executor::RunDetails;
 use golem_worker_executor::durable_host::{CoreTypesHost, DurableWorkerCtx};
 use golem_worker_executor::preview2::{golem_api_1_x, golem_durability};
 use golem_worker_executor::services::active_agents::ActiveAgents;
+use golem_worker_executor::services::agent_filesystem_snapshots::AgentFilesystemSnapshots;
 use golem_worker_executor::services::agent_types::AgentTypesService;
 use golem_worker_executor::services::agent_webhooks::AgentWebhooksService;
 use golem_worker_executor::services::blob_store::BlobStoreService;
@@ -156,6 +157,7 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
         agent_types_service: Arc<dyn AgentTypesService>,
         environment_state_service: Arc<dyn EnvironmentStateService>,
+        agent_filesystem_snapshots: Arc<AgentFilesystemSnapshots>,
         agent_webhooks_service: Arc<AgentWebhooksService>,
         resource_limits: Arc<dyn ResourceLimits>,
         quota_service: Arc<dyn QuotaService>,
@@ -192,6 +194,7 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
             oplog_processor_plugin,
             agent_types_service,
             environment_state_service,
+            agent_filesystem_snapshots,
             agent_webhooks_service,
             resource_limits,
             quota_service,
@@ -238,6 +241,7 @@ pub async fn create_debugging_service_services(
     oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
     agent_types_service: Arc<dyn AgentTypesService>,
     environment_state_service: Arc<dyn EnvironmentStateService>,
+    agent_filesystem_snapshots: Arc<AgentFilesystemSnapshots>,
     agent_webhooks_service: Arc<AgentWebhooksService>,
     resource_limits: Arc<dyn ResourceLimits>,
     quota_service: Arc<dyn QuotaService>,
@@ -287,6 +291,7 @@ pub async fn create_debugging_service_services(
         oplog_processor_plugin.clone(),
         resource_limits.clone(),
         environment_state_service.clone(),
+        agent_filesystem_snapshots.clone(),
         native_tool_catalog.clone(),
         agent_types_service.clone(),
         agent_webhooks_service.clone(),
@@ -330,6 +335,7 @@ pub async fn create_debugging_service_services(
         resource_limits.clone(),
         shutdown_token.clone(),
         environment_state_service.clone(),
+        agent_filesystem_snapshots.clone(),
         native_tool_catalog.clone(),
         agent_types_service.clone(),
         agent_webhooks_service.clone(),
@@ -373,6 +379,7 @@ pub async fn create_debugging_service_services(
         http_connection_pool,
         websocket_connection_pool,
         environment_state_service,
+        agent_filesystem_snapshots,
         native_tool_catalog,
         additional_deps,
         leak_sentinel,

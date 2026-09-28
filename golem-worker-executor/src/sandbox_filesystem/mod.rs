@@ -756,6 +756,15 @@ impl SandboxFilesystemProvisioning {
         }
     }
 
+    /// Whether the agent filesystems live on managed XFS storage.
+    pub(crate) fn uses_managed_storage(&self) -> bool {
+        match &self.mode {
+            SandboxFilesystemProvisioningMode::Unmanaged(_) => false,
+            #[cfg(target_os = "linux")]
+            SandboxFilesystemProvisioningMode::Managed(_) => true,
+        }
+    }
+
     pub(crate) fn volume(&self) -> &FilesystemVolume {
         &self.volume
     }
