@@ -19,7 +19,7 @@ use crate::services::oplog::reader::{
 };
 use crate::services::oplog::{
     OplogError, OplogFence, PrimaryOplogService, decode_scan_cursor, next_scan_cursor,
-    retry_scan_storage_op, retry_storage_op_fenceable,
+    record_owning_epoch, refuse_if_fenced, retry_scan_storage_op, retry_storage_op_fenceable,
 };
 use crate::storage::indexed::{
     IndexedStorage, IndexedStorageError, IndexedStorageLabelledApi, IndexedStorageMetaNamespace,
@@ -344,25 +344,17 @@ impl CompressedOplogArchive {
             return archive;
         };
         archive.shard_epoch = Some(shard_epoch);
-        let recorded = retry_storage_op_fenceable(
+        if let Some(fence) = record_owning_epoch(
+            &*archive.indexed_storage,
             &archive.retry_config,
-            "compressed_set_key_epoch",
+            archive.namespace(),
+            &archive.agent_id,
             &archive.key,
-            || {
-                let is = archive.indexed_storage.clone();
-                let ns = archive.namespace();
-                let key = archive.key.clone();
-                async move {
-                    is.with("compressed_oplog", "set_key_epoch")
-                        .set_key_epoch(ns, &key, shard_epoch)
-                        .await
-                }
-            },
+            shard_epoch,
         )
-        .await;
-        record_oplog_epoch_fence("archive_record", recorded.is_err());
-        if let Err(error) = recorded {
-            archive.latch(error);
+        .await
+        {
+            let _ = archive.fence.set(fence);
         }
         archive
     }
@@ -375,28 +367,9 @@ impl CompressedOplogArchive {
         }
     }
 
-    fn refuse_if_fenced(&self) -> Result<(), OplogError> {
-        match self.fence.get() {
-            Some(fence) => Err(OplogError::Fenced(fence.clone())),
-            None => Ok(()),
-        }
-    }
-
     /// Latches the fence a refused storage call reported, and returns it as the write's error.
     fn latch(&self, error: IndexedStorageError) -> OplogError {
-        let IndexedStorageError::Fenced {
-            expected, actual, ..
-        } = error
-        else {
-            unreachable!(
-                "retry_storage_op_fenceable panics on every storage failure but a fence, got {error}"
-            )
-        };
-        let fence = OplogFence {
-            agent_id: self.agent_id.clone(),
-            expected_epoch: expected,
-            actual_epoch: actual,
-        };
+        let fence = OplogFence::refused(self.agent_id.clone(), error);
         if self.fence.set(fence.clone()).is_ok() {
             warn!(
                 agent_id = %self.agent_id,
@@ -555,7 +528,7 @@ impl OplogArchive for CompressedOplogArchive {
         if chunk.is_empty() {
             return Ok(0);
         }
-        self.refuse_if_fenced()?;
+        refuse_if_fenced(self.fence.get())?;
 
         // The cache lock must not be held across the storage writes below: `append` can be
         // reached from host-call contexts (through ephemeral oplogs), and an async lock held
@@ -673,7 +646,7 @@ impl OplogArchive for CompressedOplogArchive {
     }
 
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> Result<u64, OplogError> {
-        self.refuse_if_fenced()?;
+        refuse_if_fenced(self.fence.get())?;
         let before = self.length().await;
         let is = self.indexed_storage.clone();
         let key = self.key.clone();
@@ -686,7 +659,7 @@ impl OplogArchive for CompressedOplogArchive {
                 let key = key.clone();
                 async move {
                     is.with("compressed_oplog", "drop_prefix")
-                        .drop_prefix_with_epoch(ns, &key, dropped_id, shard_epoch)
+                        .drop_prefix(ns, &key, dropped_id, shard_epoch)
                         .await
                 }
             })

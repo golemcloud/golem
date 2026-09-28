@@ -441,21 +441,12 @@ pub trait IndexedStorage: Debug + Sync {
     /// Deletes the entry with the closest id to the given id in the index of the given key,
     /// in a way that `last_dropped_id` is greater to the id of the deleted entries.
     /// The key remains present even when every entry is removed. Missing keys stay missing.
+    ///
+    /// Fenced on the writer generation as an append is, checked in the same atomic step as the
+    /// trim: refused with [`IndexedStorageError::Fenced`], removing nothing, when `expected_epoch`
+    /// is `Some` and is not exactly the generation recorded for the key (an absent record refuses
+    /// too). `None` trims unconditionally.
     async fn drop_prefix(
-        &self,
-        svc_name: &'static str,
-        api_name: &'static str,
-        namespace: IndexedStorageNamespace,
-        key: &str,
-        last_dropped_id: u64,
-    ) -> Result<(), IndexedStorageError>;
-
-    /// [`Self::drop_prefix`] fenced on the writer generation, checked in the same atomic step as
-    /// the trim: refused with [`IndexedStorageError::Fenced`], removing nothing, when
-    /// `expected_epoch` is `Some` and is not exactly the generation recorded for the key. A
-    /// missing record refuses too, as it does for an append: every open records the owner's
-    /// generation before the oplog is written. `None` trims unconditionally.
-    async fn drop_prefix_with_epoch(
         &self,
         svc_name: &'static str,
         api_name: &'static str,
@@ -656,18 +647,6 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledIndexedStorage<'a, S> {
             .await
     }
 
-    pub async fn set_key_epoch(
-        &self,
-        namespace: IndexedStorageNamespace,
-        key: &str,
-        epoch: ShardEpoch,
-    ) -> Result<(), IndexedStorageError> {
-        self.record("set_key_epoch");
-        self.storage
-            .set_key_epoch(self.svc_name, self.api_name, namespace, key, epoch)
-            .await
-    }
-
     pub async fn delete_with_epoch(
         &self,
         namespace: IndexedStorageNamespace,
@@ -692,31 +671,12 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledIndexedStorage<'a, S> {
             .await
     }
 
-    pub async fn drop_prefix_with_epoch(
-        &self,
-        namespace: IndexedStorageNamespace,
-        key: &str,
-        last_dropped_id: u64,
-        expected_epoch: Option<ShardEpoch>,
-    ) -> Result<(), IndexedStorageError> {
-        self.record("drop_prefix");
-        self.storage
-            .drop_prefix_with_epoch(
-                self.svc_name,
-                self.api_name,
-                namespace,
-                key,
-                last_dropped_id,
-                expected_epoch,
-            )
-            .await
-    }
-
     pub async fn drop_prefix(
         &self,
         namespace: IndexedStorageNamespace,
         key: &str,
         last_dropped_id: u64,
+        expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
         self.record("drop_prefix");
         self.storage
@@ -726,6 +686,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledIndexedStorage<'a, S> {
                 namespace,
                 key,
                 last_dropped_id,
+                expected_epoch,
             )
             .await
     }

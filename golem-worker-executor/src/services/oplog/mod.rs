@@ -12,9 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::metrics::oplog::record_oplog_epoch_fence;
 use crate::model::ExecutionStatus;
 use crate::services::stream_session_index::StreamSessionIndexService;
-use crate::storage::indexed::{IndexedStorageError, ScanResume};
+use crate::storage::indexed::{
+    IndexedStorage, IndexedStorageError, IndexedStorageNamespace, ScanResume,
+};
 pub use crate::worker::tasks::WorkerTasks;
 use async_trait::async_trait;
 use base64::Engine;
@@ -486,6 +489,56 @@ where
     }
 }
 
+/// Records the epoch this executor is allowed to write `key` with, and reports the fence when
+/// the stored record is already ahead of it.
+///
+/// Monotonic on the storage side once a record exists, so a re-grant at a higher epoch takes the
+/// key over while an executor holding a stale one cannot claim it back. A key with no record
+/// (new, deleted, or from before the record existed) is claimed by whichever epoch opens it
+/// first. Written before the key's first entry - an absent record fences too, which is what
+/// closes the window between creating a key and recording who owns it. The primary oplog and
+/// each compressed archive level record their own key.
+pub(crate) async fn record_owning_epoch(
+    indexed_storage: &(dyn IndexedStorage + Send + Sync),
+    retry_config: &golem_common::model::RetryConfig,
+    namespace: IndexedStorageNamespace,
+    agent_id: &AgentId,
+    key: &str,
+    shard_epoch: ShardEpoch,
+) -> Option<OplogFence> {
+    let (svc_name, metric_op) = match namespace {
+        IndexedStorageNamespace::CompressedOpLog { .. } => ("compressed_oplog", "archive_record"),
+        _ => ("oplog", "record"),
+    };
+    let outcome = retry_storage_op_fenceable(retry_config, "set_key_epoch", key, || {
+        let namespace = namespace.clone();
+        async move {
+            indexed_storage
+                .set_key_epoch(svc_name, "set_key_epoch", namespace, key, shard_epoch)
+                .await
+        }
+    })
+    .await;
+    record_oplog_epoch_fence(metric_op, outcome.is_err());
+    let fence = OplogFence::refused(agent_id.clone(), outcome.err()?);
+    tracing::warn!(
+        agent_id = %agent_id,
+        store = svc_name,
+        expected_epoch = fence.expected_epoch.0,
+        actual_epoch = ?fence.actual_epoch.map(|epoch| epoch.0),
+        "Oplog opened at a stale shard epoch: the shard has a new owner"
+    );
+    Some(fence)
+}
+
+/// Refuses a new write once `fence` has latched, before anything reaches the storage.
+pub(crate) fn refuse_if_fenced(fence: Option<&OplogFence>) -> Result<(), OplogError> {
+    match fence {
+        Some(fence) => Err(OplogError::Fenced(fence.clone())),
+        None => Ok(()),
+    }
+}
+
 /// A handle to an external blob upload that [`Oplog::add_start_with_reserved_raw_payload`] started
 /// (spawned) but which may not have finished yet.
 ///
@@ -706,6 +759,23 @@ pub struct OplogFence {
     pub agent_id: AgentId,
     pub expected_epoch: ShardEpoch,
     pub actual_epoch: Option<ShardEpoch>,
+}
+
+impl OplogFence {
+    /// The fence a refused storage write reports for `agent_id`. Only a fence comes back from
+    /// the fenceable storage retries: every other storage failure panics inside them.
+    pub(crate) fn refused(agent_id: AgentId, error: IndexedStorageError) -> Self {
+        match error {
+            IndexedStorageError::Fenced {
+                expected, actual, ..
+            } => OplogFence {
+                agent_id,
+                expected_epoch: expected,
+                actual_epoch: actual,
+            },
+            other => unreachable!("a fenceable storage write failed without a fence: {other}"),
+        }
+    }
 }
 
 /// Why an oplog write failed without taking the executor down.

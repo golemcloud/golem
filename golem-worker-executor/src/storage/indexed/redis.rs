@@ -779,17 +779,37 @@ impl IndexedStorage for RedisIndexedStorage {
         namespace: IndexedStorageNamespace,
         key: &str,
         last_dropped_id: u64,
+        expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
-        let _: u64 = self
-            .redis
+        let Some(expected) = expected_epoch else {
+            let _: u64 = self
+                .redis
+                .with(svc_name, api_name)
+                .xtrim(
+                    Self::composite_key(namespace, key),
+                    (XCapKind::MinID, last_dropped_id + 1),
+                )
+                .await
+                .map_err(|e| IndexedStorageError::Other(e.to_string()))?;
+            return Ok(());
+        };
+        self.redis
             .with(svc_name, api_name)
-            .xtrim(
-                Self::composite_key(namespace, key),
-                (XCapKind::MinID, last_dropped_id + 1),
+            .eval(
+                Self::FENCED_DROP_PREFIX_SCRIPT,
+                &[
+                    Self::composite_key(namespace.clone(), key),
+                    Self::epoch_key(namespace, key),
+                ],
+                vec![
+                    Value::from((last_dropped_id + 1).to_string()),
+                    Value::from(expected.0.to_string()),
+                ],
+                None,
             )
             .await
-            .map_err(|e| IndexedStorageError::Other(e.to_string()))?;
-        Ok(())
+            .map(|_| ())
+            .map_err(|error| Self::classify_epoch_error(error, key, Some(expected)))
     }
 
     async fn delete_empty_with_epoch(
@@ -818,39 +838,6 @@ impl IndexedStorage for RedisIndexedStorage {
             .await
             .map(|deleted| matches!(deleted, Value::Integer(1)))
             .map_err(|error| Self::classify_epoch_error(error, key, expected_epoch))
-    }
-
-    async fn drop_prefix_with_epoch(
-        &self,
-        svc_name: &'static str,
-        api_name: &'static str,
-        namespace: IndexedStorageNamespace,
-        key: &str,
-        last_dropped_id: u64,
-        expected_epoch: Option<ShardEpoch>,
-    ) -> Result<(), IndexedStorageError> {
-        let Some(expected) = expected_epoch else {
-            return self
-                .drop_prefix(svc_name, api_name, namespace, key, last_dropped_id)
-                .await;
-        };
-        self.redis
-            .with(svc_name, api_name)
-            .eval(
-                Self::FENCED_DROP_PREFIX_SCRIPT,
-                &[
-                    Self::composite_key(namespace.clone(), key),
-                    Self::epoch_key(namespace, key),
-                ],
-                vec![
-                    Value::from((last_dropped_id + 1).to_string()),
-                    Value::from(expected.0.to_string()),
-                ],
-                None,
-            )
-            .await
-            .map(|_| ())
-            .map_err(|error| Self::classify_epoch_error(error, key, Some(expected)))
     }
 }
 

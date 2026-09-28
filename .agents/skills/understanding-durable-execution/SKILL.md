@@ -378,7 +378,7 @@ owner leaves by:
   the archive watermark is read, so an older owner's transfer either landed before the record,
   and the watermark covers it, or is refused after it. Each level asserts the epoch on its
   appends, trims and delete-when-empty, and the primary oplog asserts it on the trim that follows
-  archiving (`drop_prefix_with_epoch`). A refused step ends the transfer
+  archiving (the `expected_epoch` of `IndexedStorage::drop_prefix`). A refused step ends the transfer
   (`multilayer.rs::BackgroundTransfer::run`): an append the storage turned away is not verified,
   so the new owner's history does not trip fail-stop validation, and a source whose entries were
   not archived is not trimmed. The refusal latches on the archive handle, `Oplog::fence` reports

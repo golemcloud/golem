@@ -290,10 +290,20 @@ pub(super) fn default_execution_status(
     })))
 }
 
+/// Where a [`BlockingArchive`] holds each transfer through it until released.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PausePoint {
+    /// Before the archive append reaches the storage.
+    Append,
+    /// After the append landed, before the transfer verifies it and trims its source.
+    Verify,
+}
+
 struct BlockingArchiveService {
     inner: Arc<dyn OplogArchiveService>,
-    append_started: Arc<Mutex<Option<oneshot::Sender<()>>>>,
-    release_append: Arc<Notify>,
+    pause_at: PausePoint,
+    paused: Arc<Mutex<Option<oneshot::Sender<()>>>>,
+    release: Arc<Notify>,
     append_finished: Arc<Notify>,
 }
 
@@ -316,8 +326,9 @@ impl OplogArchiveService for BlockingArchiveService {
                 .inner
                 .open(owned_agent_id, agent_mode, shard_epoch)
                 .await,
-            append_started: self.append_started.clone(),
-            release_append: self.release_append.clone(),
+            pause_at: self.pause_at,
+            paused: self.paused.clone(),
+            release: self.release.clone(),
             append_finished: self.append_finished.clone(),
         })
     }
@@ -333,8 +344,9 @@ impl OplogArchiveService for BlockingArchiveService {
                 .inner
                 .open_fresh(owned_agent_id, agent_mode, shard_epoch)
                 .await,
-            append_started: self.append_started.clone(),
-            release_append: self.release_append.clone(),
+            pause_at: self.pause_at,
+            paused: self.paused.clone(),
+            release: self.release.clone(),
             append_finished: self.append_finished.clone(),
         })
     }
@@ -383,9 +395,24 @@ impl OplogArchiveService for BlockingArchiveService {
 
 struct BlockingArchive {
     inner: Arc<dyn OplogArchive + Send + Sync>,
-    append_started: Arc<Mutex<Option<oneshot::Sender<()>>>>,
-    release_append: Arc<Notify>,
+    pause_at: PausePoint,
+    paused: Arc<Mutex<Option<oneshot::Sender<()>>>>,
+    release: Arc<Notify>,
     append_finished: Arc<Notify>,
+}
+
+impl BlockingArchive {
+    /// Waits for the release when `point` is where this archive pauses, announcing the first
+    /// arrival.
+    async fn hold(&self, point: PausePoint) {
+        if point != self.pause_at {
+            return;
+        }
+        if let Some(sender) = self.paused.lock().await.take() {
+            let _ = sender.send(());
+        }
+        self.release.notified().await;
+    }
 }
 
 impl Debug for BlockingArchive {
@@ -401,16 +428,14 @@ impl OplogArchive for BlockingArchive {
     }
 
     async fn append(&self, chunk: &[(OplogIndex, OplogEntry)]) -> Result<u64, OplogError> {
-        if let Some(sender) = self.append_started.lock().await.take() {
-            let _ = sender.send(());
-        }
-        self.release_append.notified().await;
+        self.hold(PausePoint::Append).await;
         let result = self.inner.append(chunk).await;
         self.append_finished.notify_one();
         result
     }
 
     async fn verify_persisted(&self, entries: &[(OplogIndex, OplogEntry)]) {
+        self.hold(PausePoint::Verify).await;
         self.inner.verify_persisted(entries).await
     }
 
@@ -984,9 +1009,17 @@ impl IndexedStorage for ReadCountingIndexedStorage {
         namespace: IndexedStorageNamespace,
         key: &str,
         last_dropped_id: u64,
+        expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
         self.inner
-            .drop_prefix(svc_name, api_name, namespace, key, last_dropped_id)
+            .drop_prefix(
+                svc_name,
+                api_name,
+                namespace,
+                key,
+                last_dropped_id,
+                expected_epoch,
+            )
             .await
     }
 
@@ -1000,27 +1033,6 @@ impl IndexedStorage for ReadCountingIndexedStorage {
     ) -> Result<bool, IndexedStorageError> {
         self.inner
             .delete_empty_with_epoch(svc_name, api_name, namespace, key, expected_epoch)
-            .await
-    }
-
-    async fn drop_prefix_with_epoch(
-        &self,
-        svc_name: &'static str,
-        api_name: &'static str,
-        namespace: IndexedStorageNamespace,
-        key: &str,
-        last_dropped_id: u64,
-        expected_epoch: Option<ShardEpoch>,
-    ) -> Result<(), IndexedStorageError> {
-        self.inner
-            .drop_prefix_with_epoch(
-                svc_name,
-                api_name,
-                namespace,
-                key,
-                last_dropped_id,
-                expected_epoch,
-            )
             .await
     }
 }
@@ -6203,8 +6215,9 @@ async fn deleting_worker_fences_in_flight_archive_transfers_impl(agent_mode: Age
                     1,
                     RetryConfig::default(),
                 )),
-                append_started: Arc::new(Mutex::new(Some(append_started_tx))),
-                release_append: release_append.clone(),
+                pause_at: PausePoint::Append,
+                paused: Arc::new(Mutex::new(Some(append_started_tx))),
+                release: release_append.clone(),
                 append_finished: append_finished.clone(),
             }) as Arc<dyn OplogArchiveService>,
             Arc::new(BlobOplogArchiveService::new(blob_storage.clone(), 2))
@@ -6219,8 +6232,9 @@ async fn deleting_worker_fences_in_flight_archive_transfers_impl(agent_mode: Age
             )) as Arc<dyn OplogArchiveService>,
             Arc::new(BlockingArchiveService {
                 inner: Arc::new(BlobOplogArchiveService::new(blob_storage.clone(), 2)),
-                append_started: Arc::new(Mutex::new(Some(append_started_tx))),
-                release_append: release_append.clone(),
+                pause_at: PausePoint::Append,
+                paused: Arc::new(Mutex::new(Some(append_started_tx))),
+                release: release_append.clone(),
                 append_finished: append_finished.clone(),
             }) as Arc<dyn OplogArchiveService>,
             2,
@@ -10078,193 +10092,20 @@ async fn a_stale_create_of_an_oplog_the_owner_already_created_is_fenced_not_fata
     );
 }
 
-/// Where [`PausedArchiveService`] holds the first transfer through it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum PausePoint {
-    /// Before the archive append reaches the storage.
-    Append,
-    /// After the append landed, before the transfer verifies it and trims its source.
-    Verify,
-}
-
-/// Holds one archive transfer at a [`PausePoint`] until released, so another executor can take
-/// the oplog over while the transfer is in flight.
-#[derive(Clone)]
-struct TransferPause {
-    at: PausePoint,
-    reached: Arc<StdMutex<Option<oneshot::Sender<()>>>>,
-    release: Arc<Notify>,
-}
-
-impl TransferPause {
-    fn new(at: PausePoint) -> (Self, oneshot::Receiver<()>) {
-        let (reached, reached_rx) = oneshot::channel();
-        (
-            Self {
-                at,
-                reached: Arc::new(StdMutex::new(Some(reached))),
-                release: Arc::new(Notify::new()),
-            },
-            reached_rx,
-        )
-    }
-
-    async fn hold(&self, point: PausePoint) {
-        if point != self.at {
-            return;
-        }
-        let reached = self.reached.lock().unwrap().take();
-        if let Some(reached) = reached {
-            let _ = reached.send(());
-            self.release.notified().await;
-        }
-    }
-}
-
-struct PausedArchiveService {
-    inner: Arc<dyn OplogArchiveService>,
-    pause: TransferPause,
-}
-
-impl Debug for PausedArchiveService {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("PausedArchiveService").finish()
-    }
-}
-
-#[async_trait]
-impl OplogArchiveService for PausedArchiveService {
-    async fn open(
-        &self,
-        owned_agent_id: &OwnedAgentId,
-        agent_mode: AgentMode,
-        shard_epoch: Option<ShardEpoch>,
-    ) -> Arc<dyn OplogArchive + Send + Sync> {
-        Arc::new(PausedArchive {
-            inner: self
-                .inner
-                .open(owned_agent_id, agent_mode, shard_epoch)
-                .await,
-            pause: self.pause.clone(),
-        })
-    }
-
-    async fn open_fresh(
-        &self,
-        owned_agent_id: &OwnedAgentId,
-        agent_mode: AgentMode,
-        shard_epoch: Option<ShardEpoch>,
-    ) -> Arc<dyn OplogArchive + Send + Sync> {
-        Arc::new(PausedArchive {
-            inner: self
-                .inner
-                .open_fresh(owned_agent_id, agent_mode, shard_epoch)
-                .await,
-            pause: self.pause.clone(),
-        })
-    }
-
-    async fn delete(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) {
-        self.inner.delete(owned_agent_id, agent_mode).await
-    }
-
-    async fn read_source(
-        &self,
-        owned_agent_id: &OwnedAgentId,
-        agent_mode: AgentMode,
-        idx: OplogIndex,
-        n: u64,
-    ) -> BTreeMap<OplogIndex, OplogEntry> {
-        self.inner
-            .read_source(owned_agent_id, agent_mode, idx, n)
-            .await
-    }
-
-    async fn exists(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) -> bool {
-        self.inner.exists(owned_agent_id, agent_mode).await
-    }
-
-    async fn scan_for_component(
-        &self,
-        environment_id: &EnvironmentId,
-        component_id: &ComponentId,
-        modes: Option<AgentMode>,
-        cursor: ScanCursor,
-        count: u64,
-    ) -> Result<(ScanCursor, Vec<OwnedAgentId>), WorkerExecutorError> {
-        self.inner
-            .scan_for_component(environment_id, component_id, modes, cursor, count)
-            .await
-    }
-
-    async fn get_last_index(
-        &self,
-        owned_agent_id: &OwnedAgentId,
-        agent_mode: AgentMode,
-    ) -> OplogIndex {
-        self.inner.get_last_index(owned_agent_id, agent_mode).await
-    }
-}
-
-struct PausedArchive {
-    inner: Arc<dyn OplogArchive + Send + Sync>,
-    pause: TransferPause,
-}
-
-impl Debug for PausedArchive {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("PausedArchive").finish()
-    }
-}
-
-#[async_trait]
-impl OplogArchive for PausedArchive {
-    async fn read_source(&self, idx: OplogIndex, n: u64) -> BTreeMap<OplogIndex, OplogEntry> {
-        self.inner.read_source(idx, n).await
-    }
-
-    async fn append(&self, chunk: &[(OplogIndex, OplogEntry)]) -> Result<u64, OplogError> {
-        self.pause.hold(PausePoint::Append).await;
-        self.inner.append(chunk).await
-    }
-
-    async fn verify_persisted(&self, entries: &[(OplogIndex, OplogEntry)]) {
-        self.pause.hold(PausePoint::Verify).await;
-        self.inner.verify_persisted(entries).await
-    }
-
-    async fn current_oplog_index(&self) -> OplogIndex {
-        self.inner.current_oplog_index().await
-    }
-
-    async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> Result<u64, OplogError> {
-        self.inner.drop_prefix(last_dropped_id).await
-    }
-
-    async fn length(&self) -> u64 {
-        self.inner.length().await
-    }
-
-    async fn get_last_index(&self) -> OplogIndex {
-        self.inner.get_last_index().await
-    }
-
-    fn fence(&self) -> Option<OplogFence> {
-        self.inner.fence()
-    }
-}
-
 /// One executor's view of storage that every executor shares: a primary oplog over one
 /// compressed archive level. Nothing is archived automatically; each test drives the transfer
-/// it examines.
+/// it examines. With a [`PausePoint`], the level is a [`BlockingArchive`] holding the transfer
+/// there until `release` is notified.
 struct ArchivingExecutor {
     primary: Arc<dyn OplogService>,
     service: MultiLayerOplogService,
+    paused: StdMutex<Option<oneshot::Receiver<()>>>,
+    release: Arc<Notify>,
 }
 
 async fn archiving_executor(
     storage: &Arc<InMemoryIndexedStorage>,
-    pause: Option<TransferPause>,
+    pause_at: Option<PausePoint>,
 ) -> ArchivingExecutor {
     let primary: Arc<dyn OplogService> = Arc::new(
         PrimaryOplogService::new(
@@ -10282,16 +10123,23 @@ async fn archiving_executor(
         1,
         RetryConfig::default(),
     ));
-    let level = match pause {
-        Some(pause) => Arc::new(PausedArchiveService {
+    let (paused_tx, paused) = oneshot::channel();
+    let release = Arc::new(Notify::new());
+    let level = match pause_at {
+        Some(pause_at) => Arc::new(BlockingArchiveService {
             inner: level,
-            pause,
+            pause_at,
+            paused: Arc::new(Mutex::new(Some(paused_tx))),
+            release: release.clone(),
+            append_finished: Arc::new(Notify::new()),
         }) as _,
         None => level,
     };
     ArchivingExecutor {
         primary: primary.clone(),
         service: MultiLayerOplogService::new(primary, nev![level], 100, 1),
+        paused: StdMutex::new(Some(paused)),
+        release,
     }
 }
 
@@ -10348,17 +10196,24 @@ fn archiving_agent(name: &str) -> OwnedAgentId {
     )
 }
 
-/// Starts archiving the old owner's primary oplog and returns once the transfer is held at the
-/// pause point. The task completes when the transfer does; a transfer that panics fails it.
+/// Starts archiving `oplog` on `executor` and returns once the transfer is held at the
+/// executor's pause point. The task completes when the transfer does; a transfer that panics
+/// fails it.
 async fn start_paused_transfer(
+    executor: &ArchivingExecutor,
     oplog: &Arc<dyn Oplog>,
-    reached: oneshot::Receiver<()>,
 ) -> tokio::task::JoinHandle<Option<bool>> {
+    let paused = executor
+        .paused
+        .lock()
+        .unwrap()
+        .take()
+        .expect("the executor holds one transfer");
     let transfer = tokio::spawn({
         let oplog = oplog.clone();
         async move { MultiLayerOplog::try_archive_blocking(&oplog).await }
     });
-    tokio::time::timeout(Duration::from_secs(5), reached)
+    tokio::time::timeout(Duration::from_secs(5), paused)
         .await
         .expect("the archive transfer did not reach its pause point")
         .expect("the archive transfer pause signal was dropped");
@@ -10380,15 +10235,14 @@ async fn a_superseded_owners_in_flight_transfer_cannot_write_the_new_owners_arch
     _tracing: &Tracing,
 ) {
     let storage = Arc::new(InMemoryIndexedStorage::new());
-    let (pause, reached) = TransferPause::new(PausePoint::Append);
-    let losing_executor = archiving_executor(&storage, Some(pause.clone())).await;
+    let losing_executor = archiving_executor(&storage, Some(PausePoint::Append)).await;
     let owning_executor = archiving_executor(&storage, None).await;
     let owned_agent_id = archiving_agent("archive-append-after-takeover");
 
     let loser = losing_executor.open(&owned_agent_id, 5).await;
     loser.add(OplogEntry::suspend().rounded()).await.unwrap();
     loser.commit(CommitLevel::Always).await.unwrap();
-    let transfer = start_paused_transfer(&loser, reached).await;
+    let transfer = start_paused_transfer(&losing_executor, &loser).await;
 
     // The shard moves while the transfer is in flight. The new owner's open records its epoch on
     // the primary oplog and on the archive level, and it writes.
@@ -10396,7 +10250,7 @@ async fn a_superseded_owners_in_flight_transfer_cannot_write_the_new_owners_arch
     owner.add(OplogEntry::exited().rounded()).await.unwrap();
     owner.commit(CommitLevel::Always).await.unwrap();
 
-    pause.release.notify_one();
+    losing_executor.release.notify_one();
     transfer
         .await
         .expect("a refused transfer must stop, not fail its verification");
@@ -10417,8 +10271,7 @@ async fn a_superseded_owners_in_flight_transfer_cannot_write_the_new_owners_arch
 #[test]
 async fn a_superseded_owners_transfer_cannot_trim_the_new_owners_primary_oplog(_tracing: &Tracing) {
     let storage = Arc::new(InMemoryIndexedStorage::new());
-    let (pause, reached) = TransferPause::new(PausePoint::Verify);
-    let losing_executor = archiving_executor(&storage, Some(pause.clone())).await;
+    let losing_executor = archiving_executor(&storage, Some(PausePoint::Verify)).await;
     let owning_executor = archiving_executor(&storage, None).await;
     let owned_agent_id = archiving_agent("primary-trim-after-takeover");
 
@@ -10426,13 +10279,13 @@ async fn a_superseded_owners_transfer_cannot_trim_the_new_owners_primary_oplog(_
     loser.add(OplogEntry::suspend().rounded()).await.unwrap();
     loser.commit(CommitLevel::Always).await.unwrap();
     // The archive append lands before the takeover; the trim of the primary comes after it.
-    let transfer = start_paused_transfer(&loser, reached).await;
+    let transfer = start_paused_transfer(&losing_executor, &loser).await;
 
     let owner = owning_executor.open(&owned_agent_id, 6).await;
     owner.add(OplogEntry::exited().rounded()).await.unwrap();
     owner.commit(CommitLevel::Always).await.unwrap();
 
-    pause.release.notify_one();
+    losing_executor.release.notify_one();
     transfer.await.unwrap();
 
     assert_eq!(
@@ -10451,15 +10304,14 @@ async fn a_superseded_owners_transfer_cannot_trim_the_new_owners_primary_oplog(_
 #[test]
 async fn an_agent_deleted_by_its_new_owner_gets_no_archive_chunks_back(_tracing: &Tracing) {
     let storage = Arc::new(InMemoryIndexedStorage::new());
-    let (pause, reached) = TransferPause::new(PausePoint::Append);
-    let losing_executor = archiving_executor(&storage, Some(pause.clone())).await;
+    let losing_executor = archiving_executor(&storage, Some(PausePoint::Append)).await;
     let owning_executor = archiving_executor(&storage, None).await;
     let owned_agent_id = archiving_agent("archive-append-after-delete");
 
     let loser = losing_executor.open(&owned_agent_id, 5).await;
     loser.add(OplogEntry::suspend().rounded()).await.unwrap();
     loser.commit(CommitLevel::Always).await.unwrap();
-    let transfer = start_paused_transfer(&loser, reached).await;
+    let transfer = start_paused_transfer(&losing_executor, &loser).await;
 
     // The new owner takes the agent over and deletes it, taking every recorded generation with it.
     let _owner = owning_executor.open(&owned_agent_id, 6).await;
@@ -10477,7 +10329,7 @@ async fn an_agent_deleted_by_its_new_owner_gets_no_archive_chunks_back(_tracing:
         .await
         .unwrap();
 
-    pause.release.notify_one();
+    losing_executor.release.notify_one();
     transfer.await.unwrap();
 
     assert_fenced_by(loser.fence(), 5, None);

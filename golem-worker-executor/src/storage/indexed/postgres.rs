@@ -23,7 +23,7 @@ use futures::FutureExt;
 use golem_common::SafeDisplay;
 use golem_common::metrics::db::record_db_serialized_size;
 use golem_common::model::ShardEpoch;
-use golem_service_base::db::postgres::PostgresPool;
+use golem_service_base::db::postgres::{PostgresLabelledTransaction, PostgresPool};
 use golem_service_base::db::{Pool, PoolApi};
 use golem_service_base::migration::{IncludedMigrationsDir, Migrations};
 use golem_service_base::repo::RepoError;
@@ -152,6 +152,36 @@ impl PostgresIndexedStorage {
     /// `u64` would wrap it into a near-ceiling epoch that fences every writer out of the key.
     fn negative_epoch_message(value: i64, key: &str) -> String {
         format!("Postgres indexed storage read a negative epoch {value} for key '{key}'")
+    }
+
+    /// The writer generation recorded for `key`, read inside `tx`, and holding its row until `tx` ends: a writer recording a new generation for the key waits
+    /// for this transaction.
+    async fn stored_epoch(
+        tx: &mut PostgresLabelledTransaction,
+        namespace: &str,
+        key: &str,
+    ) -> Result<Option<i64>, RepoError> {
+        let stored: Option<(i64,)> = tx
+            .fetch_optional_as(
+                sqlx::query_as(
+                    "SELECT epoch FROM indexed_key_epoch WHERE namespace = $1 AND key = $2 FOR UPDATE;",
+                )
+                .bind(namespace.to_string())
+                .bind(key.to_string()),
+            )
+            .await?;
+        Ok(stored.map(|(epoch,)| epoch))
+    }
+
+    /// Refuses the write `tx` makes unless `expected` is the generation recorded for `key`.
+    async fn check_epoch(
+        tx: &mut PostgresLabelledTransaction,
+        namespace: &str,
+        key: &str,
+        expected: ShardEpoch,
+    ) -> Result<(), FencedTxError> {
+        let stored = Self::stored_epoch(tx, namespace, key).await?;
+        FencedTxError::check_record(key, expected, stored, Self::negative_epoch_message)
     }
 
     fn classify_repo_error(err: RepoError, primary_oplog_insert: bool) -> IndexedStorageError {
@@ -354,26 +384,11 @@ impl IndexedStorage for PostgresIndexedStorage {
         self.pool
             .with_tx_err::<(), FencedTxError, _>(svc_name, api_name, |tx| {
                 async move {
-
                     // Inside the insert transaction, and holding the row, so a writer that has
                     // lost the shard cannot slip a batch in between the check and the insert.
                     // `FOR UPDATE` is what serialises two executors racing over the same oplog.
                     if let Some(expected) = expected_epoch {
-                        let stored: Option<(i64,)> = tx
-                            .fetch_optional_as(
-                                sqlx::query_as(
-                                    "SELECT epoch FROM indexed_key_epoch WHERE namespace = $1 AND key = $2 FOR UPDATE;",
-                                )
-                                .bind(namespace.clone())
-                                .bind(key.clone()),
-                            )
-                            .await?;
-                        FencedTxError::check_record(
-                            &key,
-                            expected,
-                            stored.map(|(epoch,)| epoch),
-                            Self::negative_epoch_message,
-                        )?;
+                        Self::check_epoch(tx, &namespace, &key, expected).await?;
                     }
 
                     for chunk in pairs.chunks(Self::APPEND_MANY_CHUNK_SIZE) {
@@ -487,15 +502,7 @@ impl IndexedStorage for PostgresIndexedStorage {
                     // Holding the row, as an append does: a writer taking the key over waits for
                     // this transaction, and then finds nothing left to take over.
                     if let Some(expected) = expected_epoch {
-                        let stored: Option<(i64,)> = tx
-                            .fetch_optional_as(
-                                sqlx::query_as(
-                                    "SELECT epoch FROM indexed_key_epoch WHERE namespace = $1 AND key = $2 FOR UPDATE;",
-                                )
-                                .bind(namespace.clone())
-                                .bind(key.clone()),
-                            )
-                            .await?;
+                        let stored = Self::stored_epoch(tx, &namespace, &key).await?;
                         // Neither a record nor entries: the key is already gone, most often taken
                         // by an earlier attempt of this same deletion whose later steps failed, and
                         // a writer that lost the key has nothing here to destroy. Refusing would
@@ -518,7 +525,7 @@ impl IndexedStorage for PostgresIndexedStorage {
                         FencedTxError::check_record(
                             &key,
                             expected,
-                            stored.map(|(epoch,)| epoch),
+                            stored,
                             Self::negative_epoch_message,
                         )?;
                     }
@@ -564,21 +571,7 @@ impl IndexedStorage for PostgresIndexedStorage {
                     // Holding the row, as an append does: a writer adding entries waits for this
                     // transaction, so the emptiness seen below is the emptiness deleted.
                     if let Some(expected) = expected_epoch {
-                        let stored: Option<(i64,)> = tx
-                            .fetch_optional_as(
-                                sqlx::query_as(
-                                    "SELECT epoch FROM indexed_key_epoch WHERE namespace = $1 AND key = $2 FOR UPDATE;",
-                                )
-                                .bind(namespace.clone())
-                                .bind(key.clone()),
-                            )
-                            .await?;
-                        FencedTxError::check_record(
-                            &key,
-                            expected,
-                            stored.map(|(epoch,)| epoch),
-                            Self::negative_epoch_message,
-                        )?;
+                        Self::check_epoch(tx, &namespace, &key, expected).await?;
                     }
                     let (has_entries,): (bool,) = tx
                         .fetch_one_as(
@@ -830,18 +823,6 @@ impl IndexedStorage for PostgresIndexedStorage {
         namespace: IndexedStorageNamespace,
         key: &str,
         last_dropped_id: u64,
-    ) -> Result<(), IndexedStorageError> {
-        self.drop_prefix_with_epoch(svc_name, api_name, namespace, key, last_dropped_id, None)
-            .await
-    }
-
-    async fn drop_prefix_with_epoch(
-        &self,
-        svc_name: &'static str,
-        api_name: &'static str,
-        namespace: IndexedStorageNamespace,
-        key: &str,
-        last_dropped_id: u64,
         expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
         let _permit = self.acquire_permit().await;
@@ -860,21 +841,7 @@ impl IndexedStorage for PostgresIndexedStorage {
                     // ownership generation, so a stale executor's archive transfer cannot
                     // destroy entries the new owner accepted.
                     if let Some(expected) = expected_epoch {
-                        let stored: Option<(i64,)> = tx
-                            .fetch_optional_as(
-                                sqlx::query_as(
-                                    "SELECT epoch FROM indexed_key_epoch WHERE namespace = $1 AND key = $2 FOR UPDATE;",
-                                )
-                                .bind(namespace.clone())
-                                .bind(key.clone()),
-                            )
-                            .await?;
-                        FencedTxError::check_record(
-                            &key,
-                            expected,
-                            stored.map(|(epoch,)| epoch),
-                            Self::negative_epoch_message,
-                        )?;
+                        Self::check_epoch(tx, &namespace, &key, expected).await?;
                     }
                     tx.execute(sqlx::query(
                         "INSERT INTO index_storage (namespace, key, id, value) SELECT $1, $2, 0, ''::bytea WHERE EXISTS (SELECT 1 FROM index_storage WHERE namespace = $3 AND key = $2) ON CONFLICT DO NOTHING;")

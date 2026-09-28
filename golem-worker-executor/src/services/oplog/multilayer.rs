@@ -179,6 +179,13 @@ pub trait OplogArchive: Debug {
     }
 }
 
+/// The first refusal any of `layers` has latched.
+pub(crate) fn layers_fence(
+    layers: &NEVec<Arc<dyn OplogArchive + Send + Sync>>,
+) -> Option<OplogFence> {
+    layers.iter().find_map(|layer| layer.fence())
+}
+
 /// Wraps an `OplogArchive` to record storage metrics on writes.
 #[derive(Debug)]
 pub struct InstrumentedOplogArchive {
@@ -1481,9 +1488,7 @@ impl Oplog for MultiLayerOplog {
     /// The primary's refusal, or one an archive layer latched: a newer owner recorded its
     /// generation on both, so either one means the handle is finished.
     fn fence(&self) -> Option<OplogFence> {
-        self.primary
-            .fence()
-            .or_else(|| self.lower.iter().find_map(|layer| layer.fence()))
+        self.primary.fence().or_else(|| layers_fence(&self.lower))
     }
 }
 

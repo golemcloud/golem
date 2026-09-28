@@ -23,7 +23,7 @@ use golem_common::SafeDisplay;
 use golem_common::config::DbSqliteConfig;
 use golem_common::metrics::db::record_db_serialized_size;
 use golem_common::model::ShardEpoch;
-use golem_service_base::db::sqlite::SqlitePool;
+use golem_service_base::db::sqlite::{SqliteLabelledTransaction, SqlitePool};
 use golem_service_base::db::{Pool, PoolApi};
 use golem_service_base::migration::{IncludedMigrationsDir, Migrations};
 use golem_service_base::repo::RepoError;
@@ -136,6 +136,35 @@ impl SqliteIndexedStorage {
     /// `u64` would wrap it into a spuriously huge epoch.
     fn negative_epoch_message(value: i64, key: &str) -> String {
         format!("SQLite indexed storage read a negative epoch {value} for key '{key}'")
+    }
+
+    /// The writer generation recorded for `key`, read inside `tx`, which the single-connection write pool keeps current until `tx` ends (see `append_many`).
+    async fn stored_epoch(
+        tx: &mut SqliteLabelledTransaction,
+        namespace: &str,
+        key: &str,
+    ) -> Result<Option<i64>, RepoError> {
+        let stored: Option<(i64,)> = tx
+            .fetch_optional_as(
+                sqlx::query_as(
+                    "SELECT epoch FROM indexed_key_epoch WHERE namespace = ? AND key = ?;",
+                )
+                .bind(namespace.to_string())
+                .bind(key.to_string()),
+            )
+            .await?;
+        Ok(stored.map(|(epoch,)| epoch))
+    }
+
+    /// Refuses the write `tx` makes unless `expected` is the generation recorded for `key`.
+    async fn check_epoch(
+        tx: &mut SqliteLabelledTransaction,
+        namespace: &str,
+        key: &str,
+        expected: ShardEpoch,
+    ) -> Result<(), FencedTxError> {
+        let stored = Self::stored_epoch(tx, namespace, key).await?;
+        FencedTxError::check_record(key, expected, stored, Self::negative_epoch_message)
     }
 
     fn classify_repo_error(err: RepoError) -> IndexedStorageError {
@@ -312,21 +341,7 @@ impl IndexedStorage for SqliteIndexedStorage {
                     // storage error, not a fence - so a SQLite file shared between executors is
                     // not supported; give each its own file, or use PostgreSQL.
                     if let Some(expected) = expected_epoch {
-                        let stored: Option<(i64,)> = tx
-                            .fetch_optional_as(
-                                sqlx::query_as(
-                                    "SELECT epoch FROM indexed_key_epoch WHERE namespace = ? AND key = ?;",
-                                )
-                                .bind(namespace.clone())
-                                .bind(key.clone()),
-                            )
-                            .await?;
-                        FencedTxError::check_record(
-                            &key,
-                            expected,
-                            stored.map(|(epoch,)| epoch),
-                            Self::negative_epoch_message,
-                        )?;
+                        Self::check_epoch(tx, &namespace, &key, expected).await?;
                     }
 
                     for (id, value) in pairs.iter() {
@@ -432,21 +447,7 @@ impl IndexedStorage for SqliteIndexedStorage {
                     // The single-connection write pool makes the check, the emptiness test and
                     // the delete one step, as it does for an append (see `append_many`).
                     if let Some(expected) = expected_epoch {
-                        let stored: Option<(i64,)> = tx
-                            .fetch_optional_as(
-                                sqlx::query_as(
-                                    "SELECT epoch FROM indexed_key_epoch WHERE namespace = ? AND key = ?;",
-                                )
-                                .bind(namespace.clone())
-                                .bind(key.clone()),
-                            )
-                            .await?;
-                        FencedTxError::check_record(
-                            &key,
-                            expected,
-                            stored.map(|(epoch,)| epoch),
-                            Self::negative_epoch_message,
-                        )?;
+                        Self::check_epoch(tx, &namespace, &key, expected).await?;
                     }
                     let (has_entries,): (bool,) = tx
                         .fetch_one_as(
@@ -489,15 +490,7 @@ impl IndexedStorage for SqliteIndexedStorage {
                     // The single-connection write pool makes the check and the deletes one
                     // step, as it does for an append (see `append_many`).
                     if let Some(expected) = expected_epoch {
-                        let stored: Option<(i64,)> = tx
-                            .fetch_optional_as(
-                                sqlx::query_as(
-                                    "SELECT epoch FROM indexed_key_epoch WHERE namespace = ? AND key = ?;",
-                                )
-                                .bind(namespace.clone())
-                                .bind(key.clone()),
-                            )
-                            .await?;
+                        let stored = Self::stored_epoch(tx, &namespace, &key).await?;
                         // Neither a record nor entries: the key is already gone, most often taken
                         // by an earlier attempt of this same deletion whose later steps failed, and
                         // a writer that lost the key has nothing here to destroy. Refusing would
@@ -520,7 +513,7 @@ impl IndexedStorage for SqliteIndexedStorage {
                         FencedTxError::check_record(
                             &key,
                             expected,
-                            stored.map(|(epoch,)| epoch),
+                            stored,
                             Self::negative_epoch_message,
                         )?;
                     }
@@ -782,18 +775,6 @@ impl IndexedStorage for SqliteIndexedStorage {
         namespace: IndexedStorageNamespace,
         key: &str,
         last_dropped_id: u64,
-    ) -> Result<(), IndexedStorageError> {
-        self.drop_prefix_with_epoch(svc_name, api_name, namespace, key, last_dropped_id, None)
-            .await
-    }
-
-    async fn drop_prefix_with_epoch(
-        &self,
-        svc_name: &'static str,
-        api_name: &'static str,
-        namespace: IndexedStorageNamespace,
-        key: &str,
-        last_dropped_id: u64,
         expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
         let namespace = Self::namespace(namespace);
@@ -804,21 +785,7 @@ impl IndexedStorage for SqliteIndexedStorage {
                     // The single-connection write pool makes the check and the trim one step,
                     // as it does for an append (see `append_many`).
                     if let Some(expected) = expected_epoch {
-                        let stored: Option<(i64,)> = tx
-                            .fetch_optional_as(
-                                sqlx::query_as(
-                                    "SELECT epoch FROM indexed_key_epoch WHERE namespace = ? AND key = ?;",
-                                )
-                                .bind(namespace.clone())
-                                .bind(key.clone()),
-                            )
-                            .await?;
-                        FencedTxError::check_record(
-                            &key,
-                            expected,
-                            stored.map(|(epoch,)| epoch),
-                            Self::negative_epoch_message,
-                        )?;
+                        Self::check_epoch(tx, &namespace, &key, expected).await?;
                     }
                     tx.execute(sqlx::query(
                         "INSERT OR IGNORE INTO index_storage (namespace, key, id, value) SELECT ?, ?, 0, x'' WHERE EXISTS (SELECT 1 FROM index_storage WHERE namespace = ? AND key = ?);")

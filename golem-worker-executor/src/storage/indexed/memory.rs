@@ -559,13 +559,25 @@ impl IndexedStorage for InMemoryIndexedStorage {
         namespace: IndexedStorageNamespace,
         key: &str,
         last_dropped_id: u64,
+        expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
         let composite_key = Self::composite_key(namespace, key);
+        // The record's guard is held across the trim, in the order an append takes them, so
+        // nobody can record a new generation between the check and the trim.
+        let record = match expected_epoch {
+            Some(expected) => {
+                let record = self.key_epochs.entry_async(composite_key.clone()).await;
+                self.check_record(key, expected, &record)?;
+                Some(record)
+            }
+            None => None,
+        };
         self.data
             .update_async(&composite_key, |_, entry| {
                 entry.retain(|k, _| *k > last_dropped_id);
             })
             .await;
+        drop(record);
         Ok(())
     }
 
@@ -594,29 +606,6 @@ impl IndexedStorage for InMemoryIndexedStorage {
         }
         drop(record);
         Ok(empty)
-    }
-
-    async fn drop_prefix_with_epoch(
-        &self,
-        svc_name: &'static str,
-        api_name: &'static str,
-        namespace: IndexedStorageNamespace,
-        key: &str,
-        last_dropped_id: u64,
-        expected_epoch: Option<ShardEpoch>,
-    ) -> Result<(), IndexedStorageError> {
-        let composite_key = Self::composite_key(namespace.clone(), key);
-        // The record's guard is held across the trim, in the order an append takes them, so
-        // nobody can record a new generation between the check and the trim.
-        let record = self.key_epochs.entry_async(composite_key).await;
-        if let Some(expected) = expected_epoch {
-            self.check_record(key, expected, &record)?;
-        }
-        let result = self
-            .drop_prefix(svc_name, api_name, namespace, key, last_dropped_id)
-            .await;
-        drop(record);
-        result
     }
 }
 
@@ -1517,6 +1506,7 @@ mod tests {
                 },
                 key,
                 2,
+                None,
             )
             .await
             .unwrap();

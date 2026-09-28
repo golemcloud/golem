@@ -586,10 +586,18 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
         namespace: IndexedStorageNamespace,
         key: &str,
         last_dropped_id: u64,
+        expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
         self.storage_by_namespace(&namespace)
             .await?
-            .drop_prefix(svc_name, api_name, namespace, key, last_dropped_id)
+            .drop_prefix(
+                svc_name,
+                api_name,
+                namespace,
+                key,
+                last_dropped_id,
+                expected_epoch,
+            )
             .await
     }
 
@@ -604,28 +612,6 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
         self.storage_by_namespace(&namespace)
             .await?
             .delete_empty_with_epoch(svc_name, api_name, namespace, key, expected_epoch)
-            .await
-    }
-
-    async fn drop_prefix_with_epoch(
-        &self,
-        svc_name: &'static str,
-        api_name: &'static str,
-        namespace: IndexedStorageNamespace,
-        key: &str,
-        last_dropped_id: u64,
-        expected_epoch: Option<ShardEpoch>,
-    ) -> Result<(), IndexedStorageError> {
-        self.storage_by_namespace(&namespace)
-            .await?
-            .drop_prefix_with_epoch(
-                svc_name,
-                api_name,
-                namespace,
-                key,
-                last_dropped_id,
-                expected_epoch,
-            )
             .await
     }
 }

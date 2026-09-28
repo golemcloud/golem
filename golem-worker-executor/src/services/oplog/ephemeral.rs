@@ -15,7 +15,7 @@
 use crate::metrics::oplog::record_oplog_call;
 use crate::services::oplog::multilayer::{
     BackgroundTransferMessage, InstrumentedOplogArchive, MultiLayerOplogService, OplogArchive,
-    TransferFiber, WrappedOplogArchive, transfer_between_lower_layers,
+    TransferFiber, WrappedOplogArchive, layers_fence, transfer_between_lower_layers,
 };
 use crate::services::oplog::reader::{
     OplogRead, OplogReadError, OplogReadSource, checked_range_end, fail_stop,
@@ -23,7 +23,7 @@ use crate::services::oplog::reader::{
 use crate::services::oplog::{
     CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, Oplog, OplogAddReceipt,
     OplogCloseCompletion, OplogError, OplogFence, OplogService, OrderedOplogStart, PendingUpload,
-    ReservedRawStartBuilder, downcast_oplog,
+    ReservedRawStartBuilder, downcast_oplog, refuse_if_fenced,
 };
 use async_trait::async_trait;
 use futures::FutureExt;
@@ -72,8 +72,8 @@ pub struct EphemeralOplog {
     transfer_fiber: TransferFiber,
     multi_layer_oplog_service: MultiLayerOplogService,
     close_fn: Mutex<Option<Box<dyn FnOnce() + Send + Sync>>>,
-    /// The refusal the writer task met, shared with it and with the actor, which answer
-    /// [`Oplog::fence`] and refuse new writes from it without a round trip.
+    /// The refusal the writer task met, shared with the writer and the actor: the actor refuses
+    /// new writes on it, and [`Oplog::fence`] reports it without a round trip.
     fence: Arc<OnceLock<OplogFence>>,
 }
 
@@ -169,10 +169,7 @@ impl EphemeralOplogState {
     /// Refuses a new write once the writer, or a transfer between the archive layers, has met a
     /// newer owner's epoch: nothing this handle writes can land any more.
     fn refuse_if_fenced(&self) -> Result<(), OplogError> {
-        match fenced(&self.fence, &self.lower) {
-            Some(fence) => Err(OplogError::Fenced(fence)),
-            None => Ok(()),
-        }
+        refuse_if_fenced(fenced(&self.fence, &self.lower).as_ref())
     }
 
     /// Pushes an entry into the in-memory buffer and advances the oplog index,
@@ -304,7 +301,7 @@ impl EphemeralOplog {
         let target = lower.first().clone();
         // A layer that refused its opening record, or this oplog's first entry, has latched
         // already: the handle is born finished, as a stale create of a primary oplog is.
-        let fence = Arc::new(match lower.iter().find_map(|layer| layer.fence()) {
+        let fence = Arc::new(match layers_fence(&lower) {
             Some(fence) => OnceLock::from(fence),
             None => OnceLock::new(),
         });
@@ -827,10 +824,7 @@ fn fenced(
     latched: &OnceLock<OplogFence>,
     lower: &NEVec<Arc<dyn OplogArchive + Send + Sync>>,
 ) -> Option<OplogFence> {
-    latched
-        .get()
-        .cloned()
-        .or_else(|| lower.iter().find_map(|layer| layer.fence()))
+    latched.get().cloned().or_else(|| layers_fence(lower))
 }
 
 impl Drop for EphemeralOplog {

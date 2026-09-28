@@ -598,7 +598,7 @@ async fn staged_publication_preserves_atomic_visibility(
             .await
             .unwrap();
         storage
-            .drop_prefix("test", "archive", visible.clone(), key, first_id)
+            .drop_prefix("test", "archive", visible.clone(), key, first_id, None)
             .await
             .unwrap();
         assert!(
@@ -688,7 +688,14 @@ async fn staged_publication_preserves_atomic_visibility(
         );
     }
     storage
-        .drop_prefix("test", "archive", visible.clone(), "never-existed", 50)
+        .drop_prefix(
+            "test",
+            "archive",
+            visible.clone(),
+            "never-existed",
+            50,
+            None,
+        )
         .await
         .unwrap();
     assert!(
@@ -2284,7 +2291,7 @@ async fn drop_prefix_no_match(
     .await
     .unwrap();
 
-    is.drop_prefix("svc", "api", ns.ns.clone(), key1, 5)
+    is.drop_prefix("svc", "api", ns.ns.clone(), key1, 5, None)
         .await
         .unwrap();
     let result = is
@@ -2347,7 +2354,7 @@ async fn drop_prefix_partial(
     .await
     .unwrap();
 
-    is.drop_prefix("svc", "api", ns.ns.clone(), key1, 10)
+    is.drop_prefix("svc", "api", ns.ns.clone(), key1, 10, None)
         .await
         .unwrap();
     let result = is
@@ -2410,7 +2417,7 @@ async fn drop_prefix_full(
     .await
     .unwrap();
 
-    is.drop_prefix("svc", "api", ns.ns.clone(), key1, 20)
+    is.drop_prefix("svc", "api", ns.ns.clone(), key1, 20, None)
         .await
         .unwrap();
     let result = is
@@ -3198,7 +3205,7 @@ async fn a_trim_with_the_recorded_epoch_removes_the_prefix(
         .unwrap();
     append_three_fenced(&is, ns, key, 7).await;
 
-    is.drop_prefix_with_epoch("svc", "api", ns.ns.clone(), key, 1, Some(ShardEpoch(7)))
+    is.drop_prefix("svc", "api", ns.ns.clone(), key, 1, Some(ShardEpoch(7)))
         .await
         .unwrap();
 
@@ -3232,7 +3239,7 @@ async fn a_stale_epoch_trim_is_refused_and_removes_nothing(
         .unwrap();
 
     let result = is
-        .drop_prefix_with_epoch("svc", "api", ns.ns.clone(), key, 3, Some(ShardEpoch(7)))
+        .drop_prefix("svc", "api", ns.ns.clone(), key, 3, Some(ShardEpoch(7)))
         .await;
 
     assert_fenced(result, 7, Some(8));
@@ -3269,7 +3276,7 @@ async fn a_trim_asserting_an_epoch_on_a_key_without_a_record_is_refused(
     }
 
     let result = is
-        .drop_prefix_with_epoch("svc", "api", ns.ns.clone(), key, 3, Some(ShardEpoch(7)))
+        .drop_prefix("svc", "api", ns.ns.clone(), key, 3, Some(ShardEpoch(7)))
         .await;
 
     assert_fenced(result, 7, None);
@@ -3294,7 +3301,7 @@ async fn an_unfenced_trim_ignores_the_recorded_epoch(
         .unwrap();
     append_three_fenced(&is, ns, key, 8).await;
 
-    is.drop_prefix_with_epoch("svc", "api", ns.ns.clone(), key, 1, None)
+    is.drop_prefix("svc", "api", ns.ns.clone(), key, 1, None)
         .await
         .unwrap();
 
@@ -3318,7 +3325,7 @@ async fn deleting_an_emptied_key_keeps_its_recorded_epoch(
         .await
         .unwrap();
     append_three_fenced(&is, ns, key, 7).await;
-    is.drop_prefix_with_epoch("svc", "api", ns.ns.clone(), key, 3, Some(ShardEpoch(7)))
+    is.drop_prefix("svc", "api", ns.ns.clone(), key, 3, Some(ShardEpoch(7)))
         .await
         .unwrap();
 
@@ -3398,7 +3405,7 @@ async fn a_stale_epoch_delete_of_an_emptied_key_deletes_nothing(
         .await
         .unwrap();
     append_three_fenced(&is, ns, key, 7).await;
-    is.drop_prefix_with_epoch("svc", "api", ns.ns.clone(), key, 3, Some(ShardEpoch(7)))
+    is.drop_prefix("svc", "api", ns.ns.clone(), key, 3, Some(ShardEpoch(7)))
         .await
         .unwrap();
     is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(8))
