@@ -28,7 +28,7 @@ use tokio::sync::Notify;
 /// A store over the in-memory store that a test can make fail, hold and count.
 #[derive(Default)]
 struct ScriptedStore {
-    inner: InMemorySnapshotStore,
+    memory: InMemorySnapshotStore,
     /// The number of saves that still fail with a retryable storage error.
     failing_saves: AtomicUsize,
     /// Whether a failing save publishes the tree before it fails, as a late PUT does.
@@ -180,11 +180,11 @@ impl FilesystemSnapshotStore for ScriptedStore {
             .is_ok();
         if failing {
             if self.publish_before_failing.load(Ordering::SeqCst) {
-                let _ = self.inner.save(scope, name, tree, parent).await;
+                let _ = self.memory.save(scope, name, tree, parent).await;
             }
             return Err(retryable("the publish failed"));
         }
-        let info = self.inner.save(scope, name, tree, parent).await?;
+        let info = self.memory.save(scope, name, tree, parent).await?;
         Ok(self.timed(name, info))
     }
 
@@ -203,7 +203,7 @@ impl FilesystemSnapshotStore for ScriptedStore {
         let result = if self.restores_fail.load(Ordering::SeqCst) {
             Err(SnapshotStoreError::Corrupt(anyhow::anyhow!("corrupt")))
         } else {
-            self.inner.restore(scope, name, into).await
+            self.memory.restore(scope, name, into).await
         };
         self.restores_now.fetch_sub(1, Ordering::SeqCst);
         result
@@ -214,7 +214,7 @@ impl FilesystemSnapshotStore for ScriptedStore {
         scope: &SnapshotScope,
         name: &SnapshotName,
     ) -> Result<Option<SnapshotInfo>, SnapshotStoreError> {
-        self.inner.stat(scope, name).await
+        self.memory.stat(scope, name).await
     }
 
     async fn list(
@@ -223,7 +223,7 @@ impl FilesystemSnapshotStore for ScriptedStore {
     ) -> Result<Box<[(SnapshotName, SnapshotInfo)]>, SnapshotStoreError> {
         let times = self.times.lock().unwrap().clone();
         Ok(self
-            .inner
+            .memory
             .list(scope)
             .await?
             .iter()
@@ -252,7 +252,7 @@ impl FilesystemSnapshotStore for ScriptedStore {
         let _count = self.enter();
         tokio::task::yield_now().await;
         self.deletes.lock().unwrap().push(name.as_str().to_string());
-        self.inner.delete(scope, name).await
+        self.memory.delete(scope, name).await
     }
 
     async fn delete_scope(&self, scope: &SnapshotScope) -> Result<(), SnapshotStoreError> {
@@ -261,7 +261,7 @@ impl FilesystemSnapshotStore for ScriptedStore {
         if self.scope_deletes_fail.load(Ordering::SeqCst) {
             return Err(retryable("the scope delete failed"));
         }
-        self.inner.delete_scope(scope).await
+        self.memory.delete_scope(scope).await
     }
 
     async fn copy_scope(
@@ -269,7 +269,7 @@ impl FilesystemSnapshotStore for ScriptedStore {
         from: &SnapshotScope,
         to: &SnapshotScope,
     ) -> Result<(), SnapshotStoreError> {
-        self.inner.copy_scope(from, to).await
+        self.memory.copy_scope(from, to).await
     }
 }
 
@@ -465,9 +465,9 @@ async fn eventually(condition: impl Fn() -> bool) {
 /// Waits until the job of `scope` ended, and fails the test after five seconds.
 async fn ended(snapshots: &AgentFilesystemSnapshots, scope: &SnapshotScope) {
     let job = snapshots
-        .inner
+        .enabled
         .as_ref()
-        .and_then(|inner| inner.jobs_of_scope().jobs.get(scope).cloned());
+        .and_then(|enabled| enabled.jobs_of_scope().jobs.get(scope).cloned());
     if let Some(job) = job {
         assert!(
             tokio::time::timeout(Duration::from_secs(5), job.ended.cancelled())
@@ -635,7 +635,7 @@ async fn a_job_saves_discards_and_calls_the_confirmer_once_with_its_own_name() {
     ended(&snapshots, &scope).await;
 
     let listed = store
-        .inner
+        .memory
         .list(&scope)
         .await
         .unwrap()
@@ -764,7 +764,7 @@ async fn after_older_uploads(outcome: ConfirmOutcome) -> (Vec<String>, String, b
 
     let deletes = store.deletes.lock().unwrap()[deletes_before..].to_vec();
     let held = store
-        .inner
+        .memory
         .stat(&scope, &store_name(&name).unwrap())
         .await
         .unwrap()
@@ -775,7 +775,7 @@ async fn after_older_uploads(outcome: ConfirmOutcome) -> (Vec<String>, String, b
             let scope = &scope;
             async move {
                 store
-                    .inner
+                    .memory
                     .stat(scope, &store_name(older).unwrap())
                     .await
                     .unwrap()
@@ -864,7 +864,7 @@ async fn a_confirmed_periodic_upload_keeps_the_newest_by_kind() {
         .await;
 
     let kept = store
-        .inner
+        .memory
         .list(&scope)
         .await
         .unwrap()
@@ -989,9 +989,9 @@ async fn the_decision_of_a_job_carries_its_outcome_before_the_job_ends() {
         .await
         .unwrap();
     let job = snapshots
-        .inner
+        .enabled
         .as_ref()
-        .and_then(|inner| inner.jobs_of_scope().jobs.get(&scope).cloned())
+        .and_then(|enabled| enabled.jobs_of_scope().jobs.get(&scope).cloned())
         .unwrap();
     let mut decided = job.decided.subscribe();
 
@@ -1037,9 +1037,9 @@ async fn the_wait_for_an_upload_of_a_scope_returns_at_the_limit_and_when_the_job
 
     let job_runs = || {
         snapshots
-            .inner
+            .enabled
             .as_ref()
-            .is_some_and(|inner| inner.jobs_of_scope().jobs.contains_key(&scope))
+            .is_some_and(|enabled| enabled.jobs_of_scope().jobs.contains_key(&scope))
     };
     let waiting = snapshots.wait_for_upload_of_scope(&scope);
     let at_limit = {
@@ -1141,7 +1141,7 @@ async fn a_cancelled_confirmation_deletes_nothing() {
             .unwrap()
             .contains(&name.as_str().to_string())
     );
-    assert!(store.inner.list(&scope).await.unwrap().is_empty());
+    assert!(store.memory.list(&scope).await.unwrap().is_empty());
 }
 
 #[test]
@@ -1396,9 +1396,9 @@ async fn a_shutdown_before_the_confirmation_stops_the_job_without_a_confirmation
     assert_eq!(discarded.load(Ordering::SeqCst), 1);
     assert!(
         snapshots
-            .inner
+            .enabled
             .as_ref()
-            .is_some_and(|inner| !inner.jobs_of_scope().jobs.contains_key(&scope))
+            .is_some_and(|enabled| !enabled.jobs_of_scope().jobs.contains_key(&scope))
     );
 }
 
@@ -1484,7 +1484,7 @@ async fn an_update_retention_keeps_the_own_snapshot_and_the_newest_older_updates
     let (periodic, updates) = update_uploads_with_retention(&snapshots, &scope).await;
 
     let kept = store
-        .inner
+        .memory
         .list(&scope)
         .await
         .unwrap()
@@ -1612,9 +1612,9 @@ async fn a_shutdown_ends_a_retention_that_waits_for_a_delete() {
 async fn forget_scope_ends_a_delete_of_a_superseded_snapshot_at_once() {
     let (_store, snapshots, scope, gate) = with_a_delete_held(ConfirmOutcome::Superseded).await;
     let job = snapshots
-        .inner
+        .enabled
         .as_ref()
-        .and_then(|inner| inner.jobs_of_scope().jobs.get(&scope).cloned())
+        .and_then(|enabled| enabled.jobs_of_scope().jobs.get(&scope).cloned())
         .unwrap();
 
     snapshots.forget_scope(&scope);

@@ -15,8 +15,8 @@
 //! One upload: save, discard, confirm, then retention or a delete.
 
 use super::{
-    CapturedTree, ConfirmOutcome, Inner, JobDecision, ScopeJob, SnapshotClock, SnapshotConfirmer,
-    SnapshotKind, retention, store_name,
+    CapturedTree, ConfirmOutcome, EnabledSnapshots, JobDecision, ScopeJob, SnapshotClock,
+    SnapshotConfirmer, SnapshotKind, retention, store_name,
 };
 use crate::filesystem_snapshot::{
     ChangeDetection, SnapshotInfo, SnapshotName, SnapshotScope, SnapshotStoreError,
@@ -32,7 +32,7 @@ use tokio::sync::OwnedSemaphorePermit;
 
 /// The upload of one admission. The scope stays reserved until the upload is dropped.
 pub(super) struct Upload {
-    pub(super) inner: Arc<Inner>,
+    pub(super) enabled: Arc<EnabledSnapshots>,
     pub(super) scope: SnapshotScope,
     pub(super) job: ScopeJob,
     pub(super) name: FilesystemSnapshotName,
@@ -58,7 +58,10 @@ impl Upload {
         confirmer: SnapshotConfirmer,
     ) {
         let started = Instant::now();
-        let (info, permit) = match self.save(capture, parent, std::future::pending()).await {
+        let (info, permit) = match self
+            .save_and_discard(capture, parent, std::future::pending())
+            .await
+        {
             SaveOutcome::Saved(info, permit) => (info, permit),
             SaveOutcome::Failed(error) => {
                 self.job.decide(JobDecision::SaveFailed);
@@ -114,7 +117,7 @@ impl Upload {
         stop: impl Future<Output = ()> + Send,
     ) -> Result<(SnapshotInfo, Self), SnapshotStoreError> {
         let started = Instant::now();
-        let (result, outcome) = match self.save(capture, None, stop).await {
+        let (result, outcome) = match self.save_and_discard(capture, None, stop).await {
             SaveOutcome::Saved(info, _) => (Ok(info), Some("saved")),
             SaveOutcome::Failed(error) => (Err(error), Some("failed")),
             SaveOutcome::Stopped => (
@@ -145,7 +148,7 @@ impl Upload {
     /// `kept` is a snapshot that the retention never deletes.
     pub(super) async fn retain_in_background(self, info: SnapshotInfo, kept: Option<SnapshotName>) {
         let _permit = tokio::select! {
-            permit = Arc::clone(&self.inner.uploads).acquire_owned() => match permit {
+            permit = Arc::clone(&self.enabled.uploads).acquire_owned() => match permit {
                 Ok(permit) => permit,
                 Err(_) => return,
             },
@@ -156,31 +159,33 @@ impl Upload {
 
     /// Whether `forget_scope` or a shutdown stopped the upload.
     fn is_stopped(&self) -> bool {
-        self.job.cancel.is_cancelled() || self.inner.shutdown.is_cancelled()
+        self.job.cancel.is_cancelled() || self.enabled.shutdown.is_cancelled()
     }
 
     /// Completes when `forget_scope` or a shutdown stops the upload.
     async fn stopped(&self) {
         tokio::select! {
             () = self.job.cancel.cancelled() => {}
-            () = self.inner.shutdown.cancelled() => {}
+            () = self.enabled.shutdown.cancelled() => {}
         }
     }
 
-    /// Waits for a slot, saves with retries, and discards the capture in each case. `stop`,
-    /// `forget_scope` or a shutdown ends the save with `Stopped`.
-    async fn save(
+    /// Saves the capture with [`Self::save_tree`], then discards the capture, also when the save
+    /// fails or stops.
+    async fn save_and_discard(
         &self,
         capture: impl CapturedTree,
         parent: Option<(FilesystemSnapshotName, ChangeDetection)>,
         stop: impl Future<Output = ()> + Send,
     ) -> SaveOutcome {
-        let result = self.save_capture(capture.directory(), parent, stop).await;
+        let result = self.save_tree(capture.directory(), parent, stop).await;
         capture.discard().await;
         result
     }
 
-    async fn save_capture(
+    /// Waits for an upload slot and saves the tree with retries, one [`save_attempt`] at a time.
+    /// `stop`, `forget_scope` or a shutdown ends the save with `Stopped`.
+    async fn save_tree(
         &self,
         tree: &std::path::Path,
         parent: Option<(FilesystemSnapshotName, ChangeDetection)>,
@@ -202,7 +207,7 @@ impl Upload {
             }
         };
         let permit = tokio::select! {
-            permit = Arc::clone(&self.inner.uploads).acquire_owned() => match permit {
+            permit = Arc::clone(&self.enabled.uploads).acquire_owned() => match permit {
                 Ok(permit) => permit,
                 Err(_) => return SaveOutcome::Stopped,
             },
@@ -217,9 +222,9 @@ impl Upload {
         let saved = tokio::select! {
             biased;
             saved = retrying(
-                self.inner.settings.upload_retry(),
-                self.inner.clock.as_ref(),
-                || save_own_name(&self.inner, &self.scope, &name, tree, parent),
+                self.enabled.settings.upload_retry(),
+                self.enabled.clock.as_ref(),
+                || save_attempt(&self.enabled, &self.scope, &name, tree, parent),
             ) => Some(saved),
             () = self.stopped() => None,
             () = stop.clone() => None,
@@ -236,106 +241,102 @@ impl Upload {
     /// its kind that are older than it. `info` is the info of the own snapshot. A stop ends it at
     /// once, and a later retention deletes what it left.
     async fn apply_retention(&self, info: &SnapshotInfo, kept: Option<&SnapshotName>) {
+        let retention = async {
+            let Ok(own) = store_name(&self.name) else {
+                return;
+            };
+            let listing = match self.enabled.store.list(&self.scope).await {
+                Ok(listing) => listing,
+                Err(error) => {
+                    tracing::warn!(error = %error, "Failed to list the filesystem snapshots for retention");
+                    return;
+                }
+            };
+            let keep = match self.kind {
+                SnapshotKind::Periodic => self.enabled.settings.retained_periodic_snapshots(),
+                SnapshotKind::Update => self.enabled.settings.retained_update_snapshots(),
+            };
+            let victims = retention::victims(&listing, &own, info, keep.get(), kept);
+            futures::stream::iter(victims.iter())
+                .for_each(|name| async move {
+                    if let Err(error) = retrying(
+                        self.enabled.settings.upload_retry(),
+                        self.enabled.clock.as_ref(),
+                        || self.enabled.store.delete(&self.scope, name),
+                    )
+                    .await
+                    {
+                        tracing::warn!(
+                            error = %error,
+                            name = %name,
+                            "Failed to delete an old filesystem snapshot; the next retention tries again"
+                        );
+                    }
+                })
+                .await;
+        };
         tokio::select! {
-            () = self.retain(info, kept) => {}
+            () = retention => {}
             () = self.stopped() => {}
         }
-    }
-
-    async fn retain(&self, info: &SnapshotInfo, kept: Option<&SnapshotName>) {
-        let Ok(own) = store_name(&self.name) else {
-            return;
-        };
-        let listing = match self.inner.store.list(&self.scope).await {
-            Ok(listing) => listing,
-            Err(error) => {
-                tracing::warn!(error = %error, "Failed to list the filesystem snapshots for retention");
-                return;
-            }
-        };
-        let keep = match self.kind {
-            SnapshotKind::Periodic => self.inner.settings.retained_periodic_snapshots(),
-            SnapshotKind::Update => self.inner.settings.retained_update_snapshots(),
-        };
-        let victims = retention::victims(&listing, &own, info, keep.get(), kept);
-        futures::stream::iter(victims.iter())
-            .for_each(|name| async move {
-                if let Err(error) = retrying(
-                    self.inner.settings.upload_retry(),
-                    self.inner.clock.as_ref(),
-                    || self.inner.store.delete(&self.scope, name),
-                )
-                .await
-                {
-                    tracing::warn!(
-                        error = %error,
-                        name = %name,
-                        "Failed to delete an old filesystem snapshot; the next retention tries again"
-                    );
-                }
-            })
-            .await;
     }
 
     /// Deletes the snapshot of this upload, which no confirmation record names. A stop ends it
     /// at once, and the snapshot stays until a retention of its kind deletes it.
     async fn delete_own_snapshot(&self) {
-        tokio::select! {
-            () = self.delete_own() => {}
-            () = self.stopped() => {}
-        }
-    }
-
-    async fn delete_own(&self) {
-        let Ok(name) = store_name(&self.name) else {
-            return;
+        let delete = async {
+            let Ok(name) = store_name(&self.name) else {
+                return;
+            };
+            if let Err(error) = retrying(
+                self.enabled.settings.upload_retry(),
+                self.enabled.clock.as_ref(),
+                || self.enabled.store.delete(&self.scope, &name),
+            )
+            .await
+            {
+                tracing::warn!(
+                    error = %error,
+                    name = %name,
+                    "Failed to delete a filesystem snapshot that no confirmation record names"
+                );
+                crate::metrics::filesystem_snapshots::record_leaked_cleanup("delete");
+            }
         };
-        if let Err(error) = retrying(
-            self.inner.settings.upload_retry(),
-            self.inner.clock.as_ref(),
-            || self.inner.store.delete(&self.scope, &name),
-        )
-        .await
-        {
-            tracing::warn!(
-                error = %error,
-                name = %name,
-                "Failed to delete a filesystem snapshot that no confirmation record names"
-            );
-            crate::metrics::filesystem_snapshots::record_leaked_cleanup("delete");
+        tokio::select! {
+            () = delete => {}
+            () = self.stopped() => {}
         }
     }
 }
 
 impl Drop for Upload {
     fn drop(&mut self) {
-        self.inner.end(&self.scope, &self.job);
+        self.enabled.end(&self.scope, &self.job);
     }
 }
 
-/// Saves the tree under the name of the job. A name that the store already holds is the tree of
+/// Saves the tree under the name of the job, one time. A name that the store already holds is the tree of
 /// an earlier attempt of the same job, because each name belongs to one capture, so it counts as
 /// saved.
-async fn save_own_name(
-    inner: &Inner,
+async fn save_attempt(
+    enabled: &EnabledSnapshots,
     scope: &SnapshotScope,
     name: &SnapshotName,
     tree: &std::path::Path,
     parent: Option<(&SnapshotName, ChangeDetection)>,
 ) -> Result<SnapshotInfo, SnapshotStoreError> {
-    match inner.store.save(scope, name, tree, parent).await {
-        Err(SnapshotStoreError::AlreadyExists) => {
-            inner
-                .store
-                .stat(scope, name)
-                .await?
-                .ok_or_else(|| SnapshotStoreError::Storage {
-                    retryable: true,
-                    source: anyhow::anyhow!(
-                        "the filesystem snapshot {name} exists at the save and not after it"
-                    ),
-                })
-        }
+    match enabled.store.save(scope, name, tree, parent).await {
+        Err(SnapshotStoreError::AlreadyExists) => enabled
+            .store
+            .stat(scope, name)
+            .await?
+            .ok_or_else(|| SnapshotStoreError::Storage {
+                retryable: true,
+                source: anyhow::anyhow!(
+                    "the filesystem snapshot {name} exists at the save and not after it"
+                ),
+            }),
         other => other,
     }
 }

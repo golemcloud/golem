@@ -265,11 +265,11 @@ pub(crate) fn store_name(
 /// A disabled service answers each admission with [`SnapshotSkip::Disabled`] and each restore
 /// with [`SnapshotsDisabled`].
 pub struct AgentFilesystemSnapshots {
-    inner: Option<Arc<Inner>>,
+    enabled: Option<Arc<EnabledSnapshots>>,
 }
 
 /// The state of an enabled service.
-struct Inner {
+struct EnabledSnapshots {
     store: Arc<dyn FilesystemSnapshotStore>,
     settings: FilesystemSnapshotUploadConfig,
     /// The slots of the store operations that save or delete.
@@ -395,7 +395,7 @@ impl AgentFilesystemSnapshots {
 
     /// Makes a service that keeps no filesystem snapshots.
     pub(crate) fn disabled() -> Self {
-        Self { inner: None }
+        Self { enabled: None }
     }
 
     /// Makes a service over `store` with `settings`.
@@ -417,7 +417,7 @@ impl AgentFilesystemSnapshots {
             &jobs,
         );
         Self {
-            inner: Some(Arc::new(Inner {
+            enabled: Some(Arc::new(EnabledSnapshots {
                 restores: Arc::new(Semaphore::new(settings.max_concurrent_restores().get())),
                 store,
                 settings,
@@ -435,7 +435,7 @@ impl AgentFilesystemSnapshots {
 
     /// Whether this executor keeps filesystem snapshots.
     pub(crate) fn is_enabled(&self) -> bool {
-        self.inner.is_some()
+        self.enabled.is_some()
     }
 
     /// Gives the upload of the snapshot `name` of `scope` that runs on this executor now.
@@ -444,8 +444,8 @@ impl AgentFilesystemSnapshots {
         scope: &SnapshotScope,
         name: &FilesystemSnapshotName,
     ) -> Option<UploadView> {
-        let inner = self.inner.as_ref()?;
-        let scopes = inner.jobs_of_scope();
+        let enabled = self.enabled.as_ref()?;
+        let scopes = enabled.jobs_of_scope();
         let job = scopes.jobs.get(scope).filter(|job| &job.name == name)?;
         Some(UploadView {
             holds_slot: job.holds_slot.load(Ordering::Acquire),
@@ -459,12 +459,12 @@ impl AgentFilesystemSnapshots {
         scope: &SnapshotScope,
         name: &FilesystemSnapshotName,
     ) -> Result<bool, SnapshotStoreError> {
-        let inner = self.inner.as_ref().ok_or(SnapshotStoreError::NotFound)?;
+        let enabled = self.enabled.as_ref().ok_or(SnapshotStoreError::NotFound)?;
         let name = store_name(name).map_err(|error| SnapshotStoreError::Storage {
             retryable: false,
             source: anyhow::Error::new(error),
         })?;
-        inner
+        enabled
             .store
             .stat(scope, &name)
             .await
@@ -473,25 +473,25 @@ impl AgentFilesystemSnapshots {
 
     /// How long a capture waits for open file calls, or `None` when the service is disabled.
     pub(crate) fn capture_wait(&self) -> Option<Duration> {
-        self.inner
+        self.enabled
             .as_ref()
-            .map(|inner| inner.settings.capture_wait())
+            .map(|enabled| enabled.settings.capture_wait())
     }
 
     /// How long a start waits for an upload of its agent in progress, or `None` when the
     /// service is disabled.
     pub(crate) fn confirmation_wait(&self) -> Option<Duration> {
-        self.inner
+        self.enabled
             .as_ref()
-            .map(|inner| inner.settings.confirmation_wait())
+            .map(|enabled| enabled.settings.confirmation_wait())
     }
 
     /// How long a start that did not wait for an upload asks the store for its snapshot, or
     /// `None` when the service is disabled.
     pub(crate) fn store_check_limit(&self) -> Option<Duration> {
-        self.inner
+        self.enabled
             .as_ref()
-            .map(|inner| inner.settings.store_check_limit())
+            .map(|enabled| enabled.settings.store_check_limit())
     }
 
     /// Asks for an upload of the agent of `scope`, before the guest saves.
@@ -504,17 +504,17 @@ impl AgentFilesystemSnapshots {
         scope: &SnapshotScope,
         kind: SnapshotKind,
     ) -> Result<UploadAdmission, SnapshotSkip> {
-        let inner = self.inner.as_ref().ok_or(SnapshotSkip::Disabled)?;
-        if !inner.room.has_room().await {
+        let enabled = self.enabled.as_ref().ok_or(SnapshotSkip::Disabled)?;
+        if !enabled.room.has_room().await {
             return Err(SnapshotSkip::VolumeUnderPressure);
         }
         let name = match kind {
             SnapshotKind::Periodic => FilesystemSnapshotName::periodic(),
             SnapshotKind::Update => FilesystemSnapshotName::update(),
         };
-        let job = inner.reserve(scope, &name)?;
+        let job = enabled.reserve(scope, &name)?;
         Ok(UploadAdmission {
-            inner: Arc::clone(inner),
+            enabled: Arc::clone(enabled),
             scope: scope.clone(),
             job: Some(job),
             name,
@@ -530,12 +530,12 @@ impl AgentFilesystemSnapshots {
         scope: &SnapshotScope,
         name: &FilesystemSnapshotName,
     ) -> Result<StoreRestore, SnapshotsDisabled> {
-        let inner = self.inner.as_ref().ok_or(SnapshotsDisabled)?;
+        let enabled = self.enabled.as_ref().ok_or(SnapshotsDisabled)?;
         Ok(StoreRestore::new(
-            Arc::clone(&inner.store),
+            Arc::clone(&enabled.store),
             scope.clone(),
             name.clone(),
-            Arc::clone(&inner.restores),
+            Arc::clone(&enabled.restores),
         ))
     }
 
@@ -544,8 +544,8 @@ impl AgentFilesystemSnapshots {
     /// names that stay.
     #[allow(dead_code)]
     pub(crate) fn forget(&self, scope: &SnapshotScope, names: Box<[FilesystemSnapshotName]>) {
-        if let Some(inner) = &self.inner {
-            inner.cleanup.delete(scope.clone(), names);
+        if let Some(enabled) = &self.enabled {
+            enabled.cleanup.delete(scope.clone(), names);
         }
     }
 
@@ -557,15 +557,15 @@ impl AgentFilesystemSnapshots {
     /// [`SnapshotSkip::ScopeDeleting`].
     #[allow(dead_code)]
     pub(crate) fn forget_scope(&self, scope: &SnapshotScope) {
-        if let Some(inner) = &self.inner {
+        if let Some(enabled) = &self.enabled {
             let (job, mark) = {
-                let mut scopes = scopes_of(&inner.scopes);
+                let mut scopes = scopes_of(&enabled.scopes);
                 let job = scopes.jobs.get(scope).cloned();
                 *scopes.deleting.entry(scope.clone()).or_insert(0) += 1;
                 (
                     job,
                     DeletingMark {
-                        scopes: Arc::clone(&inner.scopes),
+                        scopes: Arc::clone(&enabled.scopes),
                         scope: scope.clone(),
                     },
                 )
@@ -573,7 +573,7 @@ impl AgentFilesystemSnapshots {
             if let Some(job) = &job {
                 job.cancel.cancel();
             }
-            inner
+            enabled
                 .cleanup
                 .delete_scope(scope.clone(), job.map(|job| job.ended), mark);
         }
@@ -586,8 +586,8 @@ impl AgentFilesystemSnapshots {
         from: &SnapshotScope,
         to: &SnapshotScope,
     ) -> Result<(), SnapshotStoreError> {
-        match &self.inner {
-            Some(inner) => inner.store.copy_scope(from, to).await,
+        match &self.enabled {
+            Some(enabled) => enabled.store.copy_scope(from, to).await,
             None => Ok(()),
         }
     }
@@ -597,10 +597,10 @@ impl AgentFilesystemSnapshots {
     /// asks again. The job holds the scope until it ends, after its retention, so the wait covers
     /// both.
     pub(crate) async fn wait_for_upload_of_scope(&self, scope: &SnapshotScope) {
-        let Some(inner) = &self.inner else {
+        let Some(enabled) = &self.enabled else {
             return;
         };
-        let Some(job) = inner.jobs_of_scope().jobs.get(scope).cloned() else {
+        let Some(job) = enabled.jobs_of_scope().jobs.get(scope).cloned() else {
             return;
         };
         let mut decided = job.decided.subscribe();
@@ -610,24 +610,24 @@ impl AgentFilesystemSnapshots {
         };
         tokio::select! {
             () = decided_and_ended => {}
-            () = inner.clock.sleep(inner.settings.confirmation_wait()) => {}
-            () = inner.shutdown.cancelled() => {}
+            () = enabled.clock.sleep(enabled.settings.confirmation_wait()) => {}
+            () = enabled.shutdown.cancelled() => {}
         }
     }
 
     /// Stops the jobs and the clean-up queue, and waits for them. Call it once, when the executor
     /// shuts down.
     pub(crate) async fn shut_down(&self) {
-        if let Some(inner) = &self.inner {
-            inner.shutdown.cancel();
-            inner.jobs.close();
-            inner.jobs.wait().await;
-            inner.store.shut_down().await;
+        if let Some(enabled) = &self.enabled {
+            enabled.shutdown.cancel();
+            enabled.jobs.close();
+            enabled.jobs.wait().await;
+            enabled.store.shut_down().await;
         }
     }
 }
 
-impl Inner {
+impl EnabledSnapshots {
     /// Gives the jobs of the scopes. No lock is held across an await, so the map of a poisoned
     /// lock is used as it is.
     fn jobs_of_scope(&self) -> MutexGuard<'_, Scopes> {
@@ -679,7 +679,7 @@ impl Inner {
 /// The permission of one upload, with its name. Only an admission gives a name, and an admission
 /// cannot be cloned, so each name reaches at most one capture.
 pub(crate) struct UploadAdmission {
-    inner: Arc<Inner>,
+    enabled: Arc<EnabledSnapshots>,
     scope: SnapshotScope,
     /// The job of the scope. `None` after the admission handed it to an upload.
     job: Option<ScopeJob>,
@@ -712,13 +712,13 @@ impl UploadAdmission {
             return;
         };
         let upload = job::Upload {
-            inner: Arc::clone(&self.inner),
+            enabled: Arc::clone(&self.enabled),
             scope: self.scope.clone(),
             job,
             name: self.name.clone(),
             kind: self.kind,
         };
-        self.inner
+        self.enabled
             .jobs
             .spawn(upload.run_in_background(capture, parent, confirmer));
     }
@@ -736,7 +736,7 @@ impl UploadAdmission {
             return Err(SnapshotStoreError::NotFound);
         };
         let upload = job::Upload {
-            inner: Arc::clone(&self.inner),
+            enabled: Arc::clone(&self.enabled),
             scope: self.scope.clone(),
             job,
             name: self.name.clone(),
@@ -763,7 +763,7 @@ impl UpdateRetention {
     /// record a start restores without a fallback. `forget_scope` or a shutdown stops it.
     pub(crate) fn run(self, baseline: Option<&FilesystemSnapshotName>) {
         let kept = baseline.and_then(|name| store_name(name).ok());
-        let jobs = self.upload.inner.jobs.clone();
+        let jobs = self.upload.enabled.jobs.clone();
         jobs.spawn(self.upload.retain_in_background(self.info, kept));
     }
 }
@@ -771,7 +771,7 @@ impl UpdateRetention {
 impl Drop for UploadAdmission {
     fn drop(&mut self) {
         if let Some(job) = self.job.take() {
-            self.inner.end(&self.scope, &job);
+            self.enabled.end(&self.scope, &job);
         }
     }
 }
