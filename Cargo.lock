@@ -4606,7 +4606,6 @@ dependencies = [
  "cap-std",
  "cap-time-ext",
  "chrono",
- "clap",
  "criterion",
  "dashmap",
  "desert_rust",

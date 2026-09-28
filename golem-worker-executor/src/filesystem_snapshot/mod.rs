@@ -25,8 +25,6 @@ use std::cmp::Reverse;
 use std::fmt::{Display, Formatter};
 use std::path::Path;
 
-#[cfg(all(target_os = "linux", any(test, feature = "fs-snapshot-benchmark")))]
-pub(crate) mod benchmark;
 #[cfg(test)]
 mod contract_tests;
 mod memory;
