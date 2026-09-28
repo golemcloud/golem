@@ -24,6 +24,9 @@ componentTemplates:                # Reusable property layers (build, env, plugi
 components:                        # Component definitions by name (namespace:name)
   <ns:name>: { ... }
 
+tools:                             # Canonical tool implementation declarations
+  <tool-name>: { ... }
+
 agents:                            # Agent type definitions by PascalCase name
   <AgentName>: { ... }
 
@@ -69,12 +72,14 @@ components:
     dir: billing                   # Base directory (relative to golem.yaml). Use "." for single-component apps
     templates:                     # Parent template names (inherit build, env, plugins, files)
       - rust
-    componentWasm: target/wasm32-wasip1/debug/billing.wasm   # Path to built WASM
+    componentWasm: target/wasm32-wasip2/debug/billing.wasm   # Path to built WASM
     outputWasm: golem-temp/billing.wasm                       # Path to final output WASM
     build:                         # Build commands (see Build Commands below)
-      - command: cargo build --target wasm32-wasip1
+      - command: cargo build --target wasm32-wasip2
     env:                           # Environment variables
       LOG_LEVEL: info
+    tools:                         # Owner authorization; inherited by the component's agents
+      search: {}
     plugins:                       # Plugin installations
       - name: otlp-exporter
         version: "0.1.0"
@@ -104,6 +109,8 @@ components:
 | `build` | array | Build commands (see Build Commands) |
 | `env` | map | Environment variables (string → string) |
 | `envMergeMode` | enum | `upsert` (default), `replace`, or `remove` |
+| `tools` | map | Tool bindings authorized for component owners and inherited by the component's agents |
+| `toolsMergeMode` | enum | `upsert` (default), `replace`, or `remove` |
 | `plugins` | array | Plugin installations |
 | `pluginsMergeMode` | enum | `append` (default), `prepend`, or `replace` |
 | `files` | array | Initial filesystem entries |
@@ -123,7 +130,7 @@ Templates define reusable property layers. Components reference them via `templa
 componentTemplates:
   rust:
     build:
-      - command: cargo build --target wasm32-wasip1
+      - command: cargo build --target wasm32-wasip2
     env:
       RUST_LOG: info
 
@@ -201,6 +208,24 @@ Each level can override or merge with its parent using merge modes:
 | `plugins` | `pluginsMergeMode` | vec | `append` | `append`, `prepend`, `replace` |
 | `files` | `filesMergeMode` | vec | `append` | `append`, `prepend`, `replace` |
 | `build` | `buildMergeMode` | vec | `append` | `append`, `prepend`, `replace` |
+| `tools` | `toolsMergeMode` | map | `upsert` | `upsert`, `replace`, `remove` |
+
+Component tool bindings authorize fresh component owners (including tools-only MCP calls) and default into real agents exported by that component. An agent-only binding does not authorize a fresh component owner. To opt an agent out of an inherited tool, remove it explicitly:
+
+```yaml
+components:
+  my-app:service:
+    tools:
+      search: {}
+
+agents:
+  RestrictedAgent:
+    toolsMergeMode: remove
+    tools:
+      search: {}
+```
+
+When agents should not receive the defaults, prefer a separate component with no agents as the tool owner.
 
 ## Presets
 
@@ -227,14 +252,14 @@ The `build` array contains commands executed during `golem build`. Each entry is
 
 ```yaml
 build:
-  - command: cargo build --target wasm32-wasip1
+  - command: cargo build --target wasm32-wasip2
     dir: .                         # Optional working directory
     env:                           # Optional extra env vars
       RUSTFLAGS: "-C opt-level=2"
     rmdirs: [target/old]           # Directories to delete before running (runs before mkdirs)
     mkdirs: [target/new]           # Directories to create before running (runs after rmdirs)
     sources: ["src/**/*.rs"]       # Inputs for up-to-date checks
-    targets: ["target/wasm32-wasip1/debug/*.wasm"]  # Outputs for up-to-date checks
+    targets: ["target/wasm32-wasip2/debug/*.wasm"]  # Outputs for up-to-date checks
 ```
 
 ### TypeScript/QuickJS-specific commands
@@ -264,10 +289,10 @@ Define CLI commands at the application or component level:
 ```yaml
 customCommands:
   test:
-    - command: cargo test --target wasm32-wasip1
+    - command: cargo test --target wasm32-wasip2
       dir: .
   lint:
-    - command: cargo clippy --target wasm32-wasip1
+    - command: cargo clippy --target wasm32-wasip2
 ```
 
 Run with `golem exec <name>` (e.g., `golem exec test`).
@@ -298,8 +323,7 @@ environments:
     componentPresets: [release]    # Preset names to activate
     cli:
       format: json
-      redeployAgents: true
-      reset: true
+      redeployAgents: true         # Delete and recreate agents; agent state is lost
     deployment:
       compatibilityCheck: true
       versionCheck: true
@@ -332,8 +356,10 @@ auth:
 |-------|-------------|
 | `format` | Default output: `text`, `json`, `yaml`, `pretty`, `pretty-json`, `pretty-yaml`, `toon` |
 | `autoConfirm` | Auto-confirm prompts (`true`) |
-| `redeployAgents` | Redeploy agents by default (`true`) |
-| `reset` | Reset agents by default (`true`) |
+| `redeployAgents` | Equivalent to `--redeploy-agents`: delete and recreate agents; agent state is lost |
+| `reset` | Equivalent to `--reset`: delete existing agents for the deployed components after deployment, losing their state, and enable incompatibility-replacement fallbacks; the environment itself is retained |
+
+Configure at most one destructive default. If both are enabled, `reset` takes precedence.
 
 When `format: toon` is used, structured stdout is emitted as framed TOON documents. Parse exact `@toon` and `@end` marker lines, and treat the content between them as one TOON document. Stderr may still contain progress or diagnostics and should not be parsed as the structured payload.
 
@@ -379,6 +405,8 @@ Each deployment must define exactly one of:
 - `subdomain`: a single DNS label resolved through the target environment server (`my-app.localhost:9006` locally by default, `my-app.apps.golem.cloud` on built-in cloud).
 - `domain`: a full custom domain such as `api.example.com` for custom DNS or custom server environments.
 
+The optional `scheme` field is the public `http` or `https` scheme advertised in OpenAPI. Omission defaults to `http` for built-in local and implicit local environments and `https` for built-in cloud. Explicit values override these defaults. Custom server environments require an explicit value; the management URL scheme is not inferred. This does not configure the listener.
+
 ```yaml
 httpApi:
   deployments:
@@ -411,15 +439,29 @@ Each deployment must define exactly one of:
 - `domain`: a full custom domain such as `mcp.example.com` for custom DNS or custom server environments.
 
 ```yaml
+components:
+  my-app:search-implementation:
+    componentWasm: build/search-implementation.wasm
+  my-app:tool-owner:
+    componentWasm: build/tool-owner.wasm
+    tools:
+      search: {}
+
+tools:
+  search:
+    component: my-app:search-implementation
+
 mcp:
   deployments:
     local:
       - subdomain: my-mcp  # resolves to my-mcp.localhost:9007 by default
-        agents:
-          ToolAgent: {}
-          SecureToolAgent:
-            securityScheme: my-oidc
+        tools:
+          search:
+            ownerComponent: my-app:tool-owner
+            include: [query]
 ```
+
+The MCP tool must also have a top-level implementation declaration and a `components.my-app:tool-owner.tools.search` binding. No agent is required. The implementation and owner components may differ; `include`/`exclude` selects exported commands. A remote declaration requires an environment grant, which application deployment automatically reconciles when the deploy actor has permission.
 
 ## Bridge SDK Generation
 
@@ -574,7 +616,7 @@ resourceDefaults:
       enforcementAction: reject
       unit: byte
       units: bytes
-    - name: connections
+    connections:
       limit:
         type: Concurrency
         value: 50
@@ -651,6 +693,7 @@ httpApi:
   deployments:
     staging:
       - domain: api-staging.example.com
+        scheme: https
         agents:
           MyAgent: {}
 ```
@@ -684,6 +727,7 @@ This table shows where each property can be defined:
 | `plugins` | — | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `files` | — | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `config` | — | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `tools` | — | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `customCommands` | ✅ | ✅ | ✅ | — | ✅ | — |
 | `clean` | ✅ | ✅ | ✅ | — | ✅ | — |
 | `dir` | — | — | ✅ | — | — | — |

@@ -65,6 +65,14 @@ pub async fn PresentedUnderlying::abandon_stdout(Self) -> Result[@async-core.Str
 pub async fn PresentedUnderlying::admin__run(Self, Bool, String) -> Result[String, @tool-middleware.ToolInvokeError[@tool-core.NoToolError]]
 pub async fn PresentedUnderlying::io(Self, @tool-middleware.MiddlewareStdin) -> Result[(String, @async-core.Stream[Byte]), @tool-middleware.ToolInvokeError[RunError]]
 pub async fn PresentedUnderlying::retry(Self, String) -> Result[Int, @tool-middleware.ToolInvokeError[@tool-core.NoToolError]]
+pub async fn PresentedUnderlying::start_abandon_stdout(Self) -> Result[@tool-middleware.UnderlyingInvocation[Unit, @tool-core.NoToolError], @tool-middleware.ToolInvokeError[@tool-core.NoToolError]]
+pub async fn PresentedUnderlying::start_admin__run(Self, Bool, String) -> Result[@tool-middleware.UnderlyingInvocation[String, @tool-core.NoToolError], @tool-middleware.ToolInvokeError[@tool-core.NoToolError]]
+pub async fn PresentedUnderlying::start_io(Self, @tool-middleware.MiddlewareStdin) -> Result[@tool-middleware.UnderlyingInvocation[String, RunError], @tool-middleware.ToolInvokeError[RunError]]
+pub async fn PresentedUnderlying::start_retry(Self, String) -> Result[@tool-middleware.UnderlyingInvocation[Int, @tool-core.NoToolError], @tool-middleware.ToolInvokeError[@tool-core.NoToolError]]
+pub async fn PresentedUnderlying::start_stdout(Self) -> Result[@tool-middleware.UnderlyingInvocation[Unit, @tool-core.NoToolError], @tool-middleware.ToolInvokeError[@tool-core.NoToolError]]
+pub async fn PresentedUnderlying::start_unit(Self) -> Result[@tool-middleware.UnderlyingInvocation[Unit, @tool-core.NoToolError], @tool-middleware.ToolInvokeError[@tool-core.NoToolError]]
+pub async fn PresentedUnderlying::start_value(Self, String) -> Result[@tool-middleware.UnderlyingInvocation[Int, @tool-core.NoToolError], @tool-middleware.ToolInvokeError[@tool-core.NoToolError]]
+pub async fn PresentedUnderlying::start_value_stdout(Self, String) -> Result[@tool-middleware.UnderlyingInvocation[Int, @tool-core.NoToolError], @tool-middleware.ToolInvokeError[@tool-core.NoToolError]]
 pub async fn PresentedUnderlying::stdout(Self) -> Result[@async-core.Stream[Byte], @tool-middleware.ToolInvokeError[@tool-core.NoToolError]]
 pub async fn PresentedUnderlying::unit(Self) -> Result[Unit, @tool-middleware.ToolInvokeError[@tool-core.NoToolError]]
 pub async fn PresentedUnderlying::value(Self, String) -> Result[Int, @tool-middleware.ToolInvokeError[@tool-core.NoToolError]]
@@ -84,6 +92,7 @@ pub struct StorageUnderlying {
   // private fields
 }
 pub async fn StorageUnderlying::fetch(Self, String) -> Result[String, @tool-middleware.ToolInvokeError[@tool-core.NoToolError]]
+pub async fn StorageUnderlying::start_fetch(Self, String) -> Result[@tool-middleware.UnderlyingInvocation[String, @tool-core.NoToolError], @tool-middleware.ToolInvokeError[@tool-core.NoToolError]]
 
 // Type aliases
 

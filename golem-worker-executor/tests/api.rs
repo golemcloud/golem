@@ -26,7 +26,7 @@ use golem_common::model::card::{CardId, ScopeCard, StoredCard};
 use golem_common::model::component::{ComponentDto, ComponentId, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
-use golem_common::model::oplog::{OplogErrorKind, OplogIndex};
+use golem_common::model::oplog::{OplogErrorKind, OplogIndex, PublicOplogEntry};
 use golem_common::model::worker::{
     AgentConfigEntryDto, AgentMetadataDto, ResolvedRevert, RevertToOplogIndex, RevertWorkerTarget,
 };
@@ -44,14 +44,16 @@ use golem_test_framework::dsl::{
     AgentResult, drain_connection, stdout_event_matching, stdout_events,
 };
 use golem_worker_executor::services::events::Event;
+use golem_worker_executor::services::worker_enumeration::WorkerEnumerationService;
 use golem_worker_executor::services::worker_proxy::{WorkerProxy, WorkerProxyError};
 use golem_worker_executor::worker::{
-    INVOCATION_OWNERSHIP_RECHECK_INTERVAL, WorkerDeletionHook, WorkerDeletionStage,
+    INVOCATION_OWNERSHIP_RECHECK_INTERVAL, Worker, WorkerDeletionHook, WorkerDeletionStage,
 };
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
-    WorkerExecutorTestDependencies, fake_ownership, registry_test_card, start, start_customized,
-    start_with_overrides, start_with_redis_storage,
+    WorkerExecutorTestDependencies, agent_oplog_length, fake_ownership, registry_test_card, start,
+    start_customized, start_with_overrides, start_with_redis_storage,
+    take_agent_oplog_over_at_epoch,
 };
 use pretty_assertions::assert_eq;
 use redis::Commands;
@@ -71,6 +73,9 @@ use tokio::task::JoinHandle;
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, Span, debug, info};
+
+/// The shard manager process every shard push in these tests names.
+const TEST_SHARD_MANAGER: &str = "5eed0000-0000-4000-8000-000000000001";
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
@@ -921,11 +926,11 @@ async fn card_transfer_delivery_is_durable_idempotent_and_rejects_payload_confli
             &target_agent_id,
             golem_common::model::oplog::OplogEntry::card_event_queued(
                 None,
-                QueuedCardEvent::transfer_received(
+                Box::new(QueuedCardEvent::transfer_received(
                     detached_status_transfer_id,
                     source_card_id,
                     card.clone(),
-                ),
+                )),
             ),
         )
         .await?;
@@ -1164,13 +1169,11 @@ async fn card_transfer_delivery_is_durable_idempotent_and_rejects_payload_confli
     assert_eq!(detached_status_transfer.len(), 1);
     assert_eq!(concurrent_transfer.len(), 1);
     assert_eq!(conflict_winner.len(), 1);
-    assert_eq!(original_transfer[0].source_card_id, Some(source_card_id));
+    assert_eq!(original_transfer[0].source_card_id, source_card_id);
     assert_eq!(original_transfer[0].installed_card_id, card.card_id());
     assert_eq!(concurrent_transfer[0].installed_card_id, card.card_id());
     assert_eq!(conflict_winner[0].installed_card_id, card.card_id());
-    let target_generation = original_transfer[0]
-        .target_wallet_generation
-        .expect("target transfer admission must record its wallet generation");
+    let target_generation = original_transfer[0].target_wallet_generation;
     assert!(
         [
             detached_status_transfer[0],
@@ -1178,7 +1181,7 @@ async fn card_transfer_delivery_is_durable_idempotent_and_rejects_payload_confli
             conflict_winner[0],
         ]
         .into_iter()
-        .all(|transfer| transfer.target_wallet_generation == Some(target_generation)),
+        .all(|transfer| transfer.target_wallet_generation == target_generation),
         "reinstalling the same card through another transfer must not bump the target generation"
     );
 
@@ -1367,12 +1370,12 @@ async fn pending_source_card_transfers_resume_only_after_replay_reaches_live_mod
             &source_agent_id,
             OplogEntry::card_event_queued(
                 None,
-                QueuedCardEvent::transfer_started_with_source(
+                Box::new(QueuedCardEvent::transfer_started_with_source(
                     pending_transfer_id,
                     card.card_id(),
                     card.clone(),
                     target_holder.clone(),
-                ),
+                )),
             ),
         )
         .await?;
@@ -1386,12 +1389,12 @@ async fn pending_source_card_transfers_resume_only_after_replay_reaches_live_mod
             &source_agent_id,
             OplogEntry::card_event_queued(
                 None,
-                QueuedCardEvent::transfer_started_with_source(
+                Box::new(QueuedCardEvent::transfer_started_with_source(
                     completed_transfer_id,
                     card.card_id(),
                     card.clone(),
                     target_holder.clone(),
-                ),
+                )),
             ),
         )
         .await?;
@@ -1400,12 +1403,12 @@ async fn pending_source_card_transfers_resume_only_after_replay_reaches_live_mod
             &source_agent_id,
             OplogEntry::card_event_queued(
                 None,
-                QueuedCardEvent::transfer_started_with_source(
+                Box::new(QueuedCardEvent::transfer_started_with_source(
                     started_transfer_id,
                     card.card_id(),
                     card.clone(),
                     target_holder.clone(),
-                ),
+                )),
             ),
         )
         .await?;
@@ -1416,9 +1419,9 @@ async fn pending_source_card_transfers_resume_only_after_replay_reaches_live_mod
                 None,
                 started_transfer_id,
                 card.card_id(),
-                Some(source_holder.clone()),
+                source_holder.clone(),
                 target_holder.clone(),
-                Some(0),
+                0,
             ),
         )
         .await?;
@@ -1429,9 +1432,9 @@ async fn pending_source_card_transfers_resume_only_after_replay_reaches_live_mod
                 None,
                 completed_transfer_id,
                 card.card_id(),
-                Some(source_holder),
+                source_holder,
                 target_holder.clone(),
-                Some(0),
+                0,
             ),
         )
         .await?;
@@ -1611,12 +1614,12 @@ async fn pending_self_card_transfer_recovery_does_not_deadlock(
             &source_agent_id,
             OplogEntry::card_event_queued(
                 None,
-                QueuedCardEvent::transfer_started_with_source(
+                Box::new(QueuedCardEvent::transfer_started_with_source(
                     transfer_id,
                     card.card_id(),
                     card.clone(),
                     self_holder,
-                ),
+                )),
             ),
         )
         .await?;
@@ -1746,12 +1749,12 @@ async fn lost_card_transfer_response_converges_after_source_and_target_restart(
             &source_agent_id,
             OplogEntry::card_event_queued(
                 None,
-                QueuedCardEvent::transfer_started_with_source(
+                Box::new(QueuedCardEvent::transfer_started_with_source(
                     transfer_id,
                     card.card_id(),
                     card.clone(),
                     target_holder.clone(),
-                ),
+                )),
             ),
         )
         .await?;
@@ -1762,9 +1765,9 @@ async fn lost_card_transfer_response_converges_after_source_and_target_restart(
                 None,
                 transfer_id,
                 card.card_id(),
-                Some(source_holder),
+                source_holder,
                 target_holder,
-                Some(0),
+                0,
             ),
         )
         .await?;
@@ -1996,11 +1999,12 @@ async fn interruption(
 
 /// Shard-assignment recovery must not acknowledge an assignment whose activations failed.
 ///
-/// Recovery reads each running worker's record twice: once to enumerate the shard, once more
-/// when the worker is activated. This fails the second read only, so enumeration succeeds and
-/// activation does not. The assignment must fail - the shard manager retries a failed one,
-/// whereas a worker skipped here would stay stopped, unrecorded, until an unrelated invocation
-/// happened to arrive - and the retry, once storage is back, must restart the worker.
+/// Recovery resolves each running worker's identity and metadata while enumerating the shard,
+/// then resolves its identity again when the worker is activated. This fails the activation read
+/// only, so enumeration succeeds and activation does not. The assignment must fail - the shard
+/// manager retries a failed one, whereas a worker skipped here would stay stopped, unrecorded,
+/// until an unrelated invocation happened to arrive - and the retry, once storage is back, must
+/// restart the worker.
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
@@ -2058,6 +2062,7 @@ async fn shard_assignment_fails_when_a_recovered_worker_cannot_be_activated(
         .revoke_shards(RevokeShardsRequest {
             shard_ids: vec![shard],
             revision: 1,
+            incarnation_id: TEST_SHARD_MANAGER.to_string(),
         })
         .await?
         .into_inner();
@@ -2072,16 +2077,16 @@ async fn shard_assignment_fails_when_a_recovered_worker_cannot_be_activated(
     })
     .await
     .map_err(|_| anyhow!("worker remained loaded after its shard was revoked"))?;
-    // The unloaded shell would otherwise still be cached, and activation would reuse it without
-    // reading storage. Retire it as the idle-expiry sweep would, which is also the shape of an
-    // executor restart: recovery then has to rebuild the worker from its record.
+    // Retire the unloaded shell as the idle-expiry sweep would, so activation must reconstruct the
+    // worker and load its metadata. This is also the shape of an executor restart.
     executor.retire_unloaded_worker(&owned_agent_id).await?;
     assert!(!executor.worker_is_cached(&owned_agent_id).await);
 
-    // Enumeration reads the worker's record once; activation reads it again. Fail the second.
+    // Enumeration resolves the worker's identity, then loads its metadata (which resolves the
+    // identity again); activation resolves it once more. Fail the activation read.
     faults.fail_after(
         "read_cached_agent_mode",
-        1,
+        2,
         1,
         KeyValueStorageError::Other("injected: key-value storage unavailable".to_string()),
     );
@@ -2093,6 +2098,7 @@ async fn shard_assignment_fails_when_a_recovered_worker_cannot_be_activated(
             }],
             number_of_shards: 1,
             revision: 2,
+            incarnation_id: TEST_SHARD_MANAGER.to_string(),
         })
         .await?
         .into_inner();
@@ -2116,6 +2122,7 @@ async fn shard_assignment_fails_when_a_recovered_worker_cannot_be_activated(
             }],
             number_of_shards: 1,
             revision: 3,
+            incarnation_id: TEST_SHARD_MANAGER.to_string(),
         })
         .await?
         .into_inner();
@@ -2840,6 +2847,199 @@ async fn get_workers_from_worker(
 #[test]
 #[tracing::instrument]
 #[timeout("4m")]
+async fn malformed_worker_enumeration_cursor_returns_domain_failure(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+) -> anyhow::Result<()> {
+    use golem_api_grpc::proto::golem::worker::Cursor;
+    use golem_api_grpc::proto::golem::workerexecutor::v1::{
+        GetWorkersMetadataRequest, get_workers_metadata_response,
+    };
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let response = executor
+        .client
+        .clone()
+        .get_workers_metadata(GetWorkersMetadataRequest {
+            component_id: Some(ComponentId::new().into()),
+            environment_id: Some(context.default_environment_id.into()),
+            filter: None,
+            cursor: Some(Cursor {
+                value: "not-a-valid-cursor".to_string(),
+            }),
+            count: 1,
+            precise: false,
+            auth_ctx: Some(executor.auth_ctx().into()),
+        })
+        .await?
+        .into_inner();
+
+    match response.result {
+        Some(get_workers_metadata_response::Result::Failure(error)) => {
+            let error: WorkerExecutorError = error.try_into().map_err(anyhow::Error::msg)?;
+            assert!(matches!(error, WorkerExecutorError::InvalidRequest { .. }));
+        }
+        other => panic!("expected InvalidRequest domain failure, got {other:?}"),
+    }
+
+    Ok(())
+}
+
+#[derive(Clone)]
+struct CountingWorkerEnumerationService {
+    inner: Arc<dyn WorkerEnumerationService>,
+    calls: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl WorkerEnumerationService for CountingWorkerEnumerationService {
+    async fn get(
+        &self,
+        environment_id: &EnvironmentId,
+        component_id: &ComponentId,
+        filter: Option<AgentFilter>,
+        cursor: ScanCursor,
+        count: u64,
+        precise: bool,
+    ) -> Result<(Option<ScanCursor>, Vec<golem_common::model::AgentMetadata>), WorkerExecutorError>
+    {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        self.inner
+            .get(environment_id, component_id, filter, cursor, count, precise)
+            .await
+    }
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn get_workers_opaque_cursor_replays_after_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let enumeration_calls = Arc::new(AtomicUsize::new(0));
+    let wrap_calls = enumeration_calls.clone();
+    let overrides = TestExecutorOverrides {
+        wrap_worker_enumeration_service: Some(Arc::new(move |inner| {
+            Arc::new(CountingWorkerEnumerationService {
+                inner,
+                calls: wrap_calls.clone(),
+            })
+        })),
+        ..TestExecutorOverrides::default()
+    };
+    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let caller = agent_id!("GolemHostApi", "opaque-cursor-replay");
+    let caller_id = executor.start_agent(&component.id, caller.clone()).await?;
+
+    let mut expected_ids = HashSet::from([caller.to_string()]);
+    for index in 0..50 {
+        let target = agent_id!("GolemHostApi", format!("opaque-cursor-target-{index}"));
+        executor.start_agent(&component.id, target.clone()).await?;
+        expected_ids.insert(target.to_string());
+    }
+
+    let promise_id_value = executor
+        .invoke_and_await_agent(&component, &caller, "create_promise", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected promise id"))?;
+    let component_id_value = {
+        let (high, low) = component.id.0.as_u64_pair();
+        SchemaValue::Record {
+            fields: vec![SchemaValue::Record {
+                fields: vec![SchemaValue::U64(high), SchemaValue::U64(low)],
+            }],
+        }
+    };
+    let params = crate::raw_params(vec![component_id_value, promise_id_value.clone()]);
+    let resumed_params = params.clone();
+    let invocation_key = IdempotencyKey::fresh();
+    let executor_clone = executor.clone();
+    let component_clone = component.clone();
+    let caller_clone = caller.clone();
+    let key_clone = invocation_key.clone();
+    let mut pending_invocation = tokio::spawn(async move {
+        executor_clone
+            .invoke_and_await_agent_with_key(
+                &component_clone,
+                &caller_clone,
+                &key_clone,
+                "get_agents_across_promise",
+                params,
+            )
+            .await
+    });
+    tokio::select! {
+        result = &mut pending_invocation => {
+            return Err(anyhow!("enumeration returned before the promise was completed: {:?}", result??));
+        }
+        status = executor.wait_for_status(&caller_id, AgentStatus::Suspended, Duration::from_secs(10)) => {
+            status?;
+        }
+    }
+    assert_eq!(enumeration_calls.load(Ordering::SeqCst), 1);
+    pending_invocation.abort();
+    assert!(
+        pending_invocation
+            .await
+            .expect_err("pending invocation should be cancelled")
+            .is_cancelled()
+    );
+
+    drop(executor);
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+    let oplog_idx = extract_oplog_idx_from_promise_id(&promise_id_value);
+    executor
+        .complete_promise(
+            &PromiseId {
+                agent_id: caller_id.clone(),
+                oplog_idx,
+            },
+            Vec::new(),
+        )
+        .await?;
+    let pages = executor
+        .invoke_and_await_agent_with_key(
+            &component,
+            &caller,
+            &invocation_key,
+            "get_agents_across_promise",
+            resumed_params,
+        )
+        .await?
+        .into_typed::<Result<Vec<Vec<String>>, String>>()?
+        .map_err(anyhow::Error::msg)?;
+
+    assert_eq!(pages.len(), 2);
+    assert_eq!(pages[0].len(), 50);
+    assert_eq!(pages[1].len(), 1);
+    let first_page: HashSet<_> = pages[0].iter().cloned().collect();
+    let second_page: HashSet<_> = pages[1].iter().cloned().collect();
+    assert!(first_page.is_disjoint(&second_page));
+    assert_eq!(
+        first_page
+            .union(&second_page)
+            .cloned()
+            .collect::<HashSet<_>>(),
+        expected_ids
+    );
+    assert_eq!(enumeration_calls.load(Ordering::SeqCst), 2);
+    executor.check_oplog_is_queryable(&caller_id).await?;
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
 async fn get_metadata_from_worker(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -3520,28 +3720,14 @@ async fn fork_source_lifecycle_blocks_deletion_until_history_copy_finishes(
     };
     let service = worker.oplog_service();
     let target_guard = service.lock_lifecycle(&target).await;
+    let (copy_entered, release_copy) = executor.gate_next_oplog_read(&source, OplogIndex::INITIAL);
     let fork = tokio::spawn({
         let executor = executor.clone();
         let source = source.clone();
         let target = target.clone();
         async move { executor.fork_worker(&source, &target.agent_id, cut).await }
     });
-    tokio::time::timeout(Duration::from_secs(10), async {
-        loop {
-            if tokio::time::timeout(Duration::from_millis(10), service.lock_lifecycle(&source))
-                .await
-                .is_err()
-            {
-                break;
-            }
-            assert!(
-                !fork.is_finished(),
-                "fork exited before holding its source guard"
-            );
-            tokio::task::yield_now().await;
-        }
-    })
-    .await?;
+    tokio::time::timeout(Duration::from_secs(10), copy_entered).await??;
     let hook = Arc::new(DeletionStageHook::new(
         owned.clone(),
         Some(WorkerDeletionStage::DurableStateRemoved),
@@ -3561,9 +3747,12 @@ async fn fork_source_lifecycle_blocks_deletion_until_history_copy_finishes(
             .is_err()
     );
     assert_eq!(hook.calls(WorkerDeletionStage::CacheRemoved), 0);
+    release_copy.send(()).unwrap();
+    // Once the hidden copy is complete, deletion must not wait for target publication.
+    tokio::time::timeout(Duration::from_secs(10), deleting).await???;
+    assert!(!fork.is_finished());
     drop(target_guard);
     fork.await??;
-    deleting.await??;
     assert!(executor.get_worker_metadata(&source).await.is_err());
     assert_eq!(
         executor
@@ -3704,12 +3893,26 @@ async fn deletion_joins_removed_shell_status_actor_before_storage_removal(
         assert!(failure.contains("status"), "{failure}");
         assert!(executor.worker_is_cached(&owned).await);
         executor.get_worker_metadata(&worker_id).await?;
+        let metadata = Worker::get_latest_metadata(&all, &owned).await?.unwrap();
+        let reconstructed =
+            golem_worker_executor::worker::status::calculate_last_known_status_with_checkpoint(
+                &all,
+                &owned,
+                metadata.fingerprint,
+                metadata.agent_mode,
+                None,
+            )
+            .await
+            .map_err(anyhow::Error::msg)?
+            .unwrap();
+        assert_eq!(metadata.last_known_status, reconstructed);
 
         // The old attempt keeps its error, but all old writes have finished. An explicit retry
         // can now remove the persisted generation without a late actor restoring its index.
         executor.delete_worker(&worker_id).await?;
         assert!(!executor.worker_is_cached(&owned).await);
         assert!(executor.get_worker_metadata(&worker_id).await.is_err());
+        assert!(Worker::get_latest_metadata(&all, &owned).await?.is_none());
         assert_eq!(hook.calls(WorkerDeletionStage::OwnedWorkJoined), 1);
         // Keeping the old shell alive retains its failed stop result across the explicit retry.
         assert_eq!(old_weak.upgrade().is_some(), !drop_old_shell);
@@ -4588,7 +4791,26 @@ async fn get_worker_metadata(
     )?
     .len();
     assert_eq!(metadata2.component_size, component_file_size);
-    assert_eq!(metadata2.total_linear_memory_size, 34 * 65536);
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let initial_memory = oplog
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::Create(create) => Some(create.initial_total_linear_memory_size),
+            _ => None,
+        })
+        .expect("the worker must have a Create entry");
+    let memory_growth: u64 = oplog
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::GrowMemory(growth) => Some(growth.delta),
+            _ => None,
+        })
+        .sum();
+    assert!(initial_memory > 0);
+    assert_eq!(
+        metadata2.total_linear_memory_size,
+        initial_memory + memory_growth
+    );
     Ok(())
 }
 
@@ -7008,10 +7230,15 @@ async fn resource_limits_initialized_for_component_owner_not_caller(
 /// Control for [`a_caller_is_answered_when_its_agents_shard_is_taken_away`].
 ///
 /// An agent's shard leaves this executor and comes straight back, and the
-/// promise it is parked on is then completed here. What this pins, and the test
-/// below cannot, is that revoking a shard interrupts the agents on it with
-/// `InterruptKind::Restart`, and that interrupt on its own does not strand the
-/// caller. So the test below is measuring the handoff and not the interrupt.
+/// promise it is parked on is then completed here. A revoke gives the agent up
+/// rather than restarting it in place - a restart would reopen its oplog at an
+/// epoch this executor no longer holds - so the caller is answered at once with
+/// an error it can retry, and the shard returning a moment later does not
+/// un-answer it. What has to survive the round trip is the work: the agent is
+/// this executor's again, the invocation it was running finishes here, and the
+/// retry worker-service makes under the same idempotency key is handed that
+/// result instead of running it a second time. So the test below is measuring
+/// the handoff and not the giving-up.
 ///
 /// It does *not* prove the `select!` is cancel-safe, though it did have to stop
 /// claiming that twice. Only the `wait_for` future is dropped on a tick;
@@ -7031,7 +7258,7 @@ async fn a_caller_is_answered_when_its_agents_shard_comes_back(
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
-    let parked = park_a_caller_on_a_promise(
+    let mut parked = park_a_caller_on_a_promise(
         &executor,
         &context,
         host_api_tests,
@@ -7044,17 +7271,37 @@ async fn a_caller_is_answered_when_its_agents_shard_comes_back(
     revoke_shard_zero(&executor).await?;
     assign_shard_zero(&executor).await?;
 
-    // Sit here long enough for the caller's ownership re-check to run several
-    // times before the result exists, so the answer has to survive the re-check
-    // firing repeatedly and finding nothing wrong.
+    // Answered by the giving-up, not left to the ownership re-check: the revoke reached this
+    // executor, so nothing here waits to find out that the agent moved.
+    let answer = parked
+        .answer_within(
+            Duration::from_secs(20),
+            "caller parked in invoke_and_await was never answered, although the revoke had \
+             already given its agent up here",
+        )
+        .await?;
+    let error = answer.expect_err(
+        "the agent was given up when its shard was revoked, so the parked call cannot have \
+         been handed a value",
+    );
+    let rendered = format!("{error:#}");
+    assert!(
+        rendered.contains("ShardingNotReady") || rendered.contains("Sharding not ready"),
+        "the caller has to be told to retry rather than handed a failure it would surface to \
+         the user; instead it got: {rendered}"
+    );
+
+    // Sit here long enough for the re-check to have run several times, so the retry below is
+    // answered by an agent that survived the window rather than one that happened to be quick.
     sleep(INVOCATION_OWNERSHIP_RECHECK_INTERVAL * 3).await;
 
     parked.complete_the_promise(&executor, vec![42]).await?;
 
     let value = parked
-        .value_within(
-            Duration::from_secs(30),
-            "caller was not answered even though the shard came back and the promise \
+        .retry_within(
+            &executor,
+            Duration::from_secs(60),
+            "the retry was never answered even though the shard came back and the promise \
              was completed on this executor",
         )
         .await?;
@@ -7063,6 +7310,42 @@ async fn a_caller_is_answered_when_its_agents_shard_comes_back(
         SchemaValue::List {
             elements: vec![SchemaValue::U8(42)]
         }
+    );
+
+    // The value alone cannot tell the retry being handed the parked call's own answer apart from
+    // a second, independent run of `await_promise` that happened to read the same completed
+    // promise: both return `[42]`. Count the method's oplog pair instead - the idempotency key
+    // must have deduplicated the retry into the original invocation, so there can only be one.
+    use golem_common::model::oplog::{PublicAgentInvocation, PublicOplogEntry};
+    let oplog = executor
+        .get_oplog(&parked.agent_id, OplogIndex::INITIAL)
+        .await?;
+    let started = oplog
+        .iter()
+        .filter(|entry| match &entry.entry {
+            PublicOplogEntry::AgentInvocationStarted(params) => matches!(
+                &params.invocation,
+                PublicAgentInvocation::AgentMethodInvocation(m)
+                    if m.method_name.replace('-', "_") == "await_promise"
+            ),
+            _ => false,
+        })
+        .count();
+    let finished = oplog
+        .iter()
+        .filter(|entry| match &entry.entry {
+            PublicOplogEntry::AgentInvocationFinished(params) => params
+                .method_name
+                .as_deref()
+                .is_some_and(|name| name.replace('-', "_") == "await_promise"),
+            _ => false,
+        })
+        .count();
+    assert_eq!(
+        (started, finished),
+        (1, 1),
+        "the retry under the same idempotency key must be answered from the recorded run, not \
+         by executing await_promise a second time"
     );
     Ok(())
 }
@@ -7080,9 +7363,13 @@ async fn a_caller_is_answered_when_its_agents_shard_comes_back(
 /// never disturbed, so nothing below the application layer had anything to
 /// notice.
 ///
-/// What it should get is an error of the `InvalidShardId` family, which is
-/// already what worker-service needs to invalidate its routing table and retry
-/// against the new owner. That path exists and works; nothing used to reach it.
+/// What it should get is an error worker-service answers by invalidating its
+/// routing table and retrying against the new owner. Two errors carry that
+/// meaning, and which one arrives depends on how the agent was lost: a revoke
+/// that reaches this executor gives the agent up and answers its callers with
+/// `ShardingNotReady` at once, while a shard that moves without a revoke
+/// arriving is caught by the periodic ownership re-check, which reports
+/// `InvalidShardId`. Either is a retry; silence is not.
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
@@ -7094,7 +7381,7 @@ async fn a_caller_is_answered_when_its_agents_shard_is_taken_away(
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
-    let parked =
+    let mut parked =
         park_a_caller_on_a_promise(&executor, &context, host_api_tests, "promise-shard-taken")
             .await?;
 
@@ -7121,7 +7408,9 @@ async fn a_caller_is_answered_when_its_agents_shard_is_taken_away(
         answer.expect_err("nobody completed the promise, so the only honest answer is an error");
     let rendered = format!("{error:#}");
     assert!(
-        rendered.contains("InvalidShardId"),
+        rendered.contains("ShardingNotReady")
+            || rendered.contains("Sharding not ready")
+            || rendered.contains("InvalidShardId"),
         "the caller has to be told the shard moved, because that is what makes \
          worker-service invalidate its routing table and retry against the new \
          owner; instead it got: {rendered}"
@@ -7263,6 +7552,11 @@ async fn a_caller_is_not_given_up_on_while_the_shard_assignment_is_missing(
 /// The buffer is shrunk to 16 so a burst of 64 every 50ms is enough to keep
 /// the receiver behind; with the default 100000 the flood would have to be
 /// that much larger to say the same thing.
+///
+/// The agent is moved by [`fake_ownership`] rather than by a real revoke. A
+/// revoke that reaches this executor gives the agent up and answers its callers
+/// itself, so the re-check this test exists for would never run and the flood
+/// would prove nothing.
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
@@ -7273,14 +7567,12 @@ async fn a_caller_is_answered_when_its_agents_shard_is_taken_away_while_the_even
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let overrides = TestExecutorOverrides {
-        configure: Some(Arc::new(|config| {
-            config.limits.invocation_result_broadcast_capacity = 16;
-        })),
-        ..Default::default()
-    };
+    let (mut overrides, controls) = fake_ownership();
+    overrides.configure = Some(Arc::new(|config| {
+        config.limits.invocation_result_broadcast_capacity = 16;
+    }));
     let executor = start_with_overrides(deps, &context, overrides).await?;
-    let parked = park_a_caller_on_a_promise(
+    let mut parked = park_a_caller_on_a_promise(
         &executor,
         &context,
         host_api_tests,
@@ -7288,12 +7580,11 @@ async fn a_caller_is_answered_when_its_agents_shard_is_taken_away_while_the_even
     )
     .await?;
 
-    // Taken while the agent is still resident; revoking its shard drops it.
     let events = executor.event_bus(&parked.agent_id).await?;
 
-    info!("Revoking the shard for good, then flooding the event bus with somebody else's news");
+    info!("Reporting the agent as moved, then flooding the event bus with somebody else's news");
 
-    revoke_shard_zero(&executor).await?;
+    controls.pretend_the_agent_moved();
 
     let somebody_else = AgentId {
         component_id: parked.agent_id.component_id,
@@ -7316,6 +7607,10 @@ async fn a_caller_is_answered_when_its_agents_shard_is_taken_away_while_the_even
         }
     });
 
+    // Left unread while the flood runs, so the buffer overflows under it however
+    // the runtime schedules the two. Reading it straight away races the flood:
+    // a reader on another worker thread can keep pace with it and never lag.
+    sleep(Duration::from_millis(200)).await;
     let overflowed =
         tokio::time::timeout(Duration::from_secs(2), probe.wait_for(|_| None::<()>)).await;
     if !matches!(overflowed, Ok(Err(RecvError::Lagged(_)))) {
@@ -7346,6 +7641,754 @@ async fn a_caller_is_answered_when_its_agents_shard_is_taken_away_while_the_even
         rendered.contains("InvalidShardId"),
         "the caller has to be told the shard moved; instead it got: {rendered}"
     );
+    // Without this the test also passes when the answer came from somewhere other than the
+    // re-check, which is the one path the flood is here to starve.
+    assert!(
+        controls.agent_moved_reports() >= 1,
+        "the ownership re-check never ran while the bus was lagging, so nothing here says the \
+         deadline arm survives a starved subscription"
+    );
+    Ok(())
+}
+
+/// A stop that reaches a generation already given up must leave the generation that replaced it
+/// alone.
+///
+/// A given-up agent passes through the stop's removal more than once - from its own loop and
+/// again from the give-up that waited for it - and a handle kept past its generation can stop it
+/// once more. Removal keyed by agent id alone would let any of those passes evict whatever was
+/// cached under that id by then: here, the newer generation the shard's return created.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn a_stop_through_a_given_up_generation_leaves_the_next_generation_cached(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Clocks", "stale-generation-stop");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "sleep_for", data_value!(0.0f64))
+        .await?;
+    let stale = executor
+        .active_agent(&owned_agent_id)
+        .await
+        .ok_or_else(|| anyhow!("the agent is not cached after its first invocation"))?
+        .primary();
+
+    revoke_shard_zero(&executor).await?;
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while executor.worker_is_cached(&owned_agent_id).await {
+            sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow!("the agent stayed cached after its shard was revoked"))?;
+
+    assign_shard_zero(&executor).await?;
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "sleep_for", data_value!(0.0f64))
+        .await?;
+    let fresh = executor
+        .active_agent(&owned_agent_id)
+        .await
+        .ok_or_else(|| anyhow!("the agent is not cached after the shard came back"))?
+        .primary();
+    assert!(
+        !Arc::ptr_eq(&stale, &fresh),
+        "the shard's return must have created a new generation, or this test proves nothing"
+    );
+
+    // The stale generation is already unloaded and given up, so this goes straight to the
+    // removal.
+    stale.test_stop().await;
+
+    assert!(
+        executor.worker_is_cached(&owned_agent_id).await,
+        "a stop through the given-up generation evicted the generation that replaced it"
+    );
+    let cached = executor
+        .active_agent(&owned_agent_id)
+        .await
+        .ok_or_else(|| anyhow!("the agent is no longer cached"))?
+        .primary();
+    assert!(
+        Arc::ptr_eq(&cached, &fresh),
+        "the cached generation changed under a stop through a stale handle"
+    );
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "sleep_for", data_value!(0.0f64))
+        .await?;
+    Ok(())
+}
+
+/// A retry scheduled before the shard moved must not resume the agent afterwards.
+///
+/// A crash schedules the loop's own restart. If the shard is revoked in that window, the agent is
+/// retired, and the loop's gate on the retirement token (invocation_loop.rs, ahead of any new
+/// generation) has to stop it instead: no restart here, no `Resumed` written to an oplog the new
+/// owner is taking over, and the caller told to reroute. Without the gate the retry would win the
+/// race and resume an agent this executor no longer owns.
+#[test]
+#[tracing::instrument]
+#[timeout(120000)]
+async fn a_retry_scheduled_before_a_revoke_does_not_resume_the_agent(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Clocks", "retry-after-revoke");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+
+    let invocation = {
+        let executor = executor.clone();
+        let component = component.clone();
+        let agent_id = agent_id.clone();
+        tokio::spawn(
+            async move {
+                executor
+                    .invoke_and_await_agent(&component, &agent_id, "interruption", data_value!())
+                    .await
+            }
+            .in_current_span(),
+        )
+    };
+    tokio::time::sleep(Duration::from_secs(5)).await;
+
+    // The crash schedules the loop's restart; the revoke lands while it is pending.
+    let _ = executor.simulated_crash(&worker_id).await;
+    revoke_shard_zero(&executor).await?;
+
+    // Given up, so the pending retry must not bring it back: the agent leaves the cache and stays
+    // out of it.
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while executor.worker_is_cached(&owned_agent_id).await {
+            sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow!("the agent stayed cached after its shard was revoked"))?;
+
+    let result = tokio::time::timeout(Duration::from_secs(30), invocation)
+        .await
+        .map_err(|_| anyhow!("the caller was never answered after the revoke"))??;
+    assert!(
+        result.is_err(),
+        "the invocation must be handed back to the caller to reroute, not completed by an \
+         executor that no longer owns the shard"
+    );
+
+    sleep(Duration::from_secs(2)).await;
+    assert!(
+        !executor.worker_is_cached(&owned_agent_id).await,
+        "a retry scheduled before the revoke resumed an agent this executor had given up"
+    );
+
+    // The shard coming back is what may start it again, from the oplog, as a new generation.
+    assign_shard_zero(&executor).await?;
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "sleep_for", data_value!(0.0f64))
+        .await?;
+    Ok(())
+}
+
+/// The other half of the stale-handle contract: a handle kept past its generation must not be able
+/// to *start* it either.
+///
+/// The stop-side test above pins that a stale handle cannot evict the generation that replaced it.
+/// This one pins the guard at the other end (`start_if_needed_internal`, worker/mod.rs): a start
+/// through a given-up generation would take permits, could append `Resumed` to an oplog the new
+/// owner is now writing, and would publish its failures, by agent id, to the waiters of the
+/// generation that replaced it. The caller gets a retriable error instead, and the live generation
+/// is untouched.
+#[test]
+#[tracing::instrument]
+async fn a_start_through_a_given_up_generation_is_refused(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Clocks", "stale-generation-start");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "sleep_for", data_value!(0.0f64))
+        .await?;
+    let stale = executor
+        .active_agent(&owned_agent_id)
+        .await
+        .ok_or_else(|| anyhow!("the agent is not cached after its first invocation"))?
+        .primary();
+
+    revoke_shard_zero(&executor).await?;
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while executor.worker_is_cached(&owned_agent_id).await {
+            sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow!("the agent stayed cached after its shard was revoked"))?;
+
+    assign_shard_zero(&executor).await?;
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "sleep_for", data_value!(0.0f64))
+        .await?;
+    let fresh = executor
+        .active_agent(&owned_agent_id)
+        .await
+        .ok_or_else(|| anyhow!("the agent is not cached after the shard came back"))?
+        .primary();
+    assert!(
+        !Arc::ptr_eq(&stale, &fresh),
+        "the shard's return must have created a new generation, or this test proves nothing"
+    );
+
+    let refused = Worker::start_if_needed(stale.clone()).await;
+    match refused {
+        Err(WorkerExecutorError::ShardingNotReady | WorkerExecutorError::OplogFenced { .. }) => {}
+        Err(other) => panic!(
+            "a start through a given-up generation must be answered with something the caller can \
+             retry on the new owner, got {other}"
+        ),
+        Ok(_) => panic!("a start through a given-up generation was allowed"),
+    }
+
+    let cached = executor
+        .active_agent(&owned_agent_id)
+        .await
+        .ok_or_else(|| anyhow!("the agent is no longer cached"))?
+        .primary();
+    assert!(
+        Arc::ptr_eq(&cached, &fresh),
+        "the cached generation changed under a start through a stale handle"
+    );
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "sleep_for", data_value!(0.0f64))
+        .await?;
+    Ok(())
+}
+
+/// A caller awaiting an invocation whose oplog write was refused inside a host call must be told
+/// to reroute.
+///
+/// A fence found in a host call surfaces as a `ShardLost` trap: the agent marks itself
+/// given up and its loop stops without failing anyone. The executor's own assignment still
+/// names the shard - this is the zombie, and nobody has told it - so the waiter's ownership
+/// re-check keeps passing. Two things can answer the caller: the give-up spawned when the loop's
+/// exit commit is refused, and the loop's own stop. The spawned one misses the caller whenever the
+/// loop removes the agent before it looks, and nothing in a test can hold it back, so this pins
+/// the outcome rather than that ordering.
+///
+/// The takeover lands while the guest is parked in `poll` inside `sleep_for`, after
+/// `subscribe_duration` has committed through the status actor. The first write after it is then
+/// the gated monotonic-clock hook's own commit when the guest reads the elapsed time: a refusal in
+/// the host call, not in the status actor.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn a_caller_waiting_on_an_invocation_fenced_inside_a_host_call_is_told_to_reroute(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_common::model::oplog::PublicOplogEntry;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Clocks", "fenced-inside-a-host-call");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+
+    let mut caller = {
+        let executor = executor.clone();
+        let component = component.clone();
+        let agent_id = agent_id.clone();
+        tokio::spawn(
+            async move {
+                executor
+                    .invoke_and_await_agent(&component, &agent_id, "sleep_for", data_value!(6.0f64))
+                    .await
+            }
+            .in_current_span(),
+        )
+    };
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Running, Duration::from_secs(10))
+        .await?;
+
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+            let subscribed = oplog.iter().any(|entry| match &entry.entry {
+                PublicOplogEntry::End(end) => oplog.iter().any(|start| {
+                    start.oplog_index == end.start_index
+                        && matches!(
+                            &start.entry,
+                            PublicOplogEntry::Start(params)
+                                if params.function_name == "monotonic_clock::subscribe_duration"
+                        )
+                }),
+                _ => false,
+            });
+            if subscribed {
+                return anyhow::Ok(());
+            }
+            sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow!("the guest never subscribed to its sleep"))??;
+    // Lets `subscribe_duration`'s own commit finish, so the guest is parked in `poll` with about
+    // five seconds of sleep left and nothing else is due to write.
+    sleep(Duration::from_secs(1)).await;
+    // Baseline for the no-further-progress check below: from here on, the guest's only next
+    // durable operation is the monotonic-clock read that must be refused.
+    let oplog_before_takeover = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+
+    let mut clock = executor
+        .gate_next_monotonic_clock_start(&owned_agent_id)
+        .await?;
+    take_agent_oplog_over_at_epoch(deps, &context, &owned_agent_id, 1).await?;
+
+    let answer = match tokio::time::timeout(Duration::from_secs(30), &mut caller).await {
+        Ok(joined) => joined?,
+        Err(_) => {
+            caller.abort();
+            bail!(
+                "the caller was never answered, although its agent's oplog has a new owner and \
+                 this executor gave the agent up"
+            );
+        }
+    };
+    info!(result = ?answer, "caller was answered");
+    let error =
+        answer.expect_err("the invocation's writes were refused, so it cannot have a value");
+    let rendered = format!("{error:#}");
+    assert!(
+        rendered.contains("ShardingNotReady") || rendered.contains("Sharding not ready"),
+        "the caller has to be given the error worker-service reroutes on; instead it got: \
+         {rendered}"
+    );
+
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while executor.worker_is_cached(&owned_agent_id).await {
+            sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow!("the fenced agent stayed cached on this executor"))?;
+
+    // `entered()` only fires once the gated commit *succeeds* (`OwnerExecution::
+    // test_after_monotonic_clock_start` sends it after the commit, not before), so its timing out
+    // here does not by itself prove the guest ever reached the gate: the same timeout would be
+    // observed if the agent had been interrupted by something else first, well before the
+    // monotonic-clock read. Prove reachability directly from the oplog instead: nothing may follow
+    // `subscribe_duration`'s `End` on this executor once the shard is taken away, since the
+    // guest's only next durable operation is the monotonic-clock read the fence must have refused.
+    let oplog_after = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        oplog_after.len(),
+        oplog_before_takeover.len(),
+        "no oplog entries may follow `subscribe_duration`'s `End` once the shard is taken away; \
+         the guest's next durable call is the monotonic-clock read the fence must have refused"
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_millis(500), clock.entered())
+            .await
+            .is_err(),
+        "the gated clock commit went through, so the refusal was not the host call's"
+    );
+    Ok(())
+}
+
+/// An invocation enqueued onto an oplog that has a new owner must be refused, not accepted.
+///
+/// Enqueueing buffers the pending-invocation entry and commits it through the status actor, and
+/// that commit is where the takeover is found. A refusal folded into "status unchanged" would
+/// report the enqueue a success for a key that never reached the status, and neither the give-up
+/// the refusal spawns nor the stop's removal fails keys the status does not hold - so nothing
+/// would ever answer the caller.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn an_invocation_enqueued_onto_a_fenced_oplog_is_refused_rather_than_accepted(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Clocks", "fenced-enqueue");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "sleep_for", data_value!(0.0f64))
+        .await?;
+    let idle = executor
+        .active_agent(&owned_agent_id)
+        .await
+        .ok_or_else(|| anyhow!("the agent is not cached after its first invocation"))?
+        .primary();
+
+    take_agent_oplog_over_at_epoch(deps, &context, &owned_agent_id, 1).await?;
+
+    // The refusal has to come from the enqueue's own commit. Had anything written to the idle
+    // agent first, the give-up that write spawned could evict it, and the invocation would then
+    // be refused at a fresh generation's open instead, which proves nothing about the enqueue.
+    let cached = executor
+        .active_agent(&owned_agent_id)
+        .await
+        .ok_or_else(|| anyhow!("the idle agent left the cache before the enqueue reached it"))?
+        .primary();
+    assert!(
+        Arc::ptr_eq(&idle, &cached),
+        "the generation that opened the oplog at the old epoch is no longer the cached one"
+    );
+
+    let answer = tokio::time::timeout(
+        Duration::from_secs(10),
+        executor.invoke_and_await_agent(&component, &agent_id, "sleep_for", data_value!(0.0f64)),
+    )
+    .await
+    .map_err(|_| {
+        anyhow!(
+            "the caller was never answered: the invocation was accepted onto an oplog whose \
+             pending entry the storage refused"
+        )
+    })?;
+    info!(result = ?answer, "caller was answered");
+    let error = answer.expect_err("the pending entry was never committed, so there is no value");
+    let rendered = format!("{error:#}");
+    assert!(
+        // Refused before acceptance, the fence arrives as a rejection carrying the error the
+        // worker service reroutes on.
+        rendered.contains("Sharding not ready") || rendered.contains("fenced"),
+        "the caller has to be given the error worker-service reroutes on; instead it got: \
+         {rendered}"
+    );
+
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while executor.worker_is_cached(&owned_agent_id).await {
+            sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow!("the fenced agent stayed cached on this executor"))?;
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn a_deletion_that_outlived_the_shard_leaves_the_agent_to_its_new_owner(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let name = agent_id!("Clocks", "deleted-after-its-shard-moved");
+    let worker_id = executor.start_agent(&component.id, name.clone()).await?;
+    executor
+        .invoke_and_await_agent(&component, &name, "sleep_for", data_value!(0.0f64))
+        .await?;
+    let owned = OwnedAgentId::new(context.default_environment_id, &worker_id);
+
+    let hook = Arc::new(DeletionStageHook::new(
+        owned.clone(),
+        Some(WorkerDeletionStage::DurableStateRemoved),
+        None,
+    ));
+    executor.set_worker_deletion_hook(hook.clone());
+    let deleting = tokio::spawn({
+        let executor = executor.clone();
+        let worker_id = worker_id.clone();
+        async move { executor.delete_worker(&worker_id).await }.in_current_span()
+    });
+    tokio::time::timeout(Duration::from_secs(10), hook.wait_until_gated())
+        .await
+        .map_err(|_| anyhow!("the deletion never reached the removal of the durable state"))?;
+
+    // The deletion was accepted while this executor owned the shard. Before it gets to the agent's
+    // state the shard moves on, and the new owner takes the oplog over.
+    take_agent_oplog_over_at_epoch(deps, &context, &owned, 1).await?;
+    let entries = agent_oplog_length(deps, &context, &owned).await?;
+    assert!(entries > 0);
+    hook.release();
+
+    let result = tokio::time::timeout(Duration::from_secs(30), deleting).await??;
+    let rendered = format!(
+        "{:#}",
+        result.expect_err("the deletion belongs to the shard's new owner now")
+    );
+    assert!(
+        rendered.contains("ShardingNotReady")
+            || rendered.contains("Sharding not ready")
+            || rendered.contains("fenced"),
+        "the caller has to be sent to the new owner; instead it got: {rendered}"
+    );
+    assert_eq!(
+        agent_oplog_length(deps, &context, &owned).await?,
+        entries,
+        "a deletion that lost the shard removes nothing from the new owner's oplog"
+    );
+
+    // The failed deletion stays cached with the stages it completed, so a retry here meets the
+    // fence again instead of repeating them. It leaves once the shard leaves this executor.
+    assert!(
+        executor.worker_is_cached(&owned).await,
+        "the failed deletion left the cache before its shard left this executor"
+    );
+    revoke_shard_zero(&executor).await?;
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while executor.worker_is_cached(&owned).await {
+            sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow!("the failed deletion stayed cached after its shard was revoked"))?;
+    Ok(())
+}
+
+/// A deletion removes the agent's derived state first and its oplog last. When a removal before
+/// the oplog fails, the oplog is still there, and the retry finishes the job from it.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn a_deletion_that_fails_before_the_oplog_is_finished_by_its_retry(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_worker_executor::storage::keyvalue::KeyValueStorageError;
+    use golem_worker_executor::storage::keyvalue::fault_injecting::{
+        FaultInjectingKeyValueStorage, KeyValueStorageFaults,
+    };
+
+    let context = TestContext::new(last_unique_id);
+    let faults = KeyValueStorageFaults::default();
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            wrap_key_value_storage: Some(Arc::new({
+                let faults = faults.clone();
+                move |storage| Arc::new(FaultInjectingKeyValueStorage::new(storage, faults.clone()))
+            })),
+            ..TestExecutorOverrides::default()
+        },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let name = agent_id!("Clocks", "deletion-retried-before-the-oplog-went");
+    let worker_id = executor.start_agent(&component.id, name.clone()).await?;
+    executor
+        .invoke_and_await_agent(&component, &name, "sleep_for", data_value!(0.0f64))
+        .await?;
+    let owned = OwnedAgentId::new(context.default_environment_id, &worker_id);
+
+    // Armed once the deletion reaches the durable state, so the failure lands in the removal of the
+    // derived state, before the oplog delete, rather than in an earlier stage.
+    let hook = Arc::new(DeletionStageHook::new(
+        owned.clone(),
+        Some(WorkerDeletionStage::DurableStateRemoved),
+        None,
+    ));
+    executor.set_worker_deletion_hook(hook.clone());
+    let deleting = tokio::spawn({
+        let executor = executor.clone();
+        let worker_id = worker_id.clone();
+        async move { executor.delete_worker(&worker_id).await }.in_current_span()
+    });
+    tokio::time::timeout(Duration::from_secs(10), hook.wait_until_gated())
+        .await
+        .map_err(|_| anyhow!("the deletion never reached the removal of the durable state"))?;
+    faults.fail(
+        "remove",
+        1,
+        KeyValueStorageError::Other("injected: key-value storage unavailable".to_string()),
+    );
+    hook.release();
+
+    let first = tokio::time::timeout(Duration::from_secs(30), deleting).await??;
+    assert!(
+        first.is_err(),
+        "the injected failure has to fail the first attempt"
+    );
+    assert!(
+        agent_oplog_length(deps, &context, &owned).await? > 0,
+        "the first attempt failed before it reached the oplog, which has to still be there"
+    );
+
+    executor.delete_worker(&worker_id).await?;
+    assert!(executor.get_worker_metadata(&worker_id).await.is_err());
+    Ok(())
+}
+
+/// A stop can be the first write to find that the shard has a new owner. Its final commit is
+/// then refused, and the waiters of the invocations it cuts short have to be told to retry on the
+/// new owner - not handed the stop's own error, which is cached as a failure the new owner's run
+/// of the invocation never corrects.
+///
+/// The invocation is paused with its `AgentInvocationStarted` buffered and not yet committed,
+/// so the stop's commit is not empty: an empty commit queries nothing and finds no fence.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn a_stop_that_finds_the_fence_on_its_own_commit_tells_the_caller_to_reroute(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Clocks", "fenced-on-the-stops-commit");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "sleep_for", data_value!(0.0f64))
+        .await?;
+
+    let mut started = executor
+        .gate_next_invocation_started(&owned_agent_id)
+        .await?;
+    let idempotency_key = IdempotencyKey::fresh();
+    let mut caller = {
+        let executor = executor.clone();
+        let component = component.clone();
+        let agent_id = agent_id.clone();
+        let idempotency_key = idempotency_key.clone();
+        tokio::spawn(
+            async move {
+                executor
+                    .invoke_and_await_agent_with_key(
+                        &component,
+                        &agent_id,
+                        &idempotency_key,
+                        "sleep_for",
+                        data_value!(0.0f64),
+                    )
+                    .await
+            }
+            .in_current_span(),
+        )
+    };
+    tokio::time::timeout(Duration::from_secs(10), started.entered())
+        .await
+        .map_err(|_| anyhow!("the invocation never buffered its start entry"))?;
+
+    take_agent_oplog_over_at_epoch(deps, &context, &owned_agent_id, 1).await?;
+    // An external stop carrying an error of its own, which the waiters must not be given.
+    let deletion = {
+        let executor = executor.clone();
+        let worker_id = worker_id.clone();
+        tokio::spawn(async move { executor.delete_worker(&worker_id).await }.in_current_span())
+    };
+    // The stop waits for the paused guest; let it go once the stop is under way.
+    sleep(Duration::from_millis(500)).await;
+    started.release();
+    let _ = tokio::time::timeout(Duration::from_secs(30), deletion).await;
+
+    let answer = match tokio::time::timeout(Duration::from_secs(30), &mut caller).await {
+        Ok(joined) => joined?,
+        Err(_) => {
+            caller.abort();
+            bail!("the caller was never answered");
+        }
+    };
+    info!(result = ?answer, "caller was answered");
+    let error = answer.expect_err("the invocation moved to the shard's new owner");
+    let rendered = format!("{error:#}");
+    assert!(
+        rendered.contains("Sharding not ready") || rendered.contains("fenced"),
+        "the caller has to be told to retry on the new owner; instead it got: {rendered}"
+    );
+    assert!(
+        !rendered.contains("deleted"),
+        "the stop's own error reached the caller: {rendered}"
+    );
+
+    // Nothing was cached for the key. A retry on this executor is turned away at admission - the
+    // agent is being deleted here - but never answered from a cached failure, which comes back as
+    // an invocation failure rather than a rejection.
+    let retried = executor
+        .invoke_and_await_agent_with_key(
+            &component,
+            &agent_id,
+            &idempotency_key,
+            "sleep_for",
+            data_value!(0.0f64),
+        )
+        .await;
+    if let Err(error) = &retried {
+        let rendered = format!("{error:#}");
+        assert!(
+            !(rendered.contains("invocation failed") && rendered.contains("deleted")),
+            "the retry was answered from a cached failure: {rendered}"
+        );
+    }
     Ok(())
 }
 
@@ -7353,25 +8396,34 @@ async fn a_caller_is_answered_when_its_agents_shard_is_taken_away_while_the_even
 /// these tests lives on shard 0. Moving that one shard moves all of them.
 async fn revoke_shard_zero(executor: &TestWorkerExecutor) -> anyhow::Result<()> {
     use golem_api_grpc::proto::golem::shardmanager::ShardId;
-    use golem_api_grpc::proto::golem::workerexecutor::v1::RevokeShardsRequest;
+    use golem_api_grpc::proto::golem::workerexecutor::v1::{
+        RevokeShardsRequest, revoke_shards_response,
+    };
 
-    executor
+    let revoked = executor
         .client
         .clone()
         .revoke_shards(RevokeShardsRequest {
             shard_ids: vec![ShardId { value: 0 }],
             revision: 1,
+            incarnation_id: TEST_SHARD_MANAGER.to_string(),
         })
-        .await?;
-    Ok(())
+        .await?
+        .into_inner();
+    match revoked.result {
+        Some(revoke_shards_response::Result::Success(_)) => Ok(()),
+        other => bail!("the executor refused the revoke: {other:?}"),
+    }
 }
 
 /// Hands shard 0 back, so the agents on it are this executor's again.
 async fn assign_shard_zero(executor: &TestWorkerExecutor) -> anyhow::Result<()> {
     use golem_api_grpc::proto::golem::shardmanager::{ShardEpochEntry, ShardId};
-    use golem_api_grpc::proto::golem::workerexecutor::v1::AssignShardsRequest;
+    use golem_api_grpc::proto::golem::workerexecutor::v1::{
+        AssignShardsRequest, assign_shards_response,
+    };
 
-    executor
+    let assigned = executor
         .client
         .clone()
         .assign_shards(AssignShardsRequest {
@@ -7381,9 +8433,14 @@ async fn assign_shard_zero(executor: &TestWorkerExecutor) -> anyhow::Result<()> 
             }],
             number_of_shards: 1,
             revision: 2,
+            incarnation_id: TEST_SHARD_MANAGER.to_string(),
         })
-        .await?;
-    Ok(())
+        .await?
+        .into_inner();
+    match assigned.result {
+        Some(assign_shards_response::Result::Success(_)) => Ok(()),
+        other => bail!("the executor refused the assignment: {other:?}"),
+    }
 }
 
 /// Starts an agent, opens an `invoke_and_await` against it, and returns once
@@ -7416,17 +8473,25 @@ async fn park_a_caller_on_a_promise(
 
     let promise_data = crate::raw_params(vec![promise_id_value.clone()]);
 
+    // Parked under an explicit key so a test can reissue the call the way worker-service reissues
+    // one it was told to reroute: the retry lands on this same invocation instead of starting a
+    // second run of it.
+    let idempotency_key = IdempotencyKey::fresh();
+
     let executor_clone = executor.clone();
     let component_clone = component.clone();
     let agent_id_clone = agent_id.clone();
+    let key_clone = idempotency_key.clone();
+    let params = promise_data.clone();
     let fiber = tokio::spawn(
         async move {
             executor_clone
-                .invoke_and_await_agent(
+                .invoke_and_await_agent_with_key(
                     &component_clone,
                     &agent_id_clone,
+                    &key_clone,
                     "await_promise",
-                    promise_data,
+                    params,
                 )
                 .await
         }
@@ -7441,6 +8506,10 @@ async fn park_a_caller_on_a_promise(
         agent_id: worker_id,
         promise_id: promise_id_value,
         caller: fiber,
+        component,
+        parsed_agent_id: agent_id,
+        idempotency_key,
+        promise_data,
     })
 }
 
@@ -7450,13 +8519,18 @@ struct ParkedCaller {
     agent_id: AgentId,
     promise_id: SchemaValue,
     caller: JoinHandle<anyhow::Result<AgentResult>>,
+    /// What it takes to reissue the parked call under its own idempotency key.
+    component: ComponentDto,
+    parsed_agent_id: golem_common::model::agent::ParsedAgentId,
+    idempotency_key: IdempotencyKey,
+    promise_data: golem_common::schema::TypedSchemaValue,
 }
 
 impl ParkedCaller {
     /// Waits for the parked call to come back. The outer result says whether it
     /// was answered at all; the inner one is what it was told.
     async fn answer_within(
-        mut self,
+        &mut self,
         patience: Duration,
         gave_up: &str,
     ) -> anyhow::Result<anyhow::Result<AgentResult>> {
@@ -7489,12 +8563,180 @@ impl ParkedCaller {
         Ok(())
     }
 
+    /// Reissues the parked call under its original idempotency key, the way
+    /// worker-service reissues one an executor told it to reroute, and returns
+    /// the value that retry is given.
+    ///
+    /// The key is what makes this a retry rather than a second run: an
+    /// invocation already recorded under it is not executed again, so the answer
+    /// here is the answer to the call that was parked.
+    async fn retry_within(
+        &self,
+        executor: &TestWorkerExecutor,
+        patience: Duration,
+        gave_up: &str,
+    ) -> anyhow::Result<SchemaValue> {
+        tokio::time::timeout(
+            patience,
+            executor.invoke_and_await_agent_with_key(
+                &self.component,
+                &self.parsed_agent_id,
+                &self.idempotency_key,
+                "await_promise",
+                self.promise_data.clone(),
+            ),
+        )
+        .await
+        .map_err(|_| anyhow!("{gave_up}"))??
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))
+    }
+
     /// Waits for the parked call and returns the value it was given, failing if
     /// it was not answered in time or was answered with an error.
-    async fn value_within(self, patience: Duration, gave_up: &str) -> anyhow::Result<SchemaValue> {
+    async fn value_within(
+        mut self,
+        patience: Duration,
+        gave_up: &str,
+    ) -> anyhow::Result<SchemaValue> {
         self.answer_within(patience, gave_up)
             .await??
             .into_return_value()
             .ok_or_else(|| anyhow!("expected return value"))
     }
+}
+
+/// Recovery enumerates the running workers of the delivered shards, and only then activates each
+/// one. When the shard is revoked in between, the activation is refused (`ShardingNotReady`: the
+/// shard is no longer held), and that agent belongs to whoever holds the shard next. It has to be
+/// skipped: failing the whole assignment for it would stop every other agent from being resumed,
+/// and, at executor startup, fail the start.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn shard_assignment_recovery_skips_an_agent_whose_shard_is_revoked_mid_scan(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_api_grpc::proto::golem::shardmanager::{ShardEpochEntry, ShardId};
+    use golem_api_grpc::proto::golem::workerexecutor::v1::{
+        AssignShardsRequest, RevokeShardsRequest, assign_shards_response, revoke_shards_response,
+    };
+    use golem_worker_executor::storage::keyvalue::fault_injecting::{
+        FaultInjectingKeyValueStorage, KeyValueStorageFaults,
+    };
+
+    let context = TestContext::new(last_unique_id);
+    let faults = KeyValueStorageFaults::default();
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            wrap_key_value_storage: Some(Arc::new({
+                let faults = faults.clone();
+                move |storage| Arc::new(FaultInjectingKeyValueStorage::new(storage, faults.clone()))
+            })),
+            ..TestExecutorOverrides::default()
+        },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Clocks", "recovery-revoked-mid-scan");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+
+    // A long invocation keeps the worker Running, which is what puts it in the recovery index.
+    executor
+        .invoke_agent(&component, &agent_id, "sleep_for", data_value!(60.0f64))
+        .await?;
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Running, Duration::from_secs(10))
+        .await?;
+
+    let shard = ShardId { value: 0 };
+    let mut client = executor.client.clone();
+    let revoked = client
+        .revoke_shards(RevokeShardsRequest {
+            shard_ids: vec![shard],
+            revision: 1,
+            incarnation_id: TEST_SHARD_MANAGER.to_string(),
+        })
+        .await?
+        .into_inner();
+    assert!(matches!(
+        revoked.result,
+        Some(revoke_shards_response::Result::Success(_))
+    ));
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while executor.worker_is_loaded(&owned_agent_id).await {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow!("worker remained loaded after its shard was revoked"))?;
+    executor.retire_unloaded_worker(&owned_agent_id).await?;
+
+    // Pause recovery at its first read, during enumeration, and revoke the shard again while it
+    // waits: enumeration has already listed the agent, activation will find the shard gone.
+    let gate = faults.pause_next("read_cached_agent_mode");
+    let assigning = {
+        let mut client = client.clone();
+        tokio::spawn(
+            async move {
+                client
+                    .assign_shards(AssignShardsRequest {
+                        shard_epochs: vec![ShardEpochEntry {
+                            shard_id: Some(shard),
+                            epoch: 0,
+                        }],
+                        number_of_shards: 1,
+                        revision: 2,
+                        incarnation_id: TEST_SHARD_MANAGER.to_string(),
+                    })
+                    .await
+            }
+            .in_current_span(),
+        )
+    };
+    tokio::time::timeout(Duration::from_secs(10), gate.entered())
+        .await
+        .map_err(|_| anyhow!("recovery never reached its enumeration read"))?;
+    let revoked = client
+        .revoke_shards(RevokeShardsRequest {
+            shard_ids: vec![shard],
+            revision: 3,
+            incarnation_id: TEST_SHARD_MANAGER.to_string(),
+        })
+        .await?
+        .into_inner();
+    assert!(matches!(
+        revoked.result,
+        Some(revoke_shards_response::Result::Success(_))
+    ));
+    gate.release();
+
+    let assigned = tokio::time::timeout(Duration::from_secs(30), assigning)
+        .await
+        .map_err(|_| anyhow!("the assignment never answered"))???
+        .into_inner();
+    assert!(
+        matches!(
+            assigned.result,
+            Some(assign_shards_response::Result::Success(_))
+        ),
+        "an agent whose shard left mid-recovery failed the whole assignment: {:?}",
+        assigned.result
+    );
+    assert!(!executor.worker_is_loaded(&owned_agent_id).await);
+
+    drop(client);
+    drop(executor);
+    Ok(())
 }

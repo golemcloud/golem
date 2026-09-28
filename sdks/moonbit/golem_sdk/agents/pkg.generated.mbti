@@ -92,6 +92,7 @@ pub(all) struct AgentMethodDef {
 
 pub(all) struct AgentTypeDef {
   type_name : String
+  kind : @common.AgentTypeKind
   description : String
   source_language : String
   constructor_ : AgentConstructorDef

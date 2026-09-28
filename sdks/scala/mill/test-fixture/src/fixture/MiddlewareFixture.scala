@@ -30,13 +30,13 @@ final class Transparent extends PresentedMiddleware {
     underlying: PresentedUnderlying,
     value: String
   ): Future[Either[ToolInvokeError[Nothing], String]] =
-    underlying.call(value)
+    underlying.call(value).toMiddlewareResult
 
   def inspect(
     underlying: PresentedUnderlying,
     value: Try[String]
   ): Future[Either[ToolInvokeError[Nothing], Try[String]]] =
-    underlying.inspect(value)
+    underlying.inspect(value).toMiddlewareResult
 }
 
 @toolMiddleware(name = "adapter")
@@ -45,7 +45,7 @@ final class Adapter extends PresentedMiddleware.Adapter[BackendUnderlying] {
     underlying: BackendUnderlying,
     value: String
   ): Future[Either[ToolInvokeError[Nothing], String]] =
-    underlying.execute(value)
+    underlying.execute(value).toMiddlewareResult
 
   def inspect(
     underlying: BackendUnderlying,

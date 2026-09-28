@@ -14,9 +14,10 @@
 
 use super::ErasedReplayableStream;
 use crate::storage::blob::{
-    BlobMetadata, BlobMissingError, BlobRangeError, BlobStorage, BlobStorageNamespace,
-    ExistsResult, ListedBlob, NormalizedBlobPath, PutIfAbsent, agent_path_segment,
-    blob_copy_changes_nothing, blob_positions, normalized_blob_path,
+    BLOB_STREAM_CHUNK_SIZE, BlobMetadata, BlobMissingError, BlobRangeError, BlobRangeStream,
+    BlobStorage, BlobStorageNamespace, ExistsResult, ListedBlob, NormalizedBlobPath, PutIfAbsent,
+    agent_path_segment, blob_copy_changes_nothing, blob_positions, normalized_blob_path,
+    validate_range,
 };
 use anyhow::{Context, Error, anyhow};
 use async_trait::async_trait;
@@ -188,6 +189,38 @@ impl BlobStorage for FileSystemBlobStorage {
         } else {
             Ok(None)
         }
+    }
+
+    async fn get_range_stream(
+        &self,
+        _target_label: &'static str,
+        _op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+        offset: u64,
+        length: u64,
+    ) -> Result<Option<BlobRangeStream>, Error> {
+        let path = normalized_blob_path(path)?;
+        let full_path = self.path_of(&namespace, &path);
+        self.ensure_path_is_inside_root(&full_path)?;
+        let mut file = match tokio::fs::File::open(full_path).await {
+            Ok(file) => file,
+            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
+        let metadata = file.metadata().await?;
+        anyhow::ensure!(metadata.is_file(), "Blob is not a regular file");
+        let total_size = metadata.len();
+        validate_range(offset, length, total_size)?;
+        tokio::io::AsyncSeekExt::seek(&mut file, SeekFrom::Start(offset)).await?;
+        let stream = tokio_util::io::ReaderStream::with_capacity(
+            tokio::io::AsyncReadExt::take(file, length),
+            BLOB_STREAM_CHUNK_SIZE,
+        );
+        Ok(Some(BlobRangeStream {
+            total_size,
+            stream: Box::pin(stream.map_err(Error::from)),
+        }))
     }
 
     /// Reads only the bytes of the range from the file. The rules of the trait apply. A path

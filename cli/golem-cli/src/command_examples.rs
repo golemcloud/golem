@@ -254,7 +254,7 @@ pub const AGENT_LIST: &str = "Examples:
 
   # Pagination
   golem-cli agent list --max-count 10
-  golem-cli agent list --max-count 10 --scan-cursor 0/10
+  golem-cli agent list --max-count 10 --scan-cursor '<cursor-from-previous-output>'
 
   # Force fresh status for each agent
   golem-cli agent list --precise

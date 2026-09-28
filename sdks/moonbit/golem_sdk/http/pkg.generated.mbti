@@ -4,14 +4,47 @@ package "golemcloud/golem_sdk/http"
 import {
   "golemcloud/golem_sdk/async-core",
   "golemcloud/golem_sdk/interface/wasi/http/types",
+  "golemcloud/golem_sdk/schema",
+  "golemcloud/golem_sdk/schema_model",
 }
 
 // Values
+pub fn openapi_json(Json) -> String raise OpenApiJsonError
+
 pub async fn send(@types.Request) -> Result[@types.Response, @types.ErrorCode]
 
 // Errors
+pub suberror OpenApiJsonError {
+  OpenApiJsonError(String)
+} derive(Eq)
 
 // Types and methods
+pub(all) struct HttpHeader {
+  name : String
+  value : Array[Byte]
+} derive(Eq)
+pub impl @schema.FromSchema for HttpHeader
+pub impl @schema.IntoSchema for HttpHeader
+
+pub(all) struct HttpRequest {
+  method : String
+  scheme : String
+  authority : String
+  path : String
+  query : String?
+  headers : Array[HttpHeader]
+  body : @schema.AgentStream[Array[Byte]]
+}
+pub impl @schema.FromSchema for HttpRequest
+pub impl @schema.IntoSchema for HttpRequest
+
+pub(all) struct HttpResponse {
+  status : UInt16
+  headers : Array[HttpHeader]
+  body : @schema.AgentStream[Array[Byte]]
+}
+pub impl @schema.FromSchema for HttpResponse
+pub impl @schema.IntoSchema for HttpResponse
 
 // Type aliases
 pub using @types {type DnsErrorPayload}

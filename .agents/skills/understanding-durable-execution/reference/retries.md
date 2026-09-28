@@ -20,6 +20,16 @@ the number of recorded `Error` entries with the same `retry_from`
 (`count_oplog_errors_for`, `current_retry_state_for`). After a trap and replay the in-memory
 count resets but the oplog count does not, so a policy exhausted inline stays exhausted.
 
+Elapsed-time budgets share the same durable sequence boundary. When the selected policy contains
+a `TimeBox` (including below another decorator or combinator), `RetryPolicyState::TimeBox` wraps
+the structural policy state with the first decision's wall-clock timestamp and the greatest
+elapsed duration observed so far. Each later decision evaluates with
+`max(previous_elapsed, now - started_at)`. The high-water mark makes elapsed monotonic if the wall
+clock moves backward, and persisting the wrapper in each `Error` entry means reconstruction does
+not restart the budget. The first decision observes zero elapsed; `RetryPolicy::step` keeps its
+canonical inclusive boundary, so `elapsed >= limit` gives up. Policies without a `TimeBox` keep
+their existing state shape.
+
 Startup and replay infrastructure failures are separate from both paths. They append
 `Error { kind: Recovery, retry_policy_state: None, .. }`, so metadata truthfully remains
 `Retrying` but the failure neither reads nor advances the agent's semantic invocation retry

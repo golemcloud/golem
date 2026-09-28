@@ -73,9 +73,12 @@ pub(all) struct ResolvedAgent {
 }
 
 ///|
-fn encode_config_entry(entry : AgentConfigEntry) -> Json {
+fn encode_config_entry(entry : AgentConfigEntry) -> Json raise {
   let path : Array[Json] = entry.path.map(Json::string)
-  obj([("path", Json::array(path)), ("value", schema_value_to_json(entry.value))])
+  obj([
+    ("path", Json::array(path)),
+    ("value", entry.codec.encode_canonical(entry.value)),
+  ])
 }
 
 ///|
@@ -86,7 +89,7 @@ fn encode_create_agent_request(
   parameters : SchemaValue,
   phantom_id : String?,
   config : Array[AgentConfigEntry],
-) -> Json {
+) -> Json raise {
   let fields : Array[(String, Json)] = [
     ("appName", Json::string(app_name)),
     ("envName", Json::string(env_name)),
@@ -114,7 +117,7 @@ fn encode_agent_invocation_request(
   mode : String,
   schedule_at : String?,
   idempotency_key : String?,
-) -> Json {
+) -> Json raise {
   let fields : Array[(String, Json)] = [
     ("appName", Json::string(app_name)),
     ("envName", Json::string(env_name)),

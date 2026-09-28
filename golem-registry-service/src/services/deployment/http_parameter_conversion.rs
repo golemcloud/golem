@@ -459,6 +459,9 @@ mod test {
     #[test]
     fn constructor_binds_all_parameters_from_mount_path() {
         let mount = HttpMountDetails {
+            static_bindings: vec![],
+            filesystem_bindings: vec![],
+            openapi_provider_method: None,
             path_prefix: vec![
                 PathSegment::Literal(LiteralSegment {
                     value: "agents".into(),
@@ -494,6 +497,9 @@ mod test {
     #[test]
     fn constructor_fails_if_parameter_not_in_path() {
         let mount = HttpMountDetails {
+            static_bindings: vec![],
+            filesystem_bindings: vec![],
+            openapi_provider_method: None,
             path_prefix: vec![PathSegment::Literal(LiteralSegment {
                 value: "agents".into(),
             })],
@@ -517,6 +523,9 @@ mod test {
     #[test]
     fn constructor_rejects_non_string_remaining_path_variable() {
         let mount = HttpMountDetails {
+            static_bindings: vec![],
+            filesystem_bindings: vec![],
+            openapi_provider_method: None,
             path_prefix: vec![PathSegment::RemainingPathVariable(PathVariable {
                 variable_name: "rest".into(),
             })],
@@ -540,6 +549,9 @@ mod test {
     #[test]
     fn method_parameters_only_bind_to_endpoint_suffix() {
         let mount = HttpMountDetails {
+            static_bindings: vec![],
+            filesystem_bindings: vec![],
+            openapi_provider_method: None,
             path_prefix: vec![PathSegment::PathVariable(PathVariable {
                 variable_name: "agent_id".into(),
             })],
@@ -562,6 +574,7 @@ mod test {
             })],
             query_vars: vec![],
             header_vars: vec![],
+            durable_streams: None,
         };
 
         let schema = input(vec![str_field("task_id")]);
@@ -692,6 +705,9 @@ mod test {
     #[test]
     fn constructor_binds_snake_case_parameter_from_path() {
         let mount = HttpMountDetails {
+            static_bindings: vec![],
+            filesystem_bindings: vec![],
+            openapi_provider_method: None,
             path_prefix: vec![
                 PathSegment::Literal(LiteralSegment {
                     value: "agents".into(),
@@ -727,6 +743,9 @@ mod test {
     #[test]
     fn constructor_binds_camel_case_parameter_from_path() {
         let mount = HttpMountDetails {
+            static_bindings: vec![],
+            filesystem_bindings: vec![],
+            openapi_provider_method: None,
             path_prefix: vec![
                 PathSegment::Literal(LiteralSegment {
                     value: "agents".into(),
@@ -775,6 +794,7 @@ mod test {
                 variable_name: "page_size".into(),
             }],
             header_vars: vec![],
+            durable_streams: None,
         };
 
         let schema = input(vec![str_field("page_size")]);
@@ -808,6 +828,7 @@ mod test {
                 variable_name: "pageSize".into(),
             }],
             header_vars: vec![],
+            durable_streams: None,
         };
 
         let schema = input(vec![str_field("pageSize")]);
@@ -841,6 +862,7 @@ mod test {
                 header_name: "x-api-key".into(),
                 variable_name: "x_api_key".into(),
             }],
+            durable_streams: None,
         };
 
         let schema = input(vec![str_field("x_api_key")]);
@@ -908,6 +930,9 @@ mod test {
 
     fn empty_mount() -> HttpMountDetails {
         HttpMountDetails {
+            static_bindings: vec![],
+            filesystem_bindings: vec![],
+            openapi_provider_method: None,
             path_prefix: vec![],
             auth_details: None,
             phantom_agent: false,
@@ -928,6 +953,7 @@ mod test {
             path_suffix: vec![],
             query_vars: vec![],
             header_vars: vec![],
+            durable_streams: None,
         }
     }
 

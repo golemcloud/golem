@@ -12,13 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type {
-  InvocationResult,
-  Tool,
-  ToolError,
-  TypedSchemaValue,
-  UnderlyingTool,
-} from 'golem:tool/common@0.1.0';
+import type { InvocationResult, Tool, ToolError, TypedSchemaValue } from 'golem:tool/common@0.1.0';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod/v4';
 import { ToolMiddlewareRegistry } from '../src/internal/registry/toolMiddlewareRegistry';
@@ -36,8 +30,12 @@ import {
   type UniversalToolMiddlewareInvocation,
   type UniversalToolUnderlying,
 } from '../src/tool';
+import {
+  adaptLegacyRawUnderlying,
+  type LegacyRawUnderlyingTool,
+} from './tool-middleware-test-support';
 
-type RawUnderlyingTool = Pick<UnderlyingTool, 'invoke'>;
+type RawUnderlyingTool = LegacyRawUnderlyingTool;
 
 beforeEach(() => {
   ToolMiddlewareRegistry.clearForTests();
@@ -61,7 +59,11 @@ function invoke(
   invocation: UniversalToolMiddlewareInvocation,
   raw: RawUnderlyingTool,
 ): Promise<InvocationResult> {
-  return invokeUniversalToolMiddleware(universalSource(name), invocation, raw);
+  return invokeUniversalToolMiddleware(
+    universalSource(name),
+    invocation,
+    adaptLegacyRawUnderlying(raw),
+  );
 }
 
 function rejectionOf(promise: Promise<unknown>): Promise<unknown> {
@@ -89,10 +91,11 @@ function controllableStream(...values: number[]): {
 
 function invocation(
   overrides: Partial<UniversalToolMiddlewareInvocation> = {},
-): UniversalToolMiddlewareInvocation {
+): UniversalToolMiddlewareInvocation & { parameters: TypedSchemaValue } {
   return {
     toolName: 'runtime-tool',
     toolMetadata: { raw: 'metadata' } as unknown as Tool,
+    parameters: wireValue(z.object({}), {}),
     commandPath: ['nested', 'run'],
     input: wireValue(z.string(), 'input'),
     principal: sdkPrincipalFromHost({ tag: 'anonymous' }),
@@ -150,7 +153,7 @@ describe('universal tool middleware dispatch', () => {
       name: 'raw-forward',
       invoke: async (request, { underlying }) => {
         observed = request;
-        return underlying.invoke(request.commandPath, request.input, request.stdin);
+        return underlying.invokeAndAwait(request.commandPath, request.input, request.stdin);
       },
     });
     const stdin = controllableStream(1, 2);
@@ -205,8 +208,8 @@ describe('universal tool middleware dispatch', () => {
     universalToolMiddleware({
       name: 'raw-stream-chain',
       invoke: async (request, { underlying }) => {
-        const first = await underlying.invoke(['first'], request.input, undefined);
-        await underlying.invoke(['second'], request.input, first.stdout);
+        const first = await underlying.invokeAndAwait(['first'], request.input, undefined);
+        await underlying.invokeAndAwait(['second'], request.input, first.stdout);
         return {};
       },
     });
@@ -248,7 +251,7 @@ describe('universal tool middleware dispatch', () => {
     universalToolMiddleware({
       name: 'raw-stream-reuse',
       invoke: async (request, { underlying }) => {
-        await underlying.invoke(request.commandPath, request.input, request.stdin);
+        await underlying.invokeAndAwait(request.commandPath, request.input, request.stdin);
         return { stdout: request.stdin };
       },
     });
@@ -268,7 +271,7 @@ describe('universal tool middleware dispatch', () => {
     universalToolMiddleware({
       name: 'raw-errors',
       invoke: (request, { underlying }) =>
-        underlying.invoke(request.commandPath, request.input, request.stdin),
+        underlying.invokeAndAwait(request.commandPath, request.input, request.stdin),
     });
     const customPayload = wireValue(z.string(), 'custom');
     const cases: ToolError[] = [
@@ -305,8 +308,8 @@ describe('universal tool middleware dispatch', () => {
       name: 'raw-control-flow',
       invoke: async (request, { underlying }) => {
         if (request.commandPath[0] === 'zero') return {};
-        await underlying.invoke(['first'], request.input, undefined);
-        return underlying.invoke(['second'], request.input, undefined);
+        await underlying.invokeAndAwait(['first'], request.input, undefined);
+        return underlying.invokeAndAwait(['second'], request.input, undefined);
       },
     });
     const raw = {
@@ -327,22 +330,21 @@ describe('universal tool middleware dispatch', () => {
     expect(result.result).toBe(request.input);
   });
 
-  it('enforces overlap and revocation through the universal entry', async () => {
+  it('allows overlapping starts and enforces revocation through the universal entry', async () => {
     let release!: () => void;
     let escaped: UniversalToolUnderlying | undefined;
-    let overlap: Promise<unknown> | undefined;
     universalToolMiddleware({
       name: 'raw-lifecycle',
       invoke: async (request, { underlying }) => {
         escaped = underlying;
         const first = underlying.invoke(request.commandPath, request.input, undefined);
-        overlap = rejectionOf(underlying.invoke(request.commandPath, request.input, undefined));
+        const second = underlying.invoke(request.commandPath, request.input, undefined);
         release();
-        await first;
+        await Promise.all([first, second]);
         return {};
       },
     });
-    let finish!: () => void;
+    const finish: Array<() => void> = [];
     const started = new Promise<void>((resolve) => {
       release = resolve;
     });
@@ -350,21 +352,22 @@ describe('universal tool middleware dispatch', () => {
       invoke: vi.fn(
         async () =>
           new Promise<InvocationResult>((resolve) => {
-            finish = () => resolve({});
+            finish.push(() => resolve({}));
           }),
       ),
     } as RawUnderlyingTool;
 
     const pending = invoke('raw-lifecycle', invocation(), raw);
     await started;
-    finish();
+    await vi.waitFor(() => expect(raw.invoke).toHaveBeenCalledTimes(2));
+    finish[1]();
+    finish[0]();
     await pending;
 
-    await expect(overlap).resolves.toBeInstanceOf(ToolUnderlyingMisuseError);
     await expect(
       escaped!.invoke([], wireValue(z.string(), 'late'), undefined),
     ).rejects.toBeInstanceOf(ToolUnderlyingMisuseError);
-    expect(raw.invoke).toHaveBeenCalledOnce();
+    expect(raw.invoke).toHaveBeenCalledTimes(2);
   });
 
   it('passes nested affine carriers once without reconstructing handles', async () => {
@@ -374,7 +377,7 @@ describe('universal tool middleware dispatch', () => {
     universalToolMiddleware({
       name: 'raw-affine',
       invoke: (request, { underlying }) =>
-        underlying.invoke(request.commandPath, request.input, undefined),
+        underlying.invokeAndAwait(request.commandPath, request.input, undefined),
     });
     const raw = {
       invoke: vi.fn(async (_path, received) => {

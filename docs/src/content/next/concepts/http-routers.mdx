@@ -1,0 +1,434 @@
+import { Callout } from "nextra/components"
+
+# HTTP routers and file serving
+
+Use a custom HTTP router when an application needs to own HTTP routing, status codes,
+headers, or streaming bodies. Use [code-first endpoints](/next/invoke/making-custom-apis)
+when Golem should map HTTP inputs and outputs to typed agent methods. Both can share
+a domain. This page describes the behavior and guarantees of routers and file
+serving. For SDK examples and deployment instructions, see
+[Using HTTP routers and files](/next/invoke/http-routers).
+
+The [API Gateway](/next/concepts/worker-gateway) (`golem-worker-service`) can serve
+these requests in three ways:
+
+| Behavior | Owner | What runs on a request |
+| --- | --- | --- |
+| Custom handler | Parameterless ephemeral router agent | A streaming handler invocation |
+| Immutable static file | Router's read-only initial files | Gateway reads shared blob storage; no executor call |
+| Live file | Ordinary durable agent | Agent initialization/restoration if needed, then a serialized filesystem read |
+
+## Router identity and mounts
+
+A router has an application-wide unique agent type name, `http-router` kind,
+an empty constructor, ephemeral mode, no snapshots, and one **literal** mount.
+`/` is a valid mount; constructor captures such as `/users/{id}` are not router mounts.
+Configuration, secrets, dependencies, and initial files use the normal agent-type
+provisioning mechanisms. A router may call ordinary agents through generated clients.
+
+A router can declare at most one streaming handler and one OpenAPI provider, or
+neither. Static-only routers need no dummy handler. Provider-only and empty routers
+return 404 for ordinary traffic. Handler and provider names are SDK-defined or
+configurable, not reserved platform method names. Routers are not ordinary callable
+agent clients: use their mounted HTTP interface. Operational inspection can still
+show their worker identities.
+
+The handler binding uses `Any`: a fallback matcher, **not** an HTTP method to send
+on the wire. It covers the mount root and descendants. A mount `/app` covers `/app`,
+`/app/`, and `/app/x`, but not `/application`.
+
+## Request routing precedence
+
+Reserved host endpoints, including OIDC callbacks, webhooks, and domain OpenAPI,
+keep their own bindings. For other requests:
+
+1. A complete code-first route for the actual HTTP method wins. Its results,
+   including 404 and authentication failures, are final.
+2. Otherwise Golem selects the most-specific eligible mount. Routers are eligible
+   for supported methods; live filesystem mounts only for GET and HEAD. Literal
+   segments beat parameters, and a longer matching mount beats its prefix.
+3. Golem applies the **selected mount's** authentication/session policy and CORS
+   before any file lookup, agent activation, or handler invocation.
+4. For GET/HEAD, it tries that mount's matching file mappings in declaration order.
+   Only an absent target advances to another mapping.
+5. If all mappings miss, a router invokes its handler, if present. Otherwise the
+   result is 404. Golem does not search a parent mount afterward.
+
+An exact mapping does not jump ahead of an earlier subtree mapping. File permissions,
+symlinks, directories, initialization failures, and storage failures never trigger
+fallback. Unmatched methods return 404, not an automatically generated 405.
+There is no implicit code-first GET-to-HEAD alias; a framework inside a handler may
+provide one.
+
+## Ordered file mappings
+
+Both static files and live files use the same `(source, target)` grammar:
+
+| Source | Target | Meaning |
+| --- | --- | --- |
+| `/` | `/public/index.html` | Explicit file at the mount root |
+| `/logo.svg` | `/public/brand.svg` | Exact public path |
+| `/assets/*` | `/public/assets/$1` | Descendants below a filesystem root |
+| `/*` | `/public/$1` | All suffixes below this mount |
+
+Sources are mount-relative paths. The only wildcard is one terminal `/*`; it also
+matches an empty suffix. Targets are absolute canonical filesystem paths, not URLs,
+and are not percent-decoded. A subtree target must end in `/$1`. Golem compiles
+these declarations into structural mappings; `$1` is not a runtime string replacement.
+
+For example, these declarations first look in an optional override directory:
+
+```text
+1. /assets/*  → /overrides/$1
+2. /assets/*  → /public/$1
+3. /         → /public/index.html
+```
+
+At mount `/site`, `/site/assets/logo.svg` tries `/overrides/logo.svg`, then
+`/public/logo.svg` only if the first target is absent. Repeating a source with a
+different target is allowed. Duplicate compiled source-and-target pairs are rejected,
+including equivalent percent spellings of a source.
+
+### Paths and exposure boundaries
+
+Golem splits the raw path on `/`, then decodes each segment **once**. Malformed
+escapes, invalid UTF-8, encoded separators, backslashes, NUL/control characters,
+`.`/`..` segments, and interior repeated slashes are rejected as 400 rather than
+normalized. Query strings do not participate in file lookup. `+` is a literal plus
+in a path; `%252e%252e` names the literal segment `%2e%2e`, not a parent directory.
+
+One trailing slash is significant. Both `/site` and `/site/` match a root mapping.
+Away from the root, `/site/logo.svg/` does not match an exact `/logo.svg` mapping.
+A subtree trailing-slash lookup requests a directory: an existing target is forbidden,
+and an absent target is a miss. There is **no directory listing, implicit index.html,
+or automatic slash redirect**. Map `/` explicitly to serve an index file.
+
+<Callout type="warning">
+  Mapping `/*` to `/public/$1` exposes only `/public`, not the rest of the agent
+  filesystem. It does expose every eligible file below that root. Keep secrets
+  outside it and protect the mount when files are private. Symlinks are forbidden
+  even if they point back inside the exposed root.
+</Callout>
+
+## Immutable router files
+
+Provision assets as **read-only initial files** for the router type. The manifest
+and SDK examples are in [Serving static files](/next/invoke/http-routers#serving-static-files).
+Read-write initial files and files created by a handler are not immutable assets.
+
+Deployment compiles an index scoped to the environment, router type, and exact
+component revision, using the upload-time file size and BLAKE3 digest. The gateway
+streams a static hit directly from shared initial-file blob storage. It does not
+create a router agent or contact an executor, including for HEAD and misses.
+An absent index entry can fall through. A referenced blob that cannot be read is a
+storage failure, not a miss. See [shared storage configuration](/next/invoke/http-routers#configuring-shared-storage).
+
+Immutable does not mean the URL is content-addressed. The default is
+`Cache-Control: no-cache`, allowing storage with revalidation, not a long-lived
+freshness policy. The strong ETag is `"blake3-<lowercase hexadecimal digest>"`.
+No Last-Modified header is emitted.
+
+## Live durable-agent files
+
+Use `exposeFiles` (or the SDK's equivalent annotation) on an ordinary, durable,
+non-phantom agent's HTTP mount. Every constructor parameter must occur exactly once
+as a path capture. Header, query, body, or caller identity cannot choose the agent ID.
+For example, `/documents/{owner}` can select the agent whose constructor takes `owner`.
+
+The first GET/HEAD can create and initialize that agent. Constructor-created files
+are immediately serveable; a nonresident agent is restored. File serving invokes
+no exported method, but initialization and replay can execute guest code. Concurrent
+first requests use the normal single-agent initialization lifecycle. Initialization
+failure is a server error, not a missing file.
+
+A read waits for initialization and is serialized against invocations, mutations,
+updates, reverts, and unloads. Metadata and bytes belong to one filesystem generation;
+a concurrent overwrite cannot mix old and new bytes in a response. The guard lasts
+until completion, error, or consumer drop; slow downloads can delay that agent's
+other work. HEAD releases after metadata. Cancelling a read does not roll back or
+cancel shared initialization.
+
+The selected deployment controls **what paths are exposed**, while the agent's normal
+current lifecycle revision supplies the contents. Serving does not roll the agent
+back to the deployment revision. Later requests can see an updated file; the policy
+does not automatically expand after an agent update.
+
+Live files use `Cache-Control: no-store` and emit neither ETag nor Last-Modified.
+Golem does not hash mutable files into strong validators. See the
+[timeout configuration](/next/invoke/http-routers#setting-timeouts-and-resource-budgets) for the
+serving deadline and current resource-limit behavior.
+
+## File HTTP reference
+
+Golem handles file response headers and preconditions for you. These rules apply
+to both static and live mappings unless noted otherwise.
+
+Full GET returns 200 with Content-Type (from the target extension), Content-Length,
+`Accept-Ranges: bytes`, and `X-Content-Type-Options: nosniff`. Unknown extensions use
+`application/octet-stream`. File serving does not sniff contents, negotiate formats,
+or automatically compress them. HEAD applies the same preconditions and metadata
+but sends no body and ignores Range/If-Range.
+
+Preconditions run only after a file is found and authorized:
+
+| Request header | Immutable file | Live file |
+| --- | --- | --- |
+| `If-Match` | Strong tag comparison; failure is 412 | `*` succeeds; a tag list fails with 412 |
+| `If-None-Match` | Weak comparison; a match, including `*`, returns 304 | `*` returns 304; a tag list does not match |
+| Date preconditions | Ignored | Ignored |
+| `If-Range` with Range | Only an exact strong ETag match permits 206 | Any If-Range makes the response a full 200 |
+
+If-Match runs before If-None-Match, then Range. Malformed entity-tag lists return
+400. A file 304 includes Cache-Control and the immutable ETag when available, with
+no body or Content-Length. A 412 has an empty body and Content-Length: 0.
+
+GET supports a single byte range: `bytes=2-5` (inclusive), `bytes=2-`, or
+`bytes=-4`. A satisfiable range returns 206 with Content-Range and the selected
+Content-Length. Oversized end offsets and suffix lengths are clipped to file length.
+
+An empty file, a start at or beyond EOF, or a zero suffix is unsatisfiable: 416,
+`Content-Range: bytes */<total>`, and an empty body. Malformed/overflowing ranges,
+end-before-start, unknown units, and multiple ranges or Range fields are ignored,
+returning full 200. Multipart byte ranges are not supported.
+
+## Streaming handler reference
+
+SDK adapters implement this contract. Use it when writing a raw handler, integrating
+a framework, or diagnosing framing and status errors.
+
+The language-neutral request contains `method`, `scheme`, `authority`, `path`,
+optional `query`, ordered byte-valued `headers`, and a stream of byte chunks as
+`body`. The response contains a 16-bit `status`, the same header representation,
+and a streaming body.
+
+- The method is case-sensitive, including extension methods. `Any` is only metadata.
+- The path is the original full public path, not a mount-stripped or decoded path.
+  Query excludes `?`; absent query and empty query are distinct. Repeated keys,
+  ordering, `+`, and percent escapes are preserved.
+- Header names are lowercase. Every field occurrence and byte value is preserved,
+  with order preserved among occurrences of the same name. Cross-name ordering is
+  not guaranteed. In particular, do not comma-fold Set-Cookie.
+- Bodies are transfer-decoded but not content-decoded. Chunk boundaries are not
+  semantic; empty chunks are not EOF. Stream failure and cancellation are not EOF.
+- Host/authority, forwarding, hop-by-hop headers, framing, and Expect handling belong
+  to the host. Do not generate transfer framing in the handler. A supplied
+  Content-Length must be one valid length and match the emitted bytes.
+
+Backpressure is applied through bounded stream/session credits in both directions.
+Do not collect a body simply to forward it or calculate its length. A handler can
+return a response before upload EOF. Dropping unused input stops its delivery without
+cancelling the response. The host bounds abandoned uploads rather than waiting forever.
+
+Only final statuses 200–599 are accepted. HEAD and statuses 204/205/304 dispose the
+response producer without polling body items. Content-Length is removed for 204,
+forced to zero for 205, and may describe the corresponding representation for HEAD
+or 304. Disposing an unused body is not cancellation of a successful invocation.
+
+Body EOF alone is not invocation success. Golem waits for explicit session success
+before completing the public response. It withholds the terminal streaming frame,
+or the last byte of a positive Content-Length response; for HEAD/bodyless/zero-length
+responses it delays head commitment. This prevents a later invocation failure from
+appearing as a successful complete response.
+
+### Cancellation and ephemeral recovery
+
+An external disconnect/reset cancels the active invocation and its streams.
+Cancellation is idempotent and does **not** roll back effects already performed,
+including calls to durable agents. Request EOF, normal response completion, and
+host disposal of an unused upload are not client cancellation.
+
+After internal transport loss, Golem can reattach the **same** surviving invocation
+using its identity, execution epoch, acknowledgements, and output cursors. It
+deduplicates transport frames; it does not rerun the handler. Recovery is bounded
+by retained state and the [retry budget](/next/invoke/http-routers#setting-timeouts-and-resource-budgets).
+
+Loss of the ephemeral executor or the serving gateway fails the HTTP exchange.
+Golem never transparently creates a replacement invocation, even for GET. A client
+retry is a new request and may repeat effects. Cancellation is best effort if the
+executor is unavailable. Do not rely on language finalizers running after a host-level
+Wasm interruption.
+
+### TypeScript Web adapter limitations
+
+TypeScript Web Request/Response/Headers are normalized views, not a lossless replacement
+for the canonical envelope. Web APIs may normalize methods and URLs, combine fields,
+or reject methods/statuses. Use `implementRaw` for the canonical request/response,
+the Web handler's context for its original request, and `withRawHeaders` for ordered
+byte-valued response fields. See [Working with headers](/next/invoke/http-routers#working-with-headers).
+
+### Effect adapter lifecycle and limitations
+
+The Effect adapter runs an application factory inside each request's scope and
+keeps that scope open through response consumption. Acquired resources are released
+on completion, failure, or local Effect interruption. HEAD and 204/205/304 do not
+start body streams, so cleanup for eagerly acquired resources must belong to the
+request scope, not only to a stream's `ensuring` finalizer.
+
+Effect's framework request uses a mount-relative URL. `HttpRouter.request` exposes
+the original canonical envelope, including the full public path and the distinction
+between absent and empty query strings. Both views share one body reader. The
+`text`, `json`, and `arrayBuffer` accessors buffer under Effect's
+`HttpIncomingMessage.MaxBodySize`; using the request stream does not collect it.
+
+Effect `Respondable` failures retain their HTTP responses, including `HttpApi`
+validation errors. Router misses and request parsing failures become 404 and 400
+responses. Other application failures remain invocation failures. The adapter
+does not support response `FormData`, non-`Uint8Array` raw bodies, or WebSocket upgrades.
+
+<Callout type="warning">
+  Local Effect interruption runs and awaits finalizers, but host-level Wasm
+  interruption does not deliver cooperative cancellation to JavaScript. The runtime
+  also cannot interrupt a response producer while its first request for a body
+  chunk is still pending. Do not assume Effect finalizers run on every client
+  disconnect or host interruption.
+</Callout>
+
+## Authentication, CORS, and failures
+
+Declare authentication/session and CORS on the selected mount. A child mount does
+not inherit protection from its parent, and a handler cannot override host CORS.
+Golem authenticates before looking up files or activating an agent; an auth failure
+cannot fall through to a less-protected mount. Unsafe paths are rejected even before
+route selection/authentication. Do not treat CORS as access control for non-browser clients.
+
+Browser preflight (`OPTIONS` with Origin and Access-Control-Request-Method) uses host
+CORS for the requested method/path and never invokes a handler or opens a file.
+Plain OPTIONS uses normal routing. Mount CORS also applies to host-generated outcomes.
+The separately hosted [domain OpenAPI endpoints](#openapi-generation) are public;
+mount protection does not make the API description private.
+
+| Outcome | Status before response commitment |
+| --- | --- |
+| Unsafe path, malformed head/framing or entity-tag list, invalid constructor input | 400 |
+| Authentication/session failure | Selected security policy's rejection or login redirect; no fallback |
+| File permission failure, symlink, directory/non-regular target | 403 |
+| Unknown domain, no matching behavior, exhausted mappings without handler | 404 |
+| Failed If-Match | 412 |
+| Unsatisfiable single byte range | 416 |
+| Unsupported Expect value | 417 |
+| Initialization, host, or storage failure (including missing indexed blob) | 500 |
+| CONNECT, TRACE, upgrade request, unsupported transfer coding | 501 |
+| Guest trap, invalid response head, stream/session failure, failed recovery | 502 |
+| Serving exchange deadline | 504 |
+
+After commitment, a failure aborts/resets the stream (or closes HTTP/1); it cannot
+send a second status, append an error JSON body, or manufacture successful EOF.
+Request/response bodies must not be logged. Keep diagnostics free of secrets and
+internal filesystem paths.
+
+Custom routers do not support WebSockets, tunnels/upgrades, guest informational
+responses, response trailers, or server push. File mappings do not support directory
+listing, implicit index lookup, symlinks, multipart ranges, or mutable strong validators.
+
+## OpenAPI generation
+
+A router can contribute an OpenAPI **3.1.0** document through a parameterless,
+non-streaming provider method. Golem validates the document, prefixes its paths with
+the router mount, and merges it with code-first operations for the same domain.
+The document describes routes; it does not install them in the handler. See
+[Publishing OpenAPI](/next/invoke/http-routers#publishing-openapi) for provider examples.
+
+Providers run lazily when the domain description is requested, not at deployment or
+on ordinary application requests. They receive internal system authorization and
+an anonymous agent principal, not the requester's headers, session, or identity.
+Normal router configuration, dependencies, and secrets remain available.
+
+<Callout type="warning">
+  The domain's JSON and YAML OpenAPI endpoints are public host endpoints. Mount
+  authentication does not protect them. Never include secrets or private operational
+  data in a provider document.
+</Callout>
+
+### Accepted documents
+
+Check framework-generated descriptions against this subset before returning them
+from a provider.
+
+Providers return a UTF-8 JSON string with `openapi`, valid `info`, and `paths`.
+Optional root fields are `components`, `tags`, `security`, `servers`, `externalDocs`,
+and `x-*` extensions. Golem validates then discards provider `info` and root `servers`:
+it owns the merged document's identity, and the final server URL uses the deployment's
+configured domain and scheme, not request forwarding headers.
+
+The supported subset excludes:
+
+- Path- and operation-level `servers`, even empty arrays; root `webhooks` and
+  `jsonSchemaDialect`.
+- Callbacks, callback operations, component `pathItems`, and Path Item `$ref`.
+- External/relative references, fragment anchors, dangling pointers, and example
+  `externalValue`. Golem never fetches referenced documents.
+- Schema `$id`, `$anchor`, `$dynamicAnchor`, `$dynamicRef`, and nested `$schema`.
+  Schema Objects use the default OpenAPI 3.1 dialect.
+
+References must be local JSON Pointers rooted at `#/components/` or `#/paths/`,
+resolve within that provider document, and have the expected target kind. Recursive
+schemas are allowed without expansion. `operationRef` must point to a concrete local
+operation; discriminator mappings must be explicit local schema pointers. These
+rules apply at semantic keyword positions, not arbitrary data in examples, defaults,
+const/enum values, or extensions.
+
+Operations may use get, put, post, delete, options, head, patch, and trace. There is
+no OpenAPI `any` operation; describing trace does not enable the unsupported TRACE
+transport method. Supported component kinds are schemas, responses, parameters,
+examples, requestBodies, headers, securitySchemes, and links.
+
+### Paths, security, and conflicts
+
+At mount `/site`, a provider path `/echo` becomes `/site/echo`, and `/` becomes
+`/site`. At mount `/`, paths are unchanged. Non-root trailing slashes stay distinct.
+Golem rewrites local path references and `operationRef` pointers, including those
+inside components, but does not prefix or rename component names.
+
+Root provider security is applied to operations without their own security.
+An explicit `security: []` removes the provider requirement, **not** the mount's
+requirement. Golem combines mount requirements with each operation's alternatives,
+so a provider cannot weaken host authentication. The merged document has no root
+security requirement that could leak across providers.
+
+Generated operations are merged first, then providers ordered by mount, router type
+name, and component ID. There is no last-writer-wins behavior, automatic renaming,
+or partial result. These conflicts fail the entire generation:
+
+- Duplicate method and equivalent path, even with identical definitions.
+- Equivalent path templates with different parameter names, such as `/a/{x}` and
+  `/a/{y}`, even when methods differ.
+- Conflicting path-item summary, description, or extensions. Shared path-item
+  parameter lists must be deeply equal, treating absent and empty as equal.
+- Conflicting components under the same kind/name, tags under the same name, or
+  root extensions/externalDocs. Equal values are deduplicated.
+- Empty or duplicate `operationId` values. IDs are optional, but any present ID
+  must be globally unique across generated and supplied operations. Link IDs must resolve.
+
+Object key order does not affect equality; array order does. Output object keys are
+sorted and arrays retain their semantic order.
+
+### Caching and limits
+
+| Limit | Value |
+| --- | --- |
+| Provider UTF-8 JSON text | 1 MiB |
+| JSON nesting | 64 containers |
+| Merged compact JSON | 8 MiB |
+| Concurrent provider calls per generation | 8 |
+| Cached documents per gateway | 256, LRU eviction |
+
+Exactly-at-limit sizes are accepted. Invalid JSON, duplicate keys, invalid Unicode,
+non-object roots, and unsupported semantics fail validation.
+
+Concurrent JSON/YAML requests for the same input snapshot share one generation.
+The cache fingerprint includes the configured origin, deployment/environment,
+routes, relevant method/provider descriptors, and security, but not requester identity.
+Successful documents have **no time-based expiry**; failures are not cached.
+Changed route snapshots get a new key. An admitted request may finish with its old
+snapshot, and caches are process-local. Mutable secret changes alone do not provide
+a document freshness guarantee. Providers should describe the deployed schema
+rather than changing application data.
+
+There is no provider-specific or whole-generation timeout or global generation
+admission limit. A disconnected HTTP waiter detaches without cancelling the shared
+generation. The HTTP session exchange deadline does not apply to providers, and
+ingress timeouts alone do not bound their execution.
+
+Provider invocation, output, validation, size, reference, security, or merge failures
+return **502** at the description endpoint. Normal handler and file traffic does
+not invoke the provider and remains available.

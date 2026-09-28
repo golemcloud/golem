@@ -21,3 +21,5 @@ final class internalToolMiddlewareField(
   val canonicalName: String,
   val countFlag: Boolean = false
 ) extends StaticAnnotation
+
+final class internalToolMiddlewareParameters extends StaticAnnotation

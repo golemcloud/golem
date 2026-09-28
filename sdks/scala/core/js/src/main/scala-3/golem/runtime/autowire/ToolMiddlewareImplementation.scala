@@ -47,6 +47,26 @@ object ToolMiddlewareImplementation {
       ToolMiddlewareMacro.adapterHandle[Presented, Expected, Underlying, Surface, Impl](underlying)
     )
 
+  inline def registerTransparentWithParameters[Presented, Underlying, Parameters, Surface, Impl <: Surface](
+    underlying: RawToolUnderlying => Underlying
+  ): Unit =
+    registerHandle(
+      ToolMiddlewareMacro.transparentHandleWithParameters[Presented, Underlying, Parameters, Surface, Impl](underlying)
+    )
+
+  inline def registerAdapterWithParameters[Presented, Expected, Underlying, Parameters, Surface, Impl <: Surface](
+    underlying: RawToolUnderlying => Underlying
+  ): Unit =
+    registerHandle(
+      ToolMiddlewareMacro.adapterHandleWithParameters[Presented, Expected, Underlying, Parameters, Surface, Impl](
+        underlying
+      )
+    )
+
   inline def registerUniversal[Impl <: UniversalToolMiddleware]: Unit =
     registerUniversalHandle(ToolMiddlewareMacro.universalHandle[Impl])
+
+  inline def registerUniversalWithParameters[Parameters, Impl <: UniversalToolMiddleware.WithParameters[Parameters]]
+    : Unit =
+    registerUniversalHandle(ToolMiddlewareMacro.universalHandleWithParameters[Parameters, Impl])
 }

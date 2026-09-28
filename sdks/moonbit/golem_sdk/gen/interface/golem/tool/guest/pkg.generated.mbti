@@ -4,15 +4,15 @@ package "golemcloud/golem_sdk/gen/interface/golem/tool/guest"
 import {
   "golemcloud/golem_sdk/async-core",
   "golemcloud/golem_sdk/interface/golem/core/types",
-  "golemcloud/golem_sdk/interface/golem/tool/host",
+  "golemcloud/golem_sdk/interface/golem/tool/streams",
 }
 
 // Values
-pub fn discover_tools() -> Result[Array[@golemcloud/golem_sdk/interface/golem/tool/common.Tool], @golemcloud/golem_sdk/interface/golem/tool/common.ToolError]
+pub fn discover_tools() -> Result[Array[@golemcloud/golem_sdk/interface/golem/tool/common.Tool], @types.ToolError]
 
-pub fn get_tool(String) -> Result[@golemcloud/golem_sdk/interface/golem/tool/common.Tool, @golemcloud/golem_sdk/interface/golem/tool/common.ToolError]
+pub fn get_tool(String) -> Result[@golemcloud/golem_sdk/interface/golem/tool/common.Tool, @types.ToolError]
 
-pub async fn invoke(String, Array[String], @types.TypedSchemaValue, @async-core.Stream[Result[FixedArray[Byte], @host.ByteStreamFailure]]?, @host.ToolStdoutWriter?, @golemcloud/golem_sdk/interface/golem/agent/common.Principal, @async-core.TaskGroup[Unit]) -> Result[@golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult, @golemcloud/golem_sdk/interface/golem/tool/common.ToolError]
+pub async fn invoke(String, Array[String], @types.TypedSchemaValue, @async-core.Stream[Result[FixedArray[Byte], @streams.ByteStreamFailure]]?, @streams.ToolStdoutWriter?, @golemcloud/golem_sdk/interface/golem/agent/common.Principal, @async-core.TaskGroup[Unit]) -> Result[@golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult, @types.ToolError]
 
 // Errors
 

@@ -250,8 +250,9 @@ export type StreamingRemoteMethod<Args extends any[], R> = {
 //
 // These mirror the Rust `SchemaValue` / `TypedSchemaValue` serde shapes
 // (`#[serde(tag = "kind", content = "value", rename_all = "kebab-case")]`).
-// Request `parameters` / `methodParameters` and agent `config` values travel
-// as a bare `SchemaValue`; invocation results come back as a `TypedSchemaValue`.
+// Request `parameters` / `methodParameters` travel as bare `SchemaValue`s;
+// config values use their declared public schema codec, and invocation results
+// come back as a `TypedSchemaValue`.
 // ===========================================================================
 
 export interface TextValuePayload {
@@ -353,7 +354,7 @@ export interface InvocationReceipt {
 
 export interface AgentConfigEntry {
   path: string[];
-  value: SchemaValue;
+  value: PublicValue;
 }
 
 export interface CreateAgentRequest {
@@ -1720,14 +1721,11 @@ class PublicValueValidator {
     const input = publicObject(value, 'binary');
     publicExactOptionalMembers(input, new Set(['bytes']), new Set(['mimeType']), 'binary');
     const encoded = publicString(input.bytes, 'binary bytes');
-    if (
-      encoded.length % 4 !== 0 ||
-      !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(encoded)
-    )
-      this.fail('malformed-message', 'binary bytes are not canonical padded base64');
-    const bytes = Buffer.from(encoded, 'base64');
-    if (bytes.toString('base64') !== encoded)
-      this.fail('malformed-message', 'binary bytes are not canonical padded base64');
+    if (!/^[A-Za-z0-9_-]*$/u.test(encoded) || encoded.length % 4 === 1)
+      this.fail('malformed-message', 'binary bytes are not canonical unpadded base64url');
+    const bytes = Buffer.from(encoded, 'base64url');
+    if (bytes.toString('base64url') !== encoded)
+      this.fail('malformed-message', 'binary bytes are not canonical unpadded base64url');
     const mime =
       input.mimeType === undefined ? undefined : publicString(input.mimeType, 'MIME type');
     if (mime !== undefined && !/^[A-Za-z0-9!#$&^_.+\-]+\/[A-Za-z0-9!#$&^_.+\-]+$/u.test(mime))
@@ -3003,7 +3001,7 @@ class StreamingSession {
         throw new StreamingProtocolError('malformed-message', 'invalid binary item metadata');
       const deliveredSequence = output.stream.accept(sequence, 1n, 'binary');
       output.stream.push(
-        { bytes: payload.toString('base64'), mimeType: metadata.mimeType },
+        { bytes: payload.toString('base64url'), mimeType: metadata.mimeType },
         { token: metadata.cursorToken, sequence },
         payload.length + (metadata.mimeType ? Buffer.byteLength(metadata.mimeType) : 0),
         deliveredSequence,
@@ -3259,19 +3257,16 @@ class StreamingSession {
       throw new StreamingProtocolError('schema-mismatch', 'invalid binary stream item');
     let payload: Buffer;
     if (typeof encoded.bytes === 'string') {
-      if (
-        encoded.bytes.length % 4 !== 0 ||
-        !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(encoded.bytes)
-      )
+      if (!/^[A-Za-z0-9_-]*$/u.test(encoded.bytes) || encoded.bytes.length % 4 === 1)
         throw new StreamingProtocolError(
           'schema-mismatch',
-          'binary bytes are not canonical base64',
+          'binary bytes are not canonical unpadded base64url',
         );
-      payload = Buffer.from(encoded.bytes, 'base64');
-      if (payload.toString('base64') !== encoded.bytes)
+      payload = Buffer.from(encoded.bytes, 'base64url');
+      if (payload.toString('base64url') !== encoded.bytes)
         throw new StreamingProtocolError(
           'schema-mismatch',
-          'binary bytes are not canonical base64',
+          'binary bytes are not canonical unpadded base64url',
         );
     } else if (encoded.bytes instanceof Uint8Array) payload = Buffer.from(encoded.bytes);
     else throw new StreamingProtocolError('schema-mismatch', 'invalid binary stream bytes');

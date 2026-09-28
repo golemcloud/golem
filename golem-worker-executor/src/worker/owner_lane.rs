@@ -244,33 +244,55 @@ impl OwnerLane {
         caller: &OwnerInvocationId,
         invocations: impl IntoIterator<Item = OwnerInvocationId>,
     ) -> Result<OwnerLaneWait, OwnerLaneError> {
-        let mut pending_roots = BTreeSet::new();
+        let mut edges = BTreeSet::new();
+        let mut capable_roots = BTreeSet::new();
+        let mut incapable_roots = BTreeSet::new();
         let return_holder;
         {
             let mut state = self.inner.state.lock().unwrap();
             if !state.invocations.contains_key(caller) {
                 return Err(OwnerLaneError::InactiveInvocation(caller.clone()));
             }
-            let invocations = invocations.into_iter().collect::<Vec<_>>();
-            for invocation in &invocations {
-                if !state.invocations.contains_key(invocation) {
-                    return Err(OwnerLaneError::InactiveInvocation(invocation.clone()));
-                }
-            }
             for invocation in invocations {
-                if state.invocations[&invocation].filesystem == FilesystemCapability::Capable {
-                    pending_roots.insert(invocation.clone());
+                let targets = if state.invocations.contains_key(&invocation) {
+                    vec![invocation.clone()]
+                } else {
+                    state
+                        .invocations
+                        .iter()
+                        .filter(|(_active_id, active)| {
+                            active.lineage.contains(&invocation)
+                                && active.parent.as_ref().is_none_or(|parent_id| {
+                                    !state.invocations.get(parent_id).is_some_and(|parent| {
+                                        parent.lineage.contains(&invocation)
+                                            || parent_id == &invocation
+                                    })
+                                })
+                        })
+                        .map(|(active_id, _active)| active_id.clone())
+                        .collect::<Vec<_>>()
+                };
+                for target in targets {
+                    let target_state = state.invocations.get_mut(&target).unwrap();
+                    if target == invocation {
+                        target_state.eligible = true;
+                    }
+                    if target_state.filesystem == FilesystemCapability::Capable {
+                        capable_roots.insert(target.clone());
+                    } else {
+                        incapable_roots.insert(target.clone());
+                    }
+                    edges.insert(target);
                 }
-                state.invocations.get_mut(&invocation).unwrap().eligible = true;
-                state
-                    .invocations
-                    .get_mut(caller)
-                    .unwrap()
-                    .blocked_on
-                    .insert(invocation);
             }
+            state
+                .invocations
+                .get_mut(caller)
+                .unwrap()
+                .blocked_on
+                .extend(edges.iter().cloned());
             return_holder = state.holder.clone().filter(|holder| {
-                pending_roots
+                edges
                     .iter()
                     .any(|invocation| state.blocking_reaches(holder, invocation))
             });
@@ -278,8 +300,12 @@ impl OwnerLane {
         self.inner.try_grant();
         Ok(OwnerLaneWait {
             lane: self.inner.clone(),
+            caller: caller.clone(),
             return_holder,
-            pending_roots,
+            edges,
+            capable_roots,
+            incapable_roots,
+            consumed: false,
         })
     }
 
@@ -455,8 +481,7 @@ impl OwnerLaneInner {
                 .iter()
                 .filter(|&(_id, child)| {
                     child.parent.as_ref() == Some(invocation)
-                        && child.filesystem == FilesystemCapability::Capable
-                        && !child.running
+                        && (child.filesystem == FilesystemCapability::Incapable || !child.running)
                 })
                 .map(|(id, _child)| id.clone())
                 .collect::<BTreeSet<_>>();
@@ -570,26 +595,108 @@ struct OwnerLaneWaitState {
 /// that previously held the lane.
 pub struct OwnerLaneWait {
     lane: Arc<OwnerLaneInner>,
+    caller: OwnerInvocationId,
     return_holder: Option<OwnerInvocationId>,
-    pending_roots: BTreeSet<OwnerInvocationId>,
+    edges: BTreeSet<OwnerInvocationId>,
+    capable_roots: BTreeSet<OwnerInvocationId>,
+    incapable_roots: BTreeSet<OwnerInvocationId>,
+    consumed: bool,
 }
 
 impl OwnerLaneWait {
-    pub async fn wait(self) {
-        if let Some(return_holder) = self.return_holder
-            && !self.pending_roots.is_empty()
-        {
-            self.lane
-                .wait_for_completion_return(OwnerLaneWaitState {
-                    return_holder,
-                    pending_roots: self.pending_roots,
-                })
-                .await;
+    pub async fn wait(mut self) {
+        let mut changed = self.lane.changed.subscribe();
+        loop {
+            let (ready, edges_withdrawn) = {
+                let mut state = self.lane.state.lock().unwrap();
+                let mut edges_withdrawn =
+                    state.withdraw_wait_edges(&self.caller, &self.incapable_roots);
+                let caller_gone = !state.invocations.contains_key(&self.caller);
+                let holder_outside_awaited_subtrees = state.holder.as_ref().is_none_or(|holder| {
+                    !self
+                        .edges
+                        .iter()
+                        .any(|root| state.is_in_subtree(holder, root))
+                });
+                let capable_subtrees_gone = self.capable_roots.iter().all(|root| {
+                    !state
+                        .invocations
+                        .keys()
+                        .any(|active| state.is_in_subtree(active, root))
+                });
+                let holder_returned = self.return_holder.as_ref().is_none_or(|return_holder| {
+                    state.holder.as_ref() == Some(return_holder)
+                        || !state.invocations.contains_key(return_holder)
+                });
+                let ready = caller_gone
+                    || (holder_outside_awaited_subtrees
+                        && capable_subtrees_gone
+                        && holder_returned);
+                if ready {
+                    edges_withdrawn |= state.withdraw_wait_edges(&self.caller, &self.edges);
+                }
+                (ready, edges_withdrawn)
+            };
+            if edges_withdrawn {
+                self.lane.signal_change();
+                self.lane.try_grant();
+            }
+            if ready {
+                self.consumed = true;
+                return;
+            }
+            if changed.changed().await.is_err() {
+                return;
+            }
+        }
+    }
+}
+
+impl Drop for OwnerLaneWait {
+    fn drop(&mut self) {
+        if !self.consumed {
+            let edges_withdrawn = {
+                let mut state = self.lane.state.lock().unwrap();
+                state.withdraw_wait_edges(&self.caller, &self.incapable_roots)
+            };
+            if edges_withdrawn {
+                self.lane.signal_change();
+                self.lane.try_grant();
+            }
         }
     }
 }
 
 impl OwnerLaneState {
+    fn is_in_subtree(&self, invocation: &OwnerInvocationId, root: &OwnerInvocationId) -> bool {
+        invocation == root
+            || self
+                .invocations
+                .get(invocation)
+                .is_some_and(|invocation| invocation.lineage.contains(root))
+    }
+
+    fn withdraw_wait_edges(
+        &mut self,
+        caller: &OwnerInvocationId,
+        roots: &BTreeSet<OwnerInvocationId>,
+    ) -> bool {
+        let Some(caller_state) = self.invocations.get(caller) else {
+            return false;
+        };
+        let withdrawn = caller_state
+            .blocked_on
+            .iter()
+            .filter(|blocked| roots.iter().any(|root| self.is_in_subtree(blocked, root)))
+            .cloned()
+            .collect::<Vec<_>>();
+        let caller_state = self.invocations.get_mut(caller).unwrap();
+        for blocked in &withdrawn {
+            caller_state.blocked_on.remove(blocked);
+        }
+        !withdrawn.is_empty()
+    }
+
     fn next_capable_candidate(&self) -> Option<OwnerInvocationId> {
         let candidates = if let Some(holder) = &self.holder {
             let holder_state = self.invocations.get(holder)?;
@@ -1005,13 +1112,250 @@ mod tests {
             "an unrelated off-lane chain must not take the lane"
         );
 
-        lane.await_invocations(&primary_id, [OwnerInvocationId::Entity(off_lane_id)])
+        let _wait = lane
+            .await_invocations(&primary_id, [OwnerInvocationId::Entity(off_lane_id)])
             .unwrap();
         let capable = acquire.await.unwrap();
         assert_eq!(lane.holder(), Some(OwnerInvocationId::Entity(capable_id)));
         drop(capable);
         assert_eq!(lane.holder(), Some(primary_id));
         drop(off_lane);
+    }
+
+    #[test]
+    async fn early_incapable_wait_does_not_admit_later_capable_descendant() {
+        let lane = lane();
+        let primary_id = OwnerInvocationId::Agent(OplogIndex::from_u64(1));
+        let primary = lane
+            .enter_primary(OplogIndex::from_u64(1))
+            .unwrap()
+            .acquire()
+            .await
+            .unwrap();
+        let middleware_id = entity(&lane, "middleware", 2);
+        let middleware = lane
+            .register_entity(
+                primary_id.clone(),
+                middleware_id.clone(),
+                EntityCallMode::Asynchronous,
+                FilesystemCapability::Incapable,
+            )
+            .unwrap()
+            .acquire()
+            .await
+            .unwrap();
+        lane.await_invocations(
+            &primary_id,
+            [OwnerInvocationId::Entity(middleware_id.clone())],
+        )
+        .unwrap()
+        .wait()
+        .await;
+
+        let tool_id = entity(&lane, "tool", 3);
+        let tool = lane
+            .register_entity(
+                OwnerInvocationId::Entity(middleware_id.clone()),
+                tool_id.clone(),
+                EntityCallMode::Synchronous,
+                FilesystemCapability::Capable,
+            )
+            .unwrap();
+        let mut tool = Box::pin(tool.acquire());
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(20), &mut tool)
+                .await
+                .is_err(),
+            "a capable descendant created after an incapable result became ready must stay queued"
+        );
+        primary.complete();
+        middleware.complete();
+        let tool = tool.await.unwrap();
+        assert_eq!(lane.holder(), Some(OwnerInvocationId::Entity(tool_id)));
+        tool.complete();
+    }
+
+    #[test]
+    async fn awaiting_completed_incapable_async_body_releases_and_waits_for_capable_descendant() {
+        let lane = lane();
+        let primary_id = OwnerInvocationId::Agent(OplogIndex::from_u64(1));
+        let _primary = lane
+            .enter_primary(OplogIndex::from_u64(1))
+            .unwrap()
+            .acquire()
+            .await
+            .unwrap();
+        let middleware_id = entity(&lane, "middleware", 2);
+        let middleware = lane
+            .register_entity(
+                primary_id.clone(),
+                middleware_id.clone(),
+                EntityCallMode::Asynchronous,
+                FilesystemCapability::Incapable,
+            )
+            .unwrap()
+            .acquire()
+            .await
+            .unwrap();
+        let tool_id = entity(&lane, "tool", 3);
+        let tool = lane
+            .register_entity(
+                OwnerInvocationId::Entity(middleware_id.clone()),
+                tool_id.clone(),
+                EntityCallMode::Asynchronous,
+                FilesystemCapability::Capable,
+            )
+            .unwrap();
+        let _tool_wait = lane
+            .await_invocations(
+                &OwnerInvocationId::Entity(middleware_id.clone()),
+                [OwnerInvocationId::Entity(tool_id.clone())],
+            )
+            .unwrap();
+        middleware.complete();
+
+        let mut tool = Box::pin(tool.acquire());
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(20), &mut tool)
+                .await
+                .is_err(),
+            "body completion alone must not let a retained descendant enter the primary's lane"
+        );
+        let wait = lane
+            .await_invocations(&primary_id, [OwnerInvocationId::Entity(middleware_id)])
+            .unwrap();
+        let mut wait = Box::pin(wait.wait());
+        let tool = tool.await.unwrap();
+        assert_eq!(lane.holder(), Some(OwnerInvocationId::Entity(tool_id)));
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(20), &mut wait)
+                .await
+                .is_err()
+        );
+        tool.complete();
+        wait.await;
+        assert_eq!(lane.holder(), Some(primary_id));
+    }
+
+    #[test]
+    async fn granted_capable_descendant_finishes_but_later_descendant_stays_queued() {
+        let lane = lane();
+        let primary_id = OwnerInvocationId::Agent(OplogIndex::from_u64(1));
+        let primary = lane
+            .enter_primary(OplogIndex::from_u64(1))
+            .unwrap()
+            .acquire()
+            .await
+            .unwrap();
+        let middleware_id = entity(&lane, "middleware", 2);
+        let _middleware = lane
+            .register_entity(
+                primary_id.clone(),
+                middleware_id.clone(),
+                EntityCallMode::Asynchronous,
+                FilesystemCapability::Incapable,
+            )
+            .unwrap()
+            .acquire()
+            .await
+            .unwrap();
+        let tool_id = entity(&lane, "tool", 3);
+        let tool = lane
+            .register_entity(
+                OwnerInvocationId::Entity(middleware_id.clone()),
+                tool_id.clone(),
+                EntityCallMode::Synchronous,
+                FilesystemCapability::Capable,
+            )
+            .unwrap();
+        let wait = lane
+            .await_invocations(
+                &primary_id,
+                [OwnerInvocationId::Entity(middleware_id.clone())],
+            )
+            .unwrap();
+        let tool = tool.acquire().await.unwrap();
+        let later_id = entity(&lane, "later", 4);
+        let later = lane
+            .register_entity(
+                OwnerInvocationId::Entity(middleware_id),
+                later_id.clone(),
+                EntityCallMode::Synchronous,
+                FilesystemCapability::Capable,
+            )
+            .unwrap();
+        let mut wait = Box::pin(wait.wait());
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(20), &mut wait)
+                .await
+                .is_err(),
+            "the result wait must not return while an awaited subtree owns the lane"
+        );
+        tool.complete();
+        wait.await;
+        assert_eq!(lane.holder(), Some(primary_id));
+
+        let mut later = Box::pin(later.acquire());
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(20), &mut later)
+                .await
+                .is_err(),
+            "withdrawing an incapable wait must also withdraw its later descendant edges"
+        );
+        primary.complete();
+        let later = later.await.unwrap();
+        assert_eq!(lane.holder(), Some(OwnerInvocationId::Entity(later_id)));
+        later.complete();
+    }
+
+    #[test]
+    #[test_r::timeout("5s")]
+    async fn incapable_wait_finishes_after_its_capable_return_holder_ends() {
+        let lane = lane();
+        let primary_id = OwnerInvocationId::Agent(OplogIndex::from_u64(1));
+        let primary = lane
+            .enter_primary(OplogIndex::from_u64(1))
+            .unwrap()
+            .acquire()
+            .await
+            .unwrap();
+        let middleware_id = entity(&lane, "middleware", 2);
+        let _middleware = lane
+            .register_entity(
+                primary_id.clone(),
+                middleware_id.clone(),
+                EntityCallMode::Asynchronous,
+                FilesystemCapability::Incapable,
+            )
+            .unwrap()
+            .acquire()
+            .await
+            .unwrap();
+        let primary_wait = lane
+            .await_invocations(
+                &primary_id,
+                [OwnerInvocationId::Entity(middleware_id.clone())],
+            )
+            .unwrap();
+        let tool_id = entity(&lane, "tool", 3);
+        let tool = lane
+            .register_entity(
+                OwnerInvocationId::Entity(middleware_id.clone()),
+                tool_id.clone(),
+                EntityCallMode::Asynchronous,
+                FilesystemCapability::Capable,
+            )
+            .unwrap();
+        let middleware_wait = lane
+            .await_invocations(
+                &OwnerInvocationId::Entity(middleware_id),
+                [OwnerInvocationId::Entity(tool_id)],
+            )
+            .unwrap();
+        tool.acquire().await.unwrap().complete();
+        primary_wait.wait().await;
+        primary.complete();
+        middleware_wait.wait().await;
     }
 
     #[test]

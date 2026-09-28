@@ -14,8 +14,7 @@
 
 use golem_common::base_model::oplog::PublicSnapshotData;
 use golem_common::model::oplog::{
-    PluginInstallationDescription, PublicAgentInvocation, PublicAttributeValue, PublicOplogEntry,
-    PublicUpdateDescription, StringAttributeValue,
+    PluginInstallationDescription, PublicAgentInvocation, PublicOplogEntry, PublicUpdateDescription,
 };
 use golem_common::schema::TypedSchemaValue;
 use golem_common::schema::render::value_to_cli_text;
@@ -66,6 +65,9 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
                     typed_schema_value_to_string(request)
                 );
             }
+            if let Some(span) = &params.span_started {
+                let _ = writeln!(result, "{pad}span started:      {span:?}");
+            }
         }
         PublicOplogEntry::End(params) => {
             let _ = writeln!(result, "END");
@@ -81,6 +83,12 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
             if params.forced_commit {
                 let _ = writeln!(result, "{pad}forced commit:     true");
             }
+            if let Some(span) = &params.span_finished {
+                let _ = writeln!(result, "{pad}span finished:     {span:?}");
+            }
+            if let Some(attributes) = &params.span_attributes {
+                let _ = writeln!(result, "{pad}span attributes:   {attributes:?}");
+            }
         }
         PublicOplogEntry::Cancelled(params) => {
             let _ = writeln!(result, "CANCELLED");
@@ -92,6 +100,9 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
                     "{pad}partial result:    {}",
                     typed_schema_value_to_string(partial)
                 );
+            }
+            if let Some(span) = &params.span_finished {
+                let _ = writeln!(result, "{pad}span finished:     {span:?}");
             }
         }
         PublicOplogEntry::CompletionDiscarded(params) => {
@@ -117,6 +128,16 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
                     let _ = writeln!(result, "{pad}method:            {}", inner.method_name);
                     let _ = writeln!(result, "{pad}idempotency key:   {}", inner.idempotency_key,);
                 }
+                PublicAgentInvocation::ExternalTool(inner) => {
+                    let _ = writeln!(result, "{pad}type:              external tool");
+                    let _ = writeln!(result, "{pad}tool:              {}", inner.tool_name);
+                    let _ = writeln!(
+                        result,
+                        "{pad}path:              {}",
+                        inner.command_path.join("/")
+                    );
+                    let _ = writeln!(result, "{pad}idempotency key:   {}", inner.idempotency_key);
+                }
                 PublicAgentInvocation::SaveSnapshot(_) => {
                     let _ = writeln!(result, "{pad}type:              save snapshot");
                 }
@@ -131,22 +152,21 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
                     let _ = writeln!(result, "{pad}target revision:   {}", inner.target_revision,);
                 }
             }
-            if let Some(wallet_pin) = &params.wallet_pin {
-                let wallet_id_hash = wallet_pin
-                    .wallet_token
-                    .wallet_id_hash
-                    .iter()
-                    .map(|byte| format!("{byte:02x}"))
-                    .collect::<String>();
-                let _ = writeln!(result, "{pad}wallet id hash:    {wallet_id_hash}");
-                let _ = writeln!(
-                    result,
-                    "{pad}wallet generation: {}",
-                    wallet_pin.wallet_token.generation
-                );
-                if let Some(scope_card_id) = wallet_pin.scope_card_id {
-                    let _ = writeln!(result, "{pad}scope card:        {scope_card_id}");
-                }
+            let wallet_id_hash = params
+                .wallet_pin
+                .wallet_token
+                .wallet_id_hash
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>();
+            let _ = writeln!(result, "{pad}wallet id hash:    {wallet_id_hash}");
+            let _ = writeln!(
+                result,
+                "{pad}wallet generation: {}",
+                params.wallet_pin.wallet_token.generation
+            );
+            if let Some(scope_card_id) = params.wallet_pin.scope_card_id {
+                let _ = writeln!(result, "{pad}scope card:        {scope_card_id}");
             }
         }
         PublicOplogEntry::AgentInvocationFinished(params) => {
@@ -214,6 +234,20 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
                     result,
                     "{pad}idempotency key:   {}",
                     inner_params.idempotency_key,
+                );
+            }
+            PublicAgentInvocation::ExternalTool(inner_params) => {
+                let _ = writeln!(result, "ENQUEUED EXTERNAL TOOL {}", inner_params.tool_name);
+                let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
+                let _ = writeln!(
+                    result,
+                    "{pad}path:              {}",
+                    inner_params.command_path.join("/")
+                );
+                let _ = writeln!(
+                    result,
+                    "{pad}idempotency key:   {}",
+                    inner_params.idempotency_key
                 );
             }
             PublicAgentInvocation::SaveSnapshot(_) => {
@@ -340,46 +374,6 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
             let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
             let _ = writeln!(result, "{pad}idempotency key:   {}", params.idempotency_key,);
         }
-        PublicOplogEntry::StartSpan(params) => {
-            let _ = writeln!(result, "START SPAN");
-            let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
-            let _ = writeln!(result, "{pad}span id:           {}", params.span_id);
-            if let Some(parent_id) = &params.parent_id {
-                let _ = writeln!(result, "{pad}parent span:       {}", parent_id,);
-            }
-            if let Some(linked_id) = &params.linked_context {
-                let _ = writeln!(result, "{pad}linked span:       {}", linked_id,);
-            }
-            let _ = writeln!(result, "{pad}attributes:");
-            for attr in &params.attributes {
-                let _ = writeln!(
-                    result,
-                    "{pad}  - {}: {}",
-                    attr.key,
-                    match &attr.value {
-                        PublicAttributeValue::String(StringAttributeValue { value }) => value,
-                    }
-                );
-            }
-        }
-        PublicOplogEntry::FinishSpan(params) => {
-            let _ = writeln!(result, "FINISH SPAN");
-            let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
-            let _ = writeln!(result, "{pad}span id:           {}", params.span_id);
-        }
-        PublicOplogEntry::SetSpanAttribute(params) => {
-            let _ = writeln!(result, "SET SPAN ATTRIBUTE");
-            let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
-            let _ = writeln!(result, "{pad}span id:           {}", params.span_id);
-            let _ = writeln!(result, "{pad}key:               {}", params.key);
-            let _ = writeln!(
-                result,
-                "{pad}value:             {}",
-                match &params.value {
-                    PublicAttributeValue::String(StringAttributeValue { value }) => value,
-                }
-            );
-        }
         PublicOplogEntry::BeginRemoteTransaction(params) => {
             let _ = writeln!(result, "BEGIN REMOTE TRANSACTION");
             let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
@@ -484,17 +478,21 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
                 params.queued_event_index
             );
             let _ = writeln!(result, "{pad}card id:           {}", params.card_id);
-            if let Some(generation) = params.wallet_generation {
-                let _ = writeln!(result, "{pad}wallet generation: {generation}");
-            }
+            let _ = writeln!(
+                result,
+                "{pad}wallet generation: {}",
+                params.wallet_generation
+            );
         }
         PublicOplogEntry::CardExpired(params) => {
             let _ = writeln!(result, "CARD EXPIRED");
             let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
             let _ = writeln!(result, "{pad}card id:           {}", params.card_id);
-            if let Some(generation) = params.wallet_generation {
-                let _ = writeln!(result, "{pad}wallet generation: {generation}");
-            }
+            let _ = writeln!(
+                result,
+                "{pad}wallet generation: {}",
+                params.wallet_generation
+            );
         }
         PublicOplogEntry::CardEventQueued(params) => {
             let _ = writeln!(result, "CARD EVENT QUEUED");
@@ -510,9 +508,11 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
                 params.queued_event_index
             );
             let _ = writeln!(result, "{pad}card id:           {}", params.card_id);
-            if let Some(generation) = params.wallet_generation {
-                let _ = writeln!(result, "{pad}wallet generation: {generation}");
-            }
+            let _ = writeln!(
+                result,
+                "{pad}wallet generation: {}",
+                params.wallet_generation
+            );
         }
         PublicOplogEntry::CardInstallFailed(params) => {
             let _ = writeln!(result, "CARD INSTALL FAILED");
@@ -530,9 +530,11 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
             let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
             let _ = writeln!(result, "{pad}card id:           {}", params.card_id);
             let _ = writeln!(result, "{pad}parent ids:        {:?}", params.parent_ids);
-            if let Some(generation) = params.wallet_generation {
-                let _ = writeln!(result, "{pad}wallet generation: {generation}");
-            }
+            let _ = writeln!(
+                result,
+                "{pad}wallet generation: {}",
+                params.wallet_generation
+            );
         }
         PublicOplogEntry::CardTransferStarted(params) => {
             let _ = writeln!(result, "CARD TRANSFER STARTED");
@@ -540,26 +542,28 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
             let _ = writeln!(result, "{pad}transfer id:       {}", params.transfer_id);
             let _ = writeln!(result, "{pad}card id:           {}", params.card_id);
             let _ = writeln!(result, "{pad}target holder:     {:?}", params.target_holder);
-            if let Some(generation) = params.source_wallet_generation {
-                let _ = writeln!(result, "{pad}source generation: {generation}");
-            }
+            let _ = writeln!(
+                result,
+                "{pad}source generation: {}",
+                params.source_wallet_generation
+            );
         }
         PublicOplogEntry::CardTransferred(params) => {
             let _ = writeln!(result, "CARD TRANSFER ADMITTED");
             let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
             let _ = writeln!(result, "{pad}transfer id:       {}", params.transfer_id);
-            if let Some(source_card_id) = params.source_card_id {
-                let _ = writeln!(result, "{pad}source card id:    {source_card_id}");
-            }
+            let _ = writeln!(result, "{pad}source card id:    {}", params.source_card_id);
             let _ = writeln!(
                 result,
                 "{pad}installed card id: {}",
                 params.installed_card_id
             );
             let _ = writeln!(result, "{pad}target holder:     {:?}", params.target_holder);
-            if let Some(generation) = params.target_wallet_generation {
-                let _ = writeln!(result, "{pad}target generation: {generation}");
-            }
+            let _ = writeln!(
+                result,
+                "{pad}target generation: {}",
+                params.target_wallet_generation
+            );
         }
         PublicOplogEntry::CardRevokedCascade(params) => {
             let _ = writeln!(result, "CARD REVOKED CASCADE");
@@ -569,9 +573,11 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
                 "{pad}revoked card ids:  {:?}",
                 params.revoked_card_ids
             );
-            if let Some(generation) = params.local_wallet_generation {
-                let _ = writeln!(result, "{pad}local generation:  {generation}");
-            }
+            let _ = writeln!(
+                result,
+                "{pad}local generation:  {}",
+                params.local_wallet_generation
+            );
         }
         PublicOplogEntry::CardTransferConfirmed(params) => {
             let _ = writeln!(result, "CARD TRANSFER CONFIRMED");

@@ -52,7 +52,8 @@ object ToolWireInterop {
             JsMonomorphicToolMiddlewareScope(toolToJs(presented), expected.map(toolToJs).orUndefined)
           )
         case ToolMiddlewareScope.Universal => JsToolMiddlewareScope.universal
-      }
+      },
+      SchemaWireInterop.graphToJs(golem.schema.wire.SchemaWire.schemaGraphToWit(middleware.parameterSchema))
     )
 
   def toolMiddlewareFromJs(middleware: JsToolMiddleware): ToolMiddlewareDescriptor =
@@ -70,6 +71,7 @@ object ToolWireInterop {
         case "universal" => ToolMiddlewareScope.Universal
         case other       => throw new IllegalArgumentException(s"unknown tool middleware scope tag: $other")
       },
+      golem.schema.wire.SchemaWire.schemaGraphFromWit(SchemaWireInterop.graphFromJs(middleware.parameterSchema)),
       middleware.version
     )
 

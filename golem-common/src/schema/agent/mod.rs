@@ -467,6 +467,7 @@ pub struct AgentDependencySchema {
 #[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub struct AgentTypeSchema {
     pub type_name: AgentTypeName,
+    pub kind: AgentTypeKind,
     pub description: String,
     #[serde(default)]
     pub source_language: String,
@@ -492,6 +493,16 @@ pub struct AgentTypeSchema {
     pub config: Vec<AgentConfigDeclarationSchema>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Enum))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "kebab-case"))]
+#[serde(rename_all = "kebab-case")]
+pub enum AgentTypeKind {
+    Regular,
+    HttpRouter,
+}
+
 /// Schema-layer form of an agent config declaration.
 ///
 /// Carries the `value_type` as a schema-native [`SchemaType`]. This keeps
@@ -504,6 +515,28 @@ pub struct AgentConfigDeclarationSchema {
     pub source: AgentConfigSource,
     pub path: Vec<String>,
     pub value_type: SchemaType,
+}
+
+/// Component-owned configuration declarations. Unlike an agent schema this contract can be
+/// declared and provisioned even when the component exports no agent types.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
+pub struct ComponentConfigSchema {
+    #[serde(default = "SchemaGraph::empty")]
+    pub schema: SchemaGraph,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub declarations: Vec<AgentConfigDeclarationSchema>,
+}
+
+impl Default for ComponentConfigSchema {
+    fn default() -> Self {
+        Self {
+            schema: SchemaGraph::empty(),
+            declarations: Vec::new(),
+        }
+    }
 }
 
 /// Schema-model form of a registered agent type. Mirrors the legacy
@@ -547,6 +580,7 @@ impl AgentTypeSchema {
     /// Validates semantic constraints of the agent type, including stream
     /// placement and definitions that are not reachable from an allowed use.
     pub fn validate(&self) -> Result<(), String> {
+        http::validate(self).map_err(|error| error.to_string())?;
         if self.mode == AgentMode::Ephemeral {
             for method in &self.methods {
                 if method.read_only.is_some() {
@@ -767,6 +801,8 @@ pub mod bindings {
 /// in [`bindings`].
 #[cfg(feature = "full")]
 pub mod wit;
+
+pub mod http;
 
 #[cfg(test)]
 mod tests;

@@ -1,0 +1,122 @@
+import { Callout } from "nextra/components"
+
+# Exposing Durable Streams over HTTP
+
+Golem exposes an HTTP-annotated agent method in **Durable Streams mode** whenever the method has a top-level stream input or a stream-bearing result. No Durable Streams annotation is required. The method's HTTP path becomes the base of a protocol-compatible URL family; the method schema fixes the available slots and their representations.
+
+This is useful when a browser, service, or an unmodified Durable Streams client needs to drive a long-running agent invocation without holding one HTTP request open.
+
+## URL family
+
+For a method mounted at `{base}`, Golem provides:
+
+| Resource | URL | Purpose |
+| --- | --- | --- |
+| Method | `{base}` | Create a session with a server-generated session ID. |
+| Session | `{base}/invocations/{session}` | Create, inspect, or cancel one invocation session. |
+| Stream slot | `{base}/invocations/{session}/streams/{slot}` | Create, read, append to, or delete a declared stream. |
+| Direct result | `{base}/invocations/{session}/streams/$result` | Read a direct stream result or the single non-stream method result. |
+| Fork session | `{base}/forks/{fork}/invocations/{session}` | Inspect an exact-prefix agent fork. |
+| Fork stream | `{base}/forks/{fork}/invocations/{session}/streams/{slot}` | Create or use a stream on the forked agent. |
+
+Session and fork IDs contain 1–128 ASCII letters, digits, `.`, `_`, or `-`. A session identifies one invocation and all of its input, output, and result slots. A direct `stream<T>` result is `$result`; when a result record contains streams, each field is a separate output slot and there is no aggregate `$result`. A non-stream result is a single JSON value in `$result`. Unit results have no result slot.
+
+Top-level `stream<u8>` slots are opaque byte streams. They use `application/octet-stream` by default and offsets advance through bytes. All other slots are typed JSON streams using `application/json`; each array member in a read response is one logical item. A custom opaque MIME type is available only for direct byte streams. Golem has no native `text/plain` mode for `stream<string>`.
+
+See [Customizing Durable Stream Routes](/next/invoke/making-custom-apis#customizing-durable-stream-routes) for public slot aliases, byte-stream MIME types, operation switches, and per-route admission limits. There is no fork opt-out.
+
+## Start and drive a session
+
+This example assumes an `echo` method with a JSON input slot named `input` and an output slot named `$result`.
+
+```shell
+# Create the invocation. Non-stream arguments use the endpoint's normal
+# path, query, header, and body bindings.
+curl -i -X PUT \
+  https://api.example.com/echo/invocations/demo-1 \
+  -H 'Authorization: Bearer …' \
+  -H 'Stream-TTL: 300'
+
+# Append two items and close the input atomically.
+curl -i -X POST \
+  https://api.example.com/echo/invocations/demo-1/streams/input \
+  -H 'Authorization: Bearer …' \
+  -H 'Content-Type: application/json' \
+  -H 'Producer-Id: upload-1' \
+  -H 'Producer-Epoch: 0' \
+  -H 'Producer-Seq: 0' \
+  -H 'Stream-Closed: true' \
+  --data '["first", "second"]'
+
+# Read everything produced so far. Keep the returned Stream-Next-Offset
+# opaque and pass it back unchanged when resuming.
+curl -i \
+  'https://api.example.com/echo/invocations/demo-1/streams/%24result?offset=-1'
+```
+
+Slot `PUT` and input `POST` can create a missing session only when every non-stream method argument is bound in the route path or query. Otherwise create the session first. Base and session creation consume the endpoint's normal request body; do not assume it is always a JSON argument object.
+
+## Reading
+
+`GET` accepts these query parameters:
+
+| Parameter | Meaning |
+| --- | --- |
+| `offset` | `-1` for the beginning (the default), `now` for the current tail, or a returned 48-character lowercase hexadecimal offset. |
+| `live=long-poll` | Wait for data or the server's configured polling timeout. An empty timeout returns `204`. |
+| `live=sse` | Stream data and control events as `text/event-stream`. Byte data events are base64 and report `Stream-SSE-Data-Encoding: base64`. |
+| `cursor` | An opaque long-poll collapsing cursor returned in `Stream-Cursor`; it is independent of the stream offset. |
+
+Offsets are opaque `StreamOffsetV1` values. Their hexadecimal representation is a transport token, not an integer or item count. Store and echo it exactly. A read returns `Stream-Next-Offset`, `Stream-Up-To-Date`, and terminal metadata as applicable. JSON catch-up and long-poll bodies are arrays; byte bodies are exact bytes. SSE control events carry `streamNextOffset`, `upToDate`, and either `streamClosed: true` or a string `streamCursor`.
+
+`HEAD` returns the same committed stream metadata without a body. Closed pages can use `ETag` and conditional `GET`; other responses are normally `Cache-Control: no-store`.
+
+## Appending and idempotent producers
+
+Only input slots accept `POST`. A JSON body may be one value or an array batch; arrays flatten exactly one level, so an array-valued item needs an outer array. A byte append is one opaque byte batch. A non-empty body requires the slot's content type. Send `Stream-Closed: true` with data to append and close atomically, or with an empty body for close-only.
+
+For retry-safe writes, supply `Producer-Id`, `Producer-Epoch`, and `Producer-Seq` together. Sequence starts at zero and advances per request, not per item. Retrying the exact tuple is a no-op after the first commit. A newer epoch fences older writers and starts at sequence zero; gaps are rejected. Persist the tuple and body before sending, and never replace an uncertain request with different data.
+
+## Expiry
+
+Creation `PUT`, lazy slot `PUT`, lazy input `POST`, and fork creation support one session-wide expiry policy:
+
+- `Stream-TTL: <seconds>` is a sliding idle timeout in whole seconds.
+- `Stream-Expires-At: <RFC3339 timestamp>` is an absolute future deadline.
+
+The headers are mutually exclusive; malformed, duplicated, past, or conflicting policies return `400`. The policy belongs to the entire session, not one slot. `HEAD` reports the configured value. A new origin `GET` and an accepted or duplicate `POST` refresh a sliding TTL; refresh records are coalesced until they extend the deadline by at least 10% of the TTL. `HEAD`, replayed `PUT`, subsequent activity inside an already-open live response, and agent output do not refresh it.
+
+Expiry cooperatively cancels open streams, retires the whole URL family to `404`, and—on the normal durable-agent path—allows an explicit session `PUT` or eligible slot `PUT` to create a new invocation with the same public session ID and fresh stream identities. Lazy `POST` does not recreate an expired session. Ephemeral agents cannot release their key-derived identity and require a new session ID; expired fork targets also cannot be recreated.
+
+## Authentication and browsers
+
+Every generated operation inherits the endpoint's authentication policy. Send the same bearer or configured API credentials to base, session, stream, and fork URLs. Session URLs are not bearer capabilities by themselves.
+
+CORS also inherits the route policy. Preflight supports the Durable Streams request headers, including closure, producer, fork, expiry, cache, and content headers. Successful browser responses expose the relevant `Location`, offset, terminal, producer, expiry, retry, ETag, cursor, and SSE-encoding headers. Configure the endpoint's allowed origins and credentials as described in [Making Custom APIs](/next/invoke/making-custom-apis).
+
+## Operation and status reference
+
+The deployment-specific OpenAPI document is authoritative for the concrete slots, schemas, media types, security, and operations enabled on a route. The table below summarizes the complete runtime family.
+
+| Resource and method | Success | Important failures | Main request / response headers |
+| --- | --- | --- | --- |
+| Base `PUT` | `201`; idempotent existing invocation `200` | `400` arguments/expiry; `409` identity, arguments, or policy conflict | Request expiry; response `Location` |
+| Session `PUT` | `201` / `200` | `400`; `404`; `409`; `503` | Request expiry; response `Location` when supplied by the concrete contract |
+| Session `GET` / `HEAD` | `200` manifest / bodyless metadata | `404`; `503` | `Stream-Closed`, `Cache-Control`; `HEAD` also expiry policy |
+| Session `DELETE` | First and repeated cancellation `204` | Unknown `404`; disabled `405`; `503` | `Allow`, `Retry-After` when applicable |
+| Slot `PUT` | Created `201`; existing `200` | Invalid lazy create/body `400`; unknown `404`; tombstone/type conflict `409`; `503` | Request expiry and optional matching `Content-Type`; response metadata |
+| Slot `HEAD` | `200` | Unknown `404`; tombstone `410`; `503` | Offset, closed/cancelled/up-to-date, expiry, cache, ETag |
+| Slot `GET` | Data/SSE `200`; empty long-poll `204`; conditional closed page `304` | Invalid query/offset `400`; unknown `404`; tombstone `410`; admission `429` or `503` | `If-None-Match`; response offset, closed, cancelled, up-to-date, cursor, ETag, SSE encoding, cache, `Retry-After` |
+| Input `POST` | Ordinary append/close `204`; new producer append `200`; duplicate producer request `204` | `400`; fenced `403`; output slot/disabled `405`; conflict/gap/closed `409`; tombstone `410`; body/batch `413`; rate `429`; `503` | Content type, closure, producer tuple, expiry on lazy create; response offset/closed and producer outcome |
+| Slot `DELETE` | Tombstone `204` | Unknown `404`; disabled `405`; already deleted `410`; `503` | `Allow`, `Retry-After` when applicable |
+| Fork slot `PUT` | Created `201`; identical retry `200` | Invalid source/cut `400`; read-only initial data `403`; unknown `404`; conflict/deleted source/session limit `409`; copy/body limit `413`; rate `429`; `503` | Fork source/offset/sub-offset, optional initial body/close and expiry; response `Location` and metadata |
+
+Common response metadata is `Stream-Next-Offset`, `Stream-Closed`, `Stream-Cancelled`, `Stream-Up-To-Date`, `Cache-Control`, and `ETag`. `Stream-Cancelled: true` distinguishes cooperative cancellation from normal EOF; buffered history may still be returned first. An already-terminal stream keeps its original terminal state.
+
+Producer outcomes use `Producer-Epoch` and `Producer-Seq`. A stale epoch is `403` with the current `Producer-Epoch`; a sequence gap is `409` with `Producer-Expected-Seq` and `Producer-Received-Seq`. Body and schema errors may use `application/problem+json`, but callers must accept bodyless errors too. Disabled operations return `405` with an exact `Allow`; overload returns `429` or `503` with `Retry-After`.
+
+<Callout type="info">
+  For differences from a generic Durable Streams store, deletion retention, and
+  the upstream conformance scope, see [Compatibility and limitations](/next/invoke/durable-streams-compatibility).
+  For exact-prefix branches, see [Forking Durable Streams](/next/develop/durable-stream-forks).
+</Callout>

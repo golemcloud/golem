@@ -1,0 +1,1 @@
+Runtime-owned next-layer capabilities, independent of ambient tool dispatch.

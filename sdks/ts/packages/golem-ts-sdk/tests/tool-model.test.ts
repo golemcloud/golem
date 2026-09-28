@@ -94,6 +94,26 @@ function command(name: string, overrides: Partial<ExtendedCommandNode> = {}): Ex
 }
 
 describe('internal extended tool model', () => {
+  it('encodes optional tool fields under their actual wire schema', () => {
+    const optional = new CanonicalInputModel([
+      {
+        name: 'maybe',
+        aliases: [],
+        codec: optionalCanonicalFieldCodec(stringCodec),
+        optionalCarrier: true,
+      },
+    ]);
+    const required = new CanonicalInputModel([{ name: 'maybe', aliases: [], codec: stringCodec }]);
+    for (const maybe of [undefined, 'supplied']) {
+      const typed = optional.encodeTyped({ maybe });
+      expect(schemaValueConforms(typed.graph, typed.graph.root, typed.value)).toBe(true);
+    }
+    const supplied = optional.encode({ maybe: 'supplied' });
+    expect(required.projectValues(optional.decodeValues(supplied))[0].schemaValue).toEqual(
+      v.string('supplied'),
+    );
+  });
+
   it('compares canonical schema shape across restrictions and recursive definition names', () => {
     expect(
       schemaShapesMatch(

@@ -25,7 +25,22 @@ final case class ToolMiddlewareResult(
 )
 
 sealed trait ToolError[+E]
-sealed trait ToolInvokeError[+E]
+sealed trait ToolInvokeError[+E] {
+  def mapTool[E2](f: E => E2): ToolInvokeError[E2] = ???
+}
+
+final case class ToolUnderlyingInvocation[+E, +A](
+  admission: Future[ToolUnderlyingAdmission[E, A]]
+) {
+  def toMiddlewareResult: Future[Either[ToolInvokeError[E], A]] = ???
+}
+
+final case class ToolUnderlyingAdmission[+E, +A](
+  stdout: Option[ToolMiddlewareOutputHandle],
+  result: Future[Either[Any, A]],
+  cancel: () => Unit,
+  drop: () => Unit
+)
 
 trait RawToolUnderlying {
   def invoke(
@@ -89,7 +104,8 @@ object ToolClientRuntime {
 
   def decodeValueResult[A](
     result: ToolInvokeResult,
-    from: FromSchema[A]
+    from: FromSchema[A],
+    graph: Any
   ): Either[ToolError[Nothing], A] = ???
 }
 
@@ -116,16 +132,17 @@ object ToolUnderlyingRuntime {
     commandPath: List[String],
     input: Either[ToolInvokeError[Nothing], TypedSchemaValue],
     stdin: Option[ToolMiddlewareInputHandle]
-  ): Future[Either[ToolInvokeError[Nothing], ToolMiddlewareResult]] = ???
+  ): ToolUnderlyingInvocation[Nothing, ToolMiddlewareResult] = ???
 
   def complete[E, A](
-    call: Future[Either[ToolInvokeError[E], ToolMiddlewareResult]]
-  )(decode: ToolMiddlewareResult => Either[ToolError[Nothing], A]): Future[Either[ToolInvokeError[E], A]] = ???
+    call: ToolUnderlyingInvocation[E, ToolMiddlewareResult]
+  )(decode: ToolMiddlewareResult => Either[ToolError[Nothing], A]): ToolUnderlyingInvocation[E, A] = ???
 
   def decodeUnitResult(result: ToolMiddlewareResult): Either[ToolError[Nothing], Unit] = ???
 
   def decodeValueResult[A](
     result: ToolMiddlewareResult,
-    from: FromSchema[A]
+    from: FromSchema[A],
+    graph: Any
   ): Either[ToolError[Nothing], A] = ???
 }

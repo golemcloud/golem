@@ -1,18 +1,29 @@
 use capable_streaming_tool_guest_client::CapableStreamingClient;
 use futures_concurrency::prelude::*;
 use golem_rust::agentic::{
-    InputStream, Principal, ToolInvocation, ToolInvocationStdout, pump_tool_stdin, spawn_local,
-    tool_protocol_error,
+    AgentStream, Config, InputStream, Principal, Secret, ToolInvocation, ToolInvocationStdout,
+    pump_tool_stdin, spawn_local, tool_protocol_error,
 };
 use golem_rust::durability::{Durability, DurableFunctionType};
 use golem_rust::golem_agentic::golem::tool::host::{
-    self as tool_host, ByteStreamFailure, RpcError, ToolRpc,
+    self as tool_host, ByteStreamFailure, ToolRpc, ToolRpcError,
 };
 use golem_rust::{
-    FromSchema, IntoSchema, IntoTypedSchemaValue, agent_definition, agent_implementation,
+    ConfigSchema, FromSchema, IntoSchema, IntoTypedSchemaValue, SchemaValue, agent_definition,
+    agent_implementation, decode_typed_schema_value_owned, read_only,
 };
-use std::io::Write;
+use secret_policy_probe_tool_guest_client::SecretPolicyProbeClient;
+use std::io::{Read, Write};
 use streaming_tool_guest_client::{StreamSummary, StreamingClient, StreamingRunError};
+use typed_output_stream_tool_guest_client::TypedOutputStreamClient;
+
+#[unsafe(export_name = "_initialize")]
+pub extern "C" fn initialize_component_baseline_clock() {
+    if std::env::var_os("FORBID_AGENT_CONSTRUCTION").is_some() {
+        // Observe the reactor initializer independently of any agent constructor.
+        std::hint::black_box(std::time::Instant::now());
+    }
+}
 
 #[derive(Debug, Clone, IntoSchema, FromSchema)]
 pub struct StreamEvidence {
@@ -55,10 +66,118 @@ struct RawCapableInput {
     path: String,
 }
 
+#[derive(IntoSchema)]
+struct RawMiddlewareProbeInput {
+    value: String,
+}
+
+#[derive(IntoSchema)]
+struct RawTypedOutputInput {
+    tag: String,
+}
+
+#[derive(Debug, Clone, IntoSchema, FromSchema)]
+struct TypedInputItem {
+    ordinal: u32,
+    caller_extra: u64,
+    label: String,
+}
+
+#[derive(IntoSchema)]
+struct RawTypedInput {
+    input: AgentStream<TypedInputItem>,
+}
+
+#[derive(ConfigSchema)]
+pub struct ToolSecretCallerConfig {
+    #[config_schema(secret)]
+    pub tool_secret: Secret<String>,
+}
+
+#[derive(Debug, Clone, IntoSchema, FromSchema)]
+pub struct SecretPolicyObservation {
+    pub label: String,
+    pub config_resolved: bool,
+    pub configured_secret_revealed: bool,
+    pub input_secret_revealed: bool,
+}
+
+#[derive(Debug, Clone, IntoSchema, FromSchema)]
+pub struct SecretPolicyEvidence {
+    pub middleware: Vec<SecretPolicyObservation>,
+    pub leaf_revealed: bool,
+}
+
+#[agent_definition]
+pub trait ToolSecretCaller {
+    fn new(name: String, #[agent_config] config: Config<ToolSecretCallerConfig>) -> Self;
+
+    async fn inspect_secret_policy(&self) -> SecretPolicyEvidence;
+}
+
+struct ToolSecretCallerImpl {
+    config: Config<ToolSecretCallerConfig>,
+}
+
+#[agent_implementation]
+impl ToolSecretCaller for ToolSecretCallerImpl {
+    fn new(_name: String, #[agent_config] config: Config<ToolSecretCallerConfig>) -> Self {
+        Self { config }
+    }
+
+    async fn inspect_secret_policy(&self) -> SecretPolicyEvidence {
+        let value = self
+            .config
+            .get()
+            .expect("secret handle resolution must be allowed for the calling agent")
+            .tool_secret
+            .handle()
+            .expect("secret handle resolution must be allowed for the calling agent");
+        let evidence = SecretPolicyProbeClient::new()
+            .inspect(value)
+            .await
+            .expect("invoke secret policy probe");
+        SecretPolicyEvidence {
+            middleware: evidence
+                .middleware
+                .into_iter()
+                .map(|observation| SecretPolicyObservation {
+                    label: observation.label,
+                    config_resolved: observation.config_resolved,
+                    configured_secret_revealed: observation.configured_secret_revealed,
+                    input_secret_revealed: observation.input_secret_revealed,
+                })
+                .collect(),
+            leaf_revealed: evidence.leaf_revealed,
+        }
+    }
+}
+
+#[derive(IntoSchema)]
+struct RawDirectTypedInput {
+    input: AgentStream<TypedInputEvidence>,
+}
+
+#[derive(Debug, Clone, IntoSchema, FromSchema)]
+pub struct TypedOutputEvidence {
+    pub label: String,
+    pub ordinal: u32,
+}
+
+#[derive(Debug, Clone, IntoSchema, FromSchema)]
+pub struct TypedInputEvidence {
+    pub label: String,
+    pub ordinal: u32,
+}
+
 #[agent_definition]
 pub trait ToolStreamingCaller {
     fn new(name: String) -> Self;
 
+    fn record_native_order(&self, marker: String) -> String;
+    fn replay_probe(&self) -> String;
+    #[read_only]
+    fn read_owner_file(&self, path: String) -> String;
     async fn concurrent_attempt_identity_replay(&self) -> Vec<String>;
     async fn marker_before_eof(&self, first: Vec<u8>, rest: Vec<u8>) -> StreamEvidence;
     async fn alternating_echo(&self, chunk_count: u32, chunk_size: u32) -> StreamEvidence;
@@ -84,6 +203,13 @@ pub trait ToolStreamingCaller {
     ) -> Vec<StreamEvidence>;
     async fn edge_lifecycles(&self) -> Vec<String>;
     async fn raw_modes_and_handles(&self) -> Vec<String>;
+    async fn middleware_probe_modes(&self, value: String) -> Vec<String>;
+    async fn middleware_probe_once(&self, value: String) -> String;
+    async fn dynamic_mcp_probe(&self, value: String) -> String;
+    async fn dynamic_mcp_chain_probe(&self, value: String) -> Vec<String>;
+    async fn dynamic_mcp_stdout_probe(&self, value: String) -> String;
+    async fn consume_typed_output(&self, decorated: bool, tag: String) -> Vec<TypedOutputEvidence>;
+    async fn produce_typed_input(&self, decorated: bool) -> Vec<TypedInputEvidence>;
     async fn native_modes_stream_cancel_overlap(&self) -> Vec<String>;
     async fn native_effect_count(&self) -> String;
     async fn raw_handle_lifecycles(&self) -> Vec<String>;
@@ -122,6 +248,8 @@ pub trait ToolStreamingCaller {
         second: Vec<u8>,
     ) -> ClockedStreamEvidence;
     async fn hold_completed_reconstruction_before_incomplete_custom(&self);
+    async fn hold_completed_reconstruction_overlapping_custom(&self);
+    async fn single_store_http_atomic_probe(&self);
     async fn principal_context(&self, principal: Principal) -> Vec<String>;
 }
 
@@ -242,6 +370,61 @@ fn raw_capable_input(path: &str) -> golem_rust::schema::wit::wire::TypedSchemaVa
     golem_rust::encode_typed_schema_value(&value).expect("encode raw capable wire input")
 }
 
+fn raw_middleware_probe_input(value: &str) -> golem_rust::schema::wit::wire::TypedSchemaValue {
+    let value = RawMiddlewareProbeInput {
+        value: value.to_string(),
+    }
+    .into_typed_schema_value()
+    .expect("encode raw middleware probe input");
+    golem_rust::encode_typed_schema_value(&value).expect("encode raw middleware probe wire input")
+}
+
+fn decode_middleware_probe_result(result: tool_host::InvocationResult) -> String {
+    let value =
+        decode_typed_schema_value_owned(result.result.expect("middleware probe returns a result"))
+            .expect("decode middleware probe result");
+    String::from_value(value.value()).expect("middleware probe result is a string")
+}
+
+fn decode_dynamic_mcp_result(result: tool_host::InvocationResult) -> String {
+    let value = decode_typed_schema_value_owned(result.result.expect("MCP tool returns a result"))
+        .expect("decode MCP tool result");
+    let SchemaValue::Record { fields } = value.value() else {
+        panic!("MCP result is a record");
+    };
+    let SchemaValue::Record { fields } = &fields[0] else {
+        panic!("MCP structured result is a record");
+    };
+    let SchemaValue::String(evidence) = &fields[0] else {
+        panic!("MCP evidence is a string");
+    };
+    evidence.clone()
+}
+
+fn raw_typed_output_input(tag: String) -> golem_rust::schema::wit::wire::TypedSchemaValue {
+    let value = RawTypedOutputInput { tag }
+        .into_typed_schema_value()
+        .expect("encode raw typed output input");
+    golem_rust::encode_typed_schema_value(&value).expect("encode raw typed output wire input")
+}
+
+fn gated_typed_input<T: IntoSchema + FromSchema + 'static>(items: [T; 3]) -> AgentStream<T> {
+    let (mut writer, input) = AgentStream::new();
+    spawn_local(async move {
+        let [first, second, third] = items;
+        writer
+            .write_one(first)
+            .await
+            .expect("write first typed tool input item");
+        wait_at_promise_checkpoint("typed-input-caller-produced-first").await;
+        writer
+            .write_all([second, third])
+            .await
+            .expect("write remaining typed tool input items");
+    });
+    input
+}
+
 fn raw_stdin(chunks: Vec<Vec<u8>>) -> tool_host::ToolStdin {
     pump_tool_stdin(input_stream(chunks))
 }
@@ -255,7 +438,7 @@ fn closed_raw_stdin() -> tool_host::ToolStdin {
 
 async fn raw_result(
     future: &tool_host::FutureInvokeResult,
-) -> Result<tool_host::InvocationResult, RpcError> {
+) -> Result<tool_host::InvocationResult, ToolRpcError> {
     future.get().await
 }
 
@@ -320,6 +503,39 @@ async fn wait_at_crash_checkpoint(name: &str) {
     drop(body);
     drop(trailers);
 
+    if name == "single-store-http-atomic" {
+        // Give the host-side response body scope time to record while the guest keeps running,
+        // then issue direct (non-accessor) durable calls from the same Store: a plain
+        // idempotency key followed by nested atomic regions containing more keys and oplog index
+        // reads.
+        let yields: u32 = std::env::var("GOL581_YIELDS")
+            .unwrap_or_else(|_| "1000".to_string())
+            .parse()
+            .expect("GOL581_YIELDS is a number");
+        for _ in 0..yields {
+            golem_rust::wasip3::wit_bindgen::yield_async().await;
+        }
+        // `GOL581_ATOMIC_FIRST` makes the positional atomic-region marker the first direct call
+        // after the body read; otherwise a strictly matched idempotency key comes first.
+        let atomic_first = std::env::var_os("GOL581_ATOMIC_FIRST").is_some();
+        let outside = if atomic_first {
+            None
+        } else {
+            Some(golem_rust::generate_idempotency_key())
+        };
+        let outer = golem_rust::atomically(|| {
+            let first = golem_rust::generate_idempotency_key();
+            let before = golem_rust::get_oplog_index();
+            let inner = golem_rust::atomically(golem_rust::generate_idempotency_key);
+            let after = golem_rust::get_oplog_index();
+            assert!(before < after);
+            assert_ne!(first, inner);
+            first
+        });
+        let outside = outside.unwrap_or_else(golem_rust::generate_idempotency_key);
+        assert_ne!(outside, outer);
+    }
+
     golem_rust::atomically_async(|| async {
         let socket =
             TcpSocket::create(IpAddressFamily::Ipv4).expect("create checkpoint gate socket");
@@ -352,14 +568,83 @@ async fn wait_at_crash_checkpoint(name: &str) {
     .await;
 }
 
+async fn wait_at_promise_checkpoint(name: &str) {
+    use golem_rust::wasip3::http::{client, types};
+    use golem_rust::wasip3::{wit_future, wit_stream};
+
+    let promise = golem_rust::create_promise();
+    let port = std::env::var("CALLER_PROMISE_CHECKPOINT_PORT")
+        .expect("caller promise checkpoint port is configured");
+    let headers = types::Fields::from_list(&[]).expect("valid checkpoint fields");
+    let (mut body_tx, body_rx) = wit_stream::new();
+    let (trailers_tx, trailers_rx) = wit_future::new(|| Ok(None));
+    let (request, transmit) = types::Request::new(headers, Some(body_rx), trailers_rx, None);
+    request
+        .set_method(&types::Method::Post)
+        .expect("set checkpoint method");
+    request
+        .set_scheme(Some(&types::Scheme::Http))
+        .expect("set checkpoint scheme");
+    request
+        .set_authority(Some(&format!("127.0.0.1:{port}")))
+        .expect("set checkpoint authority");
+    request
+        .set_path_with_query(Some(&format!("/{name}")))
+        .expect("set checkpoint path");
+    let payload = promise.oplog_idx.to_string().into_bytes();
+    let send = async move {
+        client::send(request)
+            .await
+            .expect("send checkpoint request")
+    };
+    let finish = async move {
+        assert!(body_tx.write_all(payload).await.is_empty());
+        drop(body_tx);
+        trailers_tx
+            .write(Ok(None))
+            .await
+            .expect("finish checkpoint trailers");
+        transmit.await.expect("transmit checkpoint request");
+    };
+    let (response, ()) = (send, finish).join().await;
+    assert_eq!(response.get_status_code(), 204);
+    golem_rust::await_promise(&promise).await;
+}
+
 #[agent_implementation]
 impl ToolStreamingCaller for ToolStreamingCallerImpl {
     fn new(_name: String) -> Self {
+        assert!(
+            std::env::var_os("FORBID_AGENT_CONSTRUCTION").is_none(),
+            "component-baseline owners must not construct an agent"
+        );
         Self
     }
 
+    fn record_native_order(&self, marker: String) -> String {
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("/native-tool-order.log")
+            .and_then(|mut file| file.write_all(marker.as_bytes()))
+            .expect("append native tool invocation order");
+        marker
+    }
+
+    fn replay_probe(&self) -> String {
+        "replayed".to_string()
+    }
+
+    fn read_owner_file(&self, path: String) -> String {
+        let mut contents = String::new();
+        std::fs::File::open(path)
+            .and_then(|mut file| file.read_to_string(&mut contents))
+            .expect("read owner file");
+        contents
+    }
+
     async fn concurrent_attempt_identity_replay(&self) -> Vec<String> {
-        let rpc = ToolRpc::new("streaming");
+        let rpc = ToolRpc::create("streaming").expect("tool RPC creation failed");
         let first = rpc.invoke_and_await(
             vec!["no-stream".to_string()],
             raw_no_stream_input("hold-attempt-identity"),
@@ -396,6 +681,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             golem_rust::golem_agentic::wit_stream::new::<Result<Vec<u8>, ByteStreamFailure>>();
         let mut invocation = StreamingClient::default()
             .run("marker-echo".to_string(), stdin)
+            .await
             .expect("start streaming tool");
         let mut output = first_chunk(&mut invocation).await;
         assert_eq!(output, b"marker:");
@@ -415,6 +701,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             golem_rust::golem_agentic::wit_stream::new::<Result<Vec<u8>, ByteStreamFailure>>();
         let mut invocation = StreamingClient::default()
             .run("echo".to_string(), stdin)
+            .await
             .expect("start alternating echo tool");
         let mut output = Vec::new();
         for index in 0..chunk_count {
@@ -441,6 +728,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         let started = std::time::Instant::now();
         let mut invocation = StreamingClient::default()
             .produce(chunk_count, chunk_size)
+            .await
             .expect("start benchmark producer");
         let first = first_chunk(&mut invocation).await;
         let first_chunk_nanos = started.elapsed().as_nanos() as u64;
@@ -473,6 +761,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
     async fn collect(&self, mode: String, input: Vec<u8>, fragment_size: u32) -> StreamEvidence {
         let invocation = StreamingClient::default()
             .run(mode, input_stream(chunks(input, fragment_size)))
+            .await
             .expect("start streaming tool");
         match invocation.collect().await {
             Ok((summary, output)) => evidence(Ok(summary), output),
@@ -483,6 +772,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
     async fn result_before_stdout(&self, mode: String) -> StreamEvidence {
         let invocation = StreamingClient::default()
             .run(mode, input_stream(Vec::new()))
+            .await
             .expect("start streaming tool");
         let result = invocation.result().await;
         let output = read_tool_stdout(invocation.stdout).await;
@@ -496,6 +786,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
     ) -> Vec<Vec<u8>> {
         let concurrent = StreamingClient::default()
             .run("empty".to_string(), input_stream(Vec::new()))
+            .await
             .expect("start concurrent-result tool");
         let first_result = concurrent.result();
         let second_result = concurrent.result();
@@ -509,6 +800,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
 
         let incapable = StreamingClient::default()
             .run("fragmented".to_string(), input_stream(Vec::new()))
+            .await
             .expect("start stdout-only incapable tool");
         let incapable_output = read_tool_stdout(incapable.stdout).await;
 
@@ -517,6 +809,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
                 "echo".to_string(),
                 input_stream(vec![b"cached-result".to_vec()]),
             )
+            .await
             .expect("start cached-result tool");
         let cached_result = cached.result();
         let cached_output = read_tool_stdout(cached.stdout).await;
@@ -528,6 +821,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
 
         let capable = CapableStreamingClient::default()
             .run_capable(capable_path, input_stream(vec![capable_input.clone()]))
+            .await
             .expect("start stdout-only capable tool");
         let capable_output = read_tool_stdout(capable.stdout).await;
 
@@ -546,9 +840,11 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             golem_rust::golem_agentic::wit_stream::new::<Result<Vec<u8>, ByteStreamFailure>>();
         let mut left_call = StreamingClient::default()
             .run("marker-echo".to_string(), left_stdin)
+            .await
             .expect("start left streaming tool");
         let mut right_call = StreamingClient::default()
             .run("marker-echo".to_string(), right_stdin)
+            .await
             .expect("start right streaming tool");
 
         let mut left_output = first_chunk(&mut left_call).await;
@@ -594,9 +890,11 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             golem_rust::golem_agentic::wit_stream::new::<Result<Vec<u8>, ByteStreamFailure>>();
         let mut left_call = StreamingClient::default()
             .run("http-left".to_string(), left_stdin)
+            .await
             .expect("start left HTTP streaming tool");
         let mut right_call = StreamingClient::default()
             .run("http-right".to_string(), right_stdin)
+            .await
             .expect("start right HTTP streaming tool");
 
         assert!(
@@ -651,6 +949,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
     async fn edge_lifecycles(&self) -> Vec<String> {
         let large = StreamingClient::default()
             .run("large".to_string(), input_stream(Vec::new()))
+            .await
             .expect("start large streaming tool")
             .collect()
             .await
@@ -661,6 +960,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             golem_rust::golem_agentic::wit_stream::new::<Result<Vec<u8>, ByteStreamFailure>>();
         let ignored = StreamingClient::default()
             .run("early-stdin-close".to_string(), ignored_stdin)
+            .await
             .expect("start early-stdin-close tool")
             .collect()
             .await
@@ -679,6 +979,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
                 "early-stdout-close".to_string(),
                 input_stream(vec![b"left".to_vec(), b"right".to_vec()]),
             )
+            .await
             .expect("start early-stdout-close tool")
             .collect()
             .await
@@ -690,6 +991,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             golem_rust::golem_agentic::wit_stream::new::<Result<Vec<u8>, ByteStreamFailure>>();
         let failed_input = StreamingClient::default()
             .run("marker-echo".to_string(), failed_stdin)
+            .await
             .expect("start failed-input tool");
         assert!(
             failed_source
@@ -706,7 +1008,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             .expect("observe source failure");
         assert_eq!(failed_input.1, b"marker:");
 
-        let rpc = ToolRpc::new("streaming");
+        let rpc = ToolRpc::create("streaming").expect("tool RPC creation failed");
         rpc.invoke_and_await(
             vec!["no-stream".to_string()],
             raw_no_stream_input("ok"),
@@ -752,7 +1054,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
                 Some(rejected_target),
             )
             .await;
-        assert!(matches!(rejected, Err(RpcError::ProtocolError(_))));
+        assert!(matches!(rejected, Err(ToolRpcError::ProtocolError(_))));
         assert!(matches!(
             rejected_stdout.next().await,
             Some(Err(ByteStreamFailure::Failed(_)))
@@ -778,7 +1080,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
     }
 
     async fn raw_modes_and_handles(&self) -> Vec<String> {
-        let rpc = ToolRpc::new("streaming");
+        let rpc = ToolRpc::create("streaming").expect("tool RPC creation failed");
         let path = ["run".to_string()];
 
         let (sync_stdout_target, sync_stdout) = tool_host::create_stdout();
@@ -813,8 +1115,215 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         ]
     }
 
+    async fn middleware_probe_modes(&self, value: String) -> Vec<String> {
+        let rpc = ToolRpc::new("middleware-probe");
+        let path = ["apply".to_string()];
+        let synchronous = rpc
+            .invoke_and_await(
+                path.to_vec(),
+                raw_middleware_probe_input(&format!("sync-{value}")),
+                None,
+                None,
+            )
+            .await
+            .expect("synchronous middleware probe");
+        rpc.invoke(
+            &path,
+            raw_middleware_probe_input(&format!("fire-{value}")),
+            None,
+        )
+        .expect("fire-and-forget middleware probe");
+        let asynchronous = rpc.async_invoke_and_await(
+            &path,
+            raw_middleware_probe_input(&format!("async-{value}")),
+            None,
+            None,
+        );
+        let asynchronous = raw_result(&asynchronous)
+            .await
+            .expect("asynchronous middleware probe");
+
+        vec![
+            decode_middleware_probe_result(synchronous),
+            "fire-and-forget-admitted".to_string(),
+            decode_middleware_probe_result(asynchronous),
+        ]
+    }
+
+    async fn middleware_probe_once(&self, value: String) -> String {
+        let result = ToolRpc::new("middleware-probe")
+            .invoke_and_await(
+                vec!["apply".to_string()],
+                raw_middleware_probe_input(&value),
+                None,
+                None,
+            )
+            .await
+            .expect("single synchronous middleware probe");
+        decode_middleware_probe_result(result)
+    }
+
+    async fn dynamic_mcp_probe(&self, value: String) -> String {
+        let result = ToolRpc::new("middleware-probe")
+            .invoke_and_await(Vec::new(), raw_middleware_probe_input(&value), None, None)
+            .await
+            .expect("invoke dynamic MCP tool through universal middleware");
+        decode_dynamic_mcp_result(result)
+    }
+
+    async fn dynamic_mcp_chain_probe(&self, value: String) -> Vec<String> {
+        let (stdout_target, stdout) = tool_host::create_stdout();
+        let rpc = ToolRpc::new("middleware-probe");
+        let result = rpc.invoke_and_await(
+            Vec::new(),
+            raw_middleware_probe_input(&value),
+            None,
+            Some(stdout_target),
+        );
+        let (result, stdout) = (result, read_all(stdout)).join().await;
+        vec![
+            decode_dynamic_mcp_result(result.expect("invoke dynamic MCP middleware chain")),
+            String::from_utf8(stdout).expect("MCP stdout is UTF-8"),
+        ]
+    }
+
+    async fn dynamic_mcp_stdout_probe(&self, value: String) -> String {
+        let (stdout_target, stdout) = tool_host::create_stdout();
+        let rpc = ToolRpc::new("middleware-probe");
+        let result = rpc.invoke_and_await(
+            Vec::new(),
+            raw_middleware_probe_input(&value),
+            None,
+            Some(stdout_target),
+        );
+        let (result, stdout) = (result, read_all(stdout)).join().await;
+        result.expect("invoke dynamic MCP middleware stdout probe");
+        String::from_utf8(stdout).expect("MCP stdout is UTF-8")
+    }
+
+    async fn consume_typed_output(&self, decorated: bool, tag: String) -> Vec<TypedOutputEvidence> {
+        if !decorated {
+            let mut source = TypedOutputStreamClient::new()
+                .produce(tag)
+                .await
+                .expect("invoke direct typed output tool");
+            let first = source
+                .next()
+                .await
+                .expect("read direct typed output")
+                .expect("typed output has a first item");
+            if std::env::var("CALLER_PROMISE_CHECKPOINT_PORT").is_ok() {
+                wait_at_promise_checkpoint("caller-consumed-first-typed-output").await;
+            } else {
+                wait_at_crash_checkpoint("caller-consumed-first-typed-output").await;
+            }
+            let mut items = vec![TypedOutputEvidence {
+                label: first.label,
+                ordinal: first.ordinal,
+            }];
+            while let Some(item) = source.next().await.expect("read direct typed output") {
+                items.push(TypedOutputEvidence {
+                    label: item.label,
+                    ordinal: item.ordinal,
+                });
+            }
+            return items;
+        }
+        let mut output = {
+            let result = ToolRpc::new("typed-output-stream")
+                .invoke_and_await(
+                    vec!["produce".to_string()],
+                    raw_typed_output_input(tag),
+                    None,
+                    None,
+                )
+                .await
+                .expect("invoke decorated typed output tool");
+            let value = decode_typed_schema_value_owned(
+                result.result.expect("decorated typed output has a result"),
+            )
+            .expect("decode decorated typed output result");
+            AgentStream::<TypedOutputEvidence>::from_value(value.value())
+                .expect("decorated result is a projected typed stream")
+        };
+        let first = output
+            .next()
+            .await
+            .expect("read first typed output")
+            .expect("typed output has a first item");
+        if std::env::var("CALLER_PROMISE_CHECKPOINT_PORT").is_ok() {
+            wait_at_promise_checkpoint("caller-consumed-first-typed-output").await;
+        } else {
+            wait_at_crash_checkpoint("caller-consumed-first-typed-output").await;
+        }
+        let mut items = vec![first];
+        items.extend(
+            output
+                .collect()
+                .await
+                .expect("collect remaining typed output"),
+        );
+        items
+    }
+
+    async fn produce_typed_input(&self, decorated: bool) -> Vec<TypedInputEvidence> {
+        let input = if decorated {
+            RawTypedInput {
+                input: gated_typed_input([
+                    TypedInputItem {
+                        label: "jade-first".to_string(),
+                        ordinal: 83,
+                        caller_extra: 8_191,
+                    },
+                    TypedInputItem {
+                        label: "jade-second".to_string(),
+                        ordinal: 131,
+                        caller_extra: 13_123,
+                    },
+                    TypedInputItem {
+                        label: "jade-third".to_string(),
+                        ordinal: 197,
+                        caller_extra: 19_739,
+                    },
+                ]),
+            }
+            .into_typed_schema_value()
+        } else {
+            RawDirectTypedInput {
+                input: gated_typed_input([
+                    TypedInputEvidence {
+                        label: "amber-first".to_string(),
+                        ordinal: 17,
+                    },
+                    TypedInputEvidence {
+                        label: "amber-second".to_string(),
+                        ordinal: 43,
+                    },
+                    TypedInputEvidence {
+                        label: "amber-third".to_string(),
+                        ordinal: 71,
+                    },
+                ]),
+            }
+            .into_typed_schema_value()
+        }
+        .expect("encode raw typed input");
+        let input = golem_rust::encode_typed_schema_value_async(&input)
+            .await
+            .expect("encode raw typed input wire value");
+        let result = ToolRpc::new("typed-input-stream")
+            .invoke_and_await(vec!["consume".to_string()], input, None, None)
+            .await
+            .expect("invoke typed input tool");
+        let value = decode_typed_schema_value_owned(
+            result.result.expect("typed input tool returns evidence"),
+        )
+        .expect("decode typed input evidence");
+        Vec::<TypedInputEvidence>::from_value(value.value()).expect("typed input evidence shape")
+    }
+
     async fn native_modes_stream_cancel_overlap(&self) -> Vec<String> {
-        let rpc = ToolRpc::new("native-streaming");
+        let rpc = ToolRpc::create("native-streaming").expect("tool RPC creation failed");
         let path = ["run".to_string()];
 
         let (sync_target, sync_stdout) = tool_host::create_stdout();
@@ -880,7 +1389,8 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         .expect("read native effect counter");
         let count = String::from_utf8(read_all(counter_stdout).await).unwrap();
 
-        ToolRpc::new("native-durable-helper")
+        ToolRpc::create("native-durable-helper")
+            .expect("tool RPC creation failed")
             .invoke_and_await(
                 vec!["touch".to_string()],
                 raw_optional_streams_input(),
@@ -902,7 +1412,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
     }
 
     async fn native_effect_count(&self) -> String {
-        let rpc = ToolRpc::new("native-streaming");
+        let rpc = ToolRpc::create("native-streaming").expect("tool RPC creation failed");
         let (target, stdout) = tool_host::create_stdout();
         rpc.invoke_and_await(
             vec!["run".to_string()],
@@ -919,7 +1429,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         use std::future::{Future, poll_fn};
         use std::task::Poll;
 
-        let rpc = ToolRpc::new("streaming");
+        let rpc = ToolRpc::create("streaming").expect("tool RPC creation failed");
         let path = ["run".to_string()];
 
         let (left_target, mut left_stdout) = tool_host::create_stdout();
@@ -959,7 +1469,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         assert_eq!(raw_chunk(&mut cancel_stdout).await, b"marker:");
         cancelled.cancel();
         assert!(
-            matches!(raw_result(&cancelled).await, Err(RpcError::Cancelled)),
+            matches!(raw_result(&cancelled).await, Err(ToolRpcError::Cancelled)),
             "explicit future cancellation must select cancelled"
         );
         assert!(
@@ -1040,7 +1550,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             Stdout(InputStream),
         }
 
-        let rpc = ToolRpc::new("streaming");
+        let rpc = ToolRpc::create("streaming").expect("tool RPC creation failed");
         let path = ["run".to_string()];
         let (mut fire_source, fire_stdin) =
             golem_rust::golem_agentic::wit_stream::new::<Result<Vec<u8>, ByteStreamFailure>>();
@@ -1096,6 +1606,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
     async fn stdout_drop_preserves_sibling(&self) -> Vec<String> {
         let mut blocked = StreamingClient::default()
             .run("backpressure".to_string(), input_stream(Vec::new()))
+            .await
             .expect("start output-blocked tool");
         assert_eq!(
             first_chunk(&mut blocked).await.len(),
@@ -1109,6 +1620,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
                 "marker-echo".to_string(),
                 input_stream(vec![b"sibling".to_vec()]),
             )
+            .await
             .expect("start sibling streaming tool")
             .collect()
             .await
@@ -1128,7 +1640,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
     }
 
     async fn hold_open_stdin(&self, calls: u32) {
-        let rpc = ToolRpc::new("streaming");
+        let rpc = ToolRpc::create("streaming").expect("tool RPC creation failed");
         let path = ["run".to_string()];
         let mut sources = Vec::new();
         let mut outputs = Vec::new();
@@ -1161,6 +1673,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             invocations.push(
                 StreamingClient::default()
                     .run("backpressure".to_string(), input_stream(Vec::new()))
+                    .await
                     .expect("start backpressured streaming tool"),
             );
         }
@@ -1171,7 +1684,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
     }
 
     async fn hold_capable_stdout_before_result(&self, path: String, input: Vec<u8>) {
-        let rpc = ToolRpc::new("capable-streaming");
+        let rpc = ToolRpc::create("capable-streaming").expect("tool RPC creation failed");
         let (stdout_target, mut stdout) = tool_host::create_stdout();
         let _result = rpc.async_invoke_and_await(
             &["run-capable".to_string()],
@@ -1184,7 +1697,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
     }
 
     async fn hold_synchronous_capable_staging(&self, input: Vec<u8>) {
-        let rpc = ToolRpc::new("capable-streaming");
+        let rpc = ToolRpc::create("capable-streaming").expect("tool RPC creation failed");
         let mut expected_output = b"body-checkpoint".to_vec();
         expected_output.extend_from_slice(&input);
         let (mut source, stdin) =
@@ -1208,7 +1721,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
     }
 
     async fn hold_fire_and_forget_capable_staging(&self, input: Vec<u8>) {
-        let rpc = ToolRpc::new("capable-streaming");
+        let rpc = ToolRpc::create("capable-streaming").expect("tool RPC creation failed");
         let (mut source, stdin) =
             golem_rust::golem_agentic::wit_stream::new::<Result<Vec<u8>, ByteStreamFailure>>();
         rpc.invoke(
@@ -1229,6 +1742,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
                 format!("hold-publication:{path}"),
                 input_stream(vec![input.clone()]),
             )
+            .await
             .expect("start capable publication checkpoint tool");
         let result = invocation.result();
         let mut stdout = invocation.stdout;
@@ -1253,7 +1767,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
     }
 
     async fn capable_modes_and_cohorts(&self) -> Vec<String> {
-        let rpc = ToolRpc::new("capable-streaming");
+        let rpc = ToolRpc::create("capable-streaming").expect("tool RPC creation failed");
         let path = ["run-capable".to_string()];
 
         let (sync_target, sync_stdout) = tool_host::create_stdout();
@@ -1285,36 +1799,31 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             Some(pump_tool_stdin(reverse_second_stdin)),
             Some(reverse_second_target),
         );
-        let reverse_feed = async move {
-            assert!(
-                reverse_second_source
-                    .write_all(vec![Ok(b"reverse-second".to_vec())])
-                    .await
-                    .is_empty()
-            );
-            drop(reverse_second_source);
-            assert!(
-                reverse_first_source
-                    .write_all(vec![Ok(b"reverse-first".to_vec())])
-                    .await
-                    .is_empty()
-            );
-            drop(reverse_first_source);
-        };
-        let (reverse_first, reverse_second, ()) = (
-            (reverse_first, read_all(reverse_first_stdout)).join(),
-            (reverse_second, read_all(reverse_second_stdout)).join(),
-            reverse_feed,
-        )
-            .join()
-            .await;
+        assert!(
+            reverse_first_source
+                .write_all(vec![Ok(b"reverse-first".to_vec())])
+                .await
+                .is_empty()
+        );
+        drop(reverse_first_source);
+        let reverse_first = (reverse_first, read_all(reverse_first_stdout)).join().await;
         reverse_first
             .0
             .expect("first reverse-staged synchronous call");
+        assert_eq!(reverse_first.1, b"reverse-first");
+        assert!(
+            reverse_second_source
+                .write_all(vec![Ok(b"reverse-second".to_vec())])
+                .await
+                .is_empty()
+        );
+        drop(reverse_second_source);
+        let reverse_second = (reverse_second, read_all(reverse_second_stdout))
+            .join()
+            .await;
         reverse_second
             .0
             .expect("second reverse-staged synchronous call");
-        assert_eq!(reverse_first.1, b"reverse-first");
         assert_eq!(reverse_second.1, b"reverse-second");
 
         let (mut first_source, first_stdin) =
@@ -1393,6 +1902,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
     async fn collect_capable(&self, path: String, input: Vec<u8>) -> StreamEvidence {
         let invocation = CapableStreamingClient::default()
             .run_capable(path.clone(), input_stream(vec![input.clone()]))
+            .await
             .expect("start capable streaming tool");
         match invocation.collect().await {
             Ok((summary, output)) => StreamEvidence {
@@ -1413,7 +1923,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
     }
 
     async fn clean_stdout_then_trap(&self) {
-        let rpc = ToolRpc::new("streaming");
+        let rpc = ToolRpc::create("streaming").expect("tool RPC creation failed");
         let (stdout_target, stdout) = tool_host::create_stdout();
         let result = rpc.async_invoke_and_await(
             &["run".to_string()],
@@ -1433,11 +1943,13 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             golem_rust::golem_agentic::wit_stream::new::<Result<Vec<u8>, ByteStreamFailure>>();
         let mut blocked = StreamingClient::default()
             .run("marker-echo".to_string(), blocked_stdin)
+            .await
             .expect("start blocked sibling tool");
         assert_eq!(first_chunk(&mut blocked).await, b"marker:");
 
         let mut trapped = StreamingClient::default()
             .run("trap".to_string(), input_stream(Vec::new()))
+            .await
             .expect("start trapping tool");
         assert_eq!(first_chunk(&mut trapped).await, b"marker:");
         assert!(matches!(
@@ -1453,7 +1965,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
     }
 
     async fn drop_trapping_result(&self) {
-        let rpc = ToolRpc::new("streaming");
+        let rpc = ToolRpc::create("streaming").expect("tool RPC creation failed");
         let (stdout_target, stdout) = tool_host::create_stdout();
         let result = rpc.async_invoke_and_await(
             &["run".to_string()],
@@ -1466,7 +1978,8 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
     }
 
     async fn fire_and_forget_trap(&self) {
-        ToolRpc::new("streaming")
+        ToolRpc::create("streaming")
+            .expect("tool RPC creation failed")
             .invoke(
                 &["run".to_string()],
                 raw_input("trap"),
@@ -1476,7 +1989,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
     }
 
     async fn hold_incapable_checkpoint(&self, checkpoint: String) {
-        let rpc = ToolRpc::new("streaming");
+        let rpc = ToolRpc::create("streaming").expect("tool RPC creation failed");
         let path = ["run".to_string()];
         match checkpoint.as_str() {
             "before-input" => {
@@ -1501,6 +2014,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
                 >();
                 let mut invocation = StreamingClient::default()
                     .run("marker-echo".to_string(), stdin)
+                    .await
                     .expect("start input/output checkpoint tool");
                 assert_eq!(first_chunk(&mut invocation).await, b"marker:");
                 assert!(
@@ -1592,7 +2106,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
     }
 
     async fn hold_capable_staging_checkpoint(&self, input: Vec<u8>) {
-        let rpc = ToolRpc::new("capable-streaming");
+        let rpc = ToolRpc::create("capable-streaming").expect("tool RPC creation failed");
         let command = ["run-capable".to_string()];
         let (mut source, stdin) =
             golem_rust::golem_agentic::wit_stream::new::<Result<Vec<u8>, ByteStreamFailure>>();
@@ -1612,7 +2126,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
     }
 
     async fn hold_capable_checkpoint(&self, path: String, input: Vec<u8>) {
-        let rpc = ToolRpc::new("capable-streaming");
+        let rpc = ToolRpc::create("capable-streaming").expect("tool RPC creation failed");
         let command = ["run-capable".to_string()];
         let (stdout_target, stdout) = tool_host::create_stdout();
         let result = rpc.async_invoke_and_await(
@@ -1631,6 +2145,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
                 format!("hold-terminal:{path}"),
                 input_stream(vec![input.clone()]),
             )
+            .await
             .expect("start capable terminal checkpoint tool");
         let (result, output) = (invocation.result(), read_tool_stdout(invocation.stdout))
             .join()
@@ -1646,6 +2161,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
     async fn hold_capable_published_checkpoint(&self, path: String, input: Vec<u8>) {
         let invocation = CapableStreamingClient::default()
             .run_capable(path, input_stream(vec![input.clone()]))
+            .await
             .expect("start post-publication capable checkpoint tool");
         let result = invocation.result();
         let output = read_tool_stdout(invocation.stdout);
@@ -1664,6 +2180,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
                 "/must-not-run-after-overflow.bin".to_string(),
                 input_stream(vec![input]),
             )
+            .await
             .expect("start capable overflow operation");
         let error = invocation
             .result()
@@ -1676,7 +2193,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
     }
 
     async fn hold_completed_reconstruction_barrier(&self) {
-        let rpc = ToolRpc::new("streaming");
+        let rpc = ToolRpc::create("streaming").expect("tool RPC creation failed");
         let (stdout_target, stdout) = tool_host::create_stdout();
         let result = rpc.async_invoke_and_await(
             &["run".to_string()],
@@ -1699,6 +2216,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         let input = vec![b'i'; input_size as usize];
         let invocation = CapableStreamingClient::default()
             .run_capable(path, input_stream(vec![input.clone()]))
+            .await
             .expect("start completed attachment reconstruction operation");
         let (summary, output) = invocation
             .collect()
@@ -1710,7 +2228,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
     }
 
     async fn reject_incomplete_attachment_upgrade_under_pressure(&self) -> Vec<String> {
-        let rpc = ToolRpc::new("streaming");
+        let rpc = ToolRpc::create("streaming").expect("tool RPC creation failed");
         let (stdout_target, mut stdout) = tool_host::create_stdout();
         let result = rpc.async_invoke_and_await(
             &["run".to_string()],
@@ -1720,7 +2238,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         );
         assert!(matches!(
             raw_result(&result).await,
-            Err(RpcError::ResourceExhausted(_))
+            Err(ToolRpcError::ResourceExhausted(_))
         ));
         assert!(matches!(
             stdout.next().await,
@@ -1736,7 +2254,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
     }
 
     async fn hold_completed_reconstruction_before_exclusive_clock(&self) {
-        let rpc = ToolRpc::new("streaming");
+        let rpc = ToolRpc::create("streaming").expect("tool RPC creation failed");
         let (stdout_target, stdout) = tool_host::create_stdout();
         let result = rpc.async_invoke_and_await(
             &["run".to_string()],
@@ -1766,6 +2284,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         let before_tool_nanos = started.elapsed().as_nanos() as u64;
         let invocation = CapableStreamingClient::default()
             .run_capable(path, input_stream(vec![first, second]))
+            .await
             .expect("start clocked capable streaming tool");
         let (summary, output) = invocation
             .collect()
@@ -1786,7 +2305,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
     }
 
     async fn hold_completed_reconstruction_before_incomplete_custom(&self) {
-        let rpc = ToolRpc::new("streaming");
+        let rpc = ToolRpc::create("streaming").expect("tool RPC creation failed");
         let (stdout_target, stdout) = tool_host::create_stdout();
         let result = rpc.async_invoke_and_await(
             &["run".to_string()],
@@ -1824,10 +2343,60 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         (tool, incomplete_custom).join().await;
     }
 
+    async fn hold_completed_reconstruction_overlapping_custom(&self) {
+        // The provider body waits at a crash checkpoint in its own entity Store while this
+        // caller Store performs its own checkpoint HTTP request and atomic TCP gate, so the two
+        // Stores record interleaved positional entries against the same oplog.
+        let rpc = ToolRpc::create("streaming").expect("tool RPC creation failed");
+        let (stdout_target, stdout) = tool_host::create_stdout();
+        let result = rpc.async_invoke_and_await(
+            &["run".to_string()],
+            raw_input("historical-reconstruction-gate"),
+            Some(raw_stdin(vec![
+                b"reconstruction-left".to_vec(),
+                b"reconstruction-right".to_vec(),
+            ])),
+            Some(stdout_target),
+        );
+        assert!(read_all(stdout).await.is_empty());
+        let tool = async {
+            raw_result(&result)
+                .await
+                .expect("completed reconstruction result before custom effect");
+        };
+        let incomplete_custom = async {
+            wait_at_crash_checkpoint("before-reconstruction-custom-effect").await;
+            Durability::<(), String>::new(
+                "golem-it",
+                "reconstruction-barrier-custom-effect",
+                DurableFunctionType::WriteRemote,
+                &(),
+            )
+            .run_infallible_async(|| async {
+                std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open("/reconstruction-custom-order.log")
+                    .and_then(|mut file| file.write_all(b"C"))
+                    .expect("append the first live custom effect after the reconstruction barrier");
+                wait_at_crash_checkpoint("reconstruction-custom-effect").await;
+            })
+            .await;
+        };
+        (tool, incomplete_custom).join().await;
+    }
+
+    async fn single_store_http_atomic_probe(&self) {
+        for _ in 0..8 {
+            wait_at_crash_checkpoint("single-store-http-atomic").await;
+        }
+    }
+
     async fn principal_context(&self, principal: Principal) -> Vec<String> {
         let caller_class = principal_class(&principal).to_string();
         let invocation = StreamingClient::default()
             .run("nested-principal".to_string(), input_stream(Vec::new()))
+            .await
             .expect("start nested principal tool");
         let (summary, output) = invocation
             .collect()

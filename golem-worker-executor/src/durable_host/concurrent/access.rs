@@ -36,6 +36,7 @@ enum AccessTerminalGuardState {
 
 pub(super) struct AccessTerminalGuard<P: DropPolicy> {
     state: AccessTerminalGuardState,
+    runtime_teardown: Arc<dyn Fn() -> bool + Send + Sync>,
     /// Policy-controlled sink for unfinished drops (`BeforeTerminal`): `None` for policies (e.g.
     /// `NotCancellable`) that treat an unfinished drop as a programming error instead of queueing
     /// a cancellation.
@@ -52,9 +53,11 @@ impl<P: DropPolicy> AccessTerminalGuard<P> {
         call: DroppedCall,
         sink: Option<UnboundedSender<DropEvent>>,
         cleanup_sink: Option<UnboundedSender<DropEvent>>,
+        runtime_teardown: Arc<dyn Fn() -> bool + Send + Sync>,
     ) -> Self {
         Self {
             state: AccessTerminalGuardState::BeforeTerminal { call },
+            runtime_teardown,
             sink,
             cleanup_sink,
             _phantom: PhantomData,
@@ -172,7 +175,7 @@ impl<P: DropPolicy> AccessTerminalGuard<P> {
 impl<P: DropPolicy> Drop for AccessTerminalGuard<P> {
     fn drop(&mut self) {
         match std::mem::replace(&mut self.state, AccessTerminalGuardState::Disarmed) {
-            AccessTerminalGuardState::BeforeTerminal { call } => {
+            AccessTerminalGuardState::BeforeTerminal { mut call } => {
                 if call.is_executor_shutting_down() {
                     call.release_atomic_lease();
                     tracing::debug!(
@@ -180,6 +183,11 @@ impl<P: DropPolicy> Drop for AccessTerminalGuard<P> {
                         "durable call terminal abandoned during executor shutdown"
                     );
                 } else {
+                    if (self.runtime_teardown)() {
+                        call.span_finished = None;
+                    } else if let Some(span) = &mut call.span_finished {
+                        span.finished_at = Timestamp::now_utc();
+                    }
                     P::unfinished_drop(call, self.sink.as_ref());
                 }
             }

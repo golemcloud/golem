@@ -18,6 +18,7 @@ package golem.runtime.macros
 
 import golem.runtime.annotations.*
 import golem.schema.{FromSchema, IntoSchema, SchemaValue, TypedSchemaValue}
+import golem.schema.validation.ValueValidation
 import golem.tool.*
 import zio.ZIO
 import zio.test.*
@@ -44,6 +45,9 @@ object ToolClientRuntimeSpec extends ZIOSpecDefault {
     def git(gitDir: String): Unit
 
     def status(short: Boolean): Either[GitError, String]
+
+    @arg("maybe", scope = "positional", required = false)
+    def choose(maybe: Option[String]): String
 
     @arg("verbose", kind = "flag")
     def remote(verbose: Boolean): Remote
@@ -78,6 +82,8 @@ object ToolClientRuntimeSpec extends ZIOSpecDefault {
   private lazy val gitDescriptor    = ToolDefinitionMacro.tryMetadata[Git]
   private lazy val remoteDescriptor = ToolDefinitionMacro.tryMetadata[Remote]
   private lazy val statusModel      = ToolClientRuntime.staticInputModel(gitDescriptor, List("status"))
+  private lazy val chooseModel      = ToolClientRuntime.staticInputModel(gitDescriptor, List("choose"))
+  private lazy val remoteModel      = ToolClientRuntime.prefixInputModel(gitDescriptor, List("remote"))
   private lazy val gitErrorSchema   = ToolErrorSchemaDerivation.derive[GitError]
 
   private def ok(text: String): Either[ToolRpcFailure, ToolInvokeResult] =
@@ -113,19 +119,48 @@ object ToolClientRuntimeSpec extends ZIOSpecDefault {
               transport.lastCommandPath == List("status"),
               record == Some(
                 SchemaValue.RecordValue(
-                  List(SchemaValue.StringValue("/repo"), SchemaValue.BoolValue(true))
+                  List(SchemaValue.OptionValue(Some(SchemaValue.StringValue("/repo"))), SchemaValue.BoolValue(true))
                 )
               )
             )
           }
+      },
+      test("optional authored values keep one carrier when omitted or supplied") {
+        def pack(maybe: Option[String]) =
+          ToolClientRuntime.buildInputFromModel(
+            chooseModel,
+            List(
+              "git-dir" -> IntoSchema[String].toValue("/repo"),
+              "maybe"   -> IntoSchema[Option[String]].toValue(maybe)
+            )
+          )
+        val omitted  = pack(None)
+        val supplied = pack(Some("selected"))
+        assertTrue(
+          omitted.map(_.value) == Right(
+            SchemaValue.RecordValue(
+              List(SchemaValue.OptionValue(Some(SchemaValue.StringValue("/repo"))), SchemaValue.OptionValue(None))
+            )
+          ),
+          supplied.map(_.value) == Right(
+            SchemaValue.RecordValue(
+              List(
+                SchemaValue.OptionValue(Some(SchemaValue.StringValue("/repo"))),
+                SchemaValue.OptionValue(Some(SchemaValue.StringValue("selected")))
+              )
+            )
+          ),
+          omitted.exists(input => ValueValidation.validateValue(input.graph, input.graph.root, input.value).isRight),
+          supplied.exists(input => ValueValidation.validateValue(input.graph, input.graph.root, input.value).isRight)
+        )
       },
       test("subtree navigation packs the inherited prefix and calls through the child descriptor") {
         val transport = new RecordingTransport(ok("added"))
         // Mirrors the generated `remote(...)` navigation: inherited global
         // first, then the subtree method's own flag parameter.
         val prefix = List(
-          ToolClientRuntime.prefixValue("git-dir", Nil, "/repo", IntoSchema[String]),
-          ToolClientRuntime.prefixValue("verbose", Nil, true, IntoSchema[Boolean])
+          ToolClientRuntime.prefixValue("git-dir", Nil, "/repo", IntoSchema[String], remoteModel),
+          ToolClientRuntime.prefixValue("verbose", Nil, true, IntoSchema[Boolean], remoteModel)
         )
         // Mirrors the generated wrapper leaf `add(...)`: dynamic input against
         // the child's descriptor because a prefix is inherited.
@@ -154,7 +189,7 @@ object ToolClientRuntimeSpec extends ZIOSpecDefault {
               record == Some(
                 SchemaValue.RecordValue(
                   List(
-                    SchemaValue.StringValue("/repo"),
+                    SchemaValue.OptionValue(Some(SchemaValue.StringValue("/repo"))),
                     SchemaValue.BoolValue(true),
                     SchemaValue.StringValue("origin"),
                     SchemaValue.StringValue("https://example.com")

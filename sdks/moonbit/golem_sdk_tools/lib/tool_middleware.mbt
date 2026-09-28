@@ -47,6 +47,7 @@ pub(all) struct ToolMiddlewareInfo {
   version : String
   aliases : Array[String]
   description : String
+  parameter_type : ParamType?
   scope : ToolMiddlewareScopeInfo
 } derive(Debug, Eq)
 
@@ -59,6 +60,7 @@ priv struct MonomorphicMiddlewareDecl {
   description : String
   presented : String
   expected : String
+  parameter_type : ParamType?
 }
 
 ///|
@@ -119,12 +121,13 @@ fn parse_middleware_metadata(
   annotation : String,
   owner : String,
   monomorphic : Bool,
-) -> (String, String, Array[String], String?, String?) raise ToolMiddlewareParseError {
+) -> (String, String, Array[String], String?, String?, ParamType?) raise ToolMiddlewareParseError {
   let mut name : String? = None
   let mut version : String? = None
   let aliases : Array[String] = []
   let mut presented : String? = None
   let mut expected : String? = None
+  let mut parameter_type : ParamType? = None
   for prop in props {
     match prop_string(prop) {
       Some((None, value)) =>
@@ -152,6 +155,12 @@ fn parse_middleware_metadata(
         } else {
           middleware_fail("Duplicate expected tool on " + owner)
         }
+      Some((Some("parameters"), value)) =>
+        if parameter_type is None {
+          parameter_type = Some(Simple(value))
+        } else {
+          middleware_fail("Duplicate middleware parameters type on " + owner)
+        }
       _ =>
         middleware_fail(
           "Malformed or unknown #derive." + annotation + " property on " + owner,
@@ -173,7 +182,14 @@ fn parse_middleware_metadata(
     }
     seen[alias_name] = ()
   }
-  (name, version.unwrap_or("0.0.0"), aliases, presented, expected)
+  (
+    name,
+    version.unwrap_or("0.0.0"),
+    aliases,
+    presented,
+    expected,
+    parameter_type,
+  )
 }
 
 ///|
@@ -717,6 +733,9 @@ fn validate_handler_signature(
   let expected : Array[(String, ParamType)] = [
     ("underlying", Simple(middleware.expected + "Underlying")),
   ]
+  if middleware.parameter_type is Some(parameter_type) {
+    expected.insert(0, ("parameters", parameter_type))
+  }
   for pair in surface.params {
     expected.push(pair)
   }
@@ -830,6 +849,7 @@ fn expected_universal_return_type() -> ParamType {
 fn validate_universal_handler(
   decl : @syntax.FunDecl,
   middleware_name : String,
+  parameter_type : ParamType?,
 ) -> Unit raise ToolMiddlewareParseError {
   let owner = "universal tool middleware '" + middleware_name + "'"
   if decl.type_name is Some(_) {
@@ -848,6 +868,9 @@ fn validate_universal_handler(
     ("invocation", Simple("@toolMiddleware.RawToolInvocation")),
     ("underlying", Simple("@toolMiddleware.UnderlyingTool")),
   ]
+  if parameter_type is Some(parameter_type) {
+    expected.insert(0, ("parameters", parameter_type))
+  }
   if params != expected {
     middleware_fail(
       owner +
@@ -969,7 +992,7 @@ pub fn parse_tool_middlewares(
                     "' must be empty",
                   )
               }
-              let (name, version, aliases, presented, expected) = parse_middleware_metadata(
+              let (name, version, aliases, presented, expected, parameter_type) = parse_middleware_metadata(
                 middleware_props(attr, "tool_middleware").unwrap(),
                 "tool_middleware",
                 "middleware " + decl.tycon,
@@ -991,6 +1014,7 @@ pub fn parse_tool_middlewares(
                 description: tool_doc(decl.doc),
                 presented,
                 expected: expected.unwrap_or(presented),
+                parameter_type,
               })
             }
             _ => ()
@@ -1020,7 +1044,7 @@ pub fn parse_tool_middlewares(
                   "#derive.universal_tool_middleware must annotate an async free function",
                 )
               }
-              let (name, version, aliases, presented, expected) = parse_middleware_metadata(
+              let (name, version, aliases, presented, expected, parameter_type) = parse_middleware_metadata(
                 middleware_props(attr, "universal_tool_middleware").unwrap(),
                 "universal_tool_middleware",
                 "function " + fun_decl.name.name,
@@ -1028,13 +1052,14 @@ pub fn parse_tool_middlewares(
               )
               ignore(presented)
               ignore(expected)
-              validate_universal_handler(fun_decl, name)
+              validate_universal_handler(fun_decl, name, parameter_type)
               result.push({
                 source_name: fun_decl.name.name,
                 name,
                 version,
                 aliases,
                 description: tool_doc(fun_decl.doc),
+                parameter_type,
                 scope: Universal({ handler_name: fun_decl.name.name, }),
               })
             }
@@ -1066,6 +1091,7 @@ pub fn parse_tool_middlewares(
       version: middleware.version,
       aliases: middleware.aliases,
       description: middleware.description,
+      parameter_type: middleware.parameter_type,
       scope: Monomorphic({ presented, expected, handlers, underlying_methods, }),
     })
   }

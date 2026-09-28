@@ -15,12 +15,14 @@
 use super::{BTreeSetDiff, HttpApiDeployment, McpDeployment};
 use crate::model::account::{AccountEmail, AccountId};
 use crate::model::agent::AgentTypeName;
+use crate::model::component::{ComponentId, ComponentName};
 use crate::model::diff::DiffError;
 use crate::model::diff::component::Component;
 use crate::model::diff::hash::{Hash, HashOf, Hashable, hash_from_serialized_value};
 use crate::model::diff::ser::serialize_with_mode;
 use crate::model::diff::{BTreeMapDiff, Diffable};
 use crate::model::json::NormalizedJsonValue;
+use crate::model::mcp_import::McpImport;
 use crate::model::tool::{
     CompiledToolBinding, ConfigKeyScope, RegisteredTool, SecretKeyScope, ToolBindingInput,
     ToolFilesystemAccess, ToolName, ToolProvisionConfig, ToolSource,
@@ -123,6 +125,7 @@ pub struct RemoteToolDeployment {
     pub metadata_version: String,
     pub metadata_digest: Hash,
     pub provision: ToolProvisionConfig,
+    pub component_bindings: BTreeMap<String, EffectiveToolBinding>,
     pub bindings: BTreeMap<AgentTypeName, EffectiveToolBinding>,
 }
 
@@ -140,27 +143,54 @@ impl Diffable for RemoteToolDeployment {
     }
 }
 
+impl Hashable for McpImport {
+    fn hash(&self) -> Result<Hash, DiffError> {
+        hash_from_serialized_value(self)
+    }
+}
+
+impl Diffable for McpImport {
+    type DiffResult = McpImport;
+
+    fn diff(new: &Self, current: &Self) -> Result<Option<Self::DiffResult>, DiffError> {
+        Ok((new != current).then(|| new.clone()))
+    }
+}
+
 pub fn remote_tool_deployments(
     registered_tools: impl IntoIterator<Item = RegisteredTool>,
     bindings: impl IntoIterator<Item = CompiledToolBinding>,
+    component_names: &BTreeMap<ComponentId, ComponentName>,
     published_tools: &BTreeSet<String>,
 ) -> Result<BTreeMap<String, HashOf<RemoteToolDeployment>>, DiffError> {
     let mut bindings_by_tool =
         BTreeMap::<ToolName, BTreeMap<AgentTypeName, EffectiveToolBinding>>::new();
+    let mut component_bindings_by_tool =
+        BTreeMap::<ToolName, BTreeMap<String, EffectiveToolBinding>>::new();
     for binding in bindings {
-        bindings_by_tool
-            .entry(binding.tool_name)
-            .or_default()
-            .insert(
-                binding.agent_type_name,
-                EffectiveToolBinding {
-                    parameters: binding.parameters,
-                    config_keys_readable: binding.config_keys_readable,
-                    secret_keys_readable: binding.secret_keys_readable,
-                    secret_keys_revealable: binding.secret_keys_revealable,
-                    filesystem_access: binding.filesystem_access,
-                },
-            );
+        let effective = EffectiveToolBinding {
+            parameters: binding.parameters,
+            config_keys_readable: binding.config_keys_readable,
+            secret_keys_readable: binding.secret_keys_readable,
+            secret_keys_revealable: binding.secret_keys_revealable,
+            filesystem_access: binding.filesystem_access,
+        };
+        match binding.owner {
+            crate::model::tool::ToolBindingOwner::AgentType { agent_type_name } => {
+                bindings_by_tool
+                    .entry(binding.tool_name)
+                    .or_default()
+                    .insert(agent_type_name, effective);
+            }
+            crate::model::tool::ToolBindingOwner::ComponentBaseline { component_id } => {
+                if let Some(component_name) = component_names.get(&component_id) {
+                    component_bindings_by_tool
+                        .entry(binding.tool_name)
+                        .or_default()
+                        .insert(component_name.0.clone(), effective);
+                }
+            }
+        }
     }
 
     registered_tools
@@ -196,6 +226,7 @@ pub fn remote_tool_deployments(
                 });
             };
             let bindings = bindings_by_tool.remove(&name).unwrap_or_default();
+            let component_bindings = component_bindings_by_tool.remove(&name).unwrap_or_default();
             Some(Ok((
                 name.to_string(),
                 RemoteToolDeployment {
@@ -207,6 +238,7 @@ pub fn remote_tool_deployments(
                     metadata_version: tool.metadata_version,
                     metadata_digest: tool.metadata_digest,
                     provision: tool.provision,
+                    component_bindings,
                     bindings,
                 }
                 .into(),
@@ -299,6 +331,9 @@ pub fn remote_tool_middleware_deployments(
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolMiddlewareBindingInput {
+    pub config_keys_readable: ConfigKeyScope,
+    pub secret_keys_readable: SecretKeyScope,
+    pub secret_keys_revealable: SecretKeyScope,
     pub middleware: Option<Vec<ToolMiddlewareInstallation>>,
     pub middleware_merge_mode: Option<ToolMiddlewareMergeMode>,
 }
@@ -306,6 +341,9 @@ pub struct ToolMiddlewareBindingInput {
 impl From<&ToolBindingInput> for ToolMiddlewareBindingInput {
     fn from(value: &ToolBindingInput) -> Self {
         Self {
+            config_keys_readable: value.config_keys_readable.clone(),
+            secret_keys_readable: value.secret_keys_readable.clone(),
+            secret_keys_revealable: value.secret_keys_revealable.clone(),
             middleware: value.middleware.clone(),
             middleware_merge_mode: value.middleware_merge_mode,
         }
@@ -320,10 +358,6 @@ impl Diffable for ToolMiddlewareBindingInput {
     }
 }
 
-pub fn has_tool_middleware_binding_input(binding: &ToolBindingInput) -> bool {
-    binding.middleware.is_some() || binding.middleware_merge_mode.is_some()
-}
-
 pub fn tool_middleware_binding_inputs(
     environment: &BTreeMap<ToolName, ToolBindingInput>,
     agents: &BTreeMap<AgentTypeName, BTreeMap<ToolName, ToolBindingInput>>,
@@ -333,7 +367,6 @@ pub fn tool_middleware_binding_inputs(
 ) {
     let environment = environment
         .iter()
-        .filter(|(_, binding)| has_tool_middleware_binding_input(binding))
         .map(|(name, binding)| (name.to_string(), binding.into()))
         .collect();
     let agents = agents
@@ -341,7 +374,6 @@ pub fn tool_middleware_binding_inputs(
         .filter_map(|(agent, bindings)| {
             let bindings = bindings
                 .iter()
-                .filter(|(_, binding)| has_tool_middleware_binding_input(binding))
                 .map(|(name, binding)| (name.to_string(), binding.into()))
                 .collect::<BTreeMap<_, _>>();
             (!bindings.is_empty()).then(|| (agent.0.clone(), bindings))
@@ -362,6 +394,9 @@ pub struct Deployment {
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     #[serde(serialize_with = "serialize_with_mode")]
     pub mcp_deployments: BTreeMap<String, HashOf<McpDeployment>>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(serialize_with = "serialize_with_mode")]
+    pub mcp_imports: BTreeMap<String, HashOf<McpImport>>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     #[serde(serialize_with = "serialize_with_mode")]
     pub remote_tools: BTreeMap<String, HashOf<RemoteToolDeployment>>,
@@ -393,6 +428,8 @@ pub struct DeploymentDiff {
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub mcp_deployments: BTreeMapDiff<String, HashOf<McpDeployment>>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub mcp_imports: BTreeMapDiff<String, HashOf<McpImport>>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub remote_tools: BTreeMapDiff<String, HashOf<RemoteToolDeployment>>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub published_tools: BTreeSetDiff<String>,
@@ -418,6 +455,7 @@ impl Diffable for Deployment {
         let mcp_deployments = new
             .mcp_deployments
             .diff_with_current(&current.mcp_deployments)?;
+        let mcp_imports = new.mcp_imports.diff_with_current(&current.mcp_imports)?;
         let remote_tools = new.remote_tools.diff_with_current(&current.remote_tools)?;
         let published_tools = new
             .published_tools
@@ -443,6 +481,7 @@ impl Diffable for Deployment {
             if components.is_some()
                 || http_api_deployments.is_some()
                 || mcp_deployments.is_some()
+                || mcp_imports.is_some()
                 || remote_tools.is_some()
                 || published_tools.is_some()
                 || remote_tool_middleware_deployments.is_some()
@@ -456,6 +495,7 @@ impl Diffable for Deployment {
                     components: components.unwrap_or_default(),
                     http_api_deployments: http_api_deployments.unwrap_or_default(),
                     mcp_deployments: mcp_deployments.unwrap_or_default(),
+                    mcp_imports: mcp_imports.unwrap_or_default(),
                     remote_tools: remote_tools.unwrap_or_default(),
                     published_tools: published_tools.unwrap_or_default(),
                     remote_tool_middleware_deployments: remote_tool_middleware_deployments
@@ -492,10 +532,13 @@ mod tests {
     };
     use crate::model::account::{AccountEmail, AccountId};
     use crate::model::agent::AgentTypeName;
+    use crate::model::agent_secret::CanonicalAgentSecretPath;
     use crate::model::component::{ComponentId, ComponentName, ComponentRevision};
     use crate::model::deployment::DeploymentRevision;
     use crate::model::diff::{Hash, Hashable};
     use crate::model::json::NormalizedJsonValue;
+    use crate::model::mcp_import::{McpImport, McpImportAuth, McpInlineCredentialKind};
+    use crate::model::security_scheme::SecuritySchemeName;
     use crate::model::tool::{
         ConfigKeyScope, HostToolId, RegisteredTool, SecretKeyScope, ToolBindingInput,
         ToolFilesystemAccess, ToolName, ToolProvisionConfig, ToolSource,
@@ -526,6 +569,7 @@ mod tests {
             metadata_version: "0.1.0".to_string(),
             metadata_digest: Hash::new(blake3::hash(b"metadata-a")),
             provision: ToolProvisionConfig::default(),
+            component_bindings: BTreeMap::new(),
             bindings: BTreeMap::new(),
         }
     }
@@ -544,6 +588,85 @@ mod tests {
         .unwrap()
     }
 
+    fn mcp_import() -> McpImport {
+        McpImport {
+            url: "http://internal.example/mcp".to_string(),
+            auth: Some(McpImportAuth {
+                kind: McpInlineCredentialKind::Bearer,
+                credential_digest: Hash::new(blake3::hash(b"credential-a")),
+            }),
+            security_scheme: None,
+            prefix: Some("upstream".to_string()),
+            include: Some(vec!["read-*".to_string()]),
+            exclude: None,
+            version: Some(crate::base_model::mcp_import::PROTOCOL_VERSION.to_string()),
+        }
+    }
+
+    #[test]
+    fn mcp_import_hash_covers_order_credentials_auth_scheme_filters_prefix_and_protocol() {
+        let first = mcp_import();
+        let second = McpImport {
+            url: "https://other.example/mcp".to_string(),
+            ..first.clone()
+        };
+        let ordered = |a: McpImport, b: McpImport| {
+            Deployment {
+                mcp_imports: BTreeMap::from([
+                    ("0".to_string(), a.into()),
+                    ("1".to_string(), b.into()),
+                ]),
+                ..Deployment::default()
+            }
+            .hash()
+            .unwrap()
+        };
+        assert_ne!(
+            ordered(first.clone(), second.clone()),
+            ordered(second, first.clone())
+        );
+
+        for changed in [
+            McpImport {
+                auth: Some(McpImportAuth {
+                    kind: McpInlineCredentialKind::Bearer,
+                    credential_digest: Hash::new(blake3::hash(b"credential-b")),
+                }),
+                ..first.clone()
+            },
+            McpImport {
+                auth: Some(McpImportAuth {
+                    kind: McpInlineCredentialKind::Basic,
+                    credential_digest: Hash::new(blake3::hash(b"credential-a")),
+                }),
+                ..first.clone()
+            },
+            McpImport {
+                auth: None,
+                security_scheme: Some(SecuritySchemeName("oauth".to_string())),
+                ..first.clone()
+            },
+            McpImport {
+                include: None,
+                exclude: Some(vec!["write-*".to_string()]),
+                ..first.clone()
+            },
+            McpImport {
+                prefix: Some("other".to_string()),
+                ..first.clone()
+            },
+            McpImport {
+                version: Some("2026-01-01".to_string()),
+                ..first.clone()
+            },
+            McpImport {
+                url: "https://internal.example/mcp".to_string(),
+                ..first.clone()
+            },
+        ] {
+            assert_ne!(first.hash().unwrap(), changed.hash().unwrap());
+        }
+    }
     fn registered_middleware(
         deployment_revision: DeploymentRevision,
         release_id: ToolMiddlewareReleaseId,
@@ -557,6 +680,7 @@ mod tests {
                 aliases: Vec::new(),
                 doc: Doc::default(),
                 scope: ToolMiddlewareScope::Universal,
+                parameter_schema: SchemaGraph::empty(),
             },
             provision: ToolProvisionConfig::default(),
             source: ToolMiddlewareSource::Component {
@@ -630,6 +754,8 @@ mod tests {
                     version: Some("1.0.0".to_string()),
                     parameters: NormalizedJsonValue::new(serde_json::json!({})),
                     account: None,
+                    secret_keys_readable: None,
+                    secret_keys_revealable: None,
                     filesystem_access: ToolFilesystemAccess::Denied,
                 },
             ],
@@ -642,12 +768,12 @@ mod tests {
     }
 
     #[test]
-    fn middleware_binding_projection_hash_retains_mode_only_and_ignores_empty_bindings() {
+    fn middleware_binding_projection_hash_retains_explicit_default_bindings() {
         let agent = AgentTypeName("Agent".to_string());
         let tool = ToolName::try_from("grep").unwrap();
         let empty_tool = ToolName::try_from("empty").unwrap();
         let environment = BTreeMap::from([(empty_tool.clone(), ToolBindingInput::default())]);
-        let agents = BTreeMap::from([(
+        let mut agents = BTreeMap::from([(
             agent,
             BTreeMap::from([
                 (
@@ -660,18 +786,20 @@ mod tests {
                 (empty_tool, ToolBindingInput::default()),
             ]),
         )]);
+        agents.insert(AgentTypeName("Unbound".to_string()), BTreeMap::new());
 
         let (environment_bindings, agent_bindings) =
             super::tool_middleware_binding_inputs(&environment, &agents);
-        assert!(environment_bindings.is_empty());
-        assert_eq!(agent_bindings["Agent"].len(), 1);
+        assert_eq!(environment_bindings.len(), 1);
+        assert_eq!(agent_bindings.len(), 1);
+        assert_eq!(agent_bindings["Agent"].len(), 2);
         assert_eq!(
             agent_bindings["Agent"]["grep"].middleware_merge_mode,
             Some(ToolMiddlewareMergeMode::Append)
         );
 
         let projected = Deployment {
-            environment_tool_middleware_bindings: environment_bindings,
+            environment_tool_middleware_bindings: environment_bindings.clone(),
             agent_tool_middleware_bindings: agent_bindings,
             ..Deployment::default()
         };
@@ -679,6 +807,68 @@ mod tests {
             projected.hash().unwrap(),
             Deployment::default().hash().unwrap()
         );
+
+        let environment_only = Deployment {
+            environment_tool_middleware_bindings: environment_bindings,
+            ..Deployment::default()
+        };
+        let agent_only = Deployment {
+            agent_tool_middleware_bindings: BTreeMap::from([(
+                "Agent".to_string(),
+                BTreeMap::from([(
+                    "empty".to_string(),
+                    super::ToolMiddlewareBindingInput::from(&ToolBindingInput::default()),
+                )]),
+            )]),
+            ..Deployment::default()
+        };
+        let absent = Deployment::default().hash().unwrap();
+        assert_ne!(environment_only.hash().unwrap(), absent);
+        assert_ne!(agent_only.hash().unwrap(), absent);
+    }
+
+    #[test]
+    fn middleware_binding_authority_scopes_each_change_deployment_hash() {
+        use crate::model::agent_config::CanonicalAgentConfigPath;
+        use crate::model::agent_secret::CanonicalAgentSecretPath;
+
+        let tool = ToolName::try_from("grep").unwrap();
+        let hash = |binding: ToolBindingInput| {
+            let (environment_tool_middleware_bindings, _) = super::tool_middleware_binding_inputs(
+                &BTreeMap::from([(tool.clone(), binding)]),
+                &BTreeMap::new(),
+            );
+            Deployment {
+                environment_tool_middleware_bindings,
+                ..Deployment::default()
+            }
+            .hash()
+            .unwrap()
+        };
+        let default_hash = Deployment::default().hash().unwrap();
+
+        for binding in [
+            ToolBindingInput {
+                config_keys_readable: ConfigKeyScope::Keys(BTreeSet::from([
+                    CanonicalAgentConfigPath(vec!["config".to_string()]),
+                ])),
+                ..Default::default()
+            },
+            ToolBindingInput {
+                secret_keys_readable: SecretKeyScope::Keys(BTreeSet::from([
+                    CanonicalAgentSecretPath(vec!["readable".to_string()]),
+                ])),
+                ..Default::default()
+            },
+            ToolBindingInput {
+                secret_keys_revealable: SecretKeyScope::Keys(BTreeSet::from([
+                    CanonicalAgentSecretPath(vec!["revealable".to_string()]),
+                ])),
+                ..Default::default()
+            },
+        ] {
+            assert_ne!(hash(binding), default_hash);
+        }
     }
 
     #[test]
@@ -689,6 +879,8 @@ mod tests {
                 version: None,
                 parameters: NormalizedJsonValue::new(serde_json::json!({})),
                 account: None,
+                secret_keys_readable: None,
+                secret_keys_revealable: None,
                 filesystem_access,
             };
         let hash = |filesystem_access| {
@@ -704,6 +896,34 @@ mod tests {
             hash(ToolFilesystemAccess::Allowed),
             hash(ToolFilesystemAccess::Denied)
         );
+    }
+
+    #[test]
+    fn changing_one_duplicate_middleware_secret_selector_changes_deployment_hash() {
+        let installation = || crate::model::tool_middleware::ToolMiddlewareInstallation {
+            name: "audit".try_into().unwrap(),
+            version: Some("1.0.0".to_string()),
+            parameters: NormalizedJsonValue::new(serde_json::json!({})),
+            account: None,
+            secret_keys_readable: None,
+            secret_keys_revealable: None,
+            filesystem_access: ToolFilesystemAccess::Denied,
+        };
+        let original = Deployment {
+            universal_tool_middlewares: vec![installation(), installation()],
+            ..Deployment::default()
+        };
+        let mut changed = original.clone();
+        changed.universal_tool_middlewares[0].secret_keys_readable =
+            Some(SecretKeyScope::Keys(BTreeSet::from([
+                CanonicalAgentSecretPath(vec!["token".to_string()]),
+            ])));
+
+        assert_eq!(
+            changed.universal_tool_middlewares[1], original.universal_tool_middlewares[1],
+            "same-named occurrences must retain independent selector state"
+        );
+        assert_ne!(original.hash().unwrap(), changed.hash().unwrap());
     }
 
     fn registered_tool(
@@ -729,6 +949,7 @@ mod tests {
                 schema: SchemaGraph::empty(),
             },
             provision: ToolProvisionConfig::default(),
+            component_bindings: BTreeMap::new(),
             source,
             owner_account_id: AccountId::new(),
             owner_account_email: AccountEmail::new("owner@example.com"),
@@ -771,6 +992,7 @@ mod tests {
         let classified = remote_tool_deployments(
             [local, published, remote],
             Vec::new(),
+            &BTreeMap::new(),
             &BTreeSet::from(["published".to_string()]),
         )
         .unwrap();
@@ -796,7 +1018,8 @@ mod tests {
             None,
         );
 
-        let error = remote_tool_deployments([tool], Vec::new(), &BTreeSet::new()).unwrap_err();
+        let error = remote_tool_deployments([tool], Vec::new(), &BTreeMap::new(), &BTreeSet::new())
+            .unwrap_err();
 
         assert!(
             error
@@ -834,6 +1057,23 @@ mod tests {
         changed_provision.provision.config =
             NormalizedJsonValue::new(serde_json::json!({ "consumer": true }));
         assert_ne!(base_hash, deployment_hash(changed_provision, false));
+
+        let mut changed_component_baseline = base.clone();
+        changed_component_baseline.component_bindings.insert(
+            "consumer".to_string(),
+            EffectiveToolBinding {
+                parameters: NormalizedJsonValue::new(serde_json::json!({ "limit": 5 })),
+                config_keys_readable: ConfigKeyScope::All,
+                secret_keys_readable: SecretKeyScope::All,
+                secret_keys_revealable: SecretKeyScope::All,
+                filesystem_access: ToolFilesystemAccess::Unset,
+            },
+        );
+        assert!(changed_component_baseline.bindings.is_empty());
+        assert_ne!(
+            base_hash,
+            deployment_hash(changed_component_baseline, false)
+        );
 
         let mut changed_binding = base.clone();
         changed_binding.bindings.insert(

@@ -18,7 +18,11 @@
     "resolveJsonModule": true,
     "declaration": true,
     "sourceMap": true,
-    "types": ["node"]
+    "types": ["node"],
+    "baseUrl": ".",
+    "paths": {
+      "@golemcloud/effect-golem": ["./src/index.ts"]
+    }
   },
   "include": ["src/**/*", "test/**/*", "golem-types/**/*"],
   "exclude": ["node_modules", "dist"]

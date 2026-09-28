@@ -14,7 +14,7 @@
 
 use super::{
     IndexedStorage, IndexedStorageError, IndexedStorageMetaNamespace, IndexedStorageNamespace,
-    ScanCursor, ScanResume,
+    ScanResume,
 };
 use crate::storage::indexed::sqlite::SqliteIndexedStorage;
 use async_trait::async_trait;
@@ -22,6 +22,7 @@ use bytes::Bytes;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::config::DbSqliteConfig;
 use golem_common::model::AgentId;
+use golem_common::model::ShardEpoch;
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::path::{Path, PathBuf};
@@ -38,6 +39,8 @@ const LISTING_TTL: Duration = Duration::from_secs(10);
 /// IndexedStorage implementation that uses multiple separate SQLite databases depending
 /// on the namespace.
 pub struct MultiSqliteIndexedStorage {
+    // Preserve typed initialization failures so transient pool or migration errors enter the
+    // primary oplog retry policy instead of becoming permanent cache-loader failures.
     cache: Cache<String, (), SqliteIndexedStorage, IndexedStorageError>,
     hash_cache: Arc<Mutex<HashCache>>,
     /// The `.db` files under each meta-namespace prefix, sorted, with the time they were read.
@@ -95,9 +98,7 @@ impl MultiSqliteIndexedStorage {
             max_connections,
             foreign_keys,
         };
-        SqliteIndexedStorage::configured(&config)
-            .await
-            .map_err(IndexedStorageError::Other)
+        SqliteIndexedStorage::configured(&config).await
     }
 
     async fn storage_by_namespace(
@@ -214,6 +215,13 @@ impl MultiSqliteIndexedStorage {
                 let mode = super::agent_mode_prefix(*agent_mode);
                 format!("{mode}-oplog-{}.db", self.agent_id_hash(agent_id).await)
             }
+            IndexedStorageNamespace::StagedOpLog {
+                agent_id,
+                agent_mode,
+            } => {
+                let mode = super::agent_mode_prefix(*agent_mode);
+                format!("{mode}-oplog-{}.db", self.agent_id_hash(agent_id).await)
+            }
             IndexedStorageNamespace::CompressedOpLog {
                 agent_id,
                 agent_mode,
@@ -255,6 +263,34 @@ impl Debug for MultiSqliteIndexedStorage {
 
 #[async_trait]
 impl IndexedStorage for MultiSqliteIndexedStorage {
+    async fn set_key_epoch(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        new_epoch: ShardEpoch,
+    ) -> Result<(), IndexedStorageError> {
+        self.storage_by_namespace(&namespace)
+            .await?
+            .set_key_epoch(svc_name, api_name, namespace, key, new_epoch)
+            .await
+    }
+
+    async fn delete_with_epoch(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        expected_epoch: Option<ShardEpoch>,
+    ) -> Result<(), IndexedStorageError> {
+        self.storage_by_namespace(&namespace)
+            .await?
+            .delete_with_epoch(svc_name, api_name, namespace, key, expected_epoch)
+            .await
+    }
+
     async fn number_of_replicas(
         &self,
         _svc_name: &'static str,
@@ -284,55 +320,6 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
             .await?
             .exists(svc_name, api_name, namespace, key)
             .await
-    }
-
-    async fn scan(
-        &self,
-        svc_name: &'static str,
-        api_name: &'static str,
-        namespace: IndexedStorageMetaNamespace,
-        prefix: Option<&str>,
-        cursor: ScanCursor,
-        count: u64,
-    ) -> Result<(ScanCursor, Vec<String>), IndexedStorageError> {
-        let matching_files = self.namespace_db_files(&namespace).await?;
-
-        // Decode cursor: upper 32 bits = file index, lower 32 bits = scan cursor within file
-        let file_index = (cursor >> 32) as usize;
-        let file_cursor = cursor & 0xFFFFFFFF;
-
-        let mut results = Vec::new();
-        let mut current_file_cursor = file_cursor;
-
-        for (idx, file_name) in matching_files.iter().enumerate().skip(file_index) {
-            let storage = self.storage_by_db_name(file_name.clone()).await?;
-
-            let (next_cursor, mut file_results) = storage
-                .scan(
-                    svc_name,
-                    api_name,
-                    namespace.clone(),
-                    prefix,
-                    current_file_cursor,
-                    count - results.len() as u64,
-                )
-                .await?;
-
-            results.append(&mut file_results);
-
-            if results.len() as u64 >= count {
-                // Encode next cursor: file index in upper 32 bits, file cursor in lower 32 bits
-                let next_combined_cursor = ((idx as u64) << 32) | (next_cursor & 0xFFFFFFFF);
-                return Ok((
-                    next_combined_cursor,
-                    results.into_iter().take(count as usize).collect(),
-                ));
-            }
-
-            current_file_cursor = 0;
-        }
-
-        Ok((0, results))
     }
 
     async fn scan_stable(
@@ -409,13 +396,27 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
         key: &str,
         id: u64,
         value: Vec<u8>,
+        expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
         self.storage_by_namespace(&namespace)
             .await?
-            .append(svc_name, api_name, entity_name, namespace, key, id, value)
+            .append(
+                svc_name,
+                api_name,
+                entity_name,
+                namespace,
+                key,
+                id,
+                value,
+                expected_epoch,
+            )
             .await
     }
 
+    /// Overridden rather than inherited. The trait default loops [`Self::append`], which would
+    /// resolve the per-agent database and re-check the fence once per entry, in a separate
+    /// transaction each time - so a batch could land half-written, and the contract that the
+    /// fence is checked once per call would not hold.
     async fn append_many(
         &self,
         svc_name: &'static str,
@@ -424,10 +425,50 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
         namespace: &IndexedStorageNamespace,
         key: &str,
         pairs: Arc<[(u64, Bytes)]>,
+        expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
         self.storage_by_namespace(namespace)
             .await?
-            .append_many(svc_name, api_name, entity_name, namespace, key, pairs)
+            .append_many(
+                svc_name,
+                api_name,
+                entity_name,
+                namespace,
+                key,
+                pairs,
+                expected_epoch,
+            )
+            .await
+    }
+
+    async fn move_if_absent(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        source_namespace: IndexedStorageNamespace,
+        source_key: &str,
+        target_namespace: IndexedStorageNamespace,
+        target_key: &str,
+        expected_last_id: u64,
+    ) -> Result<bool, IndexedStorageError> {
+        let source_db = self.namespace_to_db(&source_namespace).await;
+        let target_db = self.namespace_to_db(&target_namespace).await;
+        if source_db != target_db {
+            return Err(IndexedStorageError::Other(
+                "multi-SQLite cannot atomically move indexes across databases".to_string(),
+            ));
+        }
+        self.storage_by_db_name(target_db)
+            .await?
+            .move_if_absent(
+                svc_name,
+                api_name,
+                source_namespace,
+                source_key,
+                target_namespace,
+                target_key,
+                expected_last_id,
+            )
             .await
     }
 
@@ -585,6 +626,7 @@ mod tests {
                 &first_namespace,
                 "shared-key",
                 vec![(1, Bytes::from_static(b"first-agent-value"))].into(),
+                None,
             )
             .await
             .unwrap();
@@ -596,6 +638,7 @@ mod tests {
                 &second_namespace,
                 "shared-key",
                 vec![(1, Bytes::from_static(b"second-agent-value"))].into(),
+                None,
             )
             .await
             .unwrap();

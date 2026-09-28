@@ -1,0 +1,36 @@
+package golem:tool@0.1.0;
+
+/// Byte-stream endpoints shared by tool implementations and middleware without
+/// granting access to ambient tool discovery or dispatch.
+interface streams {
+  /// Recoverable attachment failures are stream values. Clean EOF is closure.
+  variant byte-stream-failure {
+    cancelled,
+    abandoned,
+    resource-exhausted,
+    failed(string),
+  }
+
+  /// Every successful item contains a non-empty byte chunk.
+  type byte-stream-item = result<list<u8>, byte-stream-failure>;
+
+  variant byte-stream-close-cause {
+    finished,
+    failed(byte-stream-failure),
+    consumer-cancelled,
+  }
+
+  variant stream-write-error {
+    closed(byte-stream-close-cause),
+    concurrent-operation,
+  }
+
+  /// Host-owned writer supplied to a tool or middleware implementation. Exactly
+  /// one write, finish, or fail operation may be outstanding. The first terminal
+  /// is immutable; dropping an open writer selects `abandoned`.
+  resource tool-stdout-writer {
+    write: async func(bytes: list<u8>) -> result<_, stream-write-error>;
+    finish: async func() -> result<_, stream-write-error>;
+    fail: async func(reason: byte-stream-failure) -> result<_, stream-write-error>;
+  }
+}

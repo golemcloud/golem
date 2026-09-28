@@ -92,6 +92,7 @@ fn representative_agent_type() -> AgentTypeSchema {
     ];
 
     AgentTypeSchema {
+        kind: golem_common::schema::agent::AgentTypeKind::Regular,
         type_name: AgentTypeName(AGENT_TYPE.to_string()),
         description: "benchmark agent".to_string(),
         source_language: "rust".to_string(),

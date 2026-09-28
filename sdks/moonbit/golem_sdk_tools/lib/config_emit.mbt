@@ -190,6 +190,10 @@ pub fn generate_config_override_walkers(
     }
     buf.write_string("  result\n")
     buf.write_string("}\n\n")
+    buf.write_string("///|\n")
+    buf.write_string(
+      "pub impl @rpc.AgentConfigOverrides for \{override_name} with typed_values(self) {\n  \{fn_name}(self, [])\n}\n\n",
+    )
   }
   let source = buf.to_string()
   if source.is_empty() {

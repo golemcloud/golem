@@ -1,0 +1,250 @@
+import { Callout, Tabs } from "nextra/components"
+
+# Tool Authoring and Lifecycle
+
+This page shows how to define, test, bind, publish, and consume a [Golem-native tool](/next/concepts/golem-native-tools). A tool is stateless metadata plus handlers. Its identity is scoped to the owning agent and tool name, and each component-tool invocation runs in a fresh isolated instance under the owner's execution.
+
+## Define a tool
+
+The SDKs project the same model: a command tree, inherited global options and flags, command bodies, typed results, declared errors, and optional stdin/stdout byte streams.
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+  <Tabs.Tab>
+```typescript
+import { z } from 'zod';
+import { ok, toolDefinition } from '@golemcloud/golem-ts-sdk';
+
+export const files = toolDefinition('files')
+  .version('1.0.0')
+  .global('verbose', z.boolean(), { kind: 'flag', short: 'v' })
+  .command('read', command => command.body(body => body
+    .positional('path', z.string())
+    .stdout({ mime: ['application/octet-stream'], required: false })
+    .returns(z.string())
+    .error('not-found', { kind: 'runtime', exitCode: 2 })
+  ));
+
+files.implement({
+  read: async ({ path, verbose }) => ok(verbose ? `read:${path}` : path),
+});
+```
+  </Tabs.Tab>
+  <Tabs.Tab>
+```typescript
+import { Effect, Schema } from 'effect';
+import { Tool } from '@golemcloud/effect-golem';
+
+const files = Tool.toolDefinition('files').command('read', command =>
+  command.body(body => body
+    .positional('path', Schema.String)
+    .returns(Schema.String)
+    .error('not-found', Schema.Struct({ path: Schema.String })))
+);
+
+files.implement({
+  read: ({ path }) => Effect.succeed(path),
+});
+```
+
+Handlers return `Effect` values. Tool services can be supplied with the optional `Layer` argument to `implement`.
+  </Tabs.Tab>
+  <Tabs.Tab>
+```rust
+use golem_rust::{tool_definition, tool_implementation, ToolError};
+
+#[derive(ToolError)]
+enum FileError {
+    #[tool_error(kind = "runtime-error", exit_code = 2)]
+    NotFound,
+}
+
+#[tool_definition(version = "1.0.0")]
+trait Files {
+    #[arg(path = "positional")]
+    async fn read(&self, path: String) -> Result<String, FileError>;
+}
+
+struct FilesImpl;
+
+#[tool_implementation]
+impl Files for FilesImpl {
+    async fn read(&self, path: String) -> Result<String, FileError> { Ok(path) }
+}
+```
+
+Use `InputStream` and `OutputStream` parameters for stdin and stdout. The macros generate discovery metadata and a typed client.
+  </Tabs.Tab>
+  <Tabs.Tab>
+```scala
+import golem.runtime.annotations.*
+
+enum FileError {
+  @error(kind = "runtime-error", exitCode = 2)
+  case NotFound
+}
+
+@toolDefinition(name = "files", version = "1.0.0")
+trait Files {
+  @arg("path", scope = "positional")
+  def read(path: String): Either[FileError, String]
+}
+
+@toolImplementation()
+final class FilesImpl extends Files {
+  def read(path: String): Either[FileError, String] = Right(path)
+}
+```
+
+`ToolInputStream` and `ToolOutputStream` add streaming stdin and stdout.
+  </Tabs.Tab>
+  <Tabs.Tab>
+```moonbit
+enum FileError {
+  #derive.error(kind="runtime-error", exit_code="2")
+  NotFound
+}
+
+#derive.tool("files", version="1.0.0")
+struct Files {}
+
+#derive.arg("path", scope="positional")
+pub fn Files::read(path : String) -> Result[String, FileError] {
+  Ok(path)
+}
+```
+
+Use `@asyncCore.Stream[Byte]` and `@tool.ProviderStdout` parameters for streaming.
+  </Tabs.Tab>
+</Tabs>
+
+## Model commands precisely
+
+Prefer structure over parsing strings yourself:
+
+- **Commands and subcommands** describe mutually exclusive operations. A command can also have an implicit body for bare invocation.
+- **Globals** are options or flags inherited by every descendant command.
+- **Positionals** are ordered; only the final tail positional can be variadic.
+- **Options and flags** carry long names, aliases, defaults, repetition, delimiters, environment fallback, and documentation.
+- **Constraints** express requirements, all-or-none groups, implications, and exclusions.
+- **Results and errors** are typed. Declared errors include a stable name, category, optional payload, and exit code; transport or protocol failures remain RPC errors.
+- **stdin and stdout** are byte-stream slots with declared MIME metadata; each declared slot can be required or optional. They use backpressured streams rather than buffering a complete body.
+
+The command tree is metadata, not a spawned shell. A component cannot currently run an arbitrary native executable. Implement operations with code and libraries compiled into the component, or call an external service through supported network APIs.
+
+## Call through a typed client
+
+Definition-owned clients preserve the command tree and schemas. TypeScript uses `definition.client()`, Effect uses `Tool.client(definition)`, and the Rust, Scala, and MoonBit code generators project equivalent clients. For a tool implemented in another component or language, add it to bridge generation:
+
+```yaml filename="golem.yaml"
+bridge:
+  ts:
+    internal:
+      tools: [files]
+  rust:
+    internal:
+      tools: [files]
+```
+
+Generated clients call the canonical name through `tool-rpc`; they do not embed a component ID, MCP endpoint, host-native implementation ID, or credential.
+
+## Add middleware
+
+Use **monomorphic middleware** when the wrapper knows the tool shape and may adapt it. Use **universal middleware** for shape-preserving policy across every tool. Middleware receives only an invocation-scoped handle to the next layer.
+
+```typescript
+import { ToolInvokeError } from '@golemcloud/golem-ts-sdk';
+
+export const safeFiles = files.middleware({
+  name: 'safe-files',
+  implementation: {
+    read: async ({ path, ...input }, { underlying }) => {
+      if (path.startsWith('/etc/')) {
+        throw new ToolInvokeError({ tag: 'constraint-violation', val: 'path denied' });
+      }
+      return underlying.read({ path, ...input });
+    },
+  },
+});
+```
+
+Effect exports typed and universal middleware from `@golemcloud/effect-golem/middleware`. Rust, Scala, and MoonBit expose the same runtime middleware contract through their SDK authoring forms. Binding and traversal are separate: registering middleware in a component does not attach it to any call.
+
+## Declare and bind
+
+A local declaration identifies the component that implements the tool. A binding exposes it to a component's agents, then an agent entry can override, replace, or remove inherited settings:
+
+```yaml filename="golem.yaml"
+tools:
+  files:
+    component: acme:file-tools
+    config:
+      root: /workspace
+
+components:
+  acme:assistant:
+    dependencies:
+      tools: [files]
+    tools:
+      files:
+        configKeysReadable: [workspace.root]
+
+agents:
+  ReadOnlyAssistant:
+    tools:
+      files:
+        filesystemAccess: denied
+        middleware:
+          - name: audit
+            parameters: { channel: security }
+```
+
+Bindings expose a tool; permission cards authorize calls. Component bindings provide defaults that agent entries can override, replace, or remove. Readable configuration and secret scopes intersect across retained layers and between environment and owner bindings; revealable secrets are also limited to readable secrets. Filesystem access uses the last explicit cascade value, with denial taking precedence when environment and owner bindings are combined. `toolsMergeMode` can `upsert`, `replace`, or `remove` inherited bindings. Middleware order is environment-universal middleware, then the merged per-tool list, then the leaf tool; `middlewareMergeMode` is `prepend` (the default), `append`, or `replace`.
+
+The example assumes that the `audit` middleware is declared separately under `tools.middleware`.
+
+See [Application Manifest](/next/app-manifest) for every field, merge rule, and validation mode.
+
+## Publish and consume
+
+Publish a local tool from an environment deployment:
+
+```yaml filename="golem.yaml"
+toolReleases:
+  production:
+    files: {}
+```
+
+The published version comes from the tool's discovered metadata. The Effect SDK currently emits tool metadata version `0.1.0`; its `toolDefinition` does not expose a version option. The `1.0.0` consumer below therefore applies to the TypeScript, Rust, Scala, and MoonBit definitions shown above.
+
+A consumer selects an exact release and supplies its own configuration:
+
+```yaml filename="golem.yaml"
+tools:
+  files:
+    release:
+      account: tools@example.com
+      name: files
+      version: "1.0.0"
+    config: { root: /workspace }
+```
+
+Deployment reconciles the environment's release grant before reading metadata or generating clients. Publication is additive: removing `toolReleases` does not de-publish. Existing deployment snapshots stay pinned. Use `golem tool release list|get|de-publish|restore` and `golem tool grant create|list|get|delete|restore` for explicit lifecycle operations.
+
+<Callout type="warning">
+  A release grant permits consumption of an artifact. It does not bind the tool to an agent and is not a runtime permission-card grant.
+</Callout>
+
+## Wrap MCP or a CLI
+
+- **MCP:** configure an MCP import in the environment. Golem discovers and projects its tools into the registry; generated clients still call `tool-rpc`. Resolve naming collisions explicitly—application and ambient names cannot collide, ambient tools take precedence over MCP projections, and earlier MCP imports precede later ones.
+- **CLI-shaped operation:** reproduce the required operation with libraries compiled into the component, or call an external service. Represent arguments as command metadata, stream bytes through stdin/stdout, and map failures to declared errors. Spawning an arbitrary native CLI inside a component is not currently supported.
+
+## Test the whole contract
+
+1. Unit-test metadata validation, handler results, declared errors, constraints, and stream cancellation/backpressure.
+2. Test middleware independently with a fake underlying handler, including rejection and transformed input/output.
+3. Build the component and run an integration call through `tool-rpc`; unit tests cannot prove discovery, instance isolation, runtime authorization, or middleware traversal.
+4. Deploy with the intended binding and permission cards. Test both missing-binding and missing-permission cases.
+5. For durable middleware, restart while a call or approval is pending and verify logical recovery without repeating recorded effects. External effects still require an appropriate idempotency policy across an ambiguous crash window.
+
+Build and deploy with the normal [component workflow](/next/develop/building-components). Tool and middleware publication is committed with deployment, but release de-publication and grant administration are explicit lifecycle operations.

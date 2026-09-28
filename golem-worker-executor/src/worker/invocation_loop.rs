@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::durable_host::tool::operation::OwnerFailureWinner;
-use crate::model::{LookupResult, ReadFileResult, TrapType};
+use crate::model::{LookupResult, TrapType};
 use crate::sandbox_filesystem::{SandboxFilesystem, SandboxFilesystemAdapter};
 use crate::services::agent_filesystem::{
     DeleteFailure, LimitTransition, ResidentFilesystem, ResidentFilesystemActivity,
@@ -27,8 +27,8 @@ use crate::services::{
     HasActiveAgents, HasExtraDeps, HasOplog, HasOplogService, HasShardService, HasWorker,
 };
 use crate::worker::invocation::{
-    GuestCallSettlementError, InvocationMode, InvokeResult, invocation_uses_streams,
-    invoke_observed_and_traced, invoke_result_from_trap, lower_invocation, run_guest_call_settled,
+    InvocationMode, InvokeResult, invocation_uses_streams, invoke_observed_and_traced,
+    lower_invocation, materialize_streaming_result,
 };
 use crate::worker::status_checkpointer;
 use crate::worker::{
@@ -39,24 +39,24 @@ use crate::worker::{
 };
 use crate::workerctx::{PublicWorkerIo, UpdateManagement, WorkerCtx};
 use async_lock::Mutex;
-use drop_stream::DropStream;
 use futures::FutureExt;
-use futures::channel::oneshot;
-use futures::channel::oneshot::Sender;
+use futures::channel::oneshot::{self, Sender};
 use futures::future::{BoxFuture, Shared};
-use golem_common::model::agent::{AgentMode, ParsedAgentId};
+use golem_common::model::agent::{AgentMode, OwnerKind, ParsedAgentId};
 use golem_common::model::component::{CanonicalFilePath, ComponentRevision};
+use golem_common::model::filesystem::{FileByteSelection, FileReadError};
 use golem_common::model::oplog::{AgentError, OplogEntry};
 use golem_common::model::{
     AgentId, AgentInvocation, AgentInvocationKind, AgentInvocationOutput, AgentInvocationResult,
     IdempotencyKey, OwnedAgentId, TimestampedAgentInvocation,
 };
 use golem_common::model::{
-    AgentStatusRecord, OplogIndex, Timestamp,
+    AgentStatusRecord, OplogIndex, PendingInvocationRef, Timestamp,
     invocation_context::{AttributeValue, InvocationContextStack},
 };
 use golem_common::retries::get_delay;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
+use golem_service_base::model::FileReadResponse;
 use golem_service_base::model::GetFileSystemNodeResult;
 
 use golem_common::model::agent::structural_format::format_structural_typed;
@@ -70,13 +70,12 @@ use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
-use tokio::sync::RwLock;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::task::JoinHandle;
 use tracing::{Instrument, Level, debug, error, span, warn};
 use uuid::Uuid;
+use wasmtime::Store;
 use wasmtime::component::Instance;
-use wasmtime::{AsContextMut, Store};
 
 /// Span for one bounded phase of a worker's lifecycle.
 ///
@@ -100,7 +99,7 @@ macro_rules! agent_phase_span {
 /// Context of a running worker's invocation loop
 pub struct InvocationLoop<Ctx: WorkerCtx> {
     pub receiver: UnboundedReceiver<WorkerCommand>,
-    pub active: Arc<RwLock<VecDeque<QueuedWorkerInvocation>>>,
+    pub active: Arc<tokio::sync::RwLock<VecDeque<QueuedWorkerInvocation>>>,
     pub owned_agent_id: OwnedAgentId,
     pub parent: Arc<Worker<Ctx>>, // parent must not be dropped until the invocation_loop is running
     pub waiting_for_command: Arc<AtomicBool>,
@@ -256,6 +255,11 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
 
         let mut retry_was_live = false;
         'outer: loop {
+            self.parent
+                .queue
+                .write()
+                .await
+                .retain(|invocation| !invocation.is_abandoned());
             self.release_terminal_interrupt().await;
             // ADMISSION: gates the start of a generation, so
             // fencing refuses new generations and never interrupts a running one.
@@ -263,7 +267,19 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 debug!(%agent_id, "Worker generation not started because its shard is not assigned");
                 self.parent.complete_startup(self.start_attempt, Err(error));
                 self.release_concurrent_agent_permit();
-                self.stop_unloaded(None).await;
+                self.stop_unloaded(None, PendingLiveInvocationDisposition::Fail)
+                    .await;
+                break;
+            }
+            let retiring = self.parent.owner_retirement_requested.clone();
+            if retiring.is_cancelled() {
+                self.parent.complete_startup(
+                    self.start_attempt,
+                    Err(WorkerExecutorError::runtime("Worker owner is retiring")),
+                );
+                self.release_concurrent_agent_permit();
+                self.stop_unloaded(None, PendingLiveInvocationDisposition::Fail)
+                    .await;
                 break;
             }
             if self.permit_state.is_none() {
@@ -283,6 +299,12 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                         break 'outer;
                     }
                     tokio::select! {
+                        biased;
+                        () = retiring.cancelled() => {
+                            self.parent.complete_startup(self.start_attempt, Err(WorkerExecutorError::runtime("Worker owner is retiring")));
+                            self.stop_unloaded(None, PendingLiveInvocationDisposition::Fail).await;
+                            break 'outer;
+                        }
                         permit = &mut permit => {
                             self.permit_state.install_tracked(permit);
                             break;
@@ -290,7 +312,12 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                         command = self.receiver.recv() => {
                             let Some(command) = command else {
                                 debug!(%agent_id, "Invocation queue loop command channel closed while awaiting concurrent-agent permit");
-                                self.stop_closed(None, None).await;
+                                self.stop_closed(
+                                    None,
+                                    None,
+                                    PendingLiveInvocationDisposition::Fail,
+                                )
+                                .await;
                                 break 'outer;
                             };
                             if let Some(interrupt) = self.pending_interrupt().await
@@ -329,6 +356,30 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     let kind = pending_interrupt
                         .map(|interrupt| interrupt.kind)
                         .unwrap_or(kind);
+                    if self.parent.initial_worker_metadata.owner_kind
+                        == OwnerKind::EphemeralExternalTool
+                    {
+                        // Core initialization has already entered the executable Store. Losing it
+                        // is terminal for an external owner, just as losing its invocation body is.
+                        if self
+                            .parent
+                            .add_and_commit_oplog(OplogEntry::interrupted())
+                            .await
+                            .is_err()
+                        {
+                            // The shard has a new owner. Give the agent up without archiving:
+                            // the archive would move an oplog that is no longer this executor's.
+                            self.stop_startup_retired().await;
+                            break;
+                        }
+                        self.stop_unloaded(
+                            Some(super::inactive_ephemeral_agent_error()),
+                            PendingLiveInvocationDisposition::Fail,
+                        )
+                        .await;
+                        self.archive_ephemeral_oplog();
+                        break;
+                    }
                     // Interrupted while instantiating: record the same lifecycle oplog entry the
                     // invocation failure path would (`Suspend`/`Interrupted`), then park or
                     // restart. There is no store to run `on_invocation_failure` on, but no
@@ -339,9 +390,15 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                             continue;
                         }
                         InterruptKind::Suspend(ts) => {
-                            self.parent
+                            if self
+                                .parent
                                 .add_and_commit_oplog(OplogEntry::suspend())
-                                .await;
+                                .await
+                                .is_err()
+                            {
+                                self.stop_startup_retired().await;
+                                break;
+                            }
                             if ts < *self.parent.last_resume_request.lock().await {
                                 debug!(
                                     "Suspend during instantiation ignored because there was a resume request since it"
@@ -349,19 +406,40 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                 continue;
                             } else {
                                 self.parent.complete_startup(self.start_attempt, Ok(()));
-                                self.stop_unloaded(None).await;
+                                self.stop_unloaded(
+                                    None,
+                                    resident_work_disposition(
+                                        pending_interrupt
+                                            .map(|interrupt| interrupt.unload_request.reason)
+                                            .unwrap_or(UnloadReason::Suspend),
+                                    ),
+                                )
+                                .await;
                                 break;
                             }
                         }
                         InterruptKind::Interrupt(_) => {
-                            self.parent
+                            if self
+                                .parent
                                 .add_and_commit_oplog(OplogEntry::interrupted())
-                                .await;
+                                .await
+                                .is_err()
+                            {
+                                self.stop_startup_retired().await;
+                                break;
+                            }
                             self.parent.complete_startup(
                                 self.start_attempt,
                                 Err(WorkerExecutorError::Interrupted { kind }),
                             );
-                            self.stop_unloaded(None).await;
+                            self.stop_unloaded(None, PendingLiveInvocationDisposition::Fail)
+                                .await;
+                            break;
+                        }
+                        InterruptKind::ShardLost => {
+                            // Nothing is written: the oplog belongs to the shard's new owner
+                            // now. Whoever was waiting for this start is told to look there.
+                            self.stop_startup_retired().await;
                             break;
                         }
                     }
@@ -409,6 +487,9 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
 
             if final_decision.is_none() {
                 'resident: loop {
+                    if !self.active.read().await.is_empty() {
+                        Self::defer_wakeup(&mut deferred_wakeups, WorkerCommand::WorkAvailable);
+                    }
                     let mut inner_loop = InnerInvocationLoop {
                         receiver: &mut self.receiver,
                         active: self.active.clone(),
@@ -421,6 +502,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                         filesystem: &agent.filesystem,
                         invocations_since_snapshot: 0,
                         idle_snapshot_task: None,
+                        filesystem_turn_used: false,
                         permit_state: &mut self.permit_state,
                         idle_since_millis: self.idle_since_millis.clone(),
                         resume_replay_pending: self.resume_replay_pending.clone(),
@@ -521,7 +603,10 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                     Some(unloading.cleanup.clone());
                                 let cleanup_failure =
                                     finish_filesystem_limit_unload(suspend, unloading, || async {
-                                        self.parent
+                                        // A refusal records the lost shard, which the stop
+                                        // below acts on; there is nothing else to undo.
+                                        let _ = self
+                                            .parent
                                             .add_and_commit_oplog(OplogEntry::suspend())
                                             .await;
                                     })
@@ -546,7 +631,13 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                         });
                                         self.stop_cleanup_failed(cleanup).await;
                                     }
-                                    None => self.stop_unloaded(failure).await,
+                                    None => {
+                                        self.stop_unloaded(
+                                            failure,
+                                            PendingLiveInvocationDisposition::Fail,
+                                        )
+                                        .await
+                                    }
                                 }
                                 break 'outer;
                             }
@@ -568,6 +659,25 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     cleanup_ephemeral_worker = result.cleanup_ephemeral_worker;
                     break 'resident;
                 }
+            }
+
+            if self.parent.initial_worker_metadata.owner_kind == OwnerKind::EphemeralExternalTool {
+                // An external owner cannot reconstruct accepted execution after losing its Store.
+                // Record terminal interruption instead of leaving the accepted key pending behind
+                // a retry marker or starting a replacement component instance.
+                if matches!(
+                    final_decision,
+                    Some(
+                        RetryDecision::Immediate
+                            | RetryDecision::Delayed(_)
+                            | RetryDecision::ReacquirePermits
+                            | RetryDecision::TryStop(_)
+                    )
+                ) {
+                    final_interrupt = Some(InterruptKind::Interrupt(Timestamp::now_utc()));
+                }
+                final_decision = Some(RetryDecision::None);
+                cleanup_ephemeral_worker = true;
             }
 
             retry_was_live = {
@@ -609,7 +719,13 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 .try_get_active_agent(&self.owned_agent_id)
                 .await
             {
-                let owner_failure = final_interrupt
+                // A lost shard wins: the bodies must not report an API interrupt or a fault for an
+                // agent that simply has a new owner.
+                let owner_failure = self
+                    .parent
+                    .retired_for_lost_shard()
+                    .then_some(InterruptKind::ShardLost)
+                    .or(final_interrupt)
                     .map(OwnerFailureWinner::Lifecycle)
                     .or_else(|| {
                         recovery_failure
@@ -660,6 +776,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                         recovery_failure.or_else(|| {
                             cleanup_ephemeral_worker.then(super::inactive_ephemeral_agent_error)
                         }),
+                        PendingLiveInvocationDisposition::Fail,
                     )
                     .await;
                     if cleanup_ephemeral_worker {
@@ -679,7 +796,12 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                             %agent_id,
                             "Invocation queue loop notifying parent about being stopped"
                         );
-                        self.stop_closed(None, None).await;
+                        self.stop_closed(
+                            None,
+                            None,
+                            resident_work_disposition(unload_request.reason),
+                        )
+                        .await;
                         break;
                     }
                 }
@@ -706,7 +828,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                     Some(command) => command,
                                     None => {
                                         debug!(%agent_id, "Invocation queue loop command channel closed during delayed retry");
-                                        self.stop_closed(None, None).await;
+                                        self.stop_closed(None, None, PendingLiveInvocationDisposition::Fail).await;
                                         break 'outer;
                                     }
                                 };
@@ -722,14 +844,22 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                             .await
                                             .current_idempotency_key
                                             .clone();
-                                        match kind {
+                                        let recorded = match kind {
                                             InterruptKind::Suspend(_) => {
-                                                self.parent.add_and_commit_oplog(OplogEntry::suspend()).await;
+                                                self.parent.add_and_commit_oplog(OplogEntry::suspend()).await.map(|_| ())
                                             }
                                             InterruptKind::Interrupt(_) => {
-                                                self.parent.add_and_commit_oplog(OplogEntry::interrupted()).await;
+                                                self.parent.add_and_commit_oplog(OplogEntry::interrupted()).await.map(|_| ())
                                             }
-                                            InterruptKind::Restart | InterruptKind::Jump => {}
+                                            InterruptKind::Restart
+                                            | InterruptKind::Jump
+                                            | InterruptKind::ShardLost => Ok(()),
+                                        };
+                                        // Refused, the shard is lost: nothing restarts
+                                        // in place.
+                                        if recorded.is_err() {
+                                            self.stop_startup_retired().await;
+                                            break 'outer;
                                         }
                                         if matches!(kind, InterruptKind::Interrupt(_))
                                             && let Some(key) = current_idempotency_key
@@ -753,7 +883,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                             continue 'outer;
                                         }
                                         RetryDecision::None => {
-                                            self.stop_closed(None, None).await;
+                                            self.stop_closed(None, None, PendingLiveInvocationDisposition::Fail).await;
                                             break 'outer;
                                         }
                                         RetryDecision::TryStop(timestamp) => {
@@ -761,7 +891,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                                 Self::defer_wakeup(&mut deferred_wakeups, command);
                                                 continue 'outer;
                                             }
-                                            self.stop_closed(None, None).await;
+                                            self.stop_closed(None, None, resident_work_disposition(interrupt.unload_request.reason)).await;
                                             break 'outer;
                                         }
                                         RetryDecision::Delayed(_) | RetryDecision::ReacquirePermits => {
@@ -830,6 +960,17 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
         self.permit_state.release();
     }
 
+    /// Stops a generation whose shard was lost, found by an interrupt or by its oplog refusing a
+    /// lifecycle entry: the waiters are told to look for the shard's new owner. Both have already
+    /// recorded the retirement - `interrupt_and_retire` before it sends `ShardLost`, the write
+    /// helper with the fence that refused it.
+    async fn stop_startup_retired(&self) {
+        self.stop_unloaded(None, PendingLiveInvocationDisposition::Fail)
+            .await;
+    }
+
+    /// Handles an interrupt that arrived while the loop waits, unloaded, for a concurrent-agent
+    /// permit. Returns whether the loop exits.
     async fn handle_unloaded_interrupt(
         &self,
         interrupt: PendingWorkerInterrupt,
@@ -848,18 +989,24 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 .await
                 .current_idempotency_key
                 .clone();
-            match kind {
-                InterruptKind::Suspend(_) => {
-                    self.parent
-                        .add_and_commit_oplog(OplogEntry::suspend())
-                        .await;
-                }
-                InterruptKind::Interrupt(_) => {
-                    self.parent
-                        .add_and_commit_oplog(OplogEntry::interrupted())
-                        .await;
-                }
-                InterruptKind::Restart | InterruptKind::Jump => {}
+            let recorded = match kind {
+                InterruptKind::Suspend(_) => self
+                    .parent
+                    .add_and_commit_oplog(OplogEntry::suspend())
+                    .await
+                    .map(|_| ()),
+                InterruptKind::Interrupt(_) => self
+                    .parent
+                    .add_and_commit_oplog(OplogEntry::interrupted())
+                    .await
+                    .map(|_| ()),
+                InterruptKind::Restart | InterruptKind::Jump | InterruptKind::ShardLost => Ok(()),
+            };
+            // Refused, the shard is lost: no failure is cached for the invocation the
+            // shard's new owner resumes, and nothing restarts in place.
+            if recorded.is_err() {
+                self.stop_startup_retired().await;
+                return true;
             }
             if matches!(kind, InterruptKind::Interrupt(_))
                 && let Some(key) = current_idempotency_key
@@ -877,7 +1024,8 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
         match decision {
             RetryDecision::Immediate => false,
             RetryDecision::None => {
-                self.stop_closed(None, None).await;
+                self.stop_closed(None, None, PendingLiveInvocationDisposition::Fail)
+                    .await;
                 true
             }
             RetryDecision::TryStop(timestamp) => {
@@ -885,7 +1033,12 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     self.release_terminal_interrupt().await;
                     false
                 } else {
-                    self.stop_closed(None, None).await;
+                    self.stop_closed(
+                        None,
+                        None,
+                        resident_work_disposition(interrupt.unload_request.reason),
+                    )
+                    .await;
                     true
                 }
             }
@@ -895,7 +1048,11 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
         }
     }
 
-    async fn stop_unloaded(&self, startup_failure: Option<WorkerExecutorError>) {
+    async fn stop_unloaded(
+        &self,
+        startup_failure: Option<WorkerExecutorError>,
+        pending_live_invocations: PendingLiveInvocationDisposition,
+    ) {
         self.parent.complete_startup(
             self.start_attempt,
             Err(startup_failure.clone().unwrap_or_else(|| {
@@ -908,10 +1065,18 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             .try_get_active_agent(&self.owned_agent_id)
             .await
         {
-            let failure = startup_failure.clone().map_or_else(
-                || OwnerFailureWinner::Lifecycle(InterruptKind::Interrupt(Timestamp::now_utc())),
-                OwnerFailureWinner::Infrastructure,
-            );
+            let failure = if self.parent.retired_for_lost_shard() {
+                OwnerFailureWinner::Lifecycle(InterruptKind::ShardLost)
+            } else {
+                startup_failure.clone().map_or_else(
+                    || {
+                        OwnerFailureWinner::Lifecycle(
+                            InterruptKind::Interrupt(Timestamp::now_utc()),
+                        )
+                    },
+                    OwnerFailureWinner::Infrastructure,
+                )
+            };
             active_agent.fence_entity_bodies(failure).await;
         }
         self.parent
@@ -920,7 +1085,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 startup_failure.clone(),
                 UnloadRequest::ordinary(UnloadReason::ExplicitStop),
                 FinalWorkerState::Unloaded { startup_failure },
-                PendingLiveInvocationDisposition::Fail,
+                pending_live_invocations,
             )
             .await;
     }
@@ -954,12 +1119,16 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
         &self,
         cleanup_error: Option<WorkerExecutorError>,
         startup_failure: Option<WorkerExecutorError>,
+        pending_live_invocations: PendingLiveInvocationDisposition,
     ) {
         publish_unload_outcome(
             cleanup_error,
             startup_failure,
             |error| async move { self.stop_cleanup_failed(error).await },
-            |startup_failure| async move { self.stop_unloaded(startup_failure).await },
+            |startup_failure| async move {
+                self.stop_unloaded(startup_failure, pending_live_invocations)
+                    .await
+            },
         )
         .await;
     }
@@ -1149,10 +1318,10 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             // Making sure all pending commits are flushed
             // Make sure all pending commits are done
             let worker = store.lock().await.data().get_public_state().worker();
-            worker
+            // A failed commit is a refused one, and gives the agent up.
+            let _ = worker
                 .commit_oplog_and_update_state(CommitLevel::Always)
                 .await;
-
             // The worker is going idle; persist its cached status synchronously now instead of leaving
             // it for the next background sweep, so reads of an idle worker see an up-to-date blob.
             worker.force_flush_status().await;
@@ -1359,7 +1528,7 @@ pub(super) async fn run_invocation_loop_task<T>(
 
 struct InnerInvocationLoop<'a, Ctx: WorkerCtx> {
     receiver: &'a mut UnboundedReceiver<WorkerCommand>,
-    active: Arc<RwLock<VecDeque<QueuedWorkerInvocation>>>,
+    active: Arc<tokio::sync::RwLock<VecDeque<QueuedWorkerInvocation>>>,
     owned_agent_id: OwnedAgentId,
     parent: Arc<Worker<Ctx>>, // parent must not be dropped until the invocation_loop is running
     waiting_for_command: Arc<AtomicBool>,
@@ -1369,6 +1538,7 @@ struct InnerInvocationLoop<'a, Ctx: WorkerCtx> {
     filesystem: &'a ResidentFilesystem,
     invocations_since_snapshot: u64,
     idle_snapshot_task: Option<JoinHandle<()>>,
+    filesystem_turn_used: bool,
     /// Mutable reference to the concurrent-agent permit held by the outer
     /// `InvocationLoop`. Set to `None` when entering idle (releasing the
     /// permit back to the semaphore pool) and re-acquired on wake.
@@ -1379,6 +1549,59 @@ struct InnerInvocationLoop<'a, Ctx: WorkerCtx> {
     deferred_wakeups: &'a mut VecDeque<WorkerCommand>,
     /// What this worker's phase spans link back to, and the fields they carry.
     worker_trace: WorkerTrace,
+}
+
+enum SelectedWork {
+    Durable(PendingInvocationRef),
+    Resident(QueuedWorkerInvocation),
+    ApplyPendingUpdate,
+    Idle(Arc<AgentStatusRecord>),
+}
+
+impl SelectedWork {
+    fn next(
+        queue: &mut VecDeque<QueuedWorkerInvocation>,
+        status: Arc<AgentStatusRecord>,
+        constructor_key: Option<&IdempotencyKey>,
+        filesystem_turn_used: &mut bool,
+    ) -> Self {
+        let filesystem_request = matches!(
+            queue.front(),
+            Some(
+                QueuedWorkerInvocation::ReadFile { .. }
+                    | QueuedWorkerInvocation::GetFileSystemNode { .. }
+            )
+        );
+        // Creation reserves the constructor before ordinary invocation admission. A started
+        // constructor completes during replay instead of remaining in the pending queue.
+        let needs_initialization = filesystem_request
+            && constructor_key.is_some_and(|key| {
+                status
+                    .pending_invocations
+                    .first()
+                    .is_some_and(|pending| pending.has_idempotency_key(key))
+            });
+        let pending_work =
+            !status.pending_updates.is_empty() || !status.pending_invocations.is_empty();
+        let yield_filesystem_turn = filesystem_request && *filesystem_turn_used && pending_work;
+        if !needs_initialization
+            && !yield_filesystem_turn
+            && let Some(invocation) = queue.pop_front()
+        {
+            if filesystem_request {
+                *filesystem_turn_used = true;
+            }
+            return Self::Resident(invocation);
+        }
+        *filesystem_turn_used = false;
+        if !status.pending_updates.is_empty() {
+            return Self::ApplyPendingUpdate;
+        }
+        if let Some(pending) = status.pending_invocations.first() {
+            return Self::Durable(pending.clone());
+        }
+        Self::Idle(status)
+    }
 }
 
 impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
@@ -1478,15 +1701,17 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                             break self.interrupt(interrupt).await;
                         }
 
-                        let message = self.pop_ready_internal_invocation().await;
-
-                        let result = if let Some(message) = message {
-                            self.internal_invocation(message).await
-                        } else {
-                            // Queue is empty, use last_known_status for pending updates and invocations.
-                            // This may inject a snapshot as the next action, so stay in the drain loop
-                            // when immediate follow-up work was scheduled.
-                            self.drain_pending_from_status().await
+                        let result = match self.select_next_work().await {
+                            SelectedWork::Resident(message) => {
+                                self.internal_invocation(message).await
+                            }
+                            SelectedWork::Durable(pending) => {
+                                self.execute_selected_durable(pending).await
+                            }
+                            SelectedWork::ApplyPendingUpdate => {
+                                CommandOutcome::BreakInnerLoop(RetryDecision::Immediate)
+                            }
+                            SelectedWork::Idle(status) => self.handle_idle_status(&status).await,
                         };
 
                         match result {
@@ -1579,8 +1804,36 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
         }
     }
 
-    async fn pop_ready_internal_invocation(&self) -> Option<QueuedWorkerInvocation> {
-        self.active.write().await.pop_front()
+    /// Filesystem commands alternate with pending work at invocation boundaries after
+    /// initialization. Selecting a durable reference does not consume it.
+    async fn select_next_work(&mut self) -> SelectedWork {
+        let status = self.parent.get_non_detached_last_known_status().await;
+        let mut queue = self.active.write().await;
+        queue.retain(|invocation| !invocation.is_abandoned());
+        if let Err(error) = Worker::<Ctx>::ensure_not_failed(
+            &self.parent.deps,
+            &self.parent.owned_agent_id,
+            self.parent.agent_mode(),
+            &status,
+        )
+        .await
+        {
+            for invocation in queue.drain(..) {
+                invocation.fail(&error);
+            }
+        }
+
+        let constructor_key = self
+            .parent
+            .parsed_agent_id
+            .as_ref()
+            .map(|_| self.parent.initialization_idempotency_key());
+        SelectedWork::next(
+            &mut queue,
+            status,
+            constructor_key.as_ref(),
+            &mut self.filesystem_turn_used,
+        )
     }
 
     /// Checks — before publishing `waiting_for_command = true`, which makes the
@@ -1708,128 +1961,120 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
         }
     }
 
-    /// When the main queue becomes empty, process items from last_known_status:
-    /// first pending_updates, then pending_invocations
-    async fn drain_pending_from_status(&mut self) -> CommandOutcome {
-        loop {
-            let status = self.parent.get_non_detached_last_known_status().await;
+    /// Hydrates and executes the durable reference chosen by `select_next_work`. The pending entry
+    /// remains authoritative until the existing invocation-start transition consumes it.
+    async fn execute_selected_durable(
+        &mut self,
+        pending_invocation: PendingInvocationRef,
+    ) -> CommandOutcome {
+        let idempotency_key = pending_invocation.idempotency_key();
+        let origin = match idempotency_key {
+            Some(idempotency_key) => self
+                .parent
+                .external_invocation_origins
+                .read()
+                .await
+                .get(idempotency_key)
+                .cloned(),
+            None => None,
+        };
 
-            // First, try to process a pending update
-            if status.pending_updates.front().is_some() {
-                // if the update made it to pending_updates (instead of pending invocations), it is ready
-                // to be processed on next restart. So just restart here and let the recovery logic take over
-                break CommandOutcome::BreakInnerLoop(RetryDecision::Immediate);
-            }
+        // An invocation with no recorded origin was enqueued in an earlier
+        // process, so there is nothing in-process to relate it to.
+        let origin = origin.unwrap_or_else(TraceOrigin::none);
 
-            // Then, try to process a pending invocation
-            if let Some(pending_invocation) = status.pending_invocations.first() {
-                let idempotency_key = pending_invocation.idempotency_key();
-                let origin = match idempotency_key {
-                    Some(idempotency_key) => self
-                        .parent
-                        .external_invocation_origins
-                        .read()
-                        .await
-                        .get(idempotency_key)
-                        .cloned(),
-                    None => None,
-                };
-
-                // An invocation with no recorded origin was enqueued in an earlier
-                // process, so there is nothing in-process to relate it to.
-                let origin = origin.unwrap_or_else(TraceOrigin::none);
-
-                // The status record only stores a lightweight reference to the pending invocation;
-                // hydrate the full invocation (including its payload) from the oplog before running.
-                let timestamped_invocation = match self
-                    .parent
-                    .hydrate_pending_invocation(pending_invocation)
-                    .await
-                {
-                    Ok(invocation) => invocation,
-                    Err(error) => {
-                        warn!(
-                            agent_id = %self.owned_agent_id.agent_id,
-                            "Failed to hydrate pending invocation from oplog: {error}"
-                        );
-                        break CommandOutcome::BreakInnerLoop(RetryDecision::Immediate);
-                    }
-                };
-
-                // The span for picking work off the queue and running it: the root
-                // of its own trace, linked back to whatever enqueued the work.
-                // `otel.kind = consumer` is what the OpenTelemetry messaging
-                // conventions prescribe for processing work a producer handed off.
-                let pickup_span = related_span!(
-                    origin,
-                    Level::INFO,
-                    "invocation_queue_pickup",
+        // The status record only stores a lightweight reference to the pending invocation;
+        // hydrate the full invocation (including its payload) from the oplog before running.
+        let timestamped_invocation = match self
+            .parent
+            .hydrate_pending_invocation(&pending_invocation)
+            .await
+        {
+            Ok(invocation) => invocation,
+            Err(error) => {
+                warn!(
                     agent_id = %self.owned_agent_id.agent_id,
-                    agent_type = %self.worker_trace.agent_type,
-                    // The root of the execution's own trace, so it has to say which
-                    // invocation it is: the link points back at the producer, but
-                    // this key is what a search can join the two traces on. Left
-                    // unset rather than empty when there is none, so a search for
-                    // one key cannot collide with every keyless pickup.
-                    idempotency_key = tracing::field::Empty,
-                    otel.kind = "consumer",
+                    "Failed to hydrate pending invocation from oplog: {error}"
                 );
-
-                if let Some(idempotency_key) = idempotency_key {
-                    pickup_span.record("idempotency_key", tracing::field::display(idempotency_key));
-                }
-
-                let outcome = async {
-                    let mut store = self.store.lock().await;
-                    let mut invocation = Invocation {
-                        owned_agent_id: self.owned_agent_id.clone(),
-                        parent: self.parent.clone(),
-                        instance: self.instance,
-                        store: store.deref_mut(),
-                        uses_streams: false,
-                    };
-                    invocation.external_invocation(timestamped_invocation).await
-                }
-                .instrument(pickup_span)
-                .await;
-
-                match outcome {
-                    CommandOutcome::Continue => {
-                        if self.on_external_invocation_completed().await {
-                            break CommandOutcome::Continue;
-                        }
-                        // Fairness: after completing one external durable
-                        // invocation, yield to the scheduler so other same-account
-                        // agents get a chance to run. The worker will self-wake
-                        // and re-acquire its permit through the FIFO queue if
-                        // more durable work remains.
-                        let status = self.parent.get_non_detached_last_known_status().await;
-                        if !status.pending_invocations.is_empty() {
-                            // More durable work remains — self-wake so we return
-                            // to the outer loop, release the permit (entering
-                            // idle), and re-enter through the scheduler queue.
-                            break CommandOutcome::WaitForWakeup;
-                        }
-                        continue;
-                    }
-                    other => break other,
-                }
+                return CommandOutcome::BreakInnerLoop(RetryDecision::Immediate);
             }
+        };
 
-            match self.periodic_snapshot_action(&status) {
-                PeriodicSnapshotAction::DueNow => {
-                    self.inject_snapshot_as_next_action().await;
-                    break CommandOutcome::Continue;
-                }
-                PeriodicSnapshotAction::Wait(delay) => {
-                    self.schedule_idle_snapshot(delay);
-                    break CommandOutcome::WaitForWakeup;
-                }
-                PeriodicSnapshotAction::NotNeeded => {}
-            }
+        // The span for picking work off the queue and running it: the root
+        // of its own trace, linked back to whatever enqueued the work.
+        // `otel.kind = consumer` is what the OpenTelemetry messaging
+        // conventions prescribe for processing work a producer handed off.
+        let pickup_span = related_span!(
+            origin,
+            Level::INFO,
+            "invocation_queue_pickup",
+            agent_id = %self.owned_agent_id.agent_id,
+            agent_type = %self.worker_trace.agent_type,
+            // The root of the execution's own trace, so it has to say which
+            // invocation it is: the link points back at the producer, but
+            // this key is what a search can join the two traces on. Left
+            // unset rather than empty when there is none, so a search for
+            // one key cannot collide with every keyless pickup.
+            idempotency_key = tracing::field::Empty,
+            otel.kind = "consumer",
+        );
 
-            break CommandOutcome::WaitForWakeup;
+        if let Some(idempotency_key) = idempotency_key {
+            pickup_span.record("idempotency_key", tracing::field::display(idempotency_key));
         }
+
+        let outcome = async {
+            let mut store = self.store.lock().await;
+            let mut invocation = Invocation {
+                owned_agent_id: self.owned_agent_id.clone(),
+                parent: self.parent.clone(),
+                instance: self.instance,
+                store: store.deref_mut(),
+                uses_streams: false,
+            };
+            invocation.external_invocation(timestamped_invocation).await
+        }
+        .instrument(pickup_span)
+        .await;
+
+        match outcome {
+            CommandOutcome::Continue => {
+                if self.on_external_invocation_completed().await {
+                    return CommandOutcome::Continue;
+                }
+                // Fairness: after completing one external durable
+                // invocation, yield to the scheduler so other same-account
+                // agents get a chance to run. The worker will self-wake
+                // and re-acquire its permit through the FIFO queue if
+                // more durable work remains.
+                let status = self.parent.get_non_detached_last_known_status().await;
+                if !status.pending_invocations.is_empty() {
+                    // More durable work remains — self-wake so we return
+                    // to the outer loop, release the permit (entering
+                    // idle), and re-enter through the scheduler queue.
+                    return CommandOutcome::WaitForWakeup;
+                }
+                // Revisit commands that arrived during execution before entering idle.
+                CommandOutcome::Continue
+            }
+            other => other,
+        }
+    }
+
+    async fn handle_idle_status(&mut self, status: &AgentStatusRecord) -> CommandOutcome {
+        match self.periodic_snapshot_action(status) {
+            PeriodicSnapshotAction::DueNow => {
+                self.inject_snapshot_as_next_action().await;
+                return CommandOutcome::Continue;
+            }
+            PeriodicSnapshotAction::Wait(delay) => {
+                self.schedule_idle_snapshot(delay);
+                return CommandOutcome::WaitForWakeup;
+            }
+            PeriodicSnapshotAction::NotNeeded => {}
+        }
+
+        CommandOutcome::WaitForWakeup
     }
 
     async fn on_external_invocation_completed(&mut self) -> bool {
@@ -1880,10 +2125,9 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
     }
 
     async fn inject_snapshot_as_next_action(&self) {
-        self.active
-            .write()
-            .await
-            .push_front(QueuedWorkerInvocation::SaveSnapshot);
+        let mut queue = self.active.write().await;
+        queue.retain(|invocation| !invocation.is_abandoned());
+        queue.push_front(QueuedWorkerInvocation::SaveSnapshot);
     }
 
     /// Resumes an interrupted replay process
@@ -2213,6 +2457,14 @@ async fn take_pending_interrupt(
     signal.lock().await.take()
 }
 
+fn resident_work_disposition(reason: UnloadReason) -> PendingLiveInvocationDisposition {
+    if reason == UnloadReason::Suspend {
+        PendingLiveInvocationDisposition::Preserve
+    } else {
+        PendingLiveInvocationDisposition::Fail
+    }
+}
+
 /// Context for performing one `QueuedWorkerInvocation`
 ///
 /// The most important part is that unlike the `InnerInvocationLoop`, it holds a locked
@@ -2230,7 +2482,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     /// Process a queued worker invocation
     async fn process(&mut self, message: QueuedWorkerInvocation) -> CommandOutcome {
         match message {
-            QueuedWorkerInvocation::GetFileSystemNode { path, sender } => {
+            QueuedWorkerInvocation::GetFileSystemNode { path, sender, .. } => {
                 self.get_file_system_node(path, sender).await;
                 CommandOutcome::Continue
             }
@@ -2244,8 +2496,13 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 let _ = sender.send(wallet);
                 CommandOutcome::Continue
             }
-            QueuedWorkerInvocation::ReadFile { path, sender } => {
-                self.read_file(path, sender).await;
+            QueuedWorkerInvocation::ReadFile {
+                path,
+                selection,
+                sender,
+                ..
+            } => {
+                self.read_file(path, selection, sender).await;
                 CommandOutcome::Continue
             }
             QueuedWorkerInvocation::AwaitReadyToProcessCommands { sender } => {
@@ -2260,6 +2517,11 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     /// or a manual update request (which involves invoking the exported save-snapshot functions, so
     /// it is a special case of the exported function invocation).
     async fn external_invocation(&mut self, inner: TimestampedAgentInvocation) -> CommandOutcome {
+        // Rechecked here as well as where the invocation was taken: hydrating it and waiting for
+        // the store both leave room for the owner to start retiring in between.
+        if self.parent.owner_retirement_requested.is_cancelled() {
+            return CommandOutcome::BreakInnerLoop(RetryDecision::None);
+        }
         match inner.invocation {
             AgentInvocation::ManualUpdate { target_revision } => {
                 self.manual_update(target_revision).await
@@ -2276,16 +2538,30 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                         debug!(
                             "Skipping enqueued invocation with idempotency key {idempotency_key} as it already has a result"
                         );
-                        if let Err(error) =
-                            self.parent.cancel_invocation(idempotency_key.clone()).await
+                        // Retirement waits for this loop; stop awaiting an operation that may
+                        // itself be waiting for retirement's stop to finish.
+                        match self
+                            .parent
+                            .owner_retirement_requested
+                            .run_until_cancelled(
+                                self.parent.cancel_invocation(idempotency_key.clone()),
+                            )
+                            .await
                         {
-                            warn!(
-                                agent_id = %self.owned_agent_id.agent_id,
-                                "Failed to remove completed invocation from the pending queue: {error}"
-                            );
-                            return CommandOutcome::BreakInnerLoop(RetryDecision::Immediate);
+                            Some(Ok(())) => CommandOutcome::Continue,
+                            None => CommandOutcome::BreakInnerLoop(RetryDecision::None),
+                            Some(Err(error)) if self.parent.retire_if_shard_lost(&error) => {
+                                CommandOutcome::BreakInnerLoop(RetryDecision::None)
+                            }
+                            Some(Err(error)) => {
+                                warn!(
+                                    agent_id = %self.owned_agent_id.agent_id,
+                                    %error,
+                                    "Failed to remove completed invocation from the pending queue"
+                                );
+                                CommandOutcome::BreakInnerLoop(RetryDecision::Immediate)
+                            }
                         }
-                        CommandOutcome::Continue
                     }
                 } else {
                     self.invoke_agent(invocation).await
@@ -2312,9 +2588,12 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             function = display_name
         );
 
-        self.invoke_agent_inner(invocation_context, idempotency_key, invocation)
+        let outcome = self
+            .invoke_agent_inner(invocation_context, idempotency_key, invocation)
             .instrument(span)
-            .await
+            .await;
+        self.store.data().set_suspended();
+        outcome
     }
 
     /// Invokes an agent function on the worker
@@ -2337,10 +2616,21 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         let result = self
             .invoke_agent_with_context(invocation_context, idempotency_key, invocation)
             .await;
+        let result = if self.uses_streams {
+            materialize_streaming_result(
+                self.store,
+                result,
+                &display_name,
+                &invocation_idempotency_key,
+            )
+            .await
+        } else {
+            result
+        };
 
         match result {
             Ok(InvokeResult::Succeeded {
-                result: mut invocation_result,
+                result: invocation_result,
                 consumed_fuel,
             }) => {
                 let mut interrupt_state = self.parent.interrupt_signal.lock().await;
@@ -2357,119 +2647,10 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     .await
                 } else {
                     drop(interrupt_state);
-                    if self.uses_streams
-                        && let AgentInvocationResult::AgentMethod { output } =
-                            &mut invocation_result
-                    {
-                        let component = self.store.data().component_metadata();
-                        let Some(agent_type) =
-                            self.parent.parsed_agent_id.as_ref().and_then(|parsed| {
-                                component
-                                    .metadata
-                                    .find_agent_type_by_name_ref(&parsed.agent_type)
-                            })
-                        else {
-                            return self
-                                .agent_invocation_failed(
-                                    &display_name,
-                                    &invocation_idempotency_key,
-                                    Err(WorkerExecutorError::runtime(
-                                        "durable invocation result schema is unavailable",
-                                    )),
-                                )
-                                .await;
-                        };
-                        let Some(method) = agent_type
-                            .methods
-                            .iter()
-                            .find(|method| method.name == display_name)
-                        else {
-                            return self
-                                .agent_invocation_failed(
-                                    &display_name,
-                                    &invocation_idempotency_key,
-                                    Err(WorkerExecutorError::runtime(
-                                        "durable invocation result method schema is unavailable",
-                                    )),
-                                )
-                                .await;
-                        };
-                        let graph = agent_type.schema.clone();
-                        let root =
-                            method.output_schema.schema().cloned().unwrap_or_else(|| {
-                                golem_common::schema::SchemaType::tuple(Vec::new())
-                            });
-                        let component_revision = component.revision;
-                        let parent = self.parent.clone();
-                        let idempotency_key = invocation_idempotency_key.clone();
-                        let result_value = output.clone();
-                        match self
-                            .store
-                            .run_concurrent(async move |_accessor| {
-                                parent
-                                    .materialize_durable_streaming_result(
-                                        &idempotency_key,
-                                        result_value,
-                                        &graph,
-                                        &root,
-                                        component_revision,
-                                    )
-                                    .await
-                            })
-                            .await
-                        {
-                            Ok(Ok(materialized)) => *output = materialized,
-                            Ok(Err(error)) => {
-                                return self
-                                    .agent_invocation_failed(
-                                        &display_name,
-                                        &invocation_idempotency_key,
-                                        Err(error),
-                                    )
-                                    .await;
-                            }
-                            Err(error) => {
-                                let result = invoke_result_from_trap(
-                                    &mut self.store.as_context_mut(),
-                                    consumed_fuel,
-                                    error,
-                                )
-                                .await;
-                                return self
-                                    .agent_invocation_failed(
-                                        &display_name,
-                                        &invocation_idempotency_key,
-                                        result,
-                                    )
-                                    .await;
-                            }
-                        }
-                        if let Err(error) = run_guest_call_settled(
-                            &mut self.store.as_context_mut(),
-                            async |_accessor| (),
-                        )
-                        .await
-                        {
-                            let error = match error {
-                                GuestCallSettlementError::Infrastructure(error) => error,
-                                GuestCallSettlementError::Trap(error)
-                                | GuestCallSettlementError::Interrupted(error) => {
-                                    WorkerExecutorError::runtime(error.to_string())
-                                }
-                            };
-                            return self
-                                .agent_invocation_failed(
-                                    &display_name,
-                                    &invocation_idempotency_key,
-                                    Err(error),
-                                )
-                                .await;
-                        }
-                    }
                     self.agent_invocation_finished(
                         display_name,
                         &invocation_idempotency_key,
-                        invocation_result,
+                        *invocation_result,
                         consumed_fuel,
                         kind,
                     )
@@ -2559,10 +2740,8 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         )
         .await;
 
-        // We are removing the spans introduced by the invocation. Not calling `finish_span` here,
-        // as it would add FinishSpan oplog entries without corresponding StartSpan ones. Instead,
-        // the oplog processor should assume that spans implicitly created by AgentInvocationStarted
-        // are finished at AgentInvocationFinished.
+        // Invocation-owned spans are closed by AgentInvocationFinished in the
+        // oplog processor; removing their resident context records no transition.
         for span_id in local_span_ids {
             self.store.data_mut().remove_span(&span_id)?;
         }
@@ -2622,6 +2801,22 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                         .and_then(|result| result)
                     {
                         tracing::error!(%error, "Failed to complete durable streaming session");
+                        // An in-place retry would reopen the oplog at an epoch this executor no
+                        // longer holds, so a lost shard gives the agent up instead.
+                        if self.parent.retire_if_shard_lost(&error) {
+                            self.store
+                                .data_mut()
+                                .on_invocation_failure(
+                                    &full_function_name,
+                                    &TrapType::Interrupt(InterruptKind::ShardLost),
+                                )
+                                .await;
+                            return CommandOutcome::BreakInnerLoop(RetryDecision::None);
+                        }
+                        self.parent
+                            .durable_stream_producer
+                            .changed()
+                            .notify_waiters();
                         return failed_agent_invocation_outcome(
                             self.parent.agent_mode(),
                             RetryDecision::Immediate,
@@ -2640,33 +2835,66 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     .data_mut()
                     .on_invocation_failure(&full_function_name, &TrapType::Interrupt(kind))
                     .await;
-                if self.uses_streams {
-                    let _ = self
+                // A lost shard writes nothing more: a terminal streaming-session failure would end
+                // an invocation the shard's new owner resumes.
+                if matches!(kind, InterruptKind::ShardLost) {
+                    return CommandOutcome::BreakInnerLoop(RetryDecision::None);
+                }
+                if self.uses_streams
+                    && let Err(error) = self
                         .parent
                         .fail_durable_streaming_session(idempotency_key, kind.to_string())
-                        .await;
+                        .await
+                {
+                    if self.parent.retire_if_shard_lost(&error) {
+                        return CommandOutcome::BreakInnerLoop(RetryDecision::None);
+                    }
+                    self.parent
+                        .durable_stream_producer
+                        .changed()
+                        .notify_waiters();
                 }
                 failed_agent_invocation_outcome(self.parent.agent_mode(), decision)
             }
-            Err(error) => {
+            // Intercepted before the arm below, which would flatten it into an
+            // `AgentError::InternalError` and append an `Error` entry to the very oplog that
+            // just refused the write.
+            Err(WorkerExecutorError::OplogFenced { .. }) => {
                 self.store
                     .data_mut()
                     .on_invocation_failure(
                         &full_function_name,
-                        &TrapType::Error {
-                            error: AgentError::InternalError(error.to_string()),
-                            retry_from: OplogIndex::INITIAL,
-                            in_atomic_region: false,
-                            atomic_region_had_side_effects: false,
-                            semantic_trap_retry_override: None,
-                        },
+                        &TrapType::Interrupt(InterruptKind::ShardLost),
                     )
                     .await;
-                if self.uses_streams {
-                    let _ = self
+                CommandOutcome::BreakInnerLoop(RetryDecision::None)
+            }
+            Err(error) => {
+                // A refused commit is the `OplogFenced` arm above; this is the hook's own failure.
+                let trap_type = TrapType::Error {
+                    error: AgentError::InternalError(error.to_string()),
+                    retry_from: OplogIndex::INITIAL,
+                    in_atomic_region: false,
+                    atomic_region_had_side_effects: false,
+                    semantic_trap_retry_override: None,
+                };
+                self.store
+                    .data_mut()
+                    .on_invocation_failure(&full_function_name, &trap_type)
+                    .await;
+                if self.uses_streams
+                    && let Err(error) = self
                         .parent
                         .fail_durable_streaming_session(idempotency_key, error.to_string())
-                        .await;
+                        .await
+                {
+                    if self.parent.retire_if_shard_lost(&error) {
+                        return CommandOutcome::BreakInnerLoop(RetryDecision::None);
+                    }
+                    self.parent
+                        .durable_stream_producer
+                        .changed()
+                        .notify_waiters();
                 }
                 failed_agent_invocation_outcome(self.parent.agent_mode(), RetryDecision::None)
             }
@@ -2718,6 +2946,10 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 )),
             },
         };
+        let shard_lost = matches!(
+            trap_type,
+            Some(TrapType::Interrupt(InterruptKind::ShardLost))
+        );
         let decision = match trap_type {
             Some(trap_type) => {
                 self.store
@@ -2727,12 +2959,26 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             }
             None => RetryDecision::None,
         };
+        // A lost shard writes nothing more: a terminal streaming-session failure would end an
+        // invocation the shard's new owner resumes.
+        if shard_lost {
+            return CommandOutcome::BreakInnerLoop(RetryDecision::None);
+        }
 
-        if self.uses_streams && decision == RetryDecision::None {
-            let _ = self
+        if self.uses_streams
+            && decision == RetryDecision::None
+            && let Err(error) = self
                 .parent
                 .fail_durable_streaming_session(idempotency_key, details)
-                .await;
+                .await
+        {
+            if self.parent.retire_if_shard_lost(&error) {
+                return CommandOutcome::BreakInnerLoop(RetryDecision::None);
+            }
+            self.parent
+                .durable_stream_producer
+                .changed()
+                .notify_waiters();
         }
 
         failed_agent_invocation_outcome(self.parent.agent_mode(), decision)
@@ -2822,6 +3068,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         let result =
             invoke_observed_and_traced(lowered, self.store, self.instance, InvocationMode::Replay)
                 .await;
+        self.store.data().set_suspended();
         self.store
             .data_mut()
             .durable_ctx_mut()
@@ -2835,10 +3082,16 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         }
 
         match result {
-            Ok(InvokeResult::Succeeded {
-                result: AgentInvocationResult::SaveSnapshot { snapshot },
-                ..
-            }) => {
+            Ok(InvokeResult::Succeeded { result, .. }) => {
+                let AgentInvocationResult::SaveSnapshot { snapshot } = *result else {
+                    return self
+                        .fail_update(
+                            target_revision,
+                            "failed to get a snapshot for manual update: invalid snapshot result"
+                                .to_string(),
+                        )
+                        .await;
+                };
                 match self
                     .store
                     .data()
@@ -2852,12 +3105,21 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     .await
                 {
                     Ok(update_description) => {
-                        // Enqueue the update
-                        let _ = self.parent.enqueue_update(update_description).await;
-
-                        // Reactivate the worker
-                        CommandOutcome::BreakInnerLoop(RetryDecision::Immediate)
-                        // Stop processing the queue to avoid race conditions
+                        // Enqueue the update, then reactivate the worker; stop processing the
+                        // queue to avoid race conditions. Refused by the fence, nothing restarts
+                        // here: the update stays pending for the shard's new owner.
+                        match self
+                            .parent
+                            .owner_retirement_requested
+                            .run_until_cancelled(self.parent.enqueue_update(update_description))
+                            .await
+                        {
+                            None => CommandOutcome::BreakInnerLoop(RetryDecision::None),
+                            Some(Err(error)) if self.parent.retire_if_shard_lost(&error) => {
+                                CommandOutcome::BreakInnerLoop(RetryDecision::None)
+                            }
+                            _ => CommandOutcome::BreakInnerLoop(RetryDecision::Immediate),
+                        }
                     }
                     Err(error) => {
                         self.fail_update(
@@ -2867,14 +3129,6 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                         .await
                     }
                 }
-            }
-            Ok(InvokeResult::Succeeded { .. }) => {
-                self.fail_update(
-                    target_revision,
-                    "failed to get a snapshot for manual update: invalid snapshot result"
-                        .to_string(),
-                )
-                .await
             }
             Ok(InvokeResult::Failed { error, .. }) => {
                 let stderr = self
@@ -2898,6 +3152,16 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 .await
             }
             Ok(InvokeResult::Interrupted { interrupt_kind, .. }) => {
+                // A `FailedUpdate` drops the pending update from the status: for a lost shard
+                // nothing is written, and the update stays pending for the new owner.
+                if self
+                    .parent
+                    .retire_if_shard_lost(&WorkerExecutorError::Interrupted {
+                        kind: interrupt_kind,
+                    })
+                {
+                    return CommandOutcome::BreakInnerLoop(RetryDecision::None);
+                }
                 self.fail_update(
                     target_revision,
                     format!("failed to get a snapshot for manual update: {interrupt_kind:?}"),
@@ -2947,39 +3211,35 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     async fn read_file(
         &self,
         path: CanonicalFilePath,
-        sender: Sender<Result<ReadFileResult, WorkerExecutorError>>,
+        selection: FileByteSelection,
+        mut sender: tokio::sync::oneshot::Sender<Result<FileReadResponse, FileReadError>>,
     ) {
-        let _filesystem_access = match self
-            .store
-            .data()
-            .durable_ctx()
-            .acquire_owner_filesystem_inspection()
-            .await
-        {
+        let access = tokio::select! {
+            biased;
+            _ = sender.closed() => return,
+            result = self.store.data().durable_ctx().acquire_owner_filesystem_inspection() => {
+                result.map_err(|_| FileReadError::Lifecycle)
+            }
+        };
+        let _filesystem_access = match access {
             Ok(access) => access,
             Err(error) => {
                 let _ = sender.send(Err(error));
                 return;
             }
         };
-        let result = self.store.data().read_file(&path).await;
-        match result {
-            Ok(ReadFileResult::Ok(stream)) => {
-                // special case. We need to wait until the stream is consumed to avoid corruption
-                //
-                // This will delay processing of the next invocation and is quite unfortunate.
-                // A possible improvement would be to check whether we are on a copy-on-write filesystem
-                // if yes, we can make a cheap copy of the file here and serve the read from that copy.
-
-                let (latch, latch_receiver) = oneshot::channel();
-                let drop_stream = DropStream::new(stream, || latch.send(()).unwrap());
-                let _ = sender.send(Ok(ReadFileResult::Ok(Box::pin(drop_stream))));
-                latch_receiver.await.unwrap();
-            }
-            other => {
-                let _ = sender.send(other);
-            }
-        };
+        let generation = self
+            .store
+            .data()
+            .durable_ctx()
+            .filesystem_generation_handle();
+        crate::services::agent_filesystem::produce_file_read(
+            &generation,
+            path.as_abs_str(),
+            selection,
+            sender,
+        )
+        .await;
     }
 
     /// Records an attempted worker update as failed
@@ -2988,11 +3248,17 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         target_revision: ComponentRevision,
         error: String,
     ) -> CommandOutcome {
-        self.store
+        // Refused, the shard is lost: it stops rather than carrying on at a revision
+        // whose failed update was never recorded.
+        match self
+            .store
             .data()
             .on_worker_update_failed(target_revision, Some(error))
-            .await;
-        CommandOutcome::Continue
+            .await
+        {
+            Ok(()) => CommandOutcome::Continue,
+            Err(_) => CommandOutcome::BreakInnerLoop(RetryDecision::None),
+        }
     }
 
     /// Extends the invocation context with a new span containing information about the invocation
@@ -3088,6 +3354,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         let result =
             invoke_observed_and_traced(lowered, self.store, self.instance, InvocationMode::Replay)
                 .await;
+        self.store.data().set_suspended();
         self.store
             .data_mut()
             .durable_ctx_mut()
@@ -3119,10 +3386,11 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         }
 
         match result {
-            Ok(InvokeResult::Succeeded {
-                result: AgentInvocationResult::SaveSnapshot { snapshot },
-                ..
-            }) => {
+            Ok(InvokeResult::Succeeded { result, .. }) => {
+                let AgentInvocationResult::SaveSnapshot { snapshot } = *result else {
+                    warn!("Periodic snapshot returned unexpected result format");
+                    return CommandOutcome::Continue;
+                };
                 let serialized = golem_common::serialization::serialize(&snapshot.data);
                 match serialized {
                     Ok(serialized_bytes) => {
@@ -3136,7 +3404,8 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                                         .agent_wallet_cards_snapshot();
                                     let wallet_generation =
                                         self.store.data().durable_ctx().wallet_generation();
-                                    self.parent
+                                    if self
+                                        .parent
                                         .add_and_commit_oplog(OplogEntry::snapshot(
                                             payload,
                                             snapshot.mime_type,
@@ -3144,7 +3413,11 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                                             wallet_generation,
                                             None,
                                         ))
-                                        .await;
+                                        .await
+                                        .is_err()
+                                    {
+                                        return CommandOutcome::BreakInnerLoop(RetryDecision::None);
+                                    }
                                     debug!("Periodic snapshot saved successfully");
 
                                     // A snapshot is committed between invocations, so no jumpable
@@ -3169,10 +3442,6 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                         warn!("Failed to serialize snapshot data: {err}");
                     }
                 }
-                CommandOutcome::Continue
-            }
-            Ok(InvokeResult::Succeeded { .. }) => {
-                warn!("Periodic snapshot returned unexpected result format");
                 CommandOutcome::Continue
             }
             Ok(InvokeResult::Exited { .. }) => {
@@ -3328,6 +3597,140 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
     use test_r::{test, timeout};
+
+    #[test]
+    fn filesystem_turns_allow_pending_invocations_and_updates_to_progress() {
+        use super::{
+            AgentStatusRecord, CanonicalFilePath, FileByteSelection, IdempotencyKey,
+            PendingInvocationRef, QueuedWorkerInvocation, SelectedWork,
+        };
+        use golem_common::model::component::ComponentRevision;
+        use golem_common::model::{PendingUpdateKind, PendingUpdateRef};
+
+        for update in [false, true] {
+            let pending = PendingInvocationRef {
+                timestamp: Timestamp::now_utc(),
+                oplog_index: OplogIndex::from_u64(4),
+                idempotency_key: Some(IdempotencyKey::new("method".into())),
+                manual_update_target_revision: None,
+            };
+            let mut status = AgentStatusRecord {
+                pending_invocations: vec![pending],
+                ..Default::default()
+            };
+            if update {
+                status.pending_updates.push_back(PendingUpdateRef {
+                    timestamp: Timestamp::now_utc(),
+                    oplog_index: OplogIndex::from_u64(5),
+                    target_revision: ComponentRevision::INITIAL,
+                    kind: PendingUpdateKind::Automatic,
+                });
+            }
+            let status = Arc::new(status);
+            let mut queue = VecDeque::new();
+            let mut receivers = Vec::new();
+            let mut turn_used = false;
+            for turn in 0..20 {
+                // Keep the resident queue nonempty, including while ordinary work is selected.
+                let (sender, receiver) = tokio::sync::oneshot::channel();
+                receivers.push(receiver);
+                queue.push_back(QueuedWorkerInvocation::ReadFile {
+                    path: CanonicalFilePath::from_abs_str("/file").unwrap(),
+                    selection: FileByteSelection::Full,
+                    sender,
+                });
+                let selected = SelectedWork::next(&mut queue, status.clone(), None, &mut turn_used);
+                if turn % 2 == 0 {
+                    assert!(matches!(
+                        selected,
+                        SelectedWork::Resident(QueuedWorkerInvocation::ReadFile { .. })
+                    ));
+                } else if update {
+                    assert!(matches!(selected, SelectedWork::ApplyPendingUpdate));
+                } else {
+                    assert!(
+                        matches!(selected, SelectedWork::Durable(pending) if pending.oplog_index == OplogIndex::from_u64(4))
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn filesystem_turns_preserve_initialization_and_control_priority() {
+        use super::{
+            AgentStatusRecord, CanonicalFilePath, IdempotencyKey, PendingInvocationRef,
+            QueuedWorkerInvocation, SelectedWork,
+        };
+        let constructor = IdempotencyKey::new("init-agent".into());
+        let status = Arc::new(AgentStatusRecord {
+            pending_invocations: vec![PendingInvocationRef {
+                timestamp: Timestamp::now_utc(),
+                oplog_index: OplogIndex::from_u64(2),
+                idempotency_key: Some(constructor.clone()),
+                manual_update_target_revision: None,
+            }],
+            ..Default::default()
+        });
+        let (sender, _receiver) = futures::channel::oneshot::channel();
+        let mut queue = VecDeque::from([QueuedWorkerInvocation::GetFileSystemNode {
+            path: CanonicalFilePath::from_abs_str("/").unwrap(),
+            sender,
+        }]);
+        let mut turn_used = false;
+        assert!(matches!(
+            SelectedWork::next(
+                &mut queue,
+                status.clone(),
+                Some(&constructor),
+                &mut turn_used
+            ),
+            SelectedWork::Durable(_)
+        ));
+        assert_eq!(queue.len(), 1);
+        // Once initialized, listings also consume the filesystem turn.
+        assert!(matches!(
+            SelectedWork::next(&mut queue, status.clone(), None, &mut turn_used),
+            SelectedWork::Resident(_)
+        ));
+        assert!(turn_used);
+        queue.push_front(QueuedWorkerInvocation::SaveSnapshot);
+        assert!(matches!(
+            SelectedWork::next(&mut queue, status, None, &mut turn_used),
+            SelectedWork::Resident(QueuedWorkerInvocation::SaveSnapshot)
+        ));
+        assert!(turn_used);
+        assert!(matches!(
+            SelectedWork::next(
+                &mut queue,
+                Arc::new(AgentStatusRecord::default()),
+                None,
+                &mut turn_used
+            ),
+            SelectedWork::Idle(_)
+        ));
+        assert!(!turn_used);
+    }
+
+    #[test]
+    fn queued_inspections_survive_guest_suspend_but_not_quota_or_terminal_stops() {
+        assert_eq!(
+            super::resident_work_disposition(UnloadReason::Suspend),
+            PendingLiveInvocationDisposition::Preserve
+        );
+        for reason in [
+            UnloadReason::MemoryLimit,
+            UnloadReason::FilesystemLimit,
+            UnloadReason::Failure,
+            UnloadReason::Interrupt,
+            UnloadReason::Deleting,
+        ] {
+            assert_eq!(
+                super::resident_work_disposition(reason),
+                PendingLiveInvocationDisposition::Fail
+            );
+        }
+    }
 
     struct TestPermit {
         held: Arc<AtomicBool>,

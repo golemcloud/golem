@@ -1,0 +1,20 @@
+# Permission cards in Rust
+
+Use `golem_rust::schema::wit::GuestPermissionCardHandle` in an agent or tool input/output. It has
+the required `IntoSchema` and `FromSchema` implementations:
+
+```rust
+use golem_rust::schema::wit::GuestPermissionCardHandle;
+
+async fn forward(card: GuestPermissionCardHandle) -> GuestPermissionCardHandle {
+    ReceiverClient::get("target".to_string())
+        .accept(card)
+        .await
+}
+```
+
+Cards are opaque affine capabilities. Encoding a call transfers the card, so do not serialize,
+clone for reuse, persist, or send the same handle twice. This guide covers transferring an already
+received handle. The SDK does not currently expose a supported high-level constructor for wrapping
+cards returned by the lower-level permissions host bindings. Do not use hidden schema-codec
+constructors as application APIs, invent authority locally, or log card internals.

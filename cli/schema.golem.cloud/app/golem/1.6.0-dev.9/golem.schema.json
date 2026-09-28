@@ -231,6 +231,12 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "toolsMergeMode": {
+          "$ref": "#/definitions/mapMergeMode"
+        },
+        "tools": {
+          "$ref": "#/definitions/toolBindings"
+        },
         "templates": {
           "$ref": "#/definitions/lenientTokenList"
         },
@@ -272,6 +278,9 @@
           "items": {
             "type": "string"
           }
+        },
+        "configSchema": {
+          "$ref": "#/definitions/componentConfigSchema"
         },
         "config": {},
         "initialCard": {
@@ -330,6 +339,12 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "toolsMergeMode": {
+          "$ref": "#/definitions/mapMergeMode"
+        },
+        "tools": {
+          "$ref": "#/definitions/toolBindings"
+        },
         "templates": {
           "$ref": "#/definitions/lenientTokenList"
         },
@@ -375,6 +390,9 @@
           "items": {
             "type": "string"
           }
+        },
+        "configSchema": {
+          "$ref": "#/definitions/componentConfigSchema"
         },
         "config": {},
         "initialCard": {
@@ -432,6 +450,15 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "toolsMergeMode": {
+          "$ref": "#/definitions/mapMergeMode"
+        },
+        "tools": {
+          "$ref": "#/definitions/toolBindings"
+        },
+        "configSchema": {
+          "$ref": "#/definitions/componentConfigSchema"
+        },
         "config": {},
         "initialCard": {
           "$ref": "#/definitions/initialCard"
@@ -534,6 +561,15 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "configSchema": {
+          "$ref": "#/definitions/componentConfigSchema"
+        },
+        "toolsMergeMode": {
+          "$ref": "#/definitions/mapMergeMode"
+        },
+        "tools": {
+          "$ref": "#/definitions/toolBindings"
+        },
         "config": {},
         "initialCard": {
           "$ref": "#/definitions/initialCard"
@@ -971,6 +1007,8 @@
           "properties": {
             "name": { "type": "string", "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$" },
             "version": { "type": "string" }, "parameters": {}, "account": { "type": "string" },
+            "secretKeysReadable": { "$ref": "#/definitions/secretKeyScope" },
+            "secretKeysRevealable": { "$ref": "#/definitions/secretKeyScope" },
             "filesystemAccess": { "$ref": "#/definitions/toolFilesystemAccess" }
           }
         }
@@ -1043,6 +1081,11 @@
       "additionalProperties": false,
       "description": "HTTP API deployment",
       "properties": {
+        "scheme": {
+          "type": "string",
+          "enum": ["http", "https"],
+          "description": "Public scheme advertised in OpenAPI. Does not configure the HTTP listener. Defaults to http for built-in local and implicit local environments, and https for built-in cloud environments. Custom server environments must set this field explicitly; their management URL scheme is not used."
+        },
         "domain": {
           "type": "string",
           "description": "Full concrete domain for the HTTP API deployment. Use this for custom domains and custom server environments."
@@ -1106,7 +1149,53 @@
               "$ref": "#/definitions/mcpDeployment"
             }
           }
+        },
+        "imports": {
+          "type": "object",
+          "description": "Ordered MCP imports by environment",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "$ref": "#/definitions/mcpImport"
+            }
+          }
         }
+      }
+    },
+    "mcpImport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["url"],
+      "allOf": [
+        { "not": { "required": ["auth", "securityScheme"] } },
+        { "not": { "required": ["include", "exclude"] } }
+      ],
+      "properties": {
+        "url": { "type": "string" },
+        "auth": { "$ref": "#/definitions/mcpImportAuth" },
+        "securityScheme": { "type": "string" },
+        "prefix": { "type": "string" },
+        "include": { "type": "array", "items": { "type": "string" } },
+        "exclude": { "type": "array", "items": { "type": "string" } },
+        "version": { "type": "string" }
+      }
+    },
+    "mcpImportAuth": {
+      "type": "object",
+      "additionalProperties": false,
+      "oneOf": [{ "required": ["bearer"] }, { "required": ["basic"] }],
+      "properties": {
+        "bearer": { "type": "string" },
+        "basic": { "$ref": "#/definitions/mcpImportBasicAuth" }
+      }
+    },
+    "mcpImportBasicAuth": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["user", "password"],
+      "properties": {
+        "user": { "type": "string" },
+        "password": { "type": "string" }
       }
     },
     "mcpDeployment": {
@@ -1126,6 +1215,12 @@
           "additionalProperties": {
             "$ref": "#/definitions/mcpDeploymentAgentOptions"
           }
+        },
+        "tools": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/mcpDeploymentToolOptions"
+          }
         }
       },
       "oneOf": [
@@ -1139,6 +1234,10 @@
             "subdomain"
           ]
         }
+      ],
+      "anyOf": [
+        { "required": ["agents"], "properties": { "agents": { "minProperties": 1 } } },
+        { "required": ["tools"], "properties": { "tools": { "minProperties": 1 } } }
       ]
     },
     "mcpDeploymentAgentOptions": {
@@ -1149,6 +1248,18 @@
           "type": "string"
         }
       }
+    },
+    "mcpDeploymentToolOptions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ownerComponent"],
+      "properties": {
+        "ownerComponent": { "type": "string" },
+        "securityScheme": { "type": "string" },
+        "include": { "type": "array", "items": { "type": "string" } },
+        "exclude": { "type": "array", "items": { "type": "string" } }
+      },
+      "not": { "required": ["include", "exclude"] }
     },
     "localServer": {
       "type": "object",
@@ -2646,6 +2757,26 @@
         },
         "name": {
           "type": "string"
+        }
+      }
+    },
+    "componentConfigSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema": { "type": "object" },
+        "declarations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["source", "path", "value_type"],
+            "properties": {
+              "source": { "enum": ["Local", "Secret"] },
+              "path": { "type": "array", "items": { "type": "string" } },
+              "value_type": { "type": "object" }
+            }
+          }
         }
       }
     },

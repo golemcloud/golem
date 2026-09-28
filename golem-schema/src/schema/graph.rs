@@ -93,6 +93,72 @@ impl SchemaGraph {
         self.defs.iter().find(|d| &d.id == id)
     }
 
+    /// Whether any type reachable from the root is a stream, including unselected alternatives.
+    pub fn contains_stream_type(&self) -> bool {
+        let mut pending = vec![&self.root];
+        let mut visited = HashSet::new();
+        while let Some(ty) = pending.pop() {
+            match ty {
+                SchemaType::Stream { .. } => return true,
+                SchemaType::Ref { id, .. } => {
+                    if visited.insert(id)
+                        && let Some(def) = self.lookup(id)
+                    {
+                        pending.push(&def.body);
+                    }
+                }
+                SchemaType::Record { fields, .. } => {
+                    pending.extend(fields.iter().map(|field| &field.body));
+                }
+                SchemaType::Variant { cases, .. } => {
+                    pending.extend(cases.iter().filter_map(|case| case.payload.as_ref()));
+                }
+                SchemaType::Tuple { elements, .. } => pending.extend(elements),
+                SchemaType::List { element, .. } | SchemaType::FixedList { element, .. } => {
+                    pending.push(element);
+                }
+                SchemaType::Map { key, value, .. } => {
+                    pending.extend([key.as_ref(), value.as_ref()])
+                }
+                SchemaType::Option { inner, .. } => pending.push(inner),
+                SchemaType::Result { spec, .. } => {
+                    pending.extend(spec.ok.as_deref());
+                    pending.extend(spec.err.as_deref());
+                }
+                SchemaType::Union { spec, .. } => {
+                    pending.extend(spec.branches.iter().map(|branch| &branch.body));
+                }
+                SchemaType::Future { inner, .. } => pending.extend(inner.as_deref()),
+                SchemaType::Secret { spec, .. } => pending.push(&spec.inner),
+                SchemaType::Bool { .. }
+                | SchemaType::S8 { .. }
+                | SchemaType::S16 { .. }
+                | SchemaType::S32 { .. }
+                | SchemaType::S64 { .. }
+                | SchemaType::U8 { .. }
+                | SchemaType::U16 { .. }
+                | SchemaType::U32 { .. }
+                | SchemaType::U64 { .. }
+                | SchemaType::F32 { .. }
+                | SchemaType::F64 { .. }
+                | SchemaType::Char { .. }
+                | SchemaType::String { .. }
+                | SchemaType::Enum { .. }
+                | SchemaType::Flags { .. }
+                | SchemaType::Text { .. }
+                | SchemaType::Binary { .. }
+                | SchemaType::Path { .. }
+                | SchemaType::Url { .. }
+                | SchemaType::Datetime { .. }
+                | SchemaType::Duration { .. }
+                | SchemaType::Quantity { .. }
+                | SchemaType::QuotaToken { .. }
+                | SchemaType::PermissionCard { .. } => {}
+            }
+        }
+        false
+    }
+
     /// Walk through any number of [`SchemaType::Ref`] indirections and return
     /// the first non-ref body in this graph. Detects recursive cycles
     /// ([`RefResolutionError::RecursiveRef`]) and dangling references
@@ -388,6 +454,40 @@ fn collect_refs<'a>(ty: &'a SchemaType, out: &mut Vec<&'a TypeId>) {
 mod tests {
     use super::*;
     use test_r::test;
+
+    #[test]
+    fn stream_detection_follows_reachable_recursive_definitions() {
+        let recursive = TypeId::new("recursive");
+        let output = TypeId::new("output");
+        let mut graph = SchemaGraph {
+            root: SchemaType::ref_to(recursive.clone()),
+            defs: vec![
+                SchemaTypeDef {
+                    id: recursive.clone(),
+                    name: None,
+                    body: SchemaType::tuple(vec![SchemaType::ref_to(recursive)]),
+                },
+                SchemaTypeDef {
+                    id: output.clone(),
+                    name: None,
+                    body: SchemaType::option(SchemaType::stream(Some(SchemaType::u32()))),
+                },
+            ],
+        };
+        assert!(
+            !graph.contains_stream_type(),
+            "unreachable streams do not count"
+        );
+        let SchemaType::Tuple { elements, .. } = &mut graph.defs[0].body else {
+            unreachable!()
+        };
+        elements.push(SchemaType::ref_to(output));
+        assert!(
+            graph.contains_stream_type(),
+            "a cycle must not hide a sibling stream"
+        );
+        assert!(SchemaGraph::anonymous(SchemaType::stream(None)).contains_stream_type());
+    }
 
     fn def(id: &str, name: Option<&str>) -> SchemaTypeDef {
         SchemaTypeDef {

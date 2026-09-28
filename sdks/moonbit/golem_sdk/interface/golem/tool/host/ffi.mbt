@@ -13,9 +13,6 @@ fn wasmImportResourceDropToolStdinClosed(resource : Int) = "golem:tool/host@0.1.
 fn wasmImportResourceDropToolStdout(resource : Int) = "golem:tool/host@0.1.0" "[resource-drop]tool-stdout"
 
 ///|
-fn wasmImportResourceDropToolStdoutWriter(resource : Int) = "golem:tool/host@0.1.0" "[resource-drop]tool-stdout-writer"
-
-///|
 fn wasmImportResourceDropToolRpc(resource : Int) = "golem:tool/host@0.1.0" "[resource-drop]tool-rpc"
 
 ///|
@@ -144,7 +141,7 @@ length : Int,
 }
 
 ///|
-fn wasmGolemToolHost010CreateStdinFromStreamStream0Lift(ptr : Int) -> Result[FixedArray[Byte], ByteStreamFailure] {
+fn wasmGolemToolHost010CreateStdinFromStreamStream0Lift(ptr : Int) -> Result[FixedArray[Byte], @streams.ByteStreamFailure] {
 
       let lifted1 = match (mbt_ffi_load8_u((ptr) + 0)) {
             0 => {
@@ -158,21 +155,21 @@ fn wasmGolemToolHost010CreateStdinFromStreamStream0Lift(ptr : Int) -> Result[Fix
                   let lifted = match (mbt_ffi_load8_u((ptr) + 4)) {
                         0 => {
 
-                              ByteStreamFailure::Cancelled
+                              @streams.ByteStreamFailure::Cancelled
                         }
                         1 => {
 
-                              ByteStreamFailure::Abandoned
+                              @streams.ByteStreamFailure::Abandoned
                         }
                         2 => {
 
-                              ByteStreamFailure::ResourceExhausted
+                              @streams.ByteStreamFailure::ResourceExhausted
                         }
                         3 => {
 
                               let result0 = mbt_ffi_ptr2str(mbt_ffi_load32((ptr) + 8), mbt_ffi_load32((ptr) + 12))
 
-                              ByteStreamFailure::Failed(result0)
+                              @streams.ByteStreamFailure::Failed(result0)
                         }
                         _ => panic()
                   }
@@ -186,7 +183,7 @@ fn wasmGolemToolHost010CreateStdinFromStreamStream0Lift(ptr : Int) -> Result[Fix
 }
 
 ///|
-fn wasmGolemToolHost010CreateStdinFromStreamStream0Lower(value : Result[FixedArray[Byte], ByteStreamFailure], ptr : Int) -> Unit {
+fn wasmGolemToolHost010CreateStdinFromStreamStream0Lower(value : Result[FixedArray[Byte], @streams.ByteStreamFailure], ptr : Int) -> Unit {
 
       match value {
             Ok(payload) => {
@@ -239,7 +236,7 @@ fn wasmGolemToolHost010CreateStdinFromStreamStream0Lower(value : Result[FixedArr
 fn wasmGolemToolHost010CreateStdinFromStreamStream0ListLift(
 ptr : Int,
 length : Int,
-) -> FixedArray[Result[FixedArray[Byte], ByteStreamFailure]] {
+) -> FixedArray[Result[FixedArray[Byte], @streams.ByteStreamFailure]] {
 
       FixedArray::makei(
       length,
@@ -359,7 +356,7 @@ self : WasmGolemToolHost010CreateStdinFromStreamStream0StreamSource,
 async fn WasmGolemToolHost010CreateStdinFromStreamStream0StreamSource::read(
 self : WasmGolemToolHost010CreateStdinFromStreamStream0StreamSource,
 count : Int,
-) -> FixedArray[Result[FixedArray[Byte], ByteStreamFailure]]? {
+) -> FixedArray[Result[FixedArray[Byte], @streams.ByteStreamFailure]]? {
       if self.closed {
             return None
       }
@@ -437,7 +434,7 @@ count : Int,
 
 ///|
 #warnings("-unused_value")
-fn wasmGolemToolHost010CreateStdinFromStreamStream0StreamLift(handle : Int) -> @async-core.Stream[Result[FixedArray[Byte], ByteStreamFailure]] {
+fn wasmGolemToolHost010CreateStdinFromStreamStream0StreamLift(handle : Int) -> @async-core.Stream[Result[FixedArray[Byte], @streams.ByteStreamFailure]] {
       let source = WasmGolemToolHost010CreateStdinFromStreamStream0StreamSource::{
             handle,
             closed: false,
@@ -457,7 +454,7 @@ fn wasmGolemToolHost010CreateStdinFromStreamStream0StreamLift(handle : Int) -> @
 
 ///|
 priv struct WasmGolemToolHost010CreateStdinFromStreamStream0StreamProducer {
-      stream : @async-core.Stream[Result[FixedArray[Byte], ByteStreamFailure]]
+      stream : @async-core.Stream[Result[FixedArray[Byte], @streams.ByteStreamFailure]]
       writer : Int
 }
 
@@ -476,7 +473,7 @@ fn wasmGolemToolHost010CreateStdinFromStreamStream0StreamRejectPrepared(handle :
       @async-core.spawn_component_task_current(async fn() {
             @async-core.protect_from_cancel(
             () => {
-                  prepared.stream.reject((value : Result[FixedArray[Byte], ByteStreamFailure]) => {
+                  prepared.stream.reject((value : Result[FixedArray[Byte], @streams.ByteStreamFailure]) => {
                         let ptr = wasmGolemToolHost010CreateStdinFromStreamStream0Malloc(1)
                         wasmGolemToolHost010CreateStdinFromStreamStream0Lower(value, ptr)
                         wasmGolemToolHost010CreateStdinFromStreamStream0Reject(ptr, 0, 1)
@@ -517,14 +514,14 @@ fn wasmGolemToolHost010CreateStdinFromStreamStream0StreamCommit(handle : Int) ->
                   defer writer_lock.release()
                   close_writer()
             }
-            let cleanup_value = fn(value : Result[FixedArray[Byte], ByteStreamFailure]) -> Unit {
+            let cleanup_value = fn(value : Result[FixedArray[Byte], @streams.ByteStreamFailure]) -> Unit {
                   let ptr = wasmGolemToolHost010CreateStdinFromStreamStream0Malloc(1)
                   wasmGolemToolHost010CreateStdinFromStreamStream0Lower(value, ptr)
                   wasmGolemToolHost010CreateStdinFromStreamStream0Reject(ptr, 0, 1)
                   mbt_ffi_free(ptr)
             }
             let sink = @async-core.Sink::from_callbacks(
-            (data : ArrayView[Result[FixedArray[Byte], ByteStreamFailure]]) => {
+            (data : ArrayView[Result[FixedArray[Byte], @streams.ByteStreamFailure]]) => {
                   writer_lock.acquire()
                   defer writer_lock.release()
                   if writer_closed.val || data.length() == 0 {
@@ -537,7 +534,7 @@ fn wasmGolemToolHost010CreateStdinFromStreamStream0StreamCommit(handle : Int) ->
                   }
                   let ptr = wasmGolemToolHost010CreateStdinFromStreamStream0Malloc(data_len)
                   for i in 0..<data_len {
-                        let value : Result[FixedArray[Byte], ByteStreamFailure] = data[i]
+                        let value : Result[FixedArray[Byte], @streams.ByteStreamFailure] = data[i]
                         wasmGolemToolHost010CreateStdinFromStreamStream0Lower(value, ptr + i * 16)
                   }
                   let settle_staging = fn(transferred : Int) -> Unit {
@@ -639,7 +636,7 @@ fn wasmGolemToolHost010CreateStdinFromStreamStream0StreamCommit(handle : Int) ->
 }
 
 ///|
-fn wasmGolemToolHost010CreateStdinFromStreamStream0StreamLower(stream : @async-core.Stream[Result[FixedArray[Byte], ByteStreamFailure]]) -> Int {
+fn wasmGolemToolHost010CreateStdinFromStreamStream0StreamLower(stream : @async-core.Stream[Result[FixedArray[Byte], @streams.ByteStreamFailure]]) -> Int {
       if !@async-core.has_component_task_scope() {
             abort("component stream producer requires an async task scope")
       }
@@ -705,7 +702,7 @@ length : Int,
 }
 
 ///|
-fn wasmGolemToolHost010CreateStdoutStream0Lift(ptr : Int) -> Result[FixedArray[Byte], ByteStreamFailure] {
+fn wasmGolemToolHost010CreateStdoutStream0Lift(ptr : Int) -> Result[FixedArray[Byte], @streams.ByteStreamFailure] {
 
       let lifted1 = match (mbt_ffi_load8_u((ptr) + 0)) {
             0 => {
@@ -719,21 +716,21 @@ fn wasmGolemToolHost010CreateStdoutStream0Lift(ptr : Int) -> Result[FixedArray[B
                   let lifted = match (mbt_ffi_load8_u((ptr) + 4)) {
                         0 => {
 
-                              ByteStreamFailure::Cancelled
+                              @streams.ByteStreamFailure::Cancelled
                         }
                         1 => {
 
-                              ByteStreamFailure::Abandoned
+                              @streams.ByteStreamFailure::Abandoned
                         }
                         2 => {
 
-                              ByteStreamFailure::ResourceExhausted
+                              @streams.ByteStreamFailure::ResourceExhausted
                         }
                         3 => {
 
                               let result0 = mbt_ffi_ptr2str(mbt_ffi_load32((ptr) + 8), mbt_ffi_load32((ptr) + 12))
 
-                              ByteStreamFailure::Failed(result0)
+                              @streams.ByteStreamFailure::Failed(result0)
                         }
                         _ => panic()
                   }
@@ -750,7 +747,7 @@ fn wasmGolemToolHost010CreateStdoutStream0Lift(ptr : Int) -> Result[FixedArray[B
 fn wasmGolemToolHost010CreateStdoutStream0ListLift(
 ptr : Int,
 length : Int,
-) -> FixedArray[Result[FixedArray[Byte], ByteStreamFailure]] {
+) -> FixedArray[Result[FixedArray[Byte], @streams.ByteStreamFailure]] {
 
       FixedArray::makei(
       length,
@@ -865,7 +862,7 @@ self : WasmGolemToolHost010CreateStdoutStream0StreamSource,
 async fn WasmGolemToolHost010CreateStdoutStream0StreamSource::read(
 self : WasmGolemToolHost010CreateStdoutStream0StreamSource,
 count : Int,
-) -> FixedArray[Result[FixedArray[Byte], ByteStreamFailure]]? {
+) -> FixedArray[Result[FixedArray[Byte], @streams.ByteStreamFailure]]? {
       if self.closed {
             return None
       }
@@ -943,7 +940,7 @@ count : Int,
 
 ///|
 #warnings("-unused_value")
-fn wasmGolemToolHost010CreateStdoutStream0StreamLift(handle : Int) -> @async-core.Stream[Result[FixedArray[Byte], ByteStreamFailure]] {
+fn wasmGolemToolHost010CreateStdoutStream0StreamLift(handle : Int) -> @async-core.Stream[Result[FixedArray[Byte], @streams.ByteStreamFailure]] {
       let source = WasmGolemToolHost010CreateStdoutStream0StreamSource::{
             handle,
             closed: false,
@@ -962,16 +959,10 @@ fn wasmGolemToolHost010CreateStdoutStream0StreamLift(handle : Int) -> @async-cor
 }
 
 ///|
-fn wasmImportMethodToolStdoutWriterWrite(p0 : Int, p1 : Int, p2 : Int, p3 : Int) -> Int = "golem:tool/host@0.1.0" "[async-lower][method]tool-stdout-writer.write"
-
-///|
-fn wasmImportMethodToolStdoutWriterFinish(p0 : Int, p1 : Int) -> Int = "golem:tool/host@0.1.0" "[async-lower][method]tool-stdout-writer.finish"
-
-///|
-fn wasmImportMethodToolStdoutWriterFail(p0 : Int, p1 : Int, p2 : Int, p3 : Int, p4 : Int) -> Int = "golem:tool/host@0.1.0" "[async-lower][method]tool-stdout-writer.fail"
-
-///|
 fn wasmImportConstructorToolRpc(p0 : Int, p1 : Int) -> Int = "golem:tool/host@0.1.0" "[constructor]tool-rpc"
+
+///|
+fn wasmImportStaticToolRpcCreate(p0 : Int, p1 : Int, p2 : Int)  = "golem:tool/host@0.1.0" "[static]tool-rpc.create"
 
 ///|
 fn wasmImportMethodToolRpcInvokeAndAwait(p0 : Int, p1 : Int) -> Int = "golem:tool/host@0.1.0" "[async-lower][method]tool-rpc.invoke-and-await"

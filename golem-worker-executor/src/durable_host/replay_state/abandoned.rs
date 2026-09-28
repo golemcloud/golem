@@ -48,10 +48,6 @@ impl AbandonedStarts {
         !matches!(function_name, HostFunctionName::GolemApiFork)
     }
 
-    pub(super) fn contains(&self, start_index: OplogIndex) -> bool {
-        self.starts.contains_key(&start_index)
-    }
-
     pub(super) fn record_start(
         &mut self,
         idx: OplogIndex,

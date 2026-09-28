@@ -82,6 +82,7 @@ struct ProducerMutationScope {
     producer: Arc<DurableStreamStore>,
     admission: Arc<StreamWriteAdmission>,
     commit_tails: std::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>,
+    publication_guard: Mutex<Option<tokio::sync::OwnedMutexGuard<()>>>,
     session_records_changed: AtomicBool,
 }
 
@@ -104,6 +105,38 @@ impl StreamWriteAdmission {
         Fut: Future<Output = Result<T, E>> + Send + 'static,
     {
         self.producer.submit(self.clone(), operation).await
+    }
+
+    /// Joins status publication for the submissions captured by this call, not live delivery.
+    /// The sequential admitted orchestration must await this outside its write bodies, without
+    /// cancellation or another concurrent drainer. The finalizer joins any remaining submissions.
+    pub(crate) async fn wait_published(&self) -> Result<(), StreamStoreError> {
+        let receipts = std::mem::take(
+            &mut *self
+                .status_receipts
+                .lock()
+                .expect("status receipt list lock poisoned"),
+        );
+        let mut failure = None;
+        for receipt in receipts {
+            if let Err(error) = receipt
+                .await
+                .unwrap_or(Err(StreamStoreError::RecoveryRequired))
+            {
+                match &error {
+                    StreamStoreError::Fenced(fence) => self.producer.poison_refused(fence),
+                    _ => self.producer.poison(),
+                }
+                // The fence is why the producer stopped, so a failure after it does not replace it.
+                if !matches!(failure, Some(StreamStoreError::Fenced(_))) {
+                    failure = Some(error);
+                }
+            }
+        }
+        match failure {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
     }
 
     /// Defers live delivery until the operation has released its session lock.
@@ -187,6 +220,25 @@ impl StreamWriteContext {
         );
     }
 
+    /// Excludes lifecycle observation from prearming through final status publication.
+    /// Acquire before prearming an obligation and before producer metadata locks. Nested writes
+    /// share the guard; the independently driven completion releases it after all callback tails.
+    pub(crate) async fn begin_lifecycle_publication(&self) -> Result<(), StreamStoreError> {
+        self.assert_owner(&self.scope.producer);
+        let mut guard = self.scope.publication_guard.lock().await;
+        if guard.is_none() {
+            *guard = Some(
+                self.scope
+                    .producer
+                    .publication_gate
+                    .clone()
+                    .lock_owned()
+                    .await,
+            );
+        }
+        self.scope.producer.ensure_healthy()
+    }
+
     /// Marks a durable effect that must finish before this operation can fail safely.
     pub(crate) fn begin_durable_effect(&self) {
         self.assert_owner(&self.scope.producer);
@@ -224,7 +276,12 @@ impl DurableStreamStore {
     /// Rejects work after the resident producer has been poisoned or retired.
     pub(crate) fn ensure_healthy(&self) -> Result<(), StreamStoreError> {
         if self.poisoned.load(Ordering::Acquire) {
-            Err(StreamStoreError::RecoveryRequired)
+            // A refused write poisons the store and every later write would be refused too:
+            // report the fence so a caller reroutes instead of recovering locally.
+            match self.refused_by.get() {
+                Some(fence) => Err(StreamStoreError::Fenced(fence.clone())),
+                None => Err(StreamStoreError::RecoveryRequired),
+            }
         } else {
             Ok(())
         }
@@ -274,6 +331,12 @@ impl DurableStreamStore {
     }
 
     /// Prevents new work and cancels resident forwarded operations after failure or retirement.
+    /// Poisons the store because the storage refused one of its writes.
+    pub(crate) fn poison_refused(&self, fence: &OplogFence) {
+        let _ = self.refused_by.set(fence.clone());
+        self.poison();
+    }
+
     pub(crate) fn poison(&self) {
         self.poisoned.store(true, Ordering::Release);
         self.retirement.cancel();
@@ -429,20 +492,8 @@ impl DurableStreamStore {
                         )
                     }
                 };
-                let status_receipts = std::mem::take(
-                    &mut *admission
-                        .status_receipts
-                        .lock()
-                        .expect("status receipt list lock poisoned"),
-                );
-                for receipt in status_receipts {
-                    if let Err(error) = receipt
-                        .await
-                        .unwrap_or(Err(StreamStoreError::RecoveryRequired))
-                    {
-                        producer.poison();
-                        outcome = Err(error.into());
-                    }
+                if let Err(error) = admission.wait_published().await {
+                    outcome = Err(error.into());
                 }
                 let mut publications = std::mem::take(
                     &mut *admission
@@ -508,6 +559,7 @@ impl DurableStreamStore {
             producer: producer.clone(),
             admission,
             commit_tails: std::sync::Mutex::new(Vec::new()),
+            publication_guard: Mutex::new(None),
             session_records_changed: AtomicBool::new(false),
         });
         self.mutations
@@ -532,7 +584,7 @@ impl DurableStreamStore {
                     }
                 };
                 let _ = reply.send(outcome);
-                // The session lock covers the write body, not status publication.
+                // Guarded orchestration can join this completion before releasing its session lock.
                 MutationCompletion {
                     finish: async move {
                         let mut status = Ok(());
@@ -555,6 +607,7 @@ impl DurableStreamStore {
                         if scope.session_records_changed.load(Ordering::Acquire) {
                             producer.session_records_changed.notify_waiters();
                         }
+                        drop(scope.publication_guard.lock().await.take());
                         drop(activity);
                         drop(scope);
                         let _ = status_reply.send(status);
@@ -567,7 +620,39 @@ impl DurableStreamStore {
             .expect("durable stream producer-owned write terminated")
     }
 
-    pub(super) async fn commit(&self, context: &StreamWriteContext) {
+    /// Observes authoritative lifecycle state without racing a prearmed publication.
+    /// The observation must not submit mutations, acquire session locks, or perform recovery/RPC.
+    /// Status-actor reconstruction is allowed; cached status is not an authoritative observation.
+    #[cfg(test)]
+    pub(crate) async fn observe_publication<T>(
+        &self,
+        observation: impl Future<Output = Result<T, StreamStoreError>>,
+    ) -> Result<T, StreamStoreError> {
+        self.ensure_healthy()?;
+        let _activity = self
+            .durable_activity
+            .try_enter()
+            .ok_or(StreamStoreError::RecoveryRequired)?;
+        let _guard = self.publication_gate.lock().await;
+        self.ensure_healthy()?;
+        let outcome = std::panic::AssertUnwindSafe(observation)
+            .catch_unwind()
+            .await
+            .unwrap_or_else(|_| {
+                Err(StreamStoreError::Oplog(
+                    "durable stream publication observation panicked".into(),
+                ))
+            });
+        if outcome.is_err() {
+            self.poison();
+        }
+        outcome
+    }
+
+    pub(super) async fn commit(
+        &self,
+        context: &StreamWriteContext,
+    ) -> Result<(), StreamStoreError> {
         context.assert_owner(self);
         context.begin_durable_effect();
         let scope = &context.scope;
@@ -587,15 +672,66 @@ impl DurableStreamStore {
             .push(task);
         receipt
             .await
-            .expect("durable stream commit failed before durability receipt");
+            .expect("durable stream commit failed before durability receipt")
+            .map_err(|fence| {
+                self.poison_refused(&fence);
+                StreamStoreError::Fenced(fence)
+            })
     }
 
     pub(super) async fn commit_notifying(
         &self,
         context: &StreamWriteContext,
         committed: oneshot::Sender<()>,
-    ) {
-        self.commit(context).await;
+    ) -> Result<(), StreamStoreError> {
+        self.commit(context).await?;
         let _ = committed.send(());
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::durable_host::durable_stream::tests::{TestOplog, identity};
+    use test_r::{test, timeout};
+
+    #[test]
+    #[timeout("30s")]
+    async fn publication_failure_joins_remaining_receipts_before_returning() {
+        let identity = identity();
+        let producer = DurableStreamStore::load(
+            Arc::new(TestOplog::default()),
+            identity.environment_id,
+            identity.agent_id,
+            identity.fingerprint,
+            None,
+        )
+        .await
+        .unwrap();
+        producer
+            .run_admitted(None, 0, true, move |owner, admission| async move {
+                let (failed, failure) = oneshot::channel();
+                let (completed, completion) = oneshot::channel();
+                admission
+                    .status_receipts
+                    .lock()
+                    .unwrap()
+                    .extend([failure, completion]);
+                let expected = StreamStoreError::Oplog("status publication failed".into());
+                failed.send(Err(expected.clone())).unwrap();
+                let waiting = admission.wait_published();
+                tokio::pin!(waiting);
+                assert!(futures::poll!(waiting.as_mut()).is_pending());
+                assert_eq!(
+                    owner.ensure_healthy(),
+                    Err(StreamStoreError::RecoveryRequired)
+                );
+                completed.send(Ok(())).unwrap();
+                assert_eq!(waiting.await, Err(expected));
+                Ok::<(), StreamStoreError>(())
+            })
+            .await
+            .unwrap();
     }
 }

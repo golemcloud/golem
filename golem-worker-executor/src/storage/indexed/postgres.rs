@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use super::{
-    IndexedStorage, IndexedStorageError, IndexedStorageMetaNamespace, IndexedStorageNamespace,
-    ScanCursor, ScanResume,
+    FencedTxError, IndexedStorage, IndexedStorageError, IndexedStorageMetaNamespace,
+    IndexedStorageNamespace, ScanResume,
 };
 use crate::services::golem_config::IndexedStoragePostgresConfig;
 use async_trait::async_trait;
@@ -22,6 +22,7 @@ use bytes::Bytes;
 use futures::FutureExt;
 use golem_common::SafeDisplay;
 use golem_common::metrics::db::record_db_serialized_size;
+use golem_common::model::ShardEpoch;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::{Pool, PoolApi};
 use golem_service_base::migration::{IncludedMigrationsDir, Migrations};
@@ -35,6 +36,10 @@ use tokio::sync::Semaphore;
 static DB_MIGRATIONS: include_dir::Dir = include_dir!("$CARGO_MANIFEST_DIR/db/migration/indexed");
 
 const DB_TYPE: &str = "postgres";
+const SCAN_INCLUSIVE_BOUNDED_QUERY: &str = "SELECT DISTINCT key FROM index_storage WHERE namespace = $1 AND key >= $2 AND key < $3 ORDER BY key LIMIT $4;";
+const SCAN_EXCLUSIVE_BOUNDED_QUERY: &str = "SELECT DISTINCT key FROM index_storage WHERE namespace = $1 AND key > $2 AND key < $3 ORDER BY key LIMIT $4;";
+const SCAN_INCLUSIVE_UNBOUNDED_QUERY: &str = "SELECT DISTINCT key FROM index_storage WHERE namespace = $1 AND key >= $2 ORDER BY key LIMIT $3;";
+const SCAN_EXCLUSIVE_UNBOUNDED_QUERY: &str = "SELECT DISTINCT key FROM index_storage WHERE namespace = $1 AND key > $2 ORDER BY key LIMIT $3;";
 
 #[derive(Debug, Clone)]
 pub struct PostgresIndexedStorage {
@@ -103,6 +108,13 @@ impl PostgresIndexedStorage {
                 let mode = super::agent_mode_prefix(agent_mode);
                 format!("{mode}-worker-oplog")
             }
+            IndexedStorageNamespace::StagedOpLog {
+                agent_id: _,
+                agent_mode,
+            } => {
+                let mode = super::agent_mode_prefix(agent_mode);
+                format!("{mode}-worker-staged-oplog")
+            }
             IndexedStorageNamespace::CompressedOpLog {
                 agent_id: _,
                 agent_mode,
@@ -135,6 +147,13 @@ impl PostgresIndexedStorage {
         })
     }
 
+    /// A stored epoch that will not fit a `u64` is corruption, not a fence. `to_i64` refuses to
+    /// write one, so a negative column value came from outside this code - and reading it back as
+    /// `u64` would wrap it into a near-ceiling epoch that fences every writer out of the key.
+    fn negative_epoch_message(value: i64, key: &str) -> String {
+        format!("Postgres indexed storage read a negative epoch {value} for key '{key}'")
+    }
+
     fn classify_repo_error(err: RepoError, primary_oplog_insert: bool) -> IndexedStorageError {
         if primary_oplog_insert && err.is_pool_timeout() {
             IndexedStorageError::Transient(err.to_string())
@@ -156,26 +175,17 @@ impl PostgresIndexedStorage {
         Self::classify_repo_error(err, false)
     }
 
+    /// The oplog-insert classifier as a plain `fn`, so it can be handed to
+    /// [`FencedTxError::into_indexed_storage_error`], which takes a function pointer.
+    fn classify_repo_error_oplog_insert(err: RepoError) -> IndexedStorageError {
+        Self::classify_repo_error(err, true)
+    }
+
     async fn acquire_permit(&self) -> Option<tokio::sync::OwnedSemaphorePermit> {
         match &self.semaphore {
             Some(sem) => Some(sem.clone().acquire_owned().await.expect("semaphore closed")),
             None => None,
         }
-    }
-
-    fn to_like_prefix(prefix: &str) -> String {
-        let mut result = String::with_capacity(prefix.len() + 1);
-        for ch in prefix.chars() {
-            match ch {
-                '%' | '_' | '\\' => {
-                    result.push('\\');
-                    result.push(ch);
-                }
-                _ => result.push(ch),
-            }
-        }
-        result.push('%');
-        result
     }
 }
 
@@ -207,10 +217,12 @@ impl IndexedStorage for PostgresIndexedStorage {
         key: &str,
     ) -> Result<bool, IndexedStorageError> {
         let _permit = self.acquire_permit().await;
+        let namespace = Self::namespace(namespace);
         let query = sqlx::query_as::<_, (bool,)>(
-            "SELECT EXISTS(SELECT 1 FROM index_storage WHERE namespace = $1 AND key = $2);",
+            "SELECT EXISTS(SELECT 1 FROM index_storage WHERE namespace IN ($1, $2) AND key = $3);",
         )
-        .bind(Self::namespace(namespace))
+        .bind(format!("{namespace}-present"))
+        .bind(namespace)
         .bind(key);
 
         self.pool
@@ -219,58 +231,6 @@ impl IndexedStorage for PostgresIndexedStorage {
             .await
             .map(|row| row.0)
             .map_err(Self::classify_repo_error_general)
-    }
-
-    async fn scan(
-        &self,
-        svc_name: &'static str,
-        api_name: &'static str,
-        namespace: IndexedStorageMetaNamespace,
-        prefix: Option<&str>,
-        cursor: ScanCursor,
-        count: u64,
-    ) -> Result<(ScanCursor, Vec<String>), IndexedStorageError> {
-        let _permit = self.acquire_permit().await;
-        let count_i64 = Self::to_i64(count, "count")?;
-        let cursor_i64 = Self::to_i64(cursor, "cursor")?;
-        let query = match prefix {
-            Some(prefix) => {
-                let key = Self::to_like_prefix(prefix);
-                sqlx::query_as(
-                    "SELECT DISTINCT key FROM index_storage WHERE namespace = $1 AND key LIKE $2 ESCAPE '\\' ORDER BY key LIMIT $3 OFFSET $4;",
-                )
-                .bind(Self::meta_namespace(namespace))
-                .bind(key)
-                .bind(count_i64)
-                .bind(cursor_i64)
-            }
-            None => sqlx::query_as(
-                "SELECT DISTINCT key FROM index_storage WHERE namespace = $1 ORDER BY key LIMIT $2 OFFSET $3;",
-            )
-            .bind(Self::meta_namespace(namespace))
-            .bind(count_i64)
-            .bind(cursor_i64),
-        };
-
-        let keys = self
-            .pool
-            .with_ro(svc_name, api_name)
-            .fetch_all_as::<(String,), _>(query)
-            .await
-            .map(|keys| keys.into_iter().map(|k| k.0).collect::<Vec<String>>())
-            .map_err(Self::classify_repo_error_general)?;
-
-        let new_cursor = if keys.len() < count as usize {
-            0
-        } else {
-            cursor.checked_add(count).ok_or_else(|| {
-                IndexedStorageError::Other(
-                    "Postgres indexed storage scan cursor overflow".to_string(),
-                )
-            })?
-        };
-
-        Ok((new_cursor, keys))
     }
 
     async fn scan_stable(
@@ -284,28 +244,27 @@ impl IndexedStorage for PostgresIndexedStorage {
     ) -> Result<(Option<ScanResume>, Vec<String>), IndexedStorageError> {
         let _permit = self.acquire_permit().await;
         let count_i64 = Self::to_i64(count, "count")?;
-        // Stored keys are never empty, so `key > ''` starts the first page at the first key.
-        let after = resume
-            .map(|resume| resume.into_marker("Postgres"))
-            .transpose()?
-            .unwrap_or_default();
-        let query = match prefix {
-            Some(prefix) => {
-                let like = Self::to_like_prefix(prefix);
-                sqlx::query_as(
-                    "SELECT DISTINCT key FROM index_storage WHERE namespace = $1 AND key > $2 AND key LIKE $3 ESCAPE '\\' ORDER BY key LIMIT $4;",
-                )
-                .bind(Self::meta_namespace(namespace))
-                .bind(after)
-                .bind(like)
-                .bind(count_i64)
-            }
-            None => sqlx::query_as(
-                "SELECT DISTINCT key FROM index_storage WHERE namespace = $1 AND key > $2 ORDER BY key LIMIT $3;",
-            )
-            .bind(Self::meta_namespace(namespace))
-            .bind(after)
-            .bind(count_i64),
+        let bounds = super::stable_scan_key_bounds(prefix, resume, "Postgres")?;
+        let namespace = Self::meta_namespace(namespace);
+        let query = match (bounds.inclusive, bounds.upper) {
+            (true, Some(upper)) => sqlx::query_as(SCAN_INCLUSIVE_BOUNDED_QUERY)
+                .bind(namespace)
+                .bind(bounds.lower)
+                .bind(upper)
+                .bind(count_i64),
+            (false, Some(upper)) => sqlx::query_as(SCAN_EXCLUSIVE_BOUNDED_QUERY)
+                .bind(namespace)
+                .bind(bounds.lower)
+                .bind(upper)
+                .bind(count_i64),
+            (true, None) => sqlx::query_as(SCAN_INCLUSIVE_UNBOUNDED_QUERY)
+                .bind(namespace)
+                .bind(bounds.lower)
+                .bind(count_i64),
+            (false, None) => sqlx::query_as(SCAN_EXCLUSIVE_UNBOUNDED_QUERY)
+                .bind(namespace)
+                .bind(bounds.lower)
+                .bind(count_i64),
         };
 
         let keys = self
@@ -319,6 +278,10 @@ impl IndexedStorage for PostgresIndexedStorage {
         Ok((super::last_key_resume(&keys, count), keys))
     }
 
+    /// Delegates to [`Self::append_many`] so a single entry and a batch share the id validation,
+    /// the permit and the epoch check. An entry that asserts an epoch is checked in the same
+    /// transaction as its insert, like a batch; one that asserts nothing is a single autocommit
+    /// `INSERT`. The permit is acquired there, not here.
     async fn append(
         &self,
         svc_name: &'static str,
@@ -328,25 +291,18 @@ impl IndexedStorage for PostgresIndexedStorage {
         key: &str,
         id: u64,
         value: Vec<u8>,
+        expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
-        let _permit = self.acquire_permit().await;
-        record_db_serialized_size(DB_TYPE, svc_name, entity_name, value.len());
-        let primary_oplog_insert = matches!(&namespace, IndexedStorageNamespace::OpLog { .. });
-        let id = Self::to_i64(id, "id")?;
-        let query = sqlx::query(
-            "INSERT INTO index_storage (namespace, key, id, value) VALUES ($1, $2, $3, $4);",
+        self.append_many(
+            svc_name,
+            api_name,
+            entity_name,
+            &namespace,
+            key,
+            vec![(id, Bytes::from(value))].into(),
+            expected_epoch,
         )
-        .bind(Self::namespace(namespace))
-        .bind(key)
-        .bind(id)
-        .bind(value);
-
-        self.pool
-            .with_rw(svc_name, api_name)
-            .execute(query)
-            .await
-            .map(|_| ())
-            .map_err(|err| Self::classify_repo_error(err, primary_oplog_insert))
+        .await
     }
 
     async fn append_many(
@@ -357,26 +313,16 @@ impl IndexedStorage for PostgresIndexedStorage {
         namespace: &IndexedStorageNamespace,
         key: &str,
         pairs: Arc<[(u64, Bytes)]>,
+        expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
         if pairs.is_empty() {
             return Ok(());
         }
-        if let [(id, value)] = pairs.as_ref() {
-            return self
-                .append(
-                    svc_name,
-                    api_name,
-                    entity_name,
-                    (*namespace).clone(),
-                    key,
-                    *id,
-                    value.to_vec(),
-                )
-                .await;
-        }
-
         let _permit = self.acquire_permit().await;
-        let primary_oplog_insert = matches!(namespace, IndexedStorageNamespace::OpLog { .. });
+        let primary_oplog_insert = matches!(
+            namespace,
+            IndexedStorageNamespace::OpLog { .. } | IndexedStorageNamespace::StagedOpLog { .. }
+        );
         let namespace = Self::namespace((*namespace).clone());
         let key = key.to_string();
         for (id, value) in pairs.iter() {
@@ -384,9 +330,52 @@ impl IndexedStorage for PostgresIndexedStorage {
             Self::to_i64(*id, "id")?;
         }
 
+        // With no epoch asserted there is nothing to check atomically with the insert, so a lone
+        // entry is one autocommit `INSERT` rather than a transaction held open around it. An
+        // entry that asserts an epoch takes the transaction below, as a batch does.
+        if let (None, [(id, value)]) = (expected_epoch, pairs.as_ref()) {
+            return self
+                .pool
+                .with_rw(svc_name, api_name)
+                .execute(
+                    sqlx::query(
+                        "INSERT INTO index_storage (namespace, key, id, value) VALUES ($1, $2, $3, $4);",
+                    )
+                    .bind(namespace)
+                    .bind(key)
+                    .bind(i64::try_from(*id).expect("validated oplog index"))
+                    .bind(value.as_ref()),
+                )
+                .await
+                .map(|_| ())
+                .map_err(|err| Self::classify_repo_error(err, primary_oplog_insert));
+        }
+
         self.pool
-            .with_tx(svc_name, api_name, |tx| {
+            .with_tx_err::<(), FencedTxError, _>(svc_name, api_name, |tx| {
                 async move {
+
+                    // Inside the insert transaction, and holding the row, so a writer that has
+                    // lost the shard cannot slip a batch in between the check and the insert.
+                    // `FOR UPDATE` is what serialises two executors racing over the same oplog.
+                    if let Some(expected) = expected_epoch {
+                        let stored: Option<(i64,)> = tx
+                            .fetch_optional_as(
+                                sqlx::query_as(
+                                    "SELECT epoch FROM indexed_key_epoch WHERE namespace = $1 AND key = $2 FOR UPDATE;",
+                                )
+                                .bind(namespace.clone())
+                                .bind(key.clone()),
+                            )
+                            .await?;
+                        FencedTxError::check_record(
+                            &key,
+                            expected,
+                            stored.map(|(epoch,)| epoch),
+                            Self::negative_epoch_message,
+                        )?;
+                    }
+
                     for chunk in pairs.chunks(Self::APPEND_MANY_CHUNK_SIZE) {
                         let mut query_builder = QueryBuilder::<Postgres>::new(
                             "INSERT INTO index_storage (namespace, key, id, value) ",
@@ -409,7 +398,201 @@ impl IndexedStorage for PostgresIndexedStorage {
                 .boxed()
             })
             .await
-            .map_err(|err| Self::classify_repo_error(err, primary_oplog_insert))
+            .map_err(|err| {
+                err.into_indexed_storage_error(if primary_oplog_insert {
+                    Self::classify_repo_error_oplog_insert
+                } else {
+                    Self::classify_repo_error_general
+                })
+            })
+    }
+
+    /// Postgres's half of [`IndexedStorage::set_key_epoch`], which states the rule this
+    /// enforces.
+    ///
+    /// The `WHERE` on the conflict path is where it lives: `epoch <= EXCLUDED.epoch`, a higher
+    /// generation or the one already recorded. With no record there is no conflict and any epoch is inserted. Postgres
+    /// reports one row affected for an insert and for an accepted update, and zero when the `WHERE`
+    /// excludes it - which is what the read-back below turns into a fence.
+    async fn set_key_epoch(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        new_epoch: ShardEpoch,
+    ) -> Result<(), IndexedStorageError> {
+        let _permit = self.acquire_permit().await;
+        let namespace = Self::namespace(namespace);
+        let epoch = Self::to_i64(new_epoch.0, "epoch")?;
+
+        let mut api = self.pool.with_rw(svc_name, api_name);
+        let result = api
+            .execute(
+                sqlx::query(
+                    r#"INSERT INTO indexed_key_epoch (namespace, key, epoch) VALUES ($1, $2, $3)
+                       ON CONFLICT (namespace, key) DO UPDATE SET epoch = EXCLUDED.epoch
+                       WHERE indexed_key_epoch.epoch <= EXCLUDED.epoch;"#,
+                )
+                .bind(namespace.clone())
+                .bind(key)
+                .bind(epoch),
+            )
+            .await
+            .map_err(Self::classify_repo_error_general)?;
+
+        if result.rows_affected() == 0 {
+            // Rejected. Read the stored epoch back purely so the error can name it.
+            let stored: Option<(i64,)> = api
+                .fetch_optional_as(
+                    sqlx::query_as(
+                        "SELECT epoch FROM indexed_key_epoch WHERE namespace = $1 AND key = $2;",
+                    )
+                    .bind(namespace)
+                    .bind(key),
+                )
+                .await
+                .map_err(Self::classify_repo_error_general)?;
+            let actual = stored
+                .map(|(epoch,)| {
+                    u64::try_from(epoch).map(ShardEpoch).map_err(|_| {
+                        IndexedStorageError::Other(Self::negative_epoch_message(epoch, key))
+                    })
+                })
+                .transpose()?;
+            return Err(IndexedStorageError::Fenced {
+                key: key.to_string(),
+                expected: new_epoch,
+                actual,
+            });
+        }
+
+        Ok(())
+    }
+
+    async fn delete_with_epoch(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        expected_epoch: Option<ShardEpoch>,
+    ) -> Result<(), IndexedStorageError> {
+        let _permit = self.acquire_permit().await;
+        let namespace = Self::namespace(namespace);
+        let key = key.to_string();
+        self.pool
+            .with_tx_err::<(), FencedTxError, _>(svc_name, api_name, |tx| {
+                async move {
+                    // Holding the row, as an append does: a writer taking the key over waits for
+                    // this transaction, and then finds nothing left to take over.
+                    if let Some(expected) = expected_epoch {
+                        let stored: Option<(i64,)> = tx
+                            .fetch_optional_as(
+                                sqlx::query_as(
+                                    "SELECT epoch FROM indexed_key_epoch WHERE namespace = $1 AND key = $2 FOR UPDATE;",
+                                )
+                                .bind(namespace.clone())
+                                .bind(key.clone()),
+                            )
+                            .await?;
+                        // Neither a record nor entries: the key is already gone, most often taken
+                        // by an earlier attempt of this same deletion whose later steps failed, and
+                        // a writer that lost the key has nothing here to destroy. Refusing would
+                        // leave that deletion unable to finish.
+                        if stored.is_none() {
+                            let (has_entries,): (bool,) = tx
+                                .fetch_one_as(
+                                    sqlx::query_as(
+                                        "SELECT EXISTS(SELECT 1 FROM index_storage WHERE namespace IN ($1, $2) AND key = $3);",
+                                    )
+                                    .bind(format!("{namespace}-present"))
+                                    .bind(namespace.clone())
+                                    .bind(key.clone()),
+                                )
+                                .await?;
+                            if !has_entries {
+                                return Ok(());
+                            }
+                        }
+                        FencedTxError::check_record(
+                            &key,
+                            expected,
+                            stored.map(|(epoch,)| epoch),
+                            Self::negative_epoch_message,
+                        )?;
+                    }
+                    tx.execute(
+                        sqlx::query(
+                            "DELETE FROM index_storage WHERE namespace IN ($1, $2) AND key = $3;",
+                        )
+                        .bind(format!("{namespace}-present"))
+                        .bind(namespace.clone())
+                        .bind(key.clone()),
+                    )
+                    .await?;
+                    tx.execute(
+                        sqlx::query(
+                            "DELETE FROM indexed_key_epoch WHERE namespace = $1 AND key = $2;",
+                        )
+                        .bind(namespace)
+                        .bind(key),
+                    )
+                    .await?;
+                    Ok(())
+                }
+                .boxed()
+            })
+            .await
+            .map_err(|err| err.into_indexed_storage_error(Self::classify_repo_error_general))
+    }
+
+    async fn move_if_absent(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        source_namespace: IndexedStorageNamespace,
+        source_key: &str,
+        target_namespace: IndexedStorageNamespace,
+        target_key: &str,
+        expected_last_id: u64,
+    ) -> Result<bool, IndexedStorageError> {
+        if expected_last_id == 0 {
+            return Err(IndexedStorageError::Other(
+                "source index expected tip must be greater than zero".to_string(),
+            ));
+        }
+        let expected = Self::to_i64(expected_last_id, "expected_last_id")?;
+        let source_namespace = Self::namespace(source_namespace);
+        let target_namespace = Self::namespace(target_namespace);
+        let source_key = source_key.to_string();
+        let target_key = target_key.to_string();
+        let _permit = self.acquire_permit().await;
+        let result = self.pool.with_tx(svc_name, api_name, |tx| async move {
+            let target_exists: (bool,) = tx.fetch_one_as(
+                sqlx::query_as("SELECT EXISTS(SELECT 1 FROM index_storage WHERE namespace IN ($1, $2) AND key = $3);")
+                    .bind(&target_namespace).bind(format!("{target_namespace}-present")).bind(&target_key)).await?;
+            if target_exists.0 { return Ok(false); }
+            let source: (i64, Option<i64>, Option<i64>) = tx.fetch_one_as(
+                sqlx::query_as("SELECT COUNT(*), MIN(id), MAX(id) FROM index_storage WHERE namespace = $1 AND key = $2;")
+                    .bind(&source_namespace).bind(&source_key)).await?;
+            if source != (expected, Some(1), Some(expected)) {
+                return Err(RepoError::InternalError(anyhow::anyhow!("source index is missing, empty, gapped, or has an unexpected tip")));
+            }
+            tx.execute(sqlx::query(
+                "INSERT INTO index_storage (namespace, key, id, value) VALUES ($1, $2, 0, ''::bytea);")
+                .bind(format!("{target_namespace}-present")).bind(&target_key)).await?;
+            tx.execute(sqlx::query(
+                "UPDATE index_storage SET namespace = $1, key = $2 WHERE namespace = $3 AND key = $4;")
+                .bind(&target_namespace).bind(&target_key).bind(&source_namespace).bind(&source_key)).await?;
+            tx.execute(sqlx::query("DELETE FROM index_storage WHERE namespace = $1 AND key = $2;")
+                .bind(format!("{source_namespace}-present")).bind(&source_key)).await?;
+            Ok(true)
+        }.boxed()).await;
+        match result {
+            Err(err) if err.is_unique_violation() => Ok(false),
+            result => result.map_err(|err| Self::classify_repo_error(err, true)),
+        }
     }
 
     async fn length(
@@ -442,9 +625,12 @@ impl IndexedStorage for PostgresIndexedStorage {
         key: &str,
     ) -> Result<(), IndexedStorageError> {
         let _permit = self.acquire_permit().await;
-        let query = sqlx::query("DELETE FROM index_storage WHERE namespace = $1 AND key = $2;")
-            .bind(Self::namespace(namespace))
-            .bind(key);
+        let namespace = Self::namespace(namespace);
+        let query =
+            sqlx::query("DELETE FROM index_storage WHERE namespace IN ($1, $2) AND key = $3;")
+                .bind(format!("{namespace}-present"))
+                .bind(namespace)
+                .bind(key);
 
         self.pool
             .with_rw(svc_name, api_name)
@@ -598,6 +784,9 @@ impl IndexedStorage for PostgresIndexedStorage {
         self.pool
             .with_tx(svc_name, api_name, |tx| {
                 async move {
+                    tx.execute(sqlx::query(
+                        "INSERT INTO index_storage (namespace, key, id, value) SELECT $1, $2, 0, ''::bytea WHERE EXISTS (SELECT 1 FROM index_storage WHERE namespace = $3 AND key = $2) ON CONFLICT DO NOTHING;")
+                        .bind(format!("{namespace}-present")).bind(&key).bind(&namespace)).await?;
                     let mut deleted_rows = delete_batch_size;
 
                     while deleted_rows >= delete_batch_size {

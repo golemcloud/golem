@@ -309,7 +309,7 @@ object GolemServer {
                      file
                    }
         process <- ZIO.acquireRelease(
-                     Cmd("golem", "-vvv", "server", "run", "--clean", "--disable-app-manifest-discovery")
+                     Cmd("golem", "--yes", "-vvv", "server", "run", "--clean", "--disable-app-manifest-discovery")
                        .workingDirectory(examplesDir)
                        .env(buildEnv)
                        .redirectErrorStream(true)
@@ -624,6 +624,11 @@ object GolemExamplesIntegrationSpec extends ZIOSpec[GolemServer] {
       "samples/principal/principal.ts",
       Contains("was created by:")
     ),
+    Sample(
+      "reflection-canonical-json",
+      "samples/reflection/repl-reflection-canonical.ts",
+      Contains("scala-canonical-ok", "omitted", "supplied")
+    ),
 
     // --- Database (requires external DB) ---
     Sample(
@@ -830,7 +835,7 @@ object GolemExamplesIntegrationSpec extends ZIOSpec[GolemServer] {
     test("http-weather-root") {
       for {
         _              <- ZIO.service[GolemServer]
-        (status, body) <- httpGet("/api/weather/test-key/")
+        (status, body) <- httpGet("/api/weather/test-key")
       } yield assertTrue(status == 200) && assertTrue(body.contains("Welcome to the Weather API"))
     },
 

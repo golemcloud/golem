@@ -12,28 +12,165 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::base_model::OplogIndex;
+use crate::base_model::account::AccountId;
+use crate::base_model::agent::{AgentMode, OwnerKind};
+use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
+use crate::base_model::{AgentId, OplogIndex};
 use crate::model::Timestamp;
 use crate::model::component::ComponentRevision;
 use crate::model::environment::EnvironmentId;
-use crate::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId};
+use crate::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId, TraceId};
 use crate::model::oplog::OplogPayload;
 use crate::model::quota::ResourceName;
+use crate::model::worker::UntypedAgentConfigEntry;
 use desert_rust::{
     BinaryCodec, BinaryDeserializer, BinaryOutput, BinarySerializer, DeserializationContext,
     SerializationContext,
 };
 use nonempty_collections::NEVec;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use uuid::Uuid;
 
+#[derive(Clone, Debug, PartialEq, BinaryCodec)]
+#[desert(evolution())]
+pub struct CreateParameters {
+    pub agent_id: AgentId,
+    pub owner_kind: OwnerKind,
+    pub agent_mode: AgentMode,
+    pub component_revision: ComponentRevision,
+    pub env: Vec<(String, String)>,
+    pub environment_id: EnvironmentId,
+    pub created_by: AccountId,
+    pub parent: Option<AgentId>,
+    pub component_size: u64,
+    pub initial_total_linear_memory_size: u64,
+    pub initial_active_plugins: HashSet<EnvironmentPluginGrantId>,
+    pub local_agent_config: Vec<UntypedAgentConfigEntry>,
+    pub original_phantom_id: Option<Uuid>,
+    pub instance_id: Uuid,
+}
+
 /// A map of attributes, serialized as WIT `list<attribute>` where attribute is a record `{ key: string, value: attribute-value }`
 #[derive(Debug, Clone, PartialEq, BinaryCodec)]
 #[desert(transparent)]
 pub struct AttributeMap(pub HashMap<String, AttributeValue>);
+
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
+pub enum DurableStreamEventSummary {
+    Registered,
+    Items { item_count: u64 },
+    End { outcome: DurableStreamOutcome },
+    Cancelled,
+    SessionResult,
+    SessionFinished { outcome: DurableStreamOutcome },
+    SessionCancellation,
+    SessionExpired,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
+pub enum DurableStreamOutcome {
+    Success,
+    Error,
+}
+
+impl DurableStreamEventSummary {
+    pub fn items(record: &crate::model::durable_stream::StreamItemsRecord) -> Self {
+        Self::Items {
+            item_count: record.payload.logical_item_count() as u64,
+        }
+    }
+
+    pub fn end(record: &crate::model::durable_stream::StreamEndRecord) -> Self {
+        Self::End {
+            outcome: if matches!(
+                record.result,
+                crate::model::durable_stream::StreamEndResult::Ok
+            ) {
+                DurableStreamOutcome::Success
+            } else {
+                DurableStreamOutcome::Error
+            },
+        }
+    }
+
+    pub fn session(record: &crate::model::durable_stream::StreamSessionRecord) -> Option<Self> {
+        use crate::model::durable_stream::StreamSessionRecord;
+        match record {
+            StreamSessionRecord::InvocationResult(_) => Some(Self::SessionResult),
+            StreamSessionRecord::Finished(record) => Some(Self::SessionFinished {
+                outcome: if record.result.is_ok() {
+                    DurableStreamOutcome::Success
+                } else {
+                    DurableStreamOutcome::Error
+                },
+            }),
+            StreamSessionRecord::CancelRequested(_)
+            | StreamSessionRecord::ConsumerCancelIntent(_)
+            | StreamSessionRecord::ConsumerCancelApplied(_) => Some(Self::SessionCancellation),
+            StreamSessionRecord::Expired(_) => Some(Self::SessionExpired),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
+pub enum SpanKind {
+    Internal,
+    Client,
+    Server,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
+pub enum SpanOutcome {
+    Completed,
+    Failed,
+    Cancelled,
+    Abandoned,
+    Denied,
+}
+
+#[derive(Clone, Debug, PartialEq, BinaryCodec)]
+#[desert(evolution())]
+pub struct SpanLink {
+    pub trace_id: TraceId,
+    pub span_id: SpanId,
+    pub trace_states: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, BinaryCodec)]
+#[desert(evolution())]
+pub struct SpanStarted {
+    pub span_id: SpanId,
+    pub trace_id: TraceId,
+    pub trace_states: Vec<String>,
+    pub parent_span_id: Option<SpanId>,
+    pub links: Vec<SpanLink>,
+    pub started_at: Timestamp,
+    pub attributes: AttributeMap,
+    pub kind: SpanKind,
+}
+
+#[derive(Clone, Debug, PartialEq, BinaryCodec)]
+#[desert(evolution())]
+pub struct SpanFinished {
+    pub span_id: SpanId,
+    pub finished_at: Timestamp,
+    pub outcome: SpanOutcome,
+}
+
+#[derive(Clone, Debug, PartialEq, BinaryCodec)]
+#[desert(evolution())]
+pub struct SpanAttributes {
+    pub span_id: SpanId,
+    pub attributes: AttributeMap,
+}
 
 impl std::ops::Deref for AttributeMap {
     type Target = HashMap<String, AttributeValue>;

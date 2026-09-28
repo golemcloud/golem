@@ -18,8 +18,8 @@ use crate::base_model::agent::{AgentConfigSource, AgentTypeName, Snapshotting};
 use crate::model::Empty as ModelEmpty;
 use crate::schema::agent::{
     AgentConfigDeclarationSchema, AgentConstructorSchema, AgentDependencySchema, AgentMethodSchema,
-    AgentTypeSchema, AutoInjectedKind, FieldSource, InputSchema, NamedField, OutputSchema,
-    RegisteredAgentTypeSchema,
+    AgentTypeKind, AgentTypeSchema, AutoInjectedKind, ComponentConfigSchema, FieldSource,
+    InputSchema, NamedField, OutputSchema, RegisteredAgentTypeSchema,
 };
 use crate::schema::graph::SchemaGraph;
 use crate::schema::metadata::MetadataEnvelope;
@@ -283,6 +283,10 @@ impl From<AgentTypeSchema> for proto::AgentTypeSchema {
     fn from(value: AgentTypeSchema) -> Self {
         Self {
             type_name: value.type_name.0,
+            kind: match value.kind {
+                AgentTypeKind::Regular => proto::AgentTypeKind::Regular as i32,
+                AgentTypeKind::HttpRouter => proto::AgentTypeKind::HttpRouter as i32,
+            },
             description: value.description,
             source_language: value.source_language,
             schema: Some(value.schema.into()),
@@ -302,8 +306,14 @@ impl TryFrom<proto::AgentTypeSchema> for AgentTypeSchema {
 
     fn try_from(value: proto::AgentTypeSchema) -> Result<Self, Self::Error> {
         let mode = value.mode().into();
+        let kind = match proto::AgentTypeKind::try_from(value.kind) {
+            Ok(proto::AgentTypeKind::Regular) => AgentTypeKind::Regular,
+            Ok(proto::AgentTypeKind::HttpRouter) => AgentTypeKind::HttpRouter,
+            _ => return Err("Missing or unknown AgentTypeSchema.kind".to_string()),
+        };
         Ok(Self {
             type_name: AgentTypeName(value.type_name),
+            kind,
             description: value.description,
             source_language: value.source_language,
             schema: value
@@ -366,6 +376,34 @@ impl TryFrom<proto::AgentConfigDeclarationSchema> for AgentConfigDeclarationSche
                     "Missing field: AgentConfigDeclarationSchema.value_type".to_string()
                 })?
                 .try_into()?,
+        })
+    }
+}
+
+impl From<ComponentConfigSchema> for proto::ComponentConfigSchema {
+    fn from(value: ComponentConfigSchema) -> Self {
+        Self {
+            schema: Some(value.schema.into()),
+            declarations: value.declarations.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl TryFrom<proto::ComponentConfigSchema> for ComponentConfigSchema {
+    type Error = String;
+
+    fn try_from(value: proto::ComponentConfigSchema) -> Result<Self, Self::Error> {
+        Ok(Self {
+            schema: value
+                .schema
+                .map(TryInto::try_into)
+                .transpose()?
+                .unwrap_or_else(SchemaGraph::empty),
+            declarations: value
+                .declarations
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<Result<_, _>>()?,
         })
     }
 }

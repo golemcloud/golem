@@ -249,6 +249,17 @@ test "a public method named new gets an explicit reserved-name diagnostic" {
 }
 
 ///|
+test "a public method named new_for gets an explicit reserved-name diagnostic" {
+  let source =
+    #|#derive.tool
+    #|struct Project {}
+    #|pub fn Project::new_for(name : String) -> String { name }
+  let message = parse_error(source)
+  assert_true(message.contains("Project::new_for"))
+  assert_true(message.contains("reserved"))
+}
+
+///|
 test "custom error exit codes must fit the declared Byte field" {
   let source =
     #|#derive.tool

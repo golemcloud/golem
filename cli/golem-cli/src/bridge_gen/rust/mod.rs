@@ -443,17 +443,22 @@ impl RustBridgeGenerator {
                     let __config_graph: crate::__golem_bridge_runtime::schema::SchemaGraph =
                         serde_json::from_str(#config_graph_json)
                             .map_err(|__e| crate::__golem_bridge_runtime::ClientError::InvocationFailed { message: format!("Failed to load config schema: {__e}") })?;
+                    let __public_config_json = golem_client::invocation_session::encode_generated_streamless_value(
+                        &__config_graph,
+                        &__config_value,
+                    ).map_err(|__e| crate::__golem_bridge_runtime::ClientError::InvocationFailed { message: format!("Failed to encode public config value: {__e}") })?;
+                    let __canonical_config_json = golem_common::schema::render::to_json_value(
+                        &__config_graph,
+                        &__config_graph.root,
+                        &__config_value,
+                    ).map_err(|__e| crate::__golem_bridge_runtime::ClientError::InvocationFailed { message: format!("Failed to encode canonical config value: {__e}") })?;
                     session_config.push(golem_common::model::invocation_session_public::PublicConfigEntry {
                         path: vec![#(#path_segments),*],
-                        value: golem_client::invocation_session::encode_generated_streamless_value(
-                            &__config_graph,
-                            &__config_value,
-                        ).map_err(|__e| crate::__golem_bridge_runtime::ClientError::InvocationFailed { message: format!("Failed to encode public config value: {__e}") })?,
+                        value: __public_config_json,
                     });
-                    let __config_json = serde_json::to_value(&__config_value).map_err(|__e| crate::__golem_bridge_runtime::ClientError::InvocationFailed { message: format!("Failed to serialize config value: {__e}") })?;
                     agent_config.push(golem_client::model::AgentConfigEntryDto {
                         path: vec![#(#path_segments),*],
-                        value: __config_json.into(),
+                        value: __canonical_config_json.into(),
                     });
                 }
             });
@@ -2709,10 +2714,9 @@ impl RustBridgeGenerator {
         } else {
             self.emit_encode_structural_mode(val, typ, box_recursive, depth, streaming)?
         };
-        // Pin the error type to `String` so callers can apply `?` to the
-        // expression regardless of context (a bare `Ok(..)` leaf would
-        // otherwise leave the error type unconstrained).
-        Ok(quote! { { let __r: Result<_, String> = { #inner }; __r } })
+        // Keep nested `?` inside the encoder's String error boundary; a bare
+        // `Ok(..)` leaf would otherwise leave the error type unconstrained.
+        Ok(quote! { { let __r: Result<_, String> = (|| { #inner })(); __r } })
     }
 
     /// `Result<RustType, String>` expression decoding `val` (a `SchemaValue`)
@@ -4146,6 +4150,7 @@ mod tests {
 
     fn minimal_agent_type(type_name: &str) -> AgentTypeSchema {
         AgentTypeSchema {
+            kind: golem_common::schema::agent::AgentTypeKind::Regular,
             type_name: AgentTypeName(type_name.to_string()),
             description: String::new(),
             source_language: String::new(),

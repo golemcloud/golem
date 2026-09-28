@@ -21,6 +21,84 @@ fn unused_commit() -> DurableStreamCommit {
 }
 
 #[test]
+#[test_r::timeout("10s")]
+async fn first_load_and_retirement_wake_parked_recovery() {
+    let slot = Arc::new(DurableStreamProducerSlot::default());
+    let mut changed = Box::pin(slot.changed().notified());
+    changed.as_mut().enable();
+    assert!(!slot.has_history());
+    let (release, released) = tokio::sync::oneshot::channel();
+    let loading = tokio::spawn({
+        let slot = slot.clone();
+        async move {
+            slot.get_or_load(unused_commit(), || async move {
+                released.await.unwrap();
+                load().await
+            })
+            .await
+        }
+    });
+    changed.await;
+    assert!(slot.has_history());
+    assert!(!loading.is_finished());
+    release.send(()).unwrap();
+    loading.await.unwrap().unwrap();
+
+    let mut changed = Box::pin(slot.changed().notified());
+    changed.as_mut().enable();
+    assert!(slot.try_retire_quiescent());
+    changed.await;
+    assert!(slot.is_retired());
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn nested_lookup_does_not_wait_for_its_own_activity_to_drain() {
+    for external_reload in [false, true] {
+        let slot = Arc::new(DurableStreamProducerSlot::default());
+        let producer = slot.get_or_load(unused_commit(), load).await.unwrap();
+        let mut reload = None;
+        let result = producer
+            .with_metadata_activity(async {
+                let nested = slot.get_or_load(unused_commit(), load).await.unwrap();
+                assert!(Arc::ptr_eq(&nested, &producer));
+                producer.poison();
+                if external_reload {
+                    let other = slot.clone();
+                    let (started, ready) = tokio::sync::oneshot::channel();
+                    reload = Some(tokio::spawn(async move {
+                        let mut loading =
+                            Box::pin(other.get_or_load(Arc::new(|_| Box::pin(async {})), load));
+                        assert!(futures::poll!(loading.as_mut()).is_pending());
+                        started.send(()).unwrap();
+                        loading.await
+                    }));
+                    ready.await.unwrap();
+                }
+                let nested = tokio::time::timeout(
+                    std::time::Duration::from_secs(1),
+                    slot.get_or_load(unused_commit(), load),
+                )
+                .await
+                .expect("nested lookup waited for its own producer activity");
+                assert!(matches!(nested, Err(StreamStoreError::RecoveryRequired)));
+            })
+            .await;
+        assert!(matches!(result, Err(StreamStoreError::RecoveryRequired)));
+        if let Some(reload) = reload {
+            let replacement = reload.await.unwrap().unwrap();
+            assert!(!Arc::ptr_eq(&replacement, &producer));
+        } else {
+            let replacement = slot
+                .get_or_load(Arc::new(|_| Box::pin(async {})), load)
+                .await
+                .unwrap();
+            assert!(!Arc::ptr_eq(&replacement, &producer));
+        }
+    }
+}
+
+#[test]
 async fn ephemeral_archive_waits_for_every_response_reader() {
     let slot = Arc::new(DurableStreamProducerSlot::default());
     let producer = slot.get_or_load(unused_commit(), load).await.unwrap();
@@ -138,12 +216,13 @@ async fn shutdown_fences_empty_and_idle_slots_without_flushing_buffered_entries(
                 timestamp: golem_common::model::Timestamp::now_utc(),
                 entity_parent_start_index: None,
             })
-            .await;
+            .await
+            .unwrap();
         let shutdown = slot.shutdown();
         assert!(slot.is_retired());
         shutdown.await.unwrap();
         slot.retire(unused_commit()).await.unwrap();
-        assert_eq!(oplog.commit(CommitLevel::Always).await.len(), 1);
+        assert_eq!(oplog.commit(CommitLevel::Always).await.unwrap().len(), 1);
     }
 }
 
@@ -179,8 +258,8 @@ async fn shutdown_waits_for_admitted_commit_tail_after_cancelled_waiter() {
             let reached = reached.clone();
             let release = release.clone();
             Box::pin(async move {
-                oplog.commit(CommitLevel::Always).await;
-                receipt.unwrap().send(()).unwrap();
+                oplog.commit(CommitLevel::Always).await.unwrap();
+                receipt.unwrap().send(Ok(())).unwrap();
                 reached.notify_one();
                 release.acquire().await.unwrap().forget();
             })

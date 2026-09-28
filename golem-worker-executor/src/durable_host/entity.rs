@@ -18,11 +18,14 @@
 //! an entity record here, launch the returned invocation scope through `ActiveAgent`, then hand the
 //! body handle back to [`EntityInvocationDurability::drive_access`].
 
-use crate::durable_host::DurableWorkerCtx;
 use crate::durable_host::concurrent::{
     AccessClaimOptions, DurableCallSession, HistoricalReconstruction, LeaveIncompleteOnDrop,
     ReconstructionReplayOutcome, ReplayAccessStartOutcome,
 };
+use crate::durable_host::durable_session::strip_typed_streams;
+use crate::durable_host::replay_state::ReplayState;
+use crate::durable_host::{DurableWorkerCtx, commit_replay_jumps};
+use crate::services::HasWorker;
 use crate::services::oplog::OplogOps;
 use crate::worker::entity_invocation::{EntityInvocationHandle, EntityInvocationResources};
 use crate::worker::owner_lane::OwnerInvocationId;
@@ -30,20 +33,25 @@ use crate::workerctx::WorkerCtx;
 use futures::FutureExt;
 use golem_common::model::agent::Principal;
 use golem_common::model::entity::{
-    AgentEntity, EntityActivation, EntityCallMode, EntityInvocationDescriptor, EntityInvocationId,
-    EntityInvocationRequest, EntityInvocationRequestIdentity, EntityInvocationScope,
-    InvocationExecutionMode, OwnedAgentEntityId, ToolInvocationClaimIdentity,
+    AgentEntity, EntityCallMode, EntityInvocationDescriptor, EntityInvocationId,
+    EntityInvocationPlan, EntityInvocationPlanReference, EntityInvocationRequest,
+    EntityInvocationRequestIdentity, EntityInvocationScope, InvocationExecutionMode,
+    OwnedAgentEntityId, ToolInvocationClaimIdentity,
 };
+use golem_common::model::invocation_context::{AttributeValue, SpanId};
 use golem_common::model::oplog::host_functions::{GolemEntityInvoke, GolemToolInvocationRejected};
 use golem_common::model::oplog::payload::types::{
     SerializableEntityBodyExecution, SerializableToolOperationTerminal, SerializableToolRpcError,
 };
 use golem_common::model::oplog::{
-    DurableFunctionType, HostPayloadPair, HostRequest, HostRequestEntityInvocation,
+    AttributeMap, DurableFunctionType, HostPayloadPair, HostRequest, HostRequestEntityInvocation,
     HostRequestGolemToolInvocationRejected, HostResponseEntityInvocation, OplogEntry, OplogIndex,
+    SpanFinished, SpanKind, SpanOutcome, SpanStarted,
 };
 use golem_common::schema::{IntoTypedSchemaValue, TypedSchemaValue};
+use golem_schema::FromSchema;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use std::collections::HashMap;
 use std::future::Future;
 use std::sync::{Arc, Mutex};
 use tokio::sync::oneshot;
@@ -115,22 +123,186 @@ pub struct EntityInvocationDurability {
     principal: Principal,
     parent: OwnerInvocationId,
     call_mode: EntityCallMode,
-    operation: Option<EntityInvocationDescriptor>,
+    operation: EntityInvocationDescriptor,
     input: TypedSchemaValue,
+    resolved_position: ResolvedEntityInvocationPosition,
     historical_reconstruction: Option<HistoricalReconstruction>,
 }
 
+/// Caller identity captured in guest admission order, before asynchronous dispatch or replay claims.
+#[derive(Clone)]
+pub(crate) struct EntityInvocationKeyContext {
+    caller_key: golem_common::model::IdempotencyKey,
+    logical_position: Option<OplogIndex>,
+    assume_idempotence: bool,
+    stream_session_idempotency_key: golem_common::model::IdempotencyKey,
+}
+
+impl EntityInvocationKeyContext {
+    pub(crate) fn capture<Ctx: WorkerCtx>(
+        ctx: &mut DurableWorkerCtx<Ctx>,
+        attempt_ordinal: u64,
+    ) -> Result<Self, WorkerExecutorError> {
+        let caller_key = ctx.state.get_current_idempotency_key().ok_or_else(|| {
+            WorkerExecutorError::runtime("entity invocation requires an active caller key")
+        })?;
+        let logical_position = ctx
+            .state
+            .current_atomic_region_idempotency_key_oplog_index()
+            .map(|_| {
+                ctx.state
+                    .current_idempotency_key_oplog_index(OplogIndex::NONE)
+            });
+        let stream_parent_key = ctx
+            .entity_invocation_scope()
+            .map(|scope| scope.stream_session_idempotency_key().clone())
+            .unwrap_or_else(|| caller_key.clone());
+        let stream_session_idempotency_key =
+            derive_entity_stream_session_key(&stream_parent_key, logical_position, attempt_ordinal);
+        Ok(Self {
+            caller_key,
+            logical_position,
+            assume_idempotence: ctx.state.assume_idempotence,
+            stream_session_idempotency_key,
+        })
+    }
+}
+
+fn derive_entity_stream_session_key(
+    parent: &golem_common::model::IdempotencyKey,
+    logical_position: Option<OplogIndex>,
+    attempt_ordinal: u64,
+) -> golem_common::model::IdempotencyKey {
+    let mut stream_name = b"golem:entity-stream-session:v1\0".to_vec();
+    match logical_position {
+        Some(position) => {
+            stream_name.extend_from_slice(b"logical\0");
+            stream_name.extend_from_slice(&position.as_u64().to_be_bytes());
+        }
+        None => {
+            stream_name.extend_from_slice(b"attempt-ordinal\0");
+            stream_name.extend_from_slice(&attempt_ordinal.to_be_bytes());
+        }
+    }
+    golem_common::model::IdempotencyKey::derived_from_bytes(parent, &stream_name)
+}
+
+fn entity_span_started(
+    trace_id: golem_common::model::invocation_context::TraceId,
+    trace_states: Vec<String>,
+    parent_span_id: SpanId,
+    entity: &AgentEntity,
+    operation: &EntityInvocationDescriptor,
+) -> SpanStarted {
+    let command_path = match operation {
+        EntityInvocationDescriptor::Tool(tool) => tool.command_path.join("/"),
+    };
+    SpanStarted {
+        span_id: SpanId::generate(),
+        trace_id,
+        trace_states,
+        parent_span_id: Some(parent_span_id),
+        links: Vec::new(),
+        started_at: golem_common::model::Timestamp::now_utc(),
+        attributes: AttributeMap(HashMap::from([
+            (
+                "name".to_string(),
+                AttributeValue::String("entity-invocation".to_string()),
+            ),
+            (
+                "entity.kind".to_string(),
+                AttributeValue::String(entity.kind_label().to_string()),
+            ),
+            (
+                "entity.name".to_string(),
+                AttributeValue::String(entity.name().to_string()),
+            ),
+            (
+                "operation.command_path".to_string(),
+                AttributeValue::String(command_path),
+            ),
+        ])),
+        kind: SpanKind::Internal,
+    }
+}
+
+fn tool_terminal_outcome(
+    response: &HostResponseEntityInvocation,
+) -> Result<SpanOutcome, WorkerExecutorError> {
+    let value = response.result.as_ref().map_err(|error| {
+        WorkerExecutorError::runtime(format!("entity invocation terminal failed: {error}"))
+    })?;
+    let terminal =
+        SerializableToolOperationTerminal::from_value(value.value()).map_err(|error| {
+            WorkerExecutorError::runtime(format!("invalid durable tool terminal: {error}"))
+        })?;
+    Ok(match terminal.result {
+        Ok(_) => SpanOutcome::Completed,
+        Err(SerializableToolRpcError::Denied(_)) => SpanOutcome::Denied,
+        Err(SerializableToolRpcError::Cancelled) => SpanOutcome::Cancelled,
+        Err(_) => SpanOutcome::Failed,
+    })
+}
+
+fn entity_span_finished(
+    span_id: &SpanId,
+    response: &HostResponseEntityInvocation,
+) -> Result<SpanFinished, WorkerExecutorError> {
+    Ok(SpanFinished {
+        span_id: span_id.clone(),
+        finished_at: golem_common::model::Timestamp::now_utc(),
+        outcome: tool_terminal_outcome(response)?,
+    })
+}
+
+#[derive(Clone)]
+pub struct ResolvedEntityInvocationPosition {
+    plan: Arc<EntityInvocationPlan>,
+    root_start_index: OplogIndex,
+    position: u32,
+}
+
+impl ResolvedEntityInvocationPosition {
+    pub fn plan(&self) -> &Arc<EntityInvocationPlan> {
+        &self.plan
+    }
+
+    pub fn root_start_index(&self) -> OplogIndex {
+        self.root_start_index
+    }
+
+    pub fn position(&self) -> u32 {
+        self.position
+    }
+
+    pub fn layer(&self) -> &golem_common::model::entity::EntityInvocationPlanLayer {
+        self.plan
+            .layer(self.position)
+            .expect("validated plan position")
+    }
+
+    pub fn next_reference(&self) -> Option<EntityInvocationPlanReference> {
+        ((self.position as usize + 1) < self.plan.len()).then(|| {
+            EntityInvocationPlanReference::Descendant {
+                root_start_index: self.root_start_index,
+                position: self.position + 1,
+            }
+        })
+    }
+}
+
 impl EntityInvocationDurability {
-    pub async fn start_live_access<T, D, Ctx>(
+    pub(crate) async fn start_live_access<T, D, Ctx>(
         store: &Accessor<T, D>,
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
         parent: OwnerInvocationId,
+        key_context: &EntityInvocationKeyContext,
         entity: AgentEntity,
-        activation: Arc<EntityActivation>,
         calling_principal: Principal,
         principal: Principal,
         call_mode: EntityCallMode,
-        operation: Option<EntityInvocationDescriptor>,
+        operation: EntityInvocationDescriptor,
+        plan: EntityInvocationPlanReference,
         input: TypedSchemaValue,
     ) -> Result<Self, WorkerExecutorError>
     where
@@ -146,11 +318,12 @@ impl EntityInvocationDurability {
         let parent_start_index = parent.start_index();
         let metadata = EntityInvocationRequest {
             entity: entity.clone(),
-            activation: activation.as_ref().clone(),
             calling_principal: calling_principal.clone(),
             call_mode,
             operation,
-            principal: Some(principal),
+            principal,
+            plan,
+            assume_idempotence: key_context.assume_idempotence,
         };
         let encoded_metadata = desert_rust::serialize_to_byte_vec(&metadata).map_err(|error| {
             WorkerExecutorError::runtime(format!(
@@ -159,11 +332,26 @@ impl EntityInvocationDurability {
         })?;
         let request = HostRequestEntityInvocation {
             metadata: encoded_metadata,
-            input,
+            input: strip_typed_streams(&input),
+            stream_session_idempotency_key: key_context.stream_session_idempotency_key.clone(),
         };
         let started_input = request.input.clone();
-        let handle =
-            DurableCallSession::<GolemEntityInvoke, LeaveIncompleteOnDrop>::start_access_with_options(
+        let (trace_id, trace_states, parent_span_id) = store.with(|mut access| {
+            let ctx = get_ctx(access.data_mut());
+            (
+                ctx.state.invocation_context.trace_id.clone(),
+                ctx.state.invocation_context.trace_states.clone(),
+                ctx.state.current_span_id.clone(),
+            )
+        });
+        let span_started = entity_span_started(
+            trace_id,
+            trace_states,
+            parent_span_id,
+            &entity,
+            &metadata.operation,
+        );
+        let handle = DurableCallSession::<GolemEntityInvoke, LeaveIncompleteOnDrop>::start_access_with_options_and_span(
                 store,
                 get_ctx,
                 DurableFunctionType::WriteLocal,
@@ -176,9 +364,21 @@ impl EntityInvocationDurability {
                     ..AccessClaimOptions::default()
                 },
                 async move |_| Ok(request),
+                span_started.clone(),
             )
             .await?;
-        Self::from_started_request(store, get_ctx, parent, handle, metadata, started_input).await
+        Self::from_started_request(
+            store,
+            get_ctx,
+            parent,
+            key_context,
+            key_context.stream_session_idempotency_key.clone(),
+            handle,
+            metadata,
+            started_input,
+            Some(span_started),
+        )
+        .await
     }
 
     pub async fn replay_access<T, D, Ctx>(
@@ -192,6 +392,9 @@ impl EntityInvocationDurability {
         D: HasData + ?Sized,
         Ctx: WorkerCtx,
     {
+        let key_context = store.with(|mut access| {
+            EntityInvocationKeyContext::capture(get_ctx(access.data_mut()), 0)
+        })?;
         let parent_start_index = parent.start_index();
         let handle = match DurableCallSession::<GolemEntityInvoke, LeaveIncompleteOnDrop>::claim_replay_access_with_options(
                 store,
@@ -223,15 +426,26 @@ impl EntityInvocationDurability {
                     "failed to decode recorded entity invocation metadata: {error}"
                 ))
             })?;
-        Self::from_started_request(store, get_ctx, parent, handle, metadata, request.input)
-            .await
-            .map(Some)
+        Self::from_started_request(
+            store,
+            get_ctx,
+            parent,
+            &key_context,
+            request.stream_session_idempotency_key,
+            handle,
+            metadata,
+            request.input,
+            None,
+        )
+        .await
+        .map(Some)
     }
 
-    pub async fn replay_tool_access<T, D, Ctx>(
+    pub(crate) async fn replay_tool_access<T, D, Ctx>(
         store: &Accessor<T, D>,
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
         parent: OwnerInvocationId,
+        key_context: &EntityInvocationKeyContext,
         identity: ToolInvocationClaimIdentity,
     ) -> Result<ToolInvocationReplayOutcome, WorkerExecutorError>
     where
@@ -279,14 +493,23 @@ impl EntityInvocationDurability {
                         store,
                         get_ctx,
                         parent,
+                        key_context,
+                        request.stream_session_idempotency_key,
                         handle,
                         metadata,
                         request.input,
+                        None,
                     )
                     .await?,
                 )))
             }
             HostRequest::GolemToolInvocationRejected(request) => {
+                let span_started = handle
+                    .recorded_span_started_access(store, get_ctx)
+                    .await?
+                    .ok_or_else(|| {
+                        WorkerExecutorError::runtime("tool rejection Start has no span metadata")
+                    })?;
                 let mut historical_reconstruction = handle
                     .take_historical_reconstruction()
                     .expect("replayed tool rejection claim must own a reconstruction claim");
@@ -302,10 +525,12 @@ impl EntityInvocationDurability {
                             "cancelled rejection terminal",
                         ));
                     }
-                    ReconstructionReplayOutcome::Incomplete(live) => live
-                        .complete_access(store, get_ctx, expected)
-                        .await
-                        .map_err(|error| error.source)?,
+                    ReconstructionReplayOutcome::Incomplete(live) => {
+                        let finished = entity_span_finished(&span_started.span_id, &expected)?;
+                        live.complete_access_with_span(store, get_ctx, expected, finished)
+                            .await
+                            .map_err(|error| error.source)?
+                    }
                     ReconstructionReplayOutcome::LiveAdmissionCancelled(mut live) => {
                         live.abandon_for_trap();
                         return Err(
@@ -326,9 +551,12 @@ impl EntityInvocationDurability {
         store: &Accessor<T, D>,
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
         parent: OwnerInvocationId,
+        key_context: &EntityInvocationKeyContext,
+        stream_session_idempotency_key: golem_common::model::IdempotencyKey,
         mut handle: DurableCallSession<GolemEntityInvoke, LeaveIncompleteOnDrop>,
         metadata: EntityInvocationRequest,
         input: TypedSchemaValue,
+        span_started: Option<SpanStarted>,
     ) -> Result<Self, WorkerExecutorError>
     where
         T: 'static,
@@ -338,7 +566,20 @@ impl EntityInvocationDurability {
         let parent_start_index = parent.start_index();
         let owner =
             store.with(|mut access| get_ctx(access.data_mut()).state.owned_agent_id.clone());
+        let idempotency_key = golem_common::model::IdempotencyKey::derived(
+            &key_context.caller_key,
+            key_context.logical_position.unwrap_or(handle.start_index()),
+        );
+        let logical_key_positions = key_context.logical_position.is_some();
         let operation = metadata.operation;
+        let resolved_position = resolve_recorded_plan(
+            store,
+            get_ctx,
+            handle.start_index(),
+            &metadata.entity,
+            metadata.plan,
+        )
+        .await?;
         let historical_reconstruction = if handle.is_live() {
             None
         } else {
@@ -348,9 +589,8 @@ impl EntityInvocationDurability {
                     .expect("replayed entity invocation must own a reconstruction claim"),
             )
         };
-        let principal = metadata
-            .principal
-            .unwrap_or_else(|| metadata.calling_principal.clone());
+        let principal = metadata.principal;
+        let activation = Arc::new(resolved_position.layer().activation().clone());
         let invocation_id = EntityInvocationId::new(
             OwnedAgentEntityId {
                 owner,
@@ -367,17 +607,43 @@ impl EntityInvocationDurability {
             if replay.has_visible_terminal(handle.start_index()).await {
                 InvocationExecutionMode::ReplayingCompleted
             } else {
+                // Install abandoned atomic history before any body or descendant can claim a
+                // completion from it. Surviving calls then use ordinary incomplete replay.
+                let regions = replay
+                    .entity_atomic_rollback_regions(handle.start_index())
+                    .await;
+                if !regions.is_empty() {
+                    let worker =
+                        store.with(|mut access| get_ctx(access.data_mut()).public_state.worker());
+                    commit_replay_jumps(&worker, &replay, Some(handle.start_index()), regions)
+                        .await?;
+                }
                 InvocationExecutionMode::ReplayingIncomplete
             }
         };
+        let span_started = match span_started {
+            Some(span_started) => span_started,
+            None => handle
+                .recorded_span_started_access(store, get_ctx)
+                .await?
+                .ok_or_else(|| {
+                    WorkerExecutorError::runtime("entity invocation Start has no span metadata")
+                })?,
+        };
+        handle.close_span_on_cancellation(span_started.span_id.clone());
         let scope = EntityInvocationScope::new(
             invocation_id,
             parent_start_index,
-            Arc::new(metadata.activation),
+            activation,
             metadata.calling_principal,
             execution_mode,
+            idempotency_key,
+            metadata.assume_idempotence,
+            logical_key_positions,
+            stream_session_idempotency_key,
         )
-        .map_err(WorkerExecutorError::runtime)?;
+        .map_err(WorkerExecutorError::runtime)?
+        .with_span_started(span_started);
         Ok(Self {
             handle,
             scope,
@@ -386,6 +652,7 @@ impl EntityInvocationDurability {
             call_mode: metadata.call_mode,
             operation,
             input,
+            resolved_position,
             historical_reconstruction,
         })
     }
@@ -402,12 +669,16 @@ impl EntityInvocationDurability {
         &self.principal
     }
 
-    pub fn operation(&self) -> Option<&EntityInvocationDescriptor> {
-        self.operation.as_ref()
+    pub fn operation(&self) -> &EntityInvocationDescriptor {
+        &self.operation
     }
 
     pub fn input(&self) -> &TypedSchemaValue {
         &self.input
+    }
+
+    pub fn resolved_position(&self) -> &ResolvedEntityInvocationPosition {
+        &self.resolved_position
     }
 
     pub fn call_mode(&self) -> EntityCallMode {
@@ -447,6 +718,7 @@ impl EntityInvocationDurability {
             call_mode,
             operation,
             input,
+            resolved_position,
             mut historical_reconstruction,
         } = self;
         let (handle, cancelled) = match handle.replay_reconstruction_access(store, get_ctx).await? {
@@ -475,8 +747,18 @@ impl EntityInvocationDurability {
             scope.activation().clone(),
             scope.calling_principal().clone(),
             InvocationExecutionMode::Live,
+            scope.idempotency_key().clone(),
+            scope.assume_idempotence(),
+            scope.logical_key_positions(),
+            scope.stream_session_idempotency_key().clone(),
         )
-        .map_err(WorkerExecutorError::runtime)?;
+        .map_err(WorkerExecutorError::runtime)?
+        .with_span_started(
+            scope
+                .span_started()
+                .expect("entity invocation scope must retain its recorded opening")
+                .clone(),
+        );
 
         let durability = Self {
             handle,
@@ -486,6 +768,7 @@ impl EntityInvocationDurability {
             call_mode,
             operation,
             input,
+            resolved_position,
             historical_reconstruction: None,
         };
         Ok(if cancelled {
@@ -580,6 +863,12 @@ impl EntityInvocationDurability {
         D: HasData + ?Sized,
         Ctx: WorkerCtx,
     {
+        let span_id = self
+            .scope
+            .span_started()
+            .expect("entity invocation scope must retain its recorded opening")
+            .span_id
+            .clone();
         let Self {
             handle,
             mut historical_reconstruction,
@@ -589,8 +878,9 @@ impl EntityInvocationDurability {
             reconstruction.body_settled();
         }
         let response = if handle.is_live() {
+            let span_finished = entity_span_finished(&span_id, &response)?;
             handle
-                .complete_access(store, get_ctx, response)
+                .complete_access_with_span(store, get_ctx, response, span_finished)
                 .await
                 .map_err(|error| error.source)?
         } else {
@@ -608,10 +898,12 @@ impl EntityInvocationDurability {
                         None,
                     ));
                 }
-                ReconstructionReplayOutcome::Incomplete(live) => live
-                    .complete_access(store, get_ctx, response)
-                    .await
-                    .map_err(|error| error.source)?,
+                ReconstructionReplayOutcome::Incomplete(live) => {
+                    let span_finished = entity_span_finished(&span_id, &response)?;
+                    live.complete_access_with_span(store, get_ctx, response, span_finished)
+                        .await
+                        .map_err(|error| error.source)?
+                }
                 ReconstructionReplayOutcome::LiveAdmissionCancelled(mut live) => {
                     live.abandon_for_trap();
                     return Err(
@@ -689,6 +981,7 @@ impl EntityInvocationDurability {
         D,
         Ctx,
         OnCompletedStarted,
+        OnCompletedCancelled,
         OnCompletedFailure,
         CompletedFailureFuture,
     >(
@@ -698,6 +991,7 @@ impl EntityInvocationDurability {
         body: EntityInvocationHandle<HostResponseEntityInvocation>,
         cancellation: Option<tokio_util::sync::CancellationToken>,
         on_completed_started: OnCompletedStarted,
+        on_completed_cancelled: OnCompletedCancelled,
         on_completed_failure: OnCompletedFailure,
     ) -> Result<EntityInvocationDurabilityOutcome, EntityInvocationDurabilityFailure>
     where
@@ -705,9 +999,16 @@ impl EntityInvocationDurability {
         D: HasData + ?Sized,
         Ctx: WorkerCtx,
         OnCompletedStarted: FnOnce() + Send,
+        OnCompletedCancelled: FnOnce() + Send + 'static,
         OnCompletedFailure: FnOnce(WorkerExecutorError) -> CompletedFailureFuture + Send + 'static,
         CompletedFailureFuture: Future<Output = ()> + Send + 'static,
     {
+        let span_id = self
+            .scope
+            .span_started()
+            .expect("entity invocation scope must retain its recorded opening")
+            .span_id
+            .clone();
         let Self {
             mut handle,
             scope,
@@ -745,6 +1046,7 @@ impl EntityInvocationDurability {
             let terminal = Arc::new(Mutex::new(None));
             let replay_terminal = terminal.clone();
             let structural_replay_state = replay_state.clone();
+            let residual_replay_state = replay_state.clone();
             let structural_start = invocation.start_index();
             let unconsumed_scope = async move {
                 structural_replay_state
@@ -762,6 +1064,9 @@ impl EntityInvocationDurability {
                 let cancelled = terminal.cancelled();
                 *replay_terminal.lock().unwrap() = Some(terminal);
                 Ok(if cancelled {
+                    // Select attachment cancellation before the coordinator
+                    // aborts the body and drops its producer resources.
+                    on_completed_cancelled();
                     EntityReconstructionResolution::<
                         _,
                         DurableCallSession<GolemEntityInvoke, LeaveIncompleteOnDrop>,
@@ -784,6 +1089,12 @@ impl EntityInvocationDurability {
                         || abort.abort(),
                         &mut historical_reconstruction,
                         cancellation.as_ref(),
+                    )
+                    .await?;
+                    ensure_body_claimed_retained_descendants(
+                        &residual_replay_state,
+                        &invocation,
+                        &reconstruction,
                     )
                     .await?;
                     let terminal = terminal.lock().unwrap().take().ok_or_else(|| {
@@ -920,8 +1231,14 @@ impl EntityInvocationDurability {
                     });
                 }
             };
+            let span_finished = entity_span_finished(&span_id, &response).map_err(|error| {
+                EntityInvocationDurabilityFailure {
+                    error,
+                    resources: take_entity_resources(&body_resources),
+                }
+            })?;
             let response = handle
-                .complete_access(store, get_ctx, response)
+                .complete_access_with_span(store, get_ctx, response, span_finished)
                 .await
                 .map_err(|error| EntityInvocationDurabilityFailure {
                     error: error.source,
@@ -972,6 +1289,16 @@ impl EntityInvocationDurability {
         )
         .await;
         let reconstruction = match reconstruction {
+            Ok(reconstruction) => ensure_body_claimed_retained_descendants(
+                &replay_state,
+                &invocation,
+                &reconstruction,
+            )
+            .await
+            .map(|()| reconstruction),
+            Err(error) => Err(error),
+        };
+        let reconstruction = match reconstruction {
             Ok(reconstruction) => reconstruction,
             Err(error) => {
                 return Err(EntityInvocationDurabilityFailure {
@@ -997,8 +1324,14 @@ impl EntityInvocationDurability {
                 response,
                 handle: live_handle,
             } => {
+                let span_finished = entity_span_finished(&span_id, &response).map_err(|error| {
+                    EntityInvocationDurabilityFailure {
+                        error,
+                        resources: take_entity_resources(&body_resources),
+                    }
+                })?;
                 let response = live_handle
-                    .complete_access(store, get_ctx, response)
+                    .complete_access_with_span(store, get_ctx, response, span_finished)
                     .await
                     .map_err(|error| EntityInvocationDurabilityFailure {
                         error: error.source,
@@ -1065,15 +1398,52 @@ pub async fn record_tool_rejection_access<T, D, Ctx>(
     store: &Accessor<T, D>,
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
     parent: OwnerInvocationId,
-    request: HostRequestGolemToolInvocationRejected,
+    mut request: HostRequestGolemToolInvocationRejected,
 ) -> Result<HostResponseEntityInvocation, WorkerExecutorError>
 where
     T: 'static,
     D: HasData + ?Sized,
     Ctx: WorkerCtx,
 {
+    request.input = request.input.as_ref().map(strip_typed_streams);
     let response = skipped_tool_terminal(request.error.clone()).await?;
-    let handle = DurableCallSession::<GolemToolInvocationRejected, LeaveIncompleteOnDrop>::start_access_with_options(
+    let (trace_id, trace_states, parent_span_id) = store.with(|mut access| {
+        let ctx = get_ctx(access.data_mut());
+        (
+            ctx.state.invocation_context.trace_id.clone(),
+            ctx.state.invocation_context.trace_states.clone(),
+            ctx.state.current_span_id.clone(),
+        )
+    });
+    let span_started = SpanStarted {
+        span_id: SpanId::generate(),
+        trace_id,
+        trace_states,
+        parent_span_id: Some(parent_span_id),
+        links: Vec::new(),
+        started_at: golem_common::model::Timestamp::now_utc(),
+        attributes: AttributeMap(HashMap::from([
+            (
+                "name".to_string(),
+                AttributeValue::String("entity-invocation".to_string()),
+            ),
+            (
+                "entity.kind".to_string(),
+                AttributeValue::String("tool".to_string()),
+            ),
+            (
+                "entity.name".to_string(),
+                AttributeValue::String(request.tool_name.clone()),
+            ),
+            (
+                "operation.command_path".to_string(),
+                AttributeValue::String(request.command_path.join("/")),
+            ),
+        ])),
+        kind: SpanKind::Internal,
+    };
+    let span_finished = entity_span_finished(&span_started.span_id, &response)?;
+    let handle = DurableCallSession::<GolemToolInvocationRejected, LeaveIncompleteOnDrop>::start_access_with_options_and_span(
         store,
         get_ctx,
         DurableFunctionType::WriteLocal,
@@ -1082,10 +1452,11 @@ where
             ..AccessClaimOptions::default()
         },
         async move |_| Ok(request),
+        span_started,
     )
     .await?;
     handle
-        .complete_access(store, get_ctx, response)
+        .complete_access_with_span(store, get_ctx, response, span_finished)
         .await
         .map_err(|error| error.source)
 }
@@ -1163,9 +1534,104 @@ fn entity_request_identity(
         entity: request.entity.clone(),
         calling_principal: request.calling_principal.clone(),
         call_mode: request.call_mode,
-        operation: request.operation.as_ref().map(Into::into),
+        operation: (&request.operation).into(),
+        plan_position: match &request.plan {
+            EntityInvocationPlanReference::Root { .. } => None,
+            EntityInvocationPlanReference::Descendant {
+                root_start_index,
+                position,
+            } => Some(
+                golem_common::model::entity::EntityInvocationPlanPositionIdentity {
+                    root_start_index: *root_start_index,
+                    position: *position,
+                },
+            ),
+        },
         input: input.clone(),
     }
+}
+
+async fn resolve_recorded_plan<T, D, Ctx>(
+    store: &Accessor<T, D>,
+    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+    current_start_index: OplogIndex,
+    entity: &AgentEntity,
+    reference: EntityInvocationPlanReference,
+) -> Result<ResolvedEntityInvocationPosition, WorkerExecutorError>
+where
+    T: 'static,
+    D: HasData + ?Sized,
+    Ctx: WorkerCtx,
+{
+    let root_metadata = match &reference {
+        EntityInvocationPlanReference::Root { .. } => None,
+        EntityInvocationPlanReference::Descendant {
+            root_start_index, ..
+        } => {
+            let request = load_recorded_request(store, get_ctx, *root_start_index).await?;
+            let HostRequest::EntityInvocation(request) = request else {
+                return Err(WorkerExecutorError::unexpected_oplog_entry(
+                    "root entity invocation request",
+                    format!("{request:?}"),
+                ));
+            };
+            Some(request.metadata)
+        }
+    };
+    resolve_recorded_plan_from_root_payload(
+        current_start_index,
+        entity,
+        reference,
+        root_metadata.as_deref(),
+    )
+}
+
+fn resolve_recorded_plan_from_root_payload(
+    current_start_index: OplogIndex,
+    entity: &AgentEntity,
+    reference: EntityInvocationPlanReference,
+    root_metadata: Option<&[u8]>,
+) -> Result<ResolvedEntityInvocationPosition, WorkerExecutorError> {
+    let (plan, root_start_index, position) = match reference {
+        EntityInvocationPlanReference::Root { plan } => (plan, current_start_index, 0),
+        EntityInvocationPlanReference::Descendant {
+            root_start_index,
+            position,
+        } => {
+            if root_start_index >= current_start_index || position == 0 {
+                return Err(WorkerExecutorError::runtime(
+                    "invalid descendant entity invocation plan reference",
+                ));
+            }
+            let metadata =
+                desert_rust::deserialize::<EntityInvocationRequest>(root_metadata.ok_or_else(
+                    || WorkerExecutorError::runtime("missing root entity invocation metadata"),
+                )?)
+                .map_err(|error| {
+                    WorkerExecutorError::runtime(format!(
+                        "failed to decode root entity invocation metadata: {error}"
+                    ))
+                })?;
+            let EntityInvocationPlanReference::Root { plan } = metadata.plan else {
+                return Err(WorkerExecutorError::runtime(
+                    "descendant entity invocation does not reference a plan root",
+                ));
+            };
+            (plan, root_start_index, position)
+        }
+    };
+    plan.validate().map_err(WorkerExecutorError::runtime)?;
+    let layer = plan.layer(position).map_err(WorkerExecutorError::runtime)?;
+    if &layer.activation().entity() != entity {
+        return Err(WorkerExecutorError::runtime(
+            "entity invocation selector does not match its recorded plan position",
+        ));
+    }
+    Ok(ResolvedEntityInvocationPosition {
+        plan: Arc::new(plan),
+        root_start_index,
+        position,
+    })
 }
 
 async fn load_recorded_request<T, D, Ctx>(
@@ -1195,6 +1661,42 @@ where
             "failed to load entity invocation request at {start_index}: {error}"
         ))
     })
+}
+
+/// Fails a settled entity body that returned without claiming one of its recorded descendant
+/// `Start`s. The cursor retains unclaimed `Start`s instead of parking on them, so this is the
+/// structural divergence a stalled cursor used to surface through
+/// [`ReplayState::await_unconsumed_scope_entry`]. Only outcomes whose body ran to completion are
+/// checked: an aborted or cancelled body legitimately leaves its recorded subtree unclaimed.
+async fn ensure_body_claimed_retained_descendants<R, H>(
+    replay_state: &ReplayState,
+    invocation: &EntityInvocationId,
+    reconstruction: &EntityReconstructionOutcome<R, H>,
+) -> Result<(), WorkerExecutorError> {
+    let body_completed = match reconstruction {
+        EntityReconstructionOutcome::Replayed(_)
+        | EntityReconstructionOutcome::Incomplete { .. } => true,
+        EntityReconstructionOutcome::Cancelled(_)
+        | EntityReconstructionOutcome::IncompleteCancelled { .. }
+        | EntityReconstructionOutcome::IncompleteLiveAdmissionCancelled { .. } => false,
+    };
+    if !body_completed {
+        return Ok(());
+    }
+    let active_bodies = replay_state
+        .historical_reconstruction_bodies()
+        .borrow()
+        .clone();
+    match replay_state
+        .unclaimed_retained_descendant(invocation.start_index(), active_bodies)
+        .await?
+    {
+        None => Ok(()),
+        Some(unclaimed) => Err(WorkerExecutorError::unexpected_oplog_entry(
+            format!("completed replay body for {invocation}"),
+            format!("entity body returned before consuming its recorded descendant at {unclaimed}"),
+        )),
+    }
 }
 
 trait ReconstructionGuard {
@@ -1439,10 +1941,23 @@ fn replay_body_failure(
 mod tests {
     use super::*;
     use golem_common::model::AgentId;
+    use golem_common::model::account::{AccountEmail, AccountId};
+    use golem_common::model::agent::{AgentPrincipal, AgentTypeName};
     use golem_common::model::component::ComponentId;
+    use golem_common::model::deployment::DeploymentRevision;
+    use golem_common::model::entity::{
+        EntityActivation, EntityActivationPolicy, EntityInvocationPlanLayer, ExecutableTarget,
+        FilesystemCapability, ToolInvocationDescriptor, ToolMiddlewareName, ToolOutputContract,
+    };
     use golem_common::model::environment::EnvironmentId;
+    use golem_common::model::json::NormalizedJsonValue;
     use golem_common::model::oplog::OplogIndex;
-    use golem_common::model::tool::ToolName;
+    use golem_common::model::tool::{
+        CompiledToolBinding, ConfigKeyScope, SecretKeyScope, ToolBindingOwner,
+        ToolFilesystemAccess, ToolName, ToolProvisionConfig, ToolSource,
+    };
+    use golem_common::schema::tool::{CommandTree, Tool};
+    use golem_common::schema::{SchemaGraph, SchemaType, SchemaValue};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
     use test_r::test;
@@ -1468,6 +1983,333 @@ mod tests {
             OplogIndex::from_u64(2),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn entity_span_descriptor_contains_only_safe_identity_fields() {
+        let trace_id = golem_common::model::invocation_context::TraceId::generate();
+        let parent = SpanId::generate();
+        let entity = AgentEntity::Tool(ToolName::try_from("search").unwrap());
+        let operation = EntityInvocationDescriptor::Tool(ToolInvocationDescriptor {
+            attempt_ordinal: 19,
+            command_path: vec!["files".to_string(), "find".to_string()],
+            args: Vec::new(),
+            has_stdin: true,
+            has_stdout: true,
+            declares_stdout: true,
+            output_contract: ToolOutputContract {
+                result: None,
+                errors: Vec::new(),
+            },
+        });
+
+        let started = entity_span_started(
+            trace_id.clone(),
+            vec!["vendor=value".to_string()],
+            parent.clone(),
+            &entity,
+            &operation,
+        );
+
+        assert_eq!(started.trace_id, trace_id);
+        assert_eq!(started.parent_span_id, Some(parent));
+        assert!(started.links.is_empty());
+        assert_eq!(started.attributes.len(), 4);
+        assert_eq!(
+            started.attributes.get("entity.name"),
+            Some(&AttributeValue::String("search".to_string()))
+        );
+        assert_eq!(
+            started.attributes.get("operation.command_path"),
+            Some(&AttributeValue::String("files/find".to_string()))
+        );
+        assert_eq!(entity.name(), "search");
+    }
+
+    #[test]
+    fn typed_tool_terminal_classifies_span_outcomes() {
+        fn response(
+            result: Result<
+                golem_common::model::oplog::payload::types::SerializableToolStructuredResult,
+                SerializableToolRpcError,
+            >,
+        ) -> HostResponseEntityInvocation {
+            HostResponseEntityInvocation {
+                result: Ok(SerializableToolOperationTerminal {
+                    body_execution: SerializableEntityBodyExecution::Executed,
+                    result,
+                }
+                .into_typed_schema_value()
+                .unwrap()),
+            }
+        }
+
+        assert_eq!(
+            tool_terminal_outcome(&response(Ok(
+                golem_common::model::oplog::payload::types::SerializableToolStructuredResult {
+                    result: None,
+                }
+            )))
+            .unwrap(),
+            SpanOutcome::Completed
+        );
+        assert_eq!(
+            tool_terminal_outcome(&response(Err(SerializableToolRpcError::Denied(
+                "no".to_string()
+            ))))
+            .unwrap(),
+            SpanOutcome::Denied
+        );
+        assert_eq!(
+            tool_terminal_outcome(&response(Err(SerializableToolRpcError::ProtocolError(
+                "bad".to_string()
+            ))))
+            .unwrap(),
+            SpanOutcome::Failed
+        );
+        assert_eq!(
+            tool_terminal_outcome(&response(Err(SerializableToolRpcError::Cancelled))).unwrap(),
+            SpanOutcome::Cancelled
+        );
+    }
+
+    fn tool_definition() -> Tool {
+        Tool {
+            version: "1.0.0".to_string(),
+            commands: CommandTree { nodes: Vec::new() },
+            schema: SchemaGraph::empty(),
+        }
+    }
+
+    fn middleware_activation(name: &str) -> EntityActivation {
+        EntityActivation::new(
+            ExecutableTarget::new(
+                ComponentId::new(),
+                golem_common::model::component::ComponentRevision::try_from(1_u64).unwrap(),
+            ),
+            DeploymentRevision::try_from(9_u64).unwrap(),
+            EntityActivationPolicy::ToolMiddleware {
+                middleware_name: ToolMiddlewareName::try_from(name).unwrap(),
+                provision: ToolProvisionConfig::default(),
+                config_keys_readable: ConfigKeyScope::All,
+                secret_keys_readable: SecretKeyScope::All,
+                secret_keys_revealable: SecretKeyScope::All,
+                filesystem_access: ToolFilesystemAccess::Unset,
+            },
+            FilesystemCapability::Incapable,
+        )
+        .unwrap()
+    }
+
+    fn tool_activation() -> EntityActivation {
+        let component_id = ComponentId::new();
+        let component_revision =
+            golem_common::model::component::ComponentRevision::try_from(2_u64).unwrap();
+        let deployment_revision = DeploymentRevision::try_from(9_u64).unwrap();
+        let source = ToolSource::Component {
+            component_id,
+            component_revision,
+            component_name: golem_common::model::component::ComponentName("tool".to_string()),
+        };
+        let binding = CompiledToolBinding {
+            deployment_revision,
+            release_id: None,
+            owner: ToolBindingOwner::AgentType {
+                agent_type_name: AgentTypeName("Owner".to_string()),
+            },
+            tool_name: ToolName::try_from("entity").unwrap(),
+            version: "1.0.0".to_string(),
+            metadata_version: "0.1.0".to_string(),
+            metadata_digest: Default::default(),
+            account_id: AccountId::new(),
+            account_email: AccountEmail::new("owner@example.com"),
+            parameters: NormalizedJsonValue::new(serde_json::json!({})),
+            config_keys_readable: ConfigKeyScope::All,
+            secret_keys_readable: SecretKeyScope::All,
+            secret_keys_revealable: SecretKeyScope::All,
+            filesystem_access: ToolFilesystemAccess::Unset,
+            source,
+        };
+        EntityActivation::new(
+            ExecutableTarget::new(component_id, component_revision),
+            deployment_revision,
+            EntityActivationPolicy::Tool {
+                provision: ToolProvisionConfig::default(),
+                binding: Box::new(binding),
+                mcp_import: None,
+            },
+            FilesystemCapability::Incapable,
+        )
+        .unwrap()
+    }
+
+    fn recorded_plan_request(plan: EntityInvocationPlanReference) -> Vec<u8> {
+        let owner = invocation().owner_id().clone();
+        desert_rust::serialize_to_byte_vec(&EntityInvocationRequest {
+            entity: AgentEntity::ToolMiddleware(ToolMiddlewareName::try_from("audit").unwrap()),
+            calling_principal: Principal::Agent(AgentPrincipal {
+                agent_id: owner.agent_id.clone(),
+            }),
+            call_mode: EntityCallMode::Synchronous,
+            operation: EntityInvocationDescriptor::Tool(ToolInvocationDescriptor {
+                attempt_ordinal: 1,
+                command_path: vec!["run".to_string()],
+                args: Vec::new(),
+                has_stdin: false,
+                has_stdout: false,
+                declares_stdout: false,
+                output_contract: ToolOutputContract {
+                    result: None,
+                    errors: Vec::new(),
+                },
+            }),
+            principal: Principal::Agent(AgentPrincipal {
+                agent_id: owner.agent_id,
+            }),
+            plan,
+            assume_idempotence: true,
+        })
+        .unwrap()
+    }
+
+    fn three_layer_plan() -> EntityInvocationPlan {
+        EntityInvocationPlan::new(vec![
+            EntityInvocationPlanLayer::Middleware {
+                activation: middleware_activation("audit"),
+                parameters: TypedSchemaValue::new(
+                    SchemaGraph::anonymous(SchemaType::string()),
+                    SchemaValue::String("outer".to_string()),
+                ),
+                expected_definition: None,
+                presented_definition: None,
+                next_effective_definition: tool_definition(),
+                compatibility: None,
+            },
+            EntityInvocationPlanLayer::Middleware {
+                activation: middleware_activation("audit"),
+                parameters: TypedSchemaValue::new(
+                    SchemaGraph::anonymous(SchemaType::u64()),
+                    SchemaValue::U64(7),
+                ),
+                expected_definition: None,
+                presented_definition: None,
+                next_effective_definition: tool_definition(),
+                compatibility: None,
+            },
+            EntityInvocationPlanLayer::Tool {
+                activation: tool_activation(),
+            },
+        ])
+        .unwrap()
+    }
+
+    #[test]
+    fn resolve_recorded_plan_descendant_retains_root_and_advances_chain() {
+        let root = OplogIndex::from_u64(42);
+        let payload = recorded_plan_request(EntityInvocationPlanReference::Root {
+            plan: three_layer_plan(),
+        });
+        let resolved = resolve_recorded_plan_from_root_payload(
+            OplogIndex::from_u64(61),
+            &AgentEntity::ToolMiddleware(ToolMiddlewareName::try_from("audit").unwrap()),
+            EntityInvocationPlanReference::Descendant {
+                root_start_index: root,
+                position: 1,
+            },
+            Some(&payload),
+        )
+        .unwrap();
+
+        assert_eq!(resolved.root_start_index(), root);
+        assert_eq!(resolved.position(), 1);
+        assert_eq!(
+            resolved.next_reference(),
+            Some(EntityInvocationPlanReference::Descendant {
+                root_start_index: root,
+                position: 2,
+            })
+        );
+        let EntityInvocationPlanLayer::Middleware { parameters, .. } = resolved.layer() else {
+            panic!("position one must be middleware")
+        };
+        assert_eq!(parameters.value(), &SchemaValue::U64(7));
+
+        let leaf = resolve_recorded_plan_from_root_payload(
+            OplogIndex::from_u64(62),
+            &AgentEntity::Tool(ToolName::try_from("entity").unwrap()),
+            EntityInvocationPlanReference::Descendant {
+                root_start_index: root,
+                position: 2,
+            },
+            Some(&payload),
+        )
+        .unwrap();
+        assert_eq!(leaf.root_start_index(), root);
+        assert!(leaf.next_reference().is_none());
+    }
+
+    #[test]
+    fn resolve_recorded_plan_descendant_rejects_invalid_recorded_references() {
+        let root = OplogIndex::from_u64(42);
+        let valid_payload = recorded_plan_request(EntityInvocationPlanReference::Root {
+            plan: three_layer_plan(),
+        });
+        let middleware =
+            AgentEntity::ToolMiddleware(ToolMiddlewareName::try_from("audit").unwrap());
+        for (current, position) in [(42, 1), (41, 1), (61, 0), (61, 3)] {
+            assert!(
+                resolve_recorded_plan_from_root_payload(
+                    OplogIndex::from_u64(current),
+                    &middleware,
+                    EntityInvocationPlanReference::Descendant {
+                        root_start_index: root,
+                        position,
+                    },
+                    Some(&valid_payload),
+                )
+                .is_err()
+            );
+        }
+        assert!(
+            resolve_recorded_plan_from_root_payload(
+                OplogIndex::from_u64(61),
+                &AgentEntity::Tool(ToolName::try_from("entity").unwrap()),
+                EntityInvocationPlanReference::Descendant {
+                    root_start_index: root,
+                    position: 1,
+                },
+                Some(&valid_payload),
+            )
+            .is_err()
+        );
+        let descendant_payload = recorded_plan_request(EntityInvocationPlanReference::Descendant {
+            root_start_index: OplogIndex::from_u64(1),
+            position: 1,
+        });
+        assert!(
+            resolve_recorded_plan_from_root_payload(
+                OplogIndex::from_u64(61),
+                &middleware,
+                EntityInvocationPlanReference::Descendant {
+                    root_start_index: root,
+                    position: 1,
+                },
+                Some(&descendant_payload),
+            )
+            .is_err()
+        );
+        assert!(
+            resolve_recorded_plan_from_root_payload(
+                OplogIndex::from_u64(61),
+                &middleware,
+                EntityInvocationPlanReference::Descendant {
+                    root_start_index: root,
+                    position: 1,
+                },
+                Some(b"malformed plan"),
+            )
+            .is_err()
+        );
     }
 
     #[test]

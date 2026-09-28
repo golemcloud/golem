@@ -1,0 +1,5 @@
+error: Expected string literal for HTTP path
+ --> tests/ui/fail/endpoint_any_non_string.rs:7:22
+  |
+7 |     #[endpoint(any = 42)]
+  |                      ^^

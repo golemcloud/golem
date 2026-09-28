@@ -605,6 +605,20 @@ impl BlobStorage for OverlapCountingStorage {
             .await
     }
 
+    async fn get_range_stream(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+        offset: u64,
+        length: u64,
+    ) -> anyhow::Result<Option<golem_service_base::storage::blob::BlobRangeStream>> {
+        self.inner
+            .get_range_stream(target_label, op_label, namespace, path, offset, length)
+            .await
+    }
+
     async fn get_raw_slice(
         &self,
         target_label: &'static str,

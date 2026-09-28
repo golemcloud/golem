@@ -24,7 +24,11 @@ The REPL auto-generates TypeScript classes for all agents in the application. Yo
 2
 ```
 
-It is possible to use the TypeScript REPL with agents written in any language — you can use TypeScript syntax to invoke Rust, Scala, or MoonBit agents.
+It is possible to use the TypeScript REPL with agents written in any language — including Effect TypeScript, Rust, Scala, and MoonBit agents.
+
+<Callout type="info">
+Effect applications use this same generated TypeScript REPL client. The REPL does not expose an Effect runtime or return `Effect` programs; use the generated Promise-based TypeScript methods interactively, and use an Effect bridge library in an external application when you need Effect-native composition.
+</Callout>
 
 ## Built-in commands
 
@@ -80,10 +84,11 @@ golem repl --script-file test.rs --language rust --yes
 | Language   | Interactive REPL          | Script mode |
 | ---------- | ------------------------- | ----------- |
 | TypeScript | ✅ Full support            | ✅           |
+| Effect TypeScript | ✅ Via TypeScript syntax | ✅ TypeScript scripts |
 | Rust       | ⚠️ Slow (recompilation)  | ✅           |
 | Scala      | ❌ Not available           | ❌           |
 | MoonBit    | ❌ Not available           | ❌           |
 
 <Callout type="info">
-The TypeScript REPL can work with agents written in any language — you can use TypeScript syntax to invoke Scala, Rust, or MoonBit agents.
+The TypeScript REPL can work with agents written in any language — you can use TypeScript syntax to invoke Effect TypeScript, Scala, Rust, or MoonBit agents.
 </Callout>

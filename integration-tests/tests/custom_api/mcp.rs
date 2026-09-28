@@ -40,6 +40,7 @@ static REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 struct McpClient {
     http: reqwest::Client,
     url: String,
+    host: String,
     session_id: Option<String>,
 }
 
@@ -53,6 +54,15 @@ fn parse_sse_json(body: &str) -> anyhow::Result<Value> {
         }
     }
     anyhow::bail!("No data line found in SSE response: {}", body)
+}
+
+async fn response_body(resp: reqwest::Response) -> anyhow::Result<String> {
+    let status = resp.status();
+    let body = resp.text().await?;
+    if !status.is_success() {
+        anyhow::bail!("MCP HTTP request failed with status {status}: {body}");
+    }
+    Ok(body)
 }
 
 impl McpClient {
@@ -94,7 +104,7 @@ impl McpClient {
             .map(|s| s.to_string());
 
         // Response is SSE, parse the JSON from it
-        let body = resp.text().await?;
+        let body = response_body(resp).await?;
         let _init_result = parse_sse_json(&body)?;
 
         // Send initialized notification
@@ -113,11 +123,12 @@ impl McpClient {
             notif_req = notif_req.header("mcp-session-id", sid.as_str());
         }
 
-        notif_req.json(&notif).send().await?;
+        response_body(notif_req.json(&notif).send().await?).await?;
 
         Ok(McpClient {
             http,
             url,
+            host: host.to_string(),
             session_id,
         })
     }
@@ -133,6 +144,7 @@ impl McpClient {
         let mut builder = self
             .http
             .post(&self.url)
+            .header("Host", &self.host)
             .header("Content-Type", "application/json")
             .header("Accept", "application/json, text/event-stream");
 
@@ -141,7 +153,7 @@ impl McpClient {
         }
 
         let resp = builder.json(&req_body).send().await?;
-        let body = resp.text().await?;
+        let body = response_body(resp).await?;
         let json_body = parse_sse_json(&body)?;
 
         if let Some(error) = json_body.get("error") {
@@ -248,6 +260,7 @@ async fn build_test_context(deps: &EnvBasedTestDependencies) -> McpTestContext {
 
     let mcp_deployment_creation = McpDeploymentCreation {
         domain: domain.clone(),
+        tools: BTreeMap::new(),
         agents: BTreeMap::from_iter(vec![
             (
                 AgentTypeName("WeatherAgent".to_string()),
@@ -484,7 +497,7 @@ async fn call_tool_weather_agent_component_model(
     assert_eq!(structured["lat"], json!(0.0));
     assert_eq!(structured["long"], json!(0.0));
     assert_eq!(structured["country"], "Unknown");
-    assert_eq!(structured["population"], 0);
+    assert_eq!(structured["population"], "0");
 
     Ok(())
 }
@@ -531,7 +544,7 @@ async fn call_tool_singleton_component_model(
     assert_eq!(location["lat"], json!(0.0));
     assert_eq!(location["long"], json!(0.0));
     assert_eq!(location["country"], "Unknown");
-    assert_eq!(location["population"], 0);
+    assert_eq!(location["population"], "0");
 
     Ok(())
 }

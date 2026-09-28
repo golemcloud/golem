@@ -4,16 +4,22 @@ export { toolGuest } from "./internal/tool/runtime.js"
 
 import type * as Common from "golem:tool/common@0.1.0"
 import type * as Host from "golem:tool/host@0.1.0"
-import { Context, Effect, Schema, Scope, Stream } from "effect"
+import { Cause, Context, Effect, Exit, Schema, Scope, Stream } from "effect"
 import { AbortableStreamIterable } from "./internal/abortableStreamIterable.js"
 import { ToolClient } from "./host/ToolClient.js"
 import {
   type BodyModel,
+  canonicalInputDefaults,
   canonicalInputFields,
   type CommandModel,
   type ToolDefinition,
+  registerToolClientFactory,
 } from "./internal/tool/model.js"
+import { schemaShapesMatch } from "./internal/schema-model/model.js"
+import { schemaGraphFromWit } from "./internal/schema-model/wit.js"
 import { compile } from "./WitCodec.js"
+
+export { ToolClient } from "./host/ToolClient.js"
 
 /** Convert a kebab-case protocol name to its TypeScript client spelling. @since 1.6.0 @category models */
 export type CamelCase<S extends string> = S extends `${infer H}-${infer T}`
@@ -115,10 +121,14 @@ export const liveToolStart = (
   input: Common.TypedSchemaValue,
   stdin: AsyncIterable<Host.ByteStreamItem> | undefined,
   withStdout: boolean,
+  reflected = false,
 ) =>
   Effect.gen(function* () {
     const host = yield* ToolClient
-    const rpc = host.rpc(tool)
+    const rpc = yield* Effect.try({
+      try: () => (reflected ? host.createRpc(tool) : host.rpc(tool)),
+      catch: (cause) => new ToolClientError("invoke", cause),
+    })
     const inputEndpoints = stdin ? host.createStdin() : undefined
     const output = withStdout ? host.createStdout() : undefined
     const future = yield* Effect.try({
@@ -184,16 +194,20 @@ export function client<D extends ToolDefinition<any, any>>(
       Effect.gen(function* () {
         if (!model.body) return yield* Effect.fail(new ToolClientError("input", "missing body"))
         const fields = canonicalInputFields(definition, path)
+        const defaults = canonicalInputDefaults(definition, path)
         if (!fields) return yield* Effect.fail(new ToolClientError("input", "missing command"))
         const codec = yield* compile(Schema.Struct(fields)).pipe(
           Effect.mapError((cause) => new ToolClientError("input", cause)),
         )
-        const canonicalInput = Object.fromEntries(
-          Object.keys(fields).map((name) => [
-            name,
-            input[name.replace(/-([a-z0-9])/g, (_, c: string) => c.toUpperCase())],
-          ]),
-        )
+        const canonicalInput = {
+          ...defaults,
+          ...Object.fromEntries(
+            Object.keys(fields).flatMap((name) => {
+              const inputName = name.replace(/-([a-z0-9])/g, (_, c: string) => c.toUpperCase())
+              return Object.hasOwn(input, inputName) ? [[name, input[inputName]]] : []
+            }),
+          ),
+        }
         const value = yield* codec
           .encodeAsync(canonicalInput)
           .pipe(Effect.mapError((cause) => new ToolClientError("input", cause)))
@@ -209,10 +223,23 @@ export function client<D extends ToolDefinition<any, any>>(
           !!model.body.stdout,
         ).pipe(Effect.mapError((cause) => new ToolClientError("invoke", cause)))
         yield* Effect.addFinalizer(() => started.cancel)
-        const consume = started.stdout
+        const stdoutIterator = started.stdout?.[Symbol.asyncIterator]()
+        const stdout = stdoutIterator ? { [Symbol.asyncIterator]: () => stdoutIterator } : undefined
+        const consume = stdout
           ? streams?.stdout
-            ? streams.stdout(decodeByteStream(started.stdout))
-            : drainByteStream(started.stdout)
+            ? streams
+                .stdout(decodeByteStream(stdout))
+                .pipe(
+                  Effect.catchCause((cause) =>
+                    cause.reasons.some(Cause.isInterruptReason)
+                      ? Effect.failCause(cause)
+                      : drainByteStream(stdout).pipe(
+                          Effect.ignore,
+                          Effect.andThen(Effect.failCause(cause)),
+                        ),
+                  ),
+                )
+            : drainByteStream(stdout)
           : Effect.void
         const invocationResult = started.result.pipe(
           Effect.catchIf(
@@ -256,25 +283,39 @@ export function client<D extends ToolDefinition<any, any>>(
             },
           ),
         )
-        const result = yield* Effect.all([consume, invocationResult] as const, {
-          concurrency: "unbounded",
-        }).pipe(
-          Effect.map(([, result]) => result),
+        const decodedResult = invocationResult.pipe(
+          Effect.flatMap((result) => {
+            if (!model.body!.output)
+              return result.result === undefined
+                ? Effect.succeed(undefined)
+                : Effect.fail(new ToolClientError("result", "unexpected remote result"))
+            if (!result.result) return Effect.fail(new ToolClientError("result", "missing result"))
+            return compile(model.body!.output).pipe(
+              Effect.mapError((cause) => new ToolClientError("result", cause)),
+              Effect.flatMap((output) => {
+                if (!sameWireGraph(output.schemaGraph, result.result!.graph))
+                  return Effect.fail(new ToolClientError("result", "result schema does not match"))
+                return output
+                  .decode(result.result!.value)
+                  .pipe(Effect.mapError((cause) => new ToolClientError("result", cause)))
+              }),
+            )
+          }),
+        )
+        const normalizedConsume = consume.pipe(
           Effect.mapError((cause) =>
-            cause instanceof ToolClientError || isDeclaredFailure(cause)
-              ? cause
-              : new ToolClientError("invoke", cause),
+            cause instanceof ToolClientError ? cause : new ToolClientError("stream", cause),
           ),
         )
-        if (!model.body.output) return undefined
-        if (!result.result)
-          return yield* Effect.fail(new ToolClientError("result", "missing result"))
-        const output = yield* compile(model.body.output).pipe(
-          Effect.mapError((cause) => new ToolClientError("result", cause)),
+        const [consumeExit, resultExit] = yield* Effect.all(
+          [Effect.exit(normalizedConsume), Effect.exit(decodedResult)] as const,
+          {
+            concurrency: "unbounded",
+          },
         )
-        return yield* output
-          .decode(result.result.value)
-          .pipe(Effect.mapError((cause) => new ToolClientError("result", cause)))
+        if (Exit.isFailure(resultExit)) return yield* Effect.failCause(resultExit.cause)
+        if (Exit.isFailure(consumeExit)) return yield* Effect.failCause(consumeExit.cause)
+        return resultExit.value
       }),
     )
 
@@ -293,6 +334,34 @@ export function client<D extends ToolDefinition<any, any>>(
   return build(definition.model, [])
 }
 
+registerToolClientFactory(client)
+
+/** A caller-owned typed subset of a remote tool's commands. @since 1.6.0 @category models */
+export interface ToolClientDefinition<D extends ToolDefinition<any, any>> {
+  readonly name?: string
+  readonly definition: D
+  readonly client: (
+    targetName?: string,
+    options?: Omit<ClientOptions, "lookupName">,
+  ) => Client<D, ToolClient>
+}
+
+/** Bind a typed command subset optimistically, without discovery. @since 1.6.0 @category constructors */
+export const toolClientDefinition = <D extends ToolDefinition<any, any>>(
+  definition: D,
+  name?: string,
+): ToolClientDefinition<D> =>
+  Object.freeze({
+    name,
+    definition,
+    client: (targetName?: string, options: Omit<ClientOptions, "lookupName"> = {}) => {
+      const lookupName = name ?? targetName
+      if (!lookupName)
+        throw new TypeError("a nameless tool client definition requires a target name")
+      return client(definition, { ...options, lookupName })
+    },
+  })
+
 const isToolError = (value: unknown): value is Common.ToolError =>
   typeof value === "object" && value !== null && "tag" in value
 const remoteToolError = (value: unknown): Common.ToolError | undefined => {
@@ -302,11 +371,10 @@ const remoteToolError = (value: unknown): Common.ToolError | undefined => {
   if (tagged.tag !== "remote-tool-error") return undefined
   return isToolError(tagged.val) ? tagged.val : undefined
 }
-const isDeclaredFailure = (value: unknown): value is { readonly _tag: "ToolFailure" } =>
-  typeof value === "object" &&
-  value !== null &&
-  (value as { _tag?: unknown })._tag === "ToolFailure"
-
-const sameWireGraph = (left: unknown, right: unknown): boolean =>
-  JSON.stringify(left, (_key, value) => (typeof value === "bigint" ? `${value}n` : value)) ===
-  JSON.stringify(right, (_key, value) => (typeof value === "bigint" ? `${value}n` : value))
+const sameWireGraph = (left: Common.SchemaGraph, right: Common.SchemaGraph): boolean => {
+  try {
+    return schemaShapesMatch(schemaGraphFromWit(left), schemaGraphFromWit(right))
+  } catch {
+    return false
+  }
+}

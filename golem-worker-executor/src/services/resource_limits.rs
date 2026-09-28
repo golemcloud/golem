@@ -1414,6 +1414,7 @@ impl ResourceLimits for ResourceLimitsDisabled {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::span_test_support::{Tracing, get_tracing_dependency as test_r_get_dep_tracing};
     use golem_common::model::AgentId;
     use golem_common::model::agent::{AgentTypeName, RegisteredAgentType, ResolvedAgentType};
     use golem_common::model::application::{ApplicationId, ApplicationName};
@@ -2355,6 +2356,31 @@ mod tests {
 
     #[async_trait]
     impl RegistryService for MockRegistryService {
+        async fn resolve_mcp_import(
+            &self,
+            _: &golem_common::model::mcp_import::McpImportSource,
+            _: &AuthCtx,
+            _: bool,
+        ) -> Result<golem_service_base::model::mcp_import::McpImportObservation, RegistryServiceError>
+        {
+            panic!("unexpected MCP discovery")
+        }
+        async fn get_mcp_runtime_credential(
+            &self,
+            _: &golem_common::model::mcp_import::McpImportSource,
+            _: &AuthCtx,
+        ) -> Result<golem_service_base::clients::registry::McpRuntimeCredential, RegistryServiceError>
+        {
+            panic!("unexpected MCP credential request")
+        }
+        async fn report_mcp_resource_unauthorized(
+            &self,
+            _: &golem_common::model::mcp_import::McpImportSource,
+            _: &AuthCtx,
+            _: Option<uuid::Uuid>,
+        ) -> Result<(), RegistryServiceError> {
+            panic!("unexpected MCP feedback")
+        }
         async fn authenticate_token(
             &self,
             _token: &TokenSecret,
@@ -2611,13 +2637,13 @@ mod tests {
 
     /// One span per tick, not one for the lifetime of the batch loop.
     #[test]
-    async fn send_batch_records_one_closed_span_when_it_sends_a_batch() {
+    async fn send_batch_records_one_closed_span_when_it_sends_a_batch(tracing: &Tracing) {
         let mock = Arc::new(MockRegistryService::new(1000, 512));
         let svc = make_grpc(mock);
         let entry = svc.initialize_account(account_id()).await.unwrap();
         entry.borrow_fuel(300);
 
-        let recorder = crate::span_test_support::record_spans();
+        let recorder = crate::span_test_support::record_spans(tracing);
         svc.send_batch(NO_IDLE_REFRESH_THRESHOLD_SECS).await;
 
         recorder.assert_closed_span("resource_limits_batch_update");
@@ -2628,12 +2654,12 @@ mod tests {
     /// itself work that can fail, and events recorded outside a span never reach
     /// the trace.
     #[test]
-    async fn send_batch_records_one_closed_span_when_there_is_nothing_to_send() {
+    async fn send_batch_records_one_closed_span_when_there_is_nothing_to_send(tracing: &Tracing) {
         let mock = Arc::new(MockRegistryService::new(1000, 512));
         let svc = make_grpc(mock);
         let _ = svc.initialize_account(account_id()).await.unwrap();
 
-        let recorder = crate::span_test_support::record_spans();
+        let recorder = crate::span_test_support::record_spans(tracing);
         svc.send_batch(NO_IDLE_REFRESH_THRESHOLD_SECS).await;
 
         recorder.assert_closed_span("resource_limits_batch_update");

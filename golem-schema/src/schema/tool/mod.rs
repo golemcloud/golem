@@ -41,6 +41,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod canonical;
 pub mod compatibility;
+pub mod constraints;
 #[cfg(feature = "full")]
 mod protobuf;
 pub mod validation;
@@ -49,13 +50,6 @@ pub mod validation;
     not(all(feature = "guest", feature = "host"))
 ))]
 pub mod wit;
-
-#[cfg(feature = "host")]
-#[derive(Clone, Debug)]
-pub struct UnderlyingToolHandleRep {
-    pub tool_name: String,
-    pub has_stdout: bool,
-}
 
 /// Index into [`CommandTree::nodes`].
 #[derive(
@@ -145,6 +139,7 @@ pub struct ToolMiddleware {
     pub aliases: Vec<String>,
     pub doc: Doc,
     pub scope: ToolMiddlewareScope,
+    pub parameter_schema: SchemaGraph,
 }
 
 #[derive(
