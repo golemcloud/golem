@@ -97,11 +97,7 @@ inherit_test_dep!(
     PrecompiledComponent
 );
 inherit_test_dep!(
-    #[tagged_as("filesystem_tools_rust")]
-    PrecompiledComponent
-);
-inherit_test_dep!(
-    #[tagged_as("filesystem_tools_moonbit")]
+    #[tagged_as("filesystem_tools")]
     PrecompiledComponent
 );
 inherit_test_dep!(
@@ -925,14 +921,10 @@ async fn invoke_filesystem_tool(
         golem_common::model::oplog::payload::types::SerializableToolRpcError,
     >,
 > {
-    let command_name = tool_name
-        .rsplit_once('-')
-        .map(|(name, _)| name)
-        .unwrap_or(tool_name);
     let tool_name = ToolName::try_from(tool_name).unwrap();
     let definition = &definitions[&tool_name];
     let command_index = definition
-        .command_index_by_path(&[command_name.to_string()])
+        .command_index_by_path(&[])
         .expect("filesystem tool command exists");
     let input_schema = definition.canonical_input_record_schema(command_index)?;
     let (_, input_value) = input.into_parts();
@@ -942,7 +934,7 @@ async fn invoke_filesystem_tool(
             fingerprint,
             IdempotencyKey::fresh(),
             tool_name,
-            vec![command_name.to_string()],
+            Vec::new(),
             TypedSchemaValue::new(input_schema, input_value),
             InvocationContextStack::fresh(),
             principal,
@@ -979,10 +971,6 @@ async fn invoke_filesystem_tool_success(
         Ok(None) => anyhow::bail!("filesystem tool '{tool_name}' returned no value"),
         Err(error) => anyhow::bail!("filesystem tool '{tool_name}' failed: {error:?}"),
     }
-}
-
-fn filesystem_tool_name(base_name: &str, implementation: &str) -> String {
-    format!("{base_name}-{implementation}")
 }
 
 fn assert_filesystem_tool_error(
@@ -9596,7 +9584,6 @@ async fn exercise_filesystem_tools(
     environment_state: &TestEnvironmentStateService,
     caller_component: &golem_common::model::component::ComponentDto,
     provider: &PrecompiledComponent,
-    implementation: &str,
 ) -> anyhow::Result<()> {
     let provider_component = executor
         .component_dep(&context.default_environment_id, provider)
@@ -9624,7 +9611,7 @@ async fn exercise_filesystem_tools(
         context.account_id,
         provider_component.id,
         provider_component.revision,
-        &format!("golem:filesystem-tools-{implementation}"),
+        "golem:filesystem-tools",
         "ToolStreamingCaller",
         metadata.tools,
     );
@@ -9640,10 +9627,7 @@ async fn exercise_filesystem_tools(
         Some(deployment),
     );
 
-    let agent_id = agent_id!(
-        "ToolStreamingCaller",
-        format!("filesystem-tools-{implementation}")
-    );
+    let agent_id = agent_id!("ToolStreamingCaller", "filesystem-tools");
     let worker_id = executor
         .start_agent(&caller_component.id, agent_id.clone())
         .await?;
@@ -9651,7 +9635,7 @@ async fn exercise_filesystem_tools(
     let principal = Principal::GolemUser(GolemUserPrincipal {
         account_id: context.account_id,
     });
-    let path = format!("workspace/{implementation}/notes.txt");
+    let path = "workspace/filesystem-tools/notes.txt".to_string();
 
     let write = invoke_filesystem_tool_success(
         executor,
@@ -9659,7 +9643,7 @@ async fn exercise_filesystem_tools(
         fingerprint,
         principal.clone(),
         &definitions,
-        &filesystem_tool_name("write-file", implementation),
+        "write-file",
         filesystem_tool_input(vec![
             (
                 "path",
@@ -9692,7 +9676,7 @@ async fn exercise_filesystem_tools(
         fingerprint,
         principal.clone(),
         &definitions,
-        &filesystem_tool_name("read-file", implementation),
+        "read-file",
         filesystem_tool_input(vec![
             (
                 "path",
@@ -9730,7 +9714,7 @@ async fn exercise_filesystem_tools(
         fingerprint,
         principal.clone(),
         &definitions,
-        &filesystem_tool_name("edit-file", implementation),
+        "edit-file",
         filesystem_tool_input(vec![
             (
                 "path",
@@ -9767,7 +9751,7 @@ async fn exercise_filesystem_tools(
         fingerprint,
         principal.clone(),
         &definitions,
-        &filesystem_tool_name("read-file", implementation),
+        "read-file",
         filesystem_tool_input(vec![
             (
                 "path",
@@ -9805,7 +9789,7 @@ async fn exercise_filesystem_tools(
         fingerprint,
         principal.clone(),
         &definitions,
-        &filesystem_tool_name("edit-file", implementation),
+        "edit-file",
         filesystem_tool_input(vec![
             (
                 "path",
@@ -9833,7 +9817,7 @@ async fn exercise_filesystem_tools(
         fingerprint,
         principal.clone(),
         &definitions,
-        &filesystem_tool_name("write-file", implementation),
+        "write-file",
         filesystem_tool_input(vec![
             (
                 "path",
@@ -9866,7 +9850,7 @@ async fn exercise_filesystem_tools(
         fingerprint,
         principal.clone(),
         &definitions,
-        &filesystem_tool_name("edit-file", implementation),
+        "edit-file",
         filesystem_tool_input(vec![
             ("path", SchemaType::string(), SchemaValue::String(path)),
             (
@@ -9886,14 +9870,14 @@ async fn exercise_filesystem_tools(
 
     // "aa" occurs twice in "aaa" (at offsets 0 and 1), so the documented
     // unambiguous-edit contract requires rejecting this edit.
-    let overlap_path = format!("workspace/{implementation}/overlap.txt");
+    let overlap_path = "workspace/filesystem-tools/overlap.txt".to_string();
     invoke_filesystem_tool_success(
         executor,
         &worker_id,
         fingerprint,
         principal.clone(),
         &definitions,
-        &filesystem_tool_name("write-file", implementation),
+        "write-file",
         filesystem_tool_input(vec![
             (
                 "path",
@@ -9919,7 +9903,7 @@ async fn exercise_filesystem_tools(
         fingerprint,
         principal.clone(),
         &definitions,
-        &filesystem_tool_name("edit-file", implementation),
+        "edit-file",
         filesystem_tool_input(vec![
             (
                 "path",
@@ -9947,7 +9931,7 @@ async fn exercise_filesystem_tools(
         fingerprint,
         principal,
         &definitions,
-        &filesystem_tool_name("read-file", implementation),
+        "read-file",
         filesystem_tool_input(vec![
             (
                 "path",
@@ -9972,7 +9956,6 @@ async fn exercise_guest_invoked_filesystem_tools(
     environment_state: &TestEnvironmentStateService,
     caller_component: &golem_common::model::component::ComponentDto,
     provider: &PrecompiledComponent,
-    implementation: &str,
 ) -> anyhow::Result<()> {
     let provider_component = executor
         .component_dep(&context.default_environment_id, provider)
@@ -9990,7 +9973,7 @@ async fn exercise_guest_invoked_filesystem_tools(
         context.account_id,
         provider_component.id,
         provider_component.revision,
-        &format!("golem:filesystem-tools-{implementation}"),
+        "golem:filesystem-tools",
         "ToolStreamingCaller",
         metadata.tools,
     );
@@ -10009,12 +9992,9 @@ async fn exercise_guest_invoked_filesystem_tools(
     let evidence: Vec<String> = executor
         .invoke_and_await_agent(
             caller_component,
-            &agent_id!(
-                "ToolStreamingCaller",
-                format!("filesystem-tools-guest-{implementation}")
-            ),
+            &agent_id!("ToolStreamingCaller", "filesystem-tools-guest"),
             "filesystem_tool_roundtrip",
-            data_value!(implementation.to_string()),
+            data_value!(),
         )
         .await?
         .into_typed()?;
@@ -10040,12 +10020,11 @@ async fn exercise_guest_invoked_filesystem_tools(
 #[test]
 #[tracing::instrument]
 #[timeout("5m")]
-async fn rust_and_moonbit_builtin_filesystem_tools_have_matching_behavior(
+async fn builtin_filesystem_tools_have_expected_behavior(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
-    #[tagged_as("filesystem_tools_rust")] rust: &PrecompiledComponent,
-    #[tagged_as("filesystem_tools_moonbit")] moonbit: &PrecompiledComponent,
+    #[tagged_as("filesystem_tools")] filesystem_tools: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
@@ -10070,18 +10049,7 @@ async fn rust_and_moonbit_builtin_filesystem_tools_have_matching_behavior(
         &context,
         &environment_state,
         &caller_component,
-        rust,
-        "rust",
-    )
-    .await?;
-    exercise_filesystem_tools(
-        &executor,
-        deps,
-        &context,
-        &environment_state,
-        &caller_component,
-        moonbit,
-        "moonbit",
+        filesystem_tools,
     )
     .await?;
     Ok(())
@@ -10090,12 +10058,11 @@ async fn rust_and_moonbit_builtin_filesystem_tools_have_matching_behavior(
 #[test]
 #[tracing::instrument]
 #[timeout("5m")]
-async fn rust_and_moonbit_filesystem_tools_work_through_guest_invocation(
+async fn filesystem_tools_work_through_guest_invocation(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
-    #[tagged_as("filesystem_tools_rust")] rust: &PrecompiledComponent,
-    #[tagged_as("filesystem_tools_moonbit")] moonbit: &PrecompiledComponent,
+    #[tagged_as("filesystem_tools")] filesystem_tools: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
@@ -10120,18 +10087,7 @@ async fn rust_and_moonbit_filesystem_tools_work_through_guest_invocation(
         &context,
         &environment_state,
         &caller_component,
-        rust,
-        "rust",
-    )
-    .await?;
-    exercise_guest_invoked_filesystem_tools(
-        &executor,
-        deps,
-        &context,
-        &environment_state,
-        &caller_component,
-        moonbit,
-        "moonbit",
+        filesystem_tools,
     )
     .await?;
     Ok(())

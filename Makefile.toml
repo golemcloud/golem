@@ -1609,20 +1609,21 @@ cd ../..
 ## BUILT-IN TOOLS
 [tasks.build-builtin-tools]
 dependencies = ["wit"]
-description = "Builds the Rust and MoonBit built-in filesystem tool components"
+description = "Builds the built-in filesystem tool component"
 script_runner = "@duckscript"
 script = '''
 exec --fail-on-error cargo build -p golem --bin golem
 golem = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/debug/golem"
-cd plugins/filesystem-tools-rust
+cd plugins/filesystem-tools
 exec --fail-on-error ${golem} build -P release --force-build --yes
-exec --fail-on-error ${golem} exec -P release copy
-cd ../filesystem-tools-moonbit
-exec --fail-on-error ${golem} build -P release --force-build --yes
-exec --fail-on-error moon fmt component
 exec --fail-on-error ${golem} exec -P release copy
 cd ../..
 '''
+
+[tasks.component-size-report]
+description = "Builds representative components and assembles a local size and retention report"
+command = "python3"
+args = ["test-components/size-analysis/report.py", "--out", "tmp/component-size-report"]
 
 ## ** BUILD TEST COMPONENTS **
 

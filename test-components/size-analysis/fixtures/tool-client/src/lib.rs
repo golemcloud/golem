@@ -31,6 +31,8 @@ impl Caller for CallerImpl {
             Err(golem_rust::agentic::ToolError::Tool(EchoError::Rejected(message))) => message,
             Err(golem_rust::agentic::ToolError::UnknownCustomError(error)) => error.name,
             Err(golem_rust::agentic::ToolError::Rpc(error)) => error.to_string(),
+            Err(golem_rust::agentic::ToolError::RemoteTool(error)) => error.to_string(),
+            Err(golem_rust::agentic::ToolError::MalformedRemoteOutput(message)) => message,
         }
     }
 }

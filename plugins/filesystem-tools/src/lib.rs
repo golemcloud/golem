@@ -56,8 +56,8 @@ pub enum FilesystemToolError {
     Io(String),
 }
 
-#[tool_definition(version = "0.1.0-rust")]
-pub trait ReadFileRust {
+#[tool_definition(version = "0.1.0")]
+pub trait ReadFile {
     #[command(annotations(
         read_only = true,
         destructive = false,
@@ -71,8 +71,8 @@ pub trait ReadFileRust {
     ) -> Result<ReadFileResult, FilesystemToolError>;
 }
 
-#[tool_definition(version = "0.1.0-rust")]
-pub trait WriteFileRust {
+#[tool_definition(version = "0.1.0")]
+pub trait WriteFile {
     #[command(annotations(
         read_only = false,
         destructive = true,
@@ -87,8 +87,8 @@ pub trait WriteFileRust {
     ) -> Result<WriteFileResult, FilesystemToolError>;
 }
 
-#[tool_definition(version = "0.1.0-rust")]
-pub trait EditFileRust {
+#[tool_definition(version = "0.1.0")]
+pub trait EditFile {
     #[command(annotations(
         read_only = false,
         destructive = true,
@@ -103,12 +103,12 @@ pub trait EditFileRust {
     ) -> Result<EditFileResult, FilesystemToolError>;
 }
 
-struct ReadFileRustImpl;
-struct WriteFileRustImpl;
-struct EditFileRustImpl;
+struct ReadFileImpl;
+struct WriteFileImpl;
+struct EditFileImpl;
 
 #[tool_implementation]
-impl ReadFileRust for ReadFileRustImpl {
+impl ReadFile for ReadFileImpl {
     fn read_file(
         &self,
         path: String,
@@ -132,7 +132,7 @@ impl ReadFileRust for ReadFileRustImpl {
 }
 
 #[tool_implementation]
-impl WriteFileRust for WriteFileRustImpl {
+impl WriteFile for WriteFileImpl {
     fn write_file(
         &self,
         path: String,
@@ -164,7 +164,7 @@ impl WriteFileRust for WriteFileRustImpl {
 }
 
 #[tool_implementation]
-impl EditFileRust for EditFileRustImpl {
+impl EditFile for EditFileImpl {
     fn edit_file(
         &self,
         path: String,

@@ -1,6 +1,19 @@
-# Rust component size analysis
+# Component size analysis
 
-This is an informational workflow, not a byte-budget gate. `--wasm` inputs are
+This is an explicitly invoked local report, not a byte-budget gate. Run the complete
+representative build, retention checks, release-profile matrix, Binaryen comparison,
+and allocator smoke test with:
+
+```sh
+cargo make component-size-report
+```
+
+The command writes a human-readable `tmp/component-size-report/report.md`, a combined
+machine-readable `report.json`, and the detailed component, core, section, symbol,
+Cargo, tool-version, WIT, retention, and performance artifacts below that directory.
+The output directory must not already exist.
+
+`--wasm` inputs to the lower-level analyzer are
 never modified; `--manifest` runs Cargo normally and copies its build output.
 Reports contain the original component, extracted core modules,
 section accounting, tool versions, Cargo output/lockfile, and optional attribution
@@ -184,9 +197,10 @@ throws on any host call. It does not initialize agents or measure Golem latency,
 replay, JIT compilation or application throughput. Run the repository latency,
 throughput and cold-start suites before changing code-generating defaults broadly.
 
-`.github/workflows/component-size.yaml` runs on relevant PRs or manual dispatch,
-uploads reports/partial results, and has no size or timing threshold. It is not a
-required merge gate. It neither deploys nor publishes optimized components.
+The report is intentionally not a CI job: it publishes no trend and has no meaningful
+regression threshold. Run it locally when changing SDK code generation, guest bridge
+generation, canonical ABI wrappers, runtime retention, or release profiles, and compare
+results produced with the same toolchain, lockfile, Cargo configuration, and environment.
 
 ## Measurements, 2026-09-22
 

@@ -126,7 +126,9 @@ describe('static component exports', () => {
 
     await instantiate(output.code);
     const client = globalThis.__golemCompiledToolClient;
+    const affineDrops = globalThis.__golemCompiledToolClientAffineDrops;
     delete globalThis.__golemCompiledToolClient;
+    delete globalThis.__golemCompiledToolClientAffineDrops;
     expect(await client.asymmetric({ input: { count: 7, labels: [null, 'right'] } })).toEqual({
       label: 'left',
       values: [2, 9],
@@ -134,6 +136,8 @@ describe('static component exports', () => {
     await expect(client.asymmetric({ input: { count: 1, labels: [] } })).rejects.toMatchObject({
       name: 'ToolCallError',
     });
+    await expect(client.affine({})).rejects.toMatchObject({ name: 'ToolCallError' });
+    expect(affineDrops()).toBe(1);
     await expect(client.fail({})).rejects.toMatchObject({
       cause: { tag: 'tool', error: { name: 'broken', payload: { code: 41 } } },
     });

@@ -13,9 +13,15 @@ const remote = toolDefinition('remote')
     command.body((body) =>
       body.error('broken', { kind: 'runtime', exitCode: 3, payload: z.object({ code: s.u32() }) }),
     ),
+  )
+  .command('affine', (command) =>
+    command.body((body) =>
+      body.returns(z.object({ secret: s.secret(z.string()), count: s.u32() })),
+    ),
   );
 
 let asymmetricCalls = 0;
+let affineDrops = 0;
 const remoteClient = client(remote, {
   transport: {
     start(path, input) {
@@ -46,6 +52,32 @@ const remoteClient = client(remote, {
           cancel() {},
         };
       }
+      if (path[0] === 'affine') {
+        const secret = {
+          [Symbol.dispose]() {
+            affineDrops++;
+          },
+        };
+        return {
+          settledResult: Promise.resolve({
+            status: 'fulfilled',
+            value: {
+              result: {
+                graph: input.graph,
+                value: {
+                  valueNodes: [
+                    { tag: 'secret-value', val: secret },
+                    { tag: 'bool-value', val: true },
+                    { tag: 'record-value', val: [0, 1] },
+                  ],
+                  root: 2,
+                },
+              },
+            },
+          }),
+          cancel() {},
+        };
+      }
       const validInput = input.value.valueNodes[0]?.tag === 'u32-value';
       asymmetricCalls++;
       return {
@@ -56,7 +88,14 @@ const remoteClient = client(remote, {
               graph: input.graph,
               value:
                 asymmetricCalls === 2
-                  ? { valueNodes: [{ tag: 'bool-value', val: true }], root: 0 }
+                  ? {
+                      valueNodes: [
+                        { tag: 'string-value', val: 'wrong-list-element' },
+                        { tag: 'list-value', val: [0] },
+                        { tag: 'record-value', val: [0, 1] },
+                      ],
+                      root: 2,
+                    }
                   : {
                       valueNodes: [
                         { tag: 'string-value', val: validInput ? 'left' : 'bad-input' },
@@ -79,3 +118,6 @@ const remoteClient = client(remote, {
 (
   globalThis as typeof globalThis & { __golemCompiledToolClient?: unknown }
 ).__golemCompiledToolClient = remoteClient;
+(
+  globalThis as typeof globalThis & { __golemCompiledToolClientAffineDrops?: () => number }
+).__golemCompiledToolClientAffineDrops = () => affineDrops;

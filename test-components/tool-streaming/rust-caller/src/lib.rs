@@ -238,7 +238,7 @@ pub trait ToolStreamingCaller {
     async fn dynamic_mcp_probe(&self, value: String) -> String;
     async fn dynamic_mcp_chain_probe(&self, value: String) -> Vec<String>;
     async fn dynamic_mcp_stdout_probe(&self, value: String) -> String;
-    async fn filesystem_tool_roundtrip(&self, implementation: String) -> Vec<String>;
+    async fn filesystem_tool_roundtrip(&self) -> Vec<String>;
     async fn consume_typed_output(&self, decorated: bool, tag: String) -> Vec<TypedOutputEvidence>;
     async fn produce_typed_input(&self, decorated: bool) -> Vec<TypedInputEvidence>;
     async fn native_modes_stream_cancel_overlap(&self) -> Vec<String>;
@@ -462,12 +462,11 @@ fn raw_filesystem_input(
 
 async fn invoke_filesystem_tool<T: FromSchema>(
     name: String,
-    command: &str,
     input: golem_rust::schema::wit::wire::TypedSchemaValue,
 ) -> T {
     let result = ToolRpc::create(&name)
         .expect("tool RPC creation failed")
-        .invoke_and_await(vec![command.to_string()], input, None, None)
+        .invoke_and_await(Vec::new(), input, None, None)
         .await
         .unwrap_or_else(|error| panic!("invoke guest-side filesystem tool '{name}': {error:?}"));
     let value = decode_typed_schema_value_owned(
@@ -1275,11 +1274,10 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         String::from_utf8(stdout).expect("MCP stdout is UTF-8")
     }
 
-    async fn filesystem_tool_roundtrip(&self, implementation: String) -> Vec<String> {
-        let path = format!("workspace/guest-{implementation}/notes.txt");
+    async fn filesystem_tool_roundtrip(&self) -> Vec<String> {
+        let path = "workspace/guest-filesystem-tools/notes.txt".to_string();
         let write: RawWriteFileResult = invoke_filesystem_tool(
-            format!("write-file-{implementation}"),
-            "write-file",
+            "write-file".to_string(),
             raw_filesystem_input(vec![
                 (
                     "path",
@@ -1300,8 +1298,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         )
         .await;
         let read: RawReadFileResult = invoke_filesystem_tool(
-            format!("read-file-{implementation}"),
-            "read-file",
+            "read-file".to_string(),
             raw_filesystem_input(vec![
                 (
                     "path",
@@ -1319,8 +1316,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         )
         .await;
         let edit: RawEditFileResult = invoke_filesystem_tool(
-            format!("edit-file-{implementation}"),
-            "edit-file",
+            "edit-file".to_string(),
             raw_filesystem_input(vec![
                 ("path", SchemaType::string(), SchemaValue::String(path)),
                 (

@@ -167,25 +167,14 @@ jobs:
         with:
           run-id: ${{ github.run_id }}
           copy-to-target: 'true'
-      - name: Setup MoonBit
-        uses: hustcer/setup-moonbit@v1
-        with:
-          version: ${{ env.MOONBIT_INSTALL_VERSION }}
-          core-version: ${{ env.MOONBIT_INSTALL_VERSION }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Install wasm-tools
         run: cargo binstall --force --locked wasm-tools@1.248.0
-      - name: Update MoonBit workspace dependencies
-        run: moon update
-        working-directory: sdks/moonbit
       - name: Build built-in tools
         run: cargo make --profile ci build-builtin-tools
       - name: Validate committed built-in tool artifacts
         run: |
-          wasm-tools validate --features all plugins/filesystem-tools-rust.wasm
-          wasm-tools validate --features all plugins/filesystem-tools-moonbit.wasm
-          git diff --exit-code -- plugins/filesystem-tools-rust plugins/filesystem-tools-rust.wasm plugins/filesystem-tools-moonbit plugins/filesystem-tools-moonbit.wasm
+          wasm-tools validate --features all plugins/filesystem-tools.wasm
+          git diff --exit-code -- plugins/filesystem-tools plugins/filesystem-tools.wasm
 
   worker-tests:
     env:

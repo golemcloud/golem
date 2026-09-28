@@ -1,15 +1,15 @@
 # Schema for IDEA:
 # $schema: https://schema.golem.cloud/app/golem/1.6.0-dev.9/golem.schema.json
 manifestVersion: 1.6.0
-app: filesystem-tools-rust
+app: filesystem-tools
 
 components:
-  golem:filesystem-tools-rust:
+  golem:filesystem-tools:
     dir: "."
     templates: rust
     customCommands:
       copy:
-        - command: cp golem-temp/agents/golem_filesystem_tools_rust_release.wasm ../filesystem-tools-rust.wasm
+        - command: cp golem-temp/agents/golem_filesystem_tools_release.wasm ../filesystem-tools.wasm
 
 environments:
   local:

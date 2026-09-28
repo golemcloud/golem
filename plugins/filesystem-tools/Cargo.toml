@@ -3,7 +3,7 @@ resolver = "2"
 members = ["."]
 
 [package]
-name = "golem_filesystem_tools_rust"
+name = "golem_filesystem_tools"
 version = "0.1.0"
 edition = "2024"
 

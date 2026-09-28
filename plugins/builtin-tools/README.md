@@ -4,16 +4,9 @@ Built-in tools are tool components shipped as bytes in the registry-service bina
 at registry startup. `BUILTIN_TOOLS` in
 `golem-registry-service/src/services/builtin_tool_provisioner.rs` is the production inventory.
 
-The filesystem tools currently have equivalent Rust and MoonBit candidate implementations for
-comparison:
-
-- `plugins/filesystem-tools-rust/` → `plugins/filesystem-tools-rust.wasm`
-- `plugins/filesystem-tools-moonbit/` → `plugins/filesystem-tools-moonbit.wasm`
-
-The candidates are temporarily registered as `read-file-rust` / `read-file-moonbit` (and likewise
-for write and edit), allowing both to be provisioned in the same built-in environment. Once an
-implementation is selected, its three tools will take the final unsuffixed names and the other
-candidate will be removed.
+The filesystem tools are implemented in Rust under `plugins/filesystem-tools/` and built into
+`plugins/filesystem-tools.wasm`. The component provides the `read-file`, `write-file`, and
+`edit-file` tools.
 
 ## Adding a component-implemented built-in tool
 

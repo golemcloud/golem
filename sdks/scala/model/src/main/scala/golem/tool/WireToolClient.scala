@@ -32,6 +32,8 @@ object WireToolRpcFailure {
 
 final case class WireToolInvokeResult(result: Option[WitTypedSchemaValue])
 
+final case class WireToolInputField(name: String, codec: ConcreteCodec[Any], value: Any)
+
 trait WireToolRpcTransport {
   def start(
     commandPath: List[String],
@@ -58,6 +60,15 @@ object WireToolClientRuntime {
   ): Either[ToolError[Nothing], WitTypedSchemaValue] =
     try Right(WitTypedSchemaValue(graph, codec.encodeValue(value)))
     catch { case NonFatal(error) => Left(protocol(s"failed to encode tool input: ${message(error)}")) }
+
+  def inputFields(
+    graph: WitSchemaGraph,
+    fields: List[WireToolInputField]
+  ): Either[ToolError[Nothing], WitTypedSchemaValue] = {
+    val codecs = fields.iterator.map(field => field.name -> field.codec).toVector
+    val values = fields.iterator.map(_.value).toVector
+    input(ConcreteCodec.record(codecs), graph, values)
+  }
 
   def run[E](
     rpc: WireToolRpcTransport,

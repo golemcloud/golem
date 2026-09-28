@@ -447,6 +447,19 @@ describe("capability-sensitive component exports", () => {
           { tag: "anonymous" },
         )
         expect(schemaValueFromWit(result.result.value)).toEqual(v.f64(38))
+        const asymmetric = EffectRuntime.Effect.runSync(
+          compile(EffectRuntime.Schema.Struct({ value: EffectRuntime.Schema.String })),
+        )
+        await expect(
+          runtime.golemTool010Guest.invoke(
+            "double",
+            [],
+            { graph: asymmetric.schemaGraph, value },
+            undefined,
+            undefined,
+            { tag: "anonymous" },
+          ),
+        ).rejects.toMatchObject({ tag: "invalid-input" })
         await expect(
           runtime.golemTool010Guest.invoke(
             "double",

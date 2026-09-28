@@ -50,40 +50,22 @@ pub struct BuiltinToolDescriptor {
 
 static BUILTIN_TOOLS: &[BuiltinToolDescriptor] = &[
     BuiltinToolDescriptor {
-        component_name: "filesystem-tools-rust",
-        tool_name: "read-file-rust",
-        release_version: "0.1.0-rust",
-        wasm_bytes: include_bytes!("../../../plugins/filesystem-tools-rust.wasm"),
+        component_name: "filesystem-tools",
+        tool_name: "read-file",
+        release_version: "0.1.0",
+        wasm_bytes: include_bytes!("../../../plugins/filesystem-tools.wasm"),
     },
     BuiltinToolDescriptor {
-        component_name: "filesystem-tools-rust",
-        tool_name: "write-file-rust",
-        release_version: "0.1.0-rust",
-        wasm_bytes: include_bytes!("../../../plugins/filesystem-tools-rust.wasm"),
+        component_name: "filesystem-tools",
+        tool_name: "write-file",
+        release_version: "0.1.0",
+        wasm_bytes: include_bytes!("../../../plugins/filesystem-tools.wasm"),
     },
     BuiltinToolDescriptor {
-        component_name: "filesystem-tools-rust",
-        tool_name: "edit-file-rust",
-        release_version: "0.1.0-rust",
-        wasm_bytes: include_bytes!("../../../plugins/filesystem-tools-rust.wasm"),
-    },
-    BuiltinToolDescriptor {
-        component_name: "filesystem-tools-moonbit",
-        tool_name: "read-file-moonbit",
-        release_version: "0.1.0-moonbit",
-        wasm_bytes: include_bytes!("../../../plugins/filesystem-tools-moonbit.wasm"),
-    },
-    BuiltinToolDescriptor {
-        component_name: "filesystem-tools-moonbit",
-        tool_name: "write-file-moonbit",
-        release_version: "0.1.0-moonbit",
-        wasm_bytes: include_bytes!("../../../plugins/filesystem-tools-moonbit.wasm"),
-    },
-    BuiltinToolDescriptor {
-        component_name: "filesystem-tools-moonbit",
-        tool_name: "edit-file-moonbit",
-        release_version: "0.1.0-moonbit",
-        wasm_bytes: include_bytes!("../../../plugins/filesystem-tools-moonbit.wasm"),
+        component_name: "filesystem-tools",
+        tool_name: "edit-file",
+        release_version: "0.1.0",
+        wasm_bytes: include_bytes!("../../../plugins/filesystem-tools.wasm"),
     },
 ];
 
