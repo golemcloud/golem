@@ -24557,6 +24557,96 @@ components:
           type: string
       required:
       - domain
+    DurableStreamInputSlotSource:
+      title: DurableStreamInputSlotSource
+      type: object
+      properties:
+        name:
+          type: string
+      required:
+      - name
+    DurableStreamOutputSlotSource:
+      title: DurableStreamOutputSlotSource
+      type: object
+      properties:
+        name:
+          type: string
+      required:
+      - name
+    DurableStreamRouteLoadOptions:
+      title: DurableStreamRouteLoadOptions
+      type: object
+      properties:
+        maxConcurrentReadersPerStream:
+          type: integer
+          format: uint32
+        maxAppendRequestsPerSecondPerStream:
+          type: integer
+          format: uint32
+    DurableStreamRouteOptions:
+      title: DurableStreamRouteOptions
+      type: object
+      properties:
+        slots:
+          type: array
+          items:
+            $ref: '#/components/schemas/DurableStreamSlotOptions'
+        allowExternalWrites:
+          type: boolean
+        allowStreamDelete:
+          type: boolean
+        allowInvocationDelete:
+          type: boolean
+        load:
+          $ref: '#/components/schemas/DurableStreamRouteLoadOptions'
+      required:
+      - slots
+    DurableStreamSlotOptions:
+      title: DurableStreamSlotOptions
+      type: object
+      properties:
+        source:
+          $ref: '#/components/schemas/DurableStreamSlotSource'
+        name:
+          type: string
+        contentType:
+          type: string
+      required:
+      - source
+    DurableStreamSlotSource:
+      discriminator:
+        propertyName: type
+        mapping:
+          input: '#/components/schemas/DurableStreamSlotSource_DurableStreamInputSlotSource'
+          output: '#/components/schemas/DurableStreamSlotSource_DurableStreamOutputSlotSource'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/DurableStreamSlotSource_DurableStreamInputSlotSource'
+      - $ref: '#/components/schemas/DurableStreamSlotSource_DurableStreamOutputSlotSource'
+    DurableStreamSlotSource_DurableStreamInputSlotSource:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: input
+            type: string
+            enum:
+            - input
+        required:
+        - type
+      - $ref: '#/components/schemas/DurableStreamInputSlotSource'
+    DurableStreamSlotSource_DurableStreamOutputSlotSource:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: output
+            type: string
+            enum:
+            - output
+        required:
+        - type
+      - $ref: '#/components/schemas/DurableStreamOutputSlotSource'
     EnforcementAction:
       type: string
       enum:
@@ -25312,6 +25402,8 @@ components:
           $ref: '#/components/schemas/AgentHttpAuthDetails'
         corsOptions:
           $ref: '#/components/schemas/CorsOptions'
+        durableStreams:
+          $ref: '#/components/schemas/DurableStreamRouteOptions'
       required:
       - httpMethod
       - pathSuffix

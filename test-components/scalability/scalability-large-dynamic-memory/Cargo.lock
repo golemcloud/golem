@@ -421,6 +421,7 @@ dependencies = [
 name = "golem-rust-macro"
 version = "0.0.0"
 dependencies = [
+ "golem-schema",
  "heck 0.5.0",
  "humantime",
  "proc-macro-crate",

@@ -4950,6 +4950,7 @@ mod tests {
                     cors_options: golem_common::model::agent::CorsOptions {
                         allowed_patterns: vec![],
                     },
+                    durable_streams: None,
                 }],
                 read_only: None,
             }],

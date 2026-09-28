@@ -197,12 +197,97 @@ pub fn apply_cors_outgoing_middleware(
     ] {
         response.headers_mut().remove(name);
     }
-    if matches!(&resolved_route.route.behavior, super::RichRouteBehaviour::CallAgent(behaviour)
-        if behaviour.route_mode == golem_service_base::custom_api::AgentRouteMode::DurableStreams)
+    if let super::RichRouteBehaviour::CallAgent(behaviour) = &resolved_route.route.behavior
+        && behaviour.route_mode == golem_service_base::custom_api::AgentRouteMode::DurableStreams
     {
+        let path = &resolved_route.route.path;
+        let path_variables = path
+            .iter()
+            .filter(|segment| {
+                !matches!(
+                    segment,
+                    golem_service_base::custom_api::PathSegment::Literal { .. }
+                )
+            })
+            .count();
+        let is_base = path_variables == behaviour.base_path_variables as usize;
+        let is_slot = matches!(
+            path.as_slice(),
+            [.., golem_service_base::custom_api::PathSegment::Literal { value }, _]
+                if value == "streams"
+        );
+        let is_fork_slot = is_slot && path_variables == behaviour.base_path_variables as usize + 3;
+        let is_writable_slot = is_slot
+            && resolved_route
+                .captured_path_parameters
+                .last()
+                .and_then(|slot| {
+                    behaviour
+                        .durable_streams
+                        .as_ref()?
+                        .slot_by_public_name(slot)
+                })
+                .is_some_and(|slot| slot.writable());
+        let mut exposed = vec!["Allow", "Retry-After"];
+        match resolved_route.route.route_match.method() {
+            Some(HttpMethod::Put(_)) if is_base => exposed.push("Location"),
+            Some(HttpMethod::Put(_)) if is_slot => {
+                exposed.extend([
+                    "Stream-Next-Offset",
+                    "Stream-Closed",
+                    "Stream-Cancelled",
+                    "Stream-Up-To-Date",
+                    "Stream-TTL",
+                    "Stream-Expires-At",
+                    "ETag",
+                ]);
+                if is_fork_slot {
+                    exposed.push("Location");
+                }
+            }
+            Some(HttpMethod::Head(_)) if is_slot => exposed.extend([
+                "Stream-Next-Offset",
+                "Stream-Closed",
+                "Stream-Cancelled",
+                "Stream-Up-To-Date",
+                "Stream-TTL",
+                "Stream-Expires-At",
+                "ETag",
+            ]),
+            Some(HttpMethod::Head(_)) => {
+                exposed.extend(["Stream-Closed", "Stream-TTL", "Stream-Expires-At"])
+            }
+            Some(HttpMethod::Get(_)) if is_slot => exposed.extend([
+                "Stream-Next-Offset",
+                "Stream-Closed",
+                "Stream-Cancelled",
+                "Stream-Up-To-Date",
+                "Stream-Cursor",
+                "Stream-SSE-Data-Encoding",
+                "ETag",
+            ]),
+            Some(HttpMethod::Get(_)) => exposed.push("Stream-Closed"),
+            Some(HttpMethod::Post(_))
+                if behaviour
+                    .durable_streams
+                    .as_ref()
+                    .is_some_and(|policy| policy.allow_external_writes)
+                    && is_writable_slot =>
+            {
+                exposed.extend([
+                    "Stream-Next-Offset",
+                    "Stream-Closed",
+                    "Producer-Epoch",
+                    "Producer-Seq",
+                    "Producer-Expected-Seq",
+                    "Producer-Received-Seq",
+                ])
+            }
+            _ => {}
+        }
         response.headers_mut().insert(
             http::header::ACCESS_CONTROL_EXPOSE_HEADERS,
-            HeaderValue::from_static("Stream-Next-Offset, Stream-Closed, Stream-Cancelled, Stream-Up-To-Date, Stream-Cursor, Stream-SSE-Data-Encoding, Stream-TTL, Stream-Expires-At, Producer-Epoch, Producer-Seq, Producer-Expected-Seq, Producer-Received-Seq, ETag, Location, Retry-After"),
+            exposed.join(", ").parse().map_err(anyhow::Error::from)?,
         );
     }
     let cors = &resolved_route.route.cors;

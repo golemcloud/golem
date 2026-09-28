@@ -1828,6 +1828,10 @@ fn push_wit_state_node(
                 inner: inner_idx,
             })
         }
+        RetryPolicyState::TimeBox { inner, .. } => {
+            let inner_idx = push_wit_state_node(*inner, nodes);
+            oplog::StateNode::Wrapper(inner_idx)
+        }
         RetryPolicyState::AndThen {
             left,
             right,

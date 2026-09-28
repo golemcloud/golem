@@ -93,9 +93,8 @@ impl InitialAgentFilesService {
         length: u64,
     ) -> Result<Option<BlobRangeStream>, Error> {
         self.blob_storage
+            .with(INITIAL_AGENT_FILES_LABEL, "get_range")
             .get_range_stream(
-                INITIAL_AGENT_FILES_LABEL,
-                "get_range",
                 BlobStorageNamespace::InitialAgentFiles { environment_id },
                 &PathBuf::from(key.0.into_blake3().to_hex().to_string()),
                 offset,

@@ -1120,6 +1120,7 @@ mod tests {
         require_takeover: bool,
         reject_takeover: bool,
         detach_before_takeover: bool,
+        joined_origin_observer: bool,
         scope_card_payloads: Arc<Mutex<Vec<Vec<u8>>>>,
         segment_requests: Arc<Mutex<Vec<DurableStreamSegmentReadRequest>>>,
         segment_responses: Arc<
@@ -1247,18 +1248,41 @@ mod tests {
                                 agent_id: start.agent_id.clone(),
                                 idempotency_key: start.idempotency_key.clone(),
                                 component_revision: Some(0),
-                                attachment_id: Some(uuid::Uuid::from_u128(17).into()),
-                                attempt_id: start.attempt_id,
-                                epoch: 1,
+                                attachment_id: (!self.joined_origin_observer)
+                                    .then(|| uuid::Uuid::from_u128(17).into()),
+                                attempt_id: (!self.joined_origin_observer)
+                                    .then_some(start.attempt_id)
+                                    .flatten(),
+                                epoch: if self.joined_origin_observer { 0 } else { 7 },
                                 stream_mappings: start.durable_input_mappings.clone(),
                                 environment_id: start.environment_id,
                                 callee_fingerprint: start.expected_callee_fingerprint,
                                 method_name: start.method_name.clone(),
-                                joined_origin_observer: false,
+                                joined_origin_observer: self.joined_origin_observer,
                                 ..Default::default()
                             },
                         )),
                     };
+                    if self.joined_origin_observer {
+                        let result = InvocationResponse {
+                            response: Some(invocation_response::Response::Result(
+                                InvocationSessionResult {
+                                    result: Some(invocation_session_result::Result::MethodResult(
+                                        ProtoSchemaValue::try_from(SchemaValue::U64(42)).unwrap(),
+                                    )),
+                                    component_revision: Some(0),
+                                    agent_id: start.agent_id,
+                                    idempotency_key: start.idempotency_key,
+                                    agent_fingerprint: start.expected_callee_fingerprint,
+                                    ..Default::default()
+                                },
+                            )),
+                        };
+                        return Ok(Response::new(Box::pin(tokio_stream::iter(vec![
+                            Ok(accepted),
+                            Ok(result),
+                        ]))));
+                    }
                     let revoked = InvocationResponse {
                         response: Some(invocation_response::Response::AttachmentRevoked(
                             AttachmentRevoked {
@@ -1584,36 +1608,44 @@ mod tests {
     #[test]
     #[test_r::timeout("30s")]
     async fn cross_shard_streaming_rpc_resumes_after_replayed_start_is_revoked() {
-        check_streaming_attachment_retry(false, false, false).await;
+        check_streaming_attachment_retry(false, false, false, false).await;
     }
 
     #[test]
     #[test_r::timeout("30s")]
     async fn cross_shard_streaming_rpc_takes_over_an_attached_session() {
-        check_streaming_attachment_retry(true, false, false).await;
+        check_streaming_attachment_retry(true, false, false, false).await;
     }
 
     #[test]
     #[test_r::timeout("30s")]
     async fn cross_shard_streaming_rpc_stops_after_takeover_is_rejected() {
-        check_streaming_attachment_retry(true, true, false).await;
+        check_streaming_attachment_retry(true, true, false, false).await;
     }
 
     #[test]
     #[test_r::timeout("30s")]
     async fn cross_shard_streaming_rpc_resumes_if_transport_detaches_before_takeover() {
-        check_streaming_attachment_retry(true, false, true).await;
+        check_streaming_attachment_retry(true, false, true, false).await;
+    }
+
+    #[test]
+    #[test_r::timeout("30s")]
+    async fn cross_shard_streaming_rpc_preserves_observer_acceptance_without_authority() {
+        check_streaming_attachment_retry(false, false, false, true).await;
     }
 
     async fn check_streaming_attachment_retry(
         require_takeover: bool,
         reject_takeover: bool,
         detach_before_takeover: bool,
+        joined_origin_observer: bool,
     ) {
         let service = FlakyWorkerService {
             require_takeover,
             reject_takeover,
             detach_before_takeover,
+            joined_origin_observer,
             ..Default::default()
         };
         let streaming_requests = service.streaming_requests.clone();
@@ -1680,6 +1712,7 @@ mod tests {
             callee_fingerprint: Some(caller_fingerprint.0.into()),
             idempotency_key: Some(IdempotencyKey::new("origin-invocation".into()).into()),
         };
+        let (accepted_sender, accepted_receiver) = tokio::sync::oneshot::channel();
         let result = rpc
             .invoke_and_await_streaming(
                 &OwnedAgentId::new(EnvironmentId::new(), &callee),
@@ -1690,7 +1723,7 @@ mod tests {
                 AgentFingerprint::new(),
                 uuid::Uuid::new_v4(),
                 origin.clone(),
-                tokio::sync::oneshot::channel().0,
+                accepted_sender,
                 AccountId::new(),
                 &caller,
                 &[],
@@ -1712,11 +1745,8 @@ mod tests {
                 ProtoSchemaValue::try_from(SchemaValue::U64(42)).unwrap()
             );
         }
+        let accepted = accepted_receiver.await.unwrap();
         let requests = streaming_requests.lock().unwrap();
-        assert_eq!(
-            requests.len(),
-            4 + usize::from(require_takeover) + usize::from(detach_before_takeover)
-        );
         let Some(invocation_request::Request::Start(first_start)) = &requests[0].request else {
             panic!("first request was not Start");
         };
@@ -1725,6 +1755,33 @@ mod tests {
         };
         assert_eq!(first_start, replayed_start);
         assert_eq!(first_start.origin_invocation, Some(origin));
+        assert_eq!(accepted.agent_id, first_start.agent_id);
+        assert_eq!(accepted.idempotency_key, first_start.idempotency_key);
+        assert_eq!(accepted.environment_id, first_start.environment_id);
+        assert_eq!(
+            accepted.callee_fingerprint,
+            first_start.expected_callee_fingerprint
+        );
+        assert_eq!(accepted.stream_mappings, first_start.durable_input_mappings);
+        assert_eq!(accepted.method_name, first_start.method_name);
+        assert_eq!(accepted.joined_origin_observer, joined_origin_observer);
+        if joined_origin_observer {
+            assert_eq!(accepted.attachment_id, None);
+            assert_eq!(accepted.attempt_id, None);
+            assert_eq!(accepted.epoch, 0);
+            assert_eq!(requests.len(), 2);
+            return;
+        }
+        assert_eq!(
+            accepted.attachment_id,
+            Some(uuid::Uuid::from_u128(17).into())
+        );
+        assert_eq!(accepted.attempt_id, first_start.attempt_id);
+        assert_eq!(accepted.epoch, 7);
+        assert_eq!(
+            requests.len(),
+            4 + usize::from(require_takeover) + usize::from(detach_before_takeover)
+        );
         let Some(invocation_request::Request::ResumeAttach(resume)) = &requests[2].request else {
             panic!("third request was not ResumeAttach");
         };
@@ -1736,7 +1793,7 @@ mod tests {
             first_start.expected_callee_fingerprint
         );
         assert_eq!(resume.attachment_id, Some(uuid::Uuid::from_u128(17).into()));
-        assert_eq!(resume.expected_epoch, 1);
+        assert_eq!(resume.expected_epoch, 7);
         assert_eq!(resume.operation, ResumeOperation::Resume as i32);
         assert!(resume.cursors.is_empty());
         assert_ne!(resume.attempt_id, first_start.attempt_id);

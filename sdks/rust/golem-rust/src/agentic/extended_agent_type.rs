@@ -340,6 +340,7 @@ mod tests {
                     cors_options: CorsOptions {
                         allowed_patterns: vec![],
                     },
+                    durable_streams: None,
                 }],
                 prompt_hint: None,
                 input_schema: vec![],

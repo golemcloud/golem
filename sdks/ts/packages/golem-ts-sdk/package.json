@@ -62,7 +62,7 @@
     "lint:fix": "eslint . --ext .ts,.tsx,.mjs --fix",
     "generate-dts": "node ./scripts/generate-dts.mjs",
     "build": "pnpm run generate-dts && rollup --failAfterWarnings -c",
-    "build:http-router": "pnpm run generate-dts && rollup --failAfterWarnings -c --configHttpRouter",
+    "check:package": "node ./scripts/check-package.mjs",
     "clean": "node ./scripts/clean.mjs",
     "clean-test-data": "node ../../scripts/clean-test-data.mjs",
     "test": "pnpm run typecheck && pnpm run clean-test-data && vitest run",
@@ -82,6 +82,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.33.0",
+    "@golemcloud/http-contract": "file:../../../http-contract",
     "arktype": "^2.1.0",
     "effect": "^3.10.0",
     "valibot": "^1.0.0",

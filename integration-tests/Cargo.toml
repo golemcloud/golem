@@ -77,6 +77,11 @@ path = "tests/http_handler_lifecycle.rs"
 harness = false
 
 [[test]]
+name = "streaming-session-recovery"
+path = "tests/streaming_session_recovery.rs"
+harness = false
+
+[[test]]
 name = "sharding"
 path = "tests/sharding.rs"
 harness = false

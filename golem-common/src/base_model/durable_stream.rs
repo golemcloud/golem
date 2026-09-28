@@ -41,7 +41,6 @@ pub const DEFAULT_LIVE_JOIN_BUFFER_SIZE: usize = 32;
 pub const MIN_LIVE_JOIN_BUFFER_SIZE: usize = 1;
 pub const MAX_LIVE_JOIN_BUFFER_SIZE: usize = 1024;
 pub const STREAM_ATTACHMENT_LEASE_TTL_MILLIS: u64 = 60_000;
-pub const STREAM_ATTACHMENT_RENEWAL_TARGET_MILLIS: u64 = 20_000;
 pub const STREAM_ATTACHMENT_RECONCILIATION_INTERVAL_MILLIS: u64 = 30_000;
 pub const STREAM_ATTACHMENT_RECONCILIATION_BATCH_SIZE: usize = 256;
 pub const STREAM_ATTACHMENT_ABANDONED_PREPARE_MILLIS: u64 = 5 * 60_000;
@@ -828,17 +827,6 @@ pub struct StreamAttachmentActivatedRecord {
     pub format_version: u8,
     pub key: StreamAttachmentKey,
     pub activated_at_millis: u64,
-    pub lease_expires_at_millis: u64,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-#[cfg_attr(feature = "full", desert(evolution()))]
-pub struct StreamAttachmentRenewedRecord {
-    pub format_version: u8,
-    pub key: StreamAttachmentKey,
-    pub renewed_at_millis: u64,
-    pub lease_expires_at_millis: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
@@ -923,10 +911,6 @@ pub enum StreamAttachmentControlOperation {
     Detach {
         key: StreamAttachmentKey,
     },
-    Renew {
-        key: StreamAttachmentKey,
-        now_millis: u64,
-    },
     Cancel {
         key: StreamAttachmentKey,
         role: StreamCancelRole,
@@ -952,7 +936,6 @@ impl StreamAttachmentControlOperation {
             Self::Prepare { key, .. }
             | Self::Activate { key, .. }
             | Self::Detach { key }
-            | Self::Renew { key, .. }
             | Self::Cancel { key, .. }
             | Self::Finalize { key, .. }
             | Self::SourceUnavailable { key, .. } => key,
@@ -1203,6 +1186,70 @@ pub struct StreamConsumerTerminalRecord {
     pub terminal: StreamConsumerTerminal,
 }
 
+/// The containing record that must publish an owner-journal forwarding destination.
+#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+pub enum StreamReaderForwardPublication {
+    InvocationInput,
+    InvocationResult {
+        handle_index: u64,
+    },
+    ProducerItem {
+        parent_stream: LocalStreamId,
+        sequence: u64,
+        handle_index: u64,
+    },
+}
+
+/// The exact binding that must accept an unread reader before its ownership is transferred.
+#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+pub enum StreamReaderForwardDestination {
+    /// A session journal in this oplog, including caller-side journals for remote invocations.
+    SessionBinding {
+        session_key: StreamRegistrationInvocation,
+        binding: StreamBindingRecord,
+        publication: StreamReaderForwardPublication,
+    },
+    InvocationInput {
+        invocation: StreamInvocationId,
+        mapping: StreamSessionMappingRecord,
+    },
+}
+
+impl StreamReaderForwardDestination {
+    pub fn session_key(
+        &self,
+        owner_environment_id: EnvironmentId,
+        owner: &AgentId,
+        owner_fingerprint: AgentFingerprint,
+    ) -> StreamSessionKey {
+        match self {
+            Self::SessionBinding { session_key, .. } => {
+                session_key.qualify(owner_environment_id, owner, owner_fingerprint)
+            }
+            Self::InvocationInput { invocation, .. } => invocation.clone(),
+        }
+    }
+
+    pub fn transport_stream_id(&self) -> u64 {
+        match self {
+            Self::SessionBinding { binding, .. } => binding.transport_stream_id,
+            Self::InvocationInput { mapping, .. } => mapping.transport_stream_id,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub struct StreamReaderForwardIntentRecord {
+    pub format_version: u8,
+    pub session_key: StreamRegistrationInvocation,
+    pub reader_id: LocalStreamReaderId,
+    pub destination: StreamReaderForwardDestination,
+}
+
 #[derive(Clone, Debug, Eq, Hash, PartialEq, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
@@ -1378,7 +1425,6 @@ pub enum StreamSessionRecord {
     Mapping(StreamSessionMappingUpdateRecord),
     AttachmentPrepared(StreamAttachmentPreparedRecord),
     AttachmentActivated(StreamAttachmentActivatedRecord),
-    AttachmentRenewed(StreamAttachmentRenewedRecord),
     AttachmentFinalized(StreamAttachmentFinalizedRecord),
     ProducerDeleting(StreamProducerDeletingRecord),
     CascadeOutbox(StreamCascadeOutboxRecord),
@@ -1392,6 +1438,7 @@ pub enum StreamSessionRecord {
     ConsumerCancelIntent(StreamConsumerCancelIntentRecord),
     ConsumerCancelApplied(StreamConsumerCancelAppliedRecord),
     ConsumerTerminal(StreamConsumerTerminalRecord),
+    ReaderForwardIntent(StreamReaderForwardIntentRecord),
     InvocationResult(StreamSessionInvocationResultRecord),
     Finished(StreamSessionFinishedRecord),
     Tombstoned(StreamSlotTombstonedRecord),
@@ -1437,7 +1484,6 @@ impl StreamSessionRecord {
             Self::Mapping(record) => record.format_version,
             Self::AttachmentPrepared(record) => record.format_version,
             Self::AttachmentActivated(record) => record.format_version,
-            Self::AttachmentRenewed(record) => record.format_version,
             Self::AttachmentFinalized(record) => record.format_version,
             Self::ProducerDeleting(record) => record.format_version,
             Self::CascadeOutbox(record) => record.format_version,
@@ -1451,6 +1497,7 @@ impl StreamSessionRecord {
             Self::ConsumerCancelIntent(record) => record.format_version,
             Self::ConsumerCancelApplied(record) => record.format_version,
             Self::ConsumerTerminal(record) => record.format_version,
+            Self::ReaderForwardIntent(record) => record.format_version,
             Self::InvocationResult(record) => record.format_version,
             Self::Finished(record) => record.format_version,
             Self::Tombstoned(record) => record.format_version,
@@ -1548,14 +1595,7 @@ impl StreamSessionRecord {
                 record.key.is_well_formed()
                     && record.lease_expires_at_millis > record.prepared_at_millis
             }
-            Self::AttachmentActivated(record) => {
-                record.key.is_well_formed()
-                    && record.lease_expires_at_millis > record.activated_at_millis
-            }
-            Self::AttachmentRenewed(record) => {
-                record.key.is_well_formed()
-                    && record.lease_expires_at_millis > record.renewed_at_millis
-            }
+            Self::AttachmentActivated(record) => record.key.is_well_formed(),
             Self::AttachmentFinalized(record) => record.key.is_well_formed(),
             Self::ProducerDeleting(record) => !record.producer_fingerprint.0.is_nil(),
             Self::CascadeOutbox(record) => record.key.is_well_formed(),
@@ -1621,6 +1661,38 @@ impl StreamSessionRecord {
             }
             Self::ConsumerTerminal(record) => {
                 StreamOffset::from_bytes(record.source_offset.0).is_ok()
+            }
+            Self::ReaderForwardIntent(record) => {
+                record.reader_id.introducing_oplog_index.is_defined()
+                    && match &record.destination {
+                        StreamReaderForwardDestination::SessionBinding {
+                            binding,
+                            publication,
+                            ..
+                        } => {
+                            binding.source.has_supported_format()
+                                && match publication {
+                                    StreamReaderForwardPublication::InvocationInput => {
+                                        binding.role == SessionStreamRole::Input
+                                    }
+                                    StreamReaderForwardPublication::InvocationResult { .. } => {
+                                        binding.role == SessionStreamRole::Output
+                                    }
+                                    StreamReaderForwardPublication::ProducerItem {
+                                        parent_stream,
+                                        ..
+                                    } => parent_stream.0.is_defined(),
+                                }
+                        }
+                        StreamReaderForwardDestination::InvocationInput {
+                            invocation,
+                            mapping,
+                        } => {
+                            !invocation.callee_fingerprint.0.is_nil()
+                                && mapping.role == SessionStreamRole::Input
+                                && supported_handle(&mapping.handle)
+                        }
+                    }
             }
             Self::InvocationResult(record) => {
                 let unique_transport_ids = record

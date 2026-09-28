@@ -130,12 +130,6 @@ pub(super) async fn run_session(
             send_error(&events, HttpSessionError::Protocol(error)).await;
             return;
         }
-        for durable_id in &output.terminals {
-            if let Err(error) = protocol.mark_terminal_resume_cursor(*durable_id) {
-                send_error(&events, HttpSessionError::Protocol(error)).await;
-                return;
-            }
-        }
         let decision = if let Some(deadline) = recovery.deadline {
             match tokio::time::timeout_at(deadline, responses.next()).await {
                 Ok(decision) => decision,

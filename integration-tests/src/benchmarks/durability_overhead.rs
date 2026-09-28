@@ -20,7 +20,9 @@ use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::component::{ComponentDto, ComponentId};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::{agent_id, data_value};
-use golem_test_framework::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
+use golem_test_framework::benchmark::{
+    Benchmark, BenchmarkRecorder, BenchmarkResultValue, RunConfig,
+};
 use golem_test_framework::config::benchmark::TestMode;
 use golem_test_framework::config::dsl_impl::TestUserContext;
 use golem_test_framework::config::{BenchmarkTestDependencies, TestDependencies};
@@ -80,8 +82,8 @@ impl Benchmark for DurabilityOverhead {
         cluster_size: usize,
         disable_compilation_cache: bool,
         otlp: bool,
-    ) -> Self::BenchmarkContext {
-        DurabilityOverheadBenchmarkContext {
+    ) -> BenchmarkResultValue<Self::BenchmarkContext> {
+        Ok(DurabilityOverheadBenchmarkContext {
             deps: BenchmarkTestDependencies::new(
                 mode,
                 verbosity,
@@ -90,21 +92,23 @@ impl Benchmark for DurabilityOverhead {
                 otlp,
             )
             .await,
-        }
+        })
     }
 
-    async fn cleanup(benchmark_context: Self::BenchmarkContext) {
+    async fn cleanup(benchmark_context: Self::BenchmarkContext) -> BenchmarkResultValue {
         benchmark_context.deps.kill_all().await;
+        Ok(())
     }
 
-    async fn create(_mode: &TestMode, config: RunConfig) -> Self {
-        Self { config }
+    async fn create(_mode: &TestMode, config: RunConfig) -> BenchmarkResultValue<Self> {
+        Ok(Self { config })
     }
 
     async fn setup_iteration(
         &self,
         benchmark_context: &Self::BenchmarkContext,
-    ) -> Self::IterationContext {
+        _recorder: BenchmarkRecorder,
+    ) -> BenchmarkResultValue<Self::IterationContext> {
         let user = benchmark_context.deps.user().await.unwrap();
         let (_, env) = user.app_and_env().await.unwrap();
 
@@ -135,21 +139,21 @@ impl Benchmark for DurabilityOverhead {
             ));
         }
 
-        DurabilityOverheadIterationContext {
+        Ok(DurabilityOverheadIterationContext {
             user,
             component: durable_component,
             durable_persistent_agent_ids,
             ephemeral_agent_ids,
             durable_persistent_commit_agent_ids,
             env_id: env.id,
-        }
+        })
     }
 
     async fn warmup(
         &self,
         _benchmark_context: &Self::BenchmarkContext,
         context: &Self::IterationContext,
-    ) {
+    ) -> BenchmarkResultValue {
         async fn warmup_group(
             user: &TestUserContext<BenchmarkTestDependencies>,
             component: &ComponentDto,
@@ -179,6 +183,7 @@ impl Benchmark for DurabilityOverhead {
         )
         .instrument(tracing::info_span!("warmup_durable_persistent"))
         .await;
+        Ok(())
     }
 
     async fn run(
@@ -186,7 +191,7 @@ impl Benchmark for DurabilityOverhead {
         _benchmark_context: &Self::BenchmarkContext,
         context: &Self::IterationContext,
         recorder: BenchmarkRecorder,
-    ) {
+    ) -> BenchmarkResultValue {
         let length = self.config.length as u32;
 
         async {
@@ -264,21 +269,25 @@ impl Benchmark for DurabilityOverhead {
         }
         .instrument(tracing::info_span!("measure_durable_persistent_commit"))
         .await;
+        Ok(())
     }
 
     async fn cleanup_iteration(
         &self,
         _benchmark_context: &Self::BenchmarkContext,
         context: Self::IterationContext,
-    ) {
+        recorder: BenchmarkRecorder,
+    ) -> BenchmarkResultValue {
         delete_workers(
             &context.user,
             &agent_ids_to_agent_ids(context.component.id, &context.durable_persistent_agent_ids),
+            &recorder,
         )
         .await;
         delete_workers(
             &context.user,
             &agent_ids_to_agent_ids(context.component.id, &context.ephemeral_agent_ids),
+            &recorder,
         )
         .await;
         delete_workers(
@@ -287,8 +296,10 @@ impl Benchmark for DurabilityOverhead {
                 context.component.id,
                 &context.durable_persistent_commit_agent_ids,
             ),
+            &recorder,
         )
         .await;
-        cleanup_user_state(&context.user, &context.env_id).await;
+        cleanup_user_state(&context.user, &context.env_id, &recorder).await;
+        Ok(())
     }
 }

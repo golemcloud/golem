@@ -271,6 +271,11 @@ impl ReconstructionClaimState {
         self.active_bodies.subscribe()
     }
 
+    /// Whether the entity body started at `start_index` is claimed and has not settled yet.
+    pub(crate) fn is_body_active(&self, start_index: OplogIndex) -> bool {
+        self.active_bodies.borrow().contains(&start_index)
+    }
+
     #[cfg(any(test, feature = "test-utils"))]
     pub(crate) async fn wait_for_fences(&self) {
         let mut active = self.active_fences.subscribe();
@@ -546,6 +551,10 @@ impl ReplayCallHandle {
 
     pub fn start_idx(&self) -> OplogIndex {
         self.start_idx
+    }
+
+    pub(crate) fn resolution_ready(&self) -> bool {
+        !self.receiver.is_empty() || self.receiver.is_terminated()
     }
 
     pub(crate) fn attach_historical_reconstruction(

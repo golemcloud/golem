@@ -101,11 +101,16 @@ the authoritative session index, discarding pre-cut cached state. An uncommitted
 instead of repeatedly loading an index that cannot yet cover it.
 
 The worker's post-publication stream reconciler uses the committed in-memory status tip as the
-topology suffix boundary. After recovery leaves no dirty topology and producer metadata reports no
-active attachment, the task parks on `DurableStreamStore::session_records_changed`; it does not
-periodically reopen an idle worker's oplog merely because historical stream records exist. A
-committed session mutation wakes it, active attachments keep the renewal deadline armed, and a
-failed pass keeps periodic retry armed.
+topology suffix boundary. After recovery leaves no unfinished work, the task parks on
+`DurableStreamStore::session_records_changed`, including when healthy active attachments exist.
+First producer load wakes a worker with no prior stream history. Committed session mutations and
+stream terminals wake recovery only after their commit callbacks finish publishing worker status;
+ordinary producer items do not. This lets a forwarded input's terminal complete a deferred session
+without a periodic check. Failed or unfinished recovery retains timed retries, but stale attachment
+bookkeeping without demand is deliberately lazy. Deletion reconciles before deciding dependencies.
+A read with exact committed Active consumer authority can repair a producer left Prepared by a lost
+activation RPC; an already-active read stays on the read path. No new storage transaction or global
+cleanup enumeration is implied by these resident wakeups.
 
 A repeated `Start` for a retained session reports the current epoch, even after a resume or revert.
 It does not reactivate foreign bindings when its original attempt no longer owns the attachment.

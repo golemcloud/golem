@@ -67,10 +67,10 @@ components:
     dir: billing                   # Base directory (relative to golem.yaml). Use "." for single-component apps
     templates:                     # Parent template names (inherit build, env, plugins, files)
       - rust
-    componentWasm: target/wasm32-wasip1/debug/billing.wasm   # Path to built WASM
+    componentWasm: target/wasm32-wasip2/debug/billing.wasm   # Path to built WASM
     outputWasm: golem-temp/billing.wasm                       # Path to final output WASM
     build:                         # Build commands (see Build Commands below)
-      - command: cargo build --target wasm32-wasip1
+      - command: cargo build --target wasm32-wasip2
     env:                           # Environment variables
       LOG_LEVEL: info
     tools:                         # Owner authorization; inherited by the component's agents
@@ -125,7 +125,7 @@ Templates define reusable property layers. Components reference them via `templa
 componentTemplates:
   rust:
     build:
-      - command: cargo build --target wasm32-wasip1
+      - command: cargo build --target wasm32-wasip2
     env:
       RUST_LOG: info
 
@@ -247,14 +247,14 @@ The `build` array contains commands executed during `golem build`. Each entry is
 
 ```yaml
 build:
-  - command: cargo build --target wasm32-wasip1
+  - command: cargo build --target wasm32-wasip2
     dir: .                         # Optional working directory
     env:                           # Optional extra env vars
       RUSTFLAGS: "-C opt-level=2"
     rmdirs: [target/old]           # Directories to delete before running (runs before mkdirs)
     mkdirs: [target/new]           # Directories to create before running (runs after rmdirs)
     sources: ["src/**/*.rs"]       # Inputs for up-to-date checks
-    targets: ["target/wasm32-wasip1/debug/*.wasm"]  # Outputs for up-to-date checks
+    targets: ["target/wasm32-wasip2/debug/*.wasm"]  # Outputs for up-to-date checks
 ```
 
 ### TypeScript/QuickJS-specific commands
@@ -284,10 +284,10 @@ Define CLI commands at the application or component level:
 ```yaml
 customCommands:
   test:
-    - command: cargo test --target wasm32-wasip1
+    - command: cargo test --target wasm32-wasip2
       dir: .
   lint:
-    - command: cargo clippy --target wasm32-wasip1
+    - command: cargo clippy --target wasm32-wasip2
 ```
 
 Run with `golem exec <name>` (e.g., `golem exec test`).
@@ -318,8 +318,7 @@ environments:
     componentPresets: [release]    # Preset names to activate
     cli:
       format: json
-      redeployAgents: true
-      reset: true
+      redeployAgents: true         # Delete and recreate agents; agent state is lost
     deployment:
       compatibilityCheck: true
       versionCheck: true
@@ -352,8 +351,10 @@ auth:
 |-------|-------------|
 | `format` | Default output: `text`, `json`, `yaml`, `pretty`, `pretty-json`, `pretty-yaml`, `toon` |
 | `autoConfirm` | Auto-confirm prompts (`true`) |
-| `redeployAgents` | Redeploy agents by default (`true`) |
-| `reset` | Reset agents by default (`true`) |
+| `redeployAgents` | Equivalent to `--redeploy-agents`: delete and recreate agents; agent state is lost |
+| `reset` | Equivalent to `--reset`: delete existing agents for the deployed components after deployment, losing their state, and enable incompatibility-replacement fallbacks; the environment itself is retained |
+
+Configure at most one destructive default. If both are enabled, `reset` takes precedence.
 
 When `format: toon` is used, structured stdout is emitted as framed TOON documents. Parse exact `@toon` and `@end` marker lines, and treat the content between them as one TOON document. Stderr may still contain progress or diagnostics and should not be parsed as the structured payload.
 
@@ -610,7 +611,7 @@ resourceDefaults:
       enforcementAction: reject
       unit: byte
       units: bytes
-    - name: connections
+    connections:
       limit:
         type: Concurrency
         value: 50

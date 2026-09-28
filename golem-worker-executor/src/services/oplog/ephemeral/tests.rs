@@ -19,6 +19,7 @@ use crate::services::oplog::multilayer::{
 use crate::services::oplog::primary::PrimaryOplogService;
 use crate::storage::indexed::memory::InMemoryIndexedStorage;
 use async_trait::async_trait;
+use golem_common::model::AgentFingerprint;
 use golem_common::model::RetryConfig;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::component::ComponentId;
@@ -213,6 +214,7 @@ async fn fixture(threshold: u64) -> Fixture {
         EphemeralOplog::new(
             owned_agent_id,
             AgentMode::Ephemeral,
+            AgentFingerprint::new(),
             OplogIndex::NONE,
             threshold,
             primary,

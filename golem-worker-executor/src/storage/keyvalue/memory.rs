@@ -17,6 +17,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use scc::hash_map::Entry;
 use std::sync::Arc;
+use std::time::Duration;
 
 #[derive(Debug)]
 pub struct InMemoryKeyValueStorage {
@@ -82,6 +83,20 @@ impl KeyValueStorage for InMemoryKeyValueStorage {
         Ok(())
     }
 
+    async fn set_with_expiry(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: KeyValueStorageNamespace,
+        key: &str,
+        value: &[u8],
+        _expiry: Duration,
+    ) -> Result<(), KeyValueStorageError> {
+        self.set(svc_name, api_name, entity_name, namespace, key, value)
+            .await
+    }
+
     async fn set_many(
         &self,
         _svc_name: &'static str,
@@ -129,6 +144,42 @@ impl KeyValueStorage for InMemoryKeyValueStorage {
         for (field_key, value) in pairs {
             self.kvs
                 .upsert_async(Self::composite_key(&namespace, field_key), value.to_vec())
+                .await;
+        }
+        Ok(true)
+    }
+
+    async fn compare_and_mutate_many(
+        &self,
+        _svc_name: &'static str,
+        _api_name: &'static str,
+        _entity_name: &'static str,
+        namespace: KeyValueStorageNamespace,
+        key: &str,
+        expected: Option<&[u8]>,
+        sets: &[(&str, &[u8])],
+        deletions: &[&str],
+        _expiry: Duration,
+    ) -> Result<bool, KeyValueStorageError> {
+        let _guard = self.kvs_lock.write().await;
+        let matches = self
+            .kvs
+            .read_async(&Self::composite_key(&namespace, key), |_, value| {
+                expected == Some(value.as_slice())
+            })
+            .await
+            .unwrap_or(expected.is_none());
+        if !matches {
+            return Ok(false);
+        }
+        for (field, value) in sets {
+            self.kvs
+                .upsert_async(Self::composite_key(&namespace, field), value.to_vec())
+                .await;
+        }
+        for field in deletions {
+            self.kvs
+                .remove_async(&Self::composite_key(&namespace, field))
                 .await;
         }
         Ok(true)

@@ -32,7 +32,9 @@ use crate::base_model::Empty;
 use crate::base_model::agent::AgentTypeName;
 use crate::base_model::agent::{
     AgentConfigSource, AgentHttpAuthDetails, AgentMode, AgentPrincipal, CachePolicy,
-    CachePolicyTtl, CorsOptions, CustomHttpMethod, ExactFileMapping, FileMapping,
+    CachePolicyTtl, CorsOptions, CustomHttpMethod, DurableStreamInputSlotSource,
+    DurableStreamOutputSlotSource, DurableStreamRouteLoadOptions, DurableStreamRouteOptions,
+    DurableStreamSlotOptions, DurableStreamSlotSource, ExactFileMapping, FileMapping,
     GolemUserPrincipal, HeaderVariable, HttpEndpointDetails, HttpMethod, HttpMountDetails,
     LiteralSegment, OidcPrincipal, PathSegment, PathVariable, Principal, QueryVariable,
     ReadOnlyConfig, Snapshotting, SnapshottingConfig, SnapshottingEveryNInvocation,
@@ -700,6 +702,7 @@ impl From<HttpEndpointDetails> for wire::HttpEndpointDetails {
             query_vars: value.query_vars.into_iter().map(Into::into).collect(),
             auth_details: value.auth_details.map(Into::into),
             cors_options: value.cors_options.into(),
+            durable_streams: value.durable_streams.map(Into::into),
         }
     }
 }
@@ -713,6 +716,93 @@ impl From<wire::HttpEndpointDetails> for HttpEndpointDetails {
             query_vars: value.query_vars.into_iter().map(Into::into).collect(),
             auth_details: value.auth_details.map(Into::into),
             cors_options: value.cors_options.into(),
+            durable_streams: value.durable_streams.map(Into::into),
+        }
+    }
+}
+
+impl From<DurableStreamRouteOptions> for wire::DurableStreamRouteOptions {
+    fn from(value: DurableStreamRouteOptions) -> Self {
+        Self {
+            slots: value.slots.into_iter().map(Into::into).collect(),
+            allow_external_writes: value.allow_external_writes,
+            allow_stream_delete: value.allow_stream_delete,
+            allow_invocation_delete: value.allow_invocation_delete,
+            load: value.load.map(Into::into),
+        }
+    }
+}
+
+impl From<wire::DurableStreamRouteOptions> for DurableStreamRouteOptions {
+    fn from(value: wire::DurableStreamRouteOptions) -> Self {
+        Self {
+            slots: value.slots.into_iter().map(Into::into).collect(),
+            allow_external_writes: value.allow_external_writes,
+            allow_stream_delete: value.allow_stream_delete,
+            allow_invocation_delete: value.allow_invocation_delete,
+            load: value.load.map(Into::into),
+        }
+    }
+}
+
+impl From<DurableStreamSlotOptions> for wire::DurableStreamSlotOptions {
+    fn from(value: DurableStreamSlotOptions) -> Self {
+        Self {
+            source: value.source.into(),
+            name: value.name,
+            content_type: value.content_type,
+        }
+    }
+}
+
+impl From<wire::DurableStreamSlotOptions> for DurableStreamSlotOptions {
+    fn from(value: wire::DurableStreamSlotOptions) -> Self {
+        Self {
+            source: value.source.into(),
+            name: value.name,
+            content_type: value.content_type,
+        }
+    }
+}
+
+impl From<DurableStreamSlotSource> for wire::DurableStreamSlotSource {
+    fn from(value: DurableStreamSlotSource) -> Self {
+        match value {
+            DurableStreamSlotSource::Input(source) => Self::Input(source.name),
+            DurableStreamSlotSource::Output(source) => Self::Output(source.name),
+        }
+    }
+}
+
+impl From<wire::DurableStreamSlotSource> for DurableStreamSlotSource {
+    fn from(value: wire::DurableStreamSlotSource) -> Self {
+        match value {
+            wire::DurableStreamSlotSource::Input(name) => {
+                Self::Input(DurableStreamInputSlotSource { name })
+            }
+            wire::DurableStreamSlotSource::Output(name) => {
+                Self::Output(DurableStreamOutputSlotSource { name })
+            }
+        }
+    }
+}
+
+impl From<DurableStreamRouteLoadOptions> for wire::DurableStreamRouteLoadOptions {
+    fn from(value: DurableStreamRouteLoadOptions) -> Self {
+        Self {
+            max_concurrent_readers_per_stream: value.max_concurrent_readers_per_stream,
+            max_append_requests_per_second_per_stream: value
+                .max_append_requests_per_second_per_stream,
+        }
+    }
+}
+
+impl From<wire::DurableStreamRouteLoadOptions> for DurableStreamRouteLoadOptions {
+    fn from(value: wire::DurableStreamRouteLoadOptions) -> Self {
+        Self {
+            max_concurrent_readers_per_stream: value.max_concurrent_readers_per_stream,
+            max_append_requests_per_second_per_stream: value
+                .max_append_requests_per_second_per_stream,
         }
     }
 }
@@ -1091,7 +1181,43 @@ mod tests {
                 point_ref(),
             )]),
             output_schema: OutputSchema::Single(Box::new(point_ref())),
-            http_endpoint: vec![],
+            http_endpoint: vec![HttpEndpointDetails {
+                http_method: HttpMethod::Post(Empty {}),
+                path_suffix: vec![],
+                header_vars: vec![],
+                query_vars: vec![],
+                auth_details: None,
+                cors_options: CorsOptions {
+                    allowed_patterns: vec![],
+                },
+                durable_streams: Some(DurableStreamRouteOptions {
+                    slots: vec![
+                        DurableStreamSlotOptions {
+                            source: DurableStreamSlotSource::Input(DurableStreamInputSlotSource {
+                                name: "events".to_string(),
+                            }),
+                            name: Some("messages".to_string()),
+                            content_type: None,
+                        },
+                        DurableStreamSlotOptions {
+                            source: DurableStreamSlotSource::Output(
+                                DurableStreamOutputSlotSource {
+                                    name: "$result".to_string(),
+                                },
+                            ),
+                            name: None,
+                            content_type: Some("application/vnd.golem.events".to_string()),
+                        },
+                    ],
+                    allow_external_writes: Some(false),
+                    allow_stream_delete: None,
+                    allow_invocation_delete: Some(false),
+                    load: Some(DurableStreamRouteLoadOptions {
+                        max_concurrent_readers_per_stream: Some(8),
+                        max_append_requests_per_second_per_stream: None,
+                    }),
+                }),
+            }],
             read_only: None,
         };
 

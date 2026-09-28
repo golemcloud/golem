@@ -1,9 +1,20 @@
-import { z } from 'zod';
-import { AgentStream, defineAgent, method, Result, s } from '@golemcloud/golem-ts-sdk';
+import { z } from "zod";
+import {
+  AgentStream,
+  createDurableJsonWriter,
+  defineAgent,
+  http,
+  method,
+  readDurableJsonStream,
+  Result,
+  s,
+} from "@golemcloud/golem-ts-sdk";
 
 export const StreamingAgent = defineAgent({
-  name: 'StreamingAgent',
+  name: "StreamingAgent",
   id: { name: z.string() },
+  config: { externalAuth: s.secret(z.string()) },
+  http: http.mount("/durable-stream-agents/{name}"),
   methods: {
     sum: method({
       input: { input: s.stream(z.number()) },
@@ -20,6 +31,32 @@ export const StreamingAgent = defineAgent({
       returns: s.stream(s.result(z.number(), z.string())),
     }),
     status: method({ input: {}, returns: z.string() }),
+    durableEcho: method({
+      input: { input: s.stream(z.string()) },
+      returns: s.stream(z.string()),
+      http: http.put("/echo", {
+        durableStreams: {
+          slots: [
+            { source: "input", slot: "input" },
+            { source: "output", slot: "$result" },
+          ],
+          allowExternalWrites: true,
+        },
+      }),
+    }),
+    appendExternal: method({
+      input: {
+        url: z.string(),
+        producerId: z.string(),
+        values: z.array(z.string()),
+        close: z.boolean(),
+      },
+      returns: z.string().optional(),
+    }),
+    readExternal: method({
+      input: { url: z.string() },
+      returns: z.array(z.string()),
+    }),
   },
 });
 
@@ -75,12 +112,45 @@ export const StreamingAgentImpl = StreamingAgent.implement({
     },
     recoverable() {
       return stream<Result<number, string>>(
-        [Result.ok(1), Result.err('this item could not be produced'), Result.ok(2)],
+        [
+          Result.ok(1),
+          Result.err("this item could not be produced"),
+          Result.ok(2),
+        ],
         () => this.cancelledProducers++,
       );
     },
     status() {
       return `ready (${this.cancelledProducers} cancelled producers)`;
+    },
+    durableEcho({ input }) {
+      return AgentStream.from(
+        (async function* () {
+          for await (const value of input) yield `echo:${value}`;
+        })(),
+      );
+    },
+    async appendExternal({ url, producerId, values, close }) {
+      const writer = createDurableJsonWriter(z.string(), {
+        url,
+        producerId,
+        auth: this.config.externalAuth,
+      });
+      try {
+        return (await writer.append(values, { close })).nextOffset;
+      } finally {
+        await writer.dispose();
+      }
+    },
+    async readExternal({ url }) {
+      const values: string[] = [];
+      for await (const value of readDurableJsonStream(z.string(), {
+        url,
+        auth: this.config.externalAuth,
+      })) {
+        values.push(value);
+      }
+      return values;
     },
   },
 });

@@ -84,6 +84,19 @@ try {
 
   const installed = join(temporaryDirectory, "node_modules", "@golemcloud", "effect-golem")
   const manifest = JSON.parse(readFileSync(join(installed, "package.json"), "utf8"))
+  if (
+    manifest.dependencies["@golemcloud/http-contract"] ||
+    manifest.dependencies["@golemcloud/golem-ts-sdk"]
+  ) {
+    throw new Error("The published SDK must not depend on the private contract or TypeScript SDK")
+  }
+  for (const path of walk(join(installed, "dist")).filter((path) =>
+    /\.(?:m?js|d\.m?ts)$/.test(path),
+  )) {
+    if (readFileSync(path, "utf8").includes("@golemcloud/http-contract")) {
+      throw new Error(`Unbundled private HTTP contract in ${path}`)
+    }
+  }
   runNpm(
     [
       "install",
@@ -187,7 +200,22 @@ export async function load(url, context, nextLoad) {
       pathToFileURL(loader).href,
       "--input-type=module",
       "--eval",
-      uniquePublicModules.map((name) => `await import(${JSON.stringify(name)})`).join("\n"),
+      `import assert from "node:assert/strict";
+const root = await import(${JSON.stringify(manifest.name)});
+for (const name of ${JSON.stringify(uniquePublicModules)}) {
+  const module = await import(name);
+  const namespace = name.slice(${manifest.name.length + 1});
+  const shared = root[namespace];
+  if (shared && typeof shared === "object") {
+    assert.deepEqual(Object.keys(module), Object.keys(shared).sort(), name + " exports");
+    for (const key of Object.keys(module)) assert.equal(module[key], shared[key], name + "." + key);
+  }
+}
+const { HttpRouter, Http } = root;
+const subpath = await import(${JSON.stringify(`${manifest.name}/HttpRouter`)});
+subpath.define("PackageSubpathRouter", { mount: Http.mount("/package") }).register();
+assert.ok(root.golemAgent200Guest.discoverAgentTypes().some((agent) => agent.typeName === "PackageSubpathRouter"));
+assert.equal(subpath.define, HttpRouter.define);`,
     ],
     { cwd: temporaryDirectory, encoding: "utf8" },
   )

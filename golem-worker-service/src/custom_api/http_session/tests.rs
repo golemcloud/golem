@@ -318,6 +318,7 @@ fn accepted(epoch: u64, high_water: Option<u64>) -> InvocationResponse {
             tool_name: None,
             command_path: vec![],
             joined_origin_observer: false,
+            terminal_cursor_stream_ids: vec![],
         },
     ))
 }
@@ -1207,11 +1208,17 @@ async fn observed_producer_cancel_is_a_terminal_resume_cursor_after_transport_lo
     let mut h = harness(2);
     let mut session =
         HttpSession::start_with_transport(start(), h.transport.clone(), limits()).unwrap();
-    let Call::Start(_, _) = call(&mut h.calls).await else {
+    let Call::Start(_, mut tail) = call(&mut h.calls).await else {
         panic!()
     };
     send(&h.response_txs[0], accepted(1, None)).await;
     let _ = event(&mut session).await;
+    session.input.finish().await.unwrap();
+    assert!(matches!(
+        input(tail.next().await.unwrap()),
+        invocation_request::Request::InputEnd(_)
+    ));
+    send(&h.response_txs[0], ack(0, 1)).await;
     send(&h.response_txs[0], stream_result()).await;
     let _ = event(&mut session).await;
     send(&h.response_txs[0], output_item(0)).await;
@@ -1226,7 +1233,24 @@ async fn observed_producer_cancel_is_a_terminal_resume_cursor_after_transport_lo
     assert_eq!(resume.cursors.len(), 1);
     assert_eq!(resume.cursors[0].stream_id, Some(uuid(109)));
     assert_eq!(resume.cursors[0].last_observed_offset, Some(offset(1)));
-    send(&h.response_txs[0], resumed_accepted(&resume, None)).await;
+    let mut decision = resumed_accepted(&resume, Some(0));
+    let Some(invocation_response::Response::Accepted(accepted)) = decision.response.as_mut() else {
+        panic!()
+    };
+    accepted.stream_mappings[0]
+        .high_water
+        .as_mut()
+        .unwrap()
+        .terminal = true;
+    accepted.stream_mappings.push(output_mapping());
+    accepted.terminal_cursor_stream_ids = vec![uuid(109)];
+    send(&h.response_txs[0], decision).await;
+    send(&h.response_txs[0], stream_result()).await;
+    send(&h.response_txs[0], finished()).await;
+    assert!(matches!(
+        event(&mut session).await,
+        HttpSessionEvent::Finished(_)
+    ));
 }
 
 #[test]

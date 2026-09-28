@@ -4074,7 +4074,7 @@ where
     Ctx: WorkerCtx,
 {
     let has_stdin = stdin.is_some();
-    if accessor.with(|mut access| !access.get().state.is_live()) {
+    if accessor.with(|mut access| !access.get().state.durable_call_is_live()) {
         let identity = attempt.claim_identity(&command_path, has_stdin, has_stdout, call_mode);
         match EntityInvocationDurability::replay_tool_access(
             accessor,

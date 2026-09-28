@@ -22,8 +22,9 @@ use golem_common::schema::{
 };
 use golem_service_base::custom_api::{
     AgentRouteMode, CallAgentBehaviour, CompiledInputSchema, CompiledOutputSchema, CompiledRoute,
-    CompiledRoutes, CompiledSchema, CorsOptions, OriginPattern, PathSegment, RequestBodySchema,
-    RouteBehaviour, RouteSecurity, SessionFromHeaderRouteSecurity,
+    CompiledRoutes, CompiledSchema, CorsOptions, DurableStreamRepresentation,
+    DurableStreamRoutePolicy, DurableStreamSlot, DurableStreamSlotDirection, OriginPattern,
+    PathSegment, RequestBodySchema, RouteBehaviour, RouteSecurity, SessionFromHeaderRouteSecurity,
 };
 use std::collections::HashMap;
 use std::time::Duration;
@@ -110,61 +111,196 @@ impl SessionStore for UnusedSessionStore {
 }
 
 fn durable_stream_routes() -> CompiledRoutes {
+    let behaviour = CallAgentBehaviour {
+        route_mode: AgentRouteMode::DurableStreams,
+        base_path_variables: 0,
+        durable_streams: Some(DurableStreamRoutePolicy {
+            slots: vec![
+                DurableStreamSlot {
+                    canonical_name: "$result".into(),
+                    public_name: "responses".into(),
+                    direction: DurableStreamSlotDirection::Output,
+                    content_type: "application/json".into(),
+                    representation: DurableStreamRepresentation::Json,
+                },
+                DurableStreamSlot {
+                    canonical_name: "input".into(),
+                    public_name: "requests".into(),
+                    direction: DurableStreamSlotDirection::Input,
+                    content_type: "application/vnd.golem.fragment".into(),
+                    representation: DurableStreamRepresentation::Bytes,
+                },
+            ],
+            allow_external_writes: false,
+            allow_stream_delete: false,
+            allow_invocation_delete: false,
+            load: None,
+        }),
+        component_id: ComponentId::new(),
+        component_revision: ComponentRevision::INITIAL,
+        agent_type: AgentTypeName("oracle-agent".to_string()),
+        agent_mode: AgentMode::Durable,
+        constructor_input: CompiledInputSchema {
+            graph: SchemaGraph::empty(),
+            input_schema: InputSchema::Parameters(vec![]),
+        },
+        constructor_parameters: vec![],
+        phantom: false,
+        method_name: "stream".to_string(),
+        method_input: CompiledInputSchema {
+            graph: SchemaGraph::empty(),
+            input_schema: InputSchema::Parameters(vec![]),
+        },
+        body: RequestBodySchema::Unused,
+        method_parameters: vec![],
+        expected_agent_response: CompiledOutputSchema {
+            graph: SchemaGraph::empty(),
+            output_schema: OutputSchema::Unit,
+        },
+        method_description: None,
+        read_only: None,
+    };
+    let security = RouteSecurity::SessionFromHeader(SessionFromHeaderRouteSecurity {
+        header_name: "x-golem-session".to_string(),
+    });
+    let cors = CorsOptions {
+        allowed_patterns: vec![OriginPattern("https://client.example".to_string())],
+    };
+    let route_family = |prefix: &str, route_id_offset: i32, behaviour: CallAgentBehaviour| {
+        let session_path = vec![
+            PathSegment::Literal {
+                value: prefix.into(),
+            },
+            PathSegment::Literal {
+                value: "invocations".into(),
+            },
+            PathSegment::Variable {
+                display_name: "session".into(),
+            },
+        ];
+        let mut slot_path = session_path.clone();
+        slot_path.extend([
+            PathSegment::Literal {
+                value: "streams".into(),
+            },
+            PathSegment::Variable {
+                display_name: "slot".into(),
+            },
+        ]);
+        let fork_slot_path = vec![
+            PathSegment::Literal {
+                value: prefix.into(),
+            },
+            PathSegment::Literal {
+                value: "forks".into(),
+            },
+            PathSegment::Variable {
+                display_name: "fork".into(),
+            },
+            PathSegment::Literal {
+                value: "invocations".into(),
+            },
+            PathSegment::Variable {
+                display_name: "session".into(),
+            },
+            PathSegment::Literal {
+                value: "streams".into(),
+            },
+            PathSegment::Variable {
+                display_name: "slot".into(),
+            },
+        ];
+        let route =
+            |route_id, method: HttpMethod, path, body, mut behaviour: CallAgentBehaviour| {
+                behaviour.body = body;
+                CompiledRoute {
+                    route_id,
+                    route_match: method.into(),
+                    path,
+                    behavior: RouteBehaviour::CallAgent(behaviour),
+                    security: security.clone(),
+                    cors: cors.clone(),
+                }
+            };
+        vec![
+            route(
+                route_id_offset + 1,
+                HttpMethod::Post(Empty {}),
+                vec![PathSegment::Literal {
+                    value: prefix.into(),
+                }],
+                RequestBodySchema::JsonBody {
+                    expected: CompiledSchema {
+                        graph: SchemaGraph::anonymous(SchemaType::record(vec![])),
+                    },
+                },
+                behaviour.clone(),
+            ),
+            route(
+                route_id_offset + 2,
+                HttpMethod::Get(Empty {}),
+                slot_path.clone(),
+                RequestBodySchema::Unused,
+                behaviour.clone(),
+            ),
+            route(
+                route_id_offset + 3,
+                HttpMethod::Post(Empty {}),
+                slot_path.clone(),
+                RequestBodySchema::Unused,
+                behaviour.clone(),
+            ),
+            route(
+                route_id_offset + 4,
+                HttpMethod::Delete(Empty {}),
+                slot_path,
+                RequestBodySchema::Unused,
+                behaviour.clone(),
+            ),
+            route(
+                route_id_offset + 5,
+                HttpMethod::Delete(Empty {}),
+                session_path,
+                RequestBodySchema::Unused,
+                behaviour.clone(),
+            ),
+            route(
+                route_id_offset + 6,
+                HttpMethod::Get(Empty {}),
+                fork_slot_path.clone(),
+                RequestBodySchema::Unused,
+                behaviour.clone(),
+            ),
+            route(
+                route_id_offset + 7,
+                HttpMethod::Put(Empty {}),
+                fork_slot_path,
+                RequestBodySchema::Unused,
+                behaviour,
+            ),
+        ]
+    };
+    let mut permissive_behaviour = behaviour.clone();
+    let policy = permissive_behaviour.durable_streams.as_mut().unwrap();
+    policy.allow_external_writes = true;
+    policy.allow_stream_delete = true;
+    policy.allow_invocation_delete = true;
+    let mut routes = route_family("stream", 0, behaviour);
+    routes.extend(route_family("writable", 10, permissive_behaviour));
+
     CompiledRoutes {
         account_id: AccountId::new(),
         account_email: AccountEmail::new("oracle@golem.cloud"),
         environment_id: EnvironmentId::new(),
         deployment_revision: DeploymentRevision::INITIAL,
         security_schemes: HashMap::new(),
-        routes: vec![CompiledRoute {
-            route_id: 1,
-            route_match: HttpMethod::Post(Empty {}).into(),
-            path: vec![PathSegment::Literal {
-                value: "stream".to_string(),
-            }],
-            behavior: RouteBehaviour::CallAgent(CallAgentBehaviour {
-                route_mode: AgentRouteMode::DurableStreams,
-                base_path_variables: 0,
-                component_id: ComponentId::new(),
-                component_revision: ComponentRevision::INITIAL,
-                agent_type: AgentTypeName("oracle-agent".to_string()),
-                agent_mode: AgentMode::Durable,
-                constructor_input: CompiledInputSchema {
-                    graph: SchemaGraph::empty(),
-                    input_schema: InputSchema::Parameters(vec![]),
-                },
-                constructor_parameters: vec![],
-                phantom: false,
-                method_name: "stream".to_string(),
-                method_input: CompiledInputSchema {
-                    graph: SchemaGraph::empty(),
-                    input_schema: InputSchema::Parameters(vec![]),
-                },
-                body: RequestBodySchema::JsonBody {
-                    expected: CompiledSchema {
-                        graph: SchemaGraph::anonymous(SchemaType::record(vec![])),
-                    },
-                },
-                method_parameters: vec![],
-                expected_agent_response: CompiledOutputSchema {
-                    graph: SchemaGraph::empty(),
-                    output_schema: OutputSchema::Unit,
-                },
-                method_description: None,
-                read_only: None,
-            }),
-            security: RouteSecurity::SessionFromHeader(SessionFromHeaderRouteSecurity {
-                header_name: "x-golem-session".to_string(),
-            }),
-            cors: CorsOptions {
-                allowed_patterns: vec![OriginPattern("https://client.example".to_string())],
-            },
-        }],
+        routes,
     }
 }
 
-fn request_handler() -> RequestHandler {
-    request_handler_with(
+fn request_handler_and_harness() -> (RequestHandler, InvocationHarness) {
+    let harness = invocation_harness();
+    let handler = request_handler_with_worker(
         RouteResolver::new(
             &RouteResolverConfig {
                 router_cache_max_capacity: 1,
@@ -177,7 +313,9 @@ fn request_handler() -> RequestHandler {
         Arc::new(InitialAgentFilesService::new(Arc::new(
             golem_service_base::storage::blob::memory::InMemoryBlobStorage::new(),
         ))),
-    )
+        harness.worker_service.clone(),
+    );
+    (handler, harness)
 }
 
 fn request_handler_with(
@@ -238,6 +376,10 @@ fn request_handler_with_worker(
     )
 }
 
+fn request_handler() -> RequestHandler {
+    request_handler_and_harness().0
+}
+
 fn request(body: &'static str, session: bool, origin: bool) -> Request {
     let mut builder = Request::builder()
         .method(http::Method::POST)
@@ -269,10 +411,7 @@ async fn typed_route_can_decline_h2c_upgrade_and_dispatch_over_http1() {
     );
     let response = request_handler().handle_request(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
-    assert_eq!(
-        response.headers()[http::header::ALLOW],
-        "PUT, HEAD, GET, DELETE"
-    );
+    assert_eq!(response.headers()[http::header::ALLOW], "PUT");
 }
 
 #[test]
@@ -286,7 +425,7 @@ async fn durable_stream_route_is_guarded_at_the_request_handler_boundary() {
     assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
     assert_eq!(
         response.headers().get(http::header::ALLOW),
-        Some(&"PUT, HEAD, GET, DELETE".parse().unwrap())
+        Some(&"PUT".parse().unwrap())
     );
 
     let response = handler
@@ -315,6 +454,339 @@ async fn durable_stream_route_is_guarded_at_the_request_handler_boundary() {
     assert_eq!(
         response.headers().get(http::header::VARY),
         Some(&"Origin".parse().unwrap())
+    );
+}
+
+#[test]
+async fn durable_stream_unknown_and_canonical_slot_names_are_not_probed() {
+    let handler = request_handler();
+    let session = golem_common::model::invocation_session_public::new_durable_stream_session_id();
+
+    for slot in ["unknown", "$result"] {
+        let request = Request::builder()
+            .method(http::Method::GET)
+            .uri(
+                format!("http://ds.example/stream/invocations/{session}/streams/{slot}")
+                    .parse()
+                    .unwrap(),
+            )
+            .header(http::header::HOST, "ds.example")
+            .header("x-golem-session", "{}")
+            .finish();
+        let response = handler.handle_request(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+}
+
+#[test]
+async fn durable_stream_disabled_operations_are_rejected_before_worker_calls() {
+    let handler = request_handler();
+    let session = golem_common::model::invocation_session_public::new_durable_stream_session_id();
+    for (method, suffix) in [
+        (http::Method::POST, "/streams/requests"),
+        (http::Method::DELETE, "/streams/responses"),
+        (http::Method::DELETE, ""),
+    ] {
+        let request = Request::builder()
+            .method(method)
+            .uri(
+                format!("http://ds.example/stream/invocations/{session}{suffix}")
+                    .parse()
+                    .unwrap(),
+            )
+            .header(http::header::HOST, "ds.example")
+            .header("x-golem-session", "{}")
+            .body("this body must not be read");
+        let response = handler.handle_request(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+        assert_eq!(
+            response.headers().get(http::header::ALLOW),
+            Some(&"PUT, HEAD, GET".parse().unwrap())
+        );
+    }
+}
+
+#[test]
+async fn durable_stream_operation_policy_is_isolated_per_route_family() {
+    let (handler, harness) = request_handler_and_harness();
+    let session = golem_common::model::invocation_session_public::new_durable_stream_session_id();
+    let request = |family: &str| {
+        Request::builder()
+            .method(http::Method::DELETE)
+            .uri(
+                format!("http://ds.example/{family}/invocations/{session}/streams/responses")
+                    .parse()
+                    .unwrap(),
+            )
+            .header(http::header::HOST, "ds.example")
+            .header("x-golem-session", "{}")
+            .finish()
+    };
+
+    let response = handler.handle_request(request("stream")).await.unwrap();
+    assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+    assert_eq!(
+        response.headers().get(http::header::ALLOW),
+        Some(&"PUT, HEAD, GET".parse().unwrap())
+    );
+    assert!(harness.recorded_durable_stream_controls().is_empty());
+
+    let response = handler.handle_request(request("writable")).await.unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    let controls = harness.recorded_durable_stream_controls();
+    assert_eq!(controls.len(), 1);
+    let control = controls[0].export_control.as_ref().unwrap();
+    assert_eq!(control.session, session);
+    assert_eq!(control.slot.as_deref(), Some("$result"));
+
+    let response = handler.handle_request(request("stream")).await.unwrap();
+    assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+    assert_eq!(harness.recorded_durable_stream_controls().len(), 1);
+}
+
+#[test]
+async fn durable_stream_write_disabled_fork_rejects_initial_content_before_worker_call() {
+    let handler = request_handler();
+    let session = golem_common::model::invocation_session_public::new_durable_stream_session_id();
+    let fork = golem_common::model::invocation_session_public::new_durable_stream_session_id();
+    let source = format!("/stream/invocations/{session}/streams/requests");
+    for (body, closed) in [("[\"initial\"]", false), ("", true)] {
+        let mut request = Request::builder()
+            .method(http::Method::PUT)
+            .uri(
+                format!(
+                    "http://ds.example/stream/forks/{fork}/invocations/{session}/streams/requests"
+                )
+                .parse()
+                .unwrap(),
+            )
+            .header(http::header::HOST, "ds.example")
+            .header("x-golem-session", "{}")
+            .header("stream-forked-from", &source)
+            .content_type("application/json");
+        if closed {
+            request = request.header("stream-closed", "true");
+        }
+
+        let response = handler.handle_request(request.body(body)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+}
+
+#[test]
+async fn durable_stream_write_disabled_fork_rejects_oversized_initial_content_as_read_only() {
+    let handler = request_handler();
+    let session = golem_common::model::invocation_session_public::new_durable_stream_session_id();
+    let fork = golem_common::model::invocation_session_public::new_durable_stream_session_id();
+    let source = format!("/stream/invocations/{session}/streams/requests");
+    let request = Request::builder()
+        .method(http::Method::PUT)
+        .uri(
+            format!("http://ds.example/stream/forks/{fork}/invocations/{session}/streams/requests")
+                .parse()
+                .unwrap(),
+        )
+        .header(http::header::HOST, "ds.example")
+        .header("x-golem-session", "{}")
+        .header("stream-forked-from", source)
+        .content_type("application/json")
+        .body(vec![
+            b'x';
+            crate::config::DurableStreamsConfig::default()
+                .max_append_body_bytes
+                + 1
+        ]);
+
+    let response = handler.handle_request(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[test]
+async fn durable_stream_fork_validates_public_mime_and_translates_executor_representation() {
+    let (handler, harness) = request_handler_and_harness();
+    let session = golem_common::model::invocation_session_public::new_durable_stream_session_id();
+    let source = format!("/writable/invocations/{session}/streams/requests");
+    let request = |fork: &str, content_type: Option<&str>, body: Vec<u8>| {
+        let mut builder = Request::builder()
+            .method(http::Method::PUT)
+            .uri(
+                format!(
+                    "http://ds.example/writable/forks/{fork}/invocations/{session}/streams/requests"
+                )
+                .parse()
+                .unwrap(),
+            )
+            .header(http::header::HOST, "ds.example")
+            .header("x-golem-session", "{}")
+            .header("stream-forked-from", &source)
+            .header("stream-fork-sub-offset", "2");
+        if let Some(content_type) = content_type {
+            builder = builder.content_type(content_type);
+        }
+        builder.body(body)
+    };
+
+    let mismatch_fork =
+        golem_common::model::invocation_session_public::new_durable_stream_session_id();
+    let response = handler
+        .handle_request(request(
+            &mismatch_fork,
+            Some("application/octet-stream"),
+            vec![1],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert!(harness.recorded_durable_stream_forks().is_empty());
+
+    let explicit_fork =
+        golem_common::model::invocation_session_public::new_durable_stream_session_id();
+    let response = handler
+        .handle_request(request(
+            &explicit_fork,
+            Some("Application/Vnd.Golem.Fragment; version=1"),
+            vec![1],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let forks = harness.recorded_durable_stream_forks();
+    assert_eq!(forks.len(), 1);
+    assert_eq!(forks[0].slot, "input");
+    assert_eq!(forks[0].source_path, source);
+    assert_eq!(forks[0].sub_offset, 2);
+    assert_eq!(
+        forks[0].content_type.as_deref(),
+        Some("application/octet-stream")
+    );
+
+    let inherited_fork =
+        golem_common::model::invocation_session_public::new_durable_stream_session_id();
+    let response = handler
+        .handle_request(request(&inherited_fork, None, Vec::new()))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let forks = harness.recorded_durable_stream_forks();
+    assert_eq!(forks.len(), 2);
+    assert_eq!(forks[1].content_type, None);
+}
+
+#[test]
+async fn durable_stream_close_only_fork_ignores_content_type() {
+    let (handler, harness) = request_handler_and_harness();
+    let session = golem_common::model::invocation_session_public::new_durable_stream_session_id();
+    let fork = golem_common::model::invocation_session_public::new_durable_stream_session_id();
+    let source = format!("/writable/invocations/{session}/streams/requests");
+    let request = Request::builder()
+        .method(http::Method::PUT)
+        .uri(
+            format!(
+                "http://ds.example/writable/forks/{fork}/invocations/{session}/streams/requests"
+            )
+            .parse()
+            .unwrap(),
+        )
+        .header(http::header::HOST, "ds.example")
+        .header("x-golem-session", "{}")
+        .header("stream-forked-from", source)
+        .header("stream-closed", "true")
+        .content_type("application/not-the-slot-type")
+        .finish();
+
+    let response = handler.handle_request(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let forks = harness.recorded_durable_stream_forks();
+    assert_eq!(forks.len(), 1);
+    assert!(forks[0].closed);
+    assert_eq!(forks[0].content_type, None);
+}
+
+#[test]
+async fn durable_stream_successful_fork_preserves_partial_utf8_byte_prefix() {
+    use golem_api_grpc::proto::golem::workerexecutor::v1::{
+        ForkStreamSlotSuccess, ReadStreamSlotSuccess, StreamSlotItem, stream_slot_item,
+    };
+    use golem_common::model::OplogIndex;
+    use golem_common::model::durable_stream::StreamOffset;
+
+    let (handler, harness) = request_handler_and_harness();
+    let session = golem_common::model::invocation_session_public::new_durable_stream_session_id();
+    let fork = golem_common::model::invocation_session_public::new_durable_stream_session_id();
+    let source = format!("/writable/invocations/{session}/streams/requests");
+    let origin = StreamOffset::new(OplogIndex::from_u64(42), 0);
+    let metadata = ReadStreamSlotSuccess {
+        content_type: "application/octet-stream".into(),
+        next_offset: origin.as_bytes().to_vec(),
+        head_offset: origin.as_bytes().to_vec(),
+        stream_identity: "forked-stream".into(),
+        writable: true,
+        ..Default::default()
+    };
+    let page = ReadStreamSlotSuccess {
+        items: vec![StreamSlotItem {
+            offset: origin.as_bytes().to_vec(),
+            content: Some(stream_slot_item::Content::PackedU8(vec![0xe2, 0x82])),
+        }],
+        up_to_date: true,
+        ..metadata.clone()
+    };
+    harness.script_durable_stream_fork_success(
+        ForkStreamSlotSuccess {
+            source_path: source.clone(),
+            fork_offset: origin.as_bytes().to_vec(),
+            sub_offset: 2,
+            ..Default::default()
+        },
+        vec![metadata, page],
+    );
+
+    let fork_path = format!("/writable/forks/{fork}/invocations/{session}/streams/requests");
+    let response = handler
+        .handle_request(
+            Request::builder()
+                .method(http::Method::PUT)
+                .uri(format!("http://ds.example{fork_path}").parse().unwrap())
+                .header(http::header::HOST, "ds.example")
+                .header("x-golem-session", "{}")
+                .header("stream-forked-from", &source)
+                .header("stream-fork-offset", origin.to_string())
+                .header("stream-fork-sub-offset", "2")
+                .finish(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    assert_eq!(
+        response.headers().get(http::header::CONTENT_TYPE),
+        Some(&"application/vnd.golem.fragment".parse().unwrap())
+    );
+    let forks = harness.recorded_durable_stream_forks();
+    assert_eq!(forks.len(), 1);
+    assert_eq!(forks[0].fork_offset, Some(origin.as_bytes().to_vec()));
+    assert_eq!(forks[0].sub_offset, 2);
+    assert_eq!(forks[0].slot, "input");
+    assert_eq!(forks[0].content_type, None);
+
+    let response = handler
+        .handle_request(
+            Request::builder()
+                .method(http::Method::GET)
+                .uri(format!("http://ds.example{fork_path}").parse().unwrap())
+                .header(http::header::HOST, "ds.example")
+                .header("x-golem-session", "{}")
+                .finish(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers().get(http::header::CONTENT_TYPE),
+        Some(&"application/vnd.golem.fragment".parse().unwrap())
+    );
+    assert_eq!(
+        response.into_body().into_bytes().await.unwrap().as_ref(),
+        [0xe2, 0x82]
     );
 }
 

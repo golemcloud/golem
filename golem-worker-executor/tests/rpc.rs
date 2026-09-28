@@ -49,7 +49,7 @@ use golem_worker_executor::services::direct_invocation_auth::{
 use golem_worker_executor::services::rpc::RpcError;
 use golem_worker_executor::worker::EvictionClass;
 use golem_worker_executor_test_utils::{
-    FireAndForgetRpcCheckpoint, LastUniqueId, PrecompiledComponent, RecordingRpc, TestContext,
+    LastUniqueId, PrecompiledComponent, RecordingRpc, RpcCheckpoint, TestContext,
     TestExecutorOverrides, TestWorkerExecutor, WorkerExecutorTestDependencies, start,
     start_with_concurrent_agent_limit_and_overrides, start_with_overrides,
 };
@@ -86,6 +86,526 @@ inherit_test_dep!(
     PrecompiledComponent
 );
 inherit_test_dep!(Tracing);
+
+#[test]
+#[timeout("2 minutes")]
+async fn raw_sync_rpc_resumes_after_suspension(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] component: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    raw_rpc_suspension_case(last_unique_id, deps, component, false, true, false).await
+}
+
+#[test]
+#[timeout("2 minutes")]
+async fn raw_async_rpc_resumes_after_suspension(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] component: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    raw_rpc_suspension_case(last_unique_id, deps, component, true, true, false).await
+}
+
+#[test]
+#[timeout("2 minutes")]
+async fn raw_sync_rpc_completes_before_suspension(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] component: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    raw_rpc_suspension_case(last_unique_id, deps, component, false, false, false).await
+}
+
+#[test]
+#[timeout("2 minutes")]
+async fn raw_sync_rpc_completed_history_replays(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] component: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    raw_rpc_suspension_case(last_unique_id, deps, component, false, false, true).await
+}
+
+#[test]
+#[timeout("2 minutes")]
+async fn raw_async_rpc_completed_history_replays(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] component: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    raw_rpc_suspension_case(last_unique_id, deps, component, true, false, true).await
+}
+
+#[test]
+#[timeout("2m")]
+async fn raw_sync_rpc_local_denial_replays_without_span_or_dispatch(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] fixture: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let attempts = Arc::new(Mutex::new(Vec::new()));
+    let overrides = TestExecutorOverrides {
+        wrap_rpc: Some(Arc::new({
+            let attempts = attempts.clone();
+            move |rpc| Arc::new(RecordingRpc::new(rpc, "spin", attempts.clone()))
+        })),
+        ..Default::default()
+    };
+    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, fixture)
+        .without_default_host_permissions("RpcAuthTester")
+        .store()
+        .await?;
+    let caller_id = agent_id!("RpcAuthTester", "sync-denied-caller");
+    let caller = executor
+        .start_agent(&component.id, caller_id.clone())
+        .await?;
+    let first = executor
+        .invoke_and_await_agent(&component, &caller_id, "try_ephemeral_call", data_value!())
+        .await?;
+    assert!(
+        matches!(first.value(), Some(SchemaValue::Variant(value)) if value.case == 1),
+        "{first:?}"
+    );
+    let prefix = executor.get_oplog(&caller, OplogIndex::INITIAL).await?;
+    let start = prefix.iter().find(|entry| matches!(&entry.entry, PublicOplogEntry::Start(s) if s.function_name == "golem::rpc::wasm-rpc::invoke_and_await")).expect("invocation denial, not activation denial").oplog_index;
+    assert!(prefix.iter().any(
+        |entry| matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == start)
+    ));
+    assert!(
+        !prefix.iter().any(|entry| entry.oplog_index > start
+            && matches!(&entry.entry, PublicOplogEntry::StartSpan(_)))
+    );
+    assert!(attempts.lock().unwrap().is_empty());
+    drop(executor);
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+    // A new invocation reconstructs the old denial instead of returning a cached result.
+    let second = tokio::time::timeout(
+        Duration::from_secs(30),
+        executor.invoke_and_await_agent(
+            &component,
+            &caller_id,
+            "try_ephemeral_call",
+            data_value!(),
+        ),
+    )
+    .await??;
+    assert_eq!(second.value(), first.value());
+    assert!(attempts.lock().unwrap().is_empty());
+    Ok(())
+}
+
+#[test]
+#[timeout("2m")]
+async fn raw_sync_rpc_policy_replays_without_repeating_effects(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] fixture: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    for (idempotent, atomic) in [(true, true), (false, false)] {
+        let context = TestContext::new(last_unique_id);
+        let attempts = Arc::new(Mutex::new(Vec::new()));
+        let overrides = TestExecutorOverrides {
+            wrap_rpc: Some(Arc::new({
+                let attempts = attempts.clone();
+                move |rpc| Arc::new(RecordingRpc::new(rpc, "inc_by", attempts.clone()))
+            })),
+            ..Default::default()
+        };
+        let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+        let component = executor
+            .component_dep(&context.default_environment_id, fixture)
+            .store()
+            .await?;
+        let caller_id = agent_id!("CancelTester", "sync-policy-caller");
+        executor
+            .start_agent(&component.id, caller_id.clone())
+            .await?;
+        executor
+            .invoke_and_await_agent(
+                &component,
+                &caller_id,
+                "sync_counter_with_policy",
+                data_value!("sync-policy-target", idempotent, atomic),
+            )
+            .await?;
+        {
+            let attempts = attempts.lock().unwrap();
+            assert_eq!(attempts.len(), 2);
+            assert!(attempts.iter().all(Option::is_some));
+            assert_ne!(
+                attempts[0], attempts[1],
+                "each call needs a distinct atomic logical key"
+            );
+        }
+        drop(executor);
+        let executor = start_with_overrides(deps, &context, overrides).await?;
+        executor
+            .invoke_and_await_agent(
+                &component,
+                &caller_id,
+                "sync_counter_with_policy",
+                data_value!("sync-policy-target", idempotent, atomic),
+            )
+            .await?;
+        assert_eq!(
+            attempts.lock().unwrap().len(),
+            4,
+            "only the new invocation may dispatch"
+        );
+        let count = executor
+            .invoke_and_await_agent(
+                &component,
+                &agent_id!("RpcCounter", "sync-policy-target"),
+                "get_value",
+                data_value!(),
+            )
+            .await?
+            .into_typed::<u64>()?;
+        assert_eq!(
+            count, 36,
+            "two invocations of 7 + 11; idempotent={idempotent}, atomic={atomic}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+#[timeout("3m")]
+async fn raw_sync_rpc_recovers_from_committed_crash_prefixes(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] fixture: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    for checkpoint in [
+        RpcCheckpoint::Start,
+        RpcCheckpoint::StartSpan,
+        RpcCheckpoint::End,
+    ] {
+        let context = TestContext::new(last_unique_id);
+        let attempts = Arc::new(Mutex::new(Vec::new()));
+        let overrides = TestExecutorOverrides {
+            wrap_rpc: Some(Arc::new({
+                let attempts = attempts.clone();
+                move |rpc| Arc::new(RecordingRpc::new(rpc, "inc_by", attempts.clone()))
+            })),
+            ..Default::default()
+        };
+        let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+        let component = executor
+            .component_dep(&context.default_environment_id, fixture)
+            .store()
+            .await?;
+        let caller_id = agent_id!("CancelTester", "sync-prefix-caller");
+        let caller = executor
+            .start_agent(&component.id, caller_id.clone())
+            .await?;
+        let key = IdempotencyKey::fresh();
+        let mut gate = executor.gate_next_rpc_commit(&caller, checkpoint).await;
+        let invocation = {
+            let executor = executor.clone();
+            let component = component.clone();
+            let caller_id = caller_id.clone();
+            let key = key.clone();
+            tokio::spawn(async move {
+                executor
+                    .invoke_and_await_agent_with_key(
+                        &component,
+                        &caller_id,
+                        &key,
+                        "grow_memory_before_rpc_activation",
+                        data_value!("sync-prefix-target"),
+                    )
+                    .await
+            })
+        };
+        tokio::time::timeout(Duration::from_secs(30), gate.committed()).await?;
+        let prefix = executor.get_oplog(&caller, OplogIndex::INITIAL).await?;
+        let starts: Vec<_> = prefix
+            .iter()
+            .filter_map(|entry| {
+                matches!(&entry.entry, PublicOplogEntry::Start(start)
+                if start.function_name == "golem::rpc::wasm-rpc::invoke_and_await")
+                .then_some(entry.oplog_index)
+            })
+            .collect();
+        assert_eq!(starts.len(), 1);
+        let start = starts[0];
+        assert_eq!(
+            prefix
+                .iter()
+                .filter(
+                    |e| e.oplog_index > start && matches!(&e.entry, PublicOplogEntry::StartSpan(_))
+                )
+                .count(),
+            usize::from(checkpoint != RpcCheckpoint::Start)
+        );
+        assert_eq!(
+            prefix
+                .iter()
+                .filter(
+                    |e| matches!(&e.entry, PublicOplogEntry::End(end) if end.start_index == start)
+                )
+                .count(),
+            usize::from(checkpoint == RpcCheckpoint::End)
+        );
+        assert!(
+            !prefix
+                .iter()
+                .any(|e| e.oplog_index > start
+                    && matches!(&e.entry, PublicOplogEntry::FinishSpan(_)))
+        );
+        let attempts_before = attempts.lock().unwrap().clone();
+        gate.abort_return();
+        invocation.abort();
+        let _ = invocation.await;
+        drop(gate);
+        drop(executor);
+
+        let executor = start_with_overrides(deps, &context, overrides).await?;
+        tokio::time::timeout(
+            Duration::from_secs(30),
+            executor.invoke_and_await_agent_with_key(
+                &component,
+                &caller_id,
+                &key,
+                "grow_memory_before_rpc_activation",
+                data_value!("sync-prefix-target"),
+            ),
+        )
+        .await??;
+        let count = executor
+            .invoke_and_await_agent(
+                &component,
+                &agent_id!("RpcCounter", "sync-prefix-target"),
+                "get_value",
+                data_value!(),
+            )
+            .await?
+            .into_typed::<u64>()?;
+        assert_eq!(count, 1, "checkpoint {checkpoint:?}");
+        {
+            let attempts = attempts.lock().unwrap();
+            assert_eq!(
+                attempts.len(),
+                1,
+                "completed RPC must not redispatch at {checkpoint:?}"
+            );
+            assert!(attempts[0].is_some());
+            if checkpoint == RpcCheckpoint::End {
+                assert_eq!(*attempts, attempts_before);
+            }
+        }
+        let recovered = executor.get_oplog(&caller, OplogIndex::INITIAL).await?;
+        assert_eq!(recovered.iter().filter(|e| matches!(&e.entry, PublicOplogEntry::Start(s) if s.function_name == "golem::rpc::wasm-rpc::invoke_and_await")).count(), 1);
+        assert_eq!(
+            recovered
+                .iter()
+                .filter(
+                    |e| matches!(&e.entry, PublicOplogEntry::End(end) if end.start_index == start)
+                )
+                .count(),
+            1
+        );
+        let span_ids: Vec<_> = recovered
+            .iter()
+            .filter_map(|e| match &e.entry {
+                PublicOplogEntry::StartSpan(span) if e.oplog_index > start => {
+                    Some(span.span_id.clone())
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(span_ids.len(), 1);
+        assert_eq!(recovered.iter().filter(|e| matches!(&e.entry, PublicOplogEntry::FinishSpan(span) if span.span_id == span_ids[0])).count(), 1);
+    }
+    Ok(())
+}
+
+async fn raw_rpc_suspension_case(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    fixture: &PrecompiledComponent,
+    asynchronous: bool,
+    suspend: bool,
+    restart: bool,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let attempts = Arc::new(Mutex::new(Vec::new()));
+    let recorded_attempts = attempts.clone();
+    let overrides = TestExecutorOverrides {
+        configure: Some(Arc::new(|config| {
+            config.suspend.rpc_suspend_after = Duration::from_secs(2);
+            config.suspend.rpc_resume_after = Duration::from_secs(1);
+        })),
+        wrap_rpc: Some(Arc::new(move |rpc| {
+            Arc::new(RecordingRpc::new(
+                rpc,
+                "inc_after_promise",
+                recorded_attempts.clone(),
+            ))
+        })),
+        ..Default::default()
+    };
+    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, fixture)
+        .store()
+        .await?;
+    let target_name = "raw-rpc-target";
+    let target_id = agent_id!("RpcBlockingCounter", target_name);
+    let target = executor
+        .start_agent(&component.id, target_id.clone())
+        .await?;
+    let promise = executor
+        .invoke_and_await_agent(&component, &target_id, "create_promise", data_value!())
+        .await?
+        .into_typed::<PromiseId>()?;
+    if !suspend {
+        executor.complete_promise(&promise, vec![]).await?;
+    }
+
+    let caller_id = agent_id!("CancelTester", "raw-rpc-caller");
+    let caller = executor
+        .start_agent(&component.id, caller_id.clone())
+        .await?;
+    let mut invocation = {
+        let executor = executor.clone();
+        let component = component.clone();
+        let caller_id = caller_id.clone();
+        let promise = promise.clone();
+        tokio::spawn(async move {
+            executor
+                .invoke_and_await_agent(
+                    &component,
+                    &caller_id,
+                    "await_counter",
+                    data_value!(target_name, promise, asynchronous),
+                )
+                .await
+        })
+    };
+
+    if suspend {
+        executor
+            .wait_for_status(&caller, AgentStatus::Suspended, Duration::from_secs(30))
+            .await?;
+        let prefix = executor.get_oplog(&caller, OplogIndex::INITIAL).await?;
+        eprintln!("Suspended caller (async={asynchronous}):");
+        print_rpc_memory_oplog(&prefix);
+        let starts: Vec<_> = prefix
+            .iter()
+            .filter_map(|entry| {
+                matches!(&entry.entry, PublicOplogEntry::Start(start)
+                if start.function_name == "golem::rpc::wasm-rpc::invoke_and_await")
+                .then_some(entry.oplog_index)
+            })
+            .collect();
+        assert_eq!(starts.len(), 1);
+        assert!(!prefix.iter().any(|entry| {
+            matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == starts[0])
+        }));
+        executor.complete_promise(&promise, vec![]).await?;
+    }
+
+    let result = tokio::time::timeout(Duration::from_secs(45), &mut invocation).await;
+    let caller_oplog = executor.get_oplog(&caller, OplogIndex::INITIAL).await?;
+    let target_oplog = executor.get_oplog(&target, OplogIndex::INITIAL).await?;
+    eprintln!("Caller after wait (async={asynchronous}, suspend={suspend}):");
+    print_rpc_memory_oplog(&caller_oplog);
+    eprintln!("Target after wait:");
+    print_rpc_memory_oplog(&target_oplog);
+    eprintln!("RPC attempts: {:?}", attempts.lock().unwrap());
+    if result.is_err() {
+        invocation.abort();
+        let _ = invocation.await;
+    }
+
+    let count = executor
+        .invoke_and_await_agent(&component, &target_id, "get_value", data_value!())
+        .await?
+        .into_typed::<u64>()?;
+    assert_eq!(
+        count, 7,
+        "target must execute exactly once even if caller hangs"
+    );
+    let target_calls = target_oplog
+        .iter()
+        .filter(|entry| {
+            matches!(&entry.entry, PublicOplogEntry::AgentInvocationStarted(started)
+            if matches!(&started.invocation, PublicAgentInvocation::AgentMethodInvocation(method)
+                if method.method_name == "inc_after_promise"))
+        })
+        .count();
+    assert_eq!(target_calls, 1);
+    {
+        let attempts = attempts.lock().unwrap();
+        assert!(!attempts.is_empty());
+        assert!(attempts[0].is_some());
+        assert!(attempts.iter().all(|key| key == &attempts[0]));
+    }
+    let value = result
+        .map_err(|_| {
+            anyhow::anyhow!("caller did not return (async={asynchronous}, suspend={suspend})")
+        })???
+        .into_typed::<u64>()?;
+    assert_eq!(value, 7);
+    assert_eq!(
+        caller_oplog
+            .iter()
+            .any(|entry| matches!(&entry.entry, PublicOplogEntry::Suspend(_))),
+        suspend,
+    );
+
+    if restart {
+        let attempts_before = attempts.lock().unwrap().len();
+        drop(executor);
+        let executor = start_with_overrides(deps, &context, overrides).await?;
+        // A fresh invocation forces reconstruction; looking up the original key can return
+        // its stored result without running the caller's guest again.
+        let result = tokio::time::timeout(
+            Duration::from_secs(45),
+            executor.invoke_and_await_agent(
+                &component,
+                &caller_id,
+                "await_counter",
+                data_value!(target_name, promise, asynchronous),
+            ),
+        )
+        .await;
+        let oplog = executor.get_oplog(&caller, OplogIndex::INITIAL).await?;
+        eprintln!("Caller after fresh invocation on restarted executor:");
+        print_rpc_memory_oplog(&oplog);
+        eprintln!("RPC attempts after restart: {:?}", attempts.lock().unwrap());
+        let value = result
+            .map_err(|_| {
+                anyhow::anyhow!("completed caller history did not replay (async={asynchronous})")
+            })??
+            .into_typed::<u64>()?;
+        assert_eq!(value, 14);
+        assert_eq!(attempts.lock().unwrap().len(), attempts_before + 1);
+        let count = executor
+            .invoke_and_await_agent(&component, &target_id, "get_value", data_value!())
+            .await?
+            .into_typed::<u64>()?;
+        assert_eq!(
+            count, 14,
+            "replaying the completed call must not repeat its effect"
+        );
+    }
+    Ok(())
+}
 
 #[test]
 #[timeout("2 minutes")]
@@ -385,6 +905,11 @@ fn print_rpc_memory_oplog(oplog: &[PublicOplogEntryWithIndex]) {
         let description = match &entry.entry {
             PublicOplogEntry::Start(start) => format!("Start {}", start.function_name),
             PublicOplogEntry::End(end) => format!("End {:?}", end.start_index),
+            PublicOplogEntry::StartSpan(span) => format!("StartSpan {:?}", span.span_id),
+            PublicOplogEntry::FinishSpan(span) => format!("FinishSpan {:?}", span.span_id),
+            PublicOplogEntry::Suspend(_) => "Suspend".to_string(),
+            PublicOplogEntry::AgentInvocationStarted(_) => "AgentInvocationStarted".to_string(),
+            PublicOplogEntry::AgentInvocationFinished(_) => "AgentInvocationFinished".to_string(),
             PublicOplogEntry::Error(error) => format!("Error {}", error.error),
             _ => continue,
         };
@@ -6797,9 +7322,9 @@ async fn fire_and_forget_rpc_recovers_from_committed_crash_prefixes(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     for (checkpoint, suffix) in [
-        (FireAndForgetRpcCheckpoint::Start, "start"),
-        (FireAndForgetRpcCheckpoint::StartSpan, "start-span"),
-        (FireAndForgetRpcCheckpoint::End, "end"),
+        (RpcCheckpoint::Start, "start"),
+        (RpcCheckpoint::StartSpan, "start-span"),
+        (RpcCheckpoint::End, "end"),
     ] {
         let context = TestContext::new(last_unique_id);
         let executor = start(deps, &context).await?;
@@ -6818,9 +7343,7 @@ async fn fire_and_forget_rpc_recovers_from_committed_crash_prefixes(
         let counter_name = format!("fire-and-forget-{suffix}-target");
         let counter_id = agent_id!("Counter", counter_name.clone());
         let invocation_key = IdempotencyKey::fresh();
-        let mut gate = executor
-            .gate_next_fire_and_forget_rpc_commit(&caller, checkpoint)
-            .await;
+        let mut gate = executor.gate_next_rpc_commit(&caller, checkpoint).await;
 
         let invocation = {
             let executor = executor.clone();
@@ -6858,12 +7381,12 @@ async fn fire_and_forget_rpc_recovers_from_committed_crash_prefixes(
             .count();
         assert_eq!(
             prefix_span_count,
-            usize::from(checkpoint != FireAndForgetRpcCheckpoint::Start),
+            usize::from(checkpoint != RpcCheckpoint::Start),
             "wrong span prefix at {checkpoint:?}: {prefix:#?}"
         );
         assert_eq!(
             prefix_end_count,
-            usize::from(checkpoint == FireAndForgetRpcCheckpoint::End),
+            usize::from(checkpoint == RpcCheckpoint::End),
             "wrong terminal prefix at {checkpoint:?}: {prefix:#?}"
         );
         assert_eq!(

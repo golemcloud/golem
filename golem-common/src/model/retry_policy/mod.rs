@@ -949,6 +949,13 @@ pub enum RetryPolicyState {
         attempts: u32,
         inner: Box<RetryPolicyState>,
     },
+    /// Preserves the elapsed-time origin and monotonic high-water mark for a retry sequence
+    /// whose policy contains a [`RetryPolicy::TimeBox`].
+    TimeBox {
+        started_at_millis: u64,
+        elapsed_millis: u64,
+        inner: Box<RetryPolicyState>,
+    },
     /// Tracks left/right sub-states and whether execution has moved to the right policy
     /// for [`RetryPolicy::AndThen`].
     AndThen {
@@ -968,6 +975,7 @@ impl RetryPolicyState {
             RetryPolicyState::Terminal => 0,
             RetryPolicyState::Wrapper(inner) => inner.retry_count(),
             RetryPolicyState::CountBox { attempts, .. } => *attempts,
+            RetryPolicyState::TimeBox { inner, .. } => inner.retry_count(),
             RetryPolicyState::AndThen {
                 left,
                 right,
@@ -1423,6 +1431,28 @@ impl Predicate {
 }
 
 impl RetryPolicy {
+    /// Returns whether this policy contains an elapsed-time budget.
+    pub fn contains_time_box(&self) -> bool {
+        match self {
+            RetryPolicy::TimeBox { .. } => true,
+            RetryPolicy::CountBox { inner, .. }
+            | RetryPolicy::Clamp { inner, .. }
+            | RetryPolicy::AddDelay { inner, .. }
+            | RetryPolicy::Jitter { inner, .. }
+            | RetryPolicy::FilteredOn { inner, .. } => inner.contains_time_box(),
+            RetryPolicy::AndThen(left, right)
+            | RetryPolicy::Union(left, right)
+            | RetryPolicy::Intersect(left, right) => {
+                left.contains_time_box() || right.contains_time_box()
+            }
+            RetryPolicy::Periodic(_)
+            | RetryPolicy::Exponential { .. }
+            | RetryPolicy::Fibonacci { .. }
+            | RetryPolicy::Immediate
+            | RetryPolicy::Never => false,
+        }
+    }
+
     /// Returns `true` if any nested predicate inside this policy explicitly references
     /// the given property name.
     ///

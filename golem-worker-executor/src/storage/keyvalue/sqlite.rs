@@ -23,6 +23,7 @@ use golem_service_base::migration::{IncludedMigrationsDir, Migrations};
 use include_dir::include_dir;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 const DB_TYPE: &str = "sqlite";
 
@@ -78,18 +79,36 @@ impl SqliteKeyValueStorage {
             KeyValueStorageNamespace::Worker { .. } => "worker".to_string(),
             // agent_id embedded so each agent's split status fields are an isolated key space
             // (per-agent `keys`/`del_many` select only that agent's rows).
-            KeyValueStorageNamespace::AgentStatus { agent_id } => {
-                format!("agent-status:{}", agent_id.to_redis_key())
+            KeyValueStorageNamespace::AgentStatus {
+                agent_id,
+                fingerprint,
+            } => {
+                format!("agent-status:{}:{fingerprint}", agent_id.to_redis_key())
             }
-            KeyValueStorageNamespace::AgentInvocationResultIndex { agent_id } => {
-                format!("agent-invocation-result-index:{}", agent_id.to_redis_key())
-            }
-            KeyValueStorageNamespace::AgentStatusCheckpoint { agent_id } => {
-                format!("agent-status-checkpoint:{}", agent_id.to_redis_key())
-            }
-            KeyValueStorageNamespace::AgentDurableStreamSessionIndex { agent_id } => {
+            KeyValueStorageNamespace::AgentInvocationResultIndex {
+                agent_id,
+                fingerprint,
+            } => {
                 format!(
-                    "agent:durable_stream_session_index:{}",
+                    "agent-invocation-result-index:{}:{fingerprint}",
+                    agent_id.to_redis_key()
+                )
+            }
+            KeyValueStorageNamespace::AgentStatusCheckpoint {
+                agent_id,
+                fingerprint,
+            } => {
+                format!(
+                    "agent-status-checkpoint:{}:{fingerprint}",
+                    agent_id.to_redis_key()
+                )
+            }
+            KeyValueStorageNamespace::AgentDurableStreamSessionIndex {
+                agent_id,
+                fingerprint,
+            } => {
+                format!(
+                    "agent:durable_stream_session_index:{}:{fingerprint}",
                     agent_id.to_redis_key()
                 )
             }
@@ -137,6 +156,20 @@ impl KeyValueStorage for SqliteKeyValueStorage {
             .await
             .map(|_| ())
             .map_err(KeyValueStorageError::from)
+    }
+
+    async fn set_with_expiry(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: KeyValueStorageNamespace,
+        key: &str,
+        value: &[u8],
+        _expiry: Duration,
+    ) -> Result<(), KeyValueStorageError> {
+        self.set(svc_name, api_name, entity_name, namespace, key, value)
+            .await
     }
 
     async fn set_many(
@@ -222,6 +255,68 @@ impl KeyValueStorage for SqliteKeyValueStorage {
                 .bind(field_key)
                 .bind(field_value)
                 .bind(&namespace),
+            )
+            .await
+            .map_err(KeyValueStorageError::from)?;
+        }
+        tx.commit().await.map_err(KeyValueStorageError::from)?;
+        Ok(true)
+    }
+
+    async fn compare_and_mutate_many(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: KeyValueStorageNamespace,
+        key: &str,
+        expected: Option<&[u8]>,
+        sets: &[(&str, &[u8])],
+        deletions: &[&str],
+        _expiry: Duration,
+    ) -> Result<bool, KeyValueStorageError> {
+        for (_, value) in sets {
+            record_db_serialized_size(DB_TYPE, svc_name, entity_name, value.len());
+        }
+        let namespace = Self::namespace(namespace);
+        let api = self.pool.with_rw(svc_name, api_name);
+        let mut tx = api.begin().await.map_err(KeyValueStorageError::from)?;
+        tx.execute(
+            sqlx::query("UPDATE kv_storage SET value = value WHERE namespace = ? AND key = ?;")
+                .bind(&namespace)
+                .bind(key),
+        )
+        .await
+        .map_err(KeyValueStorageError::from)?;
+        let current = tx
+            .fetch_optional_as::<DBValue, _>(
+                sqlx::query_as("SELECT value FROM kv_storage WHERE key = ? AND namespace = ?;")
+                    .bind(key)
+                    .bind(&namespace),
+            )
+            .await
+            .map_err(KeyValueStorageError::from)?;
+        if current.map(DBValue::into_bytes).as_deref() != expected {
+            tx.rollback().await.map_err(KeyValueStorageError::from)?;
+            return Ok(false);
+        }
+        for (field, value) in sets {
+            tx.execute(
+                sqlx::query(
+                    "INSERT OR REPLACE INTO kv_storage (key, value, namespace) VALUES (?, ?, ?);",
+                )
+                .bind(field)
+                .bind(value)
+                .bind(&namespace),
+            )
+            .await
+            .map_err(KeyValueStorageError::from)?;
+        }
+        for field in deletions {
+            tx.execute(
+                sqlx::query("DELETE FROM kv_storage WHERE key = ? AND namespace = ?;")
+                    .bind(field)
+                    .bind(&namespace),
             )
             .await
             .map_err(KeyValueStorageError::from)?;

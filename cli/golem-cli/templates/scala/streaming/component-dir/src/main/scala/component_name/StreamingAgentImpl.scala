@@ -2,13 +2,18 @@ package component_name
 
 import golem.runtime.annotations.agentImplementation
 import golem.schema.AgentStream
+import golem.config.Config
+import golem.streams.{DurableStreamProducer, DurableStreams}
 
 import scala.annotation.unused
 import scala.concurrent.Future
 import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
 
 @agentImplementation()
-final class StreamingAgentImpl(@unused private val name: String) extends StreamingAgent {
+final class StreamingAgentImpl(
+  @unused private val name: String,
+  config: Config[StreamingConfig]
+) extends StreamingAgent {
   private var cancelledProducers = 0
 
   private def stream[A](values: List[A]): AgentStream[A] = {
@@ -50,4 +55,31 @@ final class StreamingAgentImpl(@unused private val name: String) extends Streami
 
   override def status(): Future[String] =
     Future.successful(s"ready ($cancelledProducers cancelled producers)")
+
+  override def durableEcho(input: AgentStream[String]): Future[AgentStream[String]] =
+    Future.successful(input.map(value => s"echo:$value"))
+
+  override def appendExternal(
+    url: String,
+    producerId: String,
+    values: Vector[String],
+    close: Boolean
+  ): Future[Option[String]] =
+    val writer = DurableStreams.jsonWriter[String](
+      url,
+      DurableStreamProducer(producerId),
+      auth = Some(config.value.externalAuth)
+    )
+    writer.append(values, close).transformWith { result =>
+      writer.dispose().flatMap(_ => Future.fromTry(result.map(_.nextOffset)))
+    }
+
+  override def readExternal(url: String): Future[Vector[String]] = {
+    val input = DurableStreams.json[String](url, auth = Some(config.value.externalAuth))
+    def loop(values: Vector[String]): Future[Vector[String]] = input.pull().flatMap {
+      case Some(value) => loop(values :+ value)
+      case None        => Future.successful(values)
+    }
+    loop(Vector.empty)
+  }
 }

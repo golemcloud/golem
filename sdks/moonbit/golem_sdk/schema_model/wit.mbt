@@ -526,7 +526,9 @@ pub fn schema_graph_roots_from_wit(
     roots.push(dec.decode_type_at(index))
   }
   guard roots.get(wit.root) is Some(root) else {
-    raise DecodeError("type node index out of range: \{wit.root} (nodes: \{roots.length()})")
+    raise DecodeError(
+      "type node index out of range: \{wit.root} (nodes: \{roots.length()})",
+    )
   }
   { graph: { defs, root, }, roots, }
 }

@@ -1,0 +1,28 @@
+---
+name: golem-define-tool-ts
+description: "Defines and implements a typed Golem tool in TypeScript. Use when creating a tool provider or command schema."
+---
+
+# Define a Golem tool in TypeScript
+
+Build a definition with `toolDefinition(...).body(...)`, then register one implementation object:
+
+```typescript
+import { ok, toolDefinition } from '@golemcloud/golem-ts-sdk';
+import { z } from 'zod/v4';
+
+export const echo = toolDefinition('echo')
+  .version('1.0.0')
+  .body((body) =>
+    body.positional('value', z.string()).returns(z.string()),
+  );
+
+echo.implement({
+  echo: async ({ value }) => ok(value),
+});
+```
+
+The implementation key is the generated command name. Use the body builder for positional,
+option, flag, tail, stdin/stdout, result, and declared-error metadata; use Standard Schema values
+such as Zod schemas for typed data. Provider handlers return `ok(result)` or a declared `err(...)`.
+Call `.implement(...)` only once per definition.

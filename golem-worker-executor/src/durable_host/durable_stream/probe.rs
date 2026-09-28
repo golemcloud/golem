@@ -137,31 +137,30 @@ impl DbDirectStreamAttachmentConsumerProbe {
             key.session_key.callee_environment_id,
             &key.session_key.callee,
         );
-        let Some(session_mode) = self
+        let Some(session_identity) = self
             .worker_service
-            .get_agent_mode(&session_owner)
+            .resolve_agent_identity(&session_owner)
             .await
             .map_err(|err| StreamStoreError::Oplog(err.to_string()))?
         else {
             return Ok(ConsumerAttachmentStatus::Missing);
         };
-        if session_mode != AgentMode::Durable {
+        if session_identity.fingerprint != key.session_key.callee_fingerprint {
+            crate::metrics::workers::record_foreign_stream_fingerprint_mismatch();
             return Ok(ConsumerAttachmentStatus::IncarnationMismatch);
         }
+        if session_identity.agent_mode != AgentMode::Durable {
+            return Ok(ConsumerAttachmentStatus::IncarnationMismatch);
+        }
+        let session_mode = session_identity.agent_mode;
         let session_index = self.oplog_service.stream_session_index().ok_or_else(|| {
             StreamStoreError::Oplog("stream session index service is unavailable".to_string())
         })?;
-        let identity = session_index
-            .lookup_producer_identity(&session_owner, session_mode)
-            .await
-            .map_err(StreamStoreError::Oplog)?;
-        if identity.producer_fingerprint != key.session_key.callee_fingerprint {
-            return Ok(ConsumerAttachmentStatus::IncarnationMismatch);
-        }
         let Some(status) = session_index
             .lookup_latest(
                 &session_owner,
                 session_mode,
+                key.session_key.callee_fingerprint,
                 &key.session_key.idempotency_key,
             )
             .await
@@ -224,9 +223,9 @@ impl DbDirectStreamAttachmentConsumerProbe {
         }
 
         let consumer = OwnedAgentId::new(key.consumer_environment_id, &key.consumer);
-        let Some(agent_mode) = self
+        let Some(consumer_identity) = self
             .worker_service
-            .get_agent_mode(&consumer)
+            .resolve_agent_identity(&consumer)
             .await
             .map_err(|err| StreamStoreError::Oplog(err.to_string()))?
         else {
@@ -238,19 +237,22 @@ impl DbDirectStreamAttachmentConsumerProbe {
         {
             return Ok(ConsumerAttachmentStatus::IncarnationMismatch);
         }
-        if agent_mode != AgentMode::Durable {
+        if consumer_identity.fingerprint != key.expected_consumer_fingerprint {
+            crate::metrics::workers::record_foreign_stream_fingerprint_mismatch();
             return Ok(ConsumerAttachmentStatus::IncarnationMismatch);
         }
-        let identity = session_index
-            .lookup_producer_identity(&consumer, agent_mode)
-            .await
-            .map_err(StreamStoreError::Oplog)?;
-        if identity.producer_fingerprint != key.expected_consumer_fingerprint {
+        if consumer_identity.agent_mode != AgentMode::Durable {
             return Ok(ConsumerAttachmentStatus::IncarnationMismatch);
         }
+        let agent_mode = consumer_identity.agent_mode;
         let metadata = self
             .worker_service
-            .lookup_durable_stream_control_metadata(&consumer, agent_mode, &key.session_key)
+            .lookup_durable_stream_control_metadata(
+                &consumer,
+                agent_mode,
+                key.expected_consumer_fingerprint,
+                &key.session_key,
+            )
             .await
             .map_err(StreamStoreError::Oplog)?;
         if !metadata.is_loaded() {
@@ -331,14 +333,21 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
         else {
             return Ok(None);
         };
-        if metadata.initial_worker_metadata.fingerprint != key.expected_consumer_fingerprint
-            || metadata.initial_worker_metadata.agent_mode != AgentMode::Durable
-        {
+        if metadata.initial_worker_metadata.fingerprint != key.expected_consumer_fingerprint {
+            crate::metrics::workers::record_foreign_stream_fingerprint_mismatch();
+            return Ok(None);
+        }
+        if metadata.initial_worker_metadata.agent_mode != AgentMode::Durable {
             return Ok(None);
         }
         let control = self
             .worker_service
-            .lookup_durable_stream_control_metadata(&consumer, AgentMode::Durable, &key.session_key)
+            .lookup_durable_stream_control_metadata(
+                &consumer,
+                AgentMode::Durable,
+                key.expected_consumer_fingerprint,
+                &key.session_key,
+            )
             .await
             .map_err(StreamStoreError::Oplog)?;
         let readers = control.readers_for_attachment(key);
@@ -516,14 +525,21 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
         else {
             return Ok(None);
         };
-        if metadata.initial_worker_metadata.fingerprint != key.expected_consumer_fingerprint
-            || metadata.initial_worker_metadata.agent_mode != AgentMode::Durable
-        {
+        if metadata.initial_worker_metadata.fingerprint != key.expected_consumer_fingerprint {
+            crate::metrics::workers::record_foreign_stream_fingerprint_mismatch();
+            return Ok(None);
+        }
+        if metadata.initial_worker_metadata.agent_mode != AgentMode::Durable {
             return Ok(None);
         }
         let control = self
             .worker_service
-            .lookup_durable_stream_control_metadata(&consumer, AgentMode::Durable, &key.session_key)
+            .lookup_durable_stream_control_metadata(
+                &consumer,
+                AgentMode::Durable,
+                key.expected_consumer_fingerprint,
+                &key.session_key,
+            )
             .await
             .map_err(StreamStoreError::Oplog)?;
         let readers = control.readers_for_attachment(key);
@@ -535,6 +551,7 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
             .lookup_durable_stream_producer_metadata(
                 &consumer,
                 AgentMode::Durable,
+                key.expected_consumer_fingerprint,
                 readers
                     .iter()
                     .map(|reader| {

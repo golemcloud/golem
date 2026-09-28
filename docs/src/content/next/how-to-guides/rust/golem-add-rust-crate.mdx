@@ -3,9 +3,11 @@
 ## Important constraints
 
 - The compilation target is `wasm32-wasip2` — only crates that support this target will work.
-- Crates that use threads, native system calls, `mmap`, networking via `std::net`, or platform-specific C libraries **will not compile**.
-- Pure Rust crates and crates that support `wasm32-wasi` generally work.
-- If unsure whether a crate compiles for WASM, add it and run `golem build` to find out.
+- Crates requiring unsupported OS facilities may fail to compile or fail at runtime.
+- A generic `wasm32-wasi` compatibility claim is insufficient; verify the exact features used
+  against `wasm32-wasip2` and exercise them in Golem.
+- Pure Rust is not by itself proof of compatibility. Platform-specific C libraries, threading,
+  sockets, and memory-mapping APIs require particular scrutiny.
 
 ## Steps
 
@@ -30,7 +32,7 @@
 
 3. **If the build fails**
 
-   - Check the error for unsupported target or missing C dependencies — these crates are incompatible with `wasm32-wasip1`.
+   - Check the error for unsupported target features or missing native dependencies.
    - Try enabling a `wasm` or `wasi` feature flag if the crate provides one.
    - Look for an alternative crate that supports WASM.
 
@@ -45,8 +47,9 @@ These crates are already in the project's `Cargo.toml` — do NOT add them again
 
 ## HTTP and networking
 
-Use `wstd::http` for HTTP requests. The standard `std::net` module is **not available** on WASM.
+Prefer `wstd::http` for outgoing HTTP requests. Compile support for an API does not guarantee that
+the runtime grants the required network capability, so test the actual operation in Golem.
 
 ## AI / LLM features
 
-To add AI capabilities, add the relevant `golem-ai-*` provider crate (e.g., `golem-ai-llm-openai`) and configure the provider in the component's `golem.yaml` dependencies section.
+To add AI capabilities, See the [`golem-add-llm-rust`](/next/how-to-guides/rust/golem-add-llm-rust) guide. The published `golem-ai` release and the current WASIp2-compatible source do not currently use the same API, so do not guess a crate version or copy an older example.

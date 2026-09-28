@@ -254,7 +254,7 @@ pub fn add_agent_method_http_routes(
                 errors
             );
 
-            let http_input = if route_mode == AgentRouteMode::DurableStreams {
+            let (http_input, durable_streams) = if route_mode == AgentRouteMode::DurableStreams {
                 ok_or_continue!(
                     super::durable_streams::validate_route(
                         agent,
@@ -262,11 +262,18 @@ pub fn add_agent_method_http_routes(
                         http_mount,
                         http_endpoint
                     )
+                    .map(|(http_input, policy)| (http_input, Some(policy)))
                     .map_err(&make_route_validation_error),
                     errors
                 )
+            } else if http_endpoint.durable_streams.is_some() {
+                errors.push(make_route_validation_error(
+                    "Durable Streams route options can only be set on a method that uses streams"
+                        .into(),
+                ));
+                continue;
             } else {
-                agent_method.input_schema.clone()
+                (agent_method.input_schema.clone(), None)
             };
 
             ok_or_continue!(
@@ -332,6 +339,7 @@ pub fn add_agent_method_http_routes(
                 expected_agent_response: compiled_output(agent, &agent_method.output_schema),
                 method_description: Some(agent_method.description.clone()),
                 read_only: agent_method.read_only.clone(),
+                durable_streams,
             };
             let compiled = UnboundCompiledRoute {
                 route_id,
@@ -555,24 +563,27 @@ pub fn add_cors_preflight_http_routes(
             continue;
         };
         if !compiled_route.cors.allowed_patterns.is_empty() {
-            let entry = preflight_map
-                .entry(compiled_route.path.clone())
-                .or_insert(PreflightMapEntry::new());
+            for path in cors_preflight_paths(compiled_route) {
+                let entry = preflight_map
+                    .entry(path)
+                    .or_insert(PreflightMapEntry::new());
 
-            let method_policy = entry
-                .method_policies
-                .entry(method.clone())
-                .or_insert_with(|| PreflightMethodPolicyEntry {
-                    allowed_origins: BTreeSet::new(),
-                    allowed_headers: BTreeSet::new(),
-                });
+                let method_policy =
+                    entry
+                        .method_policies
+                        .entry(method.clone())
+                        .or_insert_with(|| PreflightMethodPolicyEntry {
+                            allowed_origins: BTreeSet::new(),
+                            allowed_headers: BTreeSet::new(),
+                        });
 
-            method_policy
-                .allowed_origins
-                .extend(compiled_route.cors.allowed_patterns.iter().cloned());
-            method_policy
-                .allowed_headers
-                .extend(collect_allowed_request_headers(compiled_route));
+                method_policy
+                    .allowed_origins
+                    .extend(compiled_route.cors.allowed_patterns.iter().cloned());
+                method_policy
+                    .allowed_headers
+                    .extend(collect_allowed_request_headers(compiled_route));
+            }
         }
     }
 
@@ -613,6 +624,52 @@ pub fn add_cors_preflight_http_routes(
             },
         });
     }
+}
+
+fn cors_preflight_paths(route: &UnboundCompiledRoute) -> Vec<Vec<PathSegment>> {
+    let RouteBehaviour::CallAgent(behaviour) = &route.behaviour else {
+        return vec![route.path.clone()];
+    };
+    if behaviour.route_mode != AgentRouteMode::DurableStreams {
+        return vec![route.path.clone()];
+    }
+    let Some(policy) = &behaviour.durable_streams else {
+        return Vec::new();
+    };
+    let path_variables = route
+        .path
+        .iter()
+        .filter(|segment| !matches!(segment, PathSegment::Literal { .. }))
+        .count();
+    let stream_path = matches!(
+        route.path.as_slice(),
+        [.., PathSegment::Literal { value }, PathSegment::Variable { .. }] if value == "streams"
+    ) && path_variables > behaviour.base_path_variables as usize;
+    let method = route.route_match.method();
+    if !stream_path {
+        return if matches!(method, Some(HttpMethod::Delete(_))) && !policy.allow_invocation_delete {
+            Vec::new()
+        } else {
+            vec![route.path.clone()]
+        };
+    }
+
+    policy
+        .slots
+        .iter()
+        .filter(|slot| {
+            (!matches!(method, Some(HttpMethod::Post(_)))
+                || policy.allow_external_writes && slot.writable())
+                && (!matches!(method, Some(HttpMethod::Delete(_))) || policy.allow_stream_delete)
+        })
+        .map(|slot| {
+            let mut path = route.path[..route.path.len() - 1].to_vec();
+            path.push(PathSegment::Literal {
+                value: slot.public_name.clone(),
+            });
+            path
+        })
+        .collect()
 }
 
 fn collect_allowed_request_headers(compiled_route: &UnboundCompiledRoute) -> BTreeSet<String> {
@@ -1005,7 +1062,10 @@ mod tests {
     use golem_common::model::Empty;
     use golem_common::model::account::AccountId;
     use golem_common::model::agent::{
-        AgentMode, CorsOptions as AgentCorsOptions, HttpMountDetails, LiteralSegment, Snapshotting,
+        AgentMode, CorsOptions as AgentCorsOptions, DurableStreamInputSlotSource,
+        DurableStreamOutputSlotSource, DurableStreamRouteLoadOptions, DurableStreamRouteOptions,
+        DurableStreamSlotOptions, DurableStreamSlotSource, HttpMountDetails, LiteralSegment,
+        Snapshotting,
     };
     use golem_common::model::application::{ApplicationId, ApplicationName};
     use golem_common::model::component::{ComponentId, ComponentRevision};
@@ -1085,6 +1145,7 @@ mod tests {
                     cors_options: AgentCorsOptions {
                         allowed_patterns: vec![],
                     },
+                    durable_streams: None,
                 }],
                 read_only: None,
             }],
@@ -1190,6 +1251,22 @@ mod tests {
             NamedField::user_supplied("events", SchemaType::stream(Some(SchemaType::string()))),
             NamedField::user_supplied("limit", SchemaType::u32()),
         ]);
+        agent.methods[0].http_endpoint[0].durable_streams = Some(DurableStreamRouteOptions {
+            slots: vec![DurableStreamSlotOptions {
+                source: DurableStreamSlotSource::Input(DurableStreamInputSlotSource {
+                    name: "events".into(),
+                }),
+                name: Some("incoming".into()),
+                content_type: Some("application/json".into()),
+            }],
+            allow_external_writes: Some(true),
+            allow_stream_delete: Some(false),
+            allow_invocation_delete: Some(false),
+            load: Some(DurableStreamRouteLoadOptions {
+                max_concurrent_readers_per_stream: Some(8),
+                max_append_requests_per_second_per_stream: Some(25),
+            }),
+        });
         let (routes, errors) = compile_test_routes(&agent);
         assert!(errors.is_empty(), "{errors:?}");
         assert_eq!(routes.len(), 17);
@@ -1237,6 +1314,30 @@ mod tests {
                 panic!()
             };
             assert_eq!(call.route_mode, AgentRouteMode::DurableStreams);
+            let policy = call.durable_streams.as_ref().unwrap();
+            assert_eq!(policy.slots.len(), 1);
+            assert_eq!(policy.slots[0].canonical_name, "events");
+            assert_eq!(policy.slots[0].public_name, "incoming");
+            assert_eq!(policy.slots[0].content_type, "application/json");
+            assert!(policy.allow_external_writes);
+            assert!(!policy.allow_stream_delete);
+            assert!(!policy.allow_invocation_delete);
+            assert_eq!(
+                policy
+                    .load
+                    .as_ref()
+                    .unwrap()
+                    .max_concurrent_readers_per_stream,
+                Some(8)
+            );
+            assert_eq!(
+                policy
+                    .load
+                    .as_ref()
+                    .unwrap()
+                    .max_append_requests_per_second_per_stream,
+                Some(25)
+            );
             assert_eq!(call.method_parameters.len(), 1);
             assert_eq!(call.method_input.input_schema.fields().len(), 2);
             let RequestBodySchema::JsonBody { ref expected } = call.body else {
@@ -1259,6 +1360,7 @@ mod tests {
                 panic!()
             };
             assert_eq!(call.route_mode, AgentRouteMode::DurableStreams);
+            assert_eq!(call.durable_streams.unwrap(), policy.clone());
         }
         assert!(identities.contains(&("PUT".into(), "notes".into())));
         assert!(identities.contains(&(
@@ -1272,6 +1374,118 @@ mod tests {
         assert!(!identities.contains(&("GET".into(), "notes".into())));
         let rest = compiled_call_agent_behaviour(AgentMode::Durable, false);
         assert_eq!(rest.route_mode, AgentRouteMode::Rest);
+        assert_eq!(rest.durable_streams, None);
+    }
+
+    #[test]
+    fn durable_stream_preflight_routes_are_public_slot_and_policy_specific() {
+        let mut agent = test_agent(AgentMode::Durable, false);
+        agent.methods[0].input_schema =
+            InputSchema::parameters([golem_common::schema::NamedField::user_supplied(
+                "events",
+                SchemaType::stream(Some(SchemaType::string())),
+            )]);
+        agent.methods[0].output_schema =
+            OutputSchema::Single(Box::new(SchemaType::stream(Some(SchemaType::u8()))));
+        agent.methods[0].http_endpoint[0]
+            .cors_options
+            .allowed_patterns = vec!["https://client.example".into()];
+        agent.methods[0].http_endpoint[0].durable_streams = Some(DurableStreamRouteOptions {
+            slots: vec![
+                DurableStreamSlotOptions {
+                    source: DurableStreamSlotSource::Input(DurableStreamInputSlotSource {
+                        name: "events".into(),
+                    }),
+                    name: Some("incoming".into()),
+                    content_type: None,
+                },
+                DurableStreamSlotOptions {
+                    source: DurableStreamSlotSource::Output(DurableStreamOutputSlotSource {
+                        name: "$result".into(),
+                    }),
+                    name: Some("outgoing".into()),
+                    content_type: Some("application/vnd.golem.bytes".into()),
+                },
+            ],
+            allow_external_writes: Some(true),
+            allow_stream_delete: Some(false),
+            allow_invocation_delete: Some(false),
+            load: None,
+        });
+        let (mut routes, errors) = compile_test_routes(&agent);
+        assert!(errors.is_empty(), "{errors:?}");
+        let mut route_id = routes.iter().map(|route| route.route_id).max().unwrap() + 1;
+        add_cors_preflight_http_routes(
+            &test_deployment(EnvironmentId::new()),
+            &mut route_id,
+            &mut routes,
+        );
+
+        let preflights: BTreeMap<_, _> = routes
+            .iter()
+            .filter_map(|route| {
+                let RouteBehaviour::CorsPreflight(preflight) = &route.behaviour else {
+                    return None;
+                };
+                Some((
+                    route.path.iter().map(ToString::to_string).join("/"),
+                    preflight
+                        .method_policies
+                        .iter()
+                        .map(|policy| render_http_method(&policy.method))
+                        .collect::<BTreeSet<_>>(),
+                ))
+            })
+            .collect();
+        assert!(
+            !preflights
+                .keys()
+                .any(|path| path.ends_with("streams/{slot}"))
+        );
+        let incoming = &preflights["notes/invocations/{session}/streams/incoming"];
+        let outgoing = &preflights["notes/invocations/{session}/streams/outgoing"];
+        assert!(incoming.contains("POST"));
+        assert!(!outgoing.contains("POST"));
+        assert!(!incoming.contains("DELETE"));
+        assert!(!outgoing.contains("DELETE"));
+        assert!(!preflights["notes/invocations/{session}"].contains("DELETE"));
+
+        let base = routes
+            .iter_mut()
+            .find(|route| {
+                matches!(route.behaviour, RouteBehaviour::CallAgent(_)) && route.path.len() == 1
+            })
+            .unwrap();
+        base.path = vec![
+            PathSegment::Literal {
+                value: "streams".into(),
+            },
+            PathSegment::Variable {
+                display_name: "tenant".into(),
+            },
+        ];
+        let RouteBehaviour::CallAgent(call) = &mut base.behaviour else {
+            unreachable!()
+        };
+        call.base_path_variables = 1;
+        assert_eq!(cors_preflight_paths(base), vec![base.path.clone()]);
+    }
+
+    #[test]
+    fn durable_stream_options_on_rest_method_are_rejected() {
+        let mut agent = test_agent(AgentMode::Durable, false);
+        agent.methods[0].http_endpoint[0].durable_streams = Some(DurableStreamRouteOptions {
+            slots: vec![],
+            allow_external_writes: None,
+            allow_stream_delete: Some(false),
+            allow_invocation_delete: None,
+            load: None,
+        });
+
+        let (routes, errors) = compile_test_routes(&agent);
+        assert!(routes.is_empty());
+        assert_eq!(errors.len(), 1);
+        assert!(format!("{:?}", errors[0]).contains("only be set on a method that uses streams"));
     }
 
     #[test]
@@ -1512,6 +1726,7 @@ mod tests {
                 behaviour: RouteBehaviour::CallAgent(CallAgentBehaviour {
                     route_mode: AgentRouteMode::Rest,
                     base_path_variables: 0,
+                    durable_streams: None,
                     component_id: golem_common::model::component::ComponentId(uuid::Uuid::nil()),
                     component_revision:
                         golem_common::model::component::ComponentRevision::try_from(0u64).unwrap(),
@@ -1547,6 +1762,7 @@ mod tests {
                 behaviour: RouteBehaviour::CallAgent(CallAgentBehaviour {
                     route_mode: AgentRouteMode::Rest,
                     base_path_variables: 0,
+                    durable_streams: None,
                     component_id: golem_common::model::component::ComponentId(uuid::Uuid::nil()),
                     component_revision:
                         golem_common::model::component::ComponentRevision::try_from(0u64).unwrap(),

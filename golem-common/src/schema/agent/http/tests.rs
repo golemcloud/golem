@@ -208,6 +208,7 @@ fn agent(input: &Value) -> AgentTypeSchema {
                         cors_options: CorsOptions {
                             allowed_patterns: vec![],
                         },
+                        durable_streams: None,
                     })
                     .collect(),
                 read_only: None,

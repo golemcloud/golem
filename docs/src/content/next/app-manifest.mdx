@@ -43,7 +43,7 @@ The _Golem CLI_ commands that use _Application Manifest_ start by searching for 
 
 After resolving relative paths in the documents they are merged, then _component selection_ happens: this can be either explicit, by using `--component-name` CLI flags, or implicit, in which case only components defined in the directory - including subdirectories - from where the _Golem CLI_ was executed are used.
 
-Application Manifest documents can also be explicitly passed to the CLI, using the `--app` flag. Note that when using explicit documents the `includes` field is not used, it is expected that all relevant documents are provided for the CLI.
+An Application Manifest can also be selected explicitly with `--app-manifest-path` (`-A`). This chooses the root manifest instead of searching parent directories; its `includes` are still resolved. Use `--disable-app-manifest-discovery` (`-X`) to run without manifest discovery.
 
 ## Template variables and functions
 

@@ -18,6 +18,8 @@ const sharedModules = [
   ["@golemcloud/effect-golem/mysql", "dist/mysql.mjs"],
   ["@golemcloud/effect-golem/ignite2", "dist/ignite.mjs"],
   ["effect", "dist/effect.mjs"],
+  ["effect/unstable/http", "dist/effect-http.mjs"],
+  ["effect/unstable/httpapi", "dist/effect-httpapi.mjs"],
 ]
 
 for (const template of templateMatrix) {
