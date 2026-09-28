@@ -3159,3 +3159,259 @@ async fn a_failed_batch_leaves_no_partial_write(
         "the failed batch must not have written its first entry"
     );
 }
+
+async fn append_three_fenced(
+    is: &Arc<dyn IndexedStorage + Send + Sync>,
+    ns: &IndexedStorageNamespaces,
+    key: &str,
+    epoch: u64,
+) {
+    is.append_many(
+        "svc",
+        "api",
+        "entity",
+        &ns.ns,
+        key,
+        Arc::from([
+            (1, Bytes::from_static(b"a")),
+            (2, Bytes::from_static(b"b")),
+            (3, Bytes::from_static(b"c")),
+        ]),
+        Some(ShardEpoch(epoch)),
+    )
+    .await
+    .unwrap();
+}
+
+#[test]
+#[tracing::instrument]
+async fn a_trim_with_the_recorded_epoch_removes_the_prefix(
+    deps: &WorkerExecutorTestDependencies,
+    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+) {
+    let is = is.get_indexed_storage().await;
+    let key = "trim-match";
+
+    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(7))
+        .await
+        .unwrap();
+    append_three_fenced(&is, ns, key, 7).await;
+
+    is.drop_prefix_with_epoch("svc", "api", ns.ns.clone(), key, 1, Some(ShardEpoch(7)))
+        .await
+        .unwrap();
+
+    let survivors = is
+        .read("svc", "api", "entity", ns.ns.clone(), key, 1, 100)
+        .await
+        .unwrap();
+    assert_eq!(
+        survivors.into_iter().map(|(id, _)| id).collect::<Vec<_>>(),
+        vec![2, 3]
+    );
+}
+
+#[test]
+#[tracing::instrument]
+async fn a_stale_epoch_trim_is_refused_and_removes_nothing(
+    deps: &WorkerExecutorTestDependencies,
+    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+) {
+    let is = is.get_indexed_storage().await;
+    let key = "trim-stale";
+
+    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(7))
+        .await
+        .unwrap();
+    append_three_fenced(&is, ns, key, 7).await;
+    // Another writer takes the key over.
+    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(8))
+        .await
+        .unwrap();
+
+    let result = is
+        .drop_prefix_with_epoch("svc", "api", ns.ns.clone(), key, 3, Some(ShardEpoch(7)))
+        .await;
+
+    assert_fenced(result, 7, Some(8));
+    assert_eq!(
+        is.length("svc", "api", ns.ns.clone(), key).await.unwrap(),
+        3,
+        "a refused trim must remove nothing"
+    );
+}
+
+#[test]
+#[tracing::instrument]
+async fn a_trim_asserting_an_epoch_on_a_key_without_a_record_is_refused(
+    deps: &WorkerExecutorTestDependencies,
+    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+) {
+    let is = is.get_indexed_storage().await;
+    let key = "trim-no-record";
+
+    for (id, value) in [(1, b"a"), (2, b"b"), (3, b"c")] {
+        is.append(
+            "svc",
+            "api",
+            "entity",
+            ns.ns.clone(),
+            key,
+            id,
+            value.to_vec(),
+            None,
+        )
+        .await
+        .unwrap();
+    }
+
+    let result = is
+        .drop_prefix_with_epoch("svc", "api", ns.ns.clone(), key, 3, Some(ShardEpoch(7)))
+        .await;
+
+    assert_fenced(result, 7, None);
+    assert_eq!(
+        is.length("svc", "api", ns.ns.clone(), key).await.unwrap(),
+        3
+    );
+}
+
+#[test]
+#[tracing::instrument]
+async fn an_unfenced_trim_ignores_the_recorded_epoch(
+    deps: &WorkerExecutorTestDependencies,
+    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+) {
+    let is = is.get_indexed_storage().await;
+    let key = "trim-unfenced";
+
+    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(8))
+        .await
+        .unwrap();
+    append_three_fenced(&is, ns, key, 8).await;
+
+    is.drop_prefix_with_epoch("svc", "api", ns.ns.clone(), key, 1, None)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        is.length("svc", "api", ns.ns.clone(), key).await.unwrap(),
+        2
+    );
+}
+
+#[test]
+#[tracing::instrument]
+async fn deleting_an_emptied_key_keeps_its_recorded_epoch(
+    deps: &WorkerExecutorTestDependencies,
+    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+) {
+    let is = is.get_indexed_storage().await;
+    let key = "delete-empty-owner";
+
+    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(7))
+        .await
+        .unwrap();
+    append_three_fenced(&is, ns, key, 7).await;
+    is.drop_prefix_with_epoch("svc", "api", ns.ns.clone(), key, 3, Some(ShardEpoch(7)))
+        .await
+        .unwrap();
+
+    let deleted = is
+        .delete_empty_with_epoch("svc", "api", ns.ns.clone(), key, Some(ShardEpoch(7)))
+        .await
+        .unwrap();
+    assert!(deleted, "an emptied key is deleted");
+    assert!(!is.exists("svc", "api", ns.ns.clone(), key).await.unwrap());
+
+    // The record survives: the owner keeps writing, a stale writer is still refused.
+    is.append(
+        "svc",
+        "api",
+        "entity",
+        ns.ns.clone(),
+        key,
+        4,
+        b"d".to_vec(),
+        Some(ShardEpoch(7)),
+    )
+    .await
+    .unwrap();
+    let stale = is
+        .append(
+            "svc",
+            "api",
+            "entity",
+            ns.ns.clone(),
+            key,
+            5,
+            b"e".to_vec(),
+            Some(ShardEpoch(6)),
+        )
+        .await;
+    assert_fenced(stale, 6, Some(7));
+}
+
+#[test]
+#[tracing::instrument]
+async fn a_key_that_still_holds_entries_is_not_deleted(
+    deps: &WorkerExecutorTestDependencies,
+    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+) {
+    let is = is.get_indexed_storage().await;
+    let key = "delete-empty-non-empty";
+
+    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(7))
+        .await
+        .unwrap();
+    append_three_fenced(&is, ns, key, 7).await;
+
+    let deleted = is
+        .delete_empty_with_epoch("svc", "api", ns.ns.clone(), key, Some(ShardEpoch(7)))
+        .await
+        .unwrap();
+
+    assert!(!deleted);
+    assert_eq!(
+        is.length("svc", "api", ns.ns.clone(), key).await.unwrap(),
+        3
+    );
+}
+
+#[test]
+#[tracing::instrument]
+async fn a_stale_epoch_delete_of_an_emptied_key_deletes_nothing(
+    deps: &WorkerExecutorTestDependencies,
+    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+) {
+    let is = is.get_indexed_storage().await;
+    let key = "delete-empty-stale";
+
+    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(7))
+        .await
+        .unwrap();
+    append_three_fenced(&is, ns, key, 7).await;
+    is.drop_prefix_with_epoch("svc", "api", ns.ns.clone(), key, 3, Some(ShardEpoch(7)))
+        .await
+        .unwrap();
+    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(8))
+        .await
+        .unwrap();
+
+    let result = is
+        .delete_empty_with_epoch("svc", "api", ns.ns.clone(), key, Some(ShardEpoch(7)))
+        .await;
+
+    assert_fenced(result.map(|_| ()), 7, Some(8));
+    assert!(
+        is.exists("svc", "api", ns.ns.clone(), key).await.unwrap(),
+        "a refused delete leaves the emptied key in place"
+    );
+}

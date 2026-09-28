@@ -17,7 +17,7 @@ use crate::services::oplog::reader::{
     OplogReadError, OplogReadSource, fail_stop, verify_persisted_entries,
 };
 use crate::services::oplog::{
-    CompressedOplogChunk, OplogArchiveService, decode_scan_cursor, next_scan_cursor,
+    CompressedOplogChunk, OplogArchiveService, OplogError, decode_scan_cursor, next_scan_cursor,
 };
 use async_trait::async_trait;
 use evicting_cache_map::EvictingCacheMap;
@@ -25,7 +25,7 @@ use golem_common::model::agent::AgentMode;
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
-use golem_common::model::{AgentId, OwnedAgentId, ScanCursor};
+use golem_common::model::{AgentId, OwnedAgentId, ScanCursor, ShardEpoch};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::storage::blob::{
     BlobStorage, BlobStorageLabelledApi, BlobStorageNamespace, ExistsResult,
@@ -57,10 +57,14 @@ impl BlobOplogArchiveService {
 
 #[async_trait]
 impl OplogArchiveService for BlobOplogArchiveService {
+    /// Accepts the owner's epoch and asserts nothing with it: blob storage has no conditional
+    /// write, so a newer owner's generation cannot refuse this layer's writes. This layer stays
+    /// outside the shard-epoch fence.
     async fn open(
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
+        _shard_epoch: Option<ShardEpoch>,
     ) -> Arc<dyn OplogArchive + Send + Sync> {
         Arc::new(
             BlobOplogArchive::new(
@@ -77,6 +81,7 @@ impl OplogArchiveService for BlobOplogArchiveService {
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
+        _shard_epoch: Option<ShardEpoch>,
     ) -> Arc<dyn OplogArchive + Send + Sync> {
         Arc::new(BlobOplogArchive::new_fresh(
             owned_agent_id.clone(),
@@ -114,7 +119,7 @@ impl OplogArchiveService for BlobOplogArchiveService {
         idx: OplogIndex,
         n: u64,
     ) -> BTreeMap<OplogIndex, OplogEntry> {
-        let archive = self.open(owned_agent_id, agent_mode).await;
+        let archive = self.open(owned_agent_id, agent_mode, None).await;
         archive.read_source(idx, n).await
     }
 
@@ -575,11 +580,11 @@ impl OplogArchive for BlobOplogArchive {
         result
     }
 
-    async fn append(&self, chunk: &[(OplogIndex, OplogEntry)]) -> u64 {
+    async fn append(&self, chunk: &[(OplogIndex, OplogEntry)]) -> Result<u64, OplogError> {
         self.ensure_is_created().await;
 
         if chunk.is_empty() {
-            return 0;
+            return Ok(0);
         }
 
         let mut total_bytes = 0u64;
@@ -624,7 +629,7 @@ impl OplogArchive for BlobOplogArchive {
             self.entries.lock().unwrap().insert(oplog_index, path);
         }
 
-        total_bytes
+        Ok(total_bytes)
     }
 
     async fn verify_persisted(&self, entries: &[(OplogIndex, OplogEntry)]) {
@@ -655,7 +660,7 @@ impl OplogArchive for BlobOplogArchive {
             .unwrap_or_else(|| OplogIndex::from_u64(0))
     }
 
-    async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> u64 {
+    async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> Result<u64, OplogError> {
         self.ensure_is_created().await;
 
         // The keys are removed from the map before the blobs are deleted, so concurrent readers
@@ -723,7 +728,7 @@ impl OplogArchive for BlobOplogArchive {
             }
         }
 
-        drop_count as u64
+        Ok(drop_count as u64)
     }
 
     async fn length(&self) -> u64 {

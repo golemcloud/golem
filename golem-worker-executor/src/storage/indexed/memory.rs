@@ -568,6 +568,56 @@ impl IndexedStorage for InMemoryIndexedStorage {
             .await;
         Ok(())
     }
+
+    async fn delete_empty_with_epoch(
+        &self,
+        _svc_name: &'static str,
+        _api_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        expected_epoch: Option<ShardEpoch>,
+    ) -> Result<bool, IndexedStorageError> {
+        let composite_key = Self::composite_key(namespace, key);
+        // The record's guard is held across the emptiness test and the removal, in the order an
+        // append takes them, so no fenced writer can add an entry in between.
+        let record = self.key_epochs.entry_async(composite_key.clone()).await;
+        if let Some(expected) = expected_epoch {
+            self.check_record(key, expected, &record)?;
+        }
+        let empty = self
+            .data
+            .read_async(&composite_key, |_, entries| entries.is_empty())
+            .await
+            .unwrap_or(true);
+        if empty {
+            self.data.remove_async(&composite_key).await;
+        }
+        drop(record);
+        Ok(empty)
+    }
+
+    async fn drop_prefix_with_epoch(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        last_dropped_id: u64,
+        expected_epoch: Option<ShardEpoch>,
+    ) -> Result<(), IndexedStorageError> {
+        let composite_key = Self::composite_key(namespace.clone(), key);
+        // The record's guard is held across the trim, in the order an append takes them, so
+        // nobody can record a new generation between the check and the trim.
+        let record = self.key_epochs.entry_async(composite_key).await;
+        if let Some(expected) = expected_epoch {
+            self.check_record(key, expected, &record)?;
+        }
+        let result = self
+            .drop_prefix(svc_name, api_name, namespace, key, last_dropped_id)
+            .await;
+        drop(record);
+        result
+    }
 }
 
 #[cfg(test)]

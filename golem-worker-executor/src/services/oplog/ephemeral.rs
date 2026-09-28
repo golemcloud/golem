@@ -22,20 +22,20 @@ use crate::services::oplog::reader::{
 };
 use crate::services::oplog::{
     CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, Oplog, OplogAddReceipt,
-    OplogCloseCompletion, OplogError, OplogService, OrderedOplogStart, PendingUpload,
+    OplogCloseCompletion, OplogError, OplogFence, OplogService, OrderedOplogStart, PendingUpload,
     ReservedRawStartBuilder, downcast_oplog,
 };
 use async_trait::async_trait;
 use futures::FutureExt;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, PayloadId, RawOplogPayload};
-use golem_common::model::{AgentFingerprint, DurableStreamSessionStatus, OwnedAgentId};
+use golem_common::model::{AgentFingerprint, DurableStreamSessionStatus, OwnedAgentId, ShardEpoch};
 use nonempty_collections::NEVec;
 use std::cmp::{max, min};
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt::{Debug, Formatter};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 use tokio::sync::mpsc::{Receiver, Sender, UnboundedReceiver, UnboundedSender};
 
@@ -72,6 +72,9 @@ pub struct EphemeralOplog {
     transfer_fiber: TransferFiber,
     multi_layer_oplog_service: MultiLayerOplogService,
     close_fn: Mutex<Option<Box<dyn FnOnce() + Send + Sync>>>,
+    /// The refusal the writer task met, shared with it and with the actor, which answer
+    /// [`Oplog::fence`] and refuse new writes from it without a round trip.
+    fence: Arc<OnceLock<OplogFence>>,
 }
 
 /// A request processed by the [`EphemeralOplog`] actor task, which exclusively owns the
@@ -80,24 +83,24 @@ enum EphemeralJob {
     Close,
     Add {
         entry: OplogEntry,
-        done: tokio::sync::oneshot::Sender<OplogIndex>,
+        done: tokio::sync::oneshot::Sender<Result<OplogIndex, OplogError>>,
     },
     AddDurableStreamBatch {
         make_batch: DurableStreamBatchBuilder,
-        done: tokio::sync::oneshot::Sender<Vec<(OplogIndex, OplogEntry)>>,
+        done: tokio::sync::oneshot::Sender<Result<Vec<(OplogIndex, OplogEntry)>, OplogError>>,
     },
     AddPair {
         start: OplogEntry,
         make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
-        done: tokio::sync::oneshot::Sender<(OplogIndex, OplogIndex)>,
+        done: tokio::sync::oneshot::Sender<Result<(OplogIndex, OplogIndex), OplogError>>,
     },
     AddIndexedStart {
         build_request: IndexedReservedStartBuilder,
-        done: tokio::sync::oneshot::Sender<Result<OrderedOplogStart, String>>,
+        done: tokio::sync::oneshot::Sender<Result<OrderedOplogStart, OplogError>>,
     },
     Commit {
         wait_for_storage: bool,
-        done: tokio::sync::oneshot::Sender<BTreeMap<OplogIndex, OplogEntry>>,
+        done: tokio::sync::oneshot::Sender<Result<BTreeMap<OplogIndex, OplogEntry>, OplogError>>,
     },
     Drain {
         done: tokio::sync::oneshot::Sender<()>,
@@ -158,9 +161,20 @@ struct EphemeralOplogState {
     writer_watermark: Arc<AtomicU64>,
     last_added_non_hint_entry: Option<OplogIndex>,
     durable_stream_sessions: super::raw_session::RawSessionCache,
+    fence: Arc<OnceLock<OplogFence>>,
+    lower: NEVec<Arc<dyn OplogArchive + Send + Sync>>,
 }
 
 impl EphemeralOplogState {
+    /// Refuses a new write once the writer, or a transfer between the archive layers, has met a
+    /// newer owner's epoch: nothing this handle writes can land any more.
+    fn refuse_if_fenced(&self) -> Result<(), OplogError> {
+        match fenced(&self.fence, &self.lower) {
+            Some(fence) => Err(OplogError::Fenced(fence)),
+            None => Ok(()),
+        }
+    }
+
     /// Pushes an entry into the in-memory buffer and advances the oplog index,
     /// without checking the commit threshold. Callers must run [`maybe_commit`]
     /// afterwards. Used by `add_pair` to buffer a `Start`/`End` pair before a
@@ -177,19 +191,26 @@ impl EphemeralOplogState {
         self.last_oplog_idx
     }
 
-    async fn maybe_commit(&mut self) {
+    async fn maybe_commit(&mut self) -> Result<(), OplogError> {
         if self.buffer.len() > self.max_operations_before_commit as usize {
-            self.flush(false).await;
+            self.flush(false).await
+        } else {
+            Ok(())
         }
     }
 
-    async fn add(&mut self, entry: OplogEntry) -> OplogIndex {
+    async fn add(&mut self, entry: OplogEntry) -> Result<OplogIndex, OplogError> {
+        self.refuse_if_fenced()?;
         let idx = self.push(entry);
-        self.maybe_commit().await;
-        idx
+        self.maybe_commit().await?;
+        Ok(idx)
     }
 
-    async fn flush(&mut self, wait_for_storage: bool) {
+    /// Hands the buffer to the writer task and, with `wait_for_storage`, waits until it is
+    /// stored. Fails with the fence when the writer has met one, before or while writing this
+    /// batch: the entries are then not committed, and stay readable from this handle only.
+    async fn flush(&mut self, wait_for_storage: bool) -> Result<(), OplogError> {
+        self.refuse_if_fenced()?;
         let entries = std::mem::take(&mut self.buffer);
         let mut receipt = BTreeMap::new();
         let mut pairs = Vec::new();
@@ -240,11 +261,13 @@ impl EphemeralOplogState {
         if let Some(rx) = barrier_rx {
             rx.await
                 .expect("ephemeral oplog writer failed before the storage barrier");
+            self.refuse_if_fenced()?;
             if let Some((idx, _)) = self.handed_off.back() {
                 self.last_committed_idx = *idx;
             }
             self.handed_off.clear();
         }
+        Ok(())
     }
 
     fn take_receipts(&mut self) -> BTreeMap<OplogIndex, OplogEntry> {
@@ -279,6 +302,12 @@ impl EphemeralOplog {
         close: Box<dyn FnOnce() + Send + Sync>,
     ) -> Self {
         let target = lower.first().clone();
+        // A layer that refused its opening record, or this oplog's first entry, has latched
+        // already: the handle is born finished, as a stale create of a primary oplog is.
+        let fence = Arc::new(match lower.iter().find_map(|layer| layer.fence()) {
+            Some(fence) => OnceLock::from(fence),
+            None => OnceLock::new(),
+        });
         let (jobs, mut job_rx) = tokio::sync::mpsc::unbounded_channel::<EphemeralJob>();
         let (writer, writer_rx) = tokio::sync::mpsc::channel(MAX_QUEUED_WRITE_BATCHES);
         let writer_watermark = Arc::new(AtomicU64::new(last_oplog_idx.as_u64()));
@@ -286,6 +315,7 @@ impl EphemeralOplog {
             target,
             writer_rx,
             writer_watermark.clone(),
+            fence.clone(),
         ));
         let mut state = EphemeralOplogState {
             buffer: VecDeque::new(),
@@ -298,6 +328,8 @@ impl EphemeralOplog {
             writer_watermark,
             last_added_non_hint_entry: None,
             durable_stream_sessions: super::raw_session::RawSessionCache::default(),
+            fence: fence.clone(),
+            lower: lower.clone(),
         };
 
         let actor_primary_service = primary_service.clone();
@@ -308,10 +340,14 @@ impl EphemeralOplog {
                 match job {
                     EphemeralJob::Close => break,
                     EphemeralJob::Add { entry, done } => {
-                        let idx = state.add(entry).await;
-                        let _ = done.send(idx);
+                        let result = state.add(entry).await;
+                        let _ = done.send(result);
                     }
                     EphemeralJob::AddDurableStreamBatch { make_batch, done } => {
+                        if let Err(error) = state.refuse_if_fenced() {
+                            let _ = done.send(Err(error));
+                            continue;
+                        }
                         let records = make_batch(state.last_oplog_idx.next());
                         let result = records
                             .into_iter()
@@ -321,7 +357,7 @@ impl EphemeralOplog {
                                 (idx, entry)
                             })
                             .collect();
-                        state.maybe_commit().await;
+                        let result = state.maybe_commit().await.map(|()| result);
                         let _ = done.send(result);
                     }
                     EphemeralJob::AddPair {
@@ -329,16 +365,26 @@ impl EphemeralOplog {
                         make_second,
                         done,
                     } => {
+                        if let Err(error) = state.refuse_if_fenced() {
+                            let _ = done.send(Err(error));
+                            continue;
+                        }
                         let first_idx = state.push(start);
                         let second = make_second(first_idx);
                         let second_idx = state.push(second);
-                        state.maybe_commit().await;
-                        let _ = done.send((first_idx, second_idx));
+                        let result = state.maybe_commit().await.map(|()| (first_idx, second_idx));
+                        let _ = done.send(result);
                     }
                     EphemeralJob::AddIndexedStart {
                         build_request,
                         done,
                     } => {
+                        // Refused before the request payload is uploaded, so nothing is stored for
+                        // a `Start` that can never be written.
+                        if let Err(error) = state.refuse_if_fenced() {
+                            let _ = done.send(Err(error));
+                            continue;
+                        }
                         let result = match build_request(state.last_oplog_idx.next()) {
                             Ok((serialized_request, build_start)) => actor_primary_service
                                 .upload_raw_payload(
@@ -358,21 +404,26 @@ impl EphemeralOplog {
                                 }),
                             Err(error) => Err(error),
                         };
-                        if result.is_ok() {
-                            state.maybe_commit().await;
-                        }
+                        let result = match result {
+                            Ok(start) => state.maybe_commit().await.map(|()| start),
+                            Err(error) => Err(OplogError::from(error)),
+                        };
                         let _ = done.send(result);
                     }
                     EphemeralJob::Commit {
                         wait_for_storage,
                         done,
                     } => {
-                        state.flush(wait_for_storage).await;
-                        let result = state.take_receipts();
+                        let result = state
+                            .flush(wait_for_storage)
+                            .await
+                            .map(|()| state.take_receipts());
                         let _ = done.send(result);
                     }
                     EphemeralJob::Drain { done } => {
-                        state.flush(true).await;
+                        // The job has no error to reply with: a fence stays latched, where
+                        // `archive` and every later write read it.
+                        let _ = state.flush(true).await;
                         let _ = done.send(());
                     }
                     EphemeralJob::CurrentIndex { done } => {
@@ -439,7 +490,7 @@ impl EphemeralOplog {
                     }
                 }
             }
-            state.flush(true).await;
+            let _ = state.flush(true).await;
         });
 
         let transfer_closed = MultiLayerOplogService::transfer_closed(&transfer_fiber);
@@ -472,20 +523,33 @@ impl EphemeralOplog {
             transfer_fiber,
             multi_layer_oplog_service,
             close_fn: Mutex::new(Some(close)),
+            fence,
         }
     }
 
+    /// Writes each batch to the first archive layer. Once the layer refuses one, the fence is
+    /// latched and no later batch is written, so none lands out of order after a refused one; the
+    /// watermark stays at the last stored batch. Barriers are always released, and the waiter
+    /// reads the fence.
     async fn write_batches(
         target: Arc<dyn OplogArchive + Send + Sync>,
         mut rx: Receiver<WriteCommand>,
         watermark: Arc<AtomicU64>,
+        fence: Arc<OnceLock<OplogFence>>,
     ) {
         while let Some(command) = rx.recv().await {
             match command {
                 WriteCommand::Append { entries, barrier } => {
-                    if let Some((end, _)) = entries.last() {
-                        target.append(&entries).await;
-                        watermark.store(end.as_u64(), Ordering::Release);
+                    if let Some((end, _)) = entries.last()
+                        && fence.get().is_none()
+                    {
+                        match target.append(&entries).await {
+                            Ok(_) => watermark.store(end.as_u64(), Ordering::Release),
+                            Err(OplogError::Fenced(refusal)) => {
+                                let _ = fence.set(refusal);
+                            }
+                            Err(error) => panic!("ephemeral oplog write: {error}"),
+                        }
                     }
                     if let Some(barrier) = barrier {
                         let _ = barrier.send(());
@@ -536,6 +600,12 @@ impl EphemeralOplog {
 
     async fn archive(self: &Arc<Self>, blocking: bool, drain: bool) -> bool {
         self.run_job(|done| EphemeralJob::Drain { done }).await;
+
+        // A newer owner holds the oplog: its own archiving decides what moves, and nothing here
+        // could be written anyway.
+        if self.fence().is_some() {
+            return false;
+        }
 
         // With only one lower layer there is nowhere to transfer to.
         if self.lower.len().get() <= 1 {
@@ -705,13 +775,16 @@ impl EphemeralOplog {
         entry_count_limit: u64,
         transfer_tx: &UnboundedSender<BackgroundTransferMessage>,
         fresh: bool,
+        shard_epoch: Option<ShardEpoch>,
     ) -> NEVec<Arc<dyn OplogArchive + Send + Sync>> {
         let mut lower: Vec<Arc<dyn OplogArchive + Send + Sync>> = Vec::new();
         for (i, layer) in lower_services.iter().enumerate() {
             let raw = if fresh {
-                layer.open_fresh(owned_agent_id, agent_mode).await
+                layer
+                    .open_fresh(owned_agent_id, agent_mode, shard_epoch)
+                    .await
             } else {
-                layer.open(owned_agent_id, agent_mode).await
+                layer.open(owned_agent_id, agent_mode, shard_epoch).await
             };
             if i != (lower_services.len().get() - 1) {
                 let instrumented = Arc::new(InstrumentedOplogArchive::new(
@@ -746,6 +819,18 @@ impl EphemeralOplog {
         }
         NEVec::try_from_vec(lower).expect("At least one lower layer is required")
     }
+}
+
+/// The refusal the writer latched, or one an archive layer latched in a transfer: a newer owner
+/// recorded its epoch on every layer, so either one means the handle is finished.
+fn fenced(
+    latched: &OnceLock<OplogFence>,
+    lower: &NEVec<Arc<dyn OplogArchive + Send + Sync>>,
+) -> Option<OplogFence> {
+    latched
+        .get()
+        .cloned()
+        .or_else(|| lower.iter().find_map(|layer| layer.fence()))
 }
 
 impl Drop for EphemeralOplog {
@@ -800,11 +885,11 @@ impl Oplog for EphemeralOplog {
         }
         let owned_agent_id = self.owned_agent_id.clone();
         Box::pin(async move {
-            Ok(done_rx.await.unwrap_or_else(|_| {
+            done_rx.await.unwrap_or_else(|_| {
                 panic!(
                     "Ephemeral oplog actor for {owned_agent_id:?} dropped an add request without replying"
                 )
-            }))
+            })
         })
     }
 
@@ -813,9 +898,8 @@ impl Oplog for EphemeralOplog {
         make_batch: DurableStreamBatchBuilder,
     ) -> Result<Vec<(OplogIndex, OplogEntry)>, OplogError> {
         record_oplog_call("add_durable_stream_batch");
-        Ok(self
-            .run_job(|done| EphemeralJob::AddDurableStreamBatch { make_batch, done })
-            .await)
+        self.run_job(|done| EphemeralJob::AddDurableStreamBatch { make_batch, done })
+            .await
     }
 
     fn enqueue_add_pair(
@@ -841,11 +925,11 @@ impl Oplog for EphemeralOplog {
         }
         let owned_agent_id = self.owned_agent_id.clone();
         Box::pin(async move {
-            Ok(done_rx.await.unwrap_or_else(|_| {
+            done_rx.await.unwrap_or_else(|_| {
                 panic!(
                     "Ephemeral oplog actor for {owned_agent_id:?} dropped an add-pair request without replying"
                 )
-            }))
+            })
         })
     }
 
@@ -858,7 +942,11 @@ impl Oplog for EphemeralOplog {
         // Ephemeral oplogs are never replayed, so cross-call `Start` ordering need not be
         // deterministic and there is no deferred-upload/commit-barrier machinery here. Upload the
         // request payload eagerly (so it is already durable) and then append the `Start`; the
-        // returned `PendingUpload` is therefore a no-op.
+        // returned `PendingUpload` is therefore a no-op. A fenced oplog refuses before uploading, so
+        // nothing is stored for a `Start` that can never be written.
+        if let Some(fence) = self.fence() {
+            return Err(OplogError::Fenced(fence));
+        }
         let raw = self.upload_raw_payload(serialized_request).await?;
         let entry = build_start(raw)?;
         let index = self
@@ -866,7 +954,7 @@ impl Oplog for EphemeralOplog {
                 entry: entry.clone(),
                 done,
             })
-            .await;
+            .await?;
         Ok(OrderedOplogStart {
             index,
             entry,
@@ -884,14 +972,17 @@ impl Oplog for EphemeralOplog {
             done,
         })
         .await
-        .map_err(OplogError::from)
     }
 
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> u64 {
         record_oplog_call("drop_prefix");
         let mut dropped = 0;
         for layer in &self.lower {
-            dropped += layer.drop_prefix(last_dropped_id).await;
+            match layer.drop_prefix(last_dropped_id).await {
+                Ok(count) => dropped += count,
+                // The layer latched the refusal, where `fence` reports it.
+                Err(_) => break,
+            }
         }
         dropped
     }
@@ -902,18 +993,20 @@ impl Oplog for EphemeralOplog {
     ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogError> {
         record_oplog_call("commit");
         match level {
-            CommitLevel::Always => Ok(self
-                .run_job(|done| EphemeralJob::Commit {
+            CommitLevel::Always => {
+                self.run_job(|done| EphemeralJob::Commit {
                     wait_for_storage: true,
                     done,
                 })
-                .await),
-            CommitLevel::Deferred => Ok(self
-                .run_job(|done| EphemeralJob::Commit {
+                .await
+            }
+            CommitLevel::Deferred => {
+                self.run_job(|done| EphemeralJob::Commit {
                     wait_for_storage: false,
                     done,
                 })
-                .await),
+                .await
+            }
             CommitLevel::DurableOnly => Ok(BTreeMap::new()),
         }
     }
@@ -1081,5 +1174,9 @@ impl Oplog for EphemeralOplog {
         self.primary_service
             .download_raw_payload(&self.owned_agent_id, self.agent_mode, payload_id, md5_hash)
             .await
+    }
+
+    fn fence(&self) -> Option<OplogFence> {
+        fenced(&self.fence, &self.lower)
     }
 }

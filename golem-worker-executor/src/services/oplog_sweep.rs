@@ -948,7 +948,8 @@ mod tests {
 
     use crate::services::oplog::{
         BlobOplogArchiveService, CommitLevel, CompressedOplogArchiveService, EphemeralOplog,
-        MultiLayerOplog, MultiLayerOplogService, OplogArchive, OplogService, PrimaryOplogService,
+        MultiLayerOplog, MultiLayerOplogService, OplogArchive, OplogError, OplogService,
+        PrimaryOplogService,
     };
     use crate::services::shard::ShardServiceDefault;
     use crate::storage::indexed::memory::InMemoryIndexedStorage;
@@ -1681,6 +1682,40 @@ mod tests {
                 .drop_prefix(svc_name, api_name, namespace, key, last_dropped_id)
                 .await
         }
+
+        async fn delete_empty_with_epoch(
+            &self,
+            svc_name: &'static str,
+            api_name: &'static str,
+            namespace: IndexedStorageNamespace,
+            key: &str,
+            expected_epoch: Option<ShardEpoch>,
+        ) -> Result<bool, IndexedStorageError> {
+            self.inner
+                .delete_empty_with_epoch(svc_name, api_name, namespace, key, expected_epoch)
+                .await
+        }
+
+        async fn drop_prefix_with_epoch(
+            &self,
+            svc_name: &'static str,
+            api_name: &'static str,
+            namespace: IndexedStorageNamespace,
+            key: &str,
+            last_dropped_id: u64,
+            expected_epoch: Option<ShardEpoch>,
+        ) -> Result<(), IndexedStorageError> {
+            self.inner
+                .drop_prefix_with_epoch(
+                    svc_name,
+                    api_name,
+                    namespace,
+                    key,
+                    last_dropped_id,
+                    expected_epoch,
+                )
+                .await
+        }
     }
 
     /// A stack with more layers below its source than one archive pass is allowed to walk.
@@ -1793,10 +1828,11 @@ mod tests {
             let grow = self.grow_on_lookup.lock().unwrap().take();
             if let Some((archive, owned_agent_id, at)) = grow {
                 archive
-                    .open(&owned_agent_id, AgentMode::Ephemeral)
+                    .open(&owned_agent_id, AgentMode::Ephemeral, None)
                     .await
                     .append(&[(at, OplogEntry::suspend())])
-                    .await;
+                    .await
+                    .unwrap();
             }
             if self.fails || (self.deleted && forced_revision.is_none()) {
                 return Err(WorkerExecutorError::runtime("component not found"));
@@ -2635,13 +2671,16 @@ mod tests {
         environment_id: EnvironmentId,
     ) {
         let owned_agent_id = OwnedAgentId::new(environment_id, agent_id);
-        let layer = archive.open(&owned_agent_id, AgentMode::Ephemeral).await;
+        let layer = archive
+            .open(&owned_agent_id, AgentMode::Ephemeral, None)
+            .await;
         layer
             .append(&[
                 (OplogIndex::INITIAL, create_entry(agent_id, environment_id)),
                 (OplogIndex::from_u64(2), OplogEntry::exited()),
             ])
-            .await;
+            .await
+            .unwrap();
     }
 
     /// Without this charge, a stack with several source layers would do a whole tick's work per
@@ -3515,9 +3554,13 @@ mod tests {
             &self,
             owned_agent_id: &OwnedAgentId,
             agent_mode: AgentMode,
+            shard_epoch: Option<ShardEpoch>,
         ) -> Arc<dyn OplogArchive + Send + Sync> {
             Arc::new(MiscountingArchive {
-                inner: self.inner.open(owned_agent_id, agent_mode).await,
+                inner: self
+                    .inner
+                    .open(owned_agent_id, agent_mode, shard_epoch)
+                    .await,
                 keeps_entries: self.keeps_entries,
                 appends: self.appends.clone(),
             })
@@ -3527,9 +3570,13 @@ mod tests {
             &self,
             owned_agent_id: &OwnedAgentId,
             agent_mode: AgentMode,
+            shard_epoch: Option<ShardEpoch>,
         ) -> Arc<dyn OplogArchive + Send + Sync> {
             Arc::new(MiscountingArchive {
-                inner: self.inner.open_fresh(owned_agent_id, agent_mode).await,
+                inner: self
+                    .inner
+                    .open_fresh(owned_agent_id, agent_mode, shard_epoch)
+                    .await,
                 keeps_entries: self.keeps_entries,
                 appends: self.appends.clone(),
             })
@@ -3595,13 +3642,13 @@ mod tests {
             self.inner.read_source(idx, n).await
         }
 
-        async fn append(&self, chunk: &[(OplogIndex, OplogEntry)]) -> u64 {
+        async fn append(&self, chunk: &[(OplogIndex, OplogEntry)]) -> Result<u64, OplogError> {
             self.appends
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             if self.keeps_entries {
                 self.inner.append(chunk).await
             } else {
-                0
+                Ok(0)
             }
         }
 
@@ -3615,9 +3662,9 @@ mod tests {
             self.inner.current_oplog_index().await
         }
 
-        async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> u64 {
+        async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> Result<u64, OplogError> {
             if self.keeps_entries {
-                0
+                Ok(0)
             } else {
                 self.inner.drop_prefix(last_dropped_id).await
             }

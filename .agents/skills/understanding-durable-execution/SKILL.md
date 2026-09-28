@@ -140,11 +140,12 @@ effect runs — an idempotent `WriteRemote`, which opens no committed scope — 
 executor that has just lost the shard; its commit is then refused and the new owner runs it
 again, the same window as a crash before that commit. Non-idempotent, batched and transactional
 calls commit their scope `Start` first, so a refusal stops them before the effect. Oplogs that
-assert no epoch are never refused: ephemeral agents' oplogs (their archive layer appends without
-one), a handle opened before this executor has an assignment, fork stages and their publication,
-and compressed archive chunks. Nor do two writes a primary oplog makes outside its entries: the
-prefix it drops once the archive transfer has copied it (`drop_prefix` takes no epoch, and a
-latched fence does not stop the transfer), and blob uploads of large payloads.
+assert no epoch are never refused: a handle opened before this executor has an assignment, and
+fork stages and their publication. The archive transfer is fenced like the primary oplog (see
+"Resharding, revocation and the oplog epoch fence" below), and so is an ephemeral agent's oplog,
+which writes only through the compressed archive levels. Two writes stay outside the fence: the
+blob archive layer, because blob storage has no conditional write, and blob uploads of large
+payloads.
 
 `worker/state_actor.rs::commit_and_update_state` samples the appended tip before its explicit
 commit and ignores receipt entries already folded into the published status. Primary/ephemeral
@@ -372,6 +373,23 @@ owner leaves by:
   retirement synchronously (`Worker::record_retirement`); the stop follows once that lock is
   released, and `stop_internal` hands the generation to `interrupt_and_retire(ShardLost)`, the
   one retirement that fails the waiters and drops it.
+- **Archive transfer.** Opening the layered oplog records the owner's epoch on every compressed
+  archive level's own key (`services/oplog/compressed.rs::CompressedOplogArchive::opened`) before
+  the archive watermark is read, so an older owner's transfer either landed before the record,
+  and the watermark covers it, or is refused after it. Each level asserts the epoch on its
+  appends, trims and delete-when-empty, and the primary oplog asserts it on the trim that follows
+  archiving (`drop_prefix_with_epoch`). A refused step ends the transfer
+  (`multilayer.rs::BackgroundTransfer::run`): an append the storage turned away is not verified,
+  so the new owner's history does not trip fail-stop validation, and a source whose entries were
+  not archived is not trimmed. The refusal latches on the archive handle, `Oplog::fence` reports
+  it for the whole layered oplog, and `archive` stops asking for more work. An emptied level is
+  removed with `delete_empty_with_epoch`, which keeps its epoch record: the owner keeps writing
+  the level, and an older owner is still refused. Deleting the agent removes the records with it,
+  so a transfer still in flight on an older owner cannot write the deleted agent's archive back.
+  An ephemeral oplog's writer task latches a refused batch, and the next add or commit fails with
+  it; the open-oplog cache replaces an ephemeral handle for an opener at a newer epoch, as it
+  replaces a primary one. The blob archive layer has no conditional write and stays outside the
+  fence.
 
 Recording a `ShardLost` retirement cancels `owner_retirement_requested`, so every owner write gate
 refuses at once, fences the durable stream producer, and stops the `AgentStatusFlusher` and

@@ -416,6 +416,63 @@ impl IndexedStorage for SqliteIndexedStorage {
         Ok(())
     }
 
+    async fn delete_empty_with_epoch(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        expected_epoch: Option<ShardEpoch>,
+    ) -> Result<bool, IndexedStorageError> {
+        let namespace = Self::namespace(namespace);
+        let key = key.to_string();
+        self.pool
+            .with_tx_err::<bool, FencedTxError, _>(svc_name, api_name, |tx| {
+                Box::pin(async move {
+                    // The single-connection write pool makes the check, the emptiness test and
+                    // the delete one step, as it does for an append (see `append_many`).
+                    if let Some(expected) = expected_epoch {
+                        let stored: Option<(i64,)> = tx
+                            .fetch_optional_as(
+                                sqlx::query_as(
+                                    "SELECT epoch FROM indexed_key_epoch WHERE namespace = ? AND key = ?;",
+                                )
+                                .bind(namespace.clone())
+                                .bind(key.clone()),
+                            )
+                            .await?;
+                        FencedTxError::check_record(
+                            &key,
+                            expected,
+                            stored.map(|(epoch,)| epoch),
+                            Self::negative_epoch_message,
+                        )?;
+                    }
+                    let (has_entries,): (bool,) = tx
+                        .fetch_one_as(
+                            sqlx::query_as(
+                                "SELECT EXISTS(SELECT 1 FROM index_storage WHERE namespace = ? AND key = ?);",
+                            )
+                            .bind(namespace.clone())
+                            .bind(key.clone()),
+                        )
+                        .await?;
+                    if has_entries {
+                        return Ok(false);
+                    }
+                    tx.execute(
+                        sqlx::query("DELETE FROM index_storage WHERE namespace = ? AND key = ?;")
+                            .bind(format!("{namespace}-present"))
+                            .bind(key.clone()),
+                    )
+                    .await?;
+                    Ok(true)
+                })
+            })
+            .await
+            .map_err(|err| err.into_indexed_storage_error(Self::classify_repo_error))
+    }
+
     async fn delete_with_epoch(
         &self,
         svc_name: &'static str,
@@ -726,19 +783,53 @@ impl IndexedStorage for SqliteIndexedStorage {
         key: &str,
         last_dropped_id: u64,
     ) -> Result<(), IndexedStorageError> {
+        self.drop_prefix_with_epoch(svc_name, api_name, namespace, key, last_dropped_id, None)
+            .await
+    }
+
+    async fn drop_prefix_with_epoch(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        last_dropped_id: u64,
+        expected_epoch: Option<ShardEpoch>,
+    ) -> Result<(), IndexedStorageError> {
         let namespace = Self::namespace(namespace);
         let key = key.to_string();
         self.pool
-            .with_tx(svc_name, api_name, |tx| async move {
-                tx.execute(sqlx::query(
-                    "INSERT OR IGNORE INTO index_storage (namespace, key, id, value) SELECT ?, ?, 0, x'' WHERE EXISTS (SELECT 1 FROM index_storage WHERE namespace = ? AND key = ?);")
-                    .bind(format!("{namespace}-present")).bind(&key).bind(&namespace).bind(&key)).await?;
-                tx.execute(sqlx::query("DELETE FROM index_storage WHERE namespace = ? AND key = ? AND id <= ?;")
-                    .bind(&namespace).bind(&key).bind(sqlx::types::Json(last_dropped_id))).await?;
-                Ok(())
-            }.boxed())
+            .with_tx_err::<(), FencedTxError, _>(svc_name, api_name, |tx| {
+                Box::pin(async move {
+                    // The single-connection write pool makes the check and the trim one step,
+                    // as it does for an append (see `append_many`).
+                    if let Some(expected) = expected_epoch {
+                        let stored: Option<(i64,)> = tx
+                            .fetch_optional_as(
+                                sqlx::query_as(
+                                    "SELECT epoch FROM indexed_key_epoch WHERE namespace = ? AND key = ?;",
+                                )
+                                .bind(namespace.clone())
+                                .bind(key.clone()),
+                            )
+                            .await?;
+                        FencedTxError::check_record(
+                            &key,
+                            expected,
+                            stored.map(|(epoch,)| epoch),
+                            Self::negative_epoch_message,
+                        )?;
+                    }
+                    tx.execute(sqlx::query(
+                        "INSERT OR IGNORE INTO index_storage (namespace, key, id, value) SELECT ?, ?, 0, x'' WHERE EXISTS (SELECT 1 FROM index_storage WHERE namespace = ? AND key = ?);")
+                        .bind(format!("{namespace}-present")).bind(&key).bind(&namespace).bind(&key)).await?;
+                    tx.execute(sqlx::query("DELETE FROM index_storage WHERE namespace = ? AND key = ? AND id <= ?;")
+                        .bind(&namespace).bind(&key).bind(sqlx::types::Json(last_dropped_id))).await?;
+                    Ok(())
+                })
+            })
             .await
-            .map_err(Self::classify_repo_error)
+            .map_err(|err| err.into_indexed_storage_error(Self::classify_repo_error))
     }
 }
 

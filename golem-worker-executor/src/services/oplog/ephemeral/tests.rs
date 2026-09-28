@@ -41,6 +41,10 @@ struct GatedArchive {
     append_permits: Semaphore,
     append_calls: AtomicUsize,
     read_calls: AtomicUsize,
+    /// Once set, appends are refused with this fence and write nothing, as a compressed layer
+    /// refuses them after a newer owner recorded its epoch. The archive does not report it through
+    /// `fence`, so only the writer task's latch can tell the oplog.
+    refusal: Mutex<Option<OplogFence>>,
 }
 
 impl Default for GatedArchive {
@@ -51,6 +55,7 @@ impl Default for GatedArchive {
             append_permits: Semaphore::new(0),
             append_calls: AtomicUsize::new(0),
             read_calls: AtomicUsize::new(0),
+            refusal: Mutex::default(),
         }
     }
 }
@@ -86,12 +91,15 @@ impl OplogArchive for GatedArchive {
             .collect()
     }
 
-    async fn append(&self, chunk: &[(OplogIndex, OplogEntry)]) -> u64 {
+    async fn append(&self, chunk: &[(OplogIndex, OplogEntry)]) -> Result<u64, OplogError> {
         self.append_calls.fetch_add(1, Ordering::Release);
         self.append_started.notify_one();
         self.append_permits.acquire().await.unwrap().forget();
+        if let Some(fence) = self.refusal.lock().unwrap().clone() {
+            return Err(OplogError::Fenced(fence));
+        }
         self.entries.lock().unwrap().extend(chunk.iter().cloned());
-        chunk.len() as u64
+        Ok(chunk.len() as u64)
     }
 
     async fn verify_persisted(&self, _entries: &[(OplogIndex, OplogEntry)]) {}
@@ -105,11 +113,11 @@ impl OplogArchive for GatedArchive {
             .unwrap_or(OplogIndex::NONE)
     }
 
-    async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> u64 {
+    async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> Result<u64, OplogError> {
         let mut entries = self.entries.lock().unwrap();
         let old = entries.len();
         entries.retain(|idx, _| *idx > last_dropped_id);
-        (old - entries.len()) as u64
+        Ok((old - entries.len()) as u64)
     }
 
     async fn length(&self) -> u64 {
@@ -131,13 +139,19 @@ impl Debug for SingletonArchiveService {
 
 #[async_trait]
 impl OplogArchiveService for SingletonArchiveService {
-    async fn open(&self, _: &OwnedAgentId, _: AgentMode) -> Arc<dyn OplogArchive + Send + Sync> {
+    async fn open(
+        &self,
+        _: &OwnedAgentId,
+        _: AgentMode,
+        _: Option<ShardEpoch>,
+    ) -> Arc<dyn OplogArchive + Send + Sync> {
         self.0.clone()
     }
     async fn open_fresh(
         &self,
         _: &OwnedAgentId,
         _: AgentMode,
+        _: Option<ShardEpoch>,
     ) -> Arc<dyn OplogArchive + Send + Sync> {
         self.0.clone()
     }
@@ -388,4 +402,77 @@ async fn failed_writer_is_joined_and_reported_by_close() {
     fixture.oplog.retire();
     assert!(fixture.oplog.closed().await.is_err());
     assert_eq!(fixture.archive.length().await, 0);
+}
+
+fn refusal(fixture: &Fixture) -> OplogFence {
+    OplogFence {
+        agent_id: fixture.oplog.owned_agent_id.agent_id.clone(),
+        expected_epoch: ShardEpoch(5),
+        actual_epoch: Some(ShardEpoch(6)),
+    }
+}
+
+#[test]
+#[timeout("30s")]
+async fn a_refused_batch_fails_the_commit_waiting_on_it_and_every_later_write() {
+    let fixture = fixture(100).await;
+    *fixture.archive.refusal.lock().unwrap() = Some(refusal(&fixture));
+    fixture.archive.release(1);
+    let refused = entry(0);
+    fixture.oplog.add(refused.clone()).await.unwrap();
+
+    match fixture.oplog.commit(CommitLevel::Always).await {
+        Err(OplogError::Fenced(fence)) => {
+            assert_eq!(fence.expected_epoch, ShardEpoch(5));
+            assert_eq!(fence.actual_epoch, Some(ShardEpoch(6)));
+        }
+        other => panic!("expected the commit to be fenced, got {other:?}"),
+    }
+    assert!(fixture.oplog.fence().is_some());
+
+    // Refused on the handle, without asking the archive again.
+    assert!(matches!(
+        fixture.oplog.add(entry(1)).await,
+        Err(OplogError::Fenced(_))
+    ));
+    assert!(matches!(
+        fixture.oplog.commit(CommitLevel::Always).await,
+        Err(OplogError::Fenced(_))
+    ));
+    assert_eq!(fixture.archive.append_calls.load(Ordering::Relaxed), 1);
+    assert_eq!(fixture.archive.length().await, 0);
+
+    // The refused entry was never committed, and this handle still reads it.
+    assert_eq!(
+        fixture
+            .oplog
+            .read_exact(OplogIndex::INITIAL, 1)
+            .await
+            .into_values()
+            .collect::<Vec<_>>(),
+        vec![refused]
+    );
+}
+
+#[test]
+#[timeout("30s")]
+async fn a_deferred_batch_refused_after_its_commit_returned_fails_the_next_write() {
+    let fixture = fixture(100).await;
+    *fixture.archive.refusal.lock().unwrap() = Some(refusal(&fixture));
+    fixture.oplog.add(entry(0)).await.unwrap();
+    fixture.oplog.commit(CommitLevel::Deferred).await.unwrap();
+    fixture.archive.wait_for_appends(1).await;
+    fixture.archive.release(1);
+
+    // The storage barrier queues behind the refused batch, so this commit reads the fence the
+    // writer latched rather than reporting the batch as stored.
+    assert!(matches!(
+        fixture.oplog.commit(CommitLevel::Always).await,
+        Err(OplogError::Fenced(_))
+    ));
+    assert!(matches!(
+        fixture.oplog.add(entry(1)).await,
+        Err(OplogError::Fenced(_))
+    ));
+    assert_eq!(fixture.archive.append_calls.load(Ordering::Relaxed), 1);
 }

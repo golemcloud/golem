@@ -450,6 +450,40 @@ pub trait IndexedStorage: Debug + Sync {
         last_dropped_id: u64,
     ) -> Result<(), IndexedStorageError>;
 
+    /// [`Self::drop_prefix`] fenced on the writer generation, checked in the same atomic step as
+    /// the trim: refused with [`IndexedStorageError::Fenced`], removing nothing, when
+    /// `expected_epoch` is `Some` and is not exactly the generation recorded for the key. A
+    /// missing record refuses too, as it does for an append: every open records the owner's
+    /// generation before the oplog is written. `None` trims unconditionally.
+    async fn drop_prefix_with_epoch(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        last_dropped_id: u64,
+        expected_epoch: Option<ShardEpoch>,
+    ) -> Result<(), IndexedStorageError>;
+
+    /// Deletes the given key only if it holds no entries, keeping the writer generation recorded
+    /// for it. Answers `true` when the key held no entries and is now gone, `false` when it still
+    /// holds entries and was left alone. The epoch is checked in the same atomic step as the emptiness
+    /// test: refused with [`IndexedStorageError::Fenced`], deleting nothing, when `expected_epoch`
+    /// is `Some` and is not exactly the recorded generation (an absent record refuses too).
+    ///
+    /// For a writer that trimmed a key empty and must keep writing it later: [`Self::delete`]
+    /// could remove entries a newer writer has added since the trim, and
+    /// [`Self::delete_with_epoch`] would also remove the record, refusing the writer's own next
+    /// append.
+    async fn delete_empty_with_epoch(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        expected_epoch: Option<ShardEpoch>,
+    ) -> Result<bool, IndexedStorageError>;
+
     /// Records the writer generation for the given key. A monotonic compare-and-set - accepted when
     /// `epoch` is at least the stored one, and refused with [`IndexedStorageError::Fenced`]
     /// otherwise. Inserts the record if the key has none.
@@ -619,6 +653,62 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledIndexedStorage<'a, S> {
         self.record("delete");
         self.storage
             .delete(self.svc_name, self.api_name, namespace, key)
+            .await
+    }
+
+    pub async fn set_key_epoch(
+        &self,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        epoch: ShardEpoch,
+    ) -> Result<(), IndexedStorageError> {
+        self.record("set_key_epoch");
+        self.storage
+            .set_key_epoch(self.svc_name, self.api_name, namespace, key, epoch)
+            .await
+    }
+
+    pub async fn delete_with_epoch(
+        &self,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        expected_epoch: Option<ShardEpoch>,
+    ) -> Result<(), IndexedStorageError> {
+        self.record("delete");
+        self.storage
+            .delete_with_epoch(self.svc_name, self.api_name, namespace, key, expected_epoch)
+            .await
+    }
+
+    pub async fn delete_empty_with_epoch(
+        &self,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        expected_epoch: Option<ShardEpoch>,
+    ) -> Result<bool, IndexedStorageError> {
+        self.record("delete");
+        self.storage
+            .delete_empty_with_epoch(self.svc_name, self.api_name, namespace, key, expected_epoch)
+            .await
+    }
+
+    pub async fn drop_prefix_with_epoch(
+        &self,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        last_dropped_id: u64,
+        expected_epoch: Option<ShardEpoch>,
+    ) -> Result<(), IndexedStorageError> {
+        self.record("drop_prefix");
+        self.storage
+            .drop_prefix_with_epoch(
+                self.svc_name,
+                self.api_name,
+                namespace,
+                key,
+                last_dropped_id,
+                expected_epoch,
+            )
             .await
     }
 

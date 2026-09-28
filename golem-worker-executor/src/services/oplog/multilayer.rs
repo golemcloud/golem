@@ -24,9 +24,9 @@ use crate::services::oplog::multilayer::BackgroundTransferMessage::{
 use crate::services::oplog::reader::{OplogRead, OplogReadError, OplogReadSource, fail_stop};
 use crate::services::oplog::{
     CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, OpenOplogs, Oplog,
-    OplogAddReceipt, OplogCloseCompletion, OplogConstructor, OplogError, OplogLifecycleGuard,
-    OplogService, OrderedOplogStart, ReservedRawStartBuilder, decode_scan_cursor, downcast_oplog,
-    first_scan_cursor,
+    OplogAddReceipt, OplogCloseCompletion, OplogConstructor, OplogError, OplogFence,
+    OplogLifecycleGuard, OplogService, OrderedOplogStart, ReservedRawStartBuilder,
+    decode_scan_cursor, downcast_oplog, first_scan_cursor,
 };
 use crate::storage::indexed::IndexedStorageMetaNamespace;
 use async_trait::async_trait;
@@ -74,21 +74,30 @@ pub(crate) fn new_transfer_fiber() -> TransferFiber {
 
 #[async_trait]
 pub trait OplogArchiveService: Debug + Send + Sync {
-    /// Opens an oplog archive for reading and writing
+    /// Opens an oplog archive for reading and writing.
+    ///
+    /// With `Some(shard_epoch)` the archive records that epoch as its writer generation, as the
+    /// primary oplog does at open, and asserts it on every write; a newer owner's record refuses
+    /// them. `None` records and asserts nothing: for read-only opens, and for executors without a
+    /// shard assignment.
     async fn open(
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
+        shard_epoch: Option<ShardEpoch>,
     ) -> Arc<dyn OplogArchive + Send + Sync>;
 
-    /// Opens a new, known-empty archive without probing persistent storage.
+    /// Opens a new, known-empty archive without probing persistent storage. The epoch as for
+    /// [`Self::open`].
     async fn open_fresh(
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
+        shard_epoch: Option<ShardEpoch>,
     ) -> Arc<dyn OplogArchive + Send + Sync>;
 
-    /// Deletes the oplog archive for a worker completely
+    /// Deletes the oplog archive for a worker completely, together with any writer generation
+    /// recorded for it.
     async fn delete(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode);
 
     /// Reads the entries physically present in this archive within the requested range.
@@ -139,8 +148,10 @@ pub trait OplogArchive: Debug {
     async fn read_source(&self, idx: OplogIndex, n: u64) -> BTreeMap<OplogIndex, OplogEntry>;
 
     /// Append a new chunk of entries to the oplog.
-    /// Returns the number of compressed bytes written to storage.
-    async fn append(&self, chunk: &[(OplogIndex, OplogEntry)]) -> u64;
+    /// Returns the number of compressed bytes written to storage, or `OplogError::Fenced` when a
+    /// newer owner recorded its epoch on this archive; the refusal latches, so every later write
+    /// through this handle is refused too.
+    async fn append(&self, chunk: &[(OplogIndex, OplogEntry)]) -> Result<u64, OplogError>;
 
     /// Verifies that transferred entries can be read from persistent storage without consulting
     /// this archive handle's cache.
@@ -149,16 +160,23 @@ pub trait OplogArchive: Debug {
     /// Gets the last appended chunk's last index
     async fn current_oplog_index(&self) -> OplogIndex;
 
-    /// Drop a chunk of entries from the beginning of the oplog
+    /// Drop a chunk of entries from the beginning of the oplog. Returns the number of entries
+    /// dropped, or `OplogError::Fenced` as for [`Self::append`], dropping nothing.
     ///
     /// This should only be called _after_ `append` succeeded in the archive below this one
-    async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> u64;
+    async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> Result<u64, OplogError>;
 
     /// Gets the total number of entries in this oplog archive
     async fn length(&self) -> u64;
 
     /// Gets the last index in this oplog archive
     async fn get_last_index(&self) -> OplogIndex;
+
+    /// The refusal this archive has latched, if a newer owner's generation turned one of its
+    /// writes away. Every later write through this handle fails on it.
+    fn fence(&self) -> Option<OplogFence> {
+        None
+    }
 }
 
 /// Wraps an `OplogArchive` to record storage metrics on writes.
@@ -189,15 +207,15 @@ impl OplogArchive for InstrumentedOplogArchive {
         self.inner.read_source(idx, n).await
     }
 
-    async fn append(&self, chunk: &[(OplogIndex, OplogEntry)]) -> u64 {
+    async fn append(&self, chunk: &[(OplogIndex, OplogEntry)]) -> Result<u64, OplogError> {
         if chunk.is_empty() {
-            return 0;
+            return Ok(0);
         }
         let entry_count = chunk.len() as u64;
         let account_id = self.account_id.to_string();
         let environment_id = self.environment_id.to_string();
 
-        let bytes = self.inner.append(chunk).await;
+        let bytes = self.inner.append(chunk).await?;
 
         record_storage_bytes_written(
             STORAGE_TYPE_OPLOG_ARCHIVE,
@@ -212,7 +230,7 @@ impl OplogArchive for InstrumentedOplogArchive {
             entry_count,
         );
 
-        bytes
+        Ok(bytes)
     }
 
     async fn verify_persisted(&self, entries: &[(OplogIndex, OplogEntry)]) {
@@ -223,8 +241,8 @@ impl OplogArchive for InstrumentedOplogArchive {
         self.inner.current_oplog_index().await
     }
 
-    async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> u64 {
-        let dropped = self.inner.drop_prefix(last_dropped_id).await;
+    async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> Result<u64, OplogError> {
+        let dropped = self.inner.drop_prefix(last_dropped_id).await?;
         if dropped > 0 {
             let account_id = self.account_id.to_string();
             let environment_id = self.environment_id.to_string();
@@ -235,7 +253,7 @@ impl OplogArchive for InstrumentedOplogArchive {
                 dropped,
             );
         }
-        dropped
+        Ok(dropped)
     }
 
     async fn length(&self) -> u64 {
@@ -244,6 +262,10 @@ impl OplogArchive for InstrumentedOplogArchive {
 
     async fn get_last_index(&self) -> OplogIndex {
         self.inner.get_last_index().await
+    }
+
+    fn fence(&self) -> Option<OplogFence> {
+        self.inner.fence()
     }
 }
 
@@ -470,20 +492,19 @@ impl OplogConstructor for CreateOplogConstructor {
         close: Box<dyn FnOnce() + Send + Sync>,
     ) -> Arc<dyn Oplog> {
         let agent_mode = self.agent_mode;
-        let last_oplog_index = match self.last_oplog_index {
-            Some(idx) => idx,
-            None => {
-                self.service
-                    .get_last_index(&self.owned_agent_id, agent_mode)
-                    .await
-            }
-        };
-
         let account_id = self.initial_worker_metadata.created_by;
         let fingerprint = self.initial_worker_metadata.fingerprint;
 
         match agent_mode {
             AgentMode::Durable => {
+                let last_oplog_index = match self.last_oplog_index {
+                    Some(idx) => idx,
+                    None => {
+                        self.service
+                            .get_last_index(&self.owned_agent_id, agent_mode)
+                            .await
+                    }
+                };
                 let primary = if let Some(initial_entry) = self.initial_entry {
                     if self.fresh {
                         self.primary
@@ -533,6 +554,7 @@ impl OplogConstructor for CreateOplogConstructor {
                     primary,
                     self.service,
                     close,
+                    self.shard_epoch,
                 )
                 .await
             }
@@ -547,11 +569,34 @@ impl OplogConstructor for CreateOplogConstructor {
                     self.service.entry_count_limit,
                     &tx,
                     self.fresh,
+                    self.shard_epoch,
                 )
                 .await;
 
+                // Read after the layers record the epoch, as the primary oplog reads its last index
+                // after its claim: an index a caller read before can be behind by whatever an
+                // older owner's writer appended in between, and this handle's first append would
+                // collide with it.
+                let stored_last_index = || {
+                    self.service
+                        .get_last_index(&self.owned_agent_id, agent_mode)
+                };
+                let last_oplog_index = match self.last_oplog_index {
+                    None => stored_last_index().await,
+                    Some(idx)
+                        if self.initial_entry.is_none()
+                            && self.shard_epoch.is_some()
+                            && lower.iter().all(|layer| layer.fence().is_none()) =>
+                    {
+                        OplogIndex::from_u64(idx.as_u64().max(stored_last_index().await.as_u64()))
+                    }
+                    Some(idx) => idx,
+                };
+
                 if let Some(initial_entry) = self.initial_entry {
-                    lower
+                    // A refusal latches on the layer, and the ephemeral oplog built over it below
+                    // reports it: the handle is finished, as a stale create of a primary oplog is.
+                    let _ = lower
                         .first()
                         .append(&[(OplogIndex::INITIAL, initial_entry)])
                         .await;
@@ -792,8 +837,8 @@ impl OplogService for MultiLayerOplogService {
     ) -> Result<(), OplogError> {
         lifecycle.assert_agent(&owned_agent_id.agent_id);
         self.abort_transfer(&owned_agent_id.agent_id).await;
-        // The primary decides: the archive layers carry no epoch of their own, and a refused
-        // delete means they now hold the new owner's history.
+        // The primary decides, and a refused delete means the archive layers now hold the new
+        // owner's history. Each layer's own record goes with it.
         self.primary
             .delete(lifecycle, owned_agent_id, agent_mode, expected_epoch)
             .await?;
@@ -974,13 +1019,17 @@ impl MultiLayerOplog {
         primary: Arc<dyn Oplog>,
         multi_layer_oplog_service: MultiLayerOplogService,
         close: Box<dyn FnOnce() + Send + Sync>,
+        shard_epoch: Option<ShardEpoch>,
     ) -> Arc<dyn Oplog> {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
+        // Every layer is opened, recording `shard_epoch` on it, before the archive watermark is
+        // read below: an older owner's transfer either landed before this owner's record, and the
+        // watermark covers it, or is refused after it.
         let mut lower: Vec<Arc<dyn OplogArchive + Send + Sync>> = Vec::new();
         for (i, layer) in multi_layer_oplog_service.lower.iter().enumerate() {
             if i != (multi_layer_oplog_service.lower.len().get() - 1) {
-                let raw = layer.open(&owned_agent_id, agent_mode).await;
+                let raw = layer.open(&owned_agent_id, agent_mode, shard_epoch).await;
                 let instrumented = Arc::new(InstrumentedOplogArchive::new(
                     raw,
                     account_id,
@@ -996,7 +1045,7 @@ impl MultiLayerOplog {
                     .await,
                 ));
             } else {
-                let raw = layer.open(&owned_agent_id, agent_mode).await;
+                let raw = layer.open(&owned_agent_id, agent_mode, shard_epoch).await;
                 lower.push(Arc::new(InstrumentedOplogArchive::new(
                     raw,
                     account_id,
@@ -1160,6 +1209,11 @@ impl MultiLayerOplog {
     }
 
     async fn archive(this: Arc<Self>, blocking: bool) -> bool {
+        // A newer owner holds the oplog: its own archiving decides what moves, and nothing here
+        // could be written anyway.
+        if this.fence().is_some() {
+            return false;
+        }
         let (done_tx, done_rx) = if blocking {
             let (done_tx, done_rx) = tokio::sync::oneshot::channel();
             (Some(done_tx), Some(done_rx))
@@ -1423,6 +1477,14 @@ impl Oplog for MultiLayerOplog {
     fn inner(&self) -> Option<Arc<dyn Oplog>> {
         Some(self.primary.clone())
     }
+
+    /// The primary's refusal, or one an archive layer latched: a newer owner recorded its
+    /// generation on both, so either one means the handle is finished.
+    fn fence(&self) -> Option<OplogFence> {
+        self.primary
+            .fence()
+            .or_else(|| self.lower.iter().find_map(|layer| layer.fence()))
+    }
 }
 
 #[derive(Debug)]
@@ -1446,18 +1508,26 @@ pub enum BackgroundTransferMessage {
 #[async_trait]
 trait BackgroundTransfer {
     async fn read_source(&self) -> Vec<(OplogIndex, OplogEntry)>;
-    async fn append_target(&self, entries: &[(OplogIndex, OplogEntry)]);
+    async fn append_target(&self, entries: &[(OplogIndex, OplogEntry)]) -> Result<(), OplogError>;
     async fn verify_target(&self, entries: &[(OplogIndex, OplogEntry)]);
-    async fn drop_source_prefix(&self, last_dropped_id: OplogIndex);
+    async fn drop_source_prefix(&self, last_dropped_id: OplogIndex) -> Result<(), OplogError>;
 
+    /// Copies, verifies, then trims. A refused step ends the transfer: the oplog has a newer
+    /// owner, so an unwritten target is not verified (which would fail-stop) and the source is
+    /// not trimmed of entries that were never archived.
     async fn run(&self) {
         let entries = self.read_source().await;
         match entries.last() {
             Some(last_entry) => {
                 let last_dropped_id = last_entry.0;
-                self.append_target(&entries).await;
+                if let Err(error) = self.append_target(&entries).await {
+                    warn!(error = %error, "Oplog transfer stopped: its target refused the entries");
+                    return;
+                }
                 self.verify_target(&entries).await;
-                self.drop_source_prefix(last_dropped_id).await;
+                if let Err(error) = self.drop_source_prefix(last_dropped_id).await {
+                    warn!(error = %error, "Oplog transfer stopped: its source refused the trim");
+                }
             }
             None => {
                 warn!("No entries to transfer from the primary oplog");
@@ -1516,10 +1586,10 @@ impl OplogArchive for WrappedOplogArchive {
         self.archive.read_source(idx, n).await
     }
 
-    async fn append(&self, chunk: &[(OplogIndex, OplogEntry)]) -> u64 {
+    async fn append(&self, chunk: &[(OplogIndex, OplogEntry)]) -> Result<u64, OplogError> {
         if !chunk.is_empty() {
             let last_idx = chunk.last().unwrap().0;
-            let bytes = self.archive.append(chunk).await;
+            let bytes = self.archive.append(chunk).await?;
             let old_count = self.entry_count.fetch_add(1, Ordering::AcqRel); // Note: the whole chunk is stored as one entry, so incrementing only by one
             let count = old_count + 1;
             if count >= self.entry_count_limit {
@@ -1538,9 +1608,9 @@ impl OplogArchive for WrappedOplogArchive {
                 // Resetting the counter, otherwise it would trigger additional transfers until the background process finishes
                 self.entry_count.store(0, Ordering::Release);
             }
-            bytes
+            Ok(bytes)
         } else {
-            0
+            Ok(0)
         }
     }
 
@@ -1552,13 +1622,13 @@ impl OplogArchive for WrappedOplogArchive {
         self.archive.current_oplog_index().await
     }
 
-    async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> u64 {
-        let dropped_entries = self.archive.drop_prefix(last_dropped_id).await;
+    async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> Result<u64, OplogError> {
+        let dropped_entries = self.archive.drop_prefix(last_dropped_id).await?;
         let new_length = self.archive.length().await;
         let old_entry_count = self.entry_count.load(Ordering::Acquire);
         let new_entry_count = min(new_length, old_entry_count);
         self.entry_count.store(new_entry_count, Ordering::Release);
-        dropped_entries
+        Ok(dropped_entries)
     }
 
     async fn length(&self) -> u64 {
@@ -1567,6 +1637,10 @@ impl OplogArchive for WrappedOplogArchive {
 
     async fn get_last_index(&self) -> OplogIndex {
         self.archive.get_last_index().await
+    }
+
+    fn fence(&self) -> Option<OplogFence> {
+        self.archive.fence()
     }
 }
 
@@ -1619,16 +1693,19 @@ impl BackgroundTransfer for BackgroundTransferFromPrimary {
         ))
     }
 
-    async fn append_target(&self, entries: &[(OplogIndex, OplogEntry)]) {
-        let _ = self.lower.first().append(entries).await;
+    async fn append_target(&self, entries: &[(OplogIndex, OplogEntry)]) -> Result<(), OplogError> {
+        self.lower.first().append(entries).await.map(|_| ())
     }
 
     async fn verify_target(&self, entries: &[(OplogIndex, OplogEntry)]) {
         self.lower.first().verify_persisted(entries).await
     }
 
-    async fn drop_source_prefix(&self, last_dropped_id: OplogIndex) {
+    /// The primary latches a refused trim itself, and reports it typed on the next write through
+    /// it, so the transfer has nothing further to act on.
+    async fn drop_source_prefix(&self, last_dropped_id: OplogIndex) -> Result<(), OplogError> {
         self.primary.drop_prefix(last_dropped_id).await;
+        Ok(())
     }
 }
 
@@ -1679,16 +1756,19 @@ impl BackgroundTransfer for BackgroundTransferBetweenLowers {
         ))
     }
 
-    async fn append_target(&self, entries: &[(OplogIndex, OplogEntry)]) {
-        let _ = self.target_layer.append(entries).await;
+    async fn append_target(&self, entries: &[(OplogIndex, OplogEntry)]) -> Result<(), OplogError> {
+        self.target_layer.append(entries).await.map(|_| ())
     }
 
     async fn verify_target(&self, entries: &[(OplogIndex, OplogEntry)]) {
         self.target_layer.verify_persisted(entries).await
     }
 
-    async fn drop_source_prefix(&self, last_dropped_id: OplogIndex) {
-        self.source_layer.drop_prefix(last_dropped_id).await;
+    async fn drop_source_prefix(&self, last_dropped_id: OplogIndex) -> Result<(), OplogError> {
+        self.source_layer
+            .drop_prefix(last_dropped_id)
+            .await
+            .map(|_| ())
     }
 }
 
@@ -1807,14 +1887,14 @@ mod transfer_lifecycle_tests {
             writer.add(entry.clone()).await.unwrap();
         }
         writer.commit(CommitLevel::Always).await.unwrap();
-        let deep_archive = deepest.open(&owned, AgentMode::Durable).await;
+        let deep_archive = deepest.open(&owned, AgentMode::Durable, None).await;
         if archived > 0 {
             let prefix = entries[..archived as usize]
                 .iter()
                 .enumerate()
                 .map(|(index, entry)| (OplogIndex::from_u64(index as u64 + 1), entry.clone()))
                 .collect::<Vec<_>>();
-            deep_archive.append(&prefix).await;
+            deep_archive.append(&prefix).await.unwrap();
             writer.drop_prefix(OplogIndex::from_u64(archived)).await;
         }
         let observer = observer_service
@@ -1847,6 +1927,7 @@ mod transfer_lifecycle_tests {
             observer,
             service,
             Box::new(|| {}),
+            None,
         )
         .await;
         let layered = downcast_oplog::<MultiLayerOplog>(&observer).unwrap();

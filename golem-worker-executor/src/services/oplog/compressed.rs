@@ -12,13 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::metrics::oplog::record_oplog_storage_retry;
+use crate::metrics::oplog::record_oplog_epoch_fence;
 use crate::services::oplog::multilayer::{OplogArchive, OplogArchiveService};
 use crate::services::oplog::reader::{
     OplogReadError, OplogReadSource, fail_stop, verify_persisted_entries,
 };
 use crate::services::oplog::{
-    PrimaryOplogService, decode_scan_cursor, next_scan_cursor, retry_scan_storage_op,
+    OplogError, OplogFence, PrimaryOplogService, decode_scan_cursor, next_scan_cursor,
+    retry_scan_storage_op, retry_storage_op_fenceable,
 };
 use crate::storage::indexed::{
     IndexedStorage, IndexedStorageError, IndexedStorageLabelledApi, IndexedStorageMetaNamespace,
@@ -28,55 +29,33 @@ use anyhow::anyhow;
 use async_trait::async_trait;
 use desert_rust::BinaryCodec;
 use evicting_cache_map::EvictingCacheMap;
-use golem_common::model::RetryConfig;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId; // used in scan_for_component
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::{AgentId, OwnedAgentId, ScanCursor};
-use golem_common::retries::get_delay;
+use golem_common::model::{RetryConfig, ShardEpoch};
 use golem_common::serialization::{deserialize, serialize};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use tracing::warn;
 
+/// Runs a storage operation under the retry policy, panicking on anything it cannot retry away,
+/// a fence included. Only for operations that assert no epoch.
 async fn retry_storage_op<T, F, Fut>(
     retry_config: &RetryConfig,
     op_name: &str,
     key: &str,
-    mut op: F,
+    op: F,
 ) -> T
 where
     F: FnMut() -> Fut,
     Fut: std::future::Future<Output = Result<T, IndexedStorageError>>,
 {
-    let mut attempts = 0u32;
-    loop {
-        attempts += 1;
-        match op().await {
-            Ok(val) => return val,
-            Err(IndexedStorageError::Transient(msg)) => {
-                if let Some(delay) = get_delay(retry_config, attempts) {
-                    record_oplog_storage_retry(op_name);
-                    warn!(
-                        op = op_name,
-                        key = key,
-                        attempt = attempts,
-                        delay_ms = delay.as_millis() as u64,
-                        "Transient indexed storage error, retrying: {msg}"
-                    );
-                    tokio::time::sleep(delay).await;
-                } else {
-                    panic!(
-                        "Indexed storage operation '{op_name}' failed for key '{key}' after {attempts} attempts: Transient storage error: {msg}"
-                    );
-                }
-            }
-            Err(err) => {
-                panic!("Indexed storage operation '{op_name}' failed for key '{key}': {err}");
-            }
-        }
+    match retry_storage_op_fenceable(retry_config, op_name, key, op).await {
+        Ok(val) => val,
+        Err(err) => panic!("Indexed storage operation '{op_name}' failed for key '{key}': {err}"),
     }
 }
 
@@ -115,28 +94,38 @@ impl OplogArchiveService for CompressedOplogArchiveService {
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
+        shard_epoch: Option<ShardEpoch>,
     ) -> Arc<dyn OplogArchive + Send + Sync> {
-        Arc::new(CompressedOplogArchive::new(
-            owned_agent_id.agent_id(),
-            agent_mode,
-            self.indexed_storage.clone(),
-            self.level,
-            self.retry_config.clone(),
-        ))
+        Arc::new(
+            CompressedOplogArchive::opened(
+                owned_agent_id.agent_id(),
+                agent_mode,
+                self.indexed_storage.clone(),
+                self.level,
+                self.retry_config.clone(),
+                shard_epoch,
+            )
+            .await,
+        )
     }
 
     async fn open_fresh(
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
+        shard_epoch: Option<ShardEpoch>,
     ) -> Arc<dyn OplogArchive + Send + Sync> {
-        Arc::new(CompressedOplogArchive::new(
-            owned_agent_id.agent_id(),
-            agent_mode,
-            self.indexed_storage.clone(),
-            self.level,
-            self.retry_config.clone(),
-        ))
+        Arc::new(
+            CompressedOplogArchive::opened(
+                owned_agent_id.agent_id(),
+                agent_mode,
+                self.indexed_storage.clone(),
+                self.level,
+                self.retry_config.clone(),
+                shard_epoch,
+            )
+            .await,
+        )
     }
 
     async fn delete(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) {
@@ -152,7 +141,11 @@ impl OplogArchiveService for CompressedOplogArchiveService {
                 level,
             };
             let key = key.clone();
-            async move { is.with("compressed_oplog", "delete").delete(ns, &key).await }
+            async move {
+                is.with("compressed_oplog", "delete")
+                    .delete_with_epoch(ns, &key, None)
+                    .await
+            }
         })
         .await;
     }
@@ -164,7 +157,7 @@ impl OplogArchiveService for CompressedOplogArchiveService {
         idx: OplogIndex,
         n: u64,
     ) -> BTreeMap<OplogIndex, OplogEntry> {
-        let archive = self.open(owned_agent_id, agent_mode).await;
+        let archive = self.open(owned_agent_id, agent_mode, None).await;
         archive.read_source(idx, n).await
     }
 
@@ -304,9 +297,16 @@ pub struct CompressedOplogArchive {
         >,
     >,
     level: usize,
+    /// The writer generation this handle asserts on every write, recorded on this level's key
+    /// when the handle was opened. `None` asserts nothing.
+    shard_epoch: Option<ShardEpoch>,
+    /// Set by the first refused write, or at open when a newer owner's generation was already
+    /// recorded. Every later write through this handle is refused without reaching the storage.
+    fence: OnceLock<OplogFence>,
 }
 
 impl CompressedOplogArchive {
+    /// A handle that asserts no epoch, for reads and for executors without a shard assignment.
     pub fn new(
         agent_id: AgentId,
         agent_mode: AgentMode,
@@ -323,7 +323,90 @@ impl CompressedOplogArchive {
             retry_config,
             cache: Mutex::new(EvictingCacheMap::new()),
             level,
+            shard_epoch: None,
+            fence: OnceLock::new(),
         }
+    }
+
+    /// A handle that writes as the owner of `shard_epoch`: records it on this level's key (a
+    /// monotonic compare-and-set, as the primary oplog does at open) and asserts it on every
+    /// write. A newer owner's record refuses the open, and the handle is returned already fenced.
+    pub async fn opened(
+        agent_id: AgentId,
+        agent_mode: AgentMode,
+        indexed_storage: Arc<dyn IndexedStorage + Send + Sync>,
+        level: usize,
+        retry_config: RetryConfig,
+        shard_epoch: Option<ShardEpoch>,
+    ) -> Self {
+        let mut archive = Self::new(agent_id, agent_mode, indexed_storage, level, retry_config);
+        let Some(shard_epoch) = shard_epoch else {
+            return archive;
+        };
+        archive.shard_epoch = Some(shard_epoch);
+        let recorded = retry_storage_op_fenceable(
+            &archive.retry_config,
+            "compressed_set_key_epoch",
+            &archive.key,
+            || {
+                let is = archive.indexed_storage.clone();
+                let ns = archive.namespace();
+                let key = archive.key.clone();
+                async move {
+                    is.with("compressed_oplog", "set_key_epoch")
+                        .set_key_epoch(ns, &key, shard_epoch)
+                        .await
+                }
+            },
+        )
+        .await;
+        record_oplog_epoch_fence("archive_record", recorded.is_err());
+        if let Err(error) = recorded {
+            archive.latch(error);
+        }
+        archive
+    }
+
+    fn namespace(&self) -> IndexedStorageNamespace {
+        IndexedStorageNamespace::CompressedOpLog {
+            agent_id: self.agent_id.clone(),
+            agent_mode: self.agent_mode,
+            level: self.level,
+        }
+    }
+
+    fn refuse_if_fenced(&self) -> Result<(), OplogError> {
+        match self.fence.get() {
+            Some(fence) => Err(OplogError::Fenced(fence.clone())),
+            None => Ok(()),
+        }
+    }
+
+    /// Latches the fence a refused storage call reported, and returns it as the write's error.
+    fn latch(&self, error: IndexedStorageError) -> OplogError {
+        let IndexedStorageError::Fenced {
+            expected, actual, ..
+        } = error
+        else {
+            unreachable!(
+                "retry_storage_op_fenceable panics on every storage failure but a fence, got {error}"
+            )
+        };
+        let fence = OplogFence {
+            agent_id: self.agent_id.clone(),
+            expected_epoch: expected,
+            actual_epoch: actual,
+        };
+        if self.fence.set(fence.clone()).is_ok() {
+            warn!(
+                agent_id = %self.agent_id,
+                level = self.level,
+                expected_epoch = fence.expected_epoch.0,
+                actual_epoch = ?fence.actual_epoch.map(|epoch| epoch.0),
+                "Oplog archive write fenced: the shard has a new owner, refusing further writes"
+            );
+        }
+        OplogError::Fenced(fence)
     }
 
     // Fetch a range of entries from the storage. At most one chunk of data will be returned,
@@ -468,10 +551,11 @@ impl OplogArchive for CompressedOplogArchive {
         result
     }
 
-    async fn append(&self, chunk: &[(OplogIndex, OplogEntry)]) -> u64 {
+    async fn append(&self, chunk: &[(OplogIndex, OplogEntry)]) -> Result<u64, OplogError> {
         if chunk.is_empty() {
-            return 0;
+            return Ok(0);
         }
+        self.refuse_if_fenced()?;
 
         // The cache lock must not be held across the storage writes below: `append` can be
         // reached from host-call contexts (through ephemeral oplogs), and an async lock held
@@ -484,6 +568,9 @@ impl OplogArchive for CompressedOplogArchive {
         }
 
         let mut total_bytes = 0u64;
+        // The last index of the sub-chunks already stored, so a refusal can tell them apart
+        // from the ones that were not.
+        let mut previous_last_id = OplogIndex::NONE;
 
         for sub_chunk in chunk.chunks(CompressedOplogArchiveService::MAX_CHUNK_SIZE) {
             let last_id = sub_chunk.last().unwrap().0;
@@ -496,33 +583,39 @@ impl OplogArchive for CompressedOplogArchive {
 
             total_bytes += compressed_chunk.compressed_data.len() as u64;
 
-            {
-                let is = self.indexed_storage.clone();
-                let agent_id_clone = self.agent_id.clone();
-                let agent_mode = self.agent_mode;
-                let level = self.level;
-                let key = self.key.clone();
-                let last_id_val: u64 = last_id.into();
-                retry_storage_op(&self.retry_config, "compressed_append", &key, || {
+            let is = self.indexed_storage.clone();
+            let key = self.key.clone();
+            let last_id_val: u64 = last_id.into();
+            let shard_epoch = self.shard_epoch;
+            let appended =
+                retry_storage_op_fenceable(&self.retry_config, "compressed_append", &key, || {
                     let is = is.clone();
-                    let ns = IndexedStorageNamespace::CompressedOpLog {
-                        agent_id: agent_id_clone.clone(),
-                        agent_mode,
-                        level,
-                    };
+                    let ns = self.namespace();
                     let key = key.clone();
                     let chunk = compressed_chunk.clone();
                     async move {
                         is.with_entity("compressed_oplog", "append", "compressed_entry")
-                            .append(ns, &key, last_id_val, &chunk, None)
+                            .append(ns, &key, last_id_val, &chunk, shard_epoch)
                             .await
                     }
                 })
                 .await;
+            if shard_epoch.is_some() {
+                record_oplog_epoch_fence("archive_append", appended.is_err());
             }
+            if let Err(error) = appended {
+                // This sub-chunk and the ones after it never reached the storage, so the cache
+                // must not answer reads with them.
+                let mut cache = self.cache.lock().unwrap();
+                for (idx, _) in chunk.iter().filter(|(idx, _)| *idx > previous_last_id) {
+                    cache.remove(idx);
+                }
+                return Err(self.latch(error));
+            }
+            previous_last_id = last_id;
         }
 
-        total_bytes
+        Ok(total_bytes)
     }
 
     async fn verify_persisted(&self, entries: &[(OplogIndex, OplogEntry)]) {
@@ -579,55 +672,59 @@ impl OplogArchive for CompressedOplogArchive {
         )
     }
 
-    async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> u64 {
+    async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> Result<u64, OplogError> {
+        self.refuse_if_fenced()?;
         let before = self.length().await;
-        {
-            let is = self.indexed_storage.clone();
-            let agent_id = self.agent_id.clone();
-            let agent_mode = self.agent_mode;
-            let level = self.level;
-            let key = self.key.clone();
-            let dropped_id: u64 = last_dropped_id.into();
-            retry_storage_op(&self.retry_config, "compressed_drop_prefix", &key, || {
+        let is = self.indexed_storage.clone();
+        let key = self.key.clone();
+        let dropped_id: u64 = last_dropped_id.into();
+        let shard_epoch = self.shard_epoch;
+        let trimmed =
+            retry_storage_op_fenceable(&self.retry_config, "compressed_drop_prefix", &key, || {
                 let is = is.clone();
-                let ns = IndexedStorageNamespace::CompressedOpLog {
-                    agent_id: agent_id.clone(),
-                    agent_mode,
-                    level,
-                };
+                let ns = self.namespace();
                 let key = key.clone();
                 async move {
                     is.with("compressed_oplog", "drop_prefix")
-                        .drop_prefix(ns, &key, dropped_id)
+                        .drop_prefix_with_epoch(ns, &key, dropped_id, shard_epoch)
                         .await
                 }
             })
             .await;
+        if shard_epoch.is_some() {
+            record_oplog_epoch_fence("archive_drop_prefix", trimmed.is_err());
+        }
+        if let Err(error) = trimmed {
+            return Err(self.latch(error));
         }
         let remaining = self.length().await;
         if remaining == 0 {
-            let is = self.indexed_storage.clone();
-            let agent_id = self.agent_id.clone();
-            let agent_mode = self.agent_mode;
-            let level = self.level;
-            let key = self.key.clone();
-            retry_storage_op(&self.retry_config, "compressed_delete", &key, || {
-                let is = is.clone();
-                let ns = IndexedStorageNamespace::CompressedOpLog {
-                    agent_id: agent_id.clone(),
-                    agent_mode,
-                    level,
-                };
-                let key = key.clone();
-                async move {
-                    is.with("compressed_oplog", "drop_prefix")
-                        .delete(ns, &key)
-                        .await
-                }
-            })
+            // Deleted only while still empty, and the writer generation stays behind: a newer
+            // owner's entries are never removed, and this owner can keep writing the level.
+            let deleted = retry_storage_op_fenceable(
+                &self.retry_config,
+                "compressed_delete_empty",
+                &key,
+                || {
+                    let is = is.clone();
+                    let ns = self.namespace();
+                    let key = key.clone();
+                    async move {
+                        is.with("compressed_oplog", "drop_prefix")
+                            .delete_empty_with_epoch(ns, &key, shard_epoch)
+                            .await
+                    }
+                },
+            )
             .await;
+            if shard_epoch.is_some() {
+                record_oplog_epoch_fence("archive_delete_empty", deleted.is_err());
+            }
+            if let Err(error) = deleted {
+                return Err(self.latch(error));
+            }
         }
-        before - remaining
+        Ok(before - remaining)
     }
 
     async fn length(&self) -> u64 {
@@ -651,6 +748,10 @@ impl OplogArchive for CompressedOplogArchive {
 
     async fn get_last_index(&self) -> OplogIndex {
         self.current_oplog_index().await
+    }
+
+    fn fence(&self) -> Option<OplogFence> {
+        self.fence.get().cloned()
     }
 }
 

@@ -438,6 +438,54 @@ where
     }
 }
 
+/// Runs a storage operation under the retry policy, handing a fence back instead of panicking
+/// on it.
+///
+/// A fenced write is not a storage failure: the storage is healthy and refused the write on
+/// purpose, because this executor no longer owns the agent's shard. Retrying cannot change that,
+/// and panicking would take the whole executor down over one agent that simply moved. Every other
+/// permanent failure still panics, so the fail-stop contract is unchanged for everything else -
+/// including the primary-key collision that has always been the crude fence.
+pub(crate) async fn retry_storage_op_fenceable<T, F, Fut>(
+    retry_config: &golem_common::model::RetryConfig,
+    op_name: &str,
+    key: &str,
+    mut op: F,
+) -> Result<T, IndexedStorageError>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T, IndexedStorageError>>,
+{
+    let mut attempts = 0u32;
+    loop {
+        attempts += 1;
+        match op().await {
+            Ok(val) => return Ok(val),
+            Err(err @ IndexedStorageError::Fenced { .. }) => return Err(err),
+            Err(IndexedStorageError::Transient(msg)) => {
+                if let Some(delay) = get_delay(retry_config, attempts) {
+                    crate::metrics::oplog::record_oplog_storage_retry(op_name);
+                    tracing::warn!(
+                        op = op_name,
+                        key = key,
+                        attempt = attempts,
+                        delay_ms = delay.as_millis() as u64,
+                        "Transient indexed storage error, retrying: {msg}"
+                    );
+                    tokio::time::sleep(delay).await;
+                } else {
+                    panic!(
+                        "Indexed storage operation '{op_name}' failed for key '{key}' after {attempts} attempts: Transient storage error: {msg}"
+                    );
+                }
+            }
+            Err(err) => {
+                panic!("Indexed storage operation '{op_name}' failed for key '{key}': {err}");
+            }
+        }
+    }
+}
+
 /// A handle to an external blob upload that [`Oplog::add_start_with_reserved_raw_payload`] started
 /// (spawned) but which may not have finished yet.
 ///
@@ -973,8 +1021,9 @@ pub trait Oplog: Any + Debug + Send + Sync {
         self.enqueue_add_pair(start, make_second).await
     }
 
-    /// The shard epoch this oplog's writes assert, or `None` for an ephemeral oplog, which nothing
-    /// fences - nor the archive layers behind it.
+    /// The shard epoch this oplog's primary writes assert, or `None` without a primary oplog. An
+    /// ephemeral oplog has none: its archive layers assert the epoch it was opened with, and a
+    /// refusal there is reported by [`Self::fence`].
     ///
     /// Only the primary oplog knows it, so a wrapper answers from the oplog it wraps.
     fn shard_epoch(&self) -> Option<ShardEpoch> {
@@ -1508,9 +1557,8 @@ impl OpenOplogs {
 /// and is replaced, when:
 /// - it is fenced: the storage refused one of its writes, so every later one is refused too;
 /// - or it belongs to an older ownership generation: `requested` is newer than the epoch it was
-///   opened with (`None`, an ephemeral open, is older than any epoch) and it really asserts that
-///   epoch. An ephemeral handle opened with an epoch asserts none, so it is reused at any epoch;
-///   one opened with `None` is replaced by any open that asserts an epoch.
+///   opened with (`None` is older than any epoch). The replacement records the newer epoch, on
+///   the primary oplog or, for an ephemeral oplog, on its archive layers.
 ///
 /// A replaced handle may still be held by a worker that is stopping, so nobody waits for it to
 /// close; it keeps any background work, such as an archive transfer, until its holder drops it.
@@ -1521,7 +1569,7 @@ fn can_reuse(
     requested: Option<ShardEpoch>,
 ) -> bool {
     let fenced = oplog.fence().is_some();
-    let older_generation = requested > opened_with && oplog.shard_epoch() == opened_with;
+    let older_generation = requested > opened_with;
     !fenced && !older_generation
 }
 
@@ -1539,8 +1587,8 @@ pub trait OplogConstructor: Send {
         close: Box<dyn FnOnce() + Send + Sync>,
     ) -> Arc<dyn Oplog>;
 
-    /// The epoch the oplog this constructor builds is asked to assert, or `None` for an ephemeral
-    /// one. The open-oplog cache compares it with the epoch a cached
+    /// The epoch the oplog this constructor builds is asked to assert, or `None` when it asserts
+    /// none. The open-oplog cache compares it with the epoch a cached
     /// handle was opened with, so it has no default: a layer that left it out would hand an
     /// older generation's handle to every newer opener.
     fn shard_epoch(&self) -> Option<ShardEpoch>;

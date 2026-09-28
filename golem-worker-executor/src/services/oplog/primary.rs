@@ -28,6 +28,7 @@ use crate::services::oplog::{
     OplogAddReceipt, OplogCloseCompletion, OplogConstructor, OplogError, OplogFence,
     OplogLifecycleGuard, OplogService, OrderedOplogStart, PendingUpload, ReservedPayload,
     ReservedRawStartBuilder, decode_scan_cursor, next_scan_cursor, retry_scan_storage_op,
+    retry_storage_op_fenceable,
 };
 use crate::storage::indexed::{
     IndexedStorage, IndexedStorageError, IndexedStorageLabelledApi, IndexedStorageMetaNamespace,
@@ -80,53 +81,6 @@ where
     match retry_storage_op_fenceable(retry_config, op_name, key, op).await {
         Ok(val) => val,
         Err(err) => panic!("Indexed storage operation '{op_name}' failed for key '{key}': {err}"),
-    }
-}
-
-/// As [`retry_storage_op`], but hands a fence back instead of panicking on it.
-///
-/// A fenced write is not a storage failure: the storage is healthy and refused the write on
-/// purpose, because this executor no longer owns the agent's shard. Retrying cannot change that,
-/// and panicking would take the whole executor down over one agent that simply moved. Every other
-/// permanent failure still panics, so the fail-stop contract is unchanged for everything else -
-/// including the primary-key collision that has always been the crude fence.
-async fn retry_storage_op_fenceable<T, F, Fut>(
-    retry_config: &RetryConfig,
-    op_name: &str,
-    key: &str,
-    mut op: F,
-) -> Result<T, IndexedStorageError>
-where
-    F: FnMut() -> Fut,
-    Fut: std::future::Future<Output = Result<T, IndexedStorageError>>,
-{
-    let mut attempts = 0u32;
-    loop {
-        attempts += 1;
-        match op().await {
-            Ok(val) => return Ok(val),
-            Err(err @ IndexedStorageError::Fenced { .. }) => return Err(err),
-            Err(IndexedStorageError::Transient(msg)) => {
-                if let Some(delay) = get_delay(retry_config, attempts) {
-                    record_oplog_storage_retry(op_name);
-                    warn!(
-                        op = op_name,
-                        key = key,
-                        attempt = attempts,
-                        delay_ms = delay.as_millis() as u64,
-                        "Transient indexed storage error, retrying: {msg}"
-                    );
-                    tokio::time::sleep(delay).await;
-                } else {
-                    panic!(
-                        "Indexed storage operation '{op_name}' failed for key '{key}' after {attempts} attempts: Transient storage error: {msg}"
-                    );
-                }
-            }
-            Err(err) => {
-                panic!("Indexed storage operation '{op_name}' failed for key '{key}': {err}");
-            }
-        }
     }
 }
 
@@ -2340,25 +2294,44 @@ impl PrimaryOplogState {
         entries
     }
 
+    /// Trims the entries an archive transfer has copied, asserting the epoch this oplog was opened
+    /// with in the same step. A refusal removes nothing and latches the fence: the oplog belongs to
+    /// a newer owner, whose own transfer decides what leaves it.
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) {
         record_oplog_call("drop_prefix");
+        if self.fence.get().is_some() {
+            return;
+        }
 
+        let is = self.indexed_storage.clone();
+        let namespace = self.namespace.clone();
+        let key = self.key.clone();
+        let dropped_id: u64 = last_dropped_id.into();
+        let shard_epoch = self.shard_epoch;
+        let trimmed = retry_storage_op_fenceable(&self.retry_config, "drop_prefix", &key, || {
+            let is = is.clone();
+            let ns = namespace.clone();
+            let key = key.clone();
+            async move {
+                is.with("oplog", "drop_prefix")
+                    .drop_prefix_with_epoch(ns, &key, dropped_id, shard_epoch)
+                    .await
+            }
+        })
+        .await
+        .map_err(|err| Self::as_oplog_error(&self.owned_agent_id, err));
+        if self.shard_epoch.is_some() {
+            record_oplog_epoch_fence("drop_prefix", trimmed.is_err());
+        }
+        if let Err(OplogError::Fenced(fence)) = trimmed
+            && self.fence.set(fence.clone()).is_ok()
         {
-            let is = self.indexed_storage.clone();
-            let namespace = self.namespace.clone();
-            let key = self.key.clone();
-            let dropped_id: u64 = last_dropped_id.into();
-            retry_storage_op(&self.retry_config, "drop_prefix", &key, || {
-                let is = is.clone();
-                let ns = namespace.clone();
-                let key = key.clone();
-                async move {
-                    is.with("oplog", "drop_prefix")
-                        .drop_prefix(ns, &key, dropped_id)
-                        .await
-                }
-            })
-            .await;
+            warn!(
+                agent_id = %self.owned_agent_id,
+                expected_epoch = fence.expected_epoch.0,
+                actual_epoch = ?fence.actual_epoch.map(|epoch| epoch.0),
+                "Oplog trim fenced: the shard has a new owner, refusing further writes"
+            );
         }
     }
 }
