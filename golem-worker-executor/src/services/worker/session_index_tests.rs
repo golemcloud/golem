@@ -3677,6 +3677,7 @@ fn status_fold_tracks_local_lifecycle_without_retaining_caller_results() {
                 bytes: serialize(&record).unwrap(),
                 cached: None,
             },
+            None,
         );
         status = update_status_with_new_entries(
             AgentMode::Durable,

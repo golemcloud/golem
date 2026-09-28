@@ -53,6 +53,21 @@ fn test_environment() -> Environment {
     }
 }
 
+fn test_security_scheme(name: SecuritySchemeName) -> SecuritySchemeDetails {
+    SecuritySchemeDetails {
+        id: golem_common::model::security_scheme::SecuritySchemeId::new(),
+        name,
+        provider_type: golem_common::model::security_scheme::Provider::Google(Empty {}),
+        client_id: openidconnect::ClientId::new("test-client".into()),
+        client_secret: openidconnect::ClientSecret::new("test-secret".into()),
+        redirect_url: openidconnect::RedirectUrl::new(
+            "https://example.com/auth/callback".to_string(),
+        )
+        .unwrap(),
+        scopes: vec![],
+    }
+}
+
 fn test_implementer() -> RegisteredAgentTypeImplementer {
     RegisteredAgentTypeImplementer {
         component_id: ComponentId::new(),
@@ -147,6 +162,66 @@ fn provider_method(name: &str) -> golem_common::schema::AgentMethodSchema {
         http_endpoint: vec![],
         read_only: None,
     }
+}
+
+#[test]
+fn tooling_corpus_keeps_router_provisioning_and_secret_config() {
+    use golem_common::model::agent::FileMapping;
+    use golem_common::schema::schema_type::SecretSpec;
+
+    let corpus: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../../golem-service-base/tests/fixtures/http-handlers/corpus.json"
+    ))
+    .unwrap();
+    for id in ["tooling-router-provisioning", "tooling-router-config"] {
+        let case = corpus["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|case| case["id"] == id)
+            .unwrap();
+        assert!(case["expect"]["included"].as_bool().unwrap(), "{id}");
+    }
+
+    let mut router = router_agent("site", "/");
+    router.config[0].value_type = SchemaType::secret(SecretSpec {
+        inner: Box::new(SchemaType::string()),
+        category: None,
+    });
+    router.http_mount.as_mut().unwrap().static_bindings =
+        vec![FileMapping::compile("/", "/index.html").unwrap()];
+    let context = http_context(vec![router]);
+
+    let mut route_errors = vec![];
+    let routes =
+        context.compile_http_api_routes(&HashMap::new(), &mut route_errors, &mut Vec::new());
+    assert!(
+        route_errors.is_empty(),
+        "tooling-router-provisioning: {route_errors:?}"
+    );
+    assert!(
+        routes.iter().any(|route| matches!(
+            &route.behaviour,
+            golem_service_base::custom_api::RouteBehaviour::HttpRouter(router)
+                if router.static_bindings.len() == 1
+        )),
+        "tooling-router-provisioning"
+    );
+
+    let mut secret_errors = vec![];
+    let (creations, updates, replacements) = context.deployment_agent_secret_creations_and_updates(
+        Vec::new(),
+        Vec::new(),
+        false,
+        &mut secret_errors,
+    );
+    assert!(
+        secret_errors.is_empty(),
+        "tooling-router-config: {secret_errors:?}"
+    );
+    assert_eq!(creations.len(), 1, "tooling-router-config");
+    assert!(updates.is_empty(), "tooling-router-config");
+    assert!(replacements.is_empty(), "tooling-router-config");
 }
 
 #[test]
@@ -1126,6 +1201,92 @@ fn compiled_mcp_blob_round_trip_preserves_registered_agent_types() {
     .unwrap();
 
     assert_eq!(restored.registered_agent_types, expected);
+}
+
+#[test]
+fn routers_do_not_contribute_mcp_capabilities_or_security_schemes() {
+    let environment = test_environment();
+    let router = router_agent("router", "/");
+    let router_name = router.type_name.clone();
+    let router = InProgressDeployedRegisteredAgentType {
+        agent_type: router,
+        implemented_by: test_implementer(),
+        webhook_domain_and_segments: None,
+    };
+    let component = native_tool_component("owner", "tool", executable_test_tool("tool", "run"));
+    let router_scheme = SecuritySchemeName("router-scheme".to_string());
+    let tool_scheme = SecuritySchemeName("tool-scheme".to_string());
+    let router_options = McpDeploymentAgentOptions {
+        security_scheme: Some(router_scheme.clone()),
+    };
+    let router_only = mcp_deployment(
+        environment.id,
+        "router-only.example.com",
+        BTreeMap::from([(router_name.clone(), router_options.clone())]),
+        BTreeMap::new(),
+    );
+    let mixed = mcp_deployment(
+        environment.id,
+        "mixed.example.com",
+        BTreeMap::from([(router_name.clone(), router_options)]),
+        BTreeMap::from([(
+            ToolName::try_from("tool").unwrap(),
+            McpDeploymentToolOptions {
+                owner_component: component.component_name.clone(),
+                security_scheme: Some(tool_scheme.clone()),
+                include: None,
+                exclude: None,
+            },
+        )]),
+    );
+    let context = DeploymentContext {
+        environment,
+        components: BTreeMap::from([(component.component_name.clone(), component)]),
+        http_api_deployments: BTreeMap::new(),
+        mcp_deployments: BTreeMap::from([
+            (router_only.domain.clone(), router_only),
+            (mixed.domain.clone(), mixed),
+        ]),
+        registered_agent_types: HashMap::from([(router_name, router)]),
+    };
+    let mut errors = Vec::new();
+    let tools = context.compile_tools(
+        golem_common::model::deployment::DeploymentRevision::INITIAL,
+        &mut errors,
+        &mut Vec::new(),
+    );
+    let compiled = context.compile_mcp_deployments(
+        AccountId::new(),
+        golem_common::model::deployment::DeploymentRevision::INITIAL,
+        &HashMap::from([
+            (router_scheme.clone(), test_security_scheme(router_scheme)),
+            (
+                tool_scheme.clone(),
+                test_security_scheme(tool_scheme.clone()),
+            ),
+        ]),
+        &tools,
+        &[],
+        &mut errors,
+    );
+
+    assert_eq!(compiled.len(), 1);
+    assert_eq!(compiled[0].domain.0, "mixed.example.com");
+    assert!(compiled[0].registered_agent_types.is_empty());
+    assert_eq!(compiled[0].tools.len(), 1);
+    assert_eq!(compiled[0].security_scheme_name, Some(tool_scheme));
+    assert!(
+        errors.iter().any(|error| matches!(
+            error,
+            DeployValidationError::McpDeploymentEmpty { mcp_deployment_domain }
+                if mcp_deployment_domain.0 == "router-only.example.com"
+        )),
+        "{errors:?}"
+    );
+    assert!(!errors.iter().any(|error| matches!(
+        error,
+        DeployValidationError::McpDeploymentConflictingSecuritySchemes { .. }
+    )));
 }
 
 #[test]

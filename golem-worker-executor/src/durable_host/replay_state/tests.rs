@@ -78,17 +78,17 @@ impl Oplog for InMemoryOplog {
         Box::pin(async move { Ok(index) })
     }
 
-    async fn add_pair(
+    fn enqueue_add_pair(
         &self,
         start: OplogEntry,
         make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
-    ) -> Result<(OplogIndex, OplogIndex), crate::services::oplog::OplogError> {
+    ) -> crate::services::oplog::OplogAddPairReceipt {
         let mut entries = self.entries.lock().unwrap();
         entries.push(start);
         let first_idx = OplogIndex::from_u64(entries.len() as u64);
         entries.push(make_second(first_idx));
         let second_idx = OplogIndex::from_u64(entries.len() as u64);
-        Ok((first_idx, second_idx))
+        Box::pin(async move { Ok((first_idx, second_idx)) })
     }
 
     async fn add_start_with_reserved_raw_payload(
@@ -262,6 +262,7 @@ fn start_now() -> OplogEntry {
             HostRequestNoInput {},
         )))),
         durable_function_type: DurableFunctionType::ReadLocal,
+        span_started: None,
     }
 }
 
@@ -327,6 +328,7 @@ fn rejected_tool_reconstruction_start(
             observational_owner: None,
             request: Some(OplogPayload::Inline(Box::new(request))),
             durable_function_type: DurableFunctionType::WriteLocal,
+            span_started: None,
         },
         identity,
     )
@@ -411,6 +413,7 @@ fn custom_start_with_request(
         observational_owner: None,
         request: Some(OplogPayload::Inline(Box::new(request))),
         durable_function_type: DurableFunctionType::ReadRemote,
+        span_started: None,
     }
 }
 
@@ -435,6 +438,8 @@ fn custom_end(start_index: u64, value: i32) -> OplogEntry {
             value.into_typed_schema_value().unwrap(),
         )))),
         forced_commit: false,
+        span_finished: None,
+        span_attributes: None,
     }
 }
 
@@ -1097,6 +1102,8 @@ fn end_for(start_index: u64, nanos: u64) -> OplogEntry {
             HostResponse::MonotonicClockTimestamp(HostResponseMonotonicClockTimestamp { nanos }),
         ))),
         forced_commit: false,
+        span_finished: None,
+        span_attributes: None,
     }
 }
 
@@ -1114,6 +1121,7 @@ fn fork_start() -> OplogEntry {
             HostRequestNoInput {},
         )))),
         durable_function_type: DurableFunctionType::WriteRemote,
+        span_started: None,
     }
 }
 
@@ -1794,6 +1802,7 @@ fn stdout_log(message: &str) -> OplogEntry {
         level: LogLevel::Stdout,
         context: "stdout".to_string(),
         message: message.to_string(),
+        trace_context: None,
     }
 }
 
@@ -1836,18 +1845,11 @@ async fn seen_log_tracks_multiplicity_of_identical_entries() {
 
 #[test]
 async fn resolution_readiness_preserves_positional_entries_and_retained_tails() {
-    for with_span in [false, true] {
+    for with_positional_entry in [false, true] {
         for completed in [false, true] {
             let mut entries = vec![noop(), start_now()];
-            if with_span {
-                entries.push(OplogEntry::StartSpan {
-                    timestamp: Timestamp::now_utc(),
-                    parent_start_index: None,
-                    span_id: golem_common::model::invocation_context::SpanId::generate(),
-                    parent: None,
-                    linked_context_id: None,
-                    attributes: HashMap::new().into(),
-                });
+            if with_positional_entry {
+                entries.push(noop());
             }
             if completed {
                 entries.push(end_for(2, 37));
@@ -1861,13 +1863,16 @@ async fn resolution_readiness_preserves_positional_entries_and_retained_tails() 
                 )
                 .await
                 .unwrap();
-            assert_eq!(rs.resolution_ready(&handle).await.unwrap(), !with_span);
-            if with_span {
+            assert_eq!(
+                rs.resolution_ready(&handle).await.unwrap(),
+                !with_positional_entry
+            );
+            if with_positional_entry {
                 assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(2));
                 assert!(!rs.resolution_ready(&handle).await.unwrap());
                 let (index, entry) = rs.get_oplog_entry(None).await.unwrap();
                 assert_eq!(index, OplogIndex::from_u64(3));
-                assert!(matches!(entry, OplogEntry::StartSpan { .. }));
+                assert!(matches!(entry, OplogEntry::NoOp { .. }));
                 assert!(rs.resolution_ready(&handle).await.unwrap());
             }
             let outcome = rs.await_resolution_outcome(handle).await.unwrap();
@@ -1925,6 +1930,34 @@ async fn start_claim_reports_replay_ended_when_cursor_is_live() {
         .unwrap();
 
     assert!(matches!(outcome, ReplayStartClaimOutcome::ReplayEnded));
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn accepted_start_notification_survives_cancelled_claim_waiter() {
+    let entry = start_now();
+    let rs = replay_state_over(vec![noop(), entry.clone(), end_for(2, 42)]).await;
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let lock = rs.cursor.state.lock().await;
+    let mut claim = Box::pin(rs.claim_start_for_store_observed(
+        StartClaim::unowned(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        ),
+        false,
+        move |index, entry| {
+            tx.send((index, entry.clone())).unwrap();
+        },
+    ));
+    assert!(futures::poll!(claim.as_mut()).is_pending());
+    drop(claim);
+    assert!(rx.try_recv().is_err());
+    drop(lock);
+    let (index, recorded) = rx.recv().await.unwrap();
+    assert_eq!(index, OplogIndex::from_u64(2));
+    assert_eq!(recorded, entry);
+    rs.fence_owned_cursor_ops().await.unwrap();
+    assert!(rx.try_recv().is_err());
 }
 
 #[test]
@@ -2085,6 +2118,7 @@ async fn request_matching_downloads_uncached_external_payloads() {
                 observational_owner: None,
                 request: Some(payload),
                 durable_function_type: DurableFunctionType::ReadLocal,
+                span_started: None,
             })
             .await
             .unwrap();
@@ -2406,6 +2440,7 @@ async fn dropped_scan_ahead_claim_leaves_no_residue_once_cursor_passes() {
                 HostRequestNoInput {},
             )))),
             durable_function_type: DurableFunctionType::ReadLocal,
+            span_started: None,
         }
     }
 
@@ -2590,6 +2625,7 @@ fn start_with_parent(parent_start_index: u64) -> OplogEntry {
             HostRequestNoInput {},
         )))),
         durable_function_type: DurableFunctionType::ReadLocal,
+        span_started: None,
     }
 }
 
@@ -2935,6 +2971,8 @@ async fn invocation_boundary_rejects_unclaimed_fork_pair() {
                 },
             )))),
             forced_commit: false,
+            span_finished: None,
+            span_attributes: None,
         },
         invocation_finished(),
     ])
@@ -2988,6 +3026,7 @@ async fn invocation_boundary_tolerates_abandoned_consume_body_scope_shape() {
                 HostRequestNoInput {},
             )))),
             durable_function_type: DurableFunctionType::WriteRemoteBatched(None),
+            span_started: None,
         },
         OplogEntry::Start {
             timestamp: Timestamp::now_utc(),
@@ -3001,6 +3040,7 @@ async fn invocation_boundary_tolerates_abandoned_consume_body_scope_shape() {
             durable_function_type: DurableFunctionType::WriteRemoteBatched(Some(
                 OplogIndex::from_u64(2),
             )),
+            span_started: None,
         },
         OplogEntry::End {
             timestamp: Timestamp::now_utc(),
@@ -3013,6 +3053,8 @@ async fn invocation_boundary_tolerates_abandoned_consume_body_scope_shape() {
                 ),
             ))),
             forced_commit: false,
+            span_finished: None,
+            span_attributes: None,
         },
         discarded_for(3),
         OplogEntry::End {
@@ -3026,6 +3068,8 @@ async fn invocation_boundary_tolerates_abandoned_consume_body_scope_shape() {
                 ),
             ))),
             forced_commit: false,
+            span_finished: None,
+            span_attributes: None,
         },
         invocation_finished(),
     ])
@@ -6308,6 +6352,7 @@ fn log_entry() -> OplogEntry {
         level: LogLevel::Info,
         context: "ctx".to_string(),
         message: "msg".to_string(),
+        trace_context: None,
     }
 }
 
@@ -6418,6 +6463,7 @@ fn cancelled_for(start_index: u64) -> OplogEntry {
         timestamp: Timestamp::now_utc(),
         start_index: OplogIndex::from_u64(start_index),
         partial: None,
+        span_finished: None,
     }
 }
 
@@ -6428,6 +6474,7 @@ fn cancelled_with_partial_for(start_index: u64, nanos: u64) -> OplogEntry {
         partial: Some(OplogPayload::Inline(Box::new(
             HostResponse::MonotonicClockTimestamp(HostResponseMonotonicClockTimestamp { nanos }),
         ))),
+        span_finished: None,
     }
 }
 
@@ -7253,6 +7300,7 @@ fn batched_scope_start() -> OplogEntry {
         observational_owner: None,
         request: None,
         durable_function_type: DurableFunctionType::WriteRemoteBatched(None),
+        span_started: None,
     }
 }
 
@@ -7280,6 +7328,8 @@ fn batched_scope_end(start_index: u64) -> OplogEntry {
         start_index: OplogIndex::from_u64(start_index),
         response: None,
         forced_commit: true,
+        span_finished: None,
+        span_attributes: None,
     }
 }
 
@@ -7299,6 +7349,7 @@ fn batched_child_start(parent: u64) -> OplogEntry {
         durable_function_type: DurableFunctionType::WriteRemoteBatched(Some(OplogIndex::from_u64(
             parent,
         ))),
+        span_started: None,
     }
 }
 
@@ -7522,6 +7573,7 @@ async fn plain_scope_claim_never_matches_discriminated_scope_start() {
         observational_owner: None,
         request: None,
         durable_function_type: DurableFunctionType::WriteRemoteBatched(None),
+        span_started: None,
     };
     let rs = replay_state_over(vec![noop(), discriminated_start, batched_scope_end(2)]).await;
 
@@ -7600,6 +7652,7 @@ async fn missing_scope_presence_check_does_not_switch_live() {
             HostRequestNoInput {},
         )))),
         durable_function_type: DurableFunctionType::ReadLocal,
+        span_started: None,
     };
     let rs = replay_state_over(vec![noop(), foreign_start]).await;
     let scope_name = HostFunctionName::Custom("<scope:batched-write:consume-body:7>".to_string());
@@ -7628,6 +7681,7 @@ async fn existing_scope_claim_does_not_wait_for_missing_scope_recovery_readiness
         observational_owner: None,
         request: None,
         durable_function_type: DurableFunctionType::WriteRemoteBatched(None),
+        span_started: None,
     };
     let rs = replay_state_over(vec![noop(), scope_start, batched_scope_end(2)]).await;
 
@@ -7668,6 +7722,7 @@ async fn missing_scope_recovery_rejects_foreign_remote_write() {
             HostRequestNoInput {},
         )))),
         durable_function_type: DurableFunctionType::WriteRemote,
+        span_started: None,
     };
     let rs = replay_state_over(vec![noop(), foreign_write]).await;
     let scope_name = HostFunctionName::Custom("<scope:batched-write:consume-body:7>".to_string());
@@ -7699,6 +7754,7 @@ async fn missing_scope_recovery_rejects_discriminator_collision() {
         observational_owner: None,
         request: None,
         durable_function_type: DurableFunctionType::ReadLocal,
+        span_started: None,
     };
     let rs = replay_state_over(vec![noop(), conflicting_start]).await;
 
@@ -7729,6 +7785,7 @@ async fn entity_owned_scope_claim_requires_the_recorded_parent() {
         observational_owner: None,
         request: None,
         durable_function_type: DurableFunctionType::WriteRemoteBatched(None),
+        span_started: None,
     };
     let rs = replay_state_over(vec![noop(), scope_start, batched_scope_end(2)]).await;
     let scope_name = HostFunctionName::Custom("<scope:batched-write>".to_string());
@@ -7768,6 +7825,7 @@ fn start_claim_requires_the_recorded_observational_owner() {
         observational_owner: Some(owner),
         request: None,
         durable_function_type: DurableFunctionType::WriteRemoteBatched(None),
+        span_started: None,
     };
 
     assert!(
@@ -7799,6 +7857,7 @@ fn start_claim_requires_the_recorded_observational_owner() {
             HostRequestNoInput {},
         )))),
         durable_function_type: DurableFunctionType::ReadLocal,
+        span_started: None,
     };
     assert!(
         StartClaim::unowned(

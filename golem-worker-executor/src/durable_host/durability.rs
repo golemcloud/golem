@@ -1177,6 +1177,13 @@ pub trait DurabilityHost: InFunctionRetryHost {
         host_function: &str,
     ) -> Result<OplogIndex, WorkerExecutorError>;
 
+    async fn begin_durable_function_with_span(
+        &mut self,
+        function_type: &DurableFunctionType,
+        host_function: &str,
+        span_started: golem_common::model::oplog::SpanStarted,
+    ) -> Result<(OplogIndex, golem_common::model::oplog::SpanStarted), WorkerExecutorError>;
+
     /// Marks the end of a durable function
     ///
     /// This is a pair of `begin_durable_function` and should be called after the durable function
@@ -1187,6 +1194,14 @@ pub trait DurabilityHost: InFunctionRetryHost {
         function_type: &DurableFunctionType,
         begin_index: OplogIndex,
         forced_commit: bool,
+    ) -> Result<(), WorkerExecutorError>;
+
+    async fn end_durable_function_with_span(
+        &mut self,
+        function_type: &DurableFunctionType,
+        begin_index: OplogIndex,
+        forced_commit: bool,
+        span_finished: golem_common::model::oplog::SpanFinished,
     ) -> Result<(), WorkerExecutorError>;
 
     /// Writes a record to the worker's oplog representing a durable function invocation
@@ -1655,6 +1670,8 @@ impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostLiveCustomDurableInvocat
                 start_index,
                 response: Some(response),
                 forced_commit,
+                span_finished: None,
+                span_attributes: None,
             })
             .await?;
         let checkpoint = accessor.with(|mut access| {
@@ -1898,6 +1915,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostWithStore<U>
                         observational_owner: None,
                         request: Some(persisted_request),
                         durable_function_type: start_function_type,
+                        span_started: None,
                     })
                     .await
                     .map_err(WorkerExecutorError::from)
@@ -1924,6 +1942,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostWithStore<U>
                                 timestamp: Timestamp::now_utc(),
                                 start_index,
                                 partial: None,
+                                span_finished: None,
                             })
                             .await?;
                         Ok(Some(start_index))
@@ -2125,6 +2144,21 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
             .map(DurableCallBoundary::begin_index)
     }
 
+    async fn begin_durable_function_with_span(
+        &mut self,
+        function_type: &DurableFunctionType,
+        host_function: &str,
+        span_started: golem_common::model::oplog::SpanStarted,
+    ) -> Result<(OplogIndex, golem_common::model::oplog::SpanStarted), WorkerExecutorError> {
+        DurableCallCoordinator::new(self)
+            .admit_with_span(
+                DurableCallAdmission::new(function_type, host_function),
+                span_started,
+            )
+            .await
+            .map(|(boundary, span)| (boundary.begin_index(), span))
+    }
+
     async fn end_durable_function(
         &mut self,
         function_type: &DurableFunctionType,
@@ -2136,6 +2170,24 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
                 function_type,
                 DurableCallBoundary::from_begin_index(begin_index),
                 forced_commit,
+                None,
+            )
+            .await
+    }
+
+    async fn end_durable_function_with_span(
+        &mut self,
+        function_type: &DurableFunctionType,
+        begin_index: OplogIndex,
+        forced_commit: bool,
+        span_finished: golem_common::model::oplog::SpanFinished,
+    ) -> Result<(), WorkerExecutorError> {
+        DurableCallCoordinator::new(self)
+            .finish(
+                function_type,
+                DurableCallBoundary::from_begin_index(begin_index),
+                forced_commit,
+                Some(span_finished),
             )
             .await
     }
@@ -2958,6 +3010,19 @@ mod tests {
             Ok(OplogIndex::from_u64(1))
         }
 
+        async fn begin_durable_function_with_span(
+            &mut self,
+            function_type: &DurableFunctionType,
+            host_function: &str,
+            span_started: golem_common::model::oplog::SpanStarted,
+        ) -> Result<(OplogIndex, golem_common::model::oplog::SpanStarted), WorkerExecutorError>
+        {
+            let index = self
+                .begin_durable_function(function_type, host_function)
+                .await?;
+            Ok((index, span_started))
+        }
+
         async fn end_durable_function(
             &mut self,
             _function_type: &DurableFunctionType,
@@ -2965,6 +3030,17 @@ mod tests {
             _forced_commit: bool,
         ) -> Result<(), WorkerExecutorError> {
             Ok(())
+        }
+
+        async fn end_durable_function_with_span(
+            &mut self,
+            function_type: &DurableFunctionType,
+            begin_index: OplogIndex,
+            forced_commit: bool,
+            _span_finished: golem_common::model::oplog::SpanFinished,
+        ) -> Result<(), WorkerExecutorError> {
+            self.end_durable_function(function_type, begin_index, forced_commit)
+                .await
         }
 
         async fn persist_durable_function_invocation(

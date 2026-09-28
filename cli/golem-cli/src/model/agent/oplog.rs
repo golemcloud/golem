@@ -20,10 +20,9 @@ use base64::prelude::BASE64_STANDARD;
 use golem_common::model::Timestamp;
 use golem_common::model::oplog::{
     MultipartPartData, PluginInstallationDescription, PublicAgentInvocation,
-    PublicAgentInvocationResult, PublicAttributeValue, PublicEntityCallMode,
-    PublicEntityInvocation, PublicEntityInvocationOperation, PublicExternalToolResult,
-    PublicOplogEntry, PublicOplogEntryAttribution, PublicSnapshotData, PublicUpdateDescription,
-    StringAttributeValue,
+    PublicAgentInvocationResult, PublicEntityCallMode, PublicEntityInvocation,
+    PublicEntityInvocationOperation, PublicExternalToolResult, PublicOplogEntry,
+    PublicOplogEntryAttribution, PublicSnapshotData, PublicUpdateDescription,
 };
 use golem_common::schema::TypedSchemaValue;
 use serde::{Deserialize, Serialize};
@@ -173,6 +172,9 @@ impl TextOutput for PublicOplogEntry {
                         typed_schema_value_to_string(request)
                     ));
                 }
+                if let Some(span) = &params.span_started {
+                    logln(format!("{pad}span started:      {span:?}"));
+                }
             }
             PublicOplogEntry::End(params) => {
                 logln(format_message_highlight("END"));
@@ -190,6 +192,12 @@ impl TextOutput for PublicOplogEntry {
                 if params.forced_commit {
                     logln(format!("{pad}forced commit:     true"));
                 }
+                if let Some(span) = &params.span_finished {
+                    logln(format!("{pad}span finished:     {span:?}"));
+                }
+                if let Some(attributes) = &params.span_attributes {
+                    logln(format!("{pad}span attributes:   {attributes:?}"));
+                }
             }
             PublicOplogEntry::Cancelled(params) => {
                 logln(format_message_highlight("CANCELLED"));
@@ -203,6 +211,9 @@ impl TextOutput for PublicOplogEntry {
                         "{pad}partial result:    {}",
                         typed_schema_value_to_string(partial)
                     ));
+                }
+                if let Some(span) = &params.span_finished {
+                    logln(format!("{pad}span finished:     {span:?}"));
                 }
             }
             PublicOplogEntry::CompletionDiscarded(params) => {
@@ -546,67 +557,6 @@ impl TextOutput for PublicOplogEntry {
                 logln(format!(
                     "{pad}idempotency key:   {}",
                     format_id(&params.idempotency_key),
-                ));
-            }
-            PublicOplogEntry::StartSpan(params) => {
-                logln(format_message_highlight("START SPAN"));
-                logln(format!(
-                    "{pad}at:                {}",
-                    format_id(&params.timestamp)
-                ));
-                logln(format!(
-                    "{pad}span id:           {}",
-                    format_id(&params.span_id)
-                ));
-                if let Some(parent_id) = &params.parent_id {
-                    logln(format!("{pad}parent span:       {}", format_id(&parent_id),));
-                }
-                if let Some(linked_id) = &params.linked_context {
-                    logln(format!("{pad}linked span:       {}", format_id(&linked_id),));
-                }
-                logln(format!("{pad}attributes:"));
-                for kv in &params.attributes {
-                    logln(format!(
-                        "{pad}  - {}: {}",
-                        kv.key,
-                        match &kv.value {
-                            PublicAttributeValue::String(StringAttributeValue { value }) =>
-                                format_id(value),
-                        }
-                    ));
-                }
-            }
-            PublicOplogEntry::FinishSpan(params) => {
-                logln(format_message_highlight("FINISH SPAN"));
-                logln(format!(
-                    "{pad}at:                {}",
-                    format_id(&params.timestamp)
-                ));
-                logln(format!(
-                    "{pad}span id:           {}",
-                    format_id(&params.span_id)
-                ));
-            }
-            PublicOplogEntry::SetSpanAttribute(params) => {
-                logln(format_message_highlight("SET SPAN ATTRIBUTE"));
-                logln(format!(
-                    "{pad}at:                {}",
-                    format_id(&params.timestamp)
-                ));
-                logln(format!(
-                    "{pad}span id:           {}",
-                    format_id(&params.span_id)
-                ));
-                logln(format!(
-                    "{pad}key:               {}",
-                    format_id(&params.key)
-                ));
-                logln(format!(
-                    "{pad}value:             {}",
-                    match &params.value {
-                        PublicAttributeValue::String(StringAttributeValue { value }) =>
-                            format_id(value),
-                    }
                 ));
             }
             PublicOplogEntry::BeginRemoteTransaction(params) => {

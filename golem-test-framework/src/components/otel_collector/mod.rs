@@ -43,7 +43,80 @@ pub async fn read_otlp_metrics(output_dir: &Path) -> anyhow::Result<Vec<OtlpMetr
     read_otlp_metric_records(&path).await
 }
 
+/// Reads and parses the OTLP JSON lines file for traces, retaining each span's resource.
+pub async fn read_otlp_traces(output_dir: &Path) -> anyhow::Result<Vec<OtlpTraceRecord>> {
+    let path = output_dir.join("otlp-traces.jsonl");
+    let content = tokio::fs::read_to_string(path).await?;
+    let mut records = Vec::new();
+    for line in content.lines().filter(|line| !line.trim().is_empty()) {
+        let request: FileExportTraceRequest = serde_json::from_str(line)
+            .map_err(|e| anyhow::anyhow!("Failed to parse OTLP traces line: {e}\nLine: {line}"))?;
+        for resource_spans in request.resource_spans {
+            for scope_spans in resource_spans.scope_spans {
+                records.extend(scope_spans.spans.into_iter().map(|span| OtlpTraceRecord {
+                    resource: resource_spans.resource.clone(),
+                    span,
+                }));
+            }
+        }
+    }
+    Ok(records)
+}
+
 // --- Deserialization types for OTLP JSON file exporter output ---
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FileExportTraceRequest {
+    resource_spans: Vec<ResourceSpans>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ResourceSpans {
+    scope_spans: Vec<ScopeSpans>,
+    #[serde(default)]
+    resource: OtlpResource,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ScopeSpans {
+    spans: Vec<OtlpSpan>,
+}
+
+#[derive(Debug, Clone)]
+pub struct OtlpTraceRecord {
+    pub resource: OtlpResource,
+    pub span: OtlpSpan,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OtlpSpan {
+    pub trace_id: String,
+    pub span_id: String,
+    #[serde(default)]
+    pub parent_span_id: Option<String>,
+    pub name: String,
+    pub kind: u32,
+    pub start_time_unix_nano: String,
+    pub end_time_unix_nano: String,
+    #[serde(default)]
+    pub attributes: Vec<OtlpKeyValue>,
+    #[serde(default)]
+    pub trace_state: Option<String>,
+    #[serde(default)]
+    pub status: Option<OtlpSpanStatus>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct OtlpSpanStatus {
+    #[serde(default)]
+    pub code: u32,
+    #[serde(default)]
+    pub message: Option<String>,
+}
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -114,7 +187,7 @@ pub struct OtlpMetricRecord {
     pub description: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OtlpResource {
     #[serde(default)]
@@ -181,13 +254,21 @@ pub async fn wait_for_otlp_logs(
     min_records: usize,
     timeout: Duration,
 ) -> anyhow::Result<Vec<OtlpLogRecord>> {
+    wait_for_otlp_logs_matching(output_dir, timeout, |records| records.len() >= min_records).await
+}
+
+pub async fn wait_for_otlp_logs_matching(
+    output_dir: &Path,
+    timeout: Duration,
+    ready: impl Fn(&[OtlpLogRecord]) -> bool,
+) -> anyhow::Result<Vec<OtlpLogRecord>> {
     let start = Instant::now();
     loop {
         match read_otlp_logs(output_dir).await {
-            Ok(records) if records.len() >= min_records => return Ok(records),
+            Ok(records) if ready(&records) => return Ok(records),
             Ok(records) => {
                 debug!(
-                    "OTLP logs file has {} records, waiting for at least {min_records}",
+                    "OTLP logs file has {} records, waiting for required records",
                     records.len()
                 );
             }
@@ -197,7 +278,32 @@ pub async fn wait_for_otlp_logs(
         }
         if start.elapsed() > timeout {
             anyhow::bail!(
-                "Timed out waiting for {min_records} OTLP log records after {}s",
+                "Timed out waiting for required OTLP log records after {}s",
+                timeout.as_secs()
+            );
+        }
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
+}
+
+pub async fn wait_for_otlp_traces(
+    output_dir: &Path,
+    timeout: Duration,
+    ready: impl Fn(&[OtlpTraceRecord]) -> bool,
+) -> anyhow::Result<Vec<OtlpTraceRecord>> {
+    let start = Instant::now();
+    loop {
+        match read_otlp_traces(output_dir).await {
+            Ok(records) if ready(&records) => return Ok(records),
+            Ok(records) => debug!(
+                "OTLP traces file has {} spans, waiting for required records",
+                records.len()
+            ),
+            Err(e) => debug!("Error reading OTLP traces: {e}"),
+        }
+        if start.elapsed() > timeout {
+            anyhow::bail!(
+                "Timed out waiting for required OTLP trace records after {}s",
                 timeout.as_secs()
             );
         }
@@ -258,5 +364,40 @@ async fn wait_for_collector_startup(health_url: &str, timeout: Duration) {
             panic!("Failed to verify that OTel Collector is running at {health_url}");
         }
         tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{OtlpSpanStatus, read_otlp_traces};
+    use test_r::test;
+
+    #[test]
+    fn span_status_accepts_omitted_code_without_losing_explicit_error() {
+        let unset: OtlpSpanStatus = serde_json::from_str("{}").unwrap();
+        assert_eq!(unset.code, 0);
+
+        let error: OtlpSpanStatus =
+            serde_json::from_str(r#"{"code":2,"message":"failed"}"#).unwrap();
+        assert_eq!(error.code, 2);
+        assert_eq!(error.message.as_deref(), Some("failed"));
+    }
+
+    #[test]
+    async fn read_otlp_traces_accepts_resource_spans_without_resource() {
+        let output_dir = tempfile::tempdir().unwrap();
+        tokio::fs::write(
+            output_dir.path().join("otlp-traces.jsonl"),
+            r#"{"resourceSpans":[{"scopeSpans":[{"spans":[{"traceId":"00000000000000000000000000000001","spanId":"0000000000000001","name":"operation","kind":1,"startTimeUnixNano":"1","endTimeUnixNano":"2"}]}]}]}"#,
+        )
+        .await
+        .unwrap();
+
+        let records = read_otlp_traces(output_dir.path())
+            .await
+            .expect("resource is an optional OTLP ResourceSpans field");
+
+        assert_eq!(records.len(), 1);
+        assert!(records[0].resource.attributes.is_empty());
     }
 }

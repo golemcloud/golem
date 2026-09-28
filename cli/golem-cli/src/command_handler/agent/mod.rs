@@ -78,7 +78,7 @@ use golem_common::model::worker::{
     AgentConfigEntryDto, RevertLastInvocations, RevertToOplogIndex, UpdateRecord,
 };
 use golem_common::model::{AgentFilter, FilterComparator, IdempotencyKey, OplogIndex};
-use golem_common::schema::agent::{AgentTypeSchema, InputSchema};
+use golem_common::schema::agent::{AgentTypeKind, AgentTypeSchema, InputSchema};
 use golem_common::schema::graph::TypedSchemaValue;
 use golem_common::schema::{ExternalSchemaValue, SchemaGraph, SchemaType, SchemaValue};
 
@@ -2847,59 +2847,62 @@ impl AgentCommandHandler {
         }
 
         match ParsedAgentId::parse_and_resolve_type(&agent_id.0, &component.metadata) {
-            Ok((agent_id, agent_type)) => match function_name {
-                Some(function_name) => {
-                    let parsed = match ParsedFunctionName::parse(function_name) {
-                        Ok(p) => p,
-                        Err(_) => {
-                            logln("");
-                            log_error(format!(
-                                "Incompatible agent type ({}) and method ({})",
-                                agent_id.agent_type.as_str().log_color_error_highlight(),
-                                function_name.log_color_error_highlight()
-                            ));
-                            logln("");
-                            log_text_view(&AvailableFunctionNamesHelp::new_agent(
-                                component,
-                                &agent_id,
-                                &agent_type,
-                            ));
-                            bail!(NonSuccessfulExit);
-                        }
-                    };
+            Ok((agent_id, agent_type)) => {
+                validate_ordinary_agent_type(&agent_type)?;
+                match function_name {
+                    Some(function_name) => {
+                        let parsed = match ParsedFunctionName::parse(function_name) {
+                            Ok(p) => p,
+                            Err(_) => {
+                                logln("");
+                                log_error(format!(
+                                    "Incompatible agent type ({}) and method ({})",
+                                    agent_id.agent_type.as_str().log_color_error_highlight(),
+                                    function_name.log_color_error_highlight()
+                                ));
+                                logln("");
+                                log_text_view(&AvailableFunctionNamesHelp::new_agent(
+                                    component,
+                                    &agent_id,
+                                    &agent_type,
+                                ));
+                                bail!(NonSuccessfulExit);
+                            }
+                        };
 
-                    if let ParsedFunctionSite::PackagedInterface {
-                        namespace,
-                        package,
-                        interface,
-                        ..
-                    } = parsed.site()
-                    {
-                        let component_name = format!("{namespace}:{package}");
-                        if *interface == agent_id.agent_type.0
-                            && component.component_name.0 == component_name
+                        if let ParsedFunctionSite::PackagedInterface {
+                            namespace,
+                            package,
+                            interface,
+                            ..
+                        } = parsed.site()
                         {
-                            return Ok(Some((agent_id, agent_type.clone())));
+                            let component_name = format!("{namespace}:{package}");
+                            if *interface == agent_id.agent_type.0
+                                && component.component_name.0 == component_name
+                            {
+                                return Ok(Some((agent_id, agent_type.clone())));
+                            }
                         }
+
+                        logln("");
+                        log_error(format!(
+                            "Incompatible agent type ({}) and method ({})",
+                            agent_id.agent_type.as_str().log_color_error_highlight(),
+                            function_name.log_color_error_highlight()
+                        ));
+                        logln("");
+                        log_text_view(&AvailableFunctionNamesHelp::new_agent(
+                            component,
+                            &agent_id,
+                            &agent_type,
+                        ));
+                        bail!(NonSuccessfulExit);
                     }
 
-                    logln("");
-                    log_error(format!(
-                        "Incompatible agent type ({}) and method ({})",
-                        agent_id.agent_type.as_str().log_color_error_highlight(),
-                        function_name.log_color_error_highlight()
-                    ));
-                    logln("");
-                    log_text_view(&AvailableFunctionNamesHelp::new_agent(
-                        component,
-                        &agent_id,
-                        &agent_type,
-                    ));
-                    bail!(NonSuccessfulExit);
+                    None => Ok(Some((agent_id, agent_type.clone()))),
                 }
-
-                None => Ok(Some((agent_id, agent_type.clone()))),
-            },
+            }
             Err(err) => {
                 let parsed_agent_type_name = ParsedAgentId::parse_agent_type_name(&agent_id.0).ok();
 
@@ -3333,6 +3336,16 @@ fn split_agent_id(agent_id: &str) -> Vec<&str> {
     }
 }
 
+fn validate_ordinary_agent_type(agent_type: &AgentTypeSchema) -> anyhow::Result<()> {
+    if agent_type.kind == AgentTypeKind::HttpRouter {
+        bail!(
+            "HTTP router '{}' is managed by its HTTP deployment and cannot be created or invoked as an ordinary agent",
+            agent_type.type_name
+        );
+    }
+    Ok(())
+}
+
 fn build_repl_agent_id(
     agent_type: &AgentTypeSchema,
     typed_parameters: TypedSchemaValue,
@@ -3380,7 +3393,7 @@ mod tests {
     use super::{
         AgentListMode, apply_list_mode_filter, build_repl_agent_id, normalize_public_agent_id,
         parse_method_argument_schema_value, render_revert_command, split_agent_id,
-        validate_public_invocation_agent_id,
+        validate_ordinary_agent_type, validate_public_invocation_agent_id,
     };
     use crate::agent_id_display::SourceLanguage;
     use crate::context::GlobalEnvironmentSelector;
@@ -3539,6 +3552,25 @@ mod tests {
             snapshotting: Snapshotting::Disabled(Empty {}),
             config: vec![],
         }
+    }
+
+    #[test]
+    fn ordinary_create_and_invoke_reject_http_routers_by_kind() {
+        let regular = test_agent_type_schema(AgentMode::Durable);
+        validate_ordinary_agent_type(&regular).unwrap();
+
+        let mut router = regular;
+        router.kind = golem_common::schema::agent::AgentTypeKind::HttpRouter;
+        router.type_name = AgentTypeName("OrdinaryLookingName".to_string());
+        let error = validate_ordinary_agent_type(&router)
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            error.contains("HTTP router 'OrdinaryLookingName'"),
+            "{error}"
+        );
+        assert!(error.contains("cannot be created or invoked"), "{error}");
     }
 
     fn empty_typed_parameters() -> TypedSchemaValue {

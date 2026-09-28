@@ -284,15 +284,21 @@ impl Oplog for RateLimitedOplog {
         self.inner.download_raw_payload(payload_id, md5_hash).await
     }
 
-    async fn add_pair(
+    fn enqueue_add_pair(
         &self,
         start: OplogEntry,
         make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
-    ) -> Result<(OplogIndex, OplogIndex), OplogError> {
-        // Assign the indices first, then throttle once for the pair: see `apply_rate_limit`.
-        let indices = self.inner.add_pair(start, make_second).await?;
-        self.apply_rate_limit().await;
-        Ok(indices)
+    ) -> super::OplogAddPairReceipt {
+        let pending = self.inner.enqueue_add_pair(start, make_second);
+        let resource_entry = self.resource_entry.clone();
+        let state = self.state.clone();
+        let account_id = self.account_id;
+        let environment_id = self.environment_id;
+        Box::pin(async move {
+            let indices = pending.await?;
+            Self::apply_rate_limit_for(&resource_entry, &state, &account_id, &environment_id).await;
+            Ok(indices)
+        })
     }
 
     async fn add_start_with_reserved_raw_payload(
@@ -951,6 +957,7 @@ mod tests {
                 observational_owner: None,
                 request: Some(request_payload),
                 durable_function_type: DurableFunctionType::ReadRemote,
+                span_started: None,
             }
         };
 

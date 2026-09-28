@@ -1153,8 +1153,10 @@ impl ForwardingOplog {
                             let cache_entries = state.cache_is_required();
                             let cached_entries =
                                 cache_entries.then(|| (start.clone(), second.clone()));
-                            let result =
-                                state.inner.add_pair(start, Box::new(move |_| second)).await;
+                            let result = state
+                                .inner
+                                .enqueue_add_pair(start, Box::new(move |_| second))
+                                .await;
                             if let Ok((start_idx, second_idx)) = &result {
                                 if let Some((start, second)) = cached_entries {
                                     state.record_cached([
@@ -1533,17 +1535,28 @@ impl Oplog for ForwardingOplog {
         self.inner.download_raw_payload(payload_id, md5_hash).await
     }
 
-    async fn add_pair(
+    fn enqueue_add_pair(
         &self,
         start: OplogEntry,
         make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
-    ) -> Result<(OplogIndex, OplogIndex), OplogError> {
-        self.run_job(|done| ForwardingJob::AddPair {
-            start,
-            make_second,
-            done,
+    ) -> super::OplogAddPairReceipt {
+        let (done, done_rx) = tokio::sync::oneshot::channel();
+        if self
+            .jobs
+            .send(ForwardingJob::AddPair {
+                start,
+                make_second,
+                done,
+            })
+            .is_err()
+        {
+            panic!("Forwarding oplog actor terminated unexpectedly");
+        }
+        Box::pin(async move {
+            done_rx.await.unwrap_or_else(|_| {
+                panic!("Forwarding oplog actor dropped an add-pair request without replying")
+            })
         })
-        .await
     }
 
     async fn add_start_with_reserved_raw_payload(
@@ -3074,11 +3087,11 @@ mod tests {
             })
         }
 
-        async fn add_pair(
+        fn enqueue_add_pair(
             &self,
             start: OplogEntry,
             make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
-        ) -> Result<(OplogIndex, OplogIndex), crate::services::oplog::OplogError> {
+        ) -> crate::services::oplog::OplogAddPairReceipt {
             let mut entries = self.entries.lock().unwrap();
             let mut idx = self.current_idx.lock().unwrap();
             *idx = idx.next();
@@ -3087,7 +3100,7 @@ mod tests {
             *idx = idx.next();
             let second_idx = *idx;
             entries.push(make_second(first_idx));
-            Ok((first_idx, second_idx))
+            Box::pin(async move { Ok((first_idx, second_idx)) })
         }
 
         async fn add_durable_stream_batch(
@@ -3643,6 +3656,38 @@ mod tests {
         assert_eq!(second, OplogIndex::INITIAL.next());
     }
 
+    #[test]
+    async fn abandoned_pair_receipt_keeps_pair_before_later_add() {
+        let grant_id = EnvironmentPluginGrantId::new();
+        let (metadata, status_lock) = test_worker_metadata(HashSet::new());
+        let inner = Arc::new(InMemoryOplog::new());
+        let oplog = ForwardingOplog::new(
+            inner.clone(),
+            Arc::new(RecordingOplogProcessorPlugin::new()),
+            Arc::new(FakeComponentService::with_one_oplog_processor_plugin(
+                grant_id,
+            )),
+            metadata,
+            status_lock,
+            OplogIndex::NONE,
+            Box::new(|| {}),
+            usize::MAX,
+            Duration::from_secs(3600),
+        )
+        .await;
+
+        drop(oplog.enqueue_add_pair(grow_memory(1), Box::new(|_| grow_memory(2))));
+        let later = oplog.add(grow_memory(3)).await.unwrap();
+        let entries = inner
+            .read_exact(OplogIndex::INITIAL, 3)
+            .await
+            .into_values()
+            .collect::<Vec<_>>();
+
+        assert_eq!(later, OplogIndex::from_u64(3));
+        assert_eq!(memory_deltas(&entries), vec![1, 2, 3]);
+    }
+
     /// Reserved starts pass through the forwarding actor in initiation order: the indices the
     /// wrapper returns are the ones the inner (leaf) oplog assigned, the mirrored buffer stays in
     /// lockstep, and a flush forwards the `Start` entries to the plugin as regular oplog entries.
@@ -3685,6 +3730,7 @@ mod tests {
                 observational_owner: None,
                 request: Some(request_payload),
                 durable_function_type: DurableFunctionType::ReadRemote,
+                span_started: None,
             }
         };
 

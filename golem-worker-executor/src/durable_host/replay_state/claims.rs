@@ -477,7 +477,8 @@ impl ReplayState {
         &self,
         claim: StartClaim,
     ) -> Result<ReplayStartClaimOutcome, WorkerExecutorError> {
-        self.claim_start_for_store(claim, false).await
+        self.claim_start_for_store_observed(claim, false, |_, _| {})
+            .await
     }
 
     /// [`Self::claim_start_or_replay_end`] issued on behalf of a Store whose own liveness is
@@ -490,6 +491,19 @@ impl ReplayState {
         claim: StartClaim,
         store_live: bool,
     ) -> Result<ReplayStartClaimOutcome, WorkerExecutorError> {
+        self.claim_start_for_store_observed(claim, store_live, |_, _| {})
+            .await
+    }
+
+    /// Shared claim loop of the wrappers above: claims on behalf of a Store whose own liveness is
+    /// `store_live` and notifies `on_claim` of every accepted claim inside the owned cursor
+    /// operation.
+    pub(crate) async fn claim_start_for_store_observed(
+        &self,
+        claim: StartClaim,
+        store_live: bool,
+        on_claim: impl Fn(OplogIndex, &OplogEntry) + Clone + Send + Sync + 'static,
+    ) -> Result<ReplayStartClaimOutcome, WorkerExecutorError> {
         enum Missing {
             ReplayEnded,
             DeletedRegion,
@@ -501,11 +515,13 @@ impl ReplayState {
             progress.as_mut().enable();
 
             let owned_claim = claim.clone();
+            let on_claim = on_claim.clone();
             let (claimed, blocked_on_completion_delivery, missing) = self
                 .run_owned_cursor_op(move |state| async move {
                     state
                         .with_tx(async |tx| match tx.claim_start(&owned_claim).await {
                             Ok(StartClaimAttempt::Claimed(handle, entry)) => {
+                                on_claim(handle.start_idx(), &entry);
                                 Ok((Some((handle, entry)), false, None))
                             }
                             Ok(StartClaimAttempt::Blocked) => {
