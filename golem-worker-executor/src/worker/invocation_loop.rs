@@ -3043,7 +3043,8 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         let scope = SnapshotScope::agent(&self.owned_agent_id);
         // An upload of a periodic snapshot of the agent can run now. The update waits for it once
         // and asks again, so a frequent snapshot does not fail the update. A terminal interrupt
-        // ends the wait and fails the update.
+        // ends the wait and fails the update, except on a lost shard: then nothing is written,
+        // and the update stays pending for the shard's new owner.
         let admitted = match snapshots.admit(&scope, SnapshotKind::Update).await {
             Err(SnapshotSkip::UploadInFlight) => {
                 let waited = tokio::select! {
@@ -3051,6 +3052,9 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     () = self.parent.clone().terminal_interrupt_queued() => false,
                 };
                 if !waited {
+                    if self.parent.retired_for_lost_shard() {
+                        return CommandOutcome::BreakInnerLoop(RetryDecision::None);
+                    }
                     return self
                         .fail_update(
                             target_revision,
@@ -3156,7 +3160,16 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     Some(admission) => match self.upload_update_filesystem(admission).await {
                         Ok(Some((name, retention))) => (Some(name), Some(retention)),
                         Ok(None) => (None, None),
-                        Err(error) => return self.fail_update(target_revision, error).await,
+                        // On a lost shard nothing is written, and the update stays pending for
+                        // the shard's new owner.
+                        Err(UpdateUploadError::Interrupted)
+                            if self.parent.retired_for_lost_shard() =>
+                        {
+                            return CommandOutcome::BreakInnerLoop(RetryDecision::None);
+                        }
+                        Err(error) => {
+                            return self.fail_update(target_revision, error.details()).await;
+                        }
                     },
                     None => (None, None),
                 };
@@ -3364,18 +3377,20 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     async fn upload_update_filesystem(
         &self,
         admission: UploadAdmission,
-    ) -> Result<Option<(FilesystemSnapshotName, UpdateRetention)>, String> {
+    ) -> Result<Option<(FilesystemSnapshotName, UpdateRetention)>, UpdateUploadError> {
         let snapshots = self.parent.agent_filesystem_snapshots();
         match self
             .capture_filesystem(snapshots.capture_wait(), None)
             .await
         {
-            None => Err("failed to capture the agent filesystem for the update".to_string()),
+            None => Err(UpdateUploadError::Failed(
+                "failed to capture the agent filesystem for the update".to_string(),
+            )),
             Some(CaptureOutcome::InitialFiles) => Ok(None),
-            Some(CaptureOutcome::Unchanged) => Err(
+            Some(CaptureOutcome::Unchanged) => Err(UpdateUploadError::Failed(
                 "the capture of the agent filesystem for the update found no change without a mark"
                     .to_string(),
-            ),
+            )),
             Some(CaptureOutcome::Captured { capture, .. }) => {
                 let name = admission.name().clone();
                 // A terminal interrupt stops the save, and the capture is discarded. An
@@ -3386,13 +3401,12 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     .await
                 {
                     Ok(retention) => Ok(Some((name, retention))),
-                    Err(_) if self.parent.terminal_interrupt_pending().await => Err(
-                        "the update was interrupted while it uploaded the filesystem snapshot"
-                            .to_string(),
-                    ),
-                    Err(error) => Err(format!(
+                    Err(_) if self.parent.terminal_interrupt_pending().await => {
+                        Err(UpdateUploadError::Interrupted)
+                    }
+                    Err(error) => Err(UpdateUploadError::Failed(format!(
                         "failed to upload the filesystem snapshot for the update: {error}"
-                    )),
+                    ))),
                 }
             }
         }
@@ -3782,6 +3796,26 @@ fn snapshot_action_at(
         PeriodicSnapshotAction::DueNow
     } else {
         PeriodicSnapshotAction::Wait(Duration::from_millis((due_at - now) as u64))
+    }
+}
+
+/// Why the filesystem snapshot of a manual update was not uploaded.
+enum UpdateUploadError {
+    /// A terminal interrupt stopped the upload.
+    Interrupted,
+    /// The capture or the upload failed, with the details of the failed update.
+    Failed(String),
+}
+
+impl UpdateUploadError {
+    /// The details of the failed update.
+    fn details(self) -> String {
+        match self {
+            Self::Interrupted => {
+                "the update was interrupted while it uploaded the filesystem snapshot".to_string()
+            }
+            Self::Failed(details) => details,
+        }
     }
 }
 

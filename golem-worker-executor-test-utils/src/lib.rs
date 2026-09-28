@@ -700,6 +700,32 @@ impl TestWorkerExecutor {
         Ok(())
     }
 
+    /// Reads the stored oplog of the durable agent from the oplog service. It does not ask the
+    /// executor, so it works when the shard of the agent is no longer assigned here.
+    pub async fn stored_oplog(&self, agent_id: &AgentId) -> Vec<OplogEntry> {
+        use golem_worker_executor::services::HasOplogService;
+
+        let owned_agent_id = OwnedAgentId::new(self.context.default_environment_id, agent_id);
+        let oplog = self
+            .services
+            .as_ref()
+            .expect("test service graph is captured")
+            .oplog_service();
+        let last = oplog
+            .get_last_index(&owned_agent_id, AgentMode::Durable)
+            .await;
+        oplog
+            .read_exact(
+                &owned_agent_id,
+                AgentMode::Durable,
+                OplogIndex::INITIAL,
+                last.as_u64(),
+            )
+            .await
+            .into_values()
+            .collect()
+    }
+
     pub async fn export_fork_admission_records(
         &self,
         agent_id: &AgentId,

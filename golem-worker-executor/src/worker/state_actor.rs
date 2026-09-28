@@ -79,7 +79,7 @@ use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tokio::sync::{Mutex, OwnedMutexGuard, mpsc, oneshot};
-use tracing::debug;
+use tracing::{debug, warn};
 
 /// Handle to the worker-state actor's two job queues. Dropping it requests ordered shutdown.
 pub(super) struct WorkerStateActor<Ctx: WorkerCtx> {
@@ -962,7 +962,8 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
     /// attached and that the last automatic snapshot record has `name`, checks that this executor
     /// still admits work of the agent, appends the confirmation record, commits, and decides from
     /// the folded status. A commit or append the oplog refuses because the shard has a new owner
-    /// gives `Deferred`; the refusal has already started the retirement of the agent.
+    /// gives `Deferred`; the refusal has already started the retirement of the agent. An append
+    /// that fails for another cause also gives `Deferred`. The job never panics.
     async fn confirm_filesystem_snapshot(&self, name: FilesystemSnapshotName) -> ConfirmationReply {
         if self
             .commit_and_update_state(CommitLevel::Always, None)
@@ -995,7 +996,12 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
                         self.retire_fenced_agent(fence);
                         return ConfirmationReply::Deferred;
                     }
-                    Err(error) => panic!("oplog write: {error}"),
+                    Err(error) => {
+                        warn!(
+                            "Failed to append the confirmation of a filesystem snapshot: {error}"
+                        );
+                        return ConfirmationReply::Deferred;
+                    }
                 }
                 if self
                     .commit_and_update_state(CommitLevel::Always, None)

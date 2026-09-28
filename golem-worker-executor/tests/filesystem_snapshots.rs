@@ -20,9 +20,9 @@ use anyhow::anyhow;
 use futures::{StreamExt as _, TryStreamExt as _};
 use golem_common::base_model::component::ComponentDto;
 use golem_common::model::agent::ParsedAgentId;
-use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath};
-use golem_common::model::oplog::PublicOplogEntry;
-use golem_common::model::{AgentId, OplogIndex, OwnedAgentId};
+use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath, ComponentRevision};
+use golem_common::model::oplog::{OplogEntry, OplogPayload, PublicOplogEntry};
+use golem_common::model::{AgentId, AgentInvocationPayload, OplogIndex, OwnedAgentId};
 use golem_common::schema::SchemaValue;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
@@ -2141,6 +2141,130 @@ async fn a_terminal_interrupt_ends_a_manual_update_that_waits_for_an_upload(
     assert!(
         took < Duration::from_secs(10),
         "the update ended after {took:?}"
+    );
+    Ok(())
+}
+
+/// The target revision of a manual-update invocation entry.
+fn manual_update_target(entry: &OplogEntry) -> Option<ComponentRevision> {
+    let OplogEntry::PendingAgentInvocation { payload, .. } = entry else {
+        return None;
+    };
+    let payload = match payload {
+        OplogPayload::Inline(payload) => (**payload).clone(),
+        OplogPayload::SerializedInline { bytes, .. } => {
+            golem_common::serialization::deserialize::<AgentInvocationPayload>(bytes).ok()?
+        }
+        OplogPayload::External { .. } => return None,
+    };
+    match payload {
+        AgentInvocationPayload::ManualUpdate { target_revision } => Some(target_revision),
+        _ => None,
+    }
+}
+
+/// The incarnation of the shard manager that the test executors trust.
+const TEST_SHARD_MANAGER: &str = "5eed0000-0000-4000-8000-000000000001";
+
+/// Revokes shard 0, the only shard of a test executor. The executor retires its agents for a
+/// lost shard.
+async fn revoke_shard_zero(executor: &TestWorkerExecutor) -> anyhow::Result<()> {
+    use golem_api_grpc::proto::golem::shardmanager::ShardId;
+    use golem_api_grpc::proto::golem::workerexecutor::v1::{
+        RevokeShardsRequest, revoke_shards_response,
+    };
+
+    let revoked = executor
+        .client
+        .clone()
+        .revoke_shards(RevokeShardsRequest {
+            shard_ids: vec![ShardId { value: 0 }],
+            revision: 1,
+            incarnation_id: TEST_SHARD_MANAGER.to_string(),
+        })
+        .await?
+        .into_inner();
+    match revoked.result {
+        Some(revoke_shards_response::Result::Success(_)) => Ok(()),
+        other => Err(anyhow!("the executor refused the revoke: {other:?}")),
+    }
+}
+
+#[test]
+#[timeout("4m")]
+async fn a_lost_shard_ends_a_manual_update_that_waits_for_an_upload_without_a_failed_update(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let store = TestFilesystemSnapshotStore::new();
+    let executor =
+        start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+    let agent = Agent::start(
+        &executor,
+        &context,
+        initial_file_system,
+        "lost-shard-wait",
+        &[],
+    )
+    .await?;
+    store.set_save_delay(Duration::from_secs(60));
+    agent
+        .apply_all(&executor, &[("write", "state.db", "rows")])
+        .await?;
+    eventually(Duration::from_secs(30), || async {
+        let records = agent.records(&executor).await?;
+        Ok(records.snapshots.iter().flatten().next().cloned())
+    })
+    .await?;
+    let updated = executor
+        .update_component_with_files(
+            &agent.component.id,
+            AGENT_TYPE,
+            "it_initial_file_system_release",
+            vec![],
+        )
+        .await?;
+    executor
+        .manual_update_worker(&agent.worker_id, updated.revision, false)
+        .await?;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    revoke_shard_zero(&executor).await?;
+    let owned = agent.owned(&context);
+    eventually(Duration::from_secs(30), || async {
+        Ok((!executor.worker_is_loaded(&owned).await).then_some(()))
+    })
+    .await?;
+    store.set_save_delay(Duration::ZERO);
+    let oplog = executor.stored_oplog(&agent.worker_id).await;
+
+    let target = updated.revision;
+    let requested = oplog
+        .iter()
+        .filter(|entry| manual_update_target(entry) == Some(target))
+        .count();
+    let consumed = oplog
+        .iter()
+        .filter(|entry| match entry {
+            OplogEntry::FailedUpdate {
+                target_revision, ..
+            }
+            | OplogEntry::SuccessfulUpdate {
+                target_revision, ..
+            } => *target_revision == target,
+            OplogEntry::PendingUpdate { description, .. } => {
+                description.target_revision() == &target
+            }
+            _ => false,
+        })
+        .count();
+    assert_eq!(
+        (requested, consumed),
+        (1, 0),
+        "the manual update must stay pending: {oplog:?}"
     );
     Ok(())
 }

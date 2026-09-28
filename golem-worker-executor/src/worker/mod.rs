@@ -11342,7 +11342,8 @@ impl RunningWorker {
     /// A filesystem snapshot of an automatic snapshot record that does not restore makes the
     /// start skip that record: the start ends with a restart, and the next start selects the
     /// usable record before it. A conflict of the initial-file rule at the start of a pending
-    /// manual update records a failed update and restarts on the current revision. A
+    /// manual update records a failed update and restarts on the current revision, unless the
+    /// shard is lost: then it writes nothing and gives the lost-shard interrupt. A
     /// manual-update baseline that does not restore fails the start with a visible cause, which a
     /// new start can retry when the store error allows it.
     async fn baseline_failure<Ctx: WorkerCtx>(
@@ -11376,6 +11377,13 @@ impl RunningWorker {
                 },
                 Error::InitialFileConflict(conflict),
             ) => {
+                // On a lost shard nothing is written, and the update stays pending for the
+                // shard's new owner.
+                if parent.retired_for_lost_shard() {
+                    return WorkerExecutorError::Interrupted {
+                        kind: InterruptKind::ShardLost,
+                    };
+                }
                 warn!(
                     "Manual update to revision {target_revision} failed with a conflict of the initial files: {conflict}"
                 );
