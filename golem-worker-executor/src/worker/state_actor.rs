@@ -998,7 +998,8 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
                     }
                     Err(error) => {
                         warn!(
-                            "Failed to append the confirmation of a filesystem snapshot: {error}"
+                            error = %error,
+                            "Failed to append the confirmation of a filesystem snapshot"
                         );
                         return ConfirmationReply::Deferred;
                     }
