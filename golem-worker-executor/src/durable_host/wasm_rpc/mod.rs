@@ -14,9 +14,10 @@
 
 use crate::durable_host::authorization::targets::agent_method_target;
 use crate::durable_host::concurrent::{
-    BegunCall, CallReplayOutcome, Cancellable, DeferredCallReplayOutcome, DurableCallSession,
-    NotCancellable, ResolvedCall, authorize_live_permissions_at_serialized_access,
-    finish_span_access, finish_span_in_memory, try_agent_auth_ctx_at_serialized_access,
+    BegunCall, CallReplayOutcome, Cancellable, DeferredCallReplayOutcome, DropPolicy,
+    DurableCallSession, NotCancellable, ResolvedCall,
+    authorize_live_permissions_at_serialized_access, finish_span_in_memory,
+    try_agent_auth_ctx_at_serialized_access,
 };
 use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind, InFunctionRetryHost};
 use crate::durable_host::durable_session::{
@@ -56,13 +57,16 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId};
 use golem_common::model::oplog::host_functions::{
-    GolemRpcCancellationTokenCancel, GolemRpcWasmRpcActivate, GolemRpcWasmRpcInvoke,
-    GolemRpcWasmRpcInvokeAndAwaitResult, GolemRpcWasmRpcNew, GolemRpcWasmRpcScheduleInvocation,
+    GolemRpcCancellationTokenCancel, GolemRpcWasmRpcActivate, GolemRpcWasmRpcAsyncInvokeRejection,
+    GolemRpcWasmRpcDrop, GolemRpcWasmRpcInvoke, GolemRpcWasmRpcInvokeAndAwaitResult,
+    GolemRpcWasmRpcNew, GolemRpcWasmRpcScheduleInvocation,
 };
 use golem_common::model::oplog::types::{SerializableRpcError, SerializableScheduleId};
+use golem_common::model::oplog::{AttributeMap, SpanFinished, SpanKind, SpanOutcome, SpanStarted};
 use golem_common::model::oplog::{
     DurableFunctionType, HostPayloadPair, HostRequest, HostRequestGolemRpcActivate,
-    HostRequestGolemRpcInvoke, HostRequestGolemRpcScheduledInvocation,
+    HostRequestGolemRpcAsyncInvokeRejection, HostRequestGolemRpcInvoke,
+    HostRequestGolemRpcResource, HostRequestGolemRpcScheduledInvocation,
     HostRequestGolemRpcScheduledInvocationCancellation, HostResponseGolemRpcActivate,
     HostResponseGolemRpcCreate, HostResponseGolemRpcInvokeAndAwait,
     HostResponseGolemRpcScheduledInvocationCompat, HostResponseGolemRpcUnit,
@@ -88,6 +92,7 @@ use golem_schema::schema::wit::wire as core_wire;
 use golem_schema::schema::{NamedFieldType, SchemaGraph, SchemaType};
 use std::any::Any;
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use std::time::Duration;
@@ -148,7 +153,7 @@ pub struct CancellationTokenEntry {
 
 struct OutboundRpcDenial {
     error: RpcError,
-    activation_decision: Option<OplogIndex>,
+    activation_decision: Option<IdempotencyKey>,
 }
 
 enum RpcTargetAdmission {
@@ -414,7 +419,6 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let config = decoded_config;
         self.check_read_only_allows("golem::rpc::wasm-rpc::new")
             .map_err(wasmtime::Error::from)?;
-        let span = create_rpc_connection_span(self, &remote_agent_id).await?;
         let pinned_ephemeral_identity =
             agent_mode == AgentMode::Ephemeral && agent_id.phantom_id.is_some();
 
@@ -431,14 +435,15 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             let mut logical_remote_agent_id =
                 OwnedAgentId::new(self.owned_agent_id.environment_id, &logical_remote_agent_id);
 
-            let mut handle = DurableCallSession::<GolemRpcWasmRpcNew, NotCancellable>::start(
+            let (mut handle, span) = start_rpc_connection_call(
                 self,
                 HostRequestGolemRpcCreate {
                     remote_agent_id: remote_agent_id.clone(),
                 },
-                DurableFunctionType::WriteRemote,
+                false,
             )
             .await?;
+            let creation_index = (!self.state.snapshotting_mode).then(|| handle.start_index());
             if !handle.is_live() {
                 match handle.replay(self).await? {
                     CallReplayOutcome::Replayed(response) => {
@@ -480,19 +485,20 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 remote_method_streams,
                 component_revision,
                 remote_owner,
+                creation_index,
             )
             .map(Ok);
         }
 
-        let handle =
-            DurableCallSession::<GolemRpcWasmRpcNew, NotCancellable>::start_with_agent_authority(
-                self,
-                HostRequestGolemRpcCreate {
-                    remote_agent_id: remote_agent_id.clone(),
-                },
-                DurableFunctionType::WriteRemote,
-            )
-            .await?;
+        let (handle, span) = start_rpc_connection_call(
+            self,
+            HostRequestGolemRpcCreate {
+                remote_agent_id: remote_agent_id.clone(),
+            },
+            true,
+        )
+        .await?;
+        let creation_index = (!self.state.snapshotting_mode).then(|| handle.start_index());
 
         if !handle.is_live() {
             match handle.replay(self).await? {
@@ -510,6 +516,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                         component_revision,
                         remote_owner,
                         pinned_ephemeral_identity,
+                        creation_index,
                     )
                     .await
                     .map(Ok);
@@ -527,6 +534,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                         component_revision,
                         remote_owner,
                         pinned_ephemeral_identity,
+                        creation_index,
                     )
                     .await
                     .map(Ok);
@@ -546,6 +554,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             component_revision,
             remote_owner,
             pinned_ephemeral_identity,
+            creation_index,
         )
         .await
         .map(Ok)
@@ -642,8 +651,19 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     let request_atomic_key = atomic_key.clone();
                     let request_scope_card = scope_card.clone();
                     let request_streaming_origin = live_streaming_origin.clone();
+                    let connection_origin = self
+                        .state
+                        .invocation_context
+                        .span_origin(&prepared.connection_span_id)
+                        .ok_or_else(|| {
+                            WorkerExecutorError::runtime("RPC connection span has no trace origin")
+                        })?;
+                    let trace_id = self.state.invocation_context.trace_id.clone();
+                    let trace_states = self.state.invocation_context.trace_states.clone();
+                    let current_span_id = self.state.current_span_id.clone();
+                    let request_connection_span_id = prepared.connection_span_id.clone();
                     begun
-                        .start_live_with_index(self, move |start_index| {
+                        .start_live_with_index_and_span(self, move |start_index| {
                             let idempotency_key = request_atomic_key.unwrap_or_else(|| {
                                 IdempotencyKey::derived(&request_parent_key, start_index)
                             });
@@ -653,11 +673,23 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                                 &idempotency_key,
                             )
                             .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
-                            Ok(request_prepared.invoke_request(
-                                &remote_agent_id,
+                            let started = embedded_invocation_span_started(
+                                &trace_id,
+                                &trace_states,
+                                &current_span_id,
+                                &request_connection_span_id,
+                                connection_origin,
+                                &request_prepared.method_name,
                                 &idempotency_key,
-                                request_scope_card.as_ref(),
-                                Some(request_streaming_origin),
+                            );
+                            Ok((
+                                request_prepared.invoke_request(
+                                    &remote_agent_id,
+                                    &idempotency_key,
+                                    request_scope_card.as_ref(),
+                                    Some(request_streaming_origin),
+                                ),
+                                started,
                             ))
                         })
                         .await?
@@ -671,20 +703,31 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 &idempotency_key,
             )?;
             let metadata = invocation_metadata(&remote_agent_id, &idempotency_key);
-            let span = match create_invocation_span(
-                self,
-                &prepared.connection_span_id,
-                &prepared.method_name,
-                &idempotency_key,
-            )
-            .await
+            if !handle.is_live()
+                && let Some(details) = handle.recorded_request(self).await?.local_denial
             {
-                Ok(span) => span,
-                Err(err) => {
-                    handle.abandon_for_trap();
-                    return Err(err);
-                }
-            };
+                replay_local_rpc_denial(
+                    self,
+                    handle,
+                    HostResponseGolemRpcInvokeAndAwait {
+                        result: Err(SerializableRpcError::Denied {
+                            details: details.clone(),
+                        }),
+                    },
+                )
+                .await?;
+                return Ok(Err(RpcError::Denied(details)));
+            }
+            let started = handle.recorded_span_started(self).await?.ok_or_else(|| {
+                WorkerExecutorError::unexpected_oplog_entry(
+                    "streaming RPC Start carrying span_started",
+                    format!(
+                        "streaming RPC Start at {} without span metadata",
+                        handle.start_index()
+                    ),
+                )
+            })?;
+            let span = restore_embedded_span(self, &started)?;
             if self.is_live() && !handle.is_live() {
                 handle = match handle.replay(self).await? {
                     CallReplayOutcome::Incomplete(handle) => handle,
@@ -758,7 +801,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                                 .unwrap_or(scalar)),
                             Err(error) => Err(InternalRpcError::from(error)),
                         };
-                        self.finish_span(span.span_id()).await?;
+                        finish_span_in_memory(self, span.span_id())?;
                         return match result {
                             Ok(value) => Ok(Ok(InvocationResultWithMetadata {
                                 metadata,
@@ -867,15 +910,17 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 }
                 Err(error) => Err(error),
             };
+            let span_finished = rpc_span_finished(span.span_id(), &result);
             handle
-                .complete(
+                .complete_with_span(
                     self,
                     HostResponseGolemRpcInvokeAndAwait {
                         result: result.clone().map(strip_streams).map_err(Into::into),
                     },
+                    span_finished,
                 )
                 .await?;
-            self.finish_span(span.span_id()).await?;
+            finish_span_in_memory(self, span.span_id())?;
             return match result {
                 Ok(value) => Ok(Ok(InvocationResultWithMetadata {
                     metadata,
@@ -924,42 +969,42 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             None,
         );
         let dispatched_scope_card = request.scope_card.clone();
-        let mut handle = match call {
-            Either::Left(begun) => begun.start_live(self, request).await?,
-            Either::Right(handle) => handle,
-        };
-        // Local denials have no span. A retained Start alone must pass incomplete-call
-        // recovery before creating its missing span. Otherwise reconstruct StartSpan before
-        // awaiting End: the terminal cannot pass this call's own positional entry.
-        if !handle.is_live() && handle.replay_ready(self).await? {
-            handle = match handle.replay(self).await? {
-                CallReplayOutcome::Incomplete(live) => live,
-                CallReplayOutcome::Replayed(persisted) => {
-                    return match persisted.result {
-                        Err(SerializableRpcError::Denied { details }) => {
-                            Ok(Err(RpcError::Denied(details)))
-                        }
-                        other => Err(WorkerExecutorError::unexpected_oplog_entry(
-                            "local RPC denial before invocation span",
-                            format!("{other:?}"),
-                        )
-                        .into()),
-                    };
+        // Local denials have no span and retain their plain Start/End contract.
+        let (handle, span) = match call {
+            Either::Left(begun) => {
+                let (span, started) = create_embedded_invocation_span(
+                    self,
+                    &prepared.connection_span_id,
+                    &prepared.method_name,
+                    &idempotency_key,
+                )?;
+                let handle = begun.start_live_with_span(self, request, started).await?;
+                (handle, span)
+            }
+            Either::Right(handle) => {
+                if let Some(details) = handle.recorded_request(self).await?.local_denial {
+                    replay_local_rpc_denial(
+                        self,
+                        handle,
+                        HostResponseGolemRpcInvokeAndAwait {
+                            result: Err(SerializableRpcError::Denied {
+                                details: details.clone(),
+                            }),
+                        },
+                    )
+                    .await?;
+                    return Ok(Err(RpcError::Denied(details)));
                 }
-            };
-        }
-        let span = match create_invocation_span(
-            self,
-            &prepared.connection_span_id,
-            &prepared.method_name,
-            &idempotency_key,
-        )
-        .await
-        {
-            Ok(span) => span,
-            Err(err) => {
-                handle.abandon_for_trap();
-                return Err(err);
+                let started = handle.recorded_span_started(self).await?.ok_or_else(|| {
+                    WorkerExecutorError::unexpected_oplog_entry(
+                        "dispatched RPC Start carrying span_started",
+                        format!(
+                            "RPC Start at {} without span metadata",
+                            handle.start_index()
+                        ),
+                    )
+                })?;
+                (handle, restore_embedded_span(self, &started)?)
             }
         };
         match run_invoke_and_await(
@@ -1064,37 +1109,43 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         )?;
         let metadata = invocation_metadata(&remote_agent_id, &idempotency_key);
         let request = prepared.invoke_request(&remote_agent_id, &idempotency_key, None, None);
-        let mut handle = match call {
-            Either::Left(begun) => begun.start_live(self, request).await?,
-            Either::Right(handle) => handle,
-        };
-        // A committed Start may be the entire replay tail, before StartSpan was appended.
-        // Resolve that incomplete call through the normal eligibility and live-admission checks
-        // before creating its missing span. With recorded history remaining, reconstruct the span
-        // first: waiting for End here would block on the unconsumed StartSpan.
-        if !handle.is_live() && self.state.replay_state.is_live() {
-            handle = match handle.replay(self).await? {
-                CallReplayOutcome::Incomplete(live) => live,
-                CallReplayOutcome::Replayed(response) => {
-                    return Ok(response
-                        .result
-                        .map(|()| metadata)
-                        .map_err(|err| RpcError::from(InternalRpcError::from(err))));
+        let (handle, span) = match call {
+            Either::Left(begun) => {
+                let (span, started) = create_embedded_invocation_span(
+                    self,
+                    &prepared.connection_span_id,
+                    &prepared.method_name,
+                    &idempotency_key,
+                )?;
+                (
+                    begun.start_live_with_span(self, request, started).await?,
+                    span,
+                )
+            }
+            Either::Right(handle) => {
+                if let Some(details) = handle.recorded_request(self).await?.local_denial {
+                    replay_local_rpc_denial(
+                        self,
+                        handle,
+                        HostResponseGolemRpcUnitOrFailure {
+                            result: Err(SerializableRpcError::Denied {
+                                details: details.clone(),
+                            }),
+                        },
+                    )
+                    .await?;
+                    return Ok(Err(RpcError::Denied(details)));
                 }
-            };
-        }
-        let span = match create_invocation_span(
-            self,
-            &prepared.connection_span_id,
-            &prepared.method_name,
-            &idempotency_key,
-        )
-        .await
-        {
-            Ok(span) => span,
-            Err(err) => {
-                handle.abandon_for_trap();
-                return Err(err);
+                let started = handle.recorded_span_started(self).await?.ok_or_else(|| {
+                    WorkerExecutorError::unexpected_oplog_entry(
+                        "fire-and-forget RPC Start carrying span_started",
+                        format!(
+                            "RPC Start at {} without span metadata",
+                            handle.start_index()
+                        ),
+                    )
+                })?;
+                (handle, restore_embedded_span(self, &started)?)
             }
         };
         match run_invoke(
@@ -1165,45 +1216,22 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             ));
         }
 
-        // Resolve the method and lift the input before opening any durability. Failures here are
-        // deterministic functions of the cached remote agent type and the guest payload, so they
-        // are baked into the future's result and surfaced on the first `get` — without opening a
-        // durable host call. Live and replay agree because the resolution is pure and no oplog
-        // entry (beyond the invocation span) is written for it.
+        // Resolve the method and lift the input before opening the remote invocation. A rejection
+        // is recorded as its own short local operation so its invocation span closes when the
+        // rejected attempt is produced, independently of whether the baked future is consumed.
         let input_value =
             match resolve_method_and_lift_input(&remote_agent_type, &method_name, input, self) {
                 Ok(parts) => parts,
                 Err(rpc_error) => {
-                    // The method/input could not be resolved, so no remote call is dispatched. The
-                    // idempotency key is informational only and is derived from the current oplog
-                    // index; it exists solely to label the invocation span.
-                    let oplog_index = self.state.oplog.current_oplog_index().await;
-                    let idempotency_key = self.derive_idempotency_key(oplog_index);
-                    let remote_agent_id = invocation_target_agent_id(
-                        &logical_remote_agent_id,
-                        ephemeral_logical_agent_id.as_ref(),
-                        &idempotency_key,
-                    )?;
-                    let metadata = invocation_metadata(&remote_agent_id, &idempotency_key);
-                    let span = create_invocation_span(
+                    return persist_async_validation_rejection(
                         self,
                         &connection_span_id,
+                        &logical_remote_agent_id,
+                        ephemeral_logical_agent_id.as_ref(),
                         &method_name,
-                        &idempotency_key,
+                        rpc_error,
                     )
-                    .await?;
-                    let fut = self.table().push(FutureInvokeResultEntry {
-                        payload: Box::new(FutureInvokeResultState::Baked {
-                            result: Ok(Err(rpc_error)),
-                            span_id: span.span_id().clone(),
-                        }),
-                        child_pollables: Vec::new(),
-                        drop_pending: false,
-                    })?;
-                    return Ok(AsyncInvocationWithMetadata {
-                        future: fut,
-                        metadata,
-                    });
+                    .await;
                 }
             };
         let method = find_agent_method(&remote_agent_type, &method_name)?;
@@ -1219,14 +1247,13 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         {
             Ok(admission) => admission,
             Err(denial) => {
-                if let Some(begin_index) = denial.activation_decision {
+                if let Some(idempotency_key) = denial.activation_decision {
                     return bake_recorded_async_invoke_denial(
                         self,
                         &this,
                         &logical_remote_agent_id,
-                        &method_name,
                         denial.error,
-                        begin_index,
+                        idempotency_key,
                     )
                     .await;
                 }
@@ -1281,8 +1308,19 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     let request_input = strip_streams(input_value.clone());
                     let request_scope_card = scope_card.clone();
                     let request_streaming_origin = live_streaming_origin.clone();
+                    let connection_origin = self
+                        .state
+                        .invocation_context
+                        .span_origin(&connection_span_id)
+                        .ok_or_else(|| {
+                            WorkerExecutorError::runtime("RPC connection span has no trace origin")
+                        })?;
+                    let trace_id = self.state.invocation_context.trace_id.clone();
+                    let trace_states = self.state.invocation_context.trace_states.clone();
+                    let current_span_id = self.state.current_span_id.clone();
+                    let request_connection_span_id = connection_span_id.clone();
                     begun
-                        .start_live_with_index(self, move |start_index| {
+                        .start_live_with_index_and_span(self, move |start_index| {
                             let idempotency_key = request_atomic_key.unwrap_or_else(|| {
                                 IdempotencyKey::derived(&request_parent_key, start_index)
                             });
@@ -1292,16 +1330,29 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                                 &idempotency_key,
                             )
                             .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
-                            Ok(HostRequestGolemRpcInvoke {
-                                remote_agent_id: remote_agent_id.agent_id(),
-                                idempotency_key,
-                                method_name: request_method_name,
-                                input: request_input,
-                                logical_streaming_origin: Some(request_streaming_origin),
-                                remote_agent_type: None,
-                                remote_agent_parameters: None,
-                                scope_card: request_scope_card,
-                            })
+                            let started = embedded_invocation_span_started(
+                                &trace_id,
+                                &trace_states,
+                                &current_span_id,
+                                &request_connection_span_id,
+                                connection_origin,
+                                &request_method_name,
+                                &idempotency_key,
+                            );
+                            Ok((
+                                HostRequestGolemRpcInvoke {
+                                    remote_agent_id: remote_agent_id.agent_id(),
+                                    idempotency_key,
+                                    method_name: request_method_name,
+                                    input: request_input,
+                                    local_denial: None,
+                                    logical_streaming_origin: Some(request_streaming_origin),
+                                    remote_agent_type: None,
+                                    remote_agent_parameters: None,
+                                    scope_card: request_scope_card,
+                                },
+                                started,
+                            ))
                         })
                         .await?
                 }
@@ -1315,9 +1366,39 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 &idempotency_key,
             )?;
             let metadata = invocation_metadata(&remote_agent_id, &idempotency_key);
-            let span =
-                create_invocation_span(self, &connection_span_id, &method_name, &idempotency_key)
-                    .await?;
+            if !handle.is_live()
+                && let request = handle.recorded_request(self).await?
+                && let Some(details) = request.local_denial
+            {
+                let metadata = invocation_metadata(
+                    &OwnedAgentId::new(
+                        self.owned_agent_id.environment_id,
+                        &request.remote_agent_id,
+                    ),
+                    &request.idempotency_key,
+                );
+                replay_local_rpc_denial(
+                    self,
+                    handle,
+                    HostResponseGolemRpcInvokeAndAwait {
+                        result: Err(SerializableRpcError::Denied {
+                            details: details.clone(),
+                        }),
+                    },
+                )
+                .await?;
+                return bake_closed_async_denial(self, metadata, details);
+            }
+            let started = handle.recorded_span_started(self).await?.ok_or_else(|| {
+                WorkerExecutorError::unexpected_oplog_entry(
+                    "streaming RPC Start carrying span_started",
+                    format!(
+                        "streaming RPC Start at {} without span metadata",
+                        handle.start_index()
+                    ),
+                )
+            })?;
+            let span = restore_embedded_span(self, &started)?;
             if self.is_live() && !handle.is_live() {
                 handle = match handle.replay(self).await? {
                     CallReplayOutcome::Incomplete(handle) => handle,
@@ -1348,6 +1429,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 idempotency_key: idempotency_key.clone(),
                 method_name: method_name.clone(),
                 input: strip_streams(input_value.clone()),
+                local_denial: None,
                 logical_streaming_origin: Some(logical_streaming_origin.clone()),
                 remote_agent_type: None,
                 remote_agent_parameters: None,
@@ -1500,7 +1582,30 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 }
                 Either::Left(begun)
             }
-            ResolvedCall::Replay(handle) => Either::Right(handle),
+            ResolvedCall::Replay(handle) => {
+                let request = handle.recorded_request(self).await?;
+                if let Some(details) = request.local_denial {
+                    let metadata = invocation_metadata(
+                        &OwnedAgentId::new(
+                            self.owned_agent_id.environment_id,
+                            &request.remote_agent_id,
+                        ),
+                        &request.idempotency_key,
+                    );
+                    replay_local_rpc_denial(
+                        self,
+                        handle,
+                        HostResponseGolemRpcInvokeAndAwait {
+                            result: Err(SerializableRpcError::Denied {
+                                details: details.clone(),
+                            }),
+                        },
+                    )
+                    .await?;
+                    return bake_closed_async_denial(self, metadata, details);
+                }
+                Either::Right(handle)
+            }
         };
         let begin_index = match &call {
             Either::Left(begun) => begun.begin_index(),
@@ -1522,15 +1627,36 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         }
         let metadata = invocation_metadata(&remote_agent_id, &idempotency_key);
 
-        let span =
-            create_invocation_span(self, &connection_span_id, &method_name, &idempotency_key)
-                .await?;
+        let (span, span_started) = match &call {
+            Either::Left(_) => {
+                let (span, started) = create_embedded_invocation_span(
+                    self,
+                    &connection_span_id,
+                    &method_name,
+                    &idempotency_key,
+                )?;
+                (span, Some(started))
+            }
+            Either::Right(handle) => {
+                let started = handle.recorded_span_started(self).await?.ok_or_else(|| {
+                    WorkerExecutorError::unexpected_oplog_entry(
+                        "RPC Start carrying span_started",
+                        format!(
+                            "RPC Start at {} without span metadata",
+                            handle.start_index()
+                        ),
+                    )
+                })?;
+                (restore_embedded_span(self, &started)?, None)
+            }
+        };
 
         let request = HostRequestGolemRpcInvoke {
             remote_agent_id: remote_agent_id.agent_id(),
             idempotency_key: idempotency_key.clone(),
             method_name: method_name.clone(),
             input: input_value.clone(),
+            local_denial: None,
             logical_streaming_origin: None,
             remote_agent_type: None,
             remote_agent_parameters: None,
@@ -1541,14 +1667,21 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             let Either::Left(begun) = call else {
                 unreachable!()
             };
-            let mut handle = match begun.start_live(self, request.clone()).await {
+            let mut handle = match begun
+                .start_live_with_span(
+                    self,
+                    request.clone(),
+                    span_started.expect("live RPC has opening span metadata"),
+                )
+                .await
+            {
                 Ok(handle) => handle,
                 Err(err) => {
                     // The eager `Start` could not be written; close any durable scope opened by
                     // `begin` and finish the span so no half-open call is left behind.
                     self.end_function(&DurableFunctionType::WriteRemote, begin_index)
                         .await?;
-                    self.finish_span(span.span_id()).await?;
+                    finish_span_in_memory(self, span.span_id())?;
                     return Err(err.into());
                 }
             };
@@ -1698,12 +1831,61 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
     }
 
     async fn drop(&mut self, rep: Resource<WasmRpcEntry>) -> anyhow::Result<()> {
-        self.observe_function_call("golem::rpc::wasm-rpc", "drop");
-
         let entry = self.table().delete(rep)?;
         let payload = entry.payload.downcast::<WasmRpcEntryPayload>();
         if let Ok(payload) = payload {
-            self.finish_span(&payload.span_id).await?;
+            let Some(creation_index) = payload.creation_index else {
+                finish_span_in_memory(self, &payload.span_id)?;
+                return Ok(());
+            };
+            let request = HostRequestGolemRpcResource { creation_index };
+            // This record observes guest resource cleanup, not an application write;
+            // cleanup remains permitted in read-only invocations.
+            let begun = DurableCallSession::<GolemRpcWasmRpcDrop, NotCancellable>::begin(
+                self,
+                DurableFunctionType::ReadLocal,
+            )
+            .await?;
+            let mut handle = match begun
+                .matching_request(request.clone())
+                .resolve(self)
+                .await?
+            {
+                ResolvedCall::Live(begun) => begun.start_live(self, request).await?,
+                ResolvedCall::Replay(handle) => handle,
+            };
+            if handle.is_live() {
+                handle
+                    .complete_with_span(
+                        self,
+                        HostResponseGolemRpcUnit {},
+                        SpanFinished {
+                            span_id: payload.span_id.clone(),
+                            finished_at: golem_common::model::Timestamp::now_utc(),
+                            outcome: SpanOutcome::Completed,
+                        },
+                    )
+                    .await?;
+            } else {
+                match handle.replay(self).await? {
+                    CallReplayOutcome::Replayed(_) => {}
+                    CallReplayOutcome::Incomplete(live) => {
+                        handle = live;
+                        handle
+                            .complete_with_span(
+                                self,
+                                HostResponseGolemRpcUnit {},
+                                SpanFinished {
+                                    span_id: payload.span_id.clone(),
+                                    finished_at: golem_common::model::Timestamp::now_utc(),
+                                    outcome: SpanOutcome::Completed,
+                                },
+                            )
+                            .await?;
+                    }
+                }
+            }
+            finish_span_in_memory(self, &payload.span_id)?;
         }
 
         Ok(())
@@ -1816,6 +1998,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let begin_index = begun.begin_index();
         let mut handle;
         let decision;
+        let mut rejection_span = None;
 
         match begun.resolve(self).await? {
             ResolvedCall::Live(begun) => {
@@ -1825,16 +2008,46 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     .map_err(|error| SerializableRpcError::Denied {
                         details: error.to_string(),
                     });
-                handle = begun
-                    .start_live(
+                if decision.is_err() {
+                    let connection_span_id = self
+                        .table()
+                        .get(rpc_resource)?
+                        .payload
+                        .downcast_ref::<WasmRpcEntryPayload>()
+                        .ok_or_else(|| anyhow::anyhow!("invalid RPC resource payload"))?
+                        .span_id
+                        .clone();
+                    let idempotency_key = self.derive_idempotency_key(begin_index);
+                    let (span, started) = create_embedded_invocation_span(
                         self,
-                        HostRequestGolemRpcActivate {
-                            remote_agent_id: remote_agent_id.agent_id(),
-                            method_name: method_name.to_string(),
-                            decision: decision.clone(),
-                        },
-                    )
-                    .await?;
+                        &connection_span_id,
+                        method_name,
+                        &idempotency_key,
+                    )?;
+                    rejection_span = Some((span, idempotency_key));
+                    handle = begun
+                        .start_live_with_span(
+                            self,
+                            HostRequestGolemRpcActivate {
+                                remote_agent_id: remote_agent_id.agent_id(),
+                                method_name: method_name.to_string(),
+                                decision: decision.clone(),
+                            },
+                            started,
+                        )
+                        .await?;
+                } else {
+                    handle = begun
+                        .start_live(
+                            self,
+                            HostRequestGolemRpcActivate {
+                                remote_agent_id: remote_agent_id.agent_id(),
+                                method_name: method_name.to_string(),
+                                decision: decision.clone(),
+                            },
+                        )
+                        .await?;
+                }
             }
             ResolvedCall::Replay(replay) => match replay.replay(self).await? {
                 CallReplayOutcome::Replayed(response) => {
@@ -1845,7 +2058,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         }
                         Err(error) => Ok(Err(OutboundRpcDenial {
                             error: InternalRpcError::from(error).into(),
-                            activation_decision: Some(begin_index),
+                            activation_decision: Some(self.derive_idempotency_key(begin_index)),
                         })),
                     };
                 }
@@ -1854,6 +2067,20 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         .load_recorded_rpc_activation_request(live.start_index())
                         .await?;
                     decision = recorded.decision;
+                    if decision.is_err() {
+                        let started = live.recorded_span_started(self).await?.ok_or_else(|| {
+                            WorkerExecutorError::unexpected_oplog_entry(
+                                "denied RPC activation Start carrying span_started",
+                                format!(
+                                    "activation Start at {} without span metadata",
+                                    live.start_index()
+                                ),
+                            )
+                        })?;
+                        let idempotency_key = self.derive_idempotency_key(begin_index);
+                        rejection_span =
+                            Some((restore_embedded_span(self, &started)?, idempotency_key));
+                    }
                     handle = live;
                 }
             },
@@ -1864,8 +2091,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 SerializableRpcError::Denied { details } => RpcError::Denied(details),
                 other => InternalRpcError::from(other).into(),
             };
+            let (span, idempotency_key) =
+                rejection_span.expect("denied activation has an opening span and a reserved key");
             handle
-                .complete(
+                .complete_with_span(
                     self,
                     HostResponseGolemRpcActivate {
                         result: Err(match &error {
@@ -1875,11 +2104,17 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             _ => unreachable!("RPC activation authorization only records denial"),
                         }),
                     },
+                    SpanFinished {
+                        span_id: span.span_id().clone(),
+                        finished_at: golem_common::model::Timestamp::now_utc(),
+                        outcome: SpanOutcome::Denied,
+                    },
                 )
                 .await?;
+            finish_span_in_memory(self, span.span_id())?;
             return Ok(Err(OutboundRpcDenial {
                 error,
-                activation_decision: Some(begin_index),
+                activation_decision: Some(idempotency_key),
             }));
         }
 
@@ -2282,14 +2517,15 @@ fn denied_rpc_request(
     remote_agent_id: &OwnedAgentId,
     idempotency_key: &IdempotencyKey,
     method_name: String,
+    details: String,
 ) -> HostRequestGolemRpcInvoke {
     HostRequestGolemRpcInvoke {
         remote_agent_id: remote_agent_id.agent_id(),
         idempotency_key: idempotency_key.clone(),
         method_name,
-        // A denied request records only a structurally valid placeholder. The durable response is
-        // authoritative and no invocation is dispatched, so the decoded input need not be stored.
+        // The recorded denial forbids dispatch even if recovery retains only the Start.
         input: SchemaValue::Tuple { elements: vec![] },
+        local_denial: Some(details),
         logical_streaming_origin: None,
         remote_agent_type: None,
         remote_agent_parameters: None,
@@ -2302,6 +2538,55 @@ fn rpc_denied_details(error: RpcError) -> String {
         RpcError::Denied(details) => details,
         _ => unreachable!("authorization only returns denied RPC errors"),
     }
+}
+
+async fn replay_local_rpc_denial<Pair, P, Ctx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    handle: DurableCallSession<Pair, P>,
+    expected: Pair::Resp,
+) -> anyhow::Result<()>
+where
+    Pair: HostPayloadPair,
+    Pair::Resp: PartialEq + Debug,
+    P: DropPolicy,
+    Ctx: WorkerCtx,
+{
+    let started = handle.recorded_span_started(ctx).await?;
+    let span = started
+        .as_ref()
+        .map(|started| restore_embedded_span(ctx, started))
+        .transpose()?;
+    match handle.replay(ctx).await? {
+        CallReplayOutcome::Replayed(response) if response == expected => {}
+        CallReplayOutcome::Replayed(response) => {
+            return Err(WorkerExecutorError::unexpected_oplog_entry(
+                format!("recorded local RPC denial {expected:?}"),
+                format!("{response:?}"),
+            )
+            .into());
+        }
+        CallReplayOutcome::Incomplete(handle) => {
+            if let Some(span) = &span {
+                handle
+                    .complete_with_span(
+                        ctx,
+                        expected,
+                        SpanFinished {
+                            span_id: span.span_id().clone(),
+                            finished_at: golem_common::model::Timestamp::now_utc(),
+                            outcome: SpanOutcome::Denied,
+                        },
+                    )
+                    .await?;
+            } else {
+                handle.complete(ctx, expected).await?;
+            }
+        }
+    }
+    if let Some(span) = span {
+        finish_span_in_memory(ctx, span.span_id())?;
+    }
+    Ok(())
 }
 
 async fn persist_invoke_and_await_denial<Ctx: WorkerCtx>(
@@ -2337,7 +2622,12 @@ async fn persist_invoke_and_await_denial_from_begun<Ctx: WorkerCtx>(
     let details = rpc_denied_details(error);
     let idempotency_key =
         reserved_idempotency_key.unwrap_or_else(|| ctx.derive_idempotency_key(begun.begin_index()));
-    let request = denied_rpc_request(&remote_agent_id, &idempotency_key, method_name);
+    let request = denied_rpc_request(
+        &remote_agent_id,
+        &idempotency_key,
+        method_name,
+        details.clone(),
+    );
     begun
         .start_live(ctx, request)
         .await?
@@ -2376,7 +2666,12 @@ async fn persist_invoke_denial_from_begun<Ctx: WorkerCtx>(
 ) -> anyhow::Result<Result<InvocationMetadata, RpcError>> {
     let details = rpc_denied_details(error);
     let idempotency_key = ctx.derive_idempotency_key(begun.begin_index());
-    let request = denied_rpc_request(&remote_agent_id, &idempotency_key, method_name);
+    let request = denied_rpc_request(
+        &remote_agent_id,
+        &idempotency_key,
+        method_name,
+        details.clone(),
+    );
     begun
         .start_live(ctx, request)
         .await?
@@ -2416,6 +2711,115 @@ async fn persist_async_invoke_denial<Ctx: WorkerCtx>(
     .await
 }
 
+async fn persist_async_validation_rejection<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    connection_span_id: &SpanId,
+    logical_remote_agent_id: &OwnedAgentId,
+    ephemeral_logical_agent_id: Option<&ParsedAgentId>,
+    method_name: &str,
+    error: InternalRpcError,
+) -> anyhow::Result<AsyncInvocationWithMetadata> {
+    let begun = DurableCallSession::<GolemRpcWasmRpcAsyncInvokeRejection, NotCancellable>::begin(
+        ctx,
+        DurableFunctionType::WriteLocal,
+    )
+    .await?;
+    let idempotency_key = ctx.derive_idempotency_key(begun.begin_index());
+    let remote_agent_id = invocation_target_agent_id(
+        logical_remote_agent_id,
+        ephemeral_logical_agent_id,
+        &idempotency_key,
+    )?;
+    let metadata = invocation_metadata(&remote_agent_id, &idempotency_key);
+    let serializable_error: SerializableRpcError = error.clone().into();
+    let request = HostRequestGolemRpcAsyncInvokeRejection {
+        remote_agent_id: remote_agent_id.agent_id(),
+        idempotency_key: idempotency_key.clone(),
+        method_name: method_name.to_string(),
+        error: serializable_error.clone(),
+    };
+    let expected = HostResponseGolemRpcInvokeAndAwait {
+        result: Err(serializable_error),
+    };
+    let mut handle = match begun.matching_request(request.clone()).resolve(ctx).await? {
+        ResolvedCall::Live(begun) => {
+            let (span, started) = create_embedded_invocation_span(
+                ctx,
+                connection_span_id,
+                method_name,
+                &idempotency_key,
+            )?;
+            begun
+                .start_live_with_span(ctx, request, started)
+                .await?
+                .complete_with_span(
+                    ctx,
+                    expected,
+                    SpanFinished {
+                        span_id: span.span_id().clone(),
+                        finished_at: golem_common::model::Timestamp::now_utc(),
+                        outcome: SpanOutcome::Failed,
+                    },
+                )
+                .await?;
+            finish_span_in_memory(ctx, span.span_id())?;
+            return bake_closed_async_error(ctx, metadata, error);
+        }
+        ResolvedCall::Replay(handle) => handle,
+    };
+    let started = handle.recorded_span_started(ctx).await?.ok_or_else(|| {
+        WorkerExecutorError::unexpected_oplog_entry(
+            "async RPC validation rejection Start carrying span_started",
+            format!(
+                "rejection Start at {} without span metadata",
+                handle.start_index()
+            ),
+        )
+    })?;
+    let span = restore_embedded_span(ctx, &started)?;
+    match handle.replay(ctx).await? {
+        CallReplayOutcome::Replayed(response) if response == expected => {}
+        CallReplayOutcome::Replayed(response) => {
+            return Err(WorkerExecutorError::unexpected_oplog_entry(
+                format!("async RPC validation rejection {expected:?}"),
+                format!("{response:?}"),
+            )
+            .into());
+        }
+        CallReplayOutcome::Incomplete(live) => {
+            handle = live;
+            handle
+                .complete_with_span(
+                    ctx,
+                    expected,
+                    SpanFinished {
+                        span_id: span.span_id().clone(),
+                        finished_at: golem_common::model::Timestamp::now_utc(),
+                        outcome: SpanOutcome::Failed,
+                    },
+                )
+                .await?;
+        }
+    }
+    finish_span_in_memory(ctx, span.span_id())?;
+    bake_closed_async_error(ctx, metadata, error)
+}
+
+fn bake_closed_async_error<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    metadata: InvocationMetadata,
+    error: InternalRpcError,
+) -> anyhow::Result<AsyncInvocationWithMetadata> {
+    let future = ctx.table().push(FutureInvokeResultEntry {
+        payload: Box::new(FutureInvokeResultState::Baked {
+            result: Ok(Err(error)),
+        }),
+        child_pollables: Vec::new(),
+        drop_pending: false,
+    })?;
+    Ok(AsyncInvocationWithMetadata { future, metadata })
+}
+
 async fn persist_async_invoke_denial_from_begun<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     begun: BegunCall<GolemRpcWasmRpcInvokeAndAwaitResult, Cancellable>,
@@ -2446,36 +2850,43 @@ async fn persist_async_invoke_denial_from_begun<Ctx: WorkerCtx>(
         &idempotency_key,
     )?;
     let metadata = invocation_metadata(&remote_agent_id, &idempotency_key);
-    let request = denied_rpc_request(&remote_agent_id, &idempotency_key, method_name.clone());
-    let mut handle = begun.start_live(ctx, request).await?;
-    let span = match create_invocation_span(
-        ctx,
-        &connection_span_id,
-        &method_name,
+    let request = denied_rpc_request(
+        &remote_agent_id,
         &idempotency_key,
-    )
-    .await
-    {
-        Ok(span) => span,
-        Err(error) => {
-            handle.abandon_for_trap();
-            return Err(error);
-        }
-    };
-    handle
-        .complete(
+        method_name.clone(),
+        details.clone(),
+    );
+    let (span, started) =
+        create_embedded_invocation_span(ctx, &connection_span_id, &method_name, &idempotency_key)?;
+    begun
+        .start_live_with_span(ctx, request, started)
+        .await?
+        .complete_with_span(
             ctx,
             HostResponseGolemRpcInvokeAndAwait {
                 result: Err(SerializableRpcError::Denied {
                     details: details.clone(),
                 }),
             },
+            SpanFinished {
+                span_id: span.span_id().clone(),
+                finished_at: golem_common::model::Timestamp::now_utc(),
+                outcome: SpanOutcome::Denied,
+            },
         )
         .await?;
+    finish_span_in_memory(ctx, span.span_id())?;
+    bake_closed_async_denial(ctx, metadata, details)
+}
+
+fn bake_closed_async_denial<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    metadata: InvocationMetadata,
+    details: String,
+) -> anyhow::Result<AsyncInvocationWithMetadata> {
     let future = ctx.table().push(FutureInvokeResultEntry {
         payload: Box::new(FutureInvokeResultState::Baked {
             result: Ok(Err(InternalRpcError::Denied { details })),
-            span_id: span.span_id().clone(),
         }),
         child_pollables: Vec::new(),
         drop_pending: false,
@@ -2487,41 +2898,26 @@ async fn bake_recorded_async_invoke_denial<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     resource: &Resource<WasmRpcEntry>,
     logical_remote_agent_id: &OwnedAgentId,
-    method_name: &str,
     error: RpcError,
-    activation_begin_index: OplogIndex,
+    idempotency_key: IdempotencyKey,
 ) -> anyhow::Result<AsyncInvocationWithMetadata> {
     let details = rpc_denied_details(error);
-    let (ephemeral_logical_agent_id, connection_span_id) = {
+    let ephemeral_logical_agent_id = {
         let payload = ctx
             .table()
             .get(resource)?
             .payload
             .downcast_ref::<WasmRpcEntryPayload>()
             .ok_or_else(|| anyhow::anyhow!("invalid RPC resource payload"))?;
-        (
-            payload.ephemeral_logical_agent_id.clone(),
-            payload.span_id.clone(),
-        )
+        payload.ephemeral_logical_agent_id.clone()
     };
-    let idempotency_key = ctx.derive_idempotency_key(activation_begin_index);
     let remote_agent_id = invocation_target_agent_id(
         logical_remote_agent_id,
         ephemeral_logical_agent_id.as_ref(),
         &idempotency_key,
     )?;
     let metadata = invocation_metadata(&remote_agent_id, &idempotency_key);
-    let span =
-        create_invocation_span(ctx, &connection_span_id, method_name, &idempotency_key).await?;
-    let future = ctx.table().push(FutureInvokeResultEntry {
-        payload: Box::new(FutureInvokeResultState::Baked {
-            result: Ok(Err(InternalRpcError::Denied { details })),
-            span_id: span.span_id().clone(),
-        }),
-        child_pollables: Vec::new(),
-        drop_pending: false,
-    })?;
-    Ok(AsyncInvocationWithMetadata { future, metadata })
+    bake_closed_async_denial(ctx, metadata, details)
 }
 
 async fn persist_schedule_denial<Ctx: WorkerCtx>(
@@ -2587,6 +2983,7 @@ impl PreparedRpcInvocation {
             idempotency_key: idempotency_key.clone(),
             method_name: self.method_name.clone(),
             input: strip_streams(self.input_value.clone()),
+            local_denial: None,
             logical_streaming_origin,
             remote_agent_type: None,
             remote_agent_parameters: None,
@@ -3003,18 +3400,20 @@ async fn run_invoke_and_await<Ctx: WorkerCtx>(
             result => result,
         };
 
+        let span_finished = rpc_span_finished(span.span_id(), &result);
         handle
-            .complete(
+            .complete_with_span(
                 ctx,
                 HostResponseGolemRpcInvokeAndAwait {
                     result: result.clone().map_err(Into::into),
                 },
+                span_finished,
             )
             .await?;
         result
     };
 
-    ctx.finish_span(span.span_id()).await?;
+    finish_span_in_memory(ctx, span.span_id())?;
 
     match result {
         Ok(value) => Ok(Ok(value)),
@@ -3048,11 +3447,6 @@ async fn run_invoke<Ctx: WorkerCtx>(
         if !handle.is_live() {
             match handle.replay(ctx).await {
                 Ok(CallReplayOutcome::Replayed(replayed)) => {
-                    // End can commit before FinishSpan. Publish checked live admission when
-                    // replay consumed that tail so the missing span terminal can be appended.
-                    if !ctx.state.is_live() && ctx.state.replay_state.is_live() {
-                        ctx.switch_to_live().await?;
-                    }
                     break 'result Ok(replayed);
                 }
                 Ok(CallReplayOutcome::Incomplete(live)) => handle = live,
@@ -3112,14 +3506,21 @@ async fn run_invoke<Ctx: WorkerCtx>(
             }
         };
 
-        let result = result.map_err(|err| err.into());
+        let result: Result<(), InternalRpcError> = result;
+        let span_finished = rpc_span_finished(span.span_id(), &result);
         handle
-            .complete(ctx, HostResponseGolemRpcUnitOrFailure { result })
+            .complete_with_span(
+                ctx,
+                HostResponseGolemRpcUnitOrFailure {
+                    result: result.map_err(Into::into),
+                },
+                span_finished,
+            )
             .await
             .map_err(|err| WorkerExecutorError::runtime(err.to_string()))
     };
 
-    ctx.finish_span(span.span_id()).await?;
+    finish_span_in_memory(ctx, span.span_id())?;
 
     match result?.result {
         Ok(_) => Ok(Ok(())),
@@ -3237,11 +3638,12 @@ fn future_invoke_task_result_to_get_result(
 /// finishes the invocation span, and marks the resource consumed.
 async fn cancel_in_flight_get<T: Send + 'static, Ctx: WorkerCtx>(
     accessor: &Accessor<T, HasSelf<DurableWorkerCtx<Ctx>>>,
-    handle: FutureInvokeCallHandle,
+    mut handle: FutureInvokeCallHandle,
     request: &HostRequestGolemRpcInvoke,
     span_id: &SpanId,
     this_rep: u32,
 ) -> anyhow::Result<Result<Option<core_wire::SchemaValueTree>, RpcError>> {
+    handle.close_span_on_cancellation(span_id.clone());
     let worker_proxy = accessor.with(|mut access| access.get().worker_proxy());
     match try_agent_auth_ctx_at_serialized_access(accessor, accessor.getter()).await {
         Ok(Some(auth_ctx)) => {
@@ -3280,7 +3682,7 @@ async fn cancel_in_flight_get<T: Send + 'static, Ctx: WorkerCtx>(
         )
         .await
         .map_err(anyhow::Error::from)?;
-    finish_span_access(accessor, accessor.getter(), span_id).await?;
+    accessor.with(|mut access| finish_span_in_memory(access.get(), span_id))?;
     accessor.with(|mut access| {
         let ctx = access.get();
         let entry = ctx
@@ -3291,9 +3693,7 @@ async fn cancel_in_flight_get<T: Send + 'static, Ctx: WorkerCtx>(
             .as_any_mut()
             .downcast_mut::<FutureInvokeResultState>()
             .unwrap();
-        *state = FutureInvokeResultState::Consumed {
-            span_id: span_id.clone(),
-        };
+        *state = FutureInvokeResultState::Consumed;
         Ok::<_, anyhow::Error>(())
     })?;
     accessor.with(|mut access| invoke_and_await_response_to_wire(partial_result, access.get()))
@@ -3317,8 +3717,6 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
             /// The result is already known — a baked deterministic failure or a prior cancellation.
             Ready {
                 result: anyhow::Result<Result<Option<core_wire::SchemaValueTree>, RpcError>>,
-                span_id: SpanId,
-                finish_span: bool,
             },
             /// The single durable call is still open; drive it to its `End`. `request`,
             /// `remote_agent_id`, and `env` are carried so a replay that finds an incomplete `Start`
@@ -3352,39 +3750,29 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                 .downcast_mut::<FutureInvokeResultState>()
                 .unwrap();
             Ok::<_, anyhow::Error>(match state {
-                FutureInvokeResultState::Consumed { span_id, .. } => GetPlan::Ready {
-                    result: Err(anyhow::Error::new(ClassifiedHostError {
-                        kind: HostFailureKind::Permanent,
-                        message: "future-invoke-result already consumed".to_string(),
-                    })),
-                    span_id: span_id.clone(),
-                    finish_span: false,
-                },
-                FutureInvokeResultState::Baked { result, span_id } => {
-                    let result = future_invoke_task_result_to_get_result(result);
-                    let span_id = span_id.clone();
-                    *state = FutureInvokeResultState::Consumed {
-                        span_id: span_id.clone(),
-                    };
+                FutureInvokeResultState::Consumed => {
+                    // The result was already consumed and its span already closed.
                     GetPlan::Ready {
-                        result: future_invoke_get_result_to_wire(result, ctx),
-                        span_id,
-                        finish_span: true,
+                        result: Err(anyhow::Error::new(ClassifiedHostError {
+                            kind: HostFailureKind::Permanent,
+                            message: "future-invoke-result already consumed".to_string(),
+                        })),
                     }
                 }
-                FutureInvokeResultState::Cancelled { span_id } => {
+                FutureInvokeResultState::Baked { result } => {
+                    let result = future_invoke_task_result_to_get_result(result);
+                    *state = FutureInvokeResultState::Consumed;
+                    GetPlan::Ready {
+                        result: future_invoke_get_result_to_wire(result, ctx),
+                    }
+                }
+                FutureInvokeResultState::Cancelled => {
                     let rpc_error = InternalRpcError::ProtocolError {
                         details: "Invocation cancelled".to_string(),
                     };
-                    let span_id = span_id.clone();
-                    *state = FutureInvokeResultState::Consumed {
-                        span_id: span_id.clone(),
-                    };
+                    *state = FutureInvokeResultState::Consumed;
                     GetPlan::Ready {
                         result: Ok(Err(rpc_error.into())),
-                        span_id,
-                        // The span was already finished by `cancel`.
-                        finish_span: false,
                     }
                 }
                 FutureInvokeResultState::Active {
@@ -3419,16 +3807,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
         })?;
 
         match plan {
-            GetPlan::Ready {
-                result,
-                span_id,
-                finish_span,
-            } => {
-                if finish_span {
-                    finish_span_access(accessor, accessor.getter(), &span_id).await?;
-                }
-                result
-            }
+            GetPlan::Ready { result, .. } => result,
             GetPlan::Active {
                 mut handle,
                 task,
@@ -3441,13 +3820,13 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                 span_id,
                 cancel_token,
             } => {
+                handle.close_span_on_cancellation(span_id.clone());
                 // The response crosses more guest-facing work after the durable `End` (span
                 // finish, resource-state transition, wire conversion), so the terminal is
                 // recorded through the deferred-delivery API: the returned token stays armed
                 // until this method actually returns the result, and a torn future in between
-                // records the `CompletionDiscarded` marker. The call's durable `FinishSpan` is
-                // appended by the same owned task as the `End` (see `post_end_entry`), so replay
-                // can rely on it unconditionally following the `End` on this path.
+                // records the `CompletionDiscarded` marker. The span closure is embedded in the
+                // same terminal as the response, so replay restores both from one durable fact.
                 let (response, delivery) = if handle.is_live() {
                     let task =
                         task.expect("a live future-invoke-result must own its background task");
@@ -3491,18 +3870,15 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                         Ok(rpc_result) => {
                             let rpc_result =
                                 admit_rpc_result_secret_holds(accessor, rpc_result).await?;
-                            let finish_span = OplogEntry::finish_span(
-                                handle.parent_start_index(),
-                                span_id.clone(),
-                            );
+                            let finish_span = rpc_span_finished(&span_id, &rpc_result);
                             handle
-                                .complete_access_deferred(
+                                .complete_access_deferred_with_span(
                                     accessor,
                                     accessor.getter(),
                                     HostResponseGolemRpcInvokeAndAwait {
                                         result: rpc_result.map(strip_streams).map_err(Into::into),
                                     },
-                                    Some(finish_span),
+                                    finish_span,
                                 )
                                 .await
                                 .map_err(anyhow::Error::from)?
@@ -3596,11 +3972,8 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                                 Some(Ok(rpc_result)) => {
                                     let rpc_result =
                                         admit_rpc_result_secret_holds(accessor, rpc_result).await?;
-                                    let finish_span = OplogEntry::finish_span(
-                                        live.parent_start_index(),
-                                        span_id.clone(),
-                                    );
-                                    live.complete_access_deferred(
+                                    let finish_span = rpc_span_finished(&span_id, &rpc_result);
+                                    live.complete_access_deferred_with_span(
                                         accessor,
                                         accessor.getter(),
                                         HostResponseGolemRpcInvokeAndAwait {
@@ -3608,7 +3981,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                                                 .map(strip_streams)
                                                 .map_err(Into::into),
                                         },
-                                        Some(finish_span),
+                                        finish_span,
                                     )
                                     .await
                                     .map_err(anyhow::Error::from)?
@@ -3634,13 +4007,13 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                 }
 
                 if delivery.is_replay_discarded() {
-                    // The recorded run persisted the `End` (and its `FinishSpan`) but the guest
+                    // The recorded run persisted the terminal span closure but the guest
                     // dropped this future before `get` returned. Mirror the recorded post-`End`
-                    // continuation deterministically — consume the positional `FinishSpan` and
-                    // mark the resource consumed — then park: never return the response, so the
+                    // continuation deterministically — update resident context and mark the
+                    // resource consumed — then park: never return the response, so the
                     // deterministic guest drops this future at the same point it did live (its
                     // resource `drop` sees no open handle and writes nothing durable).
-                    finish_span_access(accessor, accessor.getter(), &span_id).await?;
+                    accessor.with(|mut access| finish_span_in_memory(access.get(), &span_id))?;
                     accessor.with(|mut access| {
                         let ctx = access.get();
                         let entry = ctx
@@ -3651,9 +4024,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                             .as_any_mut()
                             .downcast_mut::<FutureInvokeResultState>()
                             .unwrap();
-                        *state = FutureInvokeResultState::Consumed {
-                            span_id: span_id.clone(),
-                        };
+                        *state = FutureInvokeResultState::Consumed;
                         Ok::<_, anyhow::Error>(())
                     })?;
                     std::future::pending::<()>().await;
@@ -3661,7 +4032,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                 }
 
                 if delivery.is_live_armed() {
-                    // Live: the durable `FinishSpan` is already recorded by the owned terminal
+                    // Live: the durable span closure is already recorded by the owned terminal
                     // task; everything left before the return is synchronous (in-memory span
                     // finish, resource transition, wire conversion), so no tear window remains
                     // between here and consuming the token.
@@ -3676,9 +4047,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                             .as_any_mut()
                             .downcast_mut::<FutureInvokeResultState>()
                             .unwrap();
-                        *state = FutureInvokeResultState::Consumed {
-                            span_id: span_id.clone(),
-                        };
+                        *state = FutureInvokeResultState::Consumed;
                         invoke_and_await_response_to_wire(response.result, ctx)
                     });
                     match finalize {
@@ -3698,9 +4067,8 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                     }
                 } else {
                     // Replay of a delivered completion, or a live unpersisted (snapshotting)
-                    // call: the original span handling applies — replay consumes the positional
-                    // `FinishSpan`, an unpersisted live call appends it here.
-                    finish_span_access(accessor, accessor.getter(), &span_id).await?;
+                    // call: only the resident invocation context remains to be updated here.
+                    accessor.with(|mut access| finish_span_in_memory(access.get(), &span_id))?;
                     accessor.with(|mut access| {
                         let ctx = access.get();
                         let entry = ctx
@@ -3711,9 +4079,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                             .as_any_mut()
                             .downcast_mut::<FutureInvokeResultState>()
                             .unwrap();
-                        *state = FutureInvokeResultState::Consumed {
-                            span_id: span_id.clone(),
-                        };
+                        *state = FutureInvokeResultState::Consumed;
                         Ok::<_, anyhow::Error>(())
                     })?;
                     let wire = accessor.with(|mut access| {
@@ -3739,8 +4105,8 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                 handle: FutureInvokeCallHandle,
                 span_id: SpanId,
             },
-            /// No durable call, but the invocation span of a baked failure is still open.
-            FinishSpan { span_id: SpanId },
+            /// A dropped get owns the durable cancellation; release its resident span here.
+            FinishInMemory { span_id: SpanId },
             /// Nothing to finish — already consumed or cancelled.
             Nothing,
         }
@@ -3770,26 +4136,30 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                             span_id: span_id.clone(),
                         }
                     }
-                    None => DropPlan::Nothing,
+                    None => DropPlan::FinishInMemory {
+                        span_id: span_id.clone(),
+                    },
                 },
-                FutureInvokeResultState::Baked { span_id, .. } => DropPlan::FinishSpan {
-                    span_id: span_id.clone(),
-                },
-                FutureInvokeResultState::Cancelled { .. }
-                | FutureInvokeResultState::Consumed { .. } => DropPlan::Nothing,
+                FutureInvokeResultState::Baked { .. }
+                | FutureInvokeResultState::Cancelled
+                | FutureInvokeResultState::Consumed => DropPlan::Nothing,
             })
         })?;
 
         match plan {
-            DropPlan::Cancel { handle, span_id } => {
+            DropPlan::Cancel {
+                mut handle,
+                span_id,
+            } => {
+                handle.close_span_on_cancellation(span_id.clone());
                 handle
                     .cancel_access(accessor, accessor.getter(), None)
                     .await
                     .map_err(anyhow::Error::from)?;
-                finish_span_access(accessor, accessor.getter(), &span_id).await?;
+                accessor.with(|mut access| finish_span_in_memory(access.get(), &span_id))?;
             }
-            DropPlan::FinishSpan { span_id } => {
-                finish_span_access(accessor, accessor.getter(), &span_id).await?;
+            DropPlan::FinishInMemory { span_id } => {
+                accessor.with(|mut access| finish_span_in_memory(access.get(), &span_id))?;
             }
             DropPlan::Nothing => {}
         }
@@ -3858,9 +4228,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                         let remote_agent_id = request.remote_agent_id.clone();
                         let idempotency_key = request.idempotency_key.clone();
                         let span_id = span_id.clone();
-                        *state = FutureInvokeResultState::Cancelled {
-                            span_id: span_id.clone(),
-                        };
+                        *state = FutureInvokeResultState::Cancelled;
                         CancelPlan::Cancel {
                             handle,
                             remote_agent_id,
@@ -3878,18 +4246,19 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                     }
                 },
                 FutureInvokeResultState::Baked { .. }
-                | FutureInvokeResultState::Cancelled { .. }
-                | FutureInvokeResultState::Consumed { .. } => CancelPlan::Nothing,
+                | FutureInvokeResultState::Cancelled
+                | FutureInvokeResultState::Consumed => CancelPlan::Nothing,
             }
         };
 
         if let CancelPlan::Cancel {
-            handle,
+            mut handle,
             remote_agent_id,
             idempotency_key,
             span_id,
         } = plan
         {
+            handle.close_span_on_cancellation(span_id.clone());
             // Best-effort remote cancellation, only meaningful for a live call — on replay the
             // recorded `Cancelled` is re-applied without re-issuing the side effect.
             if handle.is_live() {
@@ -3918,7 +4287,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                 .cancel(self, None)
                 .await
                 .map_err(anyhow::Error::from)?;
-            self.finish_span(&span_id).await?;
+            finish_span_in_memory(self, &span_id)?;
         }
 
         Ok(())
@@ -3987,6 +4356,7 @@ fn construct_ephemeral_wasm_rpc_resource<Ctx: WorkerCtx>(
     remote_method_streams: Arc<BTreeMap<String, bool>>,
     remote_component_revision: ComponentRevision,
     remote_owner: AgentOwnerPattern,
+    creation_index: Option<OplogIndex>,
 ) -> anyhow::Result<Resource<WasmRpcEntry>> {
     Ok(ctx.table().push(WasmRpcEntry {
         payload: Box::new(WasmRpcEntryPayload {
@@ -3998,6 +4368,7 @@ fn construct_ephemeral_wasm_rpc_resource<Ctx: WorkerCtx>(
             remote_method_streams,
             remote_component_revision,
             remote_owner,
+            creation_index,
         }),
     })?)
 }
@@ -4046,6 +4417,7 @@ pub async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
     remote_component_revision: ComponentRevision,
     remote_owner: AgentOwnerPattern,
     pinned_ephemeral_identity: bool,
+    creation_index: Option<OplogIndex>,
 ) -> anyhow::Result<Resource<WasmRpcEntry>> {
     let target_environment_id = ctx.owned_agent_id.environment_id;
     let remote_agent_id = OwnedAgentId::new(target_environment_id, &remote_agent_id);
@@ -4074,6 +4446,7 @@ pub async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
             remote_method_streams,
             remote_component_revision,
             remote_owner,
+            creation_index,
         }),
     })?;
     Ok(entry)
@@ -4092,6 +4465,7 @@ async fn reconstruct_wasm_rpc_resource<Ctx: WorkerCtx>(
     remote_component_revision: ComponentRevision,
     remote_owner: AgentOwnerPattern,
     pinned_ephemeral_identity: bool,
+    creation_index: Option<OplogIndex>,
 ) -> anyhow::Result<Resource<WasmRpcEntry>> {
     let remote_agent_id = OwnedAgentId::new(target_environment_id, &remote_agent_id);
     let target_activation = if pinned_ephemeral_identity || target_fingerprint.0.is_nil() {
@@ -4113,6 +4487,7 @@ async fn reconstruct_wasm_rpc_resource<Ctx: WorkerCtx>(
             remote_method_streams,
             remote_component_revision,
             remote_owner,
+            creation_index,
         }),
     })?;
     Ok(entry)
@@ -4699,6 +5074,8 @@ pub struct WasmRpcEntryPayload {
     pub remote_agent_id: OwnedAgentId,
     pub ephemeral_logical_agent_id: Option<ParsedAgentId>,
     pub span_id: SpanId,
+    /// Absent for snapshot-created resources whose span opening was not persisted.
+    pub creation_index: Option<OplogIndex>,
     pub target_activation: WasmRpcTargetActivation,
     /// Cached remote agent type, used to resolve per-method input/output
     /// schemas for the in-process [`SchemaValue`] / [`TypedSchemaValue`]
@@ -4906,52 +5283,220 @@ fn schema_value_to_wire_output<Ctx: WorkerCtx>(
     }
 }
 
-pub async fn create_rpc_connection_span<Ctx: InvocationContextManagement>(
-    ctx: &mut Ctx,
-    target_agent_id: &AgentId,
-) -> anyhow::Result<Arc<InvocationContextSpan>> {
-    Ok(ctx
-        .start_span(
-            &[
+fn rpc_connection_function_type(with_agent_authority: bool) -> DurableFunctionType {
+    if with_agent_authority {
+        DurableFunctionType::WriteRemote
+    } else {
+        DurableFunctionType::WriteLocal
+    }
+}
+
+async fn start_rpc_connection_call<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    request: HostRequestGolemRpcCreate,
+    with_agent_authority: bool,
+) -> Result<
+    (
+        DurableCallSession<GolemRpcWasmRpcNew, NotCancellable>,
+        Arc<InvocationContextSpan>,
+    ),
+    WorkerExecutorError,
+> {
+    let function_type = rpc_connection_function_type(with_agent_authority);
+    let begun = if with_agent_authority {
+        DurableCallSession::<GolemRpcWasmRpcNew, NotCancellable>::begin_with_agent_authority(
+            ctx,
+            function_type.clone(),
+        )
+        .await?
+    } else {
+        DurableCallSession::<GolemRpcWasmRpcNew, NotCancellable>::begin(ctx, function_type.clone())
+            .await?
+    };
+    let begin_index = begun.begin_index();
+    match begun.matching_request(request.clone()).resolve(ctx).await? {
+        ResolvedCall::Live(begun) => {
+            let attributes = HashMap::from([
                 (
                     "name".to_string(),
                     AttributeValue::String("rpc-connection".to_string()),
                 ),
                 (
                     "target_agent_id".to_string(),
-                    AttributeValue::String(target_agent_id.to_string()),
+                    AttributeValue::String(request.remote_agent_id.to_string()),
                 ),
-            ],
-            false,
-        )
-        .await?)
+            ]);
+            let started = SpanStarted {
+                span_id: SpanId::generate(),
+                trace_id: ctx.state.invocation_context.trace_id.clone(),
+                trace_states: ctx.state.invocation_context.trace_states.clone(),
+                parent_span_id: Some(ctx.state.current_span_id.clone()),
+                links: Vec::new(),
+                started_at: golem_common::model::Timestamp::now_utc(),
+                attributes: AttributeMap(attributes),
+                kind: SpanKind::Client,
+            };
+            let parent = ctx.state.current_span_id.clone();
+            let span = install_embedded_span(ctx, &started, &parent)?;
+            match begun.start_live_with_span(ctx, request, started).await {
+                Ok(handle) => Ok((handle, span)),
+                Err(error) => {
+                    ctx.end_function(&function_type, begin_index).await?;
+                    finish_span_in_memory(ctx, span.span_id())?;
+                    Err(error)
+                }
+            }
+        }
+        ResolvedCall::Replay(handle) => {
+            let started = handle.recorded_span_started(ctx).await?.ok_or_else(|| {
+                WorkerExecutorError::unexpected_oplog_entry(
+                    "RPC connection Start carrying span_started",
+                    format!(
+                        "RPC connection Start at {} without span metadata",
+                        handle.start_index()
+                    ),
+                )
+            })?;
+            let span = restore_embedded_span(ctx, &started)?;
+            Ok((handle, span))
+        }
+    }
 }
 
-pub async fn create_invocation_span<Ctx: InvocationContextManagement>(
-    ctx: &mut Ctx,
+fn rpc_span_finished<T>(span_id: &SpanId, result: &Result<T, InternalRpcError>) -> SpanFinished {
+    let outcome = match result {
+        Ok(_) => SpanOutcome::Completed,
+        Err(InternalRpcError::Denied { .. }) => SpanOutcome::Denied,
+        Err(_) => SpanOutcome::Failed,
+    };
+    SpanFinished {
+        span_id: span_id.clone(),
+        finished_at: golem_common::model::Timestamp::now_utc(),
+        outcome,
+    }
+}
+
+fn create_embedded_invocation_span<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
     connection_span_id: &SpanId,
     function_name: &str,
     idempotency_key: &IdempotencyKey,
-) -> anyhow::Result<Arc<InvocationContextSpan>> {
-    Ok(ctx
-        .start_child_span(
-            connection_span_id,
-            &[
-                (
-                    "name".to_string(),
-                    AttributeValue::String("rpc-invocation".to_string()),
-                ),
-                (
-                    "function_name".to_string(),
-                    AttributeValue::String(function_name.to_string()),
-                ),
-                (
-                    "idempotency_key".to_string(),
-                    AttributeValue::String(idempotency_key.to_string()),
-                ),
-            ],
-        )
-        .await?)
+) -> Result<(Arc<InvocationContextSpan>, SpanStarted), WorkerExecutorError> {
+    let connection_origin = ctx
+        .state
+        .invocation_context
+        .span_origin(connection_span_id)
+        .ok_or_else(|| WorkerExecutorError::runtime("RPC connection span has no trace origin"))?;
+    let started = embedded_invocation_span_started(
+        &ctx.state.invocation_context.trace_id,
+        &ctx.state.invocation_context.trace_states,
+        &ctx.state.current_span_id,
+        connection_span_id,
+        connection_origin,
+        function_name,
+        idempotency_key,
+    );
+    let span = install_embedded_span(ctx, &started, connection_span_id)?;
+    Ok((span, started))
+}
+
+fn embedded_invocation_span_started(
+    trace_id: &golem_common::model::invocation_context::TraceId,
+    trace_states: &[String],
+    current_span_id: &SpanId,
+    connection_span_id: &SpanId,
+    (connection_trace_id, connection_trace_states): (
+        golem_common::model::invocation_context::TraceId,
+        Vec<String>,
+    ),
+    function_name: &str,
+    idempotency_key: &IdempotencyKey,
+) -> SpanStarted {
+    let attributes = HashMap::from([
+        (
+            "name".to_string(),
+            AttributeValue::String("rpc-invocation".to_string()),
+        ),
+        (
+            "function_name".to_string(),
+            AttributeValue::String(function_name.to_string()),
+        ),
+        (
+            "idempotency_key".to_string(),
+            AttributeValue::String(idempotency_key.to_string()),
+        ),
+    ]);
+    let same_trace = connection_trace_id == *trace_id;
+    let links = (!same_trace)
+        .then(|| golem_common::model::oplog::SpanLink {
+            trace_id: connection_trace_id,
+            span_id: connection_span_id.clone(),
+            trace_states: connection_trace_states,
+        })
+        .into_iter()
+        .collect();
+    SpanStarted {
+        span_id: SpanId::generate(),
+        trace_id: trace_id.clone(),
+        trace_states: trace_states.to_vec(),
+        parent_span_id: Some(if same_trace {
+            connection_span_id.clone()
+        } else {
+            current_span_id.clone()
+        }),
+        links,
+        started_at: golem_common::model::Timestamp::now_utc(),
+        attributes: AttributeMap(attributes),
+        kind: SpanKind::Client,
+    }
+}
+
+fn restore_embedded_span<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    started: &SpanStarted,
+) -> Result<Arc<InvocationContextSpan>, WorkerExecutorError> {
+    let connection_span_id = started
+        .links
+        .first()
+        .map(|link| &link.span_id)
+        .or(started.parent_span_id.as_ref())
+        .ok_or_else(|| WorkerExecutorError::runtime("RPC invocation span has no connection"))?;
+    install_embedded_span(ctx, started, connection_span_id)
+}
+
+fn install_embedded_span<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    started: &SpanStarted,
+    connection_span_id: &SpanId,
+) -> Result<Arc<InvocationContextSpan>, WorkerExecutorError> {
+    let parent = started
+        .parent_span_id
+        .as_ref()
+        .map(|parent| ctx.state.invocation_context.get(parent))
+        .transpose()
+        .map_err(WorkerExecutorError::runtime)?;
+    let mut builder = InvocationContextSpan::local()
+        .with_span_id(started.span_id.clone())
+        .with_start(started.started_at)
+        .with_attributes(started.attributes.0.clone());
+    if let Some(parent) = parent {
+        builder = builder.with_parent(parent);
+    }
+    if !started.links.is_empty() {
+        let connection = ctx
+            .state
+            .invocation_context
+            .get(connection_span_id)
+            .map_err(WorkerExecutorError::runtime)?;
+        builder = builder.with_linked_context(connection);
+    }
+    let span = builder.build();
+    ctx.state.invocation_context.add_span_with_origin(
+        span.clone(),
+        started.trace_id.clone(),
+        started.trace_states.clone(),
+    );
+    Ok(span)
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -4986,19 +5531,14 @@ enum FutureInvokeResultState {
         span_id: SpanId,
         cancel_token: tokio_util::sync::CancellationToken,
     },
-    /// Method resolution / input lifting failed deterministically before any host call was opened,
-    /// so no `Start` / `End` is written for this future. `get` surfaces the baked error and finishes
-    /// the span. Live and replay agree because the failure is a pure function of the cached remote
-    /// agent type and the guest payload.
-    Baked {
-        result: FutureInvokeTaskResult,
-        span_id: SpanId,
-    },
+    /// A deterministic validation failure or an already recorded local denial.
+    /// `span_id` retains an opening only when its owner has not already closed it.
+    Baked { result: FutureInvokeTaskResult },
     /// The future was cancelled: its host call recorded a `Cancelled` and its span was finished.
     /// `get` returns a cancellation error without touching the oplog.
-    Cancelled { span_id: SpanId },
+    Cancelled,
     /// `get` already produced the result and finished the span; a second `get` traps.
-    Consumed { span_id: SpanId },
+    Consumed,
 }
 
 impl Debug for FutureInvokeResultState {
@@ -5006,8 +5546,8 @@ impl Debug for FutureInvokeResultState {
         match self {
             Self::Active { .. } => write!(f, "Active"),
             Self::Baked { .. } => write!(f, "Baked"),
-            Self::Cancelled { .. } => write!(f, "Cancelled"),
-            Self::Consumed { .. } => write!(f, "Consumed"),
+            Self::Cancelled => write!(f, "Cancelled"),
+            Self::Consumed => write!(f, "Consumed"),
         }
     }
 }
@@ -5044,6 +5584,61 @@ mod tests {
     use test_r::test;
     use uuid::Uuid;
     use wasmtime::component::ResourceTable;
+
+    #[test]
+    fn logical_ephemeral_rpc_connection_creation_is_local_durability() {
+        use crate::durable_host::durability::{DurableExecutionState, InFunctionRetryController};
+
+        for (activates_target, repairable) in [(false, true), (true, false)] {
+            let retry = InFunctionRetryController::new(
+                rpc_connection_function_type(activates_target),
+                DurableExecutionState {
+                    is_live: false,
+                    snapshotting_mode: false,
+                    assume_idempotence: false,
+                    max_in_function_retry_delay: Duration::ZERO,
+                },
+                GolemRpcWasmRpcNew::FQFN,
+            );
+            assert_eq!(retry.can_reexecute_on_incomplete_replay(), repairable);
+        }
+    }
+
+    #[test]
+    fn embedded_rpc_span_uses_parent_within_trace_and_link_across_traces() {
+        let trace_a = golem_common::model::invocation_context::TraceId::generate();
+        let trace_b = golem_common::model::invocation_context::TraceId::generate();
+        let current = SpanId::generate();
+        let connection = SpanId::generate();
+        let key = IdempotencyKey::new("rpc-key".to_string());
+
+        let same_trace = embedded_invocation_span_started(
+            &trace_a,
+            &["a=1".to_string()],
+            &current,
+            &connection,
+            (trace_a.clone(), vec!["a=1".to_string()]),
+            "same",
+            &key,
+        );
+        assert_eq!(same_trace.parent_span_id, Some(connection.clone()));
+        assert!(same_trace.links.is_empty());
+
+        let cross_trace = embedded_invocation_span_started(
+            &trace_b,
+            &["b=2".to_string()],
+            &current,
+            &connection,
+            (trace_a.clone(), vec!["a=1".to_string()]),
+            "cross",
+            &key,
+        );
+        assert_eq!(cross_trace.parent_span_id, Some(current));
+        assert_eq!(cross_trace.links.len(), 1);
+        assert_eq!(cross_trace.links[0].trace_id, trace_a);
+        assert_eq!(cross_trace.links[0].span_id, connection);
+        assert_eq!(cross_trace.links[0].trace_states, vec!["a=1".to_string()]);
+    }
 
     #[test]
     async fn dropping_rpc_task_revokes_wait_before_task_cleanup() {

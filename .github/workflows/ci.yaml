@@ -138,6 +138,8 @@ jobs:
         run: cargo make --profile ci check-openapi
       - name: Check how-to-guides docs are in sync with golem-skills/
         run: cargo make --profile ci check-docs-skills
+      - name: Check reflection conformance corpus embeds
+        run: cargo make --profile ci check-reflection-conformance
       - name: Check configs are up to date
         run: cargo make --profile ci check-configs
       - name: Check WIT deps are synced

@@ -1943,7 +1943,7 @@ mod tests {
         use golem_common::model::invocation_context::SpanId;
 
         HttpRequestState {
-            session: HttpRequestSession::new(OplogIndex::INITIAL, SpanId::generate(), None),
+            session: HttpRequestSession::new(OplogIndex::INITIAL, SpanId::generate(), true, None),
             request: HostRequestHttpRequest {
                 uri: "http://localhost:8080/".to_string(),
                 method: SerializableHttpMethod::Get,

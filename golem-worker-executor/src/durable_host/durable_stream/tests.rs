@@ -499,14 +499,20 @@ impl Oplog for TestOplog {
         })
     }
 
-    async fn add_pair(
+    fn enqueue_add_pair(
         &self,
         start: OplogEntry,
         make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
-    ) -> (OplogIndex, OplogIndex) {
-        let first = self.add(start).await;
-        let second = self.add(make_second(first)).await;
-        (first, second)
+    ) -> crate::services::oplog::OplogAddPairReceipt {
+        let mut state = self.state.lock().unwrap();
+        let first = state
+            .entries
+            .last_key_value()
+            .map_or(OplogIndex::INITIAL, |(index, _)| index.next());
+        state.entries.insert(first, start);
+        let second = first.next();
+        state.entries.insert(second, make_second(first));
+        Box::pin(async move { (first, second) })
     }
 }
 
