@@ -32,7 +32,7 @@ use golem_service_base::replayable_stream::ReplayableStream;
 use golem_service_base::storage::blob::sqlite::SqliteBlobStorage;
 use golem_service_base::storage::blob::*;
 use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace, fs, memory, s3};
-use golem_test_framework::components::minio::{DockerMinio, Minio};
+use golem_test_framework::components::s3_mock::{DockerS3Mock, S3Mock};
 use pretty_assertions::assert_eq;
 use sqlx::sqlite::SqlitePoolOptions;
 use std::fmt::Debug;
@@ -112,46 +112,51 @@ impl Debug for S3Test {
 #[async_trait]
 impl GetBlobStorage for S3Test {
     async fn get_blob_storage(&self) -> Arc<dyn BlobStorage + Send + Sync> {
-        let minio = DockerMinio::new().await;
+        let s3_mock = DockerS3Mock::new().await;
 
         let config = S3BlobStorageConfig {
             retries: Default::default(),
             region: "us-east-1".to_string(),
             object_prefix: self.prefixed.clone().unwrap_or_default(),
-            aws_endpoint_url: Some(minio.endpoint()),
+            aws_endpoint_url: Some(s3_mock.endpoint()),
             aws_credentials: Some(S3BlobStorageCredentialsConfig::new(
-                minio.access_key_id(),
-                minio.secret_access_key(),
+                s3_mock.access_key_id(),
+                s3_mock.secret_access_key(),
                 "test",
             )),
+            aws_path_style: Some(true),
             ..std::default::Default::default()
         };
-        create_buckets(&minio, &config).await;
+        create_buckets(&s3_mock, &config).await;
         let storage = s3::S3BlobStorage::new(config).await;
-        Arc::new(S3BlobStorageWithMinio {
+        Arc::new(S3BlobStorageWithS3Mock {
             storage,
-            _minio: minio,
+            _s3_mock: s3_mock,
         })
     }
 }
 
-async fn create_buckets(minio: &dyn Minio, config: &S3BlobStorageConfig) {
+async fn create_buckets(s3_mock: &dyn S3Mock, config: &S3BlobStorageConfig) {
     let region_provider = RegionProviderChain::default_provider().or_else("us-east-1");
     let creds = Credentials::new(
-        minio.access_key_id(),
-        minio.secret_access_key(),
+        s3_mock.access_key_id(),
+        s3_mock.secret_access_key(),
         None,
         None,
         "test",
     );
     let sdk_config = aws_config::defaults(BehaviorVersion::latest())
         .region(region_provider)
-        .endpoint_url(minio.endpoint())
+        .endpoint_url(s3_mock.endpoint())
         .credentials_provider(creds)
         .load()
         .await;
 
-    let client = Client::new(&sdk_config);
+    let client = Client::from_conf(
+        aws_sdk_s3::config::Builder::from(&sdk_config)
+            .force_path_style(true)
+            .build(),
+    );
     client
         .create_bucket()
         .bucket(&config.compilation_cache_bucket)
@@ -181,19 +186,19 @@ async fn create_buckets(minio: &dyn Minio, config: &S3BlobStorageConfig) {
     }
 }
 
-struct S3BlobStorageWithMinio {
+struct S3BlobStorageWithS3Mock {
     storage: s3::S3BlobStorage,
-    _minio: DockerMinio,
+    _s3_mock: DockerS3Mock,
 }
 
-impl Debug for S3BlobStorageWithMinio {
+impl Debug for S3BlobStorageWithS3Mock {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "S3BlobStorageWithMinio")
+        write!(f, "S3BlobStorageWithS3Mock")
     }
 }
 
 #[async_trait]
-impl BlobStorage for S3BlobStorageWithMinio {
+impl BlobStorage for S3BlobStorageWithS3Mock {
     async fn get_raw(
         &self,
         target_label: &'static str,

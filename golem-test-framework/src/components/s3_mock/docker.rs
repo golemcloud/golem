@@ -13,48 +13,48 @@
 // limitations under the License.
 
 use crate::components::docker::ContainerHandle;
-use crate::components::minio::Minio;
+use crate::components::s3_mock::S3Mock;
 use async_trait::async_trait;
 use std::fmt::{Debug, Formatter};
 use std::time::Duration;
+use testcontainers::GenericImage;
 use testcontainers::core::{IntoContainerPort, WaitFor};
 use testcontainers::runners::AsyncRunner;
-use testcontainers::{GenericImage, ImageExt};
 use tracing::info;
 
-pub struct DockerMinio {
+pub struct DockerS3Mock {
     container: ContainerHandle<GenericImage>,
     public_port: u16,
 }
 
-impl DockerMinio {
-    const API_PORT: u16 = 9000;
-    const DEFAULT_IMAGE_NAME: &'static str = "quay.io/minio/minio";
-    const DEFAULT_IMAGE_TAG: &'static str = "RELEASE.2025-01-20T14-49-07Z";
-    const ACCESS_KEY_ID: &'static str = "minioadmin";
-    const SECRET_ACCESS_KEY: &'static str = "minioadmin";
+impl DockerS3Mock {
+    const API_PORT: u16 = 9090;
+    const DEFAULT_IMAGE_NAME: &'static str = "adobe/s3mock";
+    const DEFAULT_IMAGE_TAG: &'static str = "5.2.3";
+    const ACCESS_KEY_ID: &'static str = "test-access-key";
+    const SECRET_ACCESS_KEY: &'static str = "test-secret-key";
 
     pub async fn new() -> Self {
-        info!("Starting MinIO container");
+        info!("Starting Adobe S3Mock container");
 
         let container = tryhard::retry_fn(|| {
             GenericImage::new(Self::DEFAULT_IMAGE_NAME, Self::DEFAULT_IMAGE_TAG)
                 .with_exposed_port(Self::API_PORT.tcp())
-                .with_wait_for(WaitFor::message_on_stderr("API:"))
-                .with_env_var("MINIO_CONSOLE_ADDRESS", ":9001")
-                .with_cmd(["server", "/data"])
+                .with_wait_for(WaitFor::message_on_stdout(
+                    "Started S3MockApplication.Companion",
+                ))
                 .start()
         })
         .retries(5)
         .exponential_backoff(Duration::from_millis(10))
         .max_delay(Duration::from_secs(10))
         .await
-        .expect("Failed to start MinIO container");
+        .expect("Failed to start Adobe S3Mock container");
 
         let public_port = container
             .get_host_port_ipv4(Self::API_PORT)
             .await
-            .expect("Failed to get MinIO host port");
+            .expect("Failed to get Adobe S3Mock host port");
 
         Self {
             container: ContainerHandle::new(container),
@@ -64,7 +64,7 @@ impl DockerMinio {
 }
 
 #[async_trait]
-impl Minio for DockerMinio {
+impl S3Mock for DockerS3Mock {
     fn endpoint(&self) -> String {
         format!("http://127.0.0.1:{}", self.public_port)
     }
@@ -82,8 +82,8 @@ impl Minio for DockerMinio {
     }
 }
 
-impl Debug for DockerMinio {
+impl Debug for DockerS3Mock {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "DockerMinio(port={})", self.public_port)
+        write!(f, "DockerS3Mock(port={})", self.public_port)
     }
 }

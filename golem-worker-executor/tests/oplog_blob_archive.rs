@@ -24,7 +24,7 @@ use golem_common::model::oplog::{LogLevel, OplogEntry, OplogIndex};
 use golem_common::model::{AgentId, OwnedAgentId, ScanCursor};
 use golem_service_base::config::{S3BlobStorageConfig, S3BlobStorageCredentialsConfig};
 use golem_service_base::storage::blob::{BlobStorage, s3};
-use golem_test_framework::components::minio::{DockerMinio, Minio};
+use golem_test_framework::components::s3_mock::{DockerS3Mock, S3Mock};
 use golem_worker_executor::services::oplog::{BlobOplogArchiveService, OplogArchiveService};
 use pretty_assertions::assert_eq;
 use std::fmt::Debug;
@@ -57,11 +57,11 @@ fn in_memory() -> Arc<dyn GetBlobStorage + Send + Sync> {
     Arc::new(InMemoryTest)
 }
 
-/// Spins up a fresh MinIO container per `get_blob_storage` call and keeps it
+/// Spins up a fresh S3Mock container per `get_blob_storage` call and keeps it
 /// alive for the lifetime of this per-worker dependency, so the returned S3
 /// blob storage remains usable for the whole test.
 struct S3Test {
-    minio_instances: Mutex<Vec<DockerMinio>>,
+    s3_mock_instances: Mutex<Vec<DockerS3Mock>>,
 }
 
 impl Debug for S3Test {
@@ -73,45 +73,50 @@ impl Debug for S3Test {
 #[async_trait]
 impl GetBlobStorage for S3Test {
     async fn get_blob_storage(&self) -> Arc<dyn BlobStorage + Send + Sync> {
-        let minio = DockerMinio::new().await;
+        let s3_mock = DockerS3Mock::new().await;
 
         let config = S3BlobStorageConfig {
             retries: Default::default(),
             region: "us-east-1".to_string(),
             object_prefix: String::new(),
-            aws_endpoint_url: Some(minio.endpoint()),
+            aws_endpoint_url: Some(s3_mock.endpoint()),
             aws_credentials: Some(S3BlobStorageCredentialsConfig::new(
-                minio.access_key_id(),
-                minio.secret_access_key(),
+                s3_mock.access_key_id(),
+                s3_mock.secret_access_key(),
                 "test",
             )),
+            aws_path_style: Some(true),
             ..std::default::Default::default()
         };
-        create_buckets(&minio, &config).await;
+        create_buckets(&s3_mock, &config).await;
         let storage = s3::S3BlobStorage::new(config).await;
 
-        self.minio_instances.lock().await.push(minio);
+        self.s3_mock_instances.lock().await.push(s3_mock);
         Arc::new(storage)
     }
 }
 
-async fn create_buckets(minio: &dyn Minio, config: &S3BlobStorageConfig) {
+async fn create_buckets(s3_mock: &dyn S3Mock, config: &S3BlobStorageConfig) {
     let region_provider = RegionProviderChain::default_provider().or_else("us-east-1");
     let creds = Credentials::new(
-        minio.access_key_id(),
-        minio.secret_access_key(),
+        s3_mock.access_key_id(),
+        s3_mock.secret_access_key(),
         None,
         None,
         "test",
     );
     let sdk_config = aws_config::defaults(BehaviorVersion::latest())
         .region(region_provider)
-        .endpoint_url(minio.endpoint())
+        .endpoint_url(s3_mock.endpoint())
         .credentials_provider(creds)
         .load()
         .await;
 
-    let client = Client::new(&sdk_config);
+    let client = Client::from_conf(
+        aws_sdk_s3::config::Builder::from(&sdk_config)
+            .force_path_style(true)
+            .build(),
+    );
     for bucket in &config.compressed_oplog_buckets {
         client.create_bucket().bucket(bucket).send().await.unwrap();
     }
@@ -120,7 +125,7 @@ async fn create_buckets(minio: &dyn Minio, config: &S3BlobStorageConfig) {
 #[test_dep(scope = PerWorker, tagged_as = "s3")]
 fn s3() -> Arc<dyn GetBlobStorage + Send + Sync> {
     Arc::new(S3Test {
-        minio_instances: Mutex::new(Vec::new()),
+        s3_mock_instances: Mutex::new(Vec::new()),
     })
 }
 
@@ -173,7 +178,7 @@ async fn drain(
 /// archived durable) workers. This test verifies that `scan_for_component`
 /// against the blob archive lists workers correctly and filters by agent mode,
 /// running the same checks against both an in-memory backend and a real
-/// S3-compatible (MinIO) backend.
+/// S3-compatible (Adobe S3Mock) backend.
 #[test]
 async fn blob_archive_scan_for_component_filters_by_mode(
     #[dimension(storage)] storage: &Arc<dyn GetBlobStorage + Send + Sync>,

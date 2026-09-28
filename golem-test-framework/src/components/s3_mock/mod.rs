@@ -16,10 +16,10 @@ use async_trait::async_trait;
 
 mod docker;
 
-pub use docker::DockerMinio;
+pub use docker::DockerS3Mock;
 
 #[async_trait]
-pub trait Minio: Send + Sync {
+pub trait S3Mock: Send + Sync {
     fn endpoint(&self) -> String;
     fn access_key_id(&self) -> &str;
     fn secret_access_key(&self) -> &str;
