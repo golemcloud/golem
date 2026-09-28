@@ -286,12 +286,6 @@ impl Benchmark for DurabilityOverhead {
         .await;
         delete_workers(
             &context.user,
-            &agent_ids_to_agent_ids(context.component.id, &context.ephemeral_agent_ids),
-            &recorder,
-        )
-        .await;
-        delete_workers(
-            &context.user,
             &agent_ids_to_agent_ids(
                 context.component.id,
                 &context.durable_persistent_commit_agent_ids,

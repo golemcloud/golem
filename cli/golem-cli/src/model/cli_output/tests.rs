@@ -5486,6 +5486,9 @@ fn arb_deployment_diff() -> BoxedStrategy<golem_common::model::diff::DeploymentD
                                 golem_common::model::agent::AgentTypeName("agent".to_string()),
                                 binding.clone(),
                             )]),
+                            environment_middleware_binding: None,
+                            component_middleware_bindings: BTreeMap::new(),
+                            agent_middleware_bindings: BTreeMap::new(),
                         },
                     ),
                 );
@@ -5519,6 +5522,9 @@ fn arb_deployment_diff() -> BoxedStrategy<golem_common::model::diff::DeploymentD
                                 golem_common::model::agent::AgentTypeName("agent".to_string()),
                                 binding,
                             )]),
+                            environment_middleware_binding: None,
+                            component_middleware_bindings: BTreeMap::new(),
+                            agent_middleware_bindings: BTreeMap::new(),
                         },
                     ),
                 );

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use futures_concurrency::future::Join;
 use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::component::ComponentDto;
 use golem_common::model::{AgentId, IdempotencyKey};
@@ -68,8 +69,14 @@ pub async fn delete_workers(
     recorder: &BenchmarkRecorder,
 ) {
     info!("Deleting {} workers...", agent_ids.len());
-    for agent_id in agent_ids {
-        if let Err(err) = user.delete_worker(agent_id).await {
+    let results = agent_ids
+        .iter()
+        .map(|agent_id| user.delete_worker(agent_id))
+        .collect::<Vec<_>>()
+        .join()
+        .await;
+    for result in results {
+        if let Err(err) = result {
             warn!(error = ?err, "Failed to delete worker");
             recorder.failure(
                 &ResultKey::primary("cleanup-delete-worker"),

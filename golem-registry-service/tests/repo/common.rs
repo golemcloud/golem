@@ -7357,6 +7357,8 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
         [remote_registered_tool.clone()],
         [remote_binding.clone()],
         &BTreeMap::new(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
         &BTreeSet::new(),
     )
     .unwrap()["remote-search"]
