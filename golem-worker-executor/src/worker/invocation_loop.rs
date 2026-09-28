@@ -3027,7 +3027,6 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         };
     }
 
-    /// Records an attempted worker update as failed
     /// Captures the agent filesystem at a boundary, against the confirmed mark `since`. Gives
     /// `None` when the capture failed: the loop then writes no record.
     async fn capture_filesystem(
@@ -3095,6 +3094,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         }
     }
 
+    /// Records an attempted worker update as failed
     async fn fail_update(
         &self,
         target_revision: ComponentRevision,

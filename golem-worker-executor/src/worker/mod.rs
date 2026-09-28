@@ -2213,7 +2213,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 let start_attempt =
                     existing_start_attempt.or_else(|| this.startup_attempt.pending());
                 if start_attempt.is_none() {
-                    this.unavailable_periodic_snapshots.lock().unwrap().clear();
+                    this.unavailable_periodic_snapshots
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .clear();
                 }
                 let memory_requirement = match this.memory_requirement().await {
                     Ok(memory_requirement) => memory_requirement,
@@ -4315,7 +4318,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let same_generation = self
             .filesystem_snapshot_slot
             .lock()
-            .unwrap()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .is_generation(&mark);
         if !matches!(&*instance_guard, WorkerInstance::Running(_))
             || !same_generation
@@ -4387,8 +4390,16 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         if status.last_automatic_snapshot_confirmed {
             return;
         }
-        let rejected = self.rejected_periodic_snapshots.lock().unwrap().clone();
-        let unavailable = self.unavailable_periodic_snapshots.lock().unwrap().clone();
+        let rejected = self
+            .rejected_periodic_snapshots
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let unavailable = self
+            .unavailable_periodic_snapshots
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
         let as_confirmed = AgentStatusRecord {
             last_automatic_snapshot_confirmed: true,
             ..(*status).clone()
@@ -4475,7 +4486,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Ends the filesystem snapshots of the current generation. A confirmation of that generation
     /// that comes later writes nothing.
     pub(crate) fn end_filesystem_snapshot_generation(&self) {
-        *self.filesystem_snapshot_slot.lock().unwrap() =
+        *self
+            .filesystem_snapshot_slot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
             filesystem_snapshots::FilesystemSnapshotSlot::default();
     }
 
@@ -4487,13 +4501,16 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ) {
         self.filesystem_snapshot_slot
             .lock()
-            .unwrap()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .confirm(name, mark);
     }
 
     /// Records the filesystem snapshots of a new generation.
     fn start_filesystem_snapshot_slot(&self, slot: filesystem_snapshots::FilesystemSnapshotSlot) {
-        *self.filesystem_snapshot_slot.lock().unwrap() = slot;
+        *self
+            .filesystem_snapshot_slot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = slot;
     }
 
     /// Gives the confirmed filesystem snapshot that a periodic capture compares with, while a
@@ -4502,8 +4519,16 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
     ) -> Option<filesystem_snapshots::ConfirmedFilesystemSnapshot> {
         let status = self.last_known_status.load();
-        let rejected = self.rejected_periodic_snapshots.lock().unwrap().clone();
-        let unavailable = self.unavailable_periodic_snapshots.lock().unwrap().clone();
+        let rejected = self
+            .rejected_periodic_snapshots
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let unavailable = self
+            .unavailable_periodic_snapshots
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
         let selected = select_automatic_snapshot(
             &status,
             AutomaticSnapshotFilter {
@@ -4513,7 +4538,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 filesystem_snapshots_enabled: self.filesystem_snapshots_enabled(),
             },
         );
-        let slot = self.filesystem_snapshot_slot.lock().unwrap();
+        let slot = self
+            .filesystem_snapshot_slot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         filesystem_snapshots::since(
             slot.confirmed(),
             selected.as_ref(),
@@ -7496,9 +7524,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .await?;
         self.rejected_periodic_snapshots
             .lock()
-            .unwrap()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .extend(rejected);
-        let rejected_periodic_snapshots = self.rejected_periodic_snapshots.lock().unwrap().clone();
+        let rejected_periodic_snapshots = self
+            .rejected_periodic_snapshots
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
 
         let replay_revision = component_revision_for_replay(
             status,
@@ -8833,6 +8865,12 @@ impl WaitingWorker {
             let agent_id = parent.owned_agent_id.agent_id();
             let registered_concurrent_account = parent.registered_concurrent_account.clone();
 
+            // The start confirms the filesystem snapshot of its record before it takes any
+            // permit, so a wait for an upload holds no slot and no memory.
+            parent
+                .confirm_filesystem_snapshot_before_start(start_attempt)
+                .await;
+
             // Determine the component's compiled-module size before acquiring
             // the per-account concurrency slot (and before reserving memory),
             // so the worker's memory and its module are admitted together (the
@@ -8857,9 +8895,6 @@ impl WaitingWorker {
             // for as long as resolution keeps failing, and never close to export
             // them. The retry events stay in the logs, and how long the wait took
             // is recorded as a metric rather than a span.
-            parent
-                .confirm_filesystem_snapshot_before_start(start_attempt)
-                .await;
             let phase_start = std::time::Instant::now();
             let requirement = parent.startup_component_charge_requirement().await;
             parent
@@ -9457,7 +9492,7 @@ impl RunningWorker {
     async fn initial_files_of<Ctx: WorkerCtx>(
         parent: &Arc<Worker<Ctx>>,
         revision: ComponentRevision,
-    ) -> Result<Vec<golem_common::model::component::InitialAgentFile>, WorkerExecutorError> {
+    ) -> Result<Box<[golem_common::model::component::InitialAgentFile]>, WorkerExecutorError> {
         let metadata = parent
             .component_service()
             .get_metadata(parent.owned_agent_id.component_id(), Some(revision))
@@ -9471,7 +9506,7 @@ impl RunningWorker {
                     .agent_type_provision_configs()
                     .get(&agent_id.agent_type)
             })
-            .map(|config| config.files.clone())
+            .map(|config| config.files.iter().cloned().collect())
             .unwrap_or_default())
     }
 
@@ -9502,7 +9537,7 @@ impl RunningWorker {
                 parent
                     .unavailable_periodic_snapshots
                     .lock()
-                    .unwrap()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .insert(index);
                 restart
             }
@@ -9646,15 +9681,18 @@ impl RunningWorker {
         parent
             .rejected_periodic_snapshots
             .lock()
-            .unwrap()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .extend(rejected);
-        let rejected_periodic_snapshots =
-            parent.rejected_periodic_snapshots.lock().unwrap().clone();
+        let rejected_periodic_snapshots = parent
+            .rejected_periodic_snapshots
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
 
         let unavailable_periodic_snapshots = parent
             .unavailable_periodic_snapshots
             .lock()
-            .unwrap()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone();
         let automatic_snapshot_filter = AutomaticSnapshotFilter {
             has_pending_update: pending_update.is_some(),

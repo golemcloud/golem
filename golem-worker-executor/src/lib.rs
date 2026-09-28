@@ -64,8 +64,8 @@ use crate::services::card::{CardService, CardServiceDefault};
 use crate::services::component::ComponentService;
 use crate::services::events::Events;
 use crate::services::golem_config::{
-    FilesystemSnapshotsConfig, GolemConfig, HttpClientConfig, IndexedStorageConfig,
-    KeyValueStorageConfig, KeyValueStorageInnerConfig, SchedulerStorageConfig,
+    GolemConfig, HttpClientConfig, IndexedStorageConfig, KeyValueStorageConfig,
+    KeyValueStorageInnerConfig, SchedulerStorageConfig,
 };
 use crate::services::key_value::{DefaultKeyValueService, KeyValueService};
 use crate::services::oplog::plugin::{
@@ -175,8 +175,8 @@ impl Drop for RunDetails {
     }
 }
 
-/// Binds the service of the filesystem snapshots to the configuration. It builds the rustic store
-/// on `blob_storage` when the service is enabled, and stops the service and the store when the
+/// Binds the service of the filesystem snapshots to the configuration. It builds the store on
+/// `blob_storage` when the service is enabled, and stops the service and the store when the
 /// executor shuts down.
 pub fn bind_agent_filesystem_snapshots<Ctx: WorkerCtx>(
     golem_config: &GolemConfig,
@@ -185,22 +185,10 @@ pub fn bind_agent_filesystem_snapshots<Ctx: WorkerCtx>(
     shutdown: &services::shutdown::Shutdown,
 ) -> anyhow::Result<Arc<AgentFilesystemSnapshots>> {
     let filesystems = active_agents.agent_filesystems();
-    let stores = Arc::new(std::sync::Mutex::new(None));
     let snapshots = AgentFilesystemSnapshots::bind(
         &golem_config.filesystem_snapshots,
         filesystems.provisioning().uses_managed_storage(),
-        || {
-            let store = match &golem_config.filesystem_snapshots {
-                FilesystemSnapshotsConfig::Managed(config) => Arc::new(
-                    filesystem_snapshot::RusticSnapshotStore::new(blob_storage, config),
-                ),
-                FilesystemSnapshotsConfig::Disabled(_) => {
-                    unreachable!("a disabled service builds no store")
-                }
-            };
-            *stores.lock().unwrap() = Some(Arc::clone(&store));
-            store
-        },
+        |config| filesystem_snapshot::managed_store(blob_storage, config),
         Arc::new(PressureTargetRoom::new(
             filesystems.volume().clone(),
             filesystems.pressure_policy().clone(),
@@ -209,15 +197,11 @@ pub fn bind_agent_filesystem_snapshots<Ctx: WorkerCtx>(
     )
     .map_err(|error| anyhow!(error))?;
     let snapshots = Arc::new(snapshots);
-    let store = stores.lock().unwrap().take();
     let token = shutdown.token();
     let stopping = Arc::clone(&snapshots);
     shutdown.spawn(async move {
         token.cancelled().await;
         stopping.shut_down().await;
-        if let Some(store) = store {
-            store.shut_down().await;
-        }
     });
     Ok(snapshots)
 }

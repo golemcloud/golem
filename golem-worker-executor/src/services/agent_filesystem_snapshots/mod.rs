@@ -31,7 +31,9 @@ use crate::filesystem_snapshot::{
     SnapshotScope, SnapshotStoreError,
 };
 use crate::services::agent_filesystem::FilesystemCapture;
-use crate::services::golem_config::{FilesystemSnapshotUploadConfig, FilesystemSnapshotsConfig};
+use crate::services::golem_config::{
+    FilesystemSnapshotStoreConfig, FilesystemSnapshotUploadConfig, FilesystemSnapshotsConfig,
+};
 use async_trait::async_trait;
 use futures::future::BoxFuture;
 use golem_common::model::oplog::FilesystemSnapshotName;
@@ -363,11 +365,12 @@ impl AgentFilesystemSnapshots {
     /// Makes the service that the configuration asks for.
     ///
     /// `Managed` needs a sandbox provisioning on managed XFS storage, and `managed_storage` tells
-    /// whether the executor has it. `store` makes the store of an enabled service.
+    /// whether the executor has it. `store` makes the store of an enabled service from its
+    /// settings. A shutdown of the service also shuts the store down.
     pub(crate) fn bind(
         config: &FilesystemSnapshotsConfig,
         managed_storage: bool,
-        store: impl FnOnce() -> Arc<dyn FilesystemSnapshotStore>,
+        store: impl FnOnce(&FilesystemSnapshotStoreConfig) -> Arc<dyn FilesystemSnapshotStore>,
         room: Arc<dyn VolumeRoom>,
         shutdown: CancellationToken,
     ) -> Result<Self, String> {
@@ -377,7 +380,7 @@ impl AgentFilesystemSnapshots {
                 Err("filesystem snapshots require managed XFS storage".to_string())
             }
             FilesystemSnapshotsConfig::Managed(config) => Ok(Self::enabled(
-                store(),
+                store(config),
                 config.uploads().clone(),
                 Arc::new(TokioClock),
                 room,
@@ -607,6 +610,7 @@ impl AgentFilesystemSnapshots {
             inner.shutdown.cancel();
             inner.jobs.close();
             inner.jobs.wait().await;
+            inner.store.shut_down().await;
         }
     }
 }

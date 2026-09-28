@@ -34,8 +34,7 @@ mod time_zone_tests;
 
 #[allow(unused_imports)]
 pub(crate) use memory::InMemorySnapshotStore;
-#[allow(unused_imports)]
-pub(crate) use rustic::RusticSnapshotStore;
+use rustic::RusticSnapshotStore;
 
 /// The place of the filesystem snapshots of one agent.
 ///
@@ -305,6 +304,19 @@ pub(crate) trait FilesystemSnapshotStore: Send + Sync {
         from: &SnapshotScope,
         to: &SnapshotScope,
     ) -> Result<(), SnapshotStoreError>;
+
+    /// Stops the work of the store and waits until it ends. Each later operation fails. A store
+    /// that runs no work of its own does nothing.
+    async fn shut_down(&self) {}
+}
+
+/// Gives the store of the filesystem snapshots over `storage`, with the key and the settings of
+/// `config`.
+pub(crate) fn managed_store(
+    storage: std::sync::Arc<dyn golem_service_base::storage::blob::BlobStorage>,
+    config: &crate::services::golem_config::FilesystemSnapshotStoreConfig,
+) -> std::sync::Arc<dyn FilesystemSnapshotStore> {
+    std::sync::Arc::new(RusticSnapshotStore::new(storage, config))
 }
 
 /// Gives the snapshots newest first: in the reverse order of `created_at`, and in the reverse

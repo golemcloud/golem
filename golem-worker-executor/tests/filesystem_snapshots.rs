@@ -17,7 +17,7 @@
 
 use crate::Tracing;
 use anyhow::anyhow;
-use futures::StreamExt as _;
+use futures::{StreamExt as _, TryStreamExt as _};
 use golem_common::base_model::component::ComponentDto;
 use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath};
@@ -1355,7 +1355,7 @@ async fn run_history(
     let store = TestFilesystemSnapshotStore::new();
     let executor =
         start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
-    let mut agent = Agent::start(
+    let agent = Agent::start(
         &executor,
         &context,
         component,
@@ -1363,32 +1363,40 @@ async fn run_history(
         &declaration_set(initial),
     )
     .await?;
-    for step in steps {
-        match step {
-            Step::Operation(operation, path, argument) => {
-                agent.apply(&executor, operation, path, argument).await?;
-            }
-            Step::ManualUpdate(set) => {
-                let outcomes = agent.update_outcomes(&executor).await?;
-                let updated = executor
-                    .update_component_with_files(
-                        &agent.component.id,
-                        AGENT_TYPE,
-                        "it_initial_file_system_release",
-                        declaration_set(*set),
-                    )
+    let executor_ref = &executor;
+    let agent = futures::stream::iter(steps)
+        .map(Ok::<_, anyhow::Error>)
+        .try_fold(agent, |agent, step| async move {
+            match step {
+                Step::Operation(operation, path, argument) => {
+                    agent.apply(executor_ref, operation, path, argument).await?;
+                    Ok(agent)
+                }
+                Step::ManualUpdate(set) => {
+                    let outcomes = agent.update_outcomes(executor_ref).await?;
+                    let updated = executor_ref
+                        .update_component_with_files(
+                            &agent.component.id,
+                            AGENT_TYPE,
+                            "it_initial_file_system_release",
+                            declaration_set(*set),
+                        )
+                        .await?;
+                    executor_ref
+                        .manual_update_worker(&agent.worker_id, updated.revision, false)
+                        .await?;
+                    eventually(Duration::from_secs(60), || async {
+                        Ok((agent.update_outcomes(executor_ref).await? > outcomes).then_some(()))
+                    })
                     .await?;
-                executor
-                    .manual_update_worker(&agent.worker_id, updated.revision, false)
-                    .await?;
-                eventually(Duration::from_secs(60), || async {
-                    Ok((agent.update_outcomes(&executor).await? > outcomes).then_some(()))
-                })
-                .await?;
-                agent.component = updated;
+                    Ok(Agent {
+                        component: updated,
+                        ..agent
+                    })
+                }
             }
-        }
-    }
+        })
+        .await?;
     let live = agent.describe(&executor).await?;
     drop(executor);
     let restores = store.restore_count();

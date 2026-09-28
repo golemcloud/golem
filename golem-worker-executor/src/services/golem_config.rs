@@ -3333,7 +3333,7 @@ mod tests {
     }
 
     #[test]
-    fn filesystem_snapshots_managed_config_gives_the_upload_defaults_of_section_6() {
+    fn filesystem_snapshots_managed_config_gives_the_upload_defaults() {
         let store = managed(json!({ "repository_key": KEY })).unwrap();
         let uploads = store.uploads();
 

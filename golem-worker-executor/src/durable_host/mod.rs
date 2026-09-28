@@ -3931,7 +3931,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         .worker()
                         .unavailable_periodic_snapshots
                         .lock()
-                        .unwrap()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
                         .insert(snapshot_index);
                     return SnapshotRecoveryResult::Retry(RetryDecision::Immediate);
                 }
@@ -4126,7 +4126,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .worker()
             .rejected_periodic_snapshots
             .lock()
-            .unwrap()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(snapshot_index);
         RetryDecision::Immediate
     }
@@ -6259,7 +6259,11 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
         match prepare_result {
             Ok(None) => {
                 let worker = store.as_context().data().get_public_state().worker();
-                let rejected = worker.rejected_periodic_snapshots.lock().unwrap().clone();
+                let rejected = worker
+                    .rejected_periodic_snapshots
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .clone();
                 if !rejected.is_empty() {
                     let metadata = worker.get_initial_worker_metadata();
                     worker
@@ -6274,7 +6278,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                 worker
                     .unavailable_periodic_snapshots
                     .lock()
-                    .unwrap()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .clear();
                 store.as_context_mut().data_mut().set_suspended();
                 Ok(None)

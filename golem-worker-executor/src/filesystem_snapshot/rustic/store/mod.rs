@@ -1033,6 +1033,10 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
             .await
             .map_err(storage_failure)
     }
+
+    async fn shut_down(&self) {
+        RusticSnapshotStore::shut_down(self).await
+    }
 }
 
 /// What the tree of a snapshot holds. The store keeps it as the description of the snapshot,
