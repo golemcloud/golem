@@ -99,17 +99,17 @@ uses the representation of its resolved body.
 | `char` | JSON string containing exactly one Unicode scalar value |
 | `string` | JSON string |
 | `text` | `{"text":"..."}` with optional non-empty `"language":"<BCP-47>"` |
-| `binary` | `{"bytes":"<base64>"}` with optional `"mimeType":"type/subtype"` |
+| `binary` | `{"bytes":"<base64url-no-pad>"}` with optional `"mimeType":"type/subtype"` |
 | `path` | non-empty JSON string |
 | `url` | non-empty JSON string |
 | `datetime` | RFC 3339 UTC string with four-digit year and nanosecond precision |
 | `duration` | `{"nanoseconds":"<canonical s64>"}` |
 | `quantity` | `{"mantissa":"<canonical s64>","scale":<s32>,"unit":"..."}` |
 
-Binary `bytes` uses canonical padded RFC 4648 base64 with the standard `+/`
-alphabet. Padding is REQUIRED exactly when RFC 4648 requires it. Whitespace,
-URL-safe alphabet characters, omitted padding, and non-zero unused trailing
-bits are invalid. MIME types are ASCII and match
+Binary `bytes` uses canonical unpadded RFC 4648 base64url with the URL-safe
+`-_` alphabet; for example, `-_8` encodes the bytes `fb ff`. Padding is
+FORBIDDEN. Whitespace, the standard-alphabet `+` and `/` characters, and
+non-zero unused trailing bits are invalid. MIME types are ASCII and match
 `^[A-Za-z0-9!#$&^_.+\-]+/[A-Za-z0-9!#$&^_.+\-]+$`.
 
 The decoder applies all restrictions from the expected schema after decoding,
@@ -731,6 +731,7 @@ The v1 code set is frozen:
 | `resource-exhausted` | a frozen protocol or configured account/session resource limit was exceeded |
 | `producer-error` | output producer terminated one stream with an application error |
 | `invocation-failed` | invocation failed after acceptance |
+| `routing-miss` | the agent's shard is moving between executors; `retryable` is `true` and a new attempt reaches its owner |
 | `internal-error` | safe, non-sensitive internal failure |
 
 Handshake failures use the existing public HTTP error envelope. Before

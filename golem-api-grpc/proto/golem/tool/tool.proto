@@ -17,6 +17,7 @@ message ToolMiddleware {
   repeated string aliases = 3;
   Doc doc = 4;
   ToolMiddlewareScope scope = 5;
+  golem.schema.SchemaGraph parameter_schema = 6;
 }
 
 message ToolMiddlewareScope {

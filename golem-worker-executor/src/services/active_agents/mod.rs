@@ -38,7 +38,7 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
-use tracing::{Instrument, debug};
+use tracing::{Instrument, debug, info};
 
 use crate::durable_host::tool::operation::OwnerFailureWinner;
 use crate::services::HasAll;
@@ -50,25 +50,26 @@ use crate::services::golem_config::{
     ActiveAgentsConfig, AgentStatusFlushConfig, FilesystemStorageConfig, MemoryConfig,
 };
 use crate::services::resource_limits::AtomicResourceEntry;
-use crate::worker::Worker;
 use crate::worker::entity_invocation::{
     EntityInvocationHandle, RetainedEntityStore, start_entity_invocation,
     start_native_entity_invocation, start_pre_acquired_entity_invocation,
+    start_registered_entity_invocation, start_registered_native_entity_invocation,
 };
 use crate::worker::entity_slot::ActiveEntityInvocationMetadata;
 use crate::worker::entity_slot::EntitySlot;
 use crate::worker::instance::{
     EntityInvocationBody, InstanceHost, OwnerExecution, OwnerRuntimeResources,
 };
-use crate::worker::owner_lane::{EntityCallMode, OwnerInvocationId};
+use crate::worker::owner_lane::{EntityCallMode, OwnerInvocationId, OwnerInvocationTicket};
 use crate::worker::status_flusher::AgentStatusFlushQueue;
 use crate::worker::{
     EvictionClass, EvictionStopOutcome, FilesystemPressureEligibility, UnloadRequest,
 };
+use crate::worker::{RetirementReason, Worker, WorkerCreationMode};
 use crate::workerctx::WorkerCtx;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{InvocationFreshnessDisposition, Principal};
+use golem_common::model::agent::{InvocationFreshnessDisposition, OwnerKind, Principal};
 use golem_common::model::card::CardId;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::entity::{
@@ -77,7 +78,9 @@ use golem_common::model::entity::{
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::worker::AgentConfigEntryDto;
-use golem_common::model::{AgentId, OplogIndex, OwnedAgentId, Timestamp};
+use golem_common::model::{
+    AgentFingerprint, AgentId, IdempotencyKey, OplogIndex, OwnedAgentId, Timestamp,
+};
 use golem_service_base::error::worker_executor::InterruptKind;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use wasmtime::Store;
@@ -408,6 +411,46 @@ impl<Ctx: WorkerCtx> ActiveAgent<Ctx> {
         )
     }
 
+    pub(crate) fn start_registered_entity_invocation<R, F, Finalize, Finalized>(
+        &self,
+        scope: EntityInvocationScope,
+        owner_component_metadata: Arc<golem_service_base::model::component::Component>,
+        mode: EntityCallMode,
+        ticket: OwnerInvocationTicket,
+        invoke: F,
+        finalize: Finalize,
+    ) -> Result<EntityInvocationHandle<R>, WorkerExecutorError>
+    where
+        R: Send + 'static,
+        F: Send + 'static,
+        F: for<'a> FnOnce(
+            &'a Instance,
+            &'a mut Store<Ctx>,
+        ) -> Pin<
+            Box<dyn Future<Output = Result<R, WorkerExecutorError>> + Send + 'a>,
+        >,
+        Finalize: FnOnce(Result<R, WorkerExecutorError>) -> Finalized + Send + 'static,
+        Finalized: Future<Output = Result<R, WorkerExecutorError>> + Send + 'static,
+    {
+        let slot = self.entity_slot_if_accepting(scope.invocation_id().entity())?;
+        let host = InstanceHost::new_entity(
+            &self.primary(),
+            scope.activation(),
+            slot.clone(),
+            owner_component_metadata,
+        )?;
+        start_registered_entity_invocation(
+            host,
+            slot,
+            self.execution().lane(),
+            scope,
+            mode,
+            ticket,
+            invoke,
+            finalize,
+        )
+    }
+
     /// Starts a sidecar after its operation has already registered and acquired the existing owner
     /// lane node. The operation retains that permit until its durable terminal is committed.
     pub(crate) fn start_pre_acquired_entity_invocation<R, F, Finalize, Finalized>(
@@ -498,6 +541,47 @@ impl<Ctx: WorkerCtx> ActiveAgent<Ctx> {
             parent,
             scope,
             mode,
+            run,
+            finalize,
+        )
+    }
+
+    pub(crate) fn start_registered_native_entity_invocation<R, Run, Finalize, Finalized>(
+        &self,
+        scope: EntityInvocationScope,
+        mode: EntityCallMode,
+        ticket: OwnerInvocationTicket,
+        run: Run,
+        finalize: Finalize,
+    ) -> Result<EntityInvocationHandle<R>, WorkerExecutorError>
+    where
+        R: Send + 'static,
+        Run: Send + 'static,
+        Run: for<'a> FnOnce(
+            EntityInvocationScope,
+            &'a crate::worker::entity_slot::EntitySlotRegistration,
+            tokio_util::sync::CancellationToken,
+        ) -> Pin<
+            Box<
+                dyn Future<
+                        Output = (
+                            Result<R, WorkerExecutorError>,
+                            Option<Box<dyn RetainedEntityStore>>,
+                        ),
+                    > + Send
+                    + 'a,
+            >,
+        >,
+        Finalize: FnOnce(Result<R, WorkerExecutorError>) -> Finalized + Send + 'static,
+        Finalized: Future<Output = Result<R, WorkerExecutorError>> + Send + 'static,
+    {
+        let slot = self.entity_slot_if_accepting(scope.invocation_id().entity())?;
+        start_registered_native_entity_invocation(
+            slot,
+            self.execution().lane(),
+            scope,
+            mode,
+            ticket,
             run,
             finalize,
         )
@@ -798,6 +882,9 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
     where
         T: HasAll<Ctx> + Clone + Send + Sync + 'static,
     {
+        OwnerKind::ComponentAgent
+            .validate_instance_name(&owned_agent_id.agent_id.agent_id)
+            .map_err(WorkerExecutorError::invalid_request)?;
         let active_agent = self.get_or_add_unresolved(deps, owned_agent_id).await?;
         let worker = active_agent.primary.clone();
         worker
@@ -809,6 +896,82 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
                 invocation_context_stack.clone(),
                 principal,
                 freshness_disposition,
+                WorkerCreationMode::ComponentAgent,
+            )
+            .in_current_span()
+            .await?;
+        Ok(active_agent.primary())
+    }
+
+    pub async fn get_or_add_ephemeral_external_tool<T>(
+        &self,
+        deps: &T,
+        component_id: ComponentId,
+        environment_id: EnvironmentId,
+        idempotency_key: &IdempotencyKey,
+        invocation_context_stack: &InvocationContextStack,
+        principal: Principal,
+    ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError>
+    where
+        T: HasAll<Ctx> + Clone + Send + Sync + 'static,
+    {
+        let component = deps
+            .component_service()
+            .get_metadata(component_id, None)
+            .await?;
+        self.get_or_add_ephemeral_external_tool_pinned(
+            deps,
+            component_id,
+            environment_id,
+            idempotency_key,
+            component.revision,
+            invocation_context_stack,
+            principal,
+        )
+        .await
+    }
+
+    pub async fn get_or_add_ephemeral_external_tool_pinned<T>(
+        &self,
+        deps: &T,
+        component_id: ComponentId,
+        environment_id: EnvironmentId,
+        idempotency_key: &IdempotencyKey,
+        component_revision: ComponentRevision,
+        invocation_context_stack: &InvocationContextStack,
+        principal: Principal,
+    ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError>
+    where
+        T: HasAll<Ctx> + Clone + Send + Sync + 'static,
+    {
+        let component = deps
+            .component_service()
+            .get_metadata(component_id, Some(component_revision))
+            .await?;
+        if component.environment_id != environment_id {
+            return Err(WorkerExecutorError::invalid_request(
+                "external tool owner environment does not match the component environment",
+            ));
+        }
+        let owned_agent_id = OwnedAgentId::new(
+            environment_id,
+            &AgentId {
+                component_id,
+                agent_id: OwnerKind::external_tool_instance_name(idempotency_key),
+            },
+        );
+        let active_agent = self.get_or_add_unresolved(deps, &owned_agent_id).await?;
+        let worker = active_agent.primary.clone();
+        worker
+            .ensure_created(
+                None,
+                Vec::new(),
+                Some(component_revision),
+                None,
+                invocation_context_stack.clone(),
+                principal,
+                InvocationFreshnessDisposition::MayExist,
+                WorkerCreationMode::EphemeralExternalTool,
             )
             .in_current_span()
             .await?;
@@ -827,9 +990,26 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
     where
         T: HasAll<Ctx> + Clone + Send + Sync + 'static,
     {
+        self.get_existing_with_fingerprint(deps, owned_agent_id, principal, None)
+            .await
+    }
+
+    pub(crate) async fn get_existing_with_fingerprint<T>(
+        &self,
+        deps: &T,
+        owned_agent_id: &OwnedAgentId,
+        principal: Principal,
+        expected_fingerprint: Option<AgentFingerprint>,
+    ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError>
+    where
+        T: HasAll<Ctx> + Clone + Send + Sync + 'static,
+    {
         let active_agent = self.get_or_add_unresolved(deps, owned_agent_id).await?;
         let worker = active_agent.primary.clone();
-        let result = worker.ensure_existing(principal).in_current_span().await;
+        let result = worker
+            .ensure_existing_with_fingerprint(principal, expected_fingerprint)
+            .in_current_span()
+            .await;
         if matches!(result, Err(WorkerExecutorError::AgentNotFound { .. }))
             && Arc::strong_count(&active_agent) == 2
             && Arc::strong_count(&worker) == 2
@@ -938,6 +1118,23 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
     /// Removes only the cache generation owned by `expected`. Bookkeeping is cleared only when
     /// that exact generation was still authoritative at the point of removal.
     pub async fn remove_worker(&self, expected: &Arc<Worker<Ctx>>, deletion_owner: bool) -> bool {
+        self.remove_worker_with(
+            expected,
+            deletion_owner,
+            OwnerFailureWinner::Lifecycle(InterruptKind::Interrupt(Timestamp::now_utc())),
+        )
+        .await
+    }
+
+    /// [`Self::remove_worker`] with an explicit reason for tearing the agent's entity bodies down.
+    /// A lost shard must not report itself as interrupted through the Golem API: it was
+    /// not, its shard moved. A deletion owner tears nothing down here, whatever the reason.
+    pub(crate) async fn remove_worker_with(
+        &self,
+        expected: &Arc<Worker<Ctx>>,
+        deletion_owner: bool,
+        owner_failure: OwnerFailureWinner,
+    ) -> bool {
         let owned_agent_id = expected.owned_agent_id().clone();
         let Some(active_agent) = self.agents.get(&owned_agent_id).await else {
             return false;
@@ -953,11 +1150,7 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
             return false;
         };
         if !deletion_owner {
-            active_agent
-                .fence_entity_bodies(OwnerFailureWinner::Lifecycle(InterruptKind::Interrupt(
-                    Timestamp::now_utc(),
-                )))
-                .await;
+            active_agent.fence_entity_bodies(owner_failure).await;
         }
         let expected_active = active_agent.clone();
         let expected_worker = expected.clone();
@@ -977,6 +1170,63 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
             retirement.commit();
         }
         removed
+    }
+
+    /// The worker cached for `owned_agent_id`, without waiting on a creation still in progress.
+    ///
+    /// For callers acting on one particular generation: a pending or still-unresolved entry is a
+    /// newer generation being created, never the one they hold, so waiting on it could only delay
+    /// them.
+    pub(crate) async fn try_get_cached(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Option<Arc<Worker<Ctx>>> {
+        self.agents
+            .try_get(owned_agent_id)
+            .await
+            .and_then(|active_agent| active_agent.resolved_primary())
+    }
+
+    /// [`Self::remove_worker_with`] for a caller holding the generation by reference: tears the
+    /// entry down and drops it only while it still holds `worker`. Returns whether it did.
+    ///
+    /// A retiring generation can reach its removal after a newer one is cached under the same id -
+    /// its retirement started from a stop through a handle kept past its generation. Keyed by id
+    /// alone, such a pass evicts that generation and fences its entity bodies while its loop keeps
+    /// running.
+    ///
+    /// A removal refused while this generation is still cached is retried, unless a deletion owns
+    /// its retirement and removes it itself. The only other refusal is the retirement marker held
+    /// by a concurrent attempt - an idle expiry, or another pass of this removal - which ends with
+    /// the generation removed or the marker rolled back. Without the retry, an agent retired
+    /// while an idle expiry happened to be checking it would stay cached here, and a later
+    /// re-grant of its shard would find this retired generation instead of opening the oplog at
+    /// the new epoch.
+    pub(crate) async fn remove_generation(
+        &self,
+        worker: &Worker<Ctx>,
+        owner_failure: OwnerFailureWinner,
+    ) -> bool {
+        loop {
+            let Some(cached) = self.try_get_cached(worker.owned_agent_id()).await else {
+                return false;
+            };
+            if !std::ptr::eq(Arc::as_ptr(&cached), worker) {
+                return false;
+            }
+            if self
+                .remove_worker_with(&cached, false, owner_failure.clone())
+                .await
+            {
+                return true;
+            }
+            if cached.deletion_owns_retirement().await {
+                return false;
+            }
+            drop(cached);
+            // The concurrent attempt may be draining entity bodies; poll rather than spin.
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
     }
 
     pub async fn tracked_card_ids(&self) -> Vec<CardId> {
@@ -1041,6 +1291,53 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
             .collect()
     }
 
+    /// Retires every agent the predicate selects for its lost shard: stops each one here and drops
+    /// it from this executor, so the shard's new owner recovers it.
+    ///
+    /// Concurrent rather than sequential, unlike [`Self::unload_environment`]: a revoke can name
+    /// many agents and each stop waits for that agent's invocation loop to exit. No acknowledgement
+    /// channel is awaited either - [`Worker::interrupt_and_retire`] never subscribes to one for a
+    /// lost shard - so an agent that is already stopping cannot panic the sweep, which is what the
+    /// old `set_interrupting(..).recv().await.unwrap()` shape risked.
+    ///
+    /// The snapshot includes suspended, loading and already-stopping agents; the stop state
+    /// machine has an arm for each, so none is skipped. An agent still being resolved is not in
+    /// it: one that read the assignment before the shard left opens its oplog at the epoch it
+    /// was granted, and checks the assignment again once it is published - see
+    /// `Worker::retire_if_shard_left_during_construction`.
+    pub(crate) async fn give_up_matching(
+        &self,
+        select: impl Fn(&AgentId) -> bool,
+        reason: RetirementReason,
+    ) {
+        let selected: Vec<Arc<Worker<Ctx>>> = self
+            .snapshot()
+            .await
+            .into_iter()
+            .filter(|(agent_id, _)| select(agent_id))
+            .map(|(_, worker)| worker)
+            .collect();
+
+        if !selected.is_empty() {
+            info!(
+                agents = selected.len(),
+                "Retiring agents whose shard has moved"
+            );
+        }
+
+        // Concurrent, and a failed retirement never stops the sweep: each agent's own answer is
+        // the routing miss that sends its callers to the new owner.
+        futures::future::join_all(selected.into_iter().map(|worker| {
+            let reason = reason.clone();
+            async move {
+                let _ = worker
+                    .interrupt_and_retire(InterruptKind::ShardLost, reason)
+                    .await;
+            }
+        }))
+        .await;
+    }
+
     /// Interrupts and unloads all in-memory workers whose environment matches
     /// `environment_id`.  Called when the environment is deleted so that
     /// running workers stop promptly.
@@ -1048,7 +1345,10 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
         for (_agent_id, worker) in self.snapshot().await {
             if worker.get_initial_worker_metadata().environment_id == environment_id
                 && let Err(error) = worker
-                    .interrupt_and_retire(InterruptKind::Interrupt(Timestamp::now_utc()))
+                    .interrupt_and_retire(
+                        InterruptKind::Interrupt(Timestamp::now_utc()),
+                        RetirementReason::Requested,
+                    )
                     .await
             {
                 tracing::error!(

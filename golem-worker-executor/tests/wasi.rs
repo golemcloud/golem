@@ -65,6 +65,9 @@ use tokio::time::Instant;
 use tokio_stream::StreamExt;
 use tracing::{Instrument, debug, info};
 
+/// The shard manager process every shard push in these tests names.
+const TEST_SHARD_MANAGER: &str = "5eed0000-0000-4000-8000-000000000001";
+
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
 inherit_test_dep!(
@@ -2460,6 +2463,7 @@ async fn filesystem_full_replay_survives_lifecycle_transitions_impl(
         .revoke_shards(RevokeShardsRequest {
             shard_ids: vec![shard],
             revision: 1,
+            incarnation_id: TEST_SHARD_MANAGER.to_string(),
         })
         .await?
         .into_inner();
@@ -2485,6 +2489,7 @@ async fn filesystem_full_replay_survives_lifecycle_transitions_impl(
             // round trip does not depend on timing.
             revision: 1,
             number_of_shards: 1,
+            incarnation_id: TEST_SHARD_MANAGER.to_string(),
         })
         .await?
         .into_inner();
@@ -2650,6 +2655,7 @@ async fn initial_file_listing_through_api(
 }
 
 #[test]
+#[timeout("120s")]
 #[tracing::instrument]
 async fn initial_file_reading_through_api(
     last_unique_id: &LastUniqueId,
@@ -2706,6 +2712,73 @@ async fn initial_file_reading_through_api(
 
     assert_eq!(result1, "foo\n");
     assert_eq!(result2, "hello world");
+
+    // Retain the lookup result across unload: intake must restore through this handle,
+    // replaying writable contents without starting a new invocation.
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let worker = executor
+        .active_agent(&owned_agent_id)
+        .await
+        .expect("active agent")
+        .primary();
+    let before_index = executor.oplog_max_index(&worker_id).await?;
+
+    for read_contents in [true, false] {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while !worker.stop_if_idle().await {
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+        })
+        .await?;
+        assert!(!executor.worker_is_loaded(&owned_agent_id).await);
+
+        if read_contents {
+            let result = tokio::time::timeout(
+                Duration::from_secs(30),
+                worker.read_file(
+                    CanonicalFilePath::from_abs_str("/bar/baz.txt").unwrap(),
+                    golem_common::model::filesystem::FileByteSelection::Full,
+                ),
+            )
+            .await
+            .expect("read through unloaded handle did not restore")?;
+            assert!(matches!(
+                result.head,
+                golem_common::model::filesystem::FileReadHead::File(_)
+            ));
+            let mut body = result.body;
+            let mut contents = Vec::new();
+            while let Some(chunk) = body.next().await {
+                contents.extend_from_slice(&chunk?);
+            }
+            assert_eq!(contents, b"hello world");
+        } else {
+            let result = tokio::time::timeout(
+                Duration::from_secs(30),
+                worker.get_file_system_node(CanonicalFilePath::from_abs_str("/bar").unwrap()),
+            )
+            .await
+            .expect("listing through unloaded handle did not restore")?;
+            let golem_service_base::model::GetFileSystemNodeResult::Ok(nodes) = result else {
+                panic!("expected restored directory");
+            };
+            assert_eq!(nodes.len(), 1);
+            assert_eq!(nodes[0].name, "baz.txt");
+            assert_eq!(
+                nodes[0].details,
+                golem_service_base::model::ComponentFileSystemNodeDetails::File {
+                    permissions: AgentFilePermissions::ReadWrite,
+                    size: 11,
+                }
+            );
+        }
+    }
+
+    let after = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        count_agent_invocation_pair_since(&after, before_index),
+        (0, 0)
+    );
 
     Ok(())
 }

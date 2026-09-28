@@ -158,6 +158,29 @@ describe("Config 1.6", () => {
     }),
   )
 
+  it.effect("borrows a fresh opaque capability without revealing it", () =>
+    Effect.gen(function* () {
+      const PublicConfig = defineConfig("BorrowConfig", { token: Schema.Redacted(Schema.String) })
+      const compiled = yield* PublicConfig.__compile()
+      const handles = [{}, {}] as CoreTypes.Secret[]
+      let calls = 0
+      const shape = yield* compiled.buildShape().pipe(
+        Effect.provide(
+          configLayer(() => ({
+            root: 0,
+            valueNodes: [{ tag: "secret-value", val: handles[calls++]! }],
+          })),
+        ),
+      )
+      yield* Effect.gen(function* () {
+        const cfg = yield* PublicConfig
+        expect(yield* cfg.token.borrow).toBe(handles[0])
+        expect(yield* cfg.token.borrow).toBe(handles[1])
+      }).pipe(Effect.provideService(PublicConfig, shape as never))
+      expect(calls).toBe(2)
+    }),
+  )
+
   it.effect("reveals an opaque secret freshly and returns a redacted value", () =>
     Effect.gen(function* () {
       const compiled = yield* compile({ apiKey: Schema.Redacted(Schema.String) })

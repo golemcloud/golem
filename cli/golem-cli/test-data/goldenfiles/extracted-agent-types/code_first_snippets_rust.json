@@ -26,6 +26,7 @@
     },
     "dependencies": [],
     "description": "Rust Code First BarAgent",
+    "kind": "regular",
     "methods": [
       {
         "description": "",
@@ -2629,6 +2630,7 @@
     },
     "dependencies": [],
     "description": "Rust Code First FooAgent",
+    "kind": "regular",
     "methods": [
       {
         "description": "",
@@ -5260,6 +5262,7 @@
     },
     "dependencies": [],
     "description": "",
+    "kind": "regular",
     "methods": [
       {
         "description": "",

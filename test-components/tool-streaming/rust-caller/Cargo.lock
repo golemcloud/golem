@@ -439,11 +439,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "glob-match"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9985c9503b412198aa4197559e9a318524ebc4519c229bfa05a535828c950b9d"
+
+[[package]]
 name = "golem-rust"
 version = "0.0.0"
 dependencies = [
  "async-trait",
  "ctor",
+ "glob-match",
  "golem-rust-macro",
  "golem-schema",
  "golem-tool-metadata",
@@ -462,6 +469,7 @@ dependencies = [
 name = "golem-rust-macro"
 version = "0.0.0"
 dependencies = [
+ "golem-schema",
  "heck 0.5.0",
  "humantime",
  "proc-macro-crate",
@@ -519,7 +527,9 @@ dependencies = [
  "capable-streaming-tool-guest-client",
  "futures-concurrency",
  "golem-rust",
+ "secret-policy-probe-tool-guest-client",
  "streaming-tool-guest-client",
+ "typed-output-stream-tool-guest-client",
 ]
 
 [[package]]
@@ -975,6 +985,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 
 [[package]]
+name = "secret-policy-probe-tool-guest-client"
+version = "0.0.1"
+dependencies = [
+ "chrono",
+ "golem-rust",
+ "serde",
+ "uuid",
+]
+
+[[package]]
 name = "semver"
 version = "1.0.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1169,6 +1189,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d38ac1cf9b95face32296c0a3ede1fdc270627c9d9c02a7274dd6d960dc4d56"
 dependencies = [
  "winnow",
+]
+
+[[package]]
+name = "typed-output-stream-tool-guest-client"
+version = "0.0.1"
+dependencies = [
+ "chrono",
+ "golem-rust",
+ "serde",
+ "uuid",
 ]
 
 [[package]]

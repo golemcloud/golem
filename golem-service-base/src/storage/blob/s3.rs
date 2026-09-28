@@ -15,12 +15,12 @@
 use crate::config::S3BlobStorageConfig;
 use crate::replayable_stream::ErasedReplayableStream;
 use crate::storage::blob::{
-    BlobMetadata, BlobMissingError, BlobNameError, BlobRangeError, BlobStorage,
-    BlobStorageNamespace, DIR_MARKER, ExistsResult, ListedBlob, NormalizedBlobPath, PutIfAbsent,
-    agent_path_segment, blob_copy_changes_nothing, blob_path_to_string, blob_positions,
-    check_blob_name, normalized_blob_path,
+    BLOB_STREAM_CHUNK_SIZE, BlobMetadata, BlobMissingError, BlobNameError, BlobRangeError,
+    BlobRangeStream, BlobStorage, BlobStorageNamespace, DIR_MARKER, ExistsResult, ListedBlob,
+    NormalizedBlobPath, PutIfAbsent, agent_path_segment, blob_copy_changes_nothing,
+    blob_path_to_string, blob_positions, check_blob_name, normalized_blob_path, validate_range,
 };
-use anyhow::{Error, anyhow};
+use anyhow::{Error, anyhow, ensure};
 use async_trait::async_trait;
 use aws_sdk_s3::Client;
 use aws_sdk_s3::config::http::HttpResponse;
@@ -164,6 +164,22 @@ const NO_SUCH_KEY_CODE: &str = "NoSuchKey";
 /// [`BlobNameError::TooLong`] in the parent module holds the rule, and this backend gives that
 /// error with this limit in it.
 const MAX_KEY_BYTES: usize = 1024;
+
+fn ranged_object_size(content_range: Option<&str>, start: u64, end: u64) -> Result<u64, Error> {
+    let (range, total) = content_range
+        .and_then(|value| value.strip_prefix("bytes "))
+        .and_then(|value| value.split_once('/'))
+        .ok_or_else(|| anyhow!("Missing or invalid S3 Content-Range"))?;
+    let (actual_start, actual_end) = range
+        .split_once('-')
+        .ok_or_else(|| anyhow!("Invalid S3 range"))?;
+    let total: u64 = total.parse()?;
+    ensure!(
+        actual_start.parse::<u64>()? == start && actual_end.parse::<u64>()? == end && end < total,
+        "Unexpected S3 range"
+    );
+    Ok(total)
+}
 
 #[derive(Debug)]
 pub struct S3BlobStorage {
@@ -1200,6 +1216,90 @@ impl BlobStorage for S3BlobStorage {
                 err => Err(err.into()),
             },
             Err(err) => Err(err.into()),
+        }
+    }
+
+    async fn get_range_stream(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+        offset: u64,
+        length: u64,
+    ) -> Result<Option<BlobRangeStream>, Error> {
+        let path = normalized_blob_path(path)?;
+        let bucket = self.bucket_of(&namespace);
+        let key = self.key_of(&namespace, &path)?;
+        if length == 0 {
+            // A directory has no blob at its path, so this reads the head of the blob key alone
+            // and not the marker object that `get_metadata` also reads.
+            let op_id = format!("{bucket} - {key:?}");
+            return self
+                .head_object(target_label, op_label, bucket, key, op_id)
+                .await?
+                .map(|head| {
+                    let total_size = head.content_length().unwrap_or_default() as u64;
+                    validate_range(offset, length, total_size)?;
+                    Ok(BlobRangeStream {
+                        total_size,
+                        stream: Box::pin(futures::stream::empty()),
+                    })
+                })
+                .transpose();
+        }
+        let end = offset
+            .checked_add(length - 1)
+            .ok_or_else(|| anyhow!("Blob range overflow"))?;
+        let result = with_retries_customized(
+            target_label,
+            op_label,
+            Some(format!("{bucket} - {key:?}")),
+            &self.config.retries,
+            &(self.client.clone(), bucket, key),
+            |(client, bucket, key)| {
+                Box::pin(async move {
+                    client
+                        .get_object()
+                        .bucket(*bucket)
+                        .key(key.clone())
+                        .range(format!("bytes={offset}-{end}"))
+                        .send()
+                        .await
+                })
+            },
+            |error| {
+                use aws_sdk_s3::error::ProvideErrorMetadata;
+                !matches!(error, SdkError::ServiceError(service) if service.err().code() == Some("InvalidRange"))
+                    && Self::is_get_object_error_retriable(error)
+            },
+            Self::get_object_error_as_loggable,
+            false,
+        )
+        .await;
+        match result {
+            Ok(response) => {
+                let total_size = ranged_object_size(response.content_range(), offset, end)?;
+                if let Some(content_length) = response.content_length() {
+                    ensure!(
+                        u64::try_from(content_length)? == length,
+                        "Invalid S3 range length"
+                    );
+                }
+                let stream = tokio_util::io::ReaderStream::with_capacity(
+                    response.body.into_async_read(),
+                    BLOB_STREAM_CHUNK_SIZE,
+                );
+                Ok(Some(BlobRangeStream {
+                    total_size,
+                    stream: Box::pin(stream.map_err(Error::from)),
+                }))
+            }
+            Err(SdkError::ServiceError(error)) => match error.into_err() {
+                NoSuchKey(_) => Ok(None),
+                error => Err(error.into()),
+            },
+            Err(error) => Err(error.into()),
         }
     }
 

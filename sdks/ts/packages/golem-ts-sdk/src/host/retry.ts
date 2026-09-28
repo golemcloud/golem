@@ -38,6 +38,7 @@ import {
   Props,
   type DurationInput,
   type NamedPolicyInput,
+  type PolicyInput,
   type PredicateValueInput,
   toRawDuration,
   toRawNamedPolicy,
@@ -54,6 +55,7 @@ export {
   Props,
   type DurationInput,
   type NamedPolicyInput,
+  type PolicyInput,
   type PredicateValueInput,
   toRawDuration,
   toRawNamedPolicy,
@@ -61,6 +63,8 @@ export {
   toRawPredicate,
   toRawPredicateValue,
 };
+
+export { retry, RetryPolicyError, type RetryOptions, type RetryProperties } from './retryExecutor';
 
 export function setRetryPolicy(policy: NamedPolicyInput): void {
   rawSetRetryPolicy(toRawNamedPolicy(policy));

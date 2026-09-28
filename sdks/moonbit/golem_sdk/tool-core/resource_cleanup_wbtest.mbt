@@ -45,7 +45,7 @@ test "parameter failure rolls back an earlier decoded stream" {
   catch {
     e => Err(e)
   }
-  guard result is Err(@toolCommon.ToolError::InvalidInput(_)) else {
+  guard result is Err(@types.ToolError::InvalidInput(_)) else {
     fail("decoding the second stream as Int must fail")
   }
   assert_false(first_owned.is_present())
@@ -81,7 +81,7 @@ test "canonical field rejection releases undecoded streams" {
   catch {
     e => Err(e)
   }
-  guard result is Err(@toolCommon.ToolError::InvalidInput(_)) else {
+  guard result is Err(@types.ToolError::InvalidInput(_)) else {
     fail("a missing canonical field must fail")
   }
   assert_false(source.is_present())

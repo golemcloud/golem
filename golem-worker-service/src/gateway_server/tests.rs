@@ -59,6 +59,24 @@ impl Drop for BodyGuard {
     }
 }
 
+#[test]
+#[timeout("5s")]
+async fn live_body_waiters_observe_acquisition_and_release() {
+    let bodies = LiveBodies::default();
+    let acquired = bodies.wait_for(1);
+    tokio::pin!(acquired);
+    assert!(futures::poll!(acquired.as_mut()).is_pending());
+
+    let guard = bodies.guard();
+    assert!(futures::poll!(acquired.as_mut()).is_ready());
+
+    let released = bodies.wait_for(0);
+    tokio::pin!(released);
+    assert!(futures::poll!(released.as_mut()).is_pending());
+    drop(guard);
+    assert!(futures::poll!(released.as_mut()).is_ready());
+}
+
 fn idle_body(guard: BodyGuard) -> Body {
     let initial = stream::once(async { Ok::<_, std::io::Error>(Bytes::from_static(b"initial\n")) });
     let pending = stream::pending::<Result<Bytes, std::io::Error>>();

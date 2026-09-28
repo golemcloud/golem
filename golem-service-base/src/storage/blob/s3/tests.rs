@@ -12,7 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{BodyLengthError, RETRIABLE_SERVICE_ERROR_CODES, S3BlobStorage, cut_range, read_body};
+use super::{
+    BodyLengthError, RETRIABLE_SERVICE_ERROR_CODES, S3BlobStorage, cut_range, ranged_object_size,
+    read_body,
+};
 use crate::config::{S3BlobStorageConfig, S3BlobStorageCredentialsConfig};
 use crate::storage::blob::{
     BlobMissingError, BlobNameError, BlobRangeError, BlobStorage, BlobStorageNamespace,
@@ -3079,4 +3082,23 @@ async fn an_oplog_payload_goes_to_the_key_of_its_agent_path_segment() {
             )]
         )
     );
+}
+
+#[test]
+fn range_response_requires_exact_selection_and_total_size() {
+    assert_eq!(
+        ranged_object_size(Some("bytes 7-10/123"), 7, 10).unwrap(),
+        123
+    );
+    for invalid in [
+        None,
+        Some("bytes 0-122/123"),
+        Some("bytes 7-9/123"),
+        Some("bytes 7-10/*"),
+        Some("bytes 7-10/10"),
+        Some("items 7-10/123"),
+        Some("bytes 7-10/18446744073709551616"),
+    ] {
+        assert!(ranged_object_size(invalid, 7, 10).is_err(), "{invalid:?}");
+    }
 }

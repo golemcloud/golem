@@ -4,10 +4,15 @@ import {
   "golemcloud/golem_sdk/interface/golem/api/retry",
   "golemcloud/golem_sdk/interface/golem/core/types",
   "golemcloud/golem_sdk/interface/golem/durability/durability" @raw_durability,
+  "golemcloud/golem_sdk/interface/wasi/clocks/monotonic-clock" @monotonic,
+  "golemcloud/golem_sdk/interface/wasi/random/insecure",
   "golemcloud/golem_sdk/schema",
   "golemcloud/golem_sdk/schema_model" @model,
   "golemcloud/golem_sdk/schema_model_host" @model_host,
   "moonbitlang/core/debug",
+  "moonbitlang/core/encoding/utf8",
+  "moonbitlang/core/math",
+  "moonbitlang/core/strconv",
 }
 
 supported_targets = "+wasm"

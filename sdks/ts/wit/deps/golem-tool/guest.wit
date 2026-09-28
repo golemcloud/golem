@@ -10,7 +10,7 @@ package golem:tool@0.1.0;
 /// rules and is independent of the tool calling convention.
 interface guest {
   use common.{tool, tool-error, invocation-result};
-  use host.{byte-stream-item, tool-stdout-writer};
+  use streams.{byte-stream-item, tool-stdout-writer};
   use golem:core/types@2.0.0.{typed-schema-value};
   use golem:agent/common@2.0.0.{principal};
 

@@ -8,22 +8,23 @@ use super::super::error::RequestHandlerError;
 use super::super::route_resolver::ResolvedRouteEntry;
 use super::super::{RichRequest, RouteExecutionResult};
 use super::encoding::offset_text;
-use super::session::{arguments_come_from_url, content_type_mismatch, declared_slot_content_type};
+use super::session::{arguments_come_from_url, content_type_mismatch, declared_slot};
 use super::{
     DurableStreamsHandler, MAX_ITEMS, body_response, has_header, rejection_response, response,
-    route_method,
+    route_method, route_stream_load_key,
 };
 use golem_api_grpc::proto::golem::schema::SchemaValue as ProtoSchemaValue;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
-    AppendToStreamSlotRequest, ExternalStreamProducer, ReadStreamSlotSuccess, TypedStreamSlotItems,
-    append_to_stream_slot_request::Payload, append_to_stream_slot_response::Result as Outcome,
+    AppendToStreamSlotRequest, ExternalStreamProducer, StreamSessionCreationIntent,
+    StreamSessionExpiryPolicy, TypedStreamSlotItems, append_to_stream_slot_request::Payload,
+    append_to_stream_slot_response::Result as Outcome,
 };
 use golem_common::model::AgentId;
 use golem_common::schema::{FieldSource, SchemaGraph, SchemaType};
 use golem_schema::schema::render::from_untrusted_json_value;
 use golem_service_base::custom_api::CallAgentBehaviour;
 use golem_service_base::model::auth::AuthCtx;
-use http::{HeaderName, StatusCode};
+use http::{HeaderName, HeaderValue, StatusCode};
 use prost::Message;
 use tokio::io::AsyncReadExt;
 
@@ -38,19 +39,40 @@ impl DurableStreamsHandler {
         agent_id: &AgentId,
         session: &str,
         slot: &str,
+        allow_create: bool,
+        allow: &str,
+        expiry_policy: Option<StreamSessionExpiryPolicy>,
     ) -> Result<RouteExecutionResult, RequestHandlerError> {
-        let key = format!("{}:{agent_id}:{session}:{slot}", route.route.environment_id);
-        if let Err(rejection) = self.limiter.check_append(&key) {
+        let Some(declared_slot) = declared_slot(behaviour, slot)? else {
+            return Ok(response(StatusCode::NOT_FOUND));
+        };
+        let route_key = route_stream_load_key(
+            route.route.environment_id,
+            route.route.deployment_revision,
+            route.route.route_id,
+            agent_id,
+            session,
+            slot,
+        );
+        let route_limit = behaviour
+            .durable_streams
+            .as_ref()
+            .and_then(|policy| policy.load.as_ref())
+            .and_then(|load| load.max_append_requests_per_second_per_stream);
+        if let Err(rejection) = self.limiter.check_append(&route_key, route_limit) {
             return Ok(rejection_response(rejection));
         }
         let metadata = self
             .read_slot(route, agent_id, session, slot, Vec::new(), 0, 0)
             .await?;
+        if metadata.is_none() && !allow_create {
+            return Ok(response(StatusCode::NOT_FOUND));
+        }
         if metadata.as_ref().is_some_and(|m| m.tombstoned) {
             return Ok(response(StatusCode::GONE));
         }
         if metadata.as_ref().is_some_and(|m| !m.writable) {
-            return Ok(read_only_response());
+            return Ok(read_only_response(allow));
         }
         let graph: SchemaGraph = match &metadata {
             Some(metadata) => metadata
@@ -77,11 +99,7 @@ impl DurableStreamsHandler {
                             field.name == slot && matches!(field.source, FieldSource::UserSupplied)
                         })
                 else {
-                    return Ok(if declared_slot_content_type(behaviour, slot)?.is_some() {
-                        read_only_response()
-                    } else {
-                        response(StatusCode::NOT_FOUND)
-                    });
+                    return Ok(read_only_response(allow));
                 };
                 let SchemaType::Stream {
                     inner: Some(inner), ..
@@ -137,12 +155,8 @@ impl DurableStreamsHandler {
                 "Append body exceeds the configured limit",
             ));
         }
-        let binary = matches!(
-            graph
-                .resolve_ref(&graph.root)
-                .map_err(|e| anyhow::anyhow!(e.to_string()))?,
-            SchemaType::U8 { .. }
-        );
+        let binary = declared_slot.representation
+            == golem_service_base::custom_api::DurableStreamRepresentation::Bytes;
         if !body.is_empty() {
             if !has_header(request, "content-type") {
                 return Ok(problem(
@@ -151,19 +165,14 @@ impl DurableStreamsHandler {
                     "Content-Type is required for an append body",
                 ));
             }
-            if content_type_mismatch(
-                request,
-                if binary {
-                    "application/octet-stream"
-                } else {
-                    "application/json"
-                },
-            )? {
+            if content_type_mismatch(request, &declared_slot.content_type)? {
                 if let Some(metadata) = metadata.as_ref().filter(|metadata| metadata.closed) {
                     return append_response(
                         Outcome::Closed(Default::default()),
                         producer.as_ref(),
-                        metadata,
+                        metadata.head_offset.clone(),
+                        Some(metadata.closed),
+                        allow,
                     );
                 }
                 return Ok(response(StatusCode::CONFLICT));
@@ -183,10 +192,18 @@ impl DurableStreamsHandler {
             ));
         }
         if metadata.is_none() {
-            self.create(request, route, behaviour, agent_id, session)
-                .await?;
+            self.create(
+                request,
+                route,
+                behaviour,
+                agent_id,
+                session,
+                StreamSessionCreationIntent::LazyPost,
+                expiry_policy,
+            )
+            .await?;
         }
-        let outcome = self
+        let append = self
             .worker_service
             .append_to_stream_slot(
                 agent_id,
@@ -203,18 +220,19 @@ impl DurableStreamsHandler {
                 },
             )
             .await?;
-        // Deletion can race an append or a duplicate. The offset stays tied to the
-        // acknowledged batch, but EOF and tombstone metadata describe the current stream.
-        let Some(metadata) = self
-            .read_slot(route, agent_id, session, slot, Vec::new(), 0, 0)
-            .await?
-        else {
+        let outcome = append
+            .result
+            .ok_or_else(|| anyhow::anyhow!("empty append stream response"))?;
+        if matches!(&outcome, Outcome::NotFound(_)) {
             return Ok(response(StatusCode::NOT_FOUND));
-        };
-        if metadata.tombstoned {
-            return Ok(response(StatusCode::GONE));
         }
-        append_response(outcome, producer.as_ref(), &metadata)
+        append_response(
+            outcome,
+            producer.as_ref(),
+            append.stream_head_offset,
+            append.stream_closed,
+            allow,
+        )
     }
 }
 
@@ -304,7 +322,9 @@ fn decode_body(
 fn append_response(
     outcome: Outcome,
     producer: Option<&ExternalStreamProducer>,
-    metadata: &ReadStreamSlotSuccess,
+    stream_head_offset: Vec<u8>,
+    stream_closed: Option<bool>,
+    allow: &str,
 ) -> Result<RouteExecutionResult, RequestHandlerError> {
     let mut result = response(StatusCode::NO_CONTENT);
     let (offset, sequence) = match outcome {
@@ -324,7 +344,7 @@ fn append_response(
             result.status = StatusCode::FORBIDDEN;
             result.headers.insert(
                 HeaderName::from_static("producer-epoch"),
-                value.current_epoch.to_string(),
+                HeaderValue::from(value.current_epoch),
             );
             return Ok(result);
         }
@@ -333,49 +353,58 @@ fn append_response(
             result.status = StatusCode::CONFLICT;
             result.headers.insert(
                 HeaderName::from_static("producer-expected-seq"),
-                value.expected.to_string(),
+                HeaderValue::from(value.expected),
             );
             result.headers.insert(
                 HeaderName::from_static("producer-received-seq"),
-                value.received.to_string(),
+                HeaderValue::from(value.received),
             );
             return Ok(result);
         }
         Outcome::Closed(_) => {
             result.status = StatusCode::CONFLICT;
-            (metadata.head_offset.clone(), None)
+            (stream_head_offset, None)
         }
         Outcome::Gone(_) => return Ok(response(StatusCode::GONE)),
         Outcome::NotFound(_) => return Ok(response(StatusCode::NOT_FOUND)),
-        Outcome::ReadOnly(_) => return Ok(read_only_response()),
+        Outcome::ReadOnly(_) => return Ok(read_only_response(allow)),
         Outcome::Failure(_) => return Err(anyhow::anyhow!("unmapped append failure").into()),
     };
     result.headers.insert(
         HeaderName::from_static("stream-next-offset"),
-        offset_text(&offset)?,
+        offset_text(&offset)?.parse().map_err(anyhow::Error::from)?,
     );
     result.headers.insert(
         HeaderName::from_static("stream-closed"),
-        metadata.closed.to_string(),
+        HeaderValue::from_static(
+            if stream_closed
+                .ok_or_else(|| anyhow::anyhow!("append outcome has no stream metadata"))?
+            {
+                "true"
+            } else {
+                "false"
+            },
+        ),
     );
     if let (Some(producer), Some(sequence)) = (producer, sequence) {
         result.headers.insert(
             HeaderName::from_static("producer-epoch"),
-            producer.epoch.to_string(),
+            HeaderValue::from(producer.epoch),
         );
         result.headers.insert(
             HeaderName::from_static("producer-seq"),
-            sequence.to_string(),
+            HeaderValue::from(sequence),
         );
     }
     Ok(result)
 }
 
-pub(super) fn read_only_response() -> RouteExecutionResult {
+fn read_only_response(allow: &str) -> RouteExecutionResult {
     let mut result = response(StatusCode::METHOD_NOT_ALLOWED);
-    result
-        .headers
-        .insert(http::header::ALLOW, "PUT, HEAD, GET, DELETE".into());
+    result.headers.insert(
+        http::header::ALLOW,
+        allow.parse().expect("static Allow header is valid"),
+    );
     result
 }
 
@@ -495,28 +524,55 @@ mod tests {
                 epoch: 4,
                 sequence: 2,
             }),
-            &ReadStreamSlotSuccess {
-                closed: false,
-                ..Default::default()
-            },
+            Vec::new(),
+            Some(false),
+            "PUT, HEAD, GET, DELETE, POST",
         )
         .unwrap();
         assert_eq!(result.status, StatusCode::NO_CONTENT);
         assert_eq!(
             result.headers[&HeaderName::from_static("stream-next-offset")],
-            original.to_string()
+            original.to_string().parse::<HeaderValue>().unwrap()
         );
         assert_eq!(
             result.headers[&HeaderName::from_static("producer-seq")],
-            "9"
+            HeaderValue::from_static("9")
         );
         assert_eq!(
             result.headers[&HeaderName::from_static("producer-epoch")],
-            "4"
+            HeaderValue::from_static("4")
         );
         assert_eq!(
             result.headers[&HeaderName::from_static("stream-closed")],
-            "false"
+            HeaderValue::from_static("false")
         );
+    }
+
+    #[test]
+    fn append_response_rejects_missing_stream_metadata() {
+        let offset = golem_common::model::durable_stream::StreamOffset::new(
+            golem_common::model::OplogIndex::from_u64(31),
+            2,
+        );
+        assert!(
+            append_response(
+                Outcome::Accepted(
+                    golem_api_grpc::proto::golem::workerexecutor::v1::AppendAccepted {
+                        offset: offset.as_bytes().to_vec(),
+                    },
+                ),
+                None,
+                Vec::new(),
+                None,
+                "PUT, HEAD, GET, DELETE, POST",
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn problem_responses_are_not_cacheable() {
+        let result = problem(StatusCode::NOT_FOUND, "$", "missing");
+        assert_eq!(result.headers[&http::header::CACHE_CONTROL], "no-store");
     }
 }

@@ -537,18 +537,14 @@ impl From<FilterComparator> for golem::common::FilterComparator {
 
 impl From<Cursor> for ScanCursor {
     fn from(value: Cursor) -> Self {
-        Self {
-            cursor: value.cursor,
-            layer: value.layer as usize,
-        }
+        Self::new(value.value)
     }
 }
 
 impl From<ScanCursor> for Cursor {
     fn from(value: ScanCursor) -> Self {
         Self {
-            cursor: value.cursor,
-            layer: value.layer as u64,
+            value: value.into_inner(),
         }
     }
 }
@@ -887,6 +883,16 @@ mod tests {
 
     test_r::enable!();
 
+    #[test]
+    fn scan_cursor_preserves_opaque_value_through_protobuf_conversion() {
+        for value in ["", "gsc1_opaque-token_雪"] {
+            let cursor = ScanCursor::new(value.to_string());
+            let wire: Cursor = cursor.clone().into();
+            assert_eq!(wire.value, value);
+            assert_eq!(ScanCursor::from(wire), cursor);
+        }
+    }
+
     /// The round trip goes through the free conversion functions
     /// themselves — they are what `AssignShards` and `RenewShardLease` use on
     /// both sides of the wire. `epoch_of` is how a reader of the pushed set
@@ -907,7 +913,15 @@ mod tests {
         assert_eq!(received, pushed);
 
         let mut assignment = ShardAssignment::default();
-        assignment.set_shards(1024, &received, ShardLeaseRevision(1));
+        let manager = uuid::Uuid::new_v4();
+        assignment.set_shards(
+            1024,
+            &received,
+            ShardLeaseRevision {
+                incarnation: manager,
+                number: 1,
+            },
+        );
 
         assert_eq!(assignment.epoch_of(&ShardId::new(0)), Some(ShardEpoch(1)));
         assert_eq!(assignment.epoch_of(&ShardId::new(7)), Some(ShardEpoch(42)));

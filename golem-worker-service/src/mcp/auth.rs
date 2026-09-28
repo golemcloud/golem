@@ -19,9 +19,11 @@ use crate::mcp::McpCapabilityLookup;
 use golem_common::base_model::domain_registration::Domain;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_service_base::custom_api::SecuritySchemeDetails;
+use golem_service_base::mcp::CompiledMcp;
 use openidconnect::{AuthorizationCode, CsrfToken, Nonce, Scope};
 use poem::http;
 use poem::{Endpoint, IntoResponse, Middleware, Request, Response, Result, Route};
+use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use std::time::Duration;
 use uuid::Uuid;
@@ -39,7 +41,7 @@ const TOKEN_CACHE_EVICTION_PERIOD: Duration = Duration::from_secs(30);
 
 /// Hash of a Bearer token, used as a cache key to avoid re-validating
 /// the same token against the identity provider on every request.
-type TokenHash = u64;
+type TokenHash = [u8; 32];
 
 /// Per-instance cache of successfully validated tokens.
 /// Each instance maintains its own cache independently; a cache miss
@@ -79,11 +81,33 @@ impl McpBearerAuth {
         }
     }
 
-    fn token_hash(token: &str) -> TokenHash {
-        use std::hash::{Hash, Hasher};
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        token.hash(&mut hasher);
-        hasher.finish()
+    fn token_hash(
+        token: &str,
+        deployment: &CompiledMcp,
+        scheme: &SecuritySchemeDetails,
+    ) -> TokenHash {
+        Self::hash_parts(&[
+            token.to_string(),
+            deployment.domain.0.clone(),
+            deployment.environment_id.to_string(),
+            deployment.deployment_revision.to_string(),
+            scheme.id.to_string(),
+            scheme.name.to_string(),
+            format!("{:?}", scheme.provider_type),
+            scheme.client_id.as_str().to_string(),
+            scheme.client_secret.secret().clone(),
+            scheme.redirect_url.as_str().to_string(),
+            format!("{:?}", scheme.scopes),
+        ])
+    }
+
+    fn hash_parts(parts: &[String]) -> TokenHash {
+        let mut hasher = Sha256::new();
+        for part in parts {
+            hasher.update((part.len() as u64).to_le_bytes());
+            hasher.update(part.as_bytes());
+        }
+        hasher.finalize().into()
     }
 }
 
@@ -110,20 +134,32 @@ pub struct McpBearerAuthEndpoint<E> {
 impl<E: Endpoint> Endpoint for McpBearerAuthEndpoint<E> {
     type Output = Response;
 
-    async fn call(&self, req: Request) -> Result<Self::Output> {
+    async fn call(&self, mut req: Request) -> Result<Self::Output> {
         let host = resolve_effective_host(req.headers());
-
-        let security_scheme = if let Some(host) = &host {
-            let domain = Domain(host.clone());
-            match self.mcp_capability_lookup.get(&domain).await {
-                Ok(compiled_mcp) => compiled_mcp.security_scheme,
-                Err(_) => None,
-            }
-        } else {
-            None
+        let Some(host_name) = &host else {
+            return Ok(Response::builder()
+                .status(http::StatusCode::BAD_REQUEST)
+                .finish());
         };
+        let compiled = match self
+            .mcp_capability_lookup
+            .get(&Domain(host_name.clone()))
+            .await
+        {
+            Ok(compiled) => Arc::new(compiled),
+            Err(_) => {
+                return Ok(Response::builder()
+                    .status(http::StatusCode::SERVICE_UNAVAILABLE)
+                    .finish());
+            }
+        };
+        if compiled.security_scheme_name.is_some() && compiled.security_scheme.is_none() {
+            return Ok(Response::builder()
+                .status(http::StatusCode::SERVICE_UNAVAILABLE)
+                .finish());
+        }
 
-        if let Some(scheme) = security_scheme {
+        if let Some(scheme) = &compiled.security_scheme {
             let auth_header = req
                 .headers()
                 .get("authorization")
@@ -134,29 +170,30 @@ impl<E: Endpoint> Endpoint for McpBearerAuthEndpoint<E> {
                 Some(header) if header.starts_with("Bearer ") => header[7..].to_string(),
                 _ => {
                     tracing::warn!("MCP request missing or invalid Authorization header");
-                    return Ok(unauthorized_response(host.as_deref(), &scheme));
+                    return Ok(unauthorized_response(host.as_deref(), scheme));
                 }
             };
 
-            let hash = McpBearerAuth::token_hash(&token);
+            let hash = McpBearerAuth::token_hash(&token, &compiled, scheme);
             let identity_provider = self.identity_provider.clone();
 
             let result = self
                 .validated_tokens
                 .get_or_insert_simple(&hash, async || {
                     identity_provider
-                        .validate_bearer_token(&scheme, &token)
+                        .validate_bearer_token(scheme, &token)
                         .await
                         .map_err(|err| err.to_string())
                 })
                 .await;
 
             if let Err(err) = result {
-                tracing::warn!("MCP Bearer token validation failed: {err}");
-                return Ok(unauthorized_response(host.as_deref(), &scheme));
+                tracing::warn!(error = %err, "MCP Bearer token validation failed");
+                return Ok(unauthorized_response(host.as_deref(), scheme));
             }
         }
 
+        req.extensions_mut().insert(compiled);
         self.inner.call(req).await.map(|resp| resp.into_response())
     }
 }
@@ -768,4 +805,136 @@ pub fn oauth_proxy_routes(
                 async move { oauth_token(req, store.as_ref()).await }
             }),
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mcp::mcp_capabilities_lookup::McpCapabilitiesLookupError;
+    use test_r::test;
+
+    struct Lookup(Option<CompiledMcp>);
+
+    #[async_trait::async_trait]
+    impl McpCapabilityLookup for Lookup {
+        async fn get(
+            &self,
+            domain: &Domain,
+        ) -> std::result::Result<CompiledMcp, McpCapabilitiesLookupError> {
+            self.0
+                .clone()
+                .ok_or_else(|| McpCapabilitiesLookupError::UnknownSite(domain.clone()))
+        }
+        async fn invalidate(&self, _: &Domain) {}
+        async fn invalidate_all(&self) {}
+    }
+
+    fn deployment() -> CompiledMcp {
+        use golem_common::model::{
+            account::{AccountEmail, AccountId},
+            application::ApplicationName,
+            deployment::DeploymentRevision,
+            environment::{EnvironmentId, EnvironmentName},
+        };
+        CompiledMcp {
+            account_id: AccountId::new(),
+            account_email: AccountEmail::new("owner@example.test"),
+            application_name: ApplicationName("app".into()),
+            environment_id: EnvironmentId::new(),
+            environment_name: EnvironmentName("env".into()),
+            deployment_revision: DeploymentRevision::INITIAL,
+            domain: Domain("example.test".into()),
+            security_scheme_name: None,
+            security_scheme: None,
+            registered_agent_types: vec![],
+            tools: vec![],
+        }
+    }
+
+    #[test]
+    async fn unavailable_or_unresolved_security_cannot_reach_mcp_endpoint() {
+        let mut unresolved = deployment();
+        unresolved.security_scheme_name = Some(
+            golem_common::model::security_scheme::SecuritySchemeName("oauth".into()),
+        );
+        for compiled in [None, Some(unresolved)] {
+            let middleware = McpBearerAuth::new(
+                Arc::new(Lookup(compiled)),
+                Arc::new(crate::custom_api::oidc::DefaultIdentityProvider),
+            );
+            let endpoint =
+                middleware.transform(poem::endpoint::make_sync(|_: Request| -> Response {
+                    panic!("unauthorized request reached the MCP endpoint")
+                }));
+            let response = endpoint
+                .call(Request::builder().header("host", "example.test").finish())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), http::StatusCode::SERVICE_UNAVAILABLE);
+        }
+    }
+
+    #[test]
+    async fn public_domain_passes_exact_compiled_deployment_to_endpoint() {
+        let compiled = deployment();
+        let expected_environment = compiled.environment_id;
+        let middleware = McpBearerAuth::new(
+            Arc::new(Lookup(Some(compiled))),
+            Arc::new(crate::custom_api::oidc::DefaultIdentityProvider),
+        );
+        let endpoint = middleware.transform(poem::endpoint::make_sync(move |req: Request| {
+            let compiled = req.extensions().get::<Arc<CompiledMcp>>().unwrap();
+            assert_eq!(compiled.environment_id, expected_environment);
+            Response::builder()
+                .status(http::StatusCode::NO_CONTENT)
+                .finish()
+        }));
+        assert_eq!(
+            endpoint
+                .call(Request::builder().header("host", "example.test").finish())
+                .await
+                .unwrap()
+                .status(),
+            http::StatusCode::NO_CONTENT
+        );
+    }
+
+    #[test]
+    fn token_cache_key_isolated_by_domain_and_scheme() {
+        let base = vec![
+            "token".to_string(),
+            "one.example".to_string(),
+            "scheme-a".to_string(),
+        ];
+        let other_domain = vec![
+            "token".to_string(),
+            "two.example".to_string(),
+            "scheme-a".to_string(),
+        ];
+        let updated_scheme = vec![
+            "token".to_string(),
+            "one.example".to_string(),
+            "scheme-b".to_string(),
+        ];
+
+        assert_ne!(
+            McpBearerAuth::hash_parts(&base),
+            McpBearerAuth::hash_parts(&other_domain)
+        );
+        assert_ne!(
+            McpBearerAuth::hash_parts(&base),
+            McpBearerAuth::hash_parts(&updated_scheme)
+        );
+    }
+
+    #[test]
+    fn token_cache_key_uses_unambiguous_field_framing() {
+        let left = vec!["ab".to_string(), "c".to_string()];
+        let right = vec!["a".to_string(), "bc".to_string()];
+
+        assert_ne!(
+            McpBearerAuth::hash_parts(&left),
+            McpBearerAuth::hash_parts(&right)
+        );
+    }
 }

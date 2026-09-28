@@ -30,7 +30,9 @@ use golem_common::schema::agent::{
 };
 use golem_common::schema::graph::{SchemaGraph, SchemaTypeDef};
 use golem_common::schema::metadata::TypeId;
-use golem_common::schema::schema_type::{BinaryRestrictions, TextRestrictions};
+use golem_common::schema::schema_type::{
+    BinaryRestrictions, NumericBound, NumericRestrictions, TextRestrictions,
+};
 use golem_common::schema::tool::{
     BoolFlagShape, CommandBody, CommandIndex, CommandNode, CommandTree, Doc, ErrorCase, ErrorKind,
     FlagShape, FlagSpec, Globals, OptionShape, OptionSpec, Positional, Positionals,
@@ -348,6 +350,51 @@ fn bridge_rust_ephemeral_agent_skips_non_phantom_constructors() {
     assert!(lib_rs.contains(
         "return Ok(Self {\n            constructor_parameters,\n            phantom_id: None,"
     ));
+}
+
+#[test]
+fn bridge_rust_external_rest_config_uses_canonical_json_and_session_public_json() {
+    let dir = TempDir::new().unwrap();
+    let target_dir = Utf8Path::from_path(dir.path()).unwrap();
+    let mut agent_type = agent(
+        "ConfigAgent",
+        "rust",
+        vec![],
+        vec![],
+        vec![],
+        AgentMode::Durable,
+    );
+    agent_type.config = vec![local_config(
+        vec!["limits", "maximum"],
+        SchemaType::S64 {
+            restrictions: Some(NumericRestrictions {
+                min: Some(NumericBound::Signed(-9_007_199_254_740_993)),
+                max: Some(NumericBound::Signed(9_007_199_254_740_993)),
+                unit: None,
+            }),
+            metadata: MetadataEnvelope::default(),
+        },
+    )];
+    let package_dir = target_dir.join(bridge_client_directory_name(
+        &agent_type.type_name,
+        BridgeMode::External,
+    ));
+    RustBridgeGenerator::new(agent_type, &package_dir, true)
+        .unwrap()
+        .generate()
+        .unwrap();
+
+    let source = std::fs::read_to_string(package_dir.join("src/lib.rs")).unwrap();
+    assert!(source.contains(
+        "let __public_config_json = golem_client::invocation_session::encode_generated_streamless_value("
+    ));
+    assert!(
+        source
+            .contains("let __canonical_config_json = golem_common::schema::render::to_json_value(")
+    );
+    assert!(source.contains("value: __public_config_json"));
+    assert!(source.contains("value: __canonical_config_json.into()"));
+    assert!(!source.contains("serde_json::to_value(&__config_value)"));
 }
 
 #[test]
@@ -1561,7 +1608,7 @@ fn cargo_check(target_path: &Utf8Path) {
 fn tool_generation_compiles() {
     let (_dir, target_path) = generate_tool(grep_tool(), "grep-tool-guest-client");
     let lib_rs = std::fs::read_to_string(target_path.join("src/lib.rs")).unwrap();
-    assert!(lib_rs.contains("pub fn replace("), "{lib_rs}");
+    assert!(lib_rs.contains("pub async fn replace("), "{lib_rs}");
     assert!(
         lib_rs.contains("agentic::ToolInvocation<(), std::convert::Infallible>"),
         "{lib_rs}"
@@ -1570,6 +1617,7 @@ fn tool_generation_compiles() {
         lib_rs.contains("agentic::start_tool_invocation("),
         "{lib_rs}"
     );
+    assert!(lib_rs.contains(")\n            .await"), "{lib_rs}");
     for shape in [
         "__name: String",
         "__value: golem_rust::TypedSchemaValue",
@@ -1618,6 +1666,7 @@ fn subtree_tool_generation_emits_and_compiles() {
 
 fn minimal_agent_type(type_name: &str) -> AgentTypeSchema {
     AgentTypeSchema {
+        kind: golem_common::schema::agent::AgentTypeKind::Regular,
         type_name: AgentTypeName(type_name.to_string()),
         description: String::new(),
         source_language: String::new(),

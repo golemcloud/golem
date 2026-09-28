@@ -2,16 +2,14 @@ use crate::config::{ExporterConfig, ServiceNameMode};
 use crate::helpers::{format_uuid, infer_span_kind};
 use crate::otlp_json::{
     ExportLogsServiceRequest, ExportMetricsServiceRequest, ExportTraceServiceRequest, KeyValue,
-    OtlpSpan, OtlpValue, SpanStatus,
+    OtlpSpan, OtlpSpanLink, OtlpValue, SpanStatus,
 };
-use crate::state::PendingSpan;
+use crate::state::{PendingSpan, ResourceIdentity};
 use golem_rust::schema::wit::wire::{AgentId, ComponentId};
 use golem_rust::wasip3::http::{client, types};
 use golem_rust::wasip3::{wit_future, wit_stream};
 
 pub(crate) fn build_otel_span(
-    trace_id: &str,
-    trace_state: Option<&str>,
     mut pending: PendingSpan,
     end_time_ns: u128,
     is_error: bool,
@@ -33,7 +31,9 @@ pub(crate) fn build_otel_span(
             }
         })
         .unwrap_or_else(|| "unknown".to_string());
-    let kind = infer_span_kind(&name, &pending.attributes);
+    let kind = pending
+        .kind
+        .unwrap_or_else(|| infer_span_kind(&name, &pending.attributes));
 
     let attributes: Vec<KeyValue> = pending
         .attributes
@@ -56,7 +56,7 @@ pub(crate) fn build_otel_span(
     };
 
     OtlpSpan {
-        trace_id: trace_id.to_string(),
+        trace_id: pending.trace_id,
         span_id: pending.span_id,
         parent_span_id: pending.parent_span_id,
         name,
@@ -64,9 +64,22 @@ pub(crate) fn build_otel_span(
         start_time_unix_nano: pending.start_time_ns.to_string(),
         end_time_unix_nano: end_time_ns.to_string(),
         attributes,
-        trace_state: trace_state.map(|s| s.to_string()),
+        links: pending
+            .links
+            .into_iter()
+            .map(|link| OtlpSpanLink {
+                trace_id: link.trace_id,
+                span_id: link.span_id,
+                trace_state: combined_trace_state(&link.trace_states),
+            })
+            .collect(),
+        trace_state: combined_trace_state(&pending.trace_states),
         status,
     }
+}
+
+fn combined_trace_state(trace_states: &[String]) -> Option<String> {
+    (!trace_states.is_empty()).then(|| trace_states.join(","))
 }
 
 fn build_service_name(
@@ -79,7 +92,11 @@ fn build_service_name(
             let comp_uuid = format_uuid(component_id.uuid.high_bits, component_id.uuid.low_bits);
             format!("{}/{}", comp_uuid, worker_id.agent_id)
         }
-        ServiceNameMode::AgentType => worker_id.agent_id.clone(),
+        ServiceNameMode::AgentType => worker_id
+            .agent_id
+            .split_once('(')
+            .map_or(worker_id.agent_id.as_str(), |(agent_type, _)| agent_type)
+            .to_string(),
     }
 }
 
@@ -88,6 +105,47 @@ pub(crate) fn build_resource_attributes(
     component_id: &ComponentId,
     worker_id: &AgentId,
     metadata: &golem_rust::oplog_processor::host::AgentMetadata,
+    identity: Option<&ResourceIdentity>,
+) -> Vec<KeyValue> {
+    let mut attributes = build_resource_attributes_for_revision(
+        config,
+        component_id,
+        worker_id,
+        metadata.component_revision,
+    );
+    if let Some(identity) = identity {
+        append_identity_attributes(&mut attributes, identity);
+    }
+    attributes
+}
+
+fn append_identity_attributes(attributes: &mut Vec<KeyValue>, identity: &ResourceIdentity) {
+    for (key, value) in [
+        (
+            "golem.agent.instance.id",
+            format_uuid(identity.instance_id.0, identity.instance_id.1),
+        ),
+        (
+            "golem.environment.id",
+            format_uuid(identity.environment_id.0, identity.environment_id.1),
+        ),
+        ("golem.agent.mode", identity.agent_mode.to_string()),
+        ("golem.agent.owner.kind", identity.owner_kind.to_string()),
+    ] {
+        attributes.push(KeyValue {
+            key: key.to_string(),
+            value: OtlpValue {
+                string_value: value,
+            },
+        });
+    }
+}
+
+fn build_resource_attributes_for_revision(
+    config: &ExporterConfig,
+    component_id: &ComponentId,
+    worker_id: &AgentId,
+    component_revision: u64,
 ) -> Vec<KeyValue> {
     let component_id_str = format_uuid(component_id.uuid.high_bits, component_id.uuid.low_bits);
     let agent_id_str = format!("{}/{}", component_id_str, worker_id.agent_id);
@@ -115,13 +173,17 @@ pub(crate) fn build_resource_attributes(
         KeyValue {
             key: "golem.component.version".to_string(),
             value: OtlpValue {
-                string_value: metadata.component_revision.to_string(),
+                string_value: component_revision.to_string(),
             },
         },
     ]
 }
 
-async fn send_otlp_request(config: &ExporterConfig, path: &str, json: String) -> Result<(), String> {
+async fn send_otlp_request(
+    config: &ExporterConfig,
+    path: &str,
+    json: String,
+) -> Result<(), String> {
     let url = format!("{}{}", config.endpoint.trim_end_matches('/'), path);
 
     let mut header_entries = vec![("content-type".to_string(), b"application/json".to_vec())];
@@ -224,4 +286,130 @@ pub(crate) async fn send_metrics(
 ) -> Result<(), String> {
     let json = serde_json::to_string(&request_body).map_err(|e| e.to_string())?;
     send_otlp_request(config, "/v1/metrics", json).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::SignalConfig;
+    use golem_rust::schema::wit::wire::Uuid;
+
+    fn config(service_name_mode: ServiceNameMode) -> ExporterConfig {
+        ExporterConfig {
+            endpoint: "http://localhost:4318".to_string(),
+            headers: Vec::new(),
+            service_name_mode,
+            signals: SignalConfig {
+                traces: true,
+                logs: false,
+                metrics: false,
+            },
+        }
+    }
+
+    fn component_id() -> ComponentId {
+        ComponentId {
+            uuid: Uuid {
+                high_bits: 0x0011223344556677,
+                low_bits: 0x8899aabbccddeeff,
+            },
+        }
+    }
+
+    fn agent_id(value: &str) -> AgentId {
+        AgentId {
+            component_id: component_id(),
+            agent_id: value.to_string(),
+        }
+    }
+
+    fn attribute<'a>(attributes: &'a [KeyValue], key: &str) -> &'a str {
+        &attributes
+            .iter()
+            .find(|attribute| attribute.key == key)
+            .unwrap()
+            .value
+            .string_value
+    }
+
+    #[test]
+    fn agent_type_service_name_ignores_constructor_parameters_and_phantom_id() {
+        let first = agent_id("ShoppingCart(\"alice\", 1)");
+        let second =
+            agent_id("ShoppingCart(\"bob (preferred)\", 2)[00000000-0000-0000-0000-000000000001]");
+        let config = config(ServiceNameMode::AgentType);
+
+        assert_eq!(
+            build_service_name(&config, &component_id(), &first),
+            "ShoppingCart"
+        );
+        assert_eq!(
+            build_service_name(&config, &component_id(), &second),
+            "ShoppingCart"
+        );
+    }
+
+    #[test]
+    fn agent_type_service_name_accepts_external_tool_owners_without_an_agent_type() {
+        let worker_id = agent_id("~golem-external-tool-owner-00000000-0000-0000-0000-000000000003");
+        assert_eq!(
+            build_service_name(
+                &config(ServiceNameMode::AgentType),
+                &component_id(),
+                &worker_id
+            ),
+            worker_id.agent_id
+        );
+    }
+
+    #[test]
+    fn agent_id_service_name_and_resource_identity_attributes_are_unchanged() {
+        let worker_id = agent_id("ShoppingCart(\"alice\")[00000000-0000-0000-0000-000000000002]");
+        let component_id = component_id();
+        let attributes = build_resource_attributes_for_revision(
+            &config(ServiceNameMode::AgentId),
+            &component_id,
+            &worker_id,
+            7,
+        );
+        let component = "00112233-4455-6677-8899-aabbccddeeff";
+
+        assert_eq!(
+            attribute(&attributes, "service.name"),
+            format!("{component}/{}", worker_id.agent_id)
+        );
+        assert_eq!(
+            attribute(&attributes, "golem.agent.id"),
+            format!("{component}/{}", worker_id.agent_id)
+        );
+        assert_eq!(attribute(&attributes, "golem.component.id"), component);
+    }
+
+    #[test]
+    fn create_identity_fields_become_bounded_resource_attributes() {
+        let mut attributes = Vec::new();
+        append_identity_attributes(
+            &mut attributes,
+            &ResourceIdentity {
+                instance_id: (0x0011223344556677, 0x8899aabbccddeeff),
+                environment_id: (0xffeeddccbbaa9988, 0x7766554433221100),
+                agent_mode: "ephemeral",
+                owner_kind: "ephemeral-external-tool",
+            },
+        );
+
+        assert_eq!(
+            attribute(&attributes, "golem.agent.instance.id"),
+            "00112233-4455-6677-8899-aabbccddeeff"
+        );
+        assert_eq!(
+            attribute(&attributes, "golem.environment.id"),
+            "ffeeddcc-bbaa-9988-7766-554433221100"
+        );
+        assert_eq!(attribute(&attributes, "golem.agent.mode"), "ephemeral");
+        assert_eq!(
+            attribute(&attributes, "golem.agent.owner.kind"),
+            "ephemeral-external-tool"
+        );
+    }
 }

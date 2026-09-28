@@ -212,6 +212,7 @@ pub fn classify_invocation(
             _ => InvocationEffect::UnknownAssumeMutating,
         },
         AgentInvocation::AgentInitialization { .. }
+        | AgentInvocation::ExternalTool { .. }
         | AgentInvocation::ManualUpdate { .. }
         | AgentInvocation::LoadSnapshot { .. }
         | AgentInvocation::SaveSnapshot { .. }
@@ -306,6 +307,7 @@ mod tests {
         methods: Vec<AgentMethodSchema>,
     ) -> ComponentMetadata {
         let at = AgentTypeSchema {
+            kind: golem_common::schema::agent::AgentTypeKind::Regular,
             type_name: agent_type,
             description: String::new(),
             source_language: String::new(),

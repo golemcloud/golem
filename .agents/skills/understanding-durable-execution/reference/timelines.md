@@ -129,19 +129,26 @@ Tests: `tests/api.rs::lost_card_transfer_response_converges_after_source_and_tar
 `tests/rpc.rs::counter_resource_test_2_with_restart` covers the weaker "completed call is not
 re-executed across restart" property (1 then 2).
 
-The serialized fire-and-forget `invoke` path records `Start → StartSpan → End → FinishSpan`.
-Replay must reconstruct `StartSpan` before awaiting the RPC terminal; the positional span entry
-otherwise blocks the terminal resolver. Each committed prefix is recoverable:
+The serialized `invoke` and non-streaming `invoke_and_await` paths record an admitted call as
+`Start(span_started = S) → End(span_finished = S)` (or a `Cancelled` carrying the close).
+Replay claims the ordinary request identity before restoring `S`; tracing metadata does not
+participate in matching and the cursor has no span-specific tail. Each committed prefix is
+recoverable:
 
-- After `Start` alone, resolve the incomplete call through the normal re-execution eligibility
-  and checked live-admission path before creating the missing span.
-- After `StartSpan`, reconstruct the span, then repair the incomplete call under the original key.
-- After `End`, reuse the recorded result without dispatching. If the cursor is exhausted, perform
-  the checked `switch_to_live` transition before appending the missing `FinishSpan`.
-- With `FinishSpan` recorded, consume it normally during replay.
+- After `Start` alone, restore its opening and repair the incomplete call under the original key
+  through normal re-execution eligibility.
+- After `End`, reuse the recorded result without dispatching and apply its embedded close. There
+  is no separate positional span entry to consume or append.
+- After `Cancelled`, replay the existing cancellation owner and apply its embedded close once.
 
-Tests: `tests/rpc.rs::completed_fire_and_forget_rpc_replays_span_before_result` and the
-fire-and-forget crash-prefix test, using committed `Start`, `StartSpan`, and `End` gates.
+Synchronous local denials remain spanless and persist the denial decision in the request before
+`End(Denied)`, so incomplete replay completes the denial without dispatch or re-authorization.
+Asynchronous validation and activation denials use their existing short durable operation with
+an embedded opening and failed/denied close; their baked future owns no later cleanup.
+
+Resource and guest-created spans can outlive their opening call. Finish, drop, and successful
+attribute mutation are short ordinary local operations whose terminals carry the close or
+applied updates; they do not hold the opening call or an atomic lease for the span lifetime.
 
 ## 7. Atomic region rollback keeps the RPC key
 
@@ -343,7 +350,7 @@ oplog.
 
 ```
 Owner O oplog
-#60 ... tool discovery / authorization reads (durable reads, ordinary Start/End pairs) ...
+#60 ... discovery snapshot / authorization (durable ordinary Start/End pairs) ...
 #61 Start { fn: golem-entity-invoke, entity: sidecar }              entity invocation id = 61
                                                                     (dispatch_tool_call; no outer
                                                                      call-tool Start wraps it)
@@ -402,3 +409,23 @@ ordinary durable path where a completed nested effect legitimately repeats, and 
 owns its idempotency.
 Test: `tests/durability.rs::custom_durability_crash_mid_live_invocation_reexecutes_whole_body`
 expects the effect sequence `probe, callback, probe, callback`.
+
+## 16. Dynamic MCP call and ambiguous `-32602`
+
+Admission creates a synthetic native activation that freezes the complete projected tool,
+protocol version, binding/digest and exact deployment/import source. Its native body uses the
+executor's shared MCP transport and the ordinary derived durable key.
+
+```
+#90 Start { fn: mcp/tools-call, WriteRemote, key: derived(#90) }
+#91 End   { start_index: 90, response: encoded -32602 }   committed before projection/stdout/401 feedback
+#92 Start { fn: mcp/tool-presence, ReadRemote, exact admitted source, forced refresh }
+     ✕ quota suspension or crash
+```
+
+Replay returns `#91` offline and repairs only the presence read under `#92`; it does not resend
+`tools/call`. Ordinary atomic-region rollback can still roll back both entries. An observed absent
+tool maps to `InvalidToolName`; true or a missing observation preserves the protocol ambiguity and
+maps to `InvalidInput`. Other MCP `isError` content becomes a custom tool error. Fixed discovery
+uses its recorded exact deployment reference, while this dynamic execution uses the full admission
+snapshot. Middleware and code-generation acceptance are outside this completed executor path.

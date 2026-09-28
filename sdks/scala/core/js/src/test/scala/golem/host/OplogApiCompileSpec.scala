@@ -32,6 +32,10 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
 
   private val pluginDesc  = PluginInstallationDescription("plug", "1.0", Map("key" -> "val"))
   private val oplogRegion = OplogRegion(BigInt(0), BigInt(10))
+  private val walletPin   = PublicInvocationWalletPin(
+    WalletVersionToken(Array[Byte](1, 2, 3), BigInt(7)),
+    Some(golem.Uuid(BigInt(10), BigInt(20)))
+  )
 
   private val localSpan                 = LocalSpanData("span1", ts, Some("parent"), Some(BigInt(1)), List(attr), inherited = false)
   private val externalSpan              = ExternalSpanData("span2")
@@ -116,9 +120,6 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
     case OplogEntry.DeactivatePlugin(p)             => s"deactivate(${p.plugin.name})"
     case OplogEntry.Revert(p)                       => s"revert(${p.start})"
     case OplogEntry.CancelPendingInvocation(p)      => s"cancel(${p.idempotencyKey})"
-    case OplogEntry.StartSpan(p)                    => s"start-span(${p.spanId})"
-    case OplogEntry.FinishSpan(p)                   => s"finish-span(${p.spanId})"
-    case OplogEntry.SetSpanAttribute(p)             => s"set-attr(${p.key})"
     case OplogEntry.BeginRemoteTransaction(p)       => s"begin-tx(${p.transactionId})"
     case OplogEntry.PreCommitRemoteTransaction(p)   => s"pre-commit(${p.beginIndex})"
     case OplogEntry.PreRollbackRemoteTransaction(p) => s"pre-rollback(${p.beginIndex})"
@@ -169,7 +170,6 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
       OplogEntry.EndRemoteWrite(EndRemoteWriteParameters(ts, BigInt(2))),
       OplogEntry.GrowMemory(GrowMemoryParameters(ts, BigInt(65536))),
       OplogEntry.CancelPendingInvocation(CancelPendingInvocationParameters(ts, "idem-key")),
-      OplogEntry.FinishSpan(FinishSpanParameters(ts, "span-1")),
       OplogEntry.BeginRemoteTransaction(BeginRemoteTransactionParameters(ts, "tx-1")),
       OplogEntry.PreCommitRemoteTransaction(RemoteTransactionParameters(ts, BigInt(10))),
       OplogEntry.PreRollbackRemoteTransaction(RemoteTransactionParameters(ts, BigInt(11))),
@@ -211,7 +211,8 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
           "idem-1",
           "trace-1",
           List("state"),
-          List(spanDatas)
+          List(spanDatas),
+          walletPin
         )
       ),
       OplogEntry.PendingAgentInvocation(PendingAgentInvocationParameters(ts, agentInvocations.head)),
@@ -221,20 +222,38 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
       OplogEntry.FailedUpdate(FailedUpdateParameters(ts, BigInt(3), None)),
       OplogEntry.CreateResource(CreateResourceParameters(ts, BigInt(1), "handle", "golem:api")),
       OplogEntry.DropResource(DropResourceParameters(ts, BigInt(1), "handle", "golem:api")),
-      OplogEntry.Log(LogParameters(ts, LogLevel.Info, "main", "started")),
+      OplogEntry.Log(LogParameters(ts, LogLevel.Info, "main", "started", Some(LogTraceContext("trace-1", "span-1")))),
       OplogEntry.ActivatePlugin(ActivatePluginParameters(ts, pluginDesc)),
       OplogEntry.DeactivatePlugin(DeactivatePluginParameters(ts, pluginDesc)),
       OplogEntry.Revert(RevertParameters(ts, BigInt(0), BigInt(10))),
-      OplogEntry.StartSpan(StartSpanParameters(ts, "span-1", Some("parent"), Some("linked"), List(attr))),
-      OplogEntry.SetSpanAttribute(
-        SetSpanAttributeParameters(ts, "span-1", "key", ContextApi.AttributeValue.StringValue("v"))
+      OplogEntry.Start(
+        StartParameters(
+          ts,
+          None,
+          "span-operation",
+          None,
+          None,
+          None,
+          DurabilityApi.DurableFunctionType.ReadLocal,
+          Some(SpanStarted("span-1", "trace-1", Nil, None, Nil, ts, List(attr), SpanKind.Internal))
+        )
+      ),
+      OplogEntry.End(
+        EndParameters(
+          ts,
+          BigInt(4),
+          None,
+          forcedCommit = false,
+          Some(SpanFinished("span-1", ts, SpanOutcome.Completed)),
+          Some(SpanAttributes("span-1", List(attr)))
+        )
       )
     )
 
   def spec = suite("OplogApiCompileSpec")(
     test("all OplogEntry variants constructed") {
       val distinctTags = allEntries.map(describeEntry).map(_.takeWhile(_ != '(')).distinct
-      assertTrue(distinctTags.size >= 42)
+      assertTrue(distinctTags.size >= 41)
     },
     test("exhaustive OplogEntry match compiles") {
       allEntries.foreach(e => Predef.assert(describeEntry(e).nonEmpty))

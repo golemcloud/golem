@@ -49,7 +49,7 @@ describe("WitCodec quota-token ownership", () => {
         Schema.decodeTo(
           Schema.declare((u): u is QuotaToken => u instanceof QuotaToken),
           {
-            decode: SchemaGetter.transformOrFail((token) =>
+            decode: SchemaGetter.transformEffect((token) =>
               Effect.gen(function* () {
                 expect((yield* Effect.result(transport.encode(token)))._tag).toBe("Failure")
                 yield* Deferred.succeed(entered, undefined)

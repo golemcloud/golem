@@ -22,9 +22,8 @@ use golem_common::schema::{
     TypedSchemaValue,
 };
 use golem_service_base::custom_api::CompiledOutputSchema;
-use http::StatusCode;
 use http::header::LOCATION;
-use std::collections::HashMap;
+use http::{HeaderMap, HeaderValue, StatusCode};
 
 pub fn interpret_agent_response(
     invoke_result: Option<SchemaValue>,
@@ -39,7 +38,7 @@ pub fn interpret_agent_response(
 fn no_content() -> RouteExecutionResult {
     RouteExecutionResult {
         status: StatusCode::NO_CONTENT,
-        headers: HashMap::new(),
+        headers: HeaderMap::new(),
         body: ResponseBody::NoBody,
     }
 }
@@ -69,7 +68,7 @@ fn map_successful_agent_response(
         decode_unstructured_output(graph, output_type, &agent_response).map_err(map_schema_error)?
     {
         return Ok(match output {
-            UnstructuredOutput::Url(url) => redirect(url),
+            UnstructuredOutput::Url(url) => redirect(url)?,
             UnstructuredOutput::Inline(inline) => {
                 let body = unstructured_body_from_value(inline).ok_or_else(|| {
                     RequestHandlerError::invariant_violated(
@@ -119,18 +118,22 @@ fn unstructured_body_from_value(value: &SchemaValue) -> Option<ResponseBody> {
 fn ok_body(body: ResponseBody) -> RouteExecutionResult {
     RouteExecutionResult {
         status: StatusCode::OK,
-        headers: HashMap::new(),
+        headers: HeaderMap::new(),
         body,
     }
 }
 
 /// A `307 Temporary Redirect` to a url-referenced unstructured value.
-fn redirect(url: &str) -> RouteExecutionResult {
-    RouteExecutionResult {
+fn redirect(url: &str) -> Result<RouteExecutionResult, RequestHandlerError> {
+    let location =
+        HeaderValue::from_str(url).map_err(|_| RequestHandlerError::AgentResponseTypeMismatch {
+            error: "URL output is not a valid Location header value".into(),
+        })?;
+    Ok(RouteExecutionResult {
         status: StatusCode::TEMPORARY_REDIRECT,
-        headers: HashMap::from([(LOCATION, url.to_string())]),
+        headers: HeaderMap::from_iter([(LOCATION, location)]),
         body: ResponseBody::NoBody,
-    }
+    })
 }
 
 fn map_schema_error(error: impl std::fmt::Display) -> RequestHandlerError {
@@ -147,7 +150,7 @@ fn map_component_model_agent_response(
     match value {
         SchemaValue::Option { inner: None } => Ok(RouteExecutionResult {
             status: StatusCode::NOT_FOUND,
-            headers: HashMap::new(),
+            headers: HeaderMap::new(),
             body: ResponseBody::NoBody,
         }),
 
@@ -155,14 +158,14 @@ fn map_component_model_agent_response(
             let inner_type = unwrap_option_type(typ)?;
             Ok(RouteExecutionResult {
                 status: StatusCode::OK,
-                headers: HashMap::new(),
+                headers: HeaderMap::new(),
                 body: json_response_body(graph, inner_type.clone(), *inner),
             })
         }
 
         SchemaValue::Result(ResultValuePayload::Ok { value: None }) => Ok(RouteExecutionResult {
             status: StatusCode::NO_CONTENT,
-            headers: HashMap::new(),
+            headers: HeaderMap::new(),
             body: ResponseBody::NoBody,
         }),
 
@@ -170,14 +173,14 @@ fn map_component_model_agent_response(
             let inner_type = unwrap_result_ok_type(typ)?;
             Ok(RouteExecutionResult {
                 status: StatusCode::OK,
-                headers: HashMap::new(),
+                headers: HeaderMap::new(),
                 body: json_response_body(graph, inner_type.clone(), *inner),
             })
         }
 
         SchemaValue::Result(ResultValuePayload::Err { value: None }) => Ok(RouteExecutionResult {
             status: StatusCode::INTERNAL_SERVER_ERROR,
-            headers: HashMap::new(),
+            headers: HeaderMap::new(),
             body: ResponseBody::NoBody,
         }),
 
@@ -185,14 +188,14 @@ fn map_component_model_agent_response(
             let inner_type = unwrap_result_err_type(typ)?;
             Ok(RouteExecutionResult {
                 status: StatusCode::INTERNAL_SERVER_ERROR,
-                headers: HashMap::new(),
+                headers: HeaderMap::new(),
                 body: json_response_body(graph, inner_type.clone(), *inner),
             })
         }
 
         other => Ok(RouteExecutionResult {
             status: StatusCode::OK,
-            headers: HashMap::new(),
+            headers: HeaderMap::new(),
             body: json_response_body(graph, typ.clone(), other),
         }),
     }
@@ -252,6 +255,16 @@ mod tests {
     };
     use golem_common::schema::{BinaryValuePayload, OutputSchema, SchemaType, TextValuePayload};
     use test_r::test;
+
+    #[test]
+    fn redirect_rejects_control_characters_without_echoing_the_url() {
+        let error = redirect("https://example.com/private\nvalue").unwrap_err();
+        assert!(matches!(
+            error,
+            RequestHandlerError::AgentResponseTypeMismatch { .. }
+        ));
+        assert!(!format!("{error:?}").contains("private"));
+    }
 
     fn text_output() -> CompiledOutputSchema {
         let ty = unstructured_text_schema_type(TextRestrictions::default());
@@ -388,7 +401,10 @@ mod tests {
 
         assert_eq!(result.status, StatusCode::TEMPORARY_REDIRECT);
         assert_eq!(
-            result.headers.get(&LOCATION).map(String::as_str),
+            result
+                .headers
+                .get(&LOCATION)
+                .and_then(|value| value.to_str().ok()),
             Some("https://example.com/doc.txt")
         );
         let_assert!(ResponseBody::NoBody = result.body);
@@ -405,7 +421,10 @@ mod tests {
 
         assert_eq!(result.status, StatusCode::TEMPORARY_REDIRECT);
         assert_eq!(
-            result.headers.get(&LOCATION).map(String::as_str),
+            result
+                .headers
+                .get(&LOCATION)
+                .and_then(|value| value.to_str().ok()),
             Some("https://example.com/blob.bin")
         );
         let_assert!(ResponseBody::NoBody = result.body);

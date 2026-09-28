@@ -7,9 +7,15 @@ description: "Configuring MCP (Model Context Protocol) server deployments in gol
 
 ## Overview
 
-Any Golem agent can be automatically exposed as an **MCP (Model Context Protocol) server** without writing any extra code. MCP is enabled by adding an `mcp` section to `golem.yaml` — the same way HTTP API deployments are configured under `httpApi`.
+Golem agents with MCP-compatible method schemas can be automatically exposed as an **MCP (Model Context Protocol) server** without writing any extra code. MCP is enabled by adding an `mcp` section to `golem.yaml` — the same way HTTP API deployments are configured under `httpApi`.
 
 The MCP server uses the **Streamable HTTP** transport. Once deployed, any MCP-compatible client (Claude Desktop, MCP Inspector, Cursor, custom clients) can connect to the server and interact with your agents through MCP tools, resources, and prompts.
+
+Streamable HTTP describes the MCP connection; it does not make agent `stream<T>` values
+MCP-compatible. A method is not exposed when its input or output schema recursively contains an
+agent stream, including a stream nested in a record, variant, collection, or another stream. Add a
+bounded stream-free adapter method if MCP clients need the same capability. Do not collect an
+unbounded stream solely to bypass this limitation.
 
 ## Adding an MCP Deployment
 
@@ -36,7 +42,9 @@ mcp:
 
 Define exactly one of `subdomain` or `domain` on each deployment. Prefer `subdomain` for built-in `server: local` and `server: cloud` environments. Use `domain` when you need a full custom domain. `subdomain` cannot be used with custom server environments — those must use `domain`.
 
-Do not use `localServer.mcpPort: 0` in the manifest. Port `0` is only allowed when passed directly as `--mcp-port 0` to `golem server run`; manifest deployment domains require stable nonzero ports.
+Do not use `localServer.mcpPort: 0` in the manifest. Port `0` is only allowed when passed directly as `--mcp-port 0` to `golem server run`; manifest deployment domains require stable nonzero ports. The local server routes requests by matching their `Host` header against the expanded `<subdomain>.localhost:<port>`, so the running server must bind the same port the manifest expands to: `golem server run` warns when its `--mcp-port` differs from the manifest value, and such deployments are not reachable until the two match.
+
+`<subdomain>.localhost` resolves only on the machine running the local server, regardless of `localServer.routerAddr` (the MCP listener binds all interfaces). To reach a local MCP deployment from another machine, use `domain` with a host name that resolves there instead of `subdomain`.
 
 ### Local Development
 

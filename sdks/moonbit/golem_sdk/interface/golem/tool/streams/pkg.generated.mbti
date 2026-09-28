@@ -1,0 +1,38 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "golemcloud/golem_sdk/interface/golem/tool/streams"
+
+import {
+  "moonbitlang/core/debug",
+}
+
+// Values
+
+// Errors
+pub(all) suberror StreamWriteError {
+  Closed(ByteStreamCloseCause)
+  ConcurrentOperation
+} derive(Eq, @debug.Debug)
+
+// Types and methods
+pub(all) enum ByteStreamCloseCause {
+  Finished
+  Failed(ByteStreamFailure)
+  ConsumerCancelled
+} derive(Eq, @debug.Debug)
+
+pub(all) enum ByteStreamFailure {
+  Cancelled
+  Abandoned
+  ResourceExhausted
+  Failed(String)
+} derive(Eq, @debug.Debug)
+
+pub(all) struct ToolStdoutWriter(Int) derive(Eq, @debug.Debug)
+pub fn ToolStdoutWriter::drop(Self) -> Unit
+pub async fn ToolStdoutWriter::fail(Self, ByteStreamFailure) -> Result[Unit, StreamWriteError]
+pub async fn ToolStdoutWriter::finish(Self) -> Result[Unit, StreamWriteError]
+pub async fn ToolStdoutWriter::write(Self, FixedArray[Byte]) -> Result[Unit, StreamWriteError]
+
+// Type aliases
+
+// Traits

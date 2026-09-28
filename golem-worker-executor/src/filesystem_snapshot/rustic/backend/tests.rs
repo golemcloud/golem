@@ -1109,6 +1109,18 @@ impl BlobStorage for FailingBlobStorage {
         Err(broken())
     }
 
+    async fn get_range_stream(
+        &self,
+        _target_label: &'static str,
+        _op_label: &'static str,
+        _namespace: BlobStorageNamespace,
+        _path: &Path,
+        _offset: u64,
+        _length: u64,
+    ) -> anyhow::Result<Option<golem_service_base::storage::blob::BlobRangeStream>> {
+        Err(broken())
+    }
+
     async fn get_metadata(
         &self,
         _target_label: &'static str,

@@ -2,12 +2,23 @@ use effect_fixture_guest_client::{
     EffectFixture, Header, Items, TransformInRequest, TransformStreamInRequest,
     TransformStreamInRequestItems, new_transform_stream_in_request_items_stream,
 };
-use golem_rust::agentic::spawn_local;
+use golem_rust::agentic::{DynamicToolClient, get_tool_type, spawn_local};
 use golem_rust::bindings::golem::permissions::{derive, types};
 use golem_rust::schema::wit::GuestPermissionCardHandle;
-use golem_rust::{agent_definition, agent_implementation};
+use golem_rust::{
+    GolemReflectError, IntoSchema, MethodOnlyAgentClientDefinition, SchemaValue, TypedSchemaValue,
+    agent_definition, agent_implementation, get_agent_type, get_agent_type_for,
+};
 use std::cell::Cell;
 use std::rc::Rc;
+
+#[derive(IntoSchema)]
+struct PrincipalPeerId {
+    tenant: String,
+}
+
+#[derive(IntoSchema)]
+struct EmptyAgentInput {}
 
 #[agent_definition]
 pub trait RustPeer {
@@ -18,6 +29,10 @@ pub trait RustPeer {
     async fn call_effect_stream(&self, tenant: String) -> String;
     async fn nonfinite(&self, kind: String) -> f64;
     async fn permission_card_through_effect(&self, tenant: String) -> String;
+    async fn reflected_ts_tool(&self, label: String) -> String;
+    async fn reflected_optional_tool(&self) -> String;
+    async fn reflected_ts_agent(&self) -> String;
+    async fn principal_identity_round_trip(&self) -> String;
 }
 
 struct RustPeerImpl {
@@ -31,6 +46,193 @@ impl RustPeer for RustPeerImpl {
     }
     async fn echo(&self, value: String) -> String {
         format!("rust:{}:{value}", self.name)
+    }
+    async fn reflected_ts_agent(&self) -> String {
+        let result = async {
+            let agent_type = get_agent_type("TsPeer")?;
+            let client = agent_type.client().get_json(
+                &serde_json::json!({ "name": format!("rust-reflected-{}", self.name) }),
+            )?;
+            let count = client.method("scheduledCount")?;
+            let mark = client.method("markScheduled")?;
+            let empty = SchemaValue::Record { fields: vec![] };
+            let before_json = count.invoke_json(&serde_json::json!({})).await?;
+            let before_native = count.invoke_value(empty.clone()).await?;
+            mark.invoke_value(empty.clone()).await?;
+            let after_json = count.invoke_json(&serde_json::json!({})).await?;
+            let parts = before_json.metadata.agent_id.parts()?;
+            let discovered = get_agent_type_for(&before_json.metadata.agent_id)?;
+            let rebound = discovered.bind(&before_json.metadata.agent_id)?;
+            let rebound_count = rebound
+                .method("scheduledCount")?
+                .invoke_value(empty.clone())
+                .await?;
+            let dynamic = before_json.metadata.agent_id.dynamic_client()?;
+            let dynamic_count = dynamic.method("scheduledCount").invoke_value(empty).await?;
+            Ok::<_, GolemReflectError>(format!(
+                "{}|{}|{}|{:?}|{}|{:?}|{:?}",
+                parts.type_name,
+                discovered.name(),
+                before_json
+                    .value
+                    .map_or("unit".to_string(), |value| value.to_string()),
+                before_native.value,
+                after_json
+                    .value
+                    .map_or("unit".to_string(), |value| value.to_string()),
+                rebound_count.value,
+                dynamic_count.value,
+            ))
+        }
+        .await;
+        result.unwrap_or_else(|error| format!("error:{error}"))
+    }
+    async fn principal_identity_round_trip(&self) -> String {
+        let result = async {
+            let tenant = format!("principal-rust-{}", self.name);
+            let agent_type = get_agent_type("TsPrincipalPeer")?;
+            let reflected = agent_type
+                .client()
+                .get_json(&serde_json::json!({ "tenant": tenant }))?;
+            let first = reflected
+                .method("value")?
+                .invoke_json(&serde_json::json!({}))
+                .await?;
+            let host_id = first.metadata.agent_id;
+            let parts = host_id.parts()?;
+            if parts.type_name != "TsPrincipalPeer"
+                || parts.constructor_value
+                    != (SchemaValue::Record {
+                        fields: vec![SchemaValue::String(tenant.clone())],
+                    })
+            {
+                return Ok::<_, GolemReflectError>("principal-in-id".to_string());
+            }
+            let full = MethodOnlyAgentClientDefinition::builder()
+                .durable::<PrincipalPeerId>("TsPrincipalPeer")
+                .method::<EmptyAgentInput, String>("value")?
+                .build();
+            let method_only = MethodOnlyAgentClientDefinition::builder()
+                .method_only()
+                .method::<EmptyAgentInput, String>("value")?
+                .build();
+            let local_id = full.agent_id(
+                &PrincipalPeerId {
+                    tenant: tenant.clone(),
+                },
+                None,
+            )?;
+            if local_id != host_id {
+                return Ok("identity-mismatch".to_string());
+            }
+            let full_call = full
+                .bind(&host_id)?
+                .method::<EmptyAgentInput, String>("value")?
+                .invoke(&EmptyAgentInput {})
+                .await?;
+            let method_call = method_only
+                .bind(&host_id)?
+                .method::<EmptyAgentInput, String>("value")?
+                .invoke(&EmptyAgentInput {})
+                .await?;
+            Ok(format!(
+                "{}|{}|{}",
+                first
+                    .value
+                    .and_then(|value| value.as_str().map(str::to_owned))
+                    .unwrap_or_default(),
+                full_call.value.unwrap_or_default(),
+                method_call.value.unwrap_or_default(),
+            ))
+        }
+        .await;
+        result.unwrap_or_else(|error| format!("error:{error}"))
+    }
+    async fn reflected_ts_tool(&self, label: String) -> String {
+        let result = async {
+            let tool = get_tool_type("ts-cross-plain")?;
+            let command = tool.command(&[])?;
+            let value = SchemaValue::Record {
+                fields: vec![SchemaValue::String(label.clone())],
+            };
+            let native = command.invoke_value(value).await?;
+            let json = command
+                .invoke_json(&serde_json::json!({ "label": label }))
+                .await?;
+            let invalid = command
+                .invoke_json(&serde_json::json!({ "label": 42 }))
+                .await;
+            let input = TypedSchemaValue::new(
+                command.input_schema().graph().clone(),
+                SchemaValue::Record {
+                    fields: vec![SchemaValue::String(label)],
+                },
+            );
+            let dynamic = DynamicToolClient::new("ts-cross-plain")
+                .invoke(&[], &input)
+                .await
+                .map_err(golem_rust::agentic::ToolReflectionError::Tool)?;
+            Ok::<_, golem_rust::agentic::ToolReflectionError>((
+                native,
+                json,
+                invalid.is_err(),
+                dynamic,
+            ))
+        }
+        .await;
+        match result {
+            Ok((Some(SchemaValue::String(native)), Some(json), invalid, dynamic)) => {
+                format!(
+                    "{native}|{json}|{invalid}|{:?}",
+                    dynamic.result.map(|value| value.into_parts().1)
+                )
+            }
+            Ok(_) => "unexpected tool output".to_string(),
+            Err(error) => format!("error:{error}"),
+        }
+    }
+    async fn reflected_optional_tool(&self) -> String {
+        let result = async {
+            let tool = get_tool_type("ts-optional-reflection")?;
+            let command = tool.command(&[])?;
+            let omitted_json = command
+                .invoke_json(&serde_json::json!({ "maybe": null }))
+                .await?;
+            let supplied_json = command
+                .invoke_json(&serde_json::json!({ "maybe": "supplied" }))
+                .await?;
+            let omitted_native = command
+                .invoke_value(SchemaValue::Record {
+                    fields: vec![SchemaValue::Option { inner: None }],
+                })
+                .await?;
+            let supplied_native = command
+                .invoke_value(SchemaValue::Record {
+                    fields: vec![SchemaValue::Option {
+                        inner: Some(Box::new(SchemaValue::String("supplied".to_string()))),
+                    }],
+                })
+                .await?;
+            Ok::<_, golem_rust::agentic::ToolReflectionError>(format!(
+                "{}|{}|{}|{}",
+                omitted_json
+                    .and_then(|value| value.as_str().map(str::to_owned))
+                    .unwrap_or_else(|| "unexpected".to_string()),
+                supplied_json
+                    .and_then(|value| value.as_str().map(str::to_owned))
+                    .unwrap_or_else(|| "unexpected".to_string()),
+                match omitted_native {
+                    Some(SchemaValue::String(value)) => value,
+                    _ => "unexpected".to_string(),
+                },
+                match supplied_native {
+                    Some(SchemaValue::String(value)) => value,
+                    _ => "unexpected".to_string(),
+                },
+            ))
+        }
+        .await;
+        result.unwrap_or_else(|error| format!("error:{error}"))
     }
     async fn call_effect(&self, tenant: String, request_id: String) -> String {
         let client = EffectFixture::get_with_config(tenant, Some("rust-override".into()))

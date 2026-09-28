@@ -60,6 +60,8 @@ pub fn resolve_component_id(String) -> @types.ComponentId?
 
 pub fn resolve_retry_policy(String, String, Array[(String, @retry.PredicateValue)]) -> @retry.RetryPolicy?
 
+pub async fn[T, E] retry_local(@retry.RetryPolicy, async () -> Result[T, E], properties? : (E) -> Array[(String, @retry.PredicateValue)]) -> Result[T, E]
+
 pub fn revert_agent(@types.AgentId, @host.RevertAgentTarget) -> Unit
 
 pub fn set_idempotence_mode(Bool) -> Unit
@@ -89,6 +91,11 @@ pub fn[T] with_retry_policy(@retry.NamedRetryPolicy, () -> T) -> T
 // Errors
 pub suberror DurabilityError {
   ReplayMismatch(String)
+} derive(Eq, @debug.Debug)
+
+pub suberror LocalRetryError {
+  InvalidPolicy(String)
+  PredicateEvaluation(String)
 } derive(Eq, @debug.Debug)
 
 pub suberror RetryBuilderError {

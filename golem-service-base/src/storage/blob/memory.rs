@@ -14,8 +14,9 @@
 
 use super::ErasedReplayableStream;
 use crate::storage::blob::{
-    BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult, ListedBlob, NormalizedBlobPath,
-    PutIfAbsent, blob_child_path, normalized_blob_path,
+    BLOB_STREAM_CHUNK_SIZE, BlobMetadata, BlobRangeStream, BlobStorage, BlobStorageNamespace,
+    ExistsResult, ListedBlob, NormalizedBlobPath, PutIfAbsent, blob_child_path,
+    normalized_blob_path, validate_range,
 };
 use anyhow::Error;
 use async_trait::async_trait;
@@ -46,9 +47,11 @@ struct Key {
 #[derive(Debug, Clone)]
 enum Entry {
     /// A directory that `create_dir` made, with the time of the last such call.
-    Directory { created_at: Timestamp },
+    Directory {
+        created_at: Timestamp,
+    },
     File {
-        data: Vec<u8>,
+        data: Bytes,
         metadata: BlobMetadata,
     },
 }
@@ -71,7 +74,7 @@ impl InMemoryBlobStorage {
         }
     }
 
-    fn file_entry(data: Vec<u8>) -> Entry {
+    fn file_entry(data: Bytes) -> Entry {
         Entry::File {
             metadata: BlobMetadata {
                 size: data.len() as u64,
@@ -160,7 +163,7 @@ impl BlobStorage for InMemoryBlobStorage {
         let key = Self::blob_key(namespace, &path)?;
         let data = self.data.read().await;
         Ok(data.get(&key).and_then(|entry| match entry {
-            Entry::File { data, .. } => Some(data.clone()),
+            Entry::File { data, .. } => Some(data.to_vec()),
             Entry::Directory { .. } => None,
         }))
     }
@@ -183,12 +186,55 @@ impl BlobStorage for InMemoryBlobStorage {
         let data = self.data.read().await;
         Ok(data.get(&key).and_then(|entry| match entry {
             Entry::File { data, .. } => {
-                let stream = tokio_stream::once(Ok(Bytes::from(data.clone())));
+                let stream = tokio_stream::once(Ok(data.clone()));
                 let boxed: Pin<Box<dyn Stream<Item = Result<Bytes, Error>> + Send>> =
                     Box::pin(stream);
                 Some(boxed)
             }
             Entry::Directory { .. } => None,
+        }))
+    }
+
+    async fn get_range_stream(
+        &self,
+        _target_label: &'static str,
+        _op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+        offset: u64,
+        length: u64,
+    ) -> Result<Option<BlobRangeStream>, Error> {
+        let path = normalized_blob_path(path)?;
+
+        // A root path is a directory, and a directory has no blob at its path.
+        if path.is_root() {
+            return Ok(None);
+        }
+
+        let key = Self::blob_key(namespace, &path)?;
+        let data = self
+            .data
+            .read()
+            .await
+            .get(&key)
+            .and_then(|entry| match entry {
+                Entry::File { data, .. } => Some(data.clone()),
+                Entry::Directory { .. } => None,
+            });
+        let Some(data) = data else { return Ok(None) };
+        let total_size = data.len() as u64;
+        validate_range(offset, length, total_size)?;
+        let selected = data.slice(offset as usize..(offset + length) as usize);
+        let stream = futures::stream::unfold(selected, |mut data| async {
+            if data.is_empty() {
+                return None;
+            }
+            let chunk = data.split_to(data.len().min(BLOB_STREAM_CHUNK_SIZE));
+            Some((Ok(chunk), data))
+        });
+        Ok(Some(BlobRangeStream {
+            total_size,
+            stream: Box::pin(stream),
         }))
     }
 
@@ -246,7 +292,7 @@ impl BlobStorage for InMemoryBlobStorage {
         path.reject_root()?;
 
         let key = Self::blob_key(namespace, &path)?;
-        let entry = Self::file_entry(data.to_vec());
+        let entry = Self::file_entry(Bytes::copy_from_slice(data));
         self.data.write().await.insert(key, entry);
 
         Ok(())
@@ -269,7 +315,7 @@ impl BlobStorage for InMemoryBlobStorage {
         let mut entries = self.data.write().await;
         match entries.entry(key) {
             std::collections::btree_map::Entry::Vacant(entry) => {
-                entry.insert(Self::file_entry(data.to_vec()));
+                entry.insert(Self::file_entry(Bytes::copy_from_slice(data)));
                 Ok(PutIfAbsent::Written)
             }
             std::collections::btree_map::Entry::Occupied(_) => Ok(PutIfAbsent::AlreadyExists),

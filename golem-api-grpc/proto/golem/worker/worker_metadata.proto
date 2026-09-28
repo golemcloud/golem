@@ -39,8 +39,9 @@ message AgentMetadata {
   // Distinguishes a freshly-created agent from a previous, now-deleted
   // instance that shared the same `AgentId`.
   golem.common.UUID fingerprint = 20;
+  OwnerKind owner_kind = 21;
   // Identifies whether last_error came from an invocation or from startup/recovery.
-  optional OplogErrorKind last_error_kind = 21;
+  optional OplogErrorKind last_error_kind = 22;
 }
 
 message UpdateRecord {

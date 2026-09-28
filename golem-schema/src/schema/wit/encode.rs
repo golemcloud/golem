@@ -743,6 +743,16 @@ pub fn encode_typed(typed: &TypedSchemaValue) -> Result<wire::TypedSchemaValue, 
     })
 }
 
+#[cfg(all(feature = "guest", not(feature = "host")))]
+pub async fn encode_typed_async(
+    typed: &TypedSchemaValue,
+) -> Result<wire::TypedSchemaValue, EncodeError> {
+    Ok(wire::TypedSchemaValue {
+        graph: encode_graph(typed.graph())?,
+        value: encode_value_async(typed.value()).await?,
+    })
+}
+
 /// Encode a typed guest value while explicitly transferring any affine
 /// resources reachable from it into the returned wire representation.
 #[cfg(all(feature = "guest", not(feature = "host")))]

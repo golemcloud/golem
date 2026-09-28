@@ -7,6 +7,7 @@ import type { SchemaValueTree } from "golem:core/types@2.0.0"
 import { Context, Effect, Schema, Stream } from "effect"
 import { decodeFromWire } from "../WitCodec.js"
 import { AbortableStreamIterable } from "./abortableStreamIterable.js"
+import { HttpStreamOwner, streamDisposals } from "./ownedStream.js"
 import { assertCapabilityReady } from "./schema-model/capabilityTransaction.js"
 import {
   GuestSchemaValueStreamHandle,
@@ -21,6 +22,7 @@ type ItemCodec<T> = Schema.Codec<T, import("./schema-model/model.js").SchemaValu
 interface ReceivedState {
   endpoint?: GuestSchemaValueStream
   iterator?: AsyncIterator<SchemaValueTree>
+  closed?: Promise<void>
   readonly ownership: StreamOwnership
 }
 
@@ -63,11 +65,19 @@ export function agentStreamToHandle<T, E, R>(
       ),
     ),
   )
-  const source = new AbortableStreamIterable(encoded, encodingContext)
+  const source = new AbortableStreamIterable(encoded, encodingContext, streamDisposals.get(stream))
   return new GuestSchemaValueStreamHandle(STREAM_INTERNAL, {
     kind: "native",
     value: source,
   })
+}
+
+/** Dispose an unused received endpoint without polling any body item. */
+export async function disposeAgentStream(stream: object): Promise<void> {
+  const state = received.get(stream)
+  if (state?.ownership.available && state.ownership.reservation === undefined) {
+    await new ReceivedStreamIterable(state).return()
+  }
 }
 
 /** @internal Lift a recursive schema-value-stream handle into a native Effect stream. */
@@ -117,12 +127,11 @@ export function agentStreamFromHandle<T>(
     ),
   )
   received.set(stream, state)
+  Context.get(decodingContext, HttpStreamOwner)?.add(() => disposeAgentStream(stream))
   return stream
 }
 
 class ReceivedStreamIterable implements AsyncIterableIterator<SchemaValueTree> {
-  private closed: Promise<void> | undefined
-
   constructor(private readonly state: ReceivedState) {}
 
   [Symbol.asyncIterator](): AsyncIterableIterator<SchemaValueTree> {
@@ -137,7 +146,7 @@ class ReceivedStreamIterable implements AsyncIterableIterator<SchemaValueTree> {
       const item = await (await wireIterator(state)).next()
       if (item.done) {
         state.ownership.available = false
-        this.closed = Promise.resolve()
+        state.closed ??= Promise.resolve()
         return { done: true, value: undefined }
       }
       return item
@@ -147,15 +156,16 @@ class ReceivedStreamIterable implements AsyncIterableIterator<SchemaValueTree> {
   }
 
   return(): Promise<IteratorResult<SchemaValueTree>> {
-    if (!this.closed) {
-      const state = this.available()
+    const state = this.state
+    if (!state.closed) {
+      this.available()
       state.ownership.available = false
-      this.closed = Promise.resolve().then(async () => {
+      state.closed = Promise.resolve().then(async () => {
         const iterator = await wireIterator(state)
         await iterator.return?.()
       })
     }
-    return this.closed.then(() => ({ done: true, value: undefined }))
+    return state.closed.then(() => ({ done: true, value: undefined }))
   }
 
   private available(): ReceivedState {

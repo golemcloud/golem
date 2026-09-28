@@ -64,6 +64,7 @@ object AgentSurfaceIR {
   final case class AgentMetadataSurface(
     description: Option[String],
     mode: String,
-    snapshotting: String
+    snapshotting: String,
+    kind: String = "regular"
   )
 }

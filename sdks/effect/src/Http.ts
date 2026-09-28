@@ -1,4 +1,5 @@
 import { Effect, Pipeable, Schema, SchemaAST } from "effect"
+import { compileFileMappings, type FileExposure } from "@golemcloud/http-contract"
 import type * as AgentCommon from "golem:agent/common@2.0.0"
 import { withPipe } from "./internal/pipeable.js"
 import type {
@@ -373,6 +374,47 @@ declare const endpointHeaderNamesBrand: unique symbol
 export type EndpointKind = "bodyful" | "bodyless"
 
 /**
+ * A canonical durable-stream slot exposed by an HTTP endpoint.
+ * `name` is the optional public route alias; `slot` always identifies
+ * the canonical method input or output slot.
+ *
+ * @since 1.6.0
+ * @category models
+ */
+export interface DurableStreamSlotOptions {
+  readonly source: "input" | "output"
+  readonly slot: string
+  readonly name?: string
+  readonly contentType?: string
+}
+
+/**
+ * Per-route load limits for durable streams.
+ *
+ * @since 1.6.0
+ * @category models
+ */
+export interface DurableStreamLoadOptions {
+  readonly maxConcurrentReadersPerStream?: number
+  readonly maxAppendRequestsPerSecondPerStream?: number
+}
+
+/**
+ * Durable-stream routing options attached to an HTTP endpoint.
+ * Schema and MIME semantics are validated by the Golem registry.
+ *
+ * @since 1.6.0
+ * @category models
+ */
+export interface DurableStreamOptions {
+  readonly slots: ReadonlyArray<DurableStreamSlotOptions>
+  readonly allowExternalWrites?: boolean
+  readonly allowStreamDelete?: boolean
+  readonly allowInvocationDelete?: boolean
+  readonly load?: DurableStreamLoadOptions
+}
+
+/**
  * Mount declaration carried by `AgentMetadata.http`. Compiled to
  * `agent-type.http-mount` (`HttpMountDetails`) at registration time.
  *
@@ -408,6 +450,7 @@ export interface MountDef<MountVars extends string, WebhookVars extends string =
   readonly cors: ReadonlyArray<string>
   readonly phantomAgent: boolean
   readonly webhookSuffix: ReadonlyArray<PathSegment>
+  readonly exposeFiles?: readonly FileExposure[]
 }
 
 /**
@@ -472,6 +515,7 @@ export interface EndpointDef<
   /** `undefined` = inherit from mount; `true`/`false` = override. */
   readonly authRequired?: boolean
   readonly cors: ReadonlyArray<string>
+  readonly durableStreams?: DurableStreamOptions
 }
 
 // ---------------------------------------------------------------------------
@@ -708,6 +752,8 @@ const runParse = <A>(eff: Effect.Effect<A, HttpRouteError>): A => {
  * @category models
  */
 export interface MountOptions<W extends string = string> {
+  /** Ordered live-file mappings for regular durable non-phantom agents. */
+  readonly exposeFiles?: readonly FileExposure[]
   /** When `true`, the host treats every endpoint as authentication-required. */
   readonly auth?: boolean
   /** CORS allowed-origin patterns advertised at the mount level. */
@@ -790,6 +836,7 @@ export const mount: <const Path extends string, const W extends string = string>
     cors: opts?.cors ?? [],
     phantomAgent: opts?.phantomAgent ?? false,
     webhookSuffix,
+    exposeFiles: opts?.exposeFiles?.map((mapping) => ({ ...mapping })),
   }) as unknown as MountDef<never, never>
 }) as never
 
@@ -821,6 +868,8 @@ export interface EndpointOptions<H extends Readonly<Record<string, string>> = No
   readonly auth?: boolean
   /** Additional CORS allowed-origin patterns for this endpoint. */
   readonly cors?: ReadonlyArray<string>
+  /** Durable-stream route customization for this endpoint. */
+  readonly durableStreams?: DurableStreamOptions
 }
 
 const buildEndpoint = <H extends Readonly<Record<string, string>>>(
@@ -842,6 +891,7 @@ const buildEndpoint = <H extends Readonly<Record<string, string>>>(
     headerVars,
     authRequired: opts?.auth,
     cors: opts?.cors ?? [],
+    durableStreams: opts?.durableStreams,
   }) as unknown as EndpointDef<string>
 }
 
@@ -1154,6 +1204,18 @@ export const withCors =
     withPipe({ ...t, cors: patterns }) as unknown as T
 
 /**
+ * Attach durable-stream route options to an endpoint. The options are
+ * plain serializable data and replace any options already attached.
+ *
+ * @since 1.6.0
+ * @category combinators
+ */
+export const withDurableStreams =
+  (options: DurableStreamOptions) =>
+  <T extends EndpointDef<string>>(endpoint: T): T =>
+    withPipe({ ...endpoint, durableStreams: options }) as unknown as T
+
+/**
  * Append a single header → method-parameter binding to an endpoint.
  *
  * **Compile-time guarantees**
@@ -1336,6 +1398,9 @@ export const compileMount = (mountDef: MountDef<string, string>): AgentCommon.Ht
   phantomAgent: mountDef.phantomAgent,
   corsOptions: { allowedPatterns: [...mountDef.cors] },
   webhookSuffix: mountDef.webhookSuffix.map(segmentToWit),
+  staticBindings: [],
+  filesystemBindings: compileFileMappings(mountDef.exposeFiles ?? []),
+  openapiProviderMethod: undefined,
 })
 
 /**
@@ -1357,6 +1422,28 @@ export const compileEndpoint = (ep: EndpointDef<string>): AgentCommon.HttpEndpoi
   })),
   authDetails: ep.authRequired === undefined ? undefined : { required: ep.authRequired },
   corsOptions: { allowedPatterns: [...ep.cors] },
+  durableStreams:
+    ep.durableStreams === undefined
+      ? undefined
+      : {
+          slots: ep.durableStreams.slots.map((slot) => ({
+            source: { tag: slot.source, val: slot.slot },
+            name: slot.name,
+            contentType: slot.contentType,
+          })),
+          allowExternalWrites: ep.durableStreams.allowExternalWrites,
+          allowStreamDelete: ep.durableStreams.allowStreamDelete,
+          allowInvocationDelete: ep.durableStreams.allowInvocationDelete,
+          load:
+            ep.durableStreams.load === undefined
+              ? undefined
+              : {
+                  maxConcurrentReadersPerStream:
+                    ep.durableStreams.load.maxConcurrentReadersPerStream,
+                  maxAppendRequestsPerSecondPerStream:
+                    ep.durableStreams.load.maxAppendRequestsPerSecondPerStream,
+                },
+        },
 })
 
 // ---------------------------------------------------------------------------

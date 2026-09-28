@@ -35,14 +35,17 @@ object PublicValueCodec {
     private val defs: Map[String, Schema]
   ) {
     def encode(value: SchemaValue): json.Json =
-      encodeAt(root, value, 0, new Budget)
+      encodeAt(root, value, 0, new Budget, canonical = false)
+
+    private[runtime] def encodeCanonical(value: SchemaValue): json.Json =
+      encodeAt(root, value, 0, new Budget, canonical = true)
 
     def decode(value: json.Json): SchemaValue = {
       rejectDuplicates(value, "$value")
       decodeAt(root, value, 0, new Budget)
     }
 
-    private def encodeAt(schema0: Schema, value: SchemaValue, depth: Int, budget: Budget): json.Json = {
+    private def encodeAt(schema0: Schema, value: SchemaValue, depth: Int, budget: Budget, canonical: Boolean): json.Json = {
       checkDepth(depth)
       budget.add(1)
       val schema = resolve(schema0)
@@ -56,8 +59,8 @@ object PublicValueCodec {
         case ("u16", U16Value(v))   => integer(v.toLong, 0, 65535, 2, schema, budget)
         case ("u32", U32Value(v))   => integer(v, 0, 4294967295L, 4, schema, budget)
         case ("u64", U64Value(v))   => checkedDecimal(BigInt(v) & MaxU64, signed = false, schema, budget)
-        case ("f32", F32Value(v))   => encodeFloat(v.toDouble, true, 4, schema, budget)
-        case ("f64", F64Value(v))   => encodeFloat(v, false, 8, schema, budget)
+        case ("f32", F32Value(v))   => encodeFloat(v.toDouble, true, 4, schema, budget, canonical)
+        case ("f64", F64Value(v))   => encodeFloat(v, false, 8, schema, budget, canonical)
         case ("char", CharValue(v)) =>
           if (!Character.isValidCodePoint(v) || v >= 0xd800 && v <= 0xdfff) fail("invalid char value")
           val s = new String(Character.toChars(v)); budget.string(s); json.Json.string(s)
@@ -71,7 +74,7 @@ object PublicValueCodec {
           collection(values.length, budget)
           json.Json.obj(fields.zip(values).map { case ((name, ty), v) =>
             budget.string(name)
-            name -> encodeAt(ty, v, depth + 1, budget)
+            name -> encodeAt(ty, v, depth + 1, budget, canonical)
           })
         case ("variant", VariantValue(index, payload)) =>
           val cases = schemaArray(schema, "cases")
@@ -79,11 +82,17 @@ object PublicValueCodec {
           val obj = objectFields(cases(index), "schema variant case")
           val name = stringField(obj, "name")
           val payloadSchema = optionalSchemaField(obj, "payload")
-          val base = Vector[(String, json.Json)]("$case" -> json.Json.string(name))
           budget.string(name)
           (payloadSchema, payload) match {
-            case (None, None)       => json.Json.obj(base)
-            case (Some(ty), Some(v)) => json.Json.obj(base :+ ("value" -> encodeAt(ty, v, depth + 1, budget)))
+            case (None, None) if canonical => json.Json.string(name)
+            case (None, None)              => json.Json.obj("$case" -> json.Json.string(name))
+            case (Some(ty), Some(v)) if canonical =>
+              json.Json.obj(name -> encodeAt(ty, v, depth + 1, budget, canonical))
+            case (Some(ty), Some(v)) =>
+              json.Json.obj(
+                "$case" -> json.Json.string(name),
+                "value" -> encodeAt(ty, v, depth + 1, budget, canonical)
+              )
             case _ => fail("variant payload presence does not match schema")
           }
         case ("enum", EnumValue(index)) =>
@@ -96,29 +105,31 @@ object PublicValueCodec {
           val selected = flags.zip(bits).collect { case (name, true) => name }
           collection(selected.length, budget)
           json.Json.arr(selected.map { name => budget.string(name); json.Json.string(name) }.toVector)
-        case ("tuple", TupleValue(values)) => encodeSequence(schemaArray(schema, "elements").map(parseSchema), values, depth, budget, "tuple")
-        case ("list", ListValue(values)) => encodeRepeated(schemaField(schemaValue(schema), "element"), values, depth, budget, None)
+        case ("tuple", TupleValue(values)) => encodeSequence(schemaArray(schema, "elements").map(parseSchema), values, depth, budget, "tuple", canonical)
+        case ("list", ListValue(values)) => encodeRepeated(schemaField(schemaValue(schema), "element"), values, depth, budget, None, canonical)
         case ("fixed-list", FixedListValue(values)) =>
           val length = schemaU32(schema, "length")
-          encodeRepeated(schemaField(schemaValue(schema), "element"), values, depth, budget, Some(length))
+          encodeRepeated(schemaField(schemaValue(schema), "element"), values, depth, budget, Some(length), canonical)
         case ("map", MapValue(entries)) =>
           collection(entries.length, budget)
           val obj = schemaValue(schema)
           val key = schemaField(obj, "key"); val valueType = schemaField(obj, "value")
-          json.Json.arr(entries.map(e => json.Json.arr(Vector(encodeAt(key, e.key, depth + 1, budget), encodeAt(valueType, e.value, depth + 1, budget)))).toVector)
+          json.Json.arr(entries.map(e => json.Json.arr(Vector(encodeAt(key, e.key, depth + 1, budget, canonical), encodeAt(valueType, e.value, depth + 1, budget, canonical)))).toVector)
         case ("option", OptionValue(inner)) =>
           val ty = schemaField(schemaValue(schema), "inner")
           inner match {
-            case None    => budget.add(4); json.Json.obj("$option" -> json.Json.string("none"))
-            case Some(v) => budget.add(4); json.Json.obj("$option" -> json.Json.string("some"), "value" -> encodeAt(ty, v, depth + 1, budget))
+            case None if canonical    => json.Json.`null`
+            case None                 => budget.add(4); json.Json.obj("$option" -> json.Json.string("none"))
+            case Some(v) if canonical => encodeAt(ty, v, depth + 1, budget, canonical)
+            case Some(v)              => budget.add(4); json.Json.obj("$option" -> json.Json.string("some"), "value" -> encodeAt(ty, v, depth + 1, budget, canonical))
           }
-        case ("result", ResultValue(result)) => encodeResult(schema, result, depth, budget)
+        case ("result", ResultValue(result)) => encodeResult(schema, result, depth, budget, canonical)
         case ("text", TextValue(text, language)) =>
           validateText(schema, text, language); budget.string(text); language.foreach(budget.string)
           json.Json.obj(Vector("text" -> json.Json.string(text)) ++ language.map(v => "language" -> json.Json.string(v)))
         case ("binary", BinaryValue(bytes, mimeType)) =>
           validateBinary(schema, bytes, mimeType); budget.add(bytes.length); mimeType.foreach(budget.string)
-          json.Json.obj(Vector("bytes" -> json.Json.string(Base64.getEncoder.encodeToString(bytes.toArray))) ++ mimeType.map(v => "mimeType" -> json.Json.string(v)))
+          json.Json.obj(Vector("bytes" -> json.Json.string(Base64.getUrlEncoder.withoutPadding().encodeToString(bytes.toArray))) ++ mimeType.map(v => "mimeType" -> json.Json.string(v)))
         case ("path", PathValue(v)) => validatePath(schema, v); budget.string(v); json.Json.string(v)
         case ("url", UrlValue(v)) => validateUrl(schema, v); budget.string(v); json.Json.string(v)
         case ("datetime", DatetimeValue(v)) => validateDatetime(v); budget.string(v); json.Json.string(v)
@@ -133,11 +144,12 @@ object PublicValueCodec {
           )
         case ("union", UnionValue(tag, body)) =>
           val branch = unionBranch(schema, tag)
-          val encoded = encodeAt(schemaField(branch, "body"), body, depth + 1, budget)
+          val encoded = encodeAt(schemaField(branch, "body"), body, depth + 1, budget, canonical)
           if (!matchesDiscriminator(branch, encoded)) fail("union body does not satisfy discriminator")
-          budget.string(tag)
-          json.Json.obj("$union" -> json.Json.string(tag), "value" -> encoded)
+          if (canonical) encoded
+          else { budget.string(tag); json.Json.obj("$union" -> json.Json.string(tag), "value" -> encoded) }
         case ("stream", StreamReferenceValue(provisional, token, _)) =>
+          if (canonical) fail("streams are unsupported in canonical configuration values")
           val field = (provisional, token) match {
             case (Some(v), None) => validateUuidV4(v); budget.add(16); "provisionalRef" -> json.Json.string(v)
             case (None, Some(v)) => if (v.isEmpty || utf8Length(v) > MaxStreamToken) fail("invalid stream token length"); budget.string(v); "streamToken" -> json.Json.string(v)
@@ -266,9 +278,9 @@ object PublicValueCodec {
       loop(schema, Set.empty)
     }
 
-    private def encodeSequence(types: Vector[Schema], values: List[SchemaValue], depth: Int, budget: Budget, what: String): json.Json = {
+    private def encodeSequence(types: Vector[Schema], values: List[SchemaValue], depth: Int, budget: Budget, what: String, canonical: Boolean): json.Json = {
       if (types.length != values.length) fail(s"$what arity does not match schema")
-      collection(values.length, budget); json.Json.arr(types.zip(values).map { case (t, v) => encodeAt(t, v, depth + 1, budget) })
+      collection(values.length, budget); json.Json.arr(types.zip(values).map { case (t, v) => encodeAt(t, v, depth + 1, budget, canonical) })
     }
 
     private def decodeSequence(types: Vector[Schema], input: json.Json, depth: Int, budget: Budget, what: String): Vector[SchemaValue] = {
@@ -276,9 +288,9 @@ object PublicValueCodec {
       collection(values.length, budget); types.zip(values).map { case (t, v) => decodeAt(t, v, depth + 1, budget) }
     }
 
-    private def encodeRepeated(ty: Schema, values: List[SchemaValue], depth: Int, budget: Budget, fixed: Option[Int]): json.Json = {
+    private def encodeRepeated(ty: Schema, values: List[SchemaValue], depth: Int, budget: Budget, fixed: Option[Int], canonical: Boolean): json.Json = {
       fixed.foreach(n => if (values.length != n) fail("fixed-list length does not match schema"))
-      collection(values.length, budget); json.Json.arr(values.map(v => encodeAt(ty, v, depth + 1, budget)).toVector)
+      collection(values.length, budget); json.Json.arr(values.map(v => encodeAt(ty, v, depth + 1, budget, canonical)).toVector)
     }
 
     private def decodeRepeated(ty: Schema, input: json.Json, depth: Int, budget: Budget, fixed: Option[Int]): Vector[SchemaValue] = {
@@ -286,17 +298,23 @@ object PublicValueCodec {
       collection(values.length, budget); values.map(v => decodeAt(ty, v, depth + 1, budget))
     }
 
-    private def encodeResult(schema: Schema, result: SchemaResult, depth: Int, budget: Budget): json.Json = {
+    private def encodeResult(schema: Schema, result: SchemaResult, depth: Int, budget: Budget, canonical: Boolean): json.Json = {
       val spec = objectField(schemaValue(schema), "spec")
       val (tag, payload, ty) = result match {
         case SchemaResult.Ok(v)  => ("ok", v, optionalSchemaField(spec, "ok"))
         case SchemaResult.Err(v) => ("err", v, optionalSchemaField(spec, "err"))
       }
       budget.string(tag)
-      val base = Vector[(String, json.Json)]("$result" -> json.Json.string(tag))
       (payload, ty) match {
-        case (None, None)       => json.Json.obj(base)
-        case (Some(v), Some(t)) => json.Json.obj(base :+ ("value" -> encodeAt(t, v, depth + 1, budget)))
+        case (None, None) if canonical => json.Json.obj(tag -> json.Json.`null`)
+        case (None, None)              => json.Json.obj("$result" -> json.Json.string(tag))
+        case (Some(v), Some(t)) if canonical =>
+          json.Json.obj(tag -> encodeAt(t, v, depth + 1, budget, canonical))
+        case (Some(v), Some(t)) =>
+          json.Json.obj(
+            "$result" -> json.Json.string(tag),
+            "value"   -> encodeAt(t, v, depth + 1, budget, canonical)
+          )
         case _ => fail("result payload presence does not match schema")
       }
     }
@@ -347,8 +365,9 @@ object PublicValueCodec {
       n
     }
 
-    private def encodeFloat(value: Double, isF32: Boolean, width: Int, schema: Schema, budget: Budget): json.Json = {
+    private def encodeFloat(value: Double, isF32: Boolean, width: Int, schema: Schema, budget: Budget, canonical: Boolean): json.Json = {
       budget.add(width)
+      if (canonical && !value.isFinite) fail("canonical configuration floats must be finite")
       if (value.isFinite) validateNumeric(schema, BigDecimal(value))
       else if (hasNumericBounds(schema)) fail("exceptional float does not satisfy numeric restrictions")
       if (value.isNaN) floatTag("nan")
@@ -470,9 +489,9 @@ object PublicValueCodec {
     }
 
     private def decodeBase64(value: String): Vector[Byte] = {
-      if (value.length % 4 != 0 || !Base64Syntax.matcher(value).matches()) fail("binary bytes are not canonical padded base64")
-      val bytes = try Base64.getDecoder.decode(value) catch { case _: IllegalArgumentException => fail("invalid base64") }
-      if (Base64.getEncoder.encodeToString(bytes) != value) fail("binary bytes are not canonical padded base64")
+      if (value.length % 4 == 1 || !Base64UrlSyntax.matcher(value).matches()) fail("binary bytes are not canonical unpadded base64url")
+      val bytes = try Base64.getUrlDecoder.decode(value) catch { case _: IllegalArgumentException => fail("invalid base64url") }
+      if (Base64.getUrlEncoder.withoutPadding().encodeToString(bytes) != value) fail("binary bytes are not canonical unpadded base64url")
       bytes.toVector
     }
 
@@ -605,7 +624,7 @@ object PublicValueCodec {
   private val UnsignedDecimal = Pattern.compile("0|[1-9][0-9]*")
   private val Mime = Pattern.compile("[A-Za-z0-9!#$&^_.+\\-]+/[A-Za-z0-9!#$&^_.+\\-]+")
   private val Language = Pattern.compile("[A-Za-z]{1,8}(?:-[A-Za-z0-9]{1,8})*")
-  private val Base64Syntax = Pattern.compile("(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?")
+  private val Base64UrlSyntax = Pattern.compile("[A-Za-z0-9_-]*")
   private val UuidV4 = Pattern.compile("[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}")
   private val Datetime = Pattern.compile("[0-9]{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])T(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](?:\\.[0-9]{1,9})?Z")
 }

@@ -1,11 +1,14 @@
 use super::{
     AgentConfigSource, AgentHttpAuthDetails, AgentInvocationMode, AgentMode, AgentPrincipal,
-    CachePolicy, CachePolicyTtl, CorsOptions, CustomHttpMethod, GolemUserPrincipal, HeaderVariable,
+    CachePolicy, CachePolicyTtl, CorsOptions, CustomHttpMethod, DurableStreamInputSlotSource,
+    DurableStreamOutputSlotSource, DurableStreamRouteLoadOptions, DurableStreamRouteOptions,
+    DurableStreamSlotOptions, DurableStreamSlotSource, GolemUserPrincipal, HeaderVariable,
     HttpEndpointDetails, HttpMethod, HttpMountDetails, LiteralSegment, OidcPrincipal, PathSegment,
     PathVariable, Principal, QueryVariable, ReadOnlyConfig, RegisteredAgentType,
     RegisteredAgentTypeImplementer, Snapshotting, SnapshottingConfig, SnapshottingEveryNInvocation,
     SnapshottingPeriodic, SystemVariable, SystemVariableSegment,
 };
+use crate::base_model::agent::{ExactFileMapping, FileMapping, SubtreeFileMapping};
 use crate::model::Empty;
 
 impl From<golem_api_grpc::proto::golem::component::AgentMode> for AgentMode {
@@ -211,6 +214,17 @@ impl TryFrom<golem_api_grpc::proto::golem::component::HttpMountDetails> for Http
                 .into_iter()
                 .map(TryInto::try_into)
                 .collect::<Result<_, _>>()?,
+            static_bindings: value
+                .static_bindings
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<Result<_, _>>()?,
+            filesystem_bindings: value
+                .filesystem_bindings
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<Result<_, _>>()?,
+            openapi_provider_method: value.openapi_provider_method,
         })
     }
 }
@@ -223,6 +237,51 @@ impl From<HttpMountDetails> for golem_api_grpc::proto::golem::component::HttpMou
             phantom_agent: value.phantom_agent,
             cors_options: Some(value.cors_options.into()),
             webhook_suffix: value.webhook_suffix.into_iter().map(Into::into).collect(),
+            static_bindings: value.static_bindings.into_iter().map(Into::into).collect(),
+            filesystem_bindings: value
+                .filesystem_bindings
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+            openapi_provider_method: value.openapi_provider_method,
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::component::FileMapping> for FileMapping {
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::component::FileMapping,
+    ) -> Result<Self, Self::Error> {
+        use golem_api_grpc::proto::golem::component::file_mapping::Value;
+        match value.value.ok_or("Missing FileMapping.value")? {
+            Value::Exact(mapping) => Ok(Self::Exact(ExactFileMapping {
+                public_path: mapping.public_path,
+                file_path: mapping.file_path,
+            })),
+            Value::Subtree(mapping) => Ok(Self::Subtree(SubtreeFileMapping {
+                public_prefix: mapping.public_prefix,
+                filesystem_root: mapping.filesystem_root,
+            })),
+        }
+    }
+}
+
+impl From<FileMapping> for golem_api_grpc::proto::golem::component::FileMapping {
+    fn from(value: FileMapping) -> Self {
+        use golem_api_grpc::proto::golem::component::{self as proto, file_mapping::Value};
+        Self {
+            value: Some(match value {
+                FileMapping::Exact(mapping) => Value::Exact(proto::ExactFileMapping {
+                    public_path: mapping.public_path,
+                    file_path: mapping.file_path,
+                }),
+                FileMapping::Subtree(mapping) => Value::Subtree(proto::SubtreeFileMapping {
+                    public_prefix: mapping.public_prefix,
+                    filesystem_root: mapping.filesystem_root,
+                }),
+            }),
         }
     }
 }
@@ -258,6 +317,7 @@ impl TryFrom<golem_api_grpc::proto::golem::component::HttpEndpointDetails> for H
                 .cors_options
                 .ok_or_else(|| "Missing field: cors_options".to_string())?
                 .try_into()?,
+            durable_streams: value.durable_streams.map(TryInto::try_into).transpose()?,
         })
     }
 }
@@ -271,6 +331,133 @@ impl From<HttpEndpointDetails> for golem_api_grpc::proto::golem::component::Http
             query_vars: value.query_vars.into_iter().map(Into::into).collect(),
             auth_details: value.auth_details.map(Into::into),
             cors_options: Some(value.cors_options.into()),
+            durable_streams: value.durable_streams.map(Into::into),
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::component::DurableStreamRouteOptions>
+    for DurableStreamRouteOptions
+{
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::component::DurableStreamRouteOptions,
+    ) -> Result<Self, Self::Error> {
+        Ok(Self {
+            slots: value
+                .slots
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<Result<_, _>>()?,
+            allow_external_writes: value.allow_external_writes,
+            allow_stream_delete: value.allow_stream_delete,
+            allow_invocation_delete: value.allow_invocation_delete,
+            load: value.load.map(Into::into),
+        })
+    }
+}
+
+impl From<DurableStreamRouteOptions>
+    for golem_api_grpc::proto::golem::component::DurableStreamRouteOptions
+{
+    fn from(value: DurableStreamRouteOptions) -> Self {
+        Self {
+            slots: value.slots.into_iter().map(Into::into).collect(),
+            allow_external_writes: value.allow_external_writes,
+            allow_stream_delete: value.allow_stream_delete,
+            allow_invocation_delete: value.allow_invocation_delete,
+            load: value.load.map(Into::into),
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::component::DurableStreamSlotOptions>
+    for DurableStreamSlotOptions
+{
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::component::DurableStreamSlotOptions,
+    ) -> Result<Self, Self::Error> {
+        Ok(Self {
+            source: value
+                .source
+                .ok_or_else(|| "Missing field: durable_stream_slot_options.source".to_string())?
+                .try_into()?,
+            name: value.name,
+            content_type: value.content_type,
+        })
+    }
+}
+
+impl From<DurableStreamSlotOptions>
+    for golem_api_grpc::proto::golem::component::DurableStreamSlotOptions
+{
+    fn from(value: DurableStreamSlotOptions) -> Self {
+        Self {
+            source: Some(value.source.into()),
+            name: value.name,
+            content_type: value.content_type,
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::component::DurableStreamSlotSource>
+    for DurableStreamSlotSource
+{
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::component::DurableStreamSlotSource,
+    ) -> Result<Self, Self::Error> {
+        use golem_api_grpc::proto::golem::component::durable_stream_slot_source::Value;
+
+        match value
+            .value
+            .ok_or_else(|| "Missing oneof: durable_stream_slot_source.value".to_string())?
+        {
+            Value::Input(name) => Ok(Self::Input(DurableStreamInputSlotSource { name })),
+            Value::Output(name) => Ok(Self::Output(DurableStreamOutputSlotSource { name })),
+        }
+    }
+}
+
+impl From<DurableStreamSlotSource>
+    for golem_api_grpc::proto::golem::component::DurableStreamSlotSource
+{
+    fn from(value: DurableStreamSlotSource) -> Self {
+        use golem_api_grpc::proto::golem::component::durable_stream_slot_source::Value;
+
+        Self {
+            value: Some(match value {
+                DurableStreamSlotSource::Input(source) => Value::Input(source.name),
+                DurableStreamSlotSource::Output(source) => Value::Output(source.name),
+            }),
+        }
+    }
+}
+
+impl From<golem_api_grpc::proto::golem::component::DurableStreamRouteLoadOptions>
+    for DurableStreamRouteLoadOptions
+{
+    fn from(value: golem_api_grpc::proto::golem::component::DurableStreamRouteLoadOptions) -> Self {
+        Self {
+            max_concurrent_readers_per_stream: value.max_concurrent_readers_per_stream,
+            max_append_requests_per_second_per_stream: value
+                .max_append_requests_per_second_per_stream,
+        }
+    }
+}
+
+impl From<DurableStreamRouteLoadOptions>
+    for golem_api_grpc::proto::golem::component::DurableStreamRouteLoadOptions
+{
+    fn from(value: DurableStreamRouteLoadOptions) -> Self {
+        Self {
+            max_concurrent_readers_per_stream: value.max_concurrent_readers_per_stream,
+            max_append_requests_per_second_per_stream: value
+                .max_append_requests_per_second_per_stream,
         }
     }
 }
@@ -308,6 +495,7 @@ impl TryFrom<golem_api_grpc::proto::golem::component::HttpMethod> for HttpMethod
                 }
             }
             Value::Custom(c) => Ok(HttpMethod::Custom(CustomHttpMethod { value: c })),
+            Value::Any(_) => Ok(HttpMethod::Any(Empty {})),
         }
     }
 }
@@ -329,6 +517,7 @@ impl From<HttpMethod> for golem_api_grpc::proto::golem::component::HttpMethod {
                 HttpMethod::Trace(_) => Value::Standard(StandardHttpMethod::Trace.into()),
                 HttpMethod::Patch(_) => Value::Standard(StandardHttpMethod::Patch.into()),
                 HttpMethod::Custom(c) => Value::Custom(c.value),
+                HttpMethod::Any(_) => Value::Any(golem_api_grpc::proto::golem::common::Empty {}),
             }),
         }
     }

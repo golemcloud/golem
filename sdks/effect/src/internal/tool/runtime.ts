@@ -1,5 +1,6 @@
 import type * as Common from "golem:tool/common@0.1.0"
 import type * as Host from "golem:tool/host@0.1.0"
+import type * as Streams from "golem:tool/streams@0.1.0"
 import { Effect, Layer, Stream } from "effect"
 import { HostLive } from "../../host/HostLive.js"
 import { schemaShapesMatch } from "../schema-model/model.js"
@@ -26,7 +27,7 @@ export async function invokeRegistered(
   path: string[],
   input: Common.TypedSchemaValue,
   stdin: AsyncIterable<Host.ByteStreamItem> | undefined,
-  stdout: Host.ToolStdoutWriter | undefined,
+  stdout: Streams.ToolStdoutWriter | undefined,
   principal: unknown,
 ): Promise<Common.InvocationResult> {
   const stdinIterator = stdin?.[Symbol.asyncIterator]()

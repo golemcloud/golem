@@ -43,7 +43,7 @@ The _Golem CLI_ commands that use _Application Manifest_ start by searching for 
 
 After resolving relative paths in the documents they are merged, then _component selection_ happens: this can be either explicit, by using `--component-name` CLI flags, or implicit, in which case only components defined in the directory - including subdirectories - from where the _Golem CLI_ was executed are used.
 
-Application Manifest documents can also be explicitly passed to the CLI, using the `--app` flag. Note that when using explicit documents the `includes` field is not used, it is expected that all relevant documents are provided for the CLI.
+An Application Manifest can also be selected explicitly with `--app-manifest-path` (`-A`). This chooses the root manifest instead of searching parent directories; its `includes` are still resolved. Use `--disable-app-manifest-discovery` (`-X`) to run without manifest discovery.
 
 ## Template variables and functions
 
@@ -113,23 +113,26 @@ tools:
 
 In this example, `build/assistant.wasm` must export both `SupportAgent` and the `search` tool.
 
-### Agent bindings
+### Component and agent bindings
 
-Tool bindings select which deployed tools are available to an agent and provide invocation parameters. Use the automatically selected `app-env:<environment>` agent preset to vary bindings by environment. Map merge modes are `upsert` (the default), `replace`, or `remove`; parameter maps use the same modes.
+Tool bindings select which deployed tools an owner can invoke and provide invocation parameters. A component binding authorizes fresh owners such as tools-only MCP calls and is also inherited as a default by real agents exported by that component. Agent bindings alone do not authorize a fresh component owner. Use the automatically selected `app-env:<environment>` agent preset to vary real-agent bindings by environment. Map merge modes are `upsert` (the default), `replace`, or `remove`; parameter maps use the same modes.
 
 ```yaml
 environments:
   production:
     server: cloud
 
-agents:
-  SupportAgent:
+components:
+  support:assistant:
     tools:
       search:
         version: "1.0.0"
         parameters:
           index: documentation
           limit: 20
+
+agents:
+  SupportAgent:
     presets:
       app-env:production:
         tools:
@@ -137,7 +140,14 @@ agents:
             parametersMergeMode: upsert
             parameters:
               limit: 5
+
+  RestrictedAgent:
+    toolsMergeMode: remove
+    tools:
+      search: {}
 ```
+
+`RestrictedAgent` opts out of the inherited `search` binding. If no agent should inherit a tool, prefer a separate agentless owner component rather than adding the binding to a component that exports agents.
 
 For a component-implemented tool, `version` can be omitted to use the version discovered from the component. When specified, it must match that version. The optional `account` must be the account that owns the locally deployed implementing component.
 
@@ -298,25 +308,29 @@ Golem currently ships no production built-in or native tool inventory. A deploym
 
 ### Bridge generation
 
-Local bridge generation continues to accept tool aliases:
+Bridge generation accepts canonical ambient native-tool names without a top-level `tools` declaration, release grant, or local implementation component. It resolves ambient metadata from the selected environment, so the CLI must be authenticated to read that environment's deployment plan:
 
 ```yaml
 bridge:
   rust:
     internal:
-      tools: [search]
+      tools: [native-search]
 ```
 
-Registry-backed bridge generation refers to the logical name. The exact source is resolved from the canonical declaration under `tools`:
+Name-only component dependencies use the same lookup. Declared local and registry-backed tools resolve from the application; otherwise the name is resolved from the selected environment's ambient catalog and then from its MCP imports:
 
 ```yaml
-bridge:
-  rust:
-    internal:
-      tools: [search]
+components:
+  my-app:consumer:
+    dependencies:
+      tools: [native-search, catalog-search]
 ```
 
-The generator reads only the release's safe tool definition and metadata digest. It does not require the publisher's WASM or permission to inspect the publisher component. Release identity and metadata digest are included in generation cache markers, so changing the selected release invalidates generated output. A missing grant is planned and created before metadata access; planning fails clearly when the deploy actor lacks permission to reconcile the grant.
+`"*"` under `bridge.<language>.internal.tools` includes all visible ambient and MCP-imported tools in addition to application tools. Explicit names avoid MCP discovery when ambient metadata already satisfies every request. Ambient and application tool names may not collide; ambient names take precedence over MCP projections, and earlier MCP imports take precedence over later imports.
+
+Generated clients always invoke the canonical Golem tool name through `tool-rpc`. They contain no native host implementation ID, MCP endpoint, transport, or credentials. Native provision, binding, and middleware configuration is deployment-only and does not change the generated API or generation cache identity.
+
+For registry-backed tools, the generator reads only the release's safe tool definition and metadata digest. It does not require the publisher's WASM or permission to inspect the publisher component. Release identity and metadata digest are included in generation cache markers, so changing the selected release invalidates generated output. A missing grant is planned and created before metadata access; planning fails clearly when the deploy actor lacks permission to reconcile the grant.
 
 <Fields>
   ## Field reference
@@ -448,6 +462,12 @@ The generator reads only the release's safe tool definition and metadata digest.
     since: Release.R_1_5_0
   }}>
     ***Built-in server subdomain*** for the deployment. Must be a single DNS label (lowercase letters, digits, and hyphens only). In a local environment it resolves to `<subdomain>.localhost:9006` by default, or `<subdomain>.localhost:<customRequestPort>` when `localServer.customRequestPort` is set to a stable nonzero port. In a cloud environment it resolves to `<subdomain>.apps.golem.cloud`. Cannot be used with custom server environments — use `domain` instead. Define exactly one of `domain` or `subdomain`.
+  </Field>
+
+  <Field meta={{
+    path: "httpApi.deployments.<environment-name>[*].scheme",
+  }}>
+    ***Public HTTP API scheme***: `http` or `https`. When omitted, defaults to `http` for the built-in local server (including the implicit local target), and `https` for the built-in cloud server. Custom server environments require an explicit value. An explicit value always overrides the default; the management API URL does not determine the public scheme. This controls the origin advertised in generated OpenAPI documents, not TLS configuration.
   </Field>
 
   <Field meta={{
@@ -875,6 +895,29 @@ The generator reads only the release's safe tool definition and metadata digest.
     path: "components.<component-name>.env",
   }}>
     ***Optional string map*** of environment variables for the component.
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.tools",
+  }}>
+    ***Optional map of tool bindings*** inherited by agents exported by the component and used as the authorization baseline for fresh component owners, including tools-only MCP calls.
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.toolsMergeMode",
+  }}>
+    ***Optional merge mode*** for <FieldLink path="components.<component-name>.tools"/>. Accepted values:
+    <EnumValues>
+      <EnumValue meta={{value: "upsert", isDefault: true}}></EnumValue>
+      <EnumValue meta={{value: "replace"}}></EnumValue>
+      <EnumValue meta={{value: "remove"}}></EnumValue>
+    </EnumValues>
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.dependencies.tools",
+  }}>
+    ***Optional canonical tool names*** whose guest clients the component consumes. A declared local tool creates a component build dependency; a declared registry-backed tool uses its selected release. A name with no declaration is resolved from the selected environment's ambient native tools first and MCP imports second, without requiring a local implementation component or release grant.
   </Field>
 
   <Field meta={{
@@ -1542,6 +1585,18 @@ The generator reads only the release's safe tool definition and metadata digest.
   </Field>
 
   <Field meta={{
+    path: "agents.<agent-type-name>.tools",
+  }}>
+    ***Optional map of tool bindings*** merged over bindings inherited from the implementing component. Agent bindings affect real agents only and cannot authorize fresh component owners.
+  </Field>
+
+  <Field meta={{
+    path: "agents.<agent-type-name>.toolsMergeMode",
+  }}>
+    ***Optional merge mode*** for <FieldLink path="agents.<agent-type-name>.tools"/>: `upsert` (the default), `replace`, or `remove`.
+  </Field>
+
+  <Field meta={{
     path: "agents.<agent-type-name>.envMergeMode",
     since: Release.R_1_5_0
   }}>
@@ -1783,7 +1838,7 @@ The generator reads only the release's safe tool definition and metadata digest.
   <Field meta={{
     path: "bridge.<language>.internal.tools",
   }}>
-    ***Optional logical tool names, local component matchers, or `"*"`*** for generated guest bridge clients. Registry release coordinates are resolved from the corresponding declaration under `tools` and cannot be repeated here.
+    ***Optional canonical tool names, local component matchers, or `"*"`*** for generated guest bridge clients. Names declared under `tools` resolve to their local or registry-backed implementations; undeclared names resolve from the selected environment's ambient native tools and MCP imports. `"*"` includes every visible tool. Release coordinates and native host identities cannot be specified here.
   </Field>
 
   <Field meta={{

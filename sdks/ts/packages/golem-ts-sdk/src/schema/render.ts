@@ -12,11 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type {
-  SchemaGraph,
-  SchemaType,
-  SchemaTypeBody,
-  SchemaValue,
+import {
+  floatFromBits,
+  type NumericRestrictions,
+  type SchemaGraph,
+  type SchemaType,
+  type SchemaTypeBody,
+  type SchemaValue,
 } from '../internal/schema-model';
 import { datetimeFromISOString, datetimeToISOString } from '../bridge/schema';
 import { SchemaRenderError, type JsonValue } from './ref';
@@ -60,14 +62,14 @@ export function fromCanonicalJson(
     case 'u32':
       return { tag: 'u32', value: expectInteger(json, path, 0, 2 ** 32 - 1) };
     case 's64':
-      return { tag: 's64', value: BigInt(expectSafeInteger(json, path)) };
-    case 'u64': {
-      const value = expectSafeInteger(json, path);
-      if (value < 0) fail(path, 'expected an unsigned integer');
-      return { tag: 'u64', value: BigInt(value) };
+      return { tag: 's64', value: expectCanonicalInteger(json, path, I64_MIN, I64_MAX, 's64') };
+    case 'u64':
+      return { tag: 'u64', value: expectCanonicalInteger(json, path, 0n, U64_MAX, 'u64') };
+    case 'f32': {
+      const value = Math.fround(expectNumber(json, path));
+      if (!Number.isFinite(value)) fail(path, 'number is outside the f32 range');
+      return { tag: 'f32', value };
     }
-    case 'f32':
-      return { tag: 'f32', value: Math.fround(expectNumber(json, path)) };
     case 'f64':
       return { tag: 'f64', value: expectNumber(json, path) };
     case 'char': {
@@ -99,7 +101,10 @@ export function fromCanonicalJson(
       return {
         tag: 'record',
         fields: body.fields.map((field) => {
-          if (!(field.name in object)) fail([...path, field.name], 'missing field');
+          if (!Object.prototype.hasOwnProperty.call(object, field.name)) {
+            if (resolve(graph, field.body).body.tag === 'option') return { tag: 'option' };
+            fail([...path, field.name], 'missing field');
+          }
           return fromCanonicalJson(graph, field.body, object[field.name], [...path, field.name]);
         }),
       };
@@ -233,6 +238,7 @@ export function toCanonicalJson(
     fail(path, `expected ${body.tag} schema value, found ${value.tag}`);
   switch (value.tag) {
     case 'bool':
+      return value.value;
     case 's8':
     case 's16':
     case 's32':
@@ -241,14 +247,12 @@ export function toCanonicalJson(
     case 'u32':
     case 'f32':
     case 'f64':
+      if (!Number.isFinite(value.value)) fail(path, 'expected a finite JSON number');
       return value.value;
     case 's64':
-    case 'u64': {
-      const number = Number(value.value);
-      if (!Number.isSafeInteger(number))
-        fail(path, '64-bit integer cannot be represented losslessly as a JavaScript JSON number');
-      return number;
-    }
+      return checkedIntegerString(value.value, path, I64_MIN, I64_MAX, 's64');
+    case 'u64':
+      return checkedIntegerString(value.value, path, 0n, U64_MAX, 'u64');
     case 'char':
     case 'string':
     case 'path':
@@ -259,18 +263,35 @@ export function toCanonicalJson(
         text: value.text,
         ...(value.language === undefined ? {} : { language: value.language }),
       };
-    case 'binary':
+    case 'binary': {
+      if (value.mimeType !== undefined && !MIME_TYPE_PATTERN.test(value.mimeType))
+        fail([...path, 'mimeType'], 'invalid MIME type');
       return {
         bytes: bytesToBase64(value.bytes),
         ...(value.mimeType === undefined ? {} : { mimeType: value.mimeType }),
       };
+    }
     case 'datetime':
       return datetimeToISOString(value.value);
     case 'duration':
-      return encodeDuration(value.nanoseconds);
+      return {
+        nanoseconds: checkedIntegerString(
+          value.nanoseconds,
+          [...path, 'nanoseconds'],
+          I64_MIN,
+          I64_MAX,
+          'duration nanoseconds',
+        ),
+      };
     case 'quantity':
       return {
-        mantissa: bigintToSafeJsonNumber(value.value.mantissa, path, 'quantity mantissa'),
+        mantissa: checkedIntegerString(
+          value.value.mantissa,
+          [...path, 'mantissa'],
+          I64_MIN,
+          I64_MAX,
+          'quantity mantissa',
+        ),
         scale: value.value.scale,
         unit: value.value.unit,
       };
@@ -424,7 +445,12 @@ function renderSchema(graph: SchemaGraph, type: SchemaType): Record<string, Json
       rendered = integerSchema(-(2 ** 31), 2 ** 31 - 1);
       break;
     case 's64':
-      rendered = integerSchema(Number(-(2n ** 63n)), Number(2n ** 63n - 1n));
+      rendered = integerStringSchema(
+        restrictedIntegerBound(body.restrictions?.min, I64_MIN, 'min'),
+        restrictedIntegerBound(body.restrictions?.max, I64_MAX, 'max'),
+        true,
+        'int64',
+      );
       break;
     case 'u8':
       rendered = integerSchema(0, 255);
@@ -436,7 +462,12 @@ function renderSchema(graph: SchemaGraph, type: SchemaType): Record<string, Json
       rendered = integerSchema(0, 2 ** 32 - 1);
       break;
     case 'u64':
-      rendered = integerSchema(0, Number(2n ** 64n - 1n));
+      rendered = integerStringSchema(
+        restrictedIntegerBound(body.restrictions?.min, 0n, 'min'),
+        restrictedIntegerBound(body.restrictions?.max, U64_MAX, 'max'),
+        false,
+        'uint64',
+      );
       break;
     case 'f32':
     case 'f64':
@@ -455,12 +486,17 @@ function renderSchema(graph: SchemaGraph, type: SchemaType): Record<string, Json
       if (body.restrictions.regex !== undefined) text.pattern = body.restrictions.regex;
       rendered = {
         type: 'object',
-        properties: { text, language: { type: 'string' } },
+        properties: {
+          text,
+          language: {
+            type: 'string',
+            ...(body.restrictions.languages === undefined
+              ? {}
+              : { enum: body.restrictions.languages }),
+          },
+        },
         required: ['text'],
         additionalProperties: false,
-        ...(body.restrictions.languages === undefined
-          ? {}
-          : { description: `Allowed languages: ${body.restrictions.languages.join(', ')}` }),
       };
       break;
     }
@@ -472,6 +508,7 @@ function renderSchema(graph: SchemaGraph, type: SchemaType): Record<string, Json
           bytes: {
             type: 'string',
             contentEncoding: 'base64url',
+            pattern: BASE64URL_PATTERN,
             ...(body.restrictions.minBytes === undefined
               ? {}
               : { minLength: base64UrlLength(body.restrictions.minBytes) }),
@@ -479,12 +516,15 @@ function renderSchema(graph: SchemaGraph, type: SchemaType): Record<string, Json
               ? {}
               : { maxLength: base64UrlLength(body.restrictions.maxBytes) }),
           },
-          mimeType: { type: 'string', pattern: MIME_TYPE_PATTERN.source },
+          mimeType: {
+            type: 'string',
+            pattern: MIME_TYPE_PATTERN.source,
+            ...(body.restrictions.mimeTypes === undefined
+              ? {}
+              : { enum: body.restrictions.mimeTypes }),
+          },
         },
         additionalProperties: false,
-        ...(body.restrictions.mimeTypes === undefined
-          ? {}
-          : { description: `Allowed MIME types: ${body.restrictions.mimeTypes.join(', ')}` }),
       };
       break;
     case 'path': {
@@ -526,14 +566,22 @@ function renderSchema(graph: SchemaGraph, type: SchemaType): Record<string, Json
       rendered = { type: 'string', format: 'date-time' };
       break;
     case 'duration':
-      rendered = { type: 'string', format: 'duration' };
+      rendered = {
+        type: 'object',
+        required: ['nanoseconds'],
+        properties: {
+          nanoseconds: integerStringSchema(I64_MIN, I64_MAX, true, 'int64'),
+        },
+        additionalProperties: false,
+        title: 'Duration in nanoseconds',
+      };
       break;
     case 'quantity':
       rendered = {
         type: 'object',
         required: ['mantissa', 'scale', 'unit'],
         properties: {
-          mantissa: { type: 'integer' },
+          mantissa: integerStringSchema(I64_MIN, I64_MAX, true, 'int64'),
           scale: { type: 'integer' },
           unit: { type: 'string' },
         },
@@ -640,12 +688,23 @@ function renderSchema(graph: SchemaGraph, type: SchemaType): Record<string, Json
     case 'secret':
     case 'quota-token':
     case 'permission-card':
-      rendered = { writeOnly: true, 'x-golem-capability': body.tag };
-      break;
     case 'future':
     case 'stream':
-      rendered = { type: 'null', description: 'WASI P3 placeholder' };
+      rendered = { not: {} };
       break;
+  }
+  if ((rendered.type === 'integer' || rendered.type === 'number') && 'restrictions' in body) {
+    const bounds = body.restrictions as NumericRestrictions | undefined;
+    if (bounds?.min !== undefined)
+      rendered.minimum = Math.max(
+        bounds.min.tag === 'float-bits' ? floatFromBits(bounds.min.val)! : Number(bounds.min.val),
+        body.tag === 'f32' ? -F32_MAX : ((rendered.minimum as number | undefined) ?? -Infinity),
+      );
+    if (bounds?.max !== undefined)
+      rendered.maximum = Math.min(
+        bounds.max.tag === 'float-bits' ? floatFromBits(bounds.max.val)! : Number(bounds.max.val),
+        body.tag === 'f32' ? F32_MAX : ((rendered.maximum as number | undefined) ?? Infinity),
+      );
   }
   return attachMetadata(rendered, type.metadata);
 }
@@ -683,42 +742,38 @@ function applyDiscriminator(
   schema: Record<string, JsonValue>,
   rule: { tag: string; val?: unknown },
 ): Record<string, JsonValue> {
+  let condition: Record<string, JsonValue>;
   switch (rule.tag) {
     case 'prefix':
-      return { ...schema, pattern: `^${escapeRegex(rule.val as string)}` };
+      condition = { type: 'string', pattern: `^${escapeRegex(rule.val as string)}` };
+      break;
     case 'suffix':
-      return { ...schema, pattern: `${escapeRegex(rule.val as string)}$` };
+      condition = { type: 'string', pattern: `${escapeRegex(rule.val as string)}$` };
+      break;
     case 'contains':
-      return { ...schema, pattern: escapeRegex(rule.val as string) };
+      condition = { type: 'string', pattern: escapeRegex(rule.val as string) };
+      break;
     case 'regex':
-      return { ...schema, pattern: rule.val as string };
+      condition = { type: 'string', pattern: rule.val as string };
+      break;
     case 'field-equals': {
       const field = rule.val as { fieldName: string; literal?: string };
-      const properties = (schema.properties ?? {}) as Record<string, JsonValue>;
-      const fieldSchema = (properties[field.fieldName] ?? { type: 'string' }) as Record<
-        string,
-        JsonValue
-      >;
-      return {
-        ...schema,
-        required: [
-          ...new Set([...((schema.required as string[] | undefined) ?? []), field.fieldName]),
-        ],
+      condition = {
+        type: 'object',
+        required: [field.fieldName],
         ...(field.literal === undefined
           ? {}
-          : {
-              properties: {
-                ...properties,
-                [field.fieldName]: { ...fieldSchema, const: field.literal },
-              },
-            }),
+          : { properties: { [field.fieldName]: { const: field.literal } } }),
       };
+      break;
     }
     case 'field-absent':
-      return { ...schema, not: { required: [rule.val as string] } };
+      condition = { type: 'object', not: { required: [rule.val as string] } };
+      break;
     default:
       return schema;
   }
+  return { allOf: [schema, condition] };
 }
 
 function escapeRegex(value: string): string {
@@ -795,7 +850,13 @@ function decodeQuantity(value: JsonValue, path: Path): SchemaValue {
   return {
     tag: 'quantity',
     value: {
-      mantissa: BigInt(expectSafeInteger(object.mantissa, [...path, 'mantissa'])),
+      mantissa: expectCanonicalInteger(
+        object.mantissa,
+        [...path, 'mantissa'],
+        I64_MIN,
+        I64_MAX,
+        'quantity mantissa',
+      ),
       scale: expectInteger(object.scale, [...path, 'scale'], -2147483648, 2147483647),
       unit: expectString(object.unit, [...path, 'unit']),
     },
@@ -804,80 +865,22 @@ function decodeQuantity(value: JsonValue, path: Path): SchemaValue {
 
 const I64_MIN = -(2n ** 63n);
 const I64_MAX = 2n ** 63n - 1n;
-const NS_PER_SECOND = 1_000_000_000n;
-const NS_PER_MINUTE = 60n * NS_PER_SECOND;
-const NS_PER_HOUR = 60n * NS_PER_MINUTE;
-const NS_PER_DAY = 24n * NS_PER_HOUR;
-
-function encodeDuration(nanoseconds: bigint): string {
-  if (nanoseconds === 0n) return 'PT0S';
-  const negative = nanoseconds < 0n;
-  let remaining = negative ? -nanoseconds : nanoseconds;
-  const days = remaining / NS_PER_DAY;
-  remaining %= NS_PER_DAY;
-  const hours = remaining / NS_PER_HOUR;
-  remaining %= NS_PER_HOUR;
-  const minutes = remaining / NS_PER_MINUTE;
-  remaining %= NS_PER_MINUTE;
-  const seconds = remaining / NS_PER_SECOND;
-  const nanos = remaining % NS_PER_SECOND;
-
-  let result = negative ? '-P' : 'P';
-  if (days !== 0n) result += `${days}D`;
-  if (hours !== 0n || minutes !== 0n || seconds !== 0n || nanos !== 0n) {
-    result += 'T';
-    if (hours !== 0n) result += `${hours}H`;
-    if (minutes !== 0n) result += `${minutes}M`;
-    if (seconds !== 0n || nanos !== 0n) {
-      result += `${seconds}`;
-      if (nanos !== 0n) result += `.${nanos.toString().padStart(9, '0').replace(/0+$/u, '')}`;
-      result += 'S';
-    }
-  }
-  return result;
-}
+const U64_MAX = 2n ** 64n - 1n;
+const F32_MAX = 3.4028234663852886e38;
+const CANONICAL_SIGNED_PATTERN = '^(?:0|-[1-9][0-9]*|[1-9][0-9]*)$';
+const CANONICAL_UNSIGNED_PATTERN = '^(?:0|[1-9][0-9]*)$';
 
 function decodeDuration(value: JsonValue, path: Path): bigint {
-  if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
-    rejectUnknownFields(value, ['nanoseconds'], path);
-    return checkedI64(BigInt(expectSafeInteger(value.nanoseconds, [...path, 'nanoseconds'])), path);
-  }
-  const text = expectString(value, path);
-  const shorthand = text.match(/^(-?\d+)(ns|us|ms|s)$/u);
-  if (shorthand) {
-    const factor =
-      shorthand[2] === 'ns'
-        ? 1n
-        : shorthand[2] === 'us'
-          ? 1_000n
-          : shorthand[2] === 'ms'
-            ? 1_000_000n
-            : NS_PER_SECOND;
-    return checkedI64(BigInt(shorthand[1]) * factor, path);
-  }
-
-  const iso = text.match(
-    /^(-)?P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)(?:\.(\d{1,9}))?S)?)?$/u,
+  const object = expectObject(value, path);
+  rejectUnknownFields(object, ['nanoseconds'], path);
+  if (!('nanoseconds' in object)) fail([...path, 'nanoseconds'], 'missing field');
+  return expectCanonicalInteger(
+    object.nanoseconds,
+    [...path, 'nanoseconds'],
+    I64_MIN,
+    I64_MAX,
+    'duration nanoseconds',
   );
-  if (
-    !iso ||
-    (iso[2] === undefined && iso[3] === undefined && iso[4] === undefined && iso[5] === undefined)
-  ) {
-    fail(path, 'expected an ISO 8601 duration');
-  }
-  let result =
-    BigInt(iso[2] ?? 0) * NS_PER_DAY +
-    BigInt(iso[3] ?? 0) * NS_PER_HOUR +
-    BigInt(iso[4] ?? 0) * NS_PER_MINUTE +
-    BigInt(iso[5] ?? 0) * NS_PER_SECOND +
-    BigInt((iso[6] ?? '').padEnd(9, '0') || 0);
-  if (iso[1]) result = -result;
-  return checkedI64(result, path);
-}
-
-function checkedI64(value: bigint, path: Path): bigint {
-  if (value < I64_MIN || value > I64_MAX) fail(path, 'duration nanoseconds out of i64 range');
-  return value;
 }
 
 function discriminatorMatches(rule: { tag: string; val?: unknown }, value: JsonValue): boolean {
@@ -910,6 +913,8 @@ function discriminatorMatches(rule: { tag: string; val?: unknown }, value: JsonV
   return false;
 }
 const MIME_TYPE_PATTERN = /^[A-Za-z0-9!#$&^_.+\-]+\/[A-Za-z0-9!#$&^_.+\-]+$/u;
+const BASE64URL_PATTERN =
+  '^(?:[A-Za-z0-9_-]{4})*(?:[A-Za-z0-9_-][AQgw]|[A-Za-z0-9_-]{2}[AEIMQUYcgkosw048])?$';
 
 function bytesToBase64(bytes: Uint8Array): string {
   const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
@@ -940,7 +945,9 @@ function base64UrlToBytes(value: string, path: Path): Uint8Array {
     if (value[index + 2] !== undefined) bytes.push(((b & 15) << 4) | (c >> 2));
     if (value[index + 3] !== undefined) bytes.push(((c & 3) << 6) | d);
   }
-  return Uint8Array.from(bytes);
+  const result = Uint8Array.from(bytes);
+  if (bytesToBase64(result) !== value) fail(path, 'invalid base64url without padding');
+  return result;
 }
 
 function rejectUnknownFields(
@@ -953,8 +960,60 @@ function rejectUnknownFields(
   });
 }
 
-function bigintToSafeJsonNumber(value: bigint, path: Path, label: string): number {
-  const number = Number(value);
-  if (!Number.isSafeInteger(number)) fail(path, `${label} cannot be represented losslessly`);
-  return number;
+function expectCanonicalInteger(
+  value: JsonValue,
+  path: Path,
+  min: bigint,
+  max: bigint,
+  label: string,
+): bigint {
+  const text = expectString(value, path);
+  const pattern = min < 0n ? CANONICAL_SIGNED_PATTERN : CANONICAL_UNSIGNED_PATTERN;
+  if (!new RegExp(pattern, 'u').test(text))
+    fail(path, `${label} must be a canonical decimal string`);
+  const parsed = BigInt(text);
+  if (parsed < min || parsed > max) fail(path, `${label} is out of range`);
+  return parsed;
+}
+
+function checkedIntegerString(
+  value: bigint,
+  path: Path,
+  min: bigint,
+  max: bigint,
+  label: string,
+): string {
+  if (value < min || value > max) fail(path, `${label} is out of range`);
+  return value.toString();
+}
+
+function integerStringSchema(
+  min: bigint,
+  max: bigint,
+  signed: boolean,
+  format: string,
+): Record<string, JsonValue> {
+  return {
+    type: 'string',
+    format,
+    pattern: signed ? CANONICAL_SIGNED_PATTERN : CANONICAL_UNSIGNED_PATTERN,
+    'x-golem-minimum': min.toString(),
+    'x-golem-maximum': max.toString(),
+  };
+}
+
+function restrictedIntegerBound(
+  bound: NumericRestrictions['min'] | undefined,
+  fallback: bigint,
+  side: 'min' | 'max',
+): bigint {
+  if (bound === undefined || bound.tag === 'float-bits') return fallback;
+  const value = bound.val;
+  return side === 'min'
+    ? value > fallback
+      ? value
+      : fallback
+    : value < fallback
+      ? value
+      : fallback;
 }

@@ -14,7 +14,7 @@ fn decode_canonical_input_for_test(
   command_index : Int,
   input : @types.TypedSchemaValue,
   context : String,
-) -> Array[CanonicalInputValue] raise @toolCommon.ToolError {
+) -> Array[CanonicalInputValue] raise @types.ToolError {
   decode_canonical_input_with_resource_drops(
     def,
     command_index,
@@ -29,7 +29,7 @@ fn decode_invocation_input_for_test(
   input : @types.TypedSchemaValue,
   arity : Int,
   context : String,
-) -> Array[@model.SchemaValue] raise @toolCommon.ToolError {
+) -> Array[@model.SchemaValue] raise @types.ToolError {
   decode_invocation_input_with_resource_drops(
     input,
     arity,
@@ -43,7 +43,7 @@ fn[T : @schema.IntoSchema + @schema.FromSchema] decode_canonical_field_for_test(
   fields : Array[CanonicalInputValue],
   name : String,
   context : String,
-) -> T raise @toolCommon.ToolError {
+) -> T raise @types.ToolError {
   decode_canonical_field_with_resource_drops(
     fields,
     name,
@@ -57,7 +57,7 @@ fn[T : @schema.FromSchema] decode_param_for_test(
   fields : Array[@model.SchemaValue],
   index : Int,
   context : String,
-) -> T raise @toolCommon.ToolError {
+) -> T raise @types.ToolError {
   decode_param_with_resource_drops(
     fields,
     index,
@@ -92,7 +92,7 @@ test "rejected tool envelopes drop reached stream resources" {
   catch {
     e => Err(e)
   }
-  guard result is Err(@toolCommon.ToolError::InvalidInput(_)) else {
+  guard result is Err(@types.ToolError::InvalidInput(_)) else {
     fail("expected the schema/value mismatch to be rejected")
   }
   assert_eq(dropped[0], 1)
@@ -199,7 +199,7 @@ test "subtree-only tool cannot be invoked as a top-level tool" {
   register_subtool_def(def)
   assert_true(
     get_registered_tool("root")
-    is Err(@toolCommon.ToolError::InvalidToolName("root")),
+    is Err(@types.ToolError::InvalidToolName("root")),
   )
 }
 
@@ -962,7 +962,7 @@ test "decode invocation input rejects graph root that is not a record" {
   let typed = encode_invocation_input(graph, [@model.SchemaValue::String("x")])
   let wire = @model.typed_schema_value_to_wit(typed)
   try decode_invocation_input_for_test(wire, 1, "tool command") catch {
-    @toolCommon.ToolError::InvalidInput(_) => ()
+    @types.ToolError::InvalidInput(_) => ()
     _ => abort("expected invalid input")
   } noraise {
     _ => abort("expected invalid input")
@@ -988,7 +988,7 @@ test "decode invocation input rejects value that does not match typed schema fie
     let fields = decode_invocation_input_for_test(wire, 1, "tool command")
     let _decoded : Int = decode_param_for_test(fields, 0, "tool command")
   } catch {
-    @toolCommon.ToolError::InvalidInput(_) => ()
+    @types.ToolError::InvalidInput(_) => ()
     _ => abort("expected invalid input")
   } noraise {
     _ => abort("expected invalid input")
@@ -1068,7 +1068,7 @@ test "decode invocation input rejects union value whose discriminator does not m
   }
   let wire = @model.typed_schema_value_to_wit(typed)
   try decode_invocation_input_for_test(wire, 1, "tool command") catch {
-    @toolCommon.ToolError::InvalidInput(_) => ()
+    @types.ToolError::InvalidInput(_) => ()
     _ => abort("expected invalid input")
   } noraise {
     _ => abort("expected invalid input")
@@ -1488,7 +1488,7 @@ test "canonical command lookup, ordering, shadowing, and collected shapes" {
       #|["global", "count", "arg", "rest", "items", "values", "force"]
     ),
   )
-  assert_true(fields[0].type_.root.body is @model.SchemaTypeBody::String)
+  assert_true(fields[0].type_.root.body is @model.SchemaTypeBody::Option(_))
   assert_true(fields[1].type_.root.body is @model.SchemaTypeBody::U32(_))
   assert_true(fields[3].type_.root.body is @model.SchemaTypeBody::List(_))
   assert_true(fields[4].type_.root.body is @model.SchemaTypeBody::List(_))
@@ -1517,8 +1517,14 @@ test "canonical model builds and decodes the expected named record" {
     ("rest", @model.SchemaValue::List([])),
     ("arg", @model.SchemaValue::String("arg")),
     ("count", @model.SchemaValue::U32(1)),
-    ("global", @model.SchemaValue::String("old")),
-    ("global", @model.SchemaValue::String("new")),
+    (
+      "global",
+      @model.SchemaValue::Option(Some(@model.SchemaValue::String("old"))),
+    ),
+    (
+      "global",
+      @model.SchemaValue::Option(Some(@model.SchemaValue::String("new"))),
+    ),
   ])
   guard input.value is @model.SchemaValue::Record(values) else {
     fail("expected record value")
@@ -1526,7 +1532,7 @@ test "canonical model builds and decodes the expected named record" {
   debug_inspect(
     values[0],
     content=(
-      #|String("new")
+      #|Option(Some(String("new")))
     ),
   )
   let wire = @model.typed_schema_value_to_wit(input)
@@ -1551,7 +1557,7 @@ test "canonical input rejects missing fields and mismatching wire schema" {
   }
   let wire = @model.typed_schema_value_to_wit(mismatching)
   try decode_canonical_input_for_test(def, 1, wire, "leaf") catch {
-    @toolCommon.ToolError::InvalidInput(_) => ()
+    @types.ToolError::InvalidInput(_) => ()
     _ => fail("expected invalid canonical input")
   } noraise {
     _ => fail("expected invalid canonical input")
@@ -1768,6 +1774,76 @@ test "text-refined string canonical input round-trips through typed values" {
       #|"aaa"
     ),
   )
+}
+
+///|
+test "optional canonical fields use option wire schemas" {
+  let def : ToolDef = {
+    version: "1",
+    commands: [
+      {
+        name: "optional",
+        aliases: [],
+        doc: doc("optional"),
+        globals: { options: [], flags: [], },
+        subcommands: [],
+        body: Some({
+          positionals: {
+            fixed: [
+              {
+                name: "position",
+                doc: doc("position"),
+                value_name: None,
+                type_: string_graph(),
+                default: None,
+                required: false,
+                accepts_stdio: false,
+              },
+            ],
+            tail: None,
+          },
+          options: [
+            {
+              long: "maybe",
+              short: None,
+              aliases: [],
+              doc: doc("maybe"),
+              value_name: None,
+              shape: OptionShapeDef::Scalar(string_graph()),
+              default: None,
+              required: false,
+              env_var: None,
+            },
+          ],
+          flags: [],
+          constraints: [],
+          stdin: None,
+          stdout: None,
+          result: None,
+          errors: [],
+          annotations: None,
+        }),
+      },
+    ],
+  }
+  let model = def.canonical_input_model(0)
+  assert_true(model.record_graph.root.body is @model.SchemaTypeBody::Record(_))
+  for value in [None, Some("supplied")] {
+    let input = build_canonical_input(model, [
+      ("position", @schema.to_value_as(value)),
+      ("maybe", @schema.to_value_as(value)),
+    ])
+    let wire = @model.typed_schema_value_to_wit(input)
+    let decoded = decode_canonical_input_for_test(def, 0, wire, "optional")
+    let position : String? = decode_canonical_field_for_test(
+      decoded, "position", "optional",
+    )
+    let maybe : String? = decode_canonical_field_for_test(
+      decoded, "maybe", "optional",
+    )
+    assert_eq(position, value)
+    assert_eq(maybe, value)
+  }
 }
 
 ///|

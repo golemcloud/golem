@@ -16,6 +16,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use golem_common::config::{DbPostgresConfig, RedisConfig};
 use golem_common::model::AgentId;
+use golem_common::model::ShardEpoch;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::component::ComponentId;
 use golem_common::redis::RedisPool;
@@ -29,7 +30,7 @@ use golem_worker_executor::storage::indexed::redis::RedisIndexedStorage;
 use golem_worker_executor::storage::indexed::sqlite::SqliteIndexedStorage;
 use golem_worker_executor::storage::indexed::{
     IndexedStorage, IndexedStorageError, IndexedStorageLabelledApi, IndexedStorageMetaNamespace,
-    IndexedStorageNamespace, ScanCursor,
+    IndexedStorageNamespace, ScanResume,
 };
 use golem_worker_executor_test_utils::WorkerExecutorTestDependencies;
 use pretty_assertions::assert_eq;
@@ -43,6 +44,14 @@ use uuid::Uuid;
 #[async_trait]
 trait GetIndexedStorage: Debug {
     async fn get_indexed_storage(&self) -> Arc<dyn IndexedStorage + Send + Sync>;
+
+    /// Two handles onto the SAME store, as two executors racing over one key have.
+    async fn get_two_writers(
+        &self,
+    ) -> (
+        Arc<dyn IndexedStorage + Send + Sync>,
+        Arc<dyn IndexedStorage + Send + Sync>,
+    );
 }
 
 struct InMemoryIndexedStorageWrapper;
@@ -58,6 +67,16 @@ impl GetIndexedStorage for InMemoryIndexedStorageWrapper {
     async fn get_indexed_storage(&self) -> Arc<dyn IndexedStorage + Send + Sync> {
         let kvs = InMemoryIndexedStorage::new();
         Arc::new(kvs)
+    }
+
+    async fn get_two_writers(
+        &self,
+    ) -> (
+        Arc<dyn IndexedStorage + Send + Sync>,
+        Arc<dyn IndexedStorage + Send + Sync>,
+    ) {
+        let store: Arc<dyn IndexedStorage + Send + Sync> = Arc::new(InMemoryIndexedStorage::new());
+        (store.clone(), store)
     }
 }
 
@@ -81,23 +100,40 @@ impl Debug for RedisIndexedStorageWrapper {
 #[async_trait]
 impl GetIndexedStorage for RedisIndexedStorageWrapper {
     async fn get_indexed_storage(&self) -> Arc<dyn IndexedStorage + Send + Sync> {
-        let random_prefix = Uuid::new_v4();
-        let redis_pool = RedisPool::configured(&RedisConfig {
+        Arc::new(RedisIndexedStorage::new(
+            self.pool(&Uuid::new_v4().to_string()).await,
+        ))
+    }
+
+    async fn get_two_writers(
+        &self,
+    ) -> (
+        Arc<dyn IndexedStorage + Send + Sync>,
+        Arc<dyn IndexedStorage + Send + Sync>,
+    ) {
+        let prefix = Uuid::new_v4().to_string();
+        let first = RedisIndexedStorage::new(self.pool(&prefix).await);
+        let second = RedisIndexedStorage::new(self.pool(&prefix).await);
+        (Arc::new(first), Arc::new(second))
+    }
+}
+
+impl RedisIndexedStorageWrapper {
+    async fn pool(&self, key_prefix: &str) -> RedisPool {
+        RedisPool::configured(&RedisConfig {
             host: self.redis.public_host(),
             port: self.redis.public_port(),
             database: 0,
             tracing: false,
             pool_size: 1,
             retries: Default::default(),
-            key_prefix: random_prefix.to_string(),
+            key_prefix: key_prefix.to_string(),
             username: None,
             password: None,
             tls: false,
         })
         .await
-        .unwrap();
-        let kvs = RedisIndexedStorage::new(redis_pool);
-        Arc::new(kvs)
+        .unwrap()
     }
 }
 
@@ -148,6 +184,29 @@ impl GetIndexedStorage for SqliteIndexedStorageWrapper {
         let sis = SqliteIndexedStorage::configured(&config).await.unwrap();
         Arc::new(sis)
     }
+
+    async fn get_two_writers(
+        &self,
+    ) -> (
+        Arc<dyn IndexedStorage + Send + Sync>,
+        Arc<dyn IndexedStorage + Send + Sync>,
+    ) {
+        let tempdir = tempfile::tempdir().unwrap();
+        let database = tempdir
+            .path()
+            .join("indexed.db")
+            .to_string_lossy()
+            .into_owned();
+        self.tempdirs.lock().unwrap().push(tempdir);
+        let config = golem_common::config::DbSqliteConfig {
+            database,
+            max_connections: 10,
+            foreign_keys: false,
+        };
+        let first = SqliteIndexedStorage::configured(&config).await.unwrap();
+        let second = SqliteIndexedStorage::configured(&config).await.unwrap();
+        (Arc::new(first), Arc::new(second))
+    }
 }
 
 #[test_dep(scope = Shared, tagged_as = "sqlite")]
@@ -185,6 +244,20 @@ impl GetIndexedStorage for MultiSqliteIndexedStorageWrapper {
         let storage = MultiSqliteIndexedStorage::new(&path, 10, true);
         Arc::new(storage)
     }
+
+    async fn get_two_writers(
+        &self,
+    ) -> (
+        Arc<dyn IndexedStorage + Send + Sync>,
+        Arc<dyn IndexedStorage + Send + Sync>,
+    ) {
+        let tempdir = tempfile::tempdir().unwrap();
+        let path = tempdir.path().to_path_buf();
+        self.tempdirs.lock().unwrap().push(tempdir);
+        let first = MultiSqliteIndexedStorage::new(&path, 10, true);
+        let second = MultiSqliteIndexedStorage::new(&path, 10, true);
+        (Arc::new(first), Arc::new(second))
+    }
 }
 
 #[test_dep(scope = Shared, tagged_as = "multi_sqlite")]
@@ -204,9 +277,10 @@ impl Debug for PostgresIndexedStorageWrapper {
     }
 }
 
-#[async_trait]
-impl GetIndexedStorage for PostgresIndexedStorageWrapper {
-    async fn get_indexed_storage(&self) -> Arc<dyn IndexedStorage + Send + Sync> {
+impl PostgresIndexedStorageWrapper {
+    /// A fresh database, and the config that reaches it. Separated from `get_indexed_storage` so a
+    /// second storage can be opened onto the same database.
+    async fn fresh_database(&self) -> IndexedStoragePostgresConfig {
         let db_name = format!("idx_{}", Uuid::new_v4().simple());
 
         let admin_pool = sqlx::postgres::PgPoolOptions::new()
@@ -234,17 +308,39 @@ impl GetIndexedStorage for PostgresIndexedStorageWrapper {
             acquire_timeout: None,
         };
 
-        let config = IndexedStoragePostgresConfig {
+        IndexedStoragePostgresConfig {
             postgres,
             drop_prefix_delete_batch_size: 1024,
             max_concurrent_ops: None,
-        };
+        }
+    }
+}
 
+#[async_trait]
+impl GetIndexedStorage for PostgresIndexedStorageWrapper {
+    async fn get_indexed_storage(&self) -> Arc<dyn IndexedStorage + Send + Sync> {
+        let config = self.fresh_database().await;
         let storage = PostgresIndexedStorage::configured(&config)
             .await
             .expect("Cannot create postgres indexed storage");
 
         Arc::new(storage)
+    }
+
+    async fn get_two_writers(
+        &self,
+    ) -> (
+        Arc<dyn IndexedStorage + Send + Sync>,
+        Arc<dyn IndexedStorage + Send + Sync>,
+    ) {
+        let config = self.fresh_database().await;
+        let first = PostgresIndexedStorage::configured(&config)
+            .await
+            .expect("Cannot create postgres indexed storage");
+        let second = PostgresIndexedStorage::configured(&config)
+            .await
+            .expect("Cannot create postgres indexed storage");
+        (Arc::new(first), Arc::new(second))
     }
 }
 
@@ -319,6 +415,333 @@ fn ns2() -> IndexedStorageNamespaces {
 inherit_test_dep!(WorkerExecutorTestDependencies);
 
 define_matrix_dimension!(is: Arc<dyn GetIndexedStorage + Send + Sync> -> "in_memory", "redis", "sqlite", "multi_sqlite", "postgres");
+define_matrix_dimension!(sql_is: Arc<dyn GetIndexedStorage + Send + Sync> -> "sqlite", "postgres");
+
+#[test]
+async fn staged_publication_preserves_atomic_visibility(
+    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+) {
+    let storage = is.get_indexed_storage().await;
+    let agent = AgentId {
+        component_id: ComponentId::new(),
+        agent_id: "fork-publication".into(),
+    };
+    let mode = AgentMode::Durable;
+    let staged = IndexedStorageNamespace::StagedOpLog {
+        agent_id: agent.clone(),
+        agent_mode: mode,
+    };
+    let visible = IndexedStorageNamespace::OpLog {
+        agent_id: agent.clone(),
+        agent_mode: mode,
+    };
+    for (key, ids, expected) in [
+        ("missing", vec![], 1),
+        ("gap", vec![1, 3], 3),
+        ("shifted", vec![2, 3], 2),
+        ("wrong-tip", vec![1, 2, 3], 2),
+        ("zero-tip", vec![1], 0),
+    ] {
+        for id in ids {
+            storage
+                .append(
+                    "test",
+                    "stage",
+                    "entry",
+                    staged.clone(),
+                    key,
+                    id,
+                    vec![id as u8],
+                    None,
+                )
+                .await
+                .unwrap();
+        }
+        assert!(
+            storage
+                .move_if_absent(
+                    "test",
+                    "publish",
+                    staged.clone(),
+                    key,
+                    visible.clone(),
+                    key,
+                    expected,
+                )
+                .await
+                .is_err()
+        );
+        assert!(
+            !storage
+                .exists("test", "visible", visible.clone(), key)
+                .await
+                .unwrap()
+        );
+    }
+    for (key, value) in [("first", 17u8), ("second", 39)] {
+        storage
+            .append_many(
+                "test",
+                "stage",
+                "entry",
+                &staged,
+                key,
+                (1..=3)
+                    .map(|id| (id, Bytes::from(vec![value, id as u8])))
+                    .collect::<Vec<_>>()
+                    .into(),
+                None,
+            )
+            .await
+            .unwrap();
+    }
+    assert!(
+        storage
+            .scan_stable(
+                "test",
+                "scan",
+                IndexedStorageMetaNamespace::Oplog { agent_mode: mode },
+                None,
+                None,
+                100
+            )
+            .await
+            .unwrap()
+            .1
+            .is_empty()
+    );
+    let (first, second) = tokio::join!(
+        storage.move_if_absent(
+            "test",
+            "publish",
+            staged.clone(),
+            "first",
+            visible.clone(),
+            "target",
+            3,
+        ),
+        storage.move_if_absent(
+            "test",
+            "publish",
+            staged.clone(),
+            "second",
+            visible.clone(),
+            "target",
+            3,
+        ),
+    );
+    let first = first.unwrap();
+    assert_ne!(first, second.unwrap());
+    let (winner, loser, value) = if first {
+        ("first", "second", 17)
+    } else {
+        ("second", "first", 39)
+    };
+    let expected: Vec<_> = (1..=3).map(|id| (id, vec![value, id as u8])).collect();
+    assert_eq!(
+        storage
+            .read("test", "read", "entry", visible.clone(), "target", 1, 3)
+            .await
+            .unwrap(),
+        expected
+    );
+    assert!(
+        !storage
+            .exists("test", "stage", staged.clone(), winner)
+            .await
+            .unwrap()
+    );
+    assert!(
+        storage
+            .exists("test", "stage", staged.clone(), loser)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !storage
+            .move_if_absent(
+                "test",
+                "publish",
+                staged.clone(),
+                loser,
+                visible.clone(),
+                "target",
+                3,
+            )
+            .await
+            .unwrap()
+    );
+    storage
+        .delete("test", "discard", staged.clone(), loser)
+        .await
+        .unwrap();
+    assert_eq!(
+        storage
+            .read("test", "read", "entry", visible.clone(), "target", 1, 3)
+            .await
+            .unwrap(),
+        expected
+    );
+
+    for (key, first_id) in [("archived", 1), ("archived-arbitrary", 17)] {
+        storage
+            .append(
+                "test",
+                "create",
+                "entry",
+                visible.clone(),
+                key,
+                first_id,
+                vec![61],
+                None,
+            )
+            .await
+            .unwrap();
+        storage
+            .drop_prefix("test", "archive", visible.clone(), key, first_id)
+            .await
+            .unwrap();
+        assert!(
+            storage
+                .exists("test", "exists", visible.clone(), key)
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            storage
+                .length("test", "length", visible.clone(), key)
+                .await
+                .unwrap(),
+            0
+        );
+        assert!(
+            storage
+                .first("test", "first", "entry", visible.clone(), key)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            storage
+                .last("test", "last", "entry", visible.clone(), key)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        storage
+            .append(
+                "test",
+                "stage",
+                "entry",
+                staged.clone(),
+                key,
+                1,
+                vec![23],
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(
+            !storage
+                .move_if_absent(
+                    "test",
+                    "publish",
+                    staged.clone(),
+                    key,
+                    visible.clone(),
+                    key,
+                    1,
+                )
+                .await
+                .unwrap()
+        );
+        storage
+            .delete("test", "delete", visible.clone(), key)
+            .await
+            .unwrap();
+        assert!(
+            !storage
+                .exists("test", "exists", visible.clone(), key)
+                .await
+                .unwrap()
+        );
+        assert!(
+            storage
+                .move_if_absent(
+                    "test",
+                    "publish",
+                    staged.clone(),
+                    key,
+                    visible.clone(),
+                    key,
+                    1,
+                )
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            storage
+                .read("test", "read", "entry", visible.clone(), key, 1, first_id)
+                .await
+                .unwrap(),
+            vec![(1, vec![23])]
+        );
+    }
+    storage
+        .drop_prefix("test", "archive", visible.clone(), "never-existed", 50)
+        .await
+        .unwrap();
+    assert!(
+        !storage
+            .exists("test", "exists", visible.clone(), "never-existed")
+            .await
+            .unwrap()
+    );
+
+    storage
+        .append(
+            "test",
+            "stage",
+            "entry",
+            staged.clone(),
+            "race",
+            1,
+            vec![51],
+            None,
+        )
+        .await
+        .unwrap();
+    let (published, ordinary) = tokio::join!(
+        storage.move_if_absent(
+            "test",
+            "publish",
+            staged,
+            "race",
+            visible.clone(),
+            "ordinary",
+            1,
+        ),
+        storage.append(
+            "test",
+            "create",
+            "entry",
+            visible.clone(),
+            "ordinary",
+            1,
+            vec![77],
+            None,
+        ),
+    );
+    let published = published.unwrap();
+    assert_ne!(published, ordinary.is_ok());
+    assert_eq!(
+        storage
+            .read("test", "read", "entry", visible, "ordinary", 1, 2)
+            .await
+            .unwrap(),
+        vec![(1, vec![if published { 51 } else { 77 }])]
+    );
+}
 
 #[test]
 async fn postgres_singleton_append_many_preserves_storage_contract(
@@ -328,110 +751,120 @@ async fn postgres_singleton_append_many_preserves_storage_contract(
 ) {
     let storage = storage.get_indexed_storage().await;
     let value = Bytes::from_static(&[0, 255, 17, 3]);
-    for ns in [primary, compressed] {
-        storage
-            .append_many("svc", "api", "entity", &ns.ns, "singleton", Arc::from([]))
-            .await
-            .unwrap();
-        assert!(
-            !storage
-                .exists("svc", "api", ns.ns.clone(), "singleton")
-                .await
-                .unwrap()
-        );
-        storage
-            .append_many(
-                "svc",
-                "api",
-                "entity",
-                &ns.ns,
-                "singleton",
-                Arc::from([(17, value.clone())]),
-            )
-            .await
-            .unwrap();
-        assert_eq!(
-            storage
-                .read("svc", "api", "entity", ns.ns.clone(), "singleton", 0, 100)
-                .await
-                .unwrap(),
-            vec![(17, value.to_vec())]
-        );
-        assert_eq!(
-            storage
-                .length("svc", "api", ns.ns.clone(), "singleton")
-                .await
-                .unwrap(),
-            1
-        );
-        assert_eq!(
-            storage
-                .last("svc", "api", "entity", ns.ns.clone(), "singleton")
-                .await
-                .unwrap(),
-            Some((17, value.to_vec()))
-        );
-        let (_, keys) = storage
-            .scan(
-                "svc",
-                "api",
-                ns.meta.clone(),
-                Some("singleton"),
-                ScanCursor::default(),
-                10,
-            )
-            .await
-            .unwrap();
-        assert_eq!(keys, vec!["singleton".to_string()]);
-        assert!(matches!(
+    // Once asserting no epoch, which is a lone autocommit INSERT, and once asserting the recorded
+    // one, which goes through the fenced transaction. A caller must not be able to tell the two
+    // paths apart.
+    for (key, shard_epoch) in [
+        ("singleton", None),
+        ("fenced-singleton", Some(ShardEpoch(1))),
+    ] {
+        for ns in [primary, compressed] {
+            if let Some(epoch) = shard_epoch {
+                storage
+                    .set_key_epoch("svc", "api", ns.ns.clone(), key, epoch)
+                    .await
+                    .unwrap();
+            }
             storage
                 .append_many(
                     "svc",
                     "api",
                     "entity",
                     &ns.ns,
-                    "singleton",
-                    Arc::from([(u64::MAX, value.clone())])
+                    key,
+                    Arc::from([]),
+                    shard_epoch,
+                )
+                .await
+                .unwrap();
+            assert!(
+                !storage
+                    .exists("svc", "api", ns.ns.clone(), key)
+                    .await
+                    .unwrap()
+            );
+            storage
+                .append_many(
+                    "svc",
+                    "api",
+                    "entity",
+                    &ns.ns,
+                    key,
+                    Arc::from([(17, value.clone())]),
+                    shard_epoch,
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                storage
+                    .read("svc", "api", "entity", ns.ns.clone(), key, 0, 100)
+                    .await
+                    .unwrap(),
+                vec![(17, value.to_vec())]
+            );
+            assert_eq!(
+                storage
+                    .length("svc", "api", ns.ns.clone(), key)
+                    .await
+                    .unwrap(),
+                1
+            );
+            assert_eq!(
+                storage
+                    .last("svc", "api", "entity", ns.ns.clone(), key)
+                    .await
+                    .unwrap(),
+                Some((17, value.to_vec()))
+            );
+            let (_, keys) = storage
+                .scan_stable("svc", "api", ns.meta.clone(), Some(key), None, 10)
+                .await
+                .unwrap();
+            assert_eq!(keys, vec![key.to_string()]);
+            assert!(matches!(
+                storage
+                    .append_many(
+                        "svc",
+                        "api",
+                        "entity",
+                        &ns.ns,
+                        key,
+                        Arc::from([(u64::MAX, value.clone())]),
+                        shard_epoch,
+                    )
+                    .await,
+                Err(IndexedStorageError::Other(_))
+            ));
+            assert_eq!(
+                storage
+                    .length("svc", "api", ns.ns.clone(), key)
+                    .await
+                    .unwrap(),
+                1
+            );
+        }
+        assert!(matches!(
+            storage
+                .append_many(
+                    "svc",
+                    "api",
+                    "entity",
+                    &primary.ns,
+                    key,
+                    Arc::from([(17, Bytes::from_static(b"replacement"))]),
+                    shard_epoch,
                 )
                 .await,
-            Err(IndexedStorageError::Other(_))
+            Err(IndexedStorageError::Conflict(_))
         ));
         assert_eq!(
             storage
-                .length("svc", "api", ns.ns.clone(), "singleton")
+                .read("svc", "api", "entity", primary.ns.clone(), key, 0, 100)
                 .await
                 .unwrap(),
-            1
+            vec![(17, value.to_vec())]
         );
     }
-    assert!(matches!(
-        storage
-            .append_many(
-                "svc",
-                "api",
-                "entity",
-                &primary.ns,
-                "singleton",
-                Arc::from([(17, Bytes::from_static(b"replacement"))])
-            )
-            .await,
-        Err(IndexedStorageError::Conflict(_))
-    ));
-    assert_eq!(
-        storage
-            .read(
-                "svc",
-                "api",
-                "entity",
-                primary.ns.clone(),
-                "singleton",
-                0,
-                100
-            )
-            .await
-            .unwrap(),
-        vec![(17, value.to_vec())]
-    );
 }
 
 #[test]
@@ -449,6 +882,7 @@ async fn postgres_append_many_rolls_back_across_statement_chunks(
             "atomic",
             1025,
             b"original".to_vec(),
+            None,
         )
         .await
         .unwrap();
@@ -458,7 +892,7 @@ async fn postgres_append_many_rolls_back_across_statement_chunks(
         .into();
     assert!(matches!(
         storage
-            .append_many("svc", "api", "entity", &ns.ns, "atomic", pairs)
+            .append_many("svc", "api", "entity", &ns.ns, "atomic", pairs, None)
             .await,
         Err(IndexedStorageError::Conflict(_))
     ));
@@ -485,7 +919,7 @@ async fn exists_append(
     let value1 = "value1".as_bytes().to_vec();
 
     let result1 = is.exists("svc", "api", ns.ns.clone(), key1).await.unwrap();
-    is.append("svc", "api", "entity", ns.ns.clone(), key1, 1, value1)
+    is.append("svc", "api", "entity", ns.ns.clone(), key1, 1, value1, None)
         .await
         .unwrap();
     let result2 = is.exists("svc", "api", ns.ns.clone(), key1).await.unwrap();
@@ -507,9 +941,18 @@ async fn namespaces_are_separate(
     let key1 = "key1";
     let value1 = "value1".as_bytes().to_vec();
 
-    is.append("svc", "api", "entity", ns1.ns.clone(), key1, 1, value1)
-        .await
-        .unwrap();
+    is.append(
+        "svc",
+        "api",
+        "entity",
+        ns1.ns.clone(),
+        key1,
+        1,
+        value1,
+        None,
+    )
+    .await
+    .unwrap();
     let result = is.exists("svc", "api", ns2.ns.clone(), key1).await.unwrap();
 
     assert_eq!(result, false);
@@ -538,6 +981,7 @@ async fn can_append_and_get(
         key1,
         1,
         value1.clone(),
+        None,
     )
     .await
     .unwrap();
@@ -549,6 +993,7 @@ async fn can_append_and_get(
         key1,
         2,
         value2.clone(),
+        None,
     )
     .await
     .unwrap();
@@ -560,6 +1005,7 @@ async fn can_append_and_get(
         key1,
         3,
         value3.clone(),
+        None,
     )
     .await
     .unwrap();
@@ -586,11 +1032,11 @@ async fn append_cannot_overwrite(
     let value1 = "value1".as_bytes().to_vec();
     let value2 = "value2".as_bytes().to_vec();
 
-    is.append("svc", "api", "entity", ns.ns.clone(), key1, 1, value1)
+    is.append("svc", "api", "entity", ns.ns.clone(), key1, 1, value1, None)
         .await
         .unwrap();
     let result1 = is
-        .append("svc", "api", "entity", ns.ns.clone(), key1, 1, value2)
+        .append("svc", "api", "entity", ns.ns.clone(), key1, 1, value2, None)
         .await;
 
     assert!(result1.is_err());
@@ -618,6 +1064,7 @@ async fn append_can_skip(
         key1,
         4,
         value1.clone(),
+        None,
     )
     .await
     .unwrap();
@@ -629,6 +1076,7 @@ async fn append_can_skip(
         key1,
         8,
         value2.clone(),
+        None,
     )
     .await
     .unwrap();
@@ -656,11 +1104,11 @@ async fn length(
     let value2 = "value2".as_bytes().to_vec();
 
     let result1 = is.length("svc", "api", ns.ns.clone(), key1).await.unwrap();
-    is.append("svc", "api", "entity", ns.ns.clone(), key1, 4, value1)
+    is.append("svc", "api", "entity", ns.ns.clone(), key1, 4, value1, None)
         .await
         .unwrap();
     let result2 = is.length("svc", "api", ns.ns.clone(), key1).await.unwrap();
-    is.append("svc", "api", "entity", ns.ns.clone(), key1, 8, value2)
+    is.append("svc", "api", "entity", ns.ns.clone(), key1, 8, value2, None)
         .await
         .unwrap();
     let result3 = is.length("svc", "api", ns.ns.clone(), key1).await.unwrap();
@@ -681,17 +1129,17 @@ async fn scan_empty(
     let is = is.get_indexed_storage().await;
 
     let mut result: Vec<String> = Vec::new();
-    let mut cursor = ScanCursor::default();
+    let mut resume = None;
     loop {
         let (next, chunk) = is
-            .scan("svc", "api", ns.meta.clone(), None, cursor, 10)
+            .scan_stable("svc", "api", ns.meta.clone(), None, resume, 10)
             .await
             .unwrap();
         result.extend(chunk);
-        cursor = next;
-        if next == 0 {
+        if next.is_none() {
             break;
         }
+        resume = next;
     }
 
     assert_eq!(result, Vec::<String>::new());
@@ -712,25 +1160,25 @@ async fn scan_with_no_pattern_single_paged(
     let value1 = "value1".as_bytes().to_vec();
     let value2 = "value2".as_bytes().to_vec();
 
-    is.append("svc", "api", "entity", ns.ns.clone(), key1, 1, value1)
+    is.append("svc", "api", "entity", ns.ns.clone(), key1, 1, value1, None)
         .await
         .unwrap();
-    is.append("svc", "api", "entity", ns.ns.clone(), key2, 1, value2)
+    is.append("svc", "api", "entity", ns.ns.clone(), key2, 1, value2, None)
         .await
         .unwrap();
 
     let mut result: Vec<String> = Vec::new();
-    let mut cursor = ScanCursor::default();
+    let mut resume = None;
     loop {
         let (next, chunk) = is
-            .scan("svc", "api", ns.meta.clone(), None, cursor, 10)
+            .scan_stable("svc", "api", ns.meta.clone(), None, resume, 10)
             .await
             .unwrap();
         result.extend(chunk);
-        cursor = next;
-        if next == 0 {
+        if next.is_none() {
             break;
         }
+        resume = next;
     }
 
     result.sort();
@@ -763,6 +1211,7 @@ async fn scan_with_no_pattern_paginated(
         key1,
         1,
         value1.clone(),
+        None,
     )
     .await
     .unwrap();
@@ -774,6 +1223,7 @@ async fn scan_with_no_pattern_paginated(
         key1,
         2,
         value2.clone(),
+        None,
     )
     .await
     .unwrap();
@@ -785,6 +1235,7 @@ async fn scan_with_no_pattern_paginated(
         key2,
         1,
         value2.clone(),
+        None,
     )
     .await
     .unwrap();
@@ -796,21 +1247,22 @@ async fn scan_with_no_pattern_paginated(
         key3,
         3,
         value3.clone(),
+        None,
     )
     .await
     .unwrap();
 
     let mut r1: Vec<String> = Vec::new();
-    let mut cursor = ScanCursor::default();
+    let mut resume = None;
     loop {
         let (next, chunk) = is
-            .scan("svc", "api", ns.meta.clone(), None, cursor, 1)
+            .scan_stable("svc", "api", ns.meta.clone(), None, resume, 1)
             .await
             .unwrap();
         r1.extend(chunk);
-        cursor = next;
+        resume = next;
 
-        if !r1.is_empty() || cursor == 0 {
+        if !r1.is_empty() || resume.is_none() {
             break;
         }
     }
@@ -818,13 +1270,13 @@ async fn scan_with_no_pattern_paginated(
     let mut r2: Vec<String> = Vec::new();
     loop {
         let (next, chunk) = is
-            .scan("svc", "api", ns.meta.clone(), None, cursor, 1)
+            .scan_stable("svc", "api", ns.meta.clone(), None, resume, 1)
             .await
             .unwrap();
         r2.extend(chunk);
-        cursor = next;
+        resume = next;
 
-        if cursor == 0 {
+        if resume.is_none() {
             break;
         }
     }
@@ -832,13 +1284,13 @@ async fn scan_with_no_pattern_paginated(
     let mut r3: Vec<String> = Vec::new();
     loop {
         let (next, chunk) = is
-            .scan("svc", "api", ns.meta.clone(), None, cursor, 1)
+            .scan_stable("svc", "api", ns.meta.clone(), None, resume, 1)
             .await
             .unwrap();
         r3.extend(chunk);
-        cursor = next;
+        resume = next;
 
-        if cursor == 0 {
+        if resume.is_none() {
             break;
         }
     }
@@ -897,12 +1349,30 @@ async fn scan_stable_resumes_past_deleted_keys(
         .collect();
 
     for (swept, below, key) in &planted {
-        is.append("svc", "api", "entity", swept.clone(), key, 1, b"v".to_vec())
-            .await
-            .unwrap();
-        is.append("svc", "api", "entity", below.clone(), key, 1, b"v".to_vec())
-            .await
-            .unwrap();
+        is.append(
+            "svc",
+            "api",
+            "entity",
+            swept.clone(),
+            key,
+            1,
+            b"v".to_vec(),
+            None,
+        )
+        .await
+        .unwrap();
+        is.append(
+            "svc",
+            "api",
+            "entity",
+            below.clone(),
+            key,
+            1,
+            b"v".to_vec(),
+            None,
+        )
+        .await
+        .unwrap();
     }
 
     // Take a page, delete its keys here and in the layer below, and resume from the token.
@@ -1006,6 +1476,7 @@ async fn multi_sqlite_scan_stable_crosses_its_files_a_page_at_a_time() {
             key,
             1,
             b"v".to_vec(),
+            None,
         )
         .await
         .unwrap();
@@ -1069,9 +1540,18 @@ async fn multi_sqlite_scan_stable_sees_files_created_after_a_walk() {
             agent_mode: AgentMode::Durable,
         };
         let key = format!("key-{name}");
-        is.append("svc", "api", "entity", namespace, &key, 1, b"v".to_vec())
-            .await
-            .unwrap();
+        is.append(
+            "svc",
+            "api",
+            "entity",
+            namespace,
+            &key,
+            1,
+            b"v".to_vec(),
+            None,
+        )
+        .await
+        .unwrap();
         key
     }
 
@@ -1124,6 +1604,7 @@ async fn last_id_matches_last_without_the_value(
             &key,
             id,
             format!("value-{id}").into_bytes(),
+            None,
         )
         .await
         .unwrap();
@@ -1160,33 +1641,167 @@ async fn scan_with_prefix_pattern_single_paged(
     let value2 = "value2".as_bytes().to_vec();
     let value3 = "value3".as_bytes().to_vec();
 
-    is.append("svc", "api", "entity", ns.ns.clone(), key1, 1, value1)
+    is.append("svc", "api", "entity", ns.ns.clone(), key1, 1, value1, None)
         .await
         .unwrap();
-    is.append("svc", "api", "entity", ns.ns.clone(), key2, 1, value2)
+    is.append("svc", "api", "entity", ns.ns.clone(), key2, 1, value2, None)
         .await
         .unwrap();
-    is.append("svc", "api", "entity", ns.ns.clone(), key3, 1, value3)
+    is.append("svc", "api", "entity", ns.ns.clone(), key3, 1, value3, None)
         .await
         .unwrap();
 
     let mut result: Vec<String> = Vec::new();
-    let mut cursor = ScanCursor::default();
+    let mut resume = None;
     loop {
         let (next, chunk) = is
-            .scan("svc", "api", ns.meta.clone(), Some("key"), cursor, 10)
+            .scan_stable("svc", "api", ns.meta.clone(), Some("key"), resume, 10)
             .await
             .unwrap();
         result.extend(chunk);
-        cursor = next;
-        if next == 0 {
+        if next.is_none() {
             break;
         }
+        resume = next;
     }
 
     result.sort();
     assert!(result.contains(&key1.to_string()));
     assert!(result.contains(&key3.to_string()));
+}
+
+#[test]
+#[tracing::instrument]
+async fn sql_scan_prefix_is_literal_bounded_and_deletion_safe(
+    #[dimension(sql_is)] storage: &Arc<dyn GetIndexedStorage + Send + Sync>,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+) {
+    let storage = storage.get_indexed_storage().await;
+    let keys = [
+        "A-prefix",
+        "a",
+        "a%",
+        "a%tail",
+        "a\\tail",
+        "a_tail",
+        "aa",
+        "ae\u{301}",
+        "aé",
+        "a😀",
+        "b",
+        "á",
+        "\u{10ffff}",
+        "\u{10ffff}tail",
+    ];
+    for key in keys {
+        storage
+            .append("svc", "api", "entity", ns.ns.clone(), key, 1, vec![1], None)
+            .await
+            .unwrap();
+    }
+    storage
+        .append(
+            "svc",
+            "api",
+            "entity",
+            ns.ns.clone(),
+            "aa",
+            2,
+            vec![2],
+            None,
+        )
+        .await
+        .unwrap();
+
+    let expected: Vec<String> = keys
+        .into_iter()
+        .filter(|key| key.starts_with('a'))
+        .map(str::to_string)
+        .collect();
+    let (_, literal_wildcard) = storage
+        .scan_stable("svc", "api", ns.meta.clone(), Some("a%"), None, 10)
+        .await
+        .unwrap();
+    assert_eq!(literal_wildcard, ["a%", "a%tail"]);
+
+    let (resume, first) = storage
+        .scan_stable("svc", "api", ns.meta.clone(), Some("a"), None, 2)
+        .await
+        .unwrap();
+    assert_eq!(first, expected[..2]);
+
+    let deleted_marker = first.last().unwrap().clone();
+    storage
+        .delete("svc", "api", ns.ns.clone(), &deleted_marker)
+        .await
+        .unwrap();
+
+    let mut actual = first;
+    let mut resume = resume;
+    loop {
+        let (next, page) = storage
+            .scan_stable("svc", "api", ns.meta.clone(), Some("a"), resume, 2)
+            .await
+            .unwrap();
+        actual.extend(page);
+        resume = next;
+        if resume.is_none() {
+            break;
+        }
+    }
+    assert_eq!(actual, expected);
+
+    let (_, from_before_prefix) = storage
+        .scan_stable(
+            "svc",
+            "api",
+            ns.meta.clone(),
+            Some("a"),
+            Some(ScanResume::Marker("A".to_string())),
+            20,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        from_before_prefix,
+        expected
+            .iter()
+            .filter(|key| **key != deleted_marker)
+            .cloned()
+            .collect::<Vec<_>>()
+    );
+
+    let (_, at_upper_bound) = storage
+        .scan_stable(
+            "svc",
+            "api",
+            ns.meta.clone(),
+            Some("a"),
+            Some(ScanResume::Marker("b".to_string())),
+            20,
+        )
+        .await
+        .unwrap();
+    assert!(at_upper_bound.is_empty());
+
+    let (_, maximum_prefix) = storage
+        .scan_stable("svc", "api", ns.meta.clone(), Some("\u{10ffff}"), None, 20)
+        .await
+        .unwrap();
+    assert_eq!(maximum_prefix, ["\u{10ffff}", "\u{10ffff}tail"]);
+
+    let (_, resumed_maximum_prefix) = storage
+        .scan_stable(
+            "svc",
+            "api",
+            ns.meta.clone(),
+            Some("\u{10ffff}"),
+            Some(ScanResume::Marker("\u{10ffff}".to_string())),
+            20,
+        )
+        .await
+        .unwrap();
+    assert_eq!(resumed_maximum_prefix, ["\u{10ffff}tail"]);
 }
 
 #[test]
@@ -1206,27 +1821,27 @@ async fn scan_with_prefix_pattern_paginated(
     let value2 = "value2".as_bytes().to_vec();
     let value3 = "value3".as_bytes().to_vec();
 
-    is.append("svc", "api", "entity", ns.ns.clone(), key1, 1, value1)
+    is.append("svc", "api", "entity", ns.ns.clone(), key1, 1, value1, None)
         .await
         .unwrap();
-    is.append("svc", "api", "entity", ns.ns.clone(), key2, 1, value2)
+    is.append("svc", "api", "entity", ns.ns.clone(), key2, 1, value2, None)
         .await
         .unwrap();
-    is.append("svc", "api", "entity", ns.ns.clone(), key3, 1, value3)
+    is.append("svc", "api", "entity", ns.ns.clone(), key3, 1, value3, None)
         .await
         .unwrap();
 
     let mut r1: Vec<String> = Vec::new();
-    let mut cursor = ScanCursor::default();
+    let mut resume = None;
     loop {
         let (next, chunk) = is
-            .scan("svc", "api", ns.meta.clone(), Some("key"), cursor, 1)
+            .scan_stable("svc", "api", ns.meta.clone(), Some("key"), resume, 1)
             .await
             .unwrap();
         r1.extend(chunk);
-        cursor = next;
+        resume = next;
 
-        if r1.len() == 1 || cursor == 0 {
+        if r1.len() == 1 || resume.is_none() {
             break;
         }
     }
@@ -1234,13 +1849,13 @@ async fn scan_with_prefix_pattern_paginated(
     let mut r2: Vec<String> = Vec::new();
     loop {
         let (next, chunk) = is
-            .scan("svc", "api", ns.meta.clone(), Some("key"), cursor, 1)
+            .scan_stable("svc", "api", ns.meta.clone(), Some("key"), resume, 1)
             .await
             .unwrap();
         r2.extend(chunk);
-        cursor = next;
+        resume = next;
 
-        if cursor == 0 {
+        if resume.is_none() {
             break;
         }
     }
@@ -1271,7 +1886,7 @@ async fn exists_append_delete(
     let value1 = "value1".as_bytes().to_vec();
 
     let result1 = is.exists("svc", "api", ns.ns.clone(), key1).await.unwrap();
-    is.append("svc", "api", "entity", ns.ns.clone(), key1, 1, value1)
+    is.append("svc", "api", "entity", ns.ns.clone(), key1, 1, value1, None)
         .await
         .unwrap();
     is.delete("svc", "api", ns.ns.clone(), key1).await.unwrap();
@@ -1294,9 +1909,18 @@ async fn delete_is_per_namespace(
     let key1 = "key1";
     let value1 = "value1".as_bytes().to_vec();
 
-    is.append("svc", "api", "entity", ns1.ns.clone(), key1, 1, value1)
-        .await
-        .unwrap();
+    is.append(
+        "svc",
+        "api",
+        "entity",
+        ns1.ns.clone(),
+        key1,
+        1,
+        value1,
+        None,
+    )
+    .await
+    .unwrap();
     is.delete("svc", "api", ns2.ns.clone(), key1).await.unwrap();
     let result = is.exists("svc", "api", ns1.ns.clone(), key1).await.unwrap();
 
@@ -1346,6 +1970,7 @@ async fn first(
         key1,
         5,
         value1.clone(),
+        None,
     )
     .await
     .unwrap();
@@ -1357,6 +1982,7 @@ async fn first(
         key1,
         7,
         value2.clone(),
+        None,
     )
     .await
     .unwrap();
@@ -1395,6 +2021,7 @@ async fn last(
         key1,
         5,
         value1.clone(),
+        None,
     )
     .await
     .unwrap();
@@ -1406,6 +2033,7 @@ async fn last(
         key1,
         7,
         value2.clone(),
+        None,
     )
     .await
     .unwrap();
@@ -1444,6 +2072,7 @@ async fn closest_low(
         key1,
         5,
         value1.clone(),
+        None,
     )
     .await
     .unwrap();
@@ -1455,6 +2084,7 @@ async fn closest_low(
         key1,
         7,
         value2.clone(),
+        None,
     )
     .await
     .unwrap();
@@ -1493,6 +2123,7 @@ async fn closest_match(
         key1,
         5,
         value1.clone(),
+        None,
     )
     .await
     .unwrap();
@@ -1504,6 +2135,7 @@ async fn closest_match(
         key1,
         7,
         value2.clone(),
+        None,
     )
     .await
     .unwrap();
@@ -1542,6 +2174,7 @@ async fn closest_mid(
         key1,
         5,
         value1.clone(),
+        None,
     )
     .await
     .unwrap();
@@ -1553,6 +2186,7 @@ async fn closest_mid(
         key1,
         7,
         value2.clone(),
+        None,
     )
     .await
     .unwrap();
@@ -1583,10 +2217,10 @@ async fn closest_high(
         .closest("svc", "api", "entity", ns.ns.clone(), key1, 10)
         .await
         .unwrap();
-    is.append("svc", "api", "entity", ns.ns.clone(), key1, 5, value1)
+    is.append("svc", "api", "entity", ns.ns.clone(), key1, 5, value1, None)
         .await
         .unwrap();
-    is.append("svc", "api", "entity", ns.ns.clone(), key1, 7, value2)
+    is.append("svc", "api", "entity", ns.ns.clone(), key1, 7, value2, None)
         .await
         .unwrap();
     let result2 = is
@@ -1621,6 +2255,7 @@ async fn drop_prefix_no_match(
         key1,
         10,
         value1.clone(),
+        None,
     )
     .await
     .unwrap();
@@ -1632,6 +2267,7 @@ async fn drop_prefix_no_match(
         key1,
         11,
         value2.clone(),
+        None,
     )
     .await
     .unwrap();
@@ -1643,6 +2279,7 @@ async fn drop_prefix_no_match(
         key1,
         12,
         value3.clone(),
+        None,
     )
     .await
     .unwrap();
@@ -1681,6 +2318,7 @@ async fn drop_prefix_partial(
         key1,
         10,
         value1.clone(),
+        None,
     )
     .await
     .unwrap();
@@ -1692,6 +2330,7 @@ async fn drop_prefix_partial(
         key1,
         11,
         value2.clone(),
+        None,
     )
     .await
     .unwrap();
@@ -1703,6 +2342,7 @@ async fn drop_prefix_partial(
         key1,
         12,
         value3.clone(),
+        None,
     )
     .await
     .unwrap();
@@ -1733,15 +2373,42 @@ async fn drop_prefix_full(
     let value2 = "value2".as_bytes().to_vec();
     let value3 = "value3".as_bytes().to_vec();
 
-    is.append("svc", "api", "entity", ns.ns.clone(), key1, 10, value1)
-        .await
-        .unwrap();
-    is.append("svc", "api", "entity", ns.ns.clone(), key1, 11, value2)
-        .await
-        .unwrap();
-    is.append("svc", "api", "entity", ns.ns.clone(), key1, 12, value3)
-        .await
-        .unwrap();
+    is.append(
+        "svc",
+        "api",
+        "entity",
+        ns.ns.clone(),
+        key1,
+        10,
+        value1,
+        None,
+    )
+    .await
+    .unwrap();
+    is.append(
+        "svc",
+        "api",
+        "entity",
+        ns.ns.clone(),
+        key1,
+        11,
+        value2,
+        None,
+    )
+    .await
+    .unwrap();
+    is.append(
+        "svc",
+        "api",
+        "entity",
+        ns.ns.clone(),
+        key1,
+        12,
+        value3,
+        None,
+    )
+    .await
+    .unwrap();
 
     is.drop_prefix("svc", "api", ns.ns.clone(), key1, 20)
         .await
@@ -1752,4 +2419,743 @@ async fn drop_prefix_full(
         .unwrap();
 
     assert_eq!(result, vec![]);
+}
+
+// ---------------------------------------------------------------------------------------------
+// The shard-epoch fence.
+//
+// Every test below runs against all five backends, and every backend fences, so each expects the
+// same refusal from all of them.
+// ---------------------------------------------------------------------------------------------
+
+fn assert_fenced(
+    result: Result<(), IndexedStorageError>,
+    expected_epoch: u64,
+    actual_epoch: Option<u64>,
+) {
+    match result {
+        Err(IndexedStorageError::Fenced {
+            expected, actual, ..
+        }) => {
+            assert_eq!(expected, ShardEpoch(expected_epoch), "expected epoch");
+            assert_eq!(actual, actual_epoch.map(ShardEpoch), "stored epoch");
+        }
+        other => panic!("expected a Fenced error, got {other:?}"),
+    }
+}
+
+#[test]
+#[tracing::instrument]
+async fn append_with_the_recorded_epoch_is_accepted(
+    deps: &WorkerExecutorTestDependencies,
+    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+) {
+    let is = is.get_indexed_storage().await;
+    let key = "fence-match";
+
+    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(7))
+        .await
+        .unwrap();
+    is.append_many(
+        "svc",
+        "api",
+        "entity",
+        &ns.ns,
+        key,
+        Arc::from([
+            (1, Bytes::from_static(b"a")),
+            (2, Bytes::from_static(b"b")),
+            (3, Bytes::from_static(b"c")),
+        ]),
+        Some(ShardEpoch(7)),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        is.length("svc", "api", ns.ns.clone(), key).await.unwrap(),
+        3
+    );
+}
+
+#[test]
+#[tracing::instrument]
+async fn a_stale_epoch_append_is_refused_and_writes_nothing(
+    deps: &WorkerExecutorTestDependencies,
+    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+) {
+    let is = is.get_indexed_storage().await;
+    let key = "fence-stale";
+
+    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(8))
+        .await
+        .unwrap();
+    let result = is
+        .append_many(
+            "svc",
+            "api",
+            "entity",
+            &ns.ns,
+            key,
+            Arc::from([
+                (1, Bytes::from_static(b"a")),
+                (2, Bytes::from_static(b"b")),
+                (3, Bytes::from_static(b"c")),
+            ]),
+            Some(ShardEpoch(7)),
+        )
+        .await;
+
+    let length = is.length("svc", "api", ns.ns.clone(), key).await.unwrap();
+    assert_fenced(result, 7, Some(8));
+    // The whole batch is rolled back, not the tail of it.
+    assert_eq!(length, 0, "a refused batch must leave no entry behind");
+}
+
+#[test]
+#[tracing::instrument]
+async fn an_owner_re_opens_at_the_epoch_it_holds(
+    deps: &WorkerExecutorTestDependencies,
+    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+) {
+    // One process re-opening an oplog it already holds, at the epoch it already holds, which
+    // happens on every cache eviction.
+    let is = is.get_indexed_storage().await;
+    let key = "fence-reopen";
+
+    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(4))
+        .await
+        .unwrap();
+    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(4))
+        .await
+        .unwrap();
+    is.append_many(
+        "svc",
+        "api",
+        "entity",
+        &ns.ns,
+        key,
+        Arc::from([(1, Bytes::from_static(b"a"))]),
+        Some(ShardEpoch(4)),
+    )
+    .await
+    .unwrap();
+}
+
+#[test]
+#[tracing::instrument]
+async fn a_higher_epoch_takes_the_oplog_over(
+    deps: &WorkerExecutorTestDependencies,
+    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+) {
+    // A new owner at a higher epoch takes the oplog over, at which point the old owner is the one
+    // being refused.
+    let (owner, newcomer) = is.get_two_writers().await;
+    let key = "fence-re-mint";
+
+    owner
+        .set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(4))
+        .await
+        .unwrap();
+    newcomer
+        .set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(5))
+        .await
+        .unwrap();
+    newcomer
+        .append_many(
+            "svc",
+            "api",
+            "entity",
+            &ns.ns,
+            key,
+            Arc::from([(1, Bytes::from_static(b"a"))]),
+            Some(ShardEpoch(5)),
+        )
+        .await
+        .unwrap();
+
+    let refused = owner
+        .append_many(
+            "svc",
+            "api",
+            "entity",
+            &ns.ns,
+            key,
+            Arc::from([(2, Bytes::from_static(b"b"))]),
+            Some(ShardEpoch(4)),
+        )
+        .await;
+    match refused {
+        Err(IndexedStorageError::Fenced { actual, .. }) => {
+            assert_eq!(actual, Some(ShardEpoch(5)));
+        }
+        other => panic!("expected a Fenced error, got {other:?}"),
+    }
+}
+
+#[test]
+#[tracing::instrument]
+async fn an_append_ahead_of_the_recorded_epoch_is_refused(
+    deps: &WorkerExecutorTestDependencies,
+    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+) {
+    let is = is.get_indexed_storage().await;
+    let key = "fence-ahead";
+
+    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(5))
+        .await
+        .unwrap();
+
+    // The check is equality, not "at least": a record behind the asserted epoch means the open
+    // that should have raised it never ran, so the write is not ours to make. Both call shapes, so
+    // a single-entry path that parts from the batch path cannot quietly relax the check.
+    let batch = is
+        .append_many(
+            "svc",
+            "api",
+            "entity",
+            &ns.ns,
+            key,
+            Arc::from([
+                (1, Bytes::from_static(b"a")),
+                (2, Bytes::from_static(b"b")),
+                (3, Bytes::from_static(b"c")),
+            ]),
+            Some(ShardEpoch(6)),
+        )
+        .await;
+    let batch_length = is.length("svc", "api", ns.ns.clone(), key).await.unwrap();
+    let single = is
+        .append(
+            "svc",
+            "api",
+            "entity",
+            ns.ns.clone(),
+            key,
+            4,
+            b"d".to_vec(),
+            Some(ShardEpoch(6)),
+        )
+        .await;
+    let length = is.length("svc", "api", ns.ns.clone(), key).await.unwrap();
+
+    assert_fenced(batch, 6, Some(5));
+    assert_eq!(
+        batch_length, 0,
+        "a refused batch must leave no entry behind"
+    );
+    assert_fenced(single, 6, Some(5));
+    assert_eq!(length, 0, "a refused append must leave no entry behind");
+}
+
+#[test]
+#[tracing::instrument]
+async fn an_append_without_a_recorded_epoch_is_refused(
+    deps: &WorkerExecutorTestDependencies,
+    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+) {
+    let is = is.get_indexed_storage().await;
+    let key = "fence-absent";
+
+    // No upsert. Epoch 0 is a perfectly valid epoch, so this also pins that an absent row is not
+    // silently treated as zero.
+    let result = is
+        .append(
+            "svc",
+            "api",
+            "entity",
+            ns.ns.clone(),
+            key,
+            1,
+            b"a".to_vec(),
+            Some(ShardEpoch(0)),
+        )
+        .await;
+
+    let length = is.length("svc", "api", ns.ns.clone(), key).await.unwrap();
+    assert_fenced(result, 0, None);
+    assert_eq!(length, 0);
+}
+
+#[test]
+#[tracing::instrument]
+async fn an_unfenced_append_ignores_the_recorded_epoch(
+    deps: &WorkerExecutorTestDependencies,
+    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+) {
+    let is = is.get_indexed_storage().await;
+    let key = "fence-none";
+
+    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(9))
+        .await
+        .unwrap();
+    // `None` asserts nothing: it is what the archive layers and generic callers pass.
+    is.append(
+        "svc",
+        "api",
+        "entity",
+        ns.ns.clone(),
+        key,
+        1,
+        b"a".to_vec(),
+        None,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        is.length("svc", "api", ns.ns.clone(), key).await.unwrap(),
+        1
+    );
+}
+
+#[test]
+#[tracing::instrument]
+async fn the_recorded_epoch_only_ever_climbs(
+    deps: &WorkerExecutorTestDependencies,
+    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+) {
+    let is = is.get_indexed_storage().await;
+    let key = "fence-monotonic";
+
+    // Rising and repeated epochs are accepted ...
+    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(5))
+        .await
+        .unwrap();
+    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(5))
+        .await
+        .unwrap();
+    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(9))
+        .await
+        .unwrap();
+
+    // ... a falling one is not, or a zombie could re-open at its stale epoch and un-fence itself
+    // against the current owner.
+    let result = is
+        .set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(8))
+        .await;
+
+    assert_fenced(result, 8, Some(9));
+    // and the rejected upsert left the record alone
+    is.append(
+        "svc",
+        "api",
+        "entity",
+        ns.ns.clone(),
+        key,
+        1,
+        b"a".to_vec(),
+        Some(ShardEpoch(9)),
+    )
+    .await
+    .unwrap();
+    assert_fenced(
+        is.append(
+            "svc",
+            "api",
+            "entity",
+            ns.ns.clone(),
+            key,
+            2,
+            b"b".to_vec(),
+            Some(ShardEpoch(8)),
+        )
+        .await,
+        8,
+        Some(9),
+    );
+}
+
+#[test]
+#[tracing::instrument]
+async fn deleting_the_recorded_epoch_fences_later_writes(
+    deps: &WorkerExecutorTestDependencies,
+    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+) {
+    let is = is.get_indexed_storage().await;
+    let key = "fence-deleted";
+
+    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(3))
+        .await
+        .unwrap();
+    is.delete_with_epoch("svc", "api", ns.ns.clone(), key, None)
+        .await
+        .unwrap();
+    // Idempotent: deleting again is not an error.
+    is.delete_with_epoch("svc", "api", ns.ns.clone(), key, None)
+        .await
+        .unwrap();
+
+    let result = is
+        .append(
+            "svc",
+            "api",
+            "entity",
+            ns.ns.clone(),
+            key,
+            1,
+            b"a".to_vec(),
+            Some(ShardEpoch(3)),
+        )
+        .await;
+
+    assert_fenced(result, 3, None);
+}
+
+#[test]
+#[tracing::instrument]
+async fn a_deleted_record_does_not_remember_its_epoch(
+    deps: &WorkerExecutorTestDependencies,
+    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+) {
+    let is = is.get_indexed_storage().await;
+    let key = "fence-forgotten";
+
+    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(9))
+        .await
+        .unwrap();
+    is.delete_with_epoch("svc", "api", ns.ns.clone(), key, None)
+        .await
+        .unwrap();
+
+    // The documented limit of the fence: the forward-only rule lives on the record, so once the
+    // record is gone a lower epoch than the one it held is recorded and written through. Closing
+    // this needs the delete to keep the epoch, which changes this test on purpose.
+    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(8))
+        .await
+        .unwrap();
+    is.append(
+        "svc",
+        "api",
+        "entity",
+        ns.ns.clone(),
+        key,
+        1,
+        b"a".to_vec(),
+        Some(ShardEpoch(8)),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        is.length("svc", "api", ns.ns.clone(), key).await.unwrap(),
+        1
+    );
+}
+
+async fn append_fenced(
+    is: &Arc<dyn IndexedStorage + Send + Sync>,
+    ns: &IndexedStorageNamespace,
+    key: &str,
+    ids: &[u64],
+    epoch: Option<ShardEpoch>,
+) -> Result<(), IndexedStorageError> {
+    let pairs: Vec<(u64, Bytes)> = ids
+        .iter()
+        .map(|id| (*id, Bytes::from(id.to_string())))
+        .collect();
+    is.append_many("svc", "api", "entity", ns, key, Arc::from(pairs), epoch)
+        .await
+}
+
+#[test]
+#[tracing::instrument]
+async fn the_recorded_writer_deletes_the_key_and_its_record(
+    deps: &WorkerExecutorTestDependencies,
+    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+) {
+    let is = is.get_indexed_storage().await;
+    let key = "fence-delete-owner";
+
+    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(5))
+        .await
+        .unwrap();
+    append_fenced(&is, &ns.ns, key, &[1, 2], Some(ShardEpoch(5)))
+        .await
+        .unwrap();
+
+    is.delete_with_epoch("svc", "api", ns.ns.clone(), key, Some(ShardEpoch(5)))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        is.length("svc", "api", ns.ns.clone(), key).await.unwrap(),
+        0
+    );
+    // The record went with the entries, so the old epoch writes nothing back.
+    assert_fenced(
+        append_fenced(&is, &ns.ns, key, &[3], Some(ShardEpoch(5))).await,
+        5,
+        None,
+    );
+}
+
+#[test]
+#[tracing::instrument]
+async fn a_delete_by_a_writer_that_lost_the_key_deletes_nothing(
+    deps: &WorkerExecutorTestDependencies,
+    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+) {
+    // A deletion that outlived its writer's hold on the key: the new holder took it at a higher
+    // epoch and wrote to it. The stale delete must leave both the record and the entries alone.
+    let (stale, owner) = is.get_two_writers().await;
+    let key = "fence-delete-stale";
+
+    stale
+        .set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(5))
+        .await
+        .unwrap();
+    append_fenced(&stale, &ns.ns, key, &[1], Some(ShardEpoch(5)))
+        .await
+        .unwrap();
+    owner
+        .set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(6))
+        .await
+        .unwrap();
+    append_fenced(&owner, &ns.ns, key, &[2], Some(ShardEpoch(6)))
+        .await
+        .unwrap();
+
+    assert_fenced(
+        stale
+            .delete_with_epoch("svc", "api", ns.ns.clone(), key, Some(ShardEpoch(5)))
+            .await,
+        5,
+        Some(6),
+    );
+
+    assert_eq!(
+        owner
+            .length("svc", "api", ns.ns.clone(), key)
+            .await
+            .unwrap(),
+        2,
+        "a refused delete removes no entry"
+    );
+    append_fenced(&owner, &ns.ns, key, &[3], Some(ShardEpoch(6)))
+        .await
+        .expect("a refused delete leaves the new holder's record in place");
+}
+
+#[test]
+#[tracing::instrument]
+async fn a_delete_asserting_an_epoch_on_a_key_without_a_record_deletes_nothing(
+    deps: &WorkerExecutorTestDependencies,
+    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+) {
+    let is = is.get_indexed_storage().await;
+    let key = "fence-delete-unrecorded";
+
+    append_fenced(&is, &ns.ns, key, &[1], None).await.unwrap();
+
+    assert_fenced(
+        is.delete_with_epoch("svc", "api", ns.ns.clone(), key, Some(ShardEpoch(1)))
+            .await,
+        1,
+        None,
+    );
+    assert_eq!(
+        is.length("svc", "api", ns.ns.clone(), key).await.unwrap(),
+        1
+    );
+}
+
+#[test]
+#[tracing::instrument]
+async fn a_delete_asserting_an_epoch_on_a_key_that_is_already_gone_is_accepted(
+    deps: &WorkerExecutorTestDependencies,
+    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+) {
+    // Neither a record nor entries: nothing is left for a writer that lost the key to destroy, so
+    // a deletion retried after its own earlier attempt removed the key can finish.
+    let is = is.get_indexed_storage().await;
+    let key = "fence-delete-gone";
+
+    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(3))
+        .await
+        .unwrap();
+    append_fenced(&is, &ns.ns, key, &[1, 2], Some(ShardEpoch(3)))
+        .await
+        .unwrap();
+    is.delete_with_epoch("svc", "api", ns.ns.clone(), key, Some(ShardEpoch(3)))
+        .await
+        .unwrap();
+    is.delete_with_epoch("svc", "api", ns.ns.clone(), key, Some(ShardEpoch(3)))
+        .await
+        .expect("a repeated delete of a key that is already gone is accepted");
+    is.delete_with_epoch(
+        "svc",
+        "api",
+        ns.ns.clone(),
+        "fence-delete-never-written",
+        Some(ShardEpoch(3)),
+    )
+    .await
+    .expect("a delete of a key that was never written is accepted");
+
+    assert!(!is.exists("svc", "api", ns.ns.clone(), key).await.unwrap());
+    // Accepting the delete recorded nothing: the old epoch still writes nothing back.
+    assert_fenced(
+        append_fenced(&is, &ns.ns, key, &[3], Some(ShardEpoch(3))).await,
+        3,
+        None,
+    );
+}
+
+#[test]
+#[tracing::instrument]
+async fn an_unfenced_delete_removes_the_key_and_its_record(
+    deps: &WorkerExecutorTestDependencies,
+    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+) {
+    let (first, second) = is.get_two_writers().await;
+    let key = "fence-delete-unfenced";
+
+    first
+        .set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(7))
+        .await
+        .unwrap();
+    append_fenced(&first, &ns.ns, key, &[1, 2], Some(ShardEpoch(7)))
+        .await
+        .unwrap();
+
+    // Asserting nothing, so it does not matter that another writer holds the record.
+    second
+        .delete_with_epoch("svc", "api", ns.ns.clone(), key, None)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        first
+            .length("svc", "api", ns.ns.clone(), key)
+            .await
+            .unwrap(),
+        0
+    );
+    assert_fenced(
+        append_fenced(&first, &ns.ns, key, &[3], Some(ShardEpoch(7))).await,
+        7,
+        None,
+    );
+}
+
+#[test]
+#[tracing::instrument]
+async fn an_empty_batch_is_accepted_whatever_epoch_it_asserts(
+    deps: &WorkerExecutorTestDependencies,
+    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+) {
+    // Nothing to write is nothing to fence: every backend agrees, stale epoch or not.
+    let is = is.get_indexed_storage().await;
+    let key = "fence-empty-batch";
+
+    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(5))
+        .await
+        .unwrap();
+
+    append_fenced(&is, &ns.ns, key, &[], Some(ShardEpoch(4)))
+        .await
+        .expect("an empty batch writes nothing, so it is not refused");
+    assert_eq!(
+        is.length("svc", "api", ns.ns.clone(), key).await.unwrap(),
+        0
+    );
+}
+
+#[test]
+#[tracing::instrument]
+async fn a_repeated_id_in_a_staged_batch_is_a_conflict(
+    deps: &WorkerExecutorTestDependencies,
+    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+) {
+    // A stage is an oplog insert like the visible oplog, in a batch as in a single append: a batch
+    // re-sent after an indeterminate write collides on its first id.
+    let is = is.get_indexed_storage().await;
+    let staged = IndexedStorageNamespace::StagedOpLog {
+        agent_id: AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "staged-conflict".into(),
+        },
+        agent_mode: AgentMode::Durable,
+    };
+    let key = "staged-conflict";
+
+    append_fenced(&is, &staged, key, &[1, 2], None)
+        .await
+        .unwrap();
+
+    // Only the classification is asserted: an unfenced Redis batch is a pipeline, and its callers
+    // reconcile a partial one by reading it back.
+    match append_fenced(&is, &staged, key, &[2, 3], None).await {
+        Err(IndexedStorageError::Conflict(_)) => {}
+        other => panic!("expected a Conflict, got {other:?}"),
+    }
+}
+
+#[test]
+#[tracing::instrument]
+async fn a_failed_batch_leaves_no_partial_write(
+    deps: &WorkerExecutorTestDependencies,
+    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+) {
+    // What makes "the fence is checked once per batch" true rather than "once per entry": a
+    // backend that loops single appends would leave the entries before the failure behind.
+    let is = is.get_indexed_storage().await;
+    let key = "batch-atomicity";
+
+    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(1))
+        .await
+        .unwrap();
+    is.append_many(
+        "svc",
+        "api",
+        "entity",
+        &ns.ns,
+        key,
+        Arc::from([(1, Bytes::from_static(b"a")), (2, Bytes::from_static(b"b"))]),
+        Some(ShardEpoch(1)),
+    )
+    .await
+    .unwrap();
+
+    // id 1 already exists, so the second entry of this batch violates the primary key.
+    let result = is
+        .append_many(
+            "svc",
+            "api",
+            "entity",
+            &ns.ns,
+            key,
+            Arc::from([
+                (3, Bytes::from_static(b"c")),
+                (1, Bytes::from_static(b"dup")),
+                (4, Bytes::from_static(b"d")),
+            ]),
+            Some(ShardEpoch(1)),
+        )
+        .await;
+
+    assert!(result.is_err(), "a duplicate id must fail the batch");
+    assert_eq!(
+        is.length("svc", "api", ns.ns.clone(), key).await.unwrap(),
+        2,
+        "the failed batch must not have written its first entry"
+    );
 }

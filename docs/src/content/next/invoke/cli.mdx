@@ -1,10 +1,11 @@
 # Invoke using Golem CLI
 
-The `golem` command line interface exposes one invocation subcommand:
+The `golem` command line interface exposes agent and native tool invocations:
 
 - `golem agent invoke` triggers a function invocation on an agent and awaits its result
 - `golem agent invoke --trigger` (or `-t`) fire-and-forget mode — triggers the invocation without waiting for the result
 - `golem agent invoke --trigger --schedule-at <DATETIME>` schedules the invocation at a specific time (ISO 8601 format; requires `--trigger`)
+- `golem tool invoke` invokes a deployed tool using its declared command-line interface, as described below
 
 ## Specifying what to invoke
 
@@ -50,3 +51,45 @@ As invocations are executed sequentially, it is possible to cancel a pending inv
 ```shell copy
 golem agent cancel-invocation <agent-id> <idempotency-key>
 ```
+
+## Invoking native tools
+
+Tool arguments follow the tool's declared CLI interface, regardless of its implementation language. Select exactly one owner with `--agent` (an existing agent) or `--component` (a fresh ephemeral owner), then supply the tool name. Put the tool's subcommands, positional arguments, and flags **after `--`**. Golem options stay before that separator.
+
+For example, if `search` declares a `query` command with a string positional argument and a `--limit` option:
+
+```shell copy
+golem tool invoke --component my-app:tool-owner search -- \
+  query "durable streams" --limit 10
+golem tool invoke --agent 'Assistant("alice")' search -- \
+  query "durable streams" --limit 10
+```
+
+The owner must have a binding for the tool; a top-level implementation declaration alone does not authorize invocation. Component-targeted calls instantiate the deployed component, including core initializers, but do not select an agent type or call an agent constructor.
+
+### Tool help and argument values
+
+```shell copy
+golem tool invoke --help
+golem tool invoke --component my-app:tool-owner search -- --help
+golem tool invoke --component my-app:tool-owner search -- query --help
+```
+
+The first command shows Golem's invocation options; the others show the bound tool's root or command help without invoking it. Help and parsing use the owner's effective deployed definition, including middleware, and require view permission on the selected agent or component's agents in addition to invocation permission. A tool that declares its own `help` or `-h` option retains that option instead of generated help.
+
+Strings are ordinary shell arguments; quote spaces using your shell. Numbers, booleans, and enums are parsed against the declared schema. Composite values use JSON in one shell argument. You do not supply a `{schema, value}` document. Declared aliases, inherited global options, defaults, repeated options, and constraints apply. Tool metadata never reads the caller's local environment variables; pass those values explicitly if needed. Optional-valued options use `--option=VALUE` for an explicit value and bare `--option` for their declared default. A second `--` belongs to the tool's own argument grammar, for example to pass a positional value beginning with `-`.
+
+### Byte streams and invocation controls
+
+Raw stream attachments are separate from structured tool arguments:
+
+```shell copy
+golem tool invoke --component my-app:tool-owner \
+  --stdin input.bin --stdout file-tools -- transform >output.bin
+golem tool invoke --component my-app:tool-owner \
+  --stdin - --stdout --output output.bin file-tools -- transform
+```
+
+These examples assume `file-tools transform` declares byte stdin and stdout. `--stdin -` reads process stdin; `--stdout` writes only tool bytes to process stdout, with diagnostics and the final structured report on stderr. With `--output`, bytes go to the named file and the report remains on process stdout. Streams use the ordinary resumable invocation transport.
+
+`--trigger`, `--schedule-at`, and `--idempotency-key` remain Golem options before `--`. Triggering and scheduling cannot attach live byte streams. To observe an existing invocation, use `--lookup --idempotency-key KEY` and supply only its tool command path after `--`, without input arguments. Lookup does not start a new invocation.

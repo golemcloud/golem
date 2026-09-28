@@ -82,6 +82,12 @@ final class JsToolOutputStream(val underlying: ToolHostApi.RawToolStdoutWriter) 
     perform(Some(ByteStreamCloseCause.Failed(reason)))(underlying.fail(encodeFailure(reason)))
 
   private[tool] def finishInvocation(): Future[Unit] =
+    completeInvocation(ByteStreamCloseCause.Finished)
+
+  private[golem] def failInvocation(error: Throwable): Future[Unit] =
+    completeInvocation(ByteStreamCloseCause.Failed(ByteStreamFailure.Failed(String.valueOf(error.getMessage))))
+
+  private def completeInvocation(selection: ByteStreamCloseCause): Future[Unit] =
     completion.getOrElse {
       val completed = Promise[Unit]()
       completion = Some(completed.future)
@@ -89,7 +95,15 @@ final class JsToolOutputStream(val underlying: ToolHostApi.RawToolStdoutWriter) 
         .getOrElse(Future.successful(Right(())))
         .flatMap { _ =>
           if (terminal.isDefined) Future.successful(Right(()))
-          else start(Some(ByteStreamCloseCause.Finished))(underlying.finish())
+          else
+            selection match {
+              case ByteStreamCloseCause.Finished =>
+                start(Some(selection))(underlying.finish())
+              case ByteStreamCloseCause.Failed(reason) =>
+                start(Some(selection))(underlying.fail(encodeFailure(reason)))
+              case ByteStreamCloseCause.ConsumerCancelled =>
+                Future.successful(Right(()))
+            }
         }
         .flatMap {
           case Right(_) | Left(StreamWriteError.Closed(_)) => Future.successful(())

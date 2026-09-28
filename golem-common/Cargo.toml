@@ -32,6 +32,7 @@ full = [
     "golem-schema/nonempty_collections",
     "golem-schema/serde_json_types",
     "golem-schema/url",
+    "serde_json/unbounded_depth",
     "dep:golem-api-grpc",
     "dep:applying",
     "dep:console-subscriber",
@@ -39,6 +40,7 @@ full = [
     "dep:figment",
     "dep:fred",
     "dep:heck",
+    "dep:humanize-rs",
     "dep:itertools",
     "dep:lazy_static",
     "dep:mac_address",
@@ -55,6 +57,7 @@ full = [
     "dep:serde_yaml",
     "dep:similar",
     "dep:sqlx",
+    "dep:stacker",
     "dep:tokio",
     "dep:toml",
     "dep:tonic",
@@ -97,6 +100,7 @@ fred = { workspace = true, optional = true }
 glob-match = { workspace = true }
 heck = { workspace = true, optional = true }
 http = { workspace = true }
+humanize-rs = { workspace = true, optional = true }
 humantime = { workspace = true }
 humantime-serde = { workspace = true }
 ident-mash = { workspace = true }
@@ -124,6 +128,7 @@ serde_yaml = { workspace = true, optional = true }
 shadow-rs = { workspace = true }
 similar = { workspace = true, optional = true }
 sqlx = { workspace = true, optional = true }
+stacker = { workspace = true, optional = true }
 strum = { workspace = true }
 strum_macros = { workspace = true }
 thiserror = { workspace = true }

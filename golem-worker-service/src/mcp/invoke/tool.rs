@@ -34,8 +34,7 @@ use golem_common::schema::unstructured::{UnstructuredOutput, decode_unstructured
 use golem_schema::schema::render::json_value::to_json_value_redacted;
 use rmcp::ErrorData;
 use rmcp::model::{
-    AnnotateAble, CallToolResult, Content, JsonObject, RawAudioContent, RawContent,
-    RawEmbeddedResource, RawResource, ResourceContents,
+    CallToolResult, ContentBlock, EmbeddedResource, JsonObject, Resource, ResourceContents,
 };
 use serde_json::json;
 use std::sync::Arc;
@@ -175,7 +174,7 @@ pub fn map_agent_response_to_tool_result(
             }
         };
 
-        let mut contents: Vec<Content> = vec![];
+        let mut contents: Vec<ContentBlock> = vec![];
         for element in elements {
             let SchemaValue::Variant(VariantValuePayload { case, payload }) = element else {
                 return Err(ErrorData::internal_error(
@@ -198,18 +197,13 @@ pub fn map_agent_response_to_tool_result(
 
             match schema_value_to_tool_result(graph, case_schema, &payload)? {
                 ToolResult::Default(json_value) => {
-                    contents.push(Content::text(json_value.to_string()));
+                    contents.push(ContentBlock::text(json_value.to_string()));
                 }
                 ToolResult::Content(content) => contents.push(content),
             }
         }
 
-        return Ok(CallToolResult {
-            content: contents,
-            structured_content: None,
-            is_error: Some(false),
-            meta: None,
-        });
+        return Ok(CallToolResult::success(contents));
     }
 
     match schema_value_to_tool_result(graph, ty, &agent_response)? {
@@ -220,12 +214,7 @@ pub fn map_agent_response_to_tool_result(
                 json!({ FALLBACK_OUTPUT_FIELD_NAME: json_value }),
             ))
         }
-        ToolResult::Content(content) => Ok(CallToolResult {
-            content: vec![content],
-            structured_content: None,
-            is_error: Some(false),
-            meta: None,
-        }),
+        ToolResult::Content(content) => Ok(CallToolResult::success(vec![content])),
     }
 }
 
@@ -237,7 +226,7 @@ pub fn map_agent_response_to_tool_result(
 #[allow(clippy::large_enum_variant)]
 pub enum ToolResult {
     Default(serde_json::Value),
-    Content(Content),
+    Content(ContentBlock),
 }
 
 fn internal_error(error: impl std::fmt::Display) -> ErrorData {
@@ -266,9 +255,9 @@ fn schema_value_to_tool_result(
     // the output kind; every other value renders through the JSON codec.
     if let Some(output) = decode_unstructured_output(graph, ty, value).map_err(internal_error)? {
         return match output {
-            UnstructuredOutput::Url(url) => Ok(ToolResult::Content(
-                RawContent::resource_link(RawResource::new(url, url)).no_annotation(),
-            )),
+            UnstructuredOutput::Url(url) => Ok(ToolResult::Content(ContentBlock::resource_link(
+                Resource::new(url, url),
+            ))),
             UnstructuredOutput::Inline(inline) => value_to_tool_content(inline).ok_or_else(|| {
                 internal_error("unstructured `inline` value must be a text or binary value")
             }),
@@ -285,20 +274,18 @@ fn schema_value_to_tool_result(
     // `Url` / `Path`.)
     match (graph.resolve_ref(ty).map_err(internal_error)?, value) {
         (SchemaType::Url { .. }, SchemaValue::Url { url }) => {
-            return Ok(ToolResult::Content(
-                RawContent::resource_link(RawResource::new(url.clone(), url.clone()))
-                    .no_annotation(),
-            ));
+            return Ok(ToolResult::Content(ContentBlock::resource_link(
+                Resource::new(url.clone(), url.clone()),
+            )));
         }
         (SchemaType::Path { .. }, SchemaValue::Path { path }) => {
             // `from_file_path` percent-encodes the path and rejects non-absolute
             // paths; a relative path has no well-defined `file://` URI, so it
             // falls through to the structured JSON string rendering below.
             if let Ok(file_url) = url::Url::from_file_path(path) {
-                return Ok(ToolResult::Content(
-                    RawContent::resource_link(RawResource::new(file_url.to_string(), path.clone()))
-                        .no_annotation(),
-                ));
+                return Ok(ToolResult::Content(ContentBlock::resource_link(
+                    Resource::new(file_url.to_string(), path.clone()),
+                )));
             }
         }
         _ => {}
@@ -313,9 +300,9 @@ fn schema_value_to_tool_result(
 /// audio, or embedded resource). Returns `None` for any other value.
 fn value_to_tool_content(value: &SchemaValue) -> Option<ToolResult> {
     match value {
-        SchemaValue::Text(TextValuePayload { text, .. }) => Some(ToolResult::Content(
-            RawContent::text(text.clone()).no_annotation(),
-        )),
+        SchemaValue::Text(TextValuePayload { text, .. }) => {
+            Some(ToolResult::Content(ContentBlock::text(text.clone())))
+        }
         SchemaValue::Binary(BinaryValuePayload { bytes, mime_type }) => Some(
             binary_to_tool_content(bytes, mime_type.as_deref().unwrap_or("")),
         ),
@@ -327,48 +314,34 @@ fn binary_to_tool_content(data: &[u8], mime_type: &str) -> ToolResult {
     match mime_type {
         "image/png" | "image/jpeg" | "image/gif" | "image/webp" => {
             let b64 = base64::engine::general_purpose::STANDARD.encode(data);
-            ToolResult::Content(RawContent::image(b64, mime_type.to_string()).no_annotation())
+            ToolResult::Content(ContentBlock::image(b64, mime_type.to_string()))
         }
 
         "audio/mpeg" | "audio/wav" | "audio/ogg" => {
             let b64 = base64::engine::general_purpose::STANDARD.encode(data);
-            ToolResult::Content(
-                RawContent::Audio(RawAudioContent {
-                    data: b64,
-                    mime_type: mime_type.to_string(),
-                })
-                .no_annotation(),
-            )
+            ToolResult::Content(ContentBlock::audio(b64, mime_type.to_string()))
         }
 
         "text/plain" | "text/csv" | "application/pdf" => {
             let data_str = String::from_utf8_lossy(data).to_string();
-            ToolResult::Content(
-                RawContent::Resource(RawEmbeddedResource {
-                    meta: None,
-                    resource: ResourceContents::TextResourceContents {
-                        uri: "data:".to_string(),
-                        mime_type: Some(mime_type.to_string()),
-                        text: data_str,
-                        meta: None,
-                    },
-                })
-                .no_annotation(),
-            )
-        }
-
-        _ => ToolResult::Content(
-            RawContent::Resource(RawEmbeddedResource {
-                meta: None,
-                resource: ResourceContents::BlobResourceContents {
+            ToolResult::Content(ContentBlock::Resource(EmbeddedResource::new(
+                ResourceContents::TextResourceContents {
                     uri: "data:".to_string(),
                     mime_type: Some(mime_type.to_string()),
-                    blob: base64::engine::general_purpose::STANDARD.encode(data),
+                    text: data_str,
                     meta: None,
                 },
-            })
-            .no_annotation(),
-        ),
+            )))
+        }
+
+        _ => ToolResult::Content(ContentBlock::Resource(EmbeddedResource::new(
+            ResourceContents::BlobResourceContents {
+                uri: "data:".to_string(),
+                mime_type: Some(mime_type.to_string()),
+                blob: base64::engine::general_purpose::STANDARD.encode(data),
+                meta: None,
+            },
+        ))),
     }
 }
 
@@ -394,7 +367,6 @@ mod tests {
     use golem_common::schema::{BinaryValuePayload, InputSchema, TextValuePayload};
     use rmcp::model::Tool;
     use serde_json::json;
-    use std::borrow::Cow;
     use std::sync::Arc;
     use test_r::test;
 
@@ -448,8 +420,8 @@ mod tests {
         }));
         let result = map_agent_response_to_tool_result(&graph(), &output, response).unwrap();
 
-        let raw_content = &result.content[0].raw;
-        assert_eq!(raw_content, &RawContent::text("weather is sunny"));
+        let content = &result.content[0];
+        assert_eq!(content, &ContentBlock::text("weather is sunny"));
     }
 
     #[test]
@@ -463,10 +435,10 @@ mod tests {
         }));
         let result = map_agent_response_to_tool_result(&graph(), &output, response).unwrap();
 
-        let raw_content = &result.content[0].raw;
+        let content = &result.content[0];
         assert_eq!(
-            raw_content,
-            &RawContent::image("AQID", "image/png".to_string())
+            content,
+            &ContentBlock::image("AQID", "image/png".to_string())
         );
     }
 
@@ -495,8 +467,8 @@ mod tests {
         });
         let result = map_agent_response_to_tool_result(&graph(), &output, response).unwrap();
 
-        let raw_content = &result.content[0].raw;
-        assert_eq!(raw_content, &RawContent::text("weather is sunny"));
+        let content = &result.content[0];
+        assert_eq!(content, &ContentBlock::text("weather is sunny"));
     }
 
     #[test]
@@ -520,8 +492,8 @@ mod tests {
         let response = unstructured_url_value("https://example.com/doc.txt".to_string());
         let result = map_agent_response_to_tool_result(&graph(), &output, response).unwrap();
 
-        let raw_content = &result.content[0].raw;
-        let resource = raw_content
+        let content = &result.content[0];
+        let resource = content
             .as_resource_link()
             .expect("expected a resource_link content block");
         assert_eq!(resource.uri, "https://example.com/doc.txt");
@@ -535,8 +507,8 @@ mod tests {
         let response = unstructured_url_value("https://example.com/blob.bin".to_string());
         let result = map_agent_response_to_tool_result(&graph(), &output, response).unwrap();
 
-        let raw_content = &result.content[0].raw;
-        let resource = raw_content
+        let content = &result.content[0];
+        let resource = content
             .as_resource_link()
             .expect("expected a resource_link content block");
         assert_eq!(resource.uri, "https://example.com/blob.bin");
@@ -551,8 +523,8 @@ mod tests {
         };
         let result = map_agent_response_to_tool_result(&graph(), &output, response).unwrap();
 
-        let raw_content = &result.content[0].raw;
-        let resource = raw_content
+        let content = &result.content[0];
+        let resource = content
             .as_resource_link()
             .expect("expected a resource_link content block");
         assert_eq!(resource.uri, "https://example.com/page");
@@ -572,8 +544,8 @@ mod tests {
         };
         let result = map_agent_response_to_tool_result(&graph(), &output, response).unwrap();
 
-        let raw_content = &result.content[0].raw;
-        let resource = raw_content
+        let content = &result.content[0];
+        let resource = content
             .as_resource_link()
             .expect("expected a resource_link content block");
         assert_eq!(resource.uri, "file:///tmp/report.txt");
@@ -594,7 +566,6 @@ mod tests {
         let result = map_agent_response_to_tool_result(&graph(), &output, response).unwrap();
 
         let resource = result.content[0]
-            .raw
             .as_resource_link()
             .expect("expected a resource_link content block");
         assert_eq!(resource.uri, "file:///tmp/a%20b.txt");
@@ -615,7 +586,7 @@ mod tests {
         let result = map_agent_response_to_tool_result(&graph(), &output, response).unwrap();
 
         // A relative path has no `file://` URI, so it renders as structured JSON.
-        assert!(result.content.is_empty() || result.content[0].raw.as_resource_link().is_none());
+        assert!(result.content.is_empty() || result.content[0].as_resource_link().is_none());
         assert_eq!(
             result.structured_content,
             Some(json!({"value": "relative.txt"}))
@@ -631,8 +602,8 @@ mod tests {
         });
         let result = map_agent_response_to_tool_result(&graph(), &output, response).unwrap();
 
-        let raw_content = &result.content[0].raw;
-        assert_eq!(raw_content, &RawContent::text("weather is sunny"));
+        let content = &result.content[0];
+        assert_eq!(content, &ContentBlock::text("weather is sunny"));
     }
 
     #[test]
@@ -645,10 +616,10 @@ mod tests {
         });
         let result = map_agent_response_to_tool_result(&graph(), &output, response).unwrap();
 
-        let raw_content = &result.content[0].raw;
+        let content = &result.content[0];
         assert_eq!(
-            raw_content,
-            &RawContent::image("AQID", "image/png".to_string())
+            content,
+            &ContentBlock::image("AQID", "image/png".to_string())
         );
     }
 
@@ -690,10 +661,10 @@ mod tests {
         let contents = &result.content;
 
         assert_eq!(contents.len(), 2);
-        assert_eq!(&contents[0].raw, &RawContent::text("a photo"));
+        assert_eq!(&contents[0], &ContentBlock::text("a photo"));
         assert_eq!(
-            &contents[1].raw,
-            &RawContent::image("AQID", "image/png".to_string())
+            &contents[1],
+            &ContentBlock::image("AQID", "image/png".to_string())
         );
     }
 
@@ -730,17 +701,7 @@ mod tests {
             vec![method.clone()],
         );
         let tool = AgentMcpTool {
-            tool: Tool {
-                name: Cow::Borrowed("mcp-agent-run"),
-                title: None,
-                description: None,
-                input_schema: Arc::new(JsonObject::default()),
-                output_schema: None,
-                annotations: None,
-                execution: None,
-                icons: None,
-                meta: None,
-            },
+            tool: Tool::new("mcp-agent-run", "", JsonObject::default()),
             environment_id: harness.environment_id,
             account_id: harness.account_id,
             schema_graph: Arc::new(SchemaGraph::empty()),
@@ -805,17 +766,7 @@ mod tests {
             vec![method.clone()],
         );
         let tool = AgentMcpTool {
-            tool: Tool {
-                name: Cow::Borrowed("mcp-agent-run"),
-                title: None,
-                description: None,
-                input_schema: Arc::new(JsonObject::default()),
-                output_schema: None,
-                annotations: None,
-                execution: None,
-                icons: None,
-                meta: None,
-            },
+            tool: Tool::new("mcp-agent-run", "", JsonObject::default()),
             environment_id: harness.environment_id,
             account_id: harness.account_id,
             account_email: harness.account_email.clone(),

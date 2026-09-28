@@ -39,6 +39,7 @@ impl DurableStreamStore {
                     payload,
                     close,
                     producer,
+                    None,
                 )
                 .await
         })
@@ -100,6 +101,7 @@ impl DurableStreamStore {
         payload: Option<StreamItemsPayload>,
         close: bool,
         producer: Option<ExternalProducer>,
+        expiry_refresh: Option<StreamSessionExpiryRefreshedRecord>,
     ) -> Result<ExternalAppendOutcome, StreamStoreError> {
         let session_key = session_key.clone();
         admission
@@ -112,6 +114,7 @@ impl DurableStreamStore {
                         payload,
                         close,
                         producer,
+                        expiry_refresh,
                     )
                     .await
             })
@@ -126,6 +129,7 @@ impl DurableStreamStore {
         payload: Option<StreamItemsPayload>,
         close: bool,
         producer: Option<ExternalProducer>,
+        expiry_refresh: Option<StreamSessionExpiryRefreshedRecord>,
     ) -> Result<ExternalAppendOutcome, StreamStoreError> {
         let mut keys = vec![ProducerMetadataKey::Stream(stream_id)];
         if let Some(producer) = &producer {
@@ -174,6 +178,9 @@ impl DurableStreamStore {
                 )
             {
                 if payload.is_none() && producer.is_none() {
+                    if let Some(refresh) = expiry_refresh {
+                        self.commit_expiry_refresh(context, refresh).await?;
+                    }
                     return Ok(ExternalAppendOutcome::Duplicate {
                         offset: event.offset,
                         highest_sequence: None,
@@ -186,6 +193,9 @@ impl DurableStreamStore {
                         && head.last_sequence == request.sequence
                         && head.last_offset == event.offset
                     {
+                        if let Some(refresh) = expiry_refresh {
+                            self.commit_expiry_refresh(context, refresh).await?;
+                        }
                         return Ok(ExternalAppendOutcome::Duplicate {
                             offset: event.offset,
                             highest_sequence: Some(head.last_sequence),
@@ -225,6 +235,9 @@ impl DurableStreamStore {
                                 "external producer sequence has no original offset".into(),
                             )
                         })?;
+                    if let Some(refresh) = expiry_refresh {
+                        self.commit_expiry_refresh(context, refresh).await?;
+                    }
                     return Ok(ExternalAppendOutcome::Duplicate {
                         offset,
                         highest_sequence: Some(head.last_sequence),
@@ -256,7 +269,6 @@ impl DurableStreamStore {
         let terminal_sequence = first_sequence
             .checked_add(item_count)
             .ok_or(StreamStoreError::CounterOverflow)?;
-        let producer_fingerprint = self.producer_fingerprint;
         let session = session_key.clone();
         if let Some(producer) = &producer {
             producer
@@ -266,6 +278,7 @@ impl DurableStreamStore {
         }
         let producer_record = producer.clone();
         let entity_parent_start_index = index.entity_parent_start_index(stream_id)?;
+        let local_stream_id = index.local_stream_id(stream_id)?;
         context.begin_durable_effect();
         let entries = self
             .oplog
@@ -284,8 +297,7 @@ impl DurableStreamStore {
                                     entity_parent_start_index,
                                     StreamItemsRecord {
                                         format_version: DURABLE_STREAM_FORMAT_VERSION,
-                                        stream_id,
-                                        producer_fingerprint,
+                                        stream_id: local_stream_id,
                                         first_sequence: first_sequence + position as u64,
                                         nested_stream_ids: Vec::new(),
                                         newly_registered_stream_ids: Vec::new(),
@@ -304,8 +316,7 @@ impl DurableStreamStore {
                                 entity_parent_start_index,
                                 StreamItemsRecord {
                                     format_version: DURABLE_STREAM_FORMAT_VERSION,
-                                    stream_id,
-                                    producer_fingerprint,
+                                    stream_id: local_stream_id,
                                     first_sequence,
                                     nested_stream_ids: Vec::new(),
                                     newly_registered_stream_ids: Vec::new(),
@@ -351,8 +362,7 @@ impl DurableStreamStore {
                         entity_parent_start_index,
                         StreamEndRecord {
                             format_version: DURABLE_STREAM_FORMAT_VERSION,
-                            stream_id,
-                            producer_fingerprint,
+                            stream_id: local_stream_id,
                             sequence: terminal_sequence,
                             offset: resulting_offset,
                             authored_by: StreamTerminalAuthor::Protocol,
@@ -379,11 +389,17 @@ impl DurableStreamStore {
                         )),
                     ));
                 }
+                if let Some(refresh) = expiry_refresh {
+                    records.push(DurableStreamOplogRecord::Session(
+                        None,
+                        Box::new(StreamSessionRecord::ExpiryRefreshed(refresh)),
+                    ));
+                }
                 records
             }))
             .await
-            .map_err(StreamStoreError::Oplog)?;
-        self.commit(context).await;
+            .map_err(StreamStoreError::from)?;
+        self.commit(context).await?;
 
         let AppliedWriteBatch { events, .. } = self
             .apply_committed_write_batch(&mut index, entries)

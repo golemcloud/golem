@@ -50,9 +50,6 @@ message OplogEntry {
     DeactivatePluginParameters DeactivatePlugin = 27;
     RevertParameters Revert = 28;
     CancelInvocationParameters CancelInvocation = 29;
-    StartSpanParameters StartSpan = 30;
-    FinishSpanParameters FinishSpan = 31;
-    SetSpanAttributeParameters SetSpanAttribute = 32;
     BeginRemoteTransactionParameters BeginRemoteTransaction = 34;
     RemoteTransactionParameters PreCommitRemoteTransaction = 35;
     RemoteTransactionParameters PreRollbackRemoteTransaction = 36;
@@ -137,6 +134,7 @@ message CreateParameters {
   optional golem.common.UUID original_phantom_id = 13;
   golem.common.UUID instance_id = 14;
   golem.component.AgentMode agent_mode = 15;
+  OwnerKind owner_kind = 16;
 }
 
 message StartParameters {
@@ -147,6 +145,7 @@ message StartParameters {
   WrappedFunctionType durable_function_type = 6;
   optional golem.common.UUID invocation_id = 7;
   optional uint64 observational_owner = 8;
+  optional SpanStarted span_started = 9;
 }
 
 message EndParameters {
@@ -154,12 +153,62 @@ message EndParameters {
   uint64 start_index = 2;
   optional golem.schema.TypedSchemaValue response = 3;
   bool forced_commit = 4;
+  optional SpanFinished span_finished = 5;
+  optional SpanAttributes span_attributes = 6;
 }
 
 message CancelledParameters {
   google.protobuf.Timestamp timestamp = 1;
   uint64 start_index = 2;
   optional golem.schema.TypedSchemaValue partial = 3;
+  optional SpanFinished span_finished = 4;
+}
+
+enum SpanKind {
+  SPAN_KIND_INTERNAL = 0;
+  SPAN_KIND_CLIENT = 1;
+  SPAN_KIND_SERVER = 2;
+}
+
+enum SpanOutcome {
+  SPAN_OUTCOME_COMPLETED = 0;
+  SPAN_OUTCOME_FAILED = 1;
+  SPAN_OUTCOME_CANCELLED = 2;
+  SPAN_OUTCOME_ABANDONED = 3;
+  SPAN_OUTCOME_DENIED = 4;
+}
+
+message SpanLink {
+  string trace_id = 1;
+  uint64 span_id = 2;
+  repeated string trace_states = 3;
+}
+
+// The span name remains an attribute whose key is "name". An embedded opening
+// must be explicitly closed; invocation boundaries do not close it automatically.
+message SpanStarted {
+  uint64 span_id = 1;
+  string trace_id = 2;
+  repeated string trace_states = 3;
+  optional uint64 parent_span_id = 4;
+  repeated SpanLink links = 5;
+  google.protobuf.Timestamp started_at = 6;
+  map<string, AttributeValue> attributes = 7;
+  SpanKind kind = 8;
+}
+
+// This compact close records an outcome but has no error-message payload.
+// Consumers must not decode the opaque host request to manufacture one.
+message SpanFinished {
+  uint64 span_id = 1;
+  google.protobuf.Timestamp finished_at = 2;
+  SpanOutcome outcome = 3;
+}
+
+// End applies these attributes before closing the span.
+message SpanAttributes {
+  uint64 span_id = 1;
+  map<string, AttributeValue> attributes = 2;
 }
 
 message CompletionDiscardedParameters {
@@ -175,7 +224,7 @@ message CompletionDeliveredParameters {
 message AgentInvocationStartedParameters {
   google.protobuf.Timestamp timestamp = 1;
   PublicAgentInvocation invocation = 2;
-  optional PublicInvocationWalletPin wallet_pin = 3;
+  PublicInvocationWalletPin wallet_pin = 3;
 }
 
 message WalletVersionToken {
@@ -204,7 +253,18 @@ message PublicAgentInvocation {
     LoadSnapshotInvocationParameters load_snapshot = 4;
     ProcessOplogEntriesInvocationParameters process_oplog_entries = 5;
     ManualUpdateInvocationParameters manual_update = 6;
+    PublicExternalToolInvocation external_tool = 7;
   }
+}
+
+message PublicExternalToolInvocation {
+  golem.worker.IdempotencyKey idempotency_key = 1;
+  string tool_name = 2;
+  repeated string command_path = 3;
+  golem.schema.TypedSchemaValue input = 4;
+  string trace_id = 5;
+  repeated string trace_states = 6;
+  repeated golem.worker.InvocationSpan invocation_context = 7;
 }
 
 message PublicAgentInitializationInvocation {
@@ -244,7 +304,51 @@ message PublicAgentInvocationResult {
     OptionalError load_snapshot = 4;
     SnapshotData save_snapshot = 5;
     ProcessOplogEntriesResult process_oplog_entries = 6;
+    PublicExternalToolResult external_tool = 7;
   }
+}
+
+message PublicExternalToolResult {
+  oneof result {
+    PublicToolInvocationResult success = 1;
+    PublicToolRpcError error = 2;
+  }
+}
+
+message PublicToolInvocationResult {
+  optional golem.schema.TypedSchemaValue result = 1;
+}
+
+message PublicToolRpcError {
+  oneof error {
+    string protocol_error = 1;
+    string denied = 2;
+    string not_found = 3;
+    string remote_internal_error = 4;
+    PublicToolError remote_tool_error = 5;
+    golem.common.Empty cancelled = 6;
+    string resource_exhausted = 7;
+  }
+}
+
+message PublicToolError {
+  oneof error {
+    string invalid_tool_name = 1;
+    StringList invalid_command_path = 2;
+    string invalid_input = 3;
+    string constraint_violation = 4;
+    string invalid_result = 5;
+    PublicCustomToolError custom_error = 6;
+  }
+}
+
+message PublicCustomToolError {
+  string name = 1;
+  golem.schema.TypedSchemaValue payload = 2;
+}
+
+message StringList {
+  repeated string values = 1;
 }
 
 message OptionalError {
@@ -333,13 +437,13 @@ message CardRevokedParameters {
   google.protobuf.Timestamp timestamp = 1;
   uint64 queued_event_index = 2;
   golem.common.UUID card_id = 3;
-  optional uint64 wallet_generation = 4;
+  uint64 wallet_generation = 4;
 }
 
 message CardExpiredParameters {
   google.protobuf.Timestamp timestamp = 1;
   golem.common.UUID card_id = 2;
-  optional uint64 wallet_generation = 3;
+  uint64 wallet_generation = 3;
 }
 
 message QueuedCardEvent {
@@ -387,7 +491,7 @@ message CardInstalledParameters {
   google.protobuf.Timestamp timestamp = 1;
   optional uint64 queued_event_index = 2;
   golem.common.UUID card_id = 3;
-  optional uint64 wallet_generation = 4;
+  uint64 wallet_generation = 4;
 }
 
 message CardInstallFailedParameters {
@@ -409,7 +513,7 @@ message CardDerivedParameters {
   google.protobuf.Timestamp timestamp = 1;
   golem.common.UUID card_id = 2;
   repeated golem.common.UUID parent_ids = 3;
-  optional uint64 wallet_generation = 4;
+  uint64 wallet_generation = 4;
 }
 
 // Source-agent durable transfer intent.
@@ -418,7 +522,7 @@ message CardTransferStartedParameters {
   golem.common.UUID transfer_id = 2;
   golem.common.UUID card_id = 3;
   CardHolder target_holder = 4;
-  optional uint64 source_wallet_generation = 5;
+  uint64 source_wallet_generation = 5;
 }
 
 // Target-agent durable admission of a transferred card.
@@ -428,13 +532,13 @@ message CardTransferredParameters {
   golem.common.UUID installed_card_id = 3;
   CardHolder target_holder = 4;
   golem.common.UUID source_card_id = 5;
-  optional uint64 target_wallet_generation = 6;
+  uint64 target_wallet_generation = 6;
 }
 
 message CardRevokedCascadeParameters {
   google.protobuf.Timestamp timestamp = 1;
   repeated golem.common.UUID revoked_card_ids = 2;
-  optional uint64 local_wallet_generation = 3;
+  uint64 local_wallet_generation = 3;
 }
 
 // Source-agent terminal receipt, written after target admission is durable.
@@ -556,26 +660,6 @@ message CancelInvocationParameters {
   IdempotencyKey idempotency_key = 2;
 }
 
-message StartSpanParameters {
-  google.protobuf.Timestamp timestamp = 1;
-  uint64 span_id = 2;
-  optional uint64 parent_id = 3;
-  optional uint64 linked_context = 4;
-  map<string, AttributeValue> attributes = 5;
-}
-
-message FinishSpanParameters {
-  google.protobuf.Timestamp timestamp = 1;
-  uint64 span_id = 2;
-}
-
-message SetSpanAttributeParameters {
-  google.protobuf.Timestamp timestamp = 1;
-  uint64 span_id = 2;
-  string key = 3;
-  AttributeValue value = 4;
-}
-
 enum OplogLogLevel {
   OPLOG_STDOUT = 0;
   OPLOG_STDERR = 1;
@@ -592,6 +676,12 @@ message LogParameters {
   OplogLogLevel level = 2;
   string context = 3;
   string message = 4;
+  optional LogTraceContext trace_context = 5;
+}
+
+message LogTraceContext {
+  string trace_id = 1;
+  string span_id = 2;
 }
 
 message SnapshotDataParameters {

@@ -16,6 +16,7 @@ import { BlobstoreClient, BlobstoreLive } from "./BlobstoreClient.js"
 import { ConfigClient, ConfigLive } from "./ConfigClient.js"
 import { DurabilityClient, DurabilityLive } from "./DurabilityClient.js"
 import { DurabilityModeClient, DurabilityModeLive } from "./DurabilityModeClient.js"
+import { DurableStreamsClient, DurableStreamsLive } from "./DurableStreamsClient.js"
 import { EnvironmentClient, EnvironmentLive } from "./EnvironmentClient.js"
 import { IgniteHostClient, IgniteHostLive } from "./IgniteHostClient.js"
 import { KeyValueClient, KeyValueLive } from "./KeyValueClient.js"
@@ -40,6 +41,7 @@ export {
   ConfigClient,
   DurabilityClient,
   DurabilityModeClient,
+  DurableStreamsClient,
   EnvironmentClient,
   IgniteHostClient,
   KeyValueClient,
@@ -73,6 +75,7 @@ export type HostServices =
   | PromiseClient
   | DurabilityClient
   | DurabilityModeClient
+  | DurableStreamsClient
   | OplogClient
   | RpcClient
   | SecretsClient
@@ -97,6 +100,7 @@ export const HostLive: Layer.Layer<HostServices> = Layer.mergeAll(
   PromiseLive,
   DurabilityLive,
   DurabilityModeLive,
+  DurableStreamsLive,
   OplogLive,
   RpcLive,
   SecretsLive,

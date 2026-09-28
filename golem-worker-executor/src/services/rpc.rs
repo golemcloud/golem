@@ -15,8 +15,13 @@
 use super::agent_webhooks::AgentWebhooksService;
 use super::direct_invocation_auth::DirectInvocationAuthService;
 use super::environment_state::EnvironmentStateService;
+use super::external_durable_stream::ExternalDurableStreamService;
 use super::file_loader::FileLoader;
-use super::{HasAgentWebhooksService, HasEnvironmentStateService, HasWebSocketConnectionPool};
+use super::{
+    HasAgentWebhooksService, HasEnvironmentStateService, HasExternalDurableStreamService,
+    HasMcpTransport, HasWebSocketConnectionPool,
+};
+use crate::durable_host::durable_session::durable_stream_mapping_to_proto;
 use crate::durable_host::websocket::WebSocketConnectionPool;
 use crate::grpc::{build_durable_streaming_request, decode_invocation_input};
 use crate::services::agent_filesystem_snapshots::AgentFilesystemSnapshots;
@@ -45,8 +50,9 @@ use futures::StreamExt;
 use golem_api_grpc::invocation_session_protocol::InvocationSessionState;
 use golem_api_grpc::proto::golem::schema::SchemaValue as ProtoSchemaValue;
 use golem_api_grpc::proto::golem::worker::{
-    DurableStreamMapping, InvocationFailure, InvocationFailureKind, InvocationRejected,
-    InvocationRejectionReason, InvocationRequest, InvocationStart, invocation_request,
+    DurableStreamMapping, InvocationAccepted, InvocationFailure, InvocationFailureKind,
+    InvocationRejected, InvocationRejectionReason, InvocationRequest, InvocationStart,
+    ResumeAttach, ResumeOperation, StreamInvocationIdentity, invocation_request,
     invocation_response, invocation_session_completion, invocation_session_result,
 };
 use golem_common::base_model::durable_stream::{
@@ -142,6 +148,8 @@ pub trait Rpc: Send + Sync {
         _input_mappings: Vec<DurableStreamMapping>,
         _expected_callee_fingerprint: AgentFingerprint,
         _attempt_id: uuid::Uuid,
+        _origin_invocation: StreamInvocationIdentity,
+        _accepted_inputs: tokio::sync::oneshot::Sender<InvocationAccepted>,
         _self_created_by: AccountId,
         _self_agent_id: &AgentId,
         _self_env: &[(String, String)],
@@ -227,9 +235,10 @@ impl<E> DurableStreamReadError<E> {
         map: impl FnOnce(String) -> E,
     ) -> Self {
         match error {
-            crate::durable_host::durable_stream::StreamStoreError::RecoveryRequired => {
-                Self::Unavailable
-            }
+            // A fenced store is as unavailable here as one awaiting recovery: the stream lives on
+            // with the shard's new owner.
+            crate::durable_host::durable_stream::StreamStoreError::RecoveryRequired
+            | crate::durable_host::durable_stream::StreamStoreError::Fenced(_) => Self::Unavailable,
             error => Self::Other(map(error.to_string())),
         }
     }
@@ -545,6 +554,8 @@ impl Rpc for RemoteInvocationRpc {
         input_mappings: Vec<DurableStreamMapping>,
         expected_callee_fingerprint: AgentFingerprint,
         attempt_id: uuid::Uuid,
+        origin_invocation: StreamInvocationIdentity,
+        accepted_inputs: tokio::sync::oneshot::Sender<InvocationAccepted>,
         _self_created_by: AccountId,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
@@ -577,24 +588,31 @@ impl Rpc for RemoteInvocationRpc {
                 attempt_id: Some(attempt_id.into()),
                 expected_callee_fingerprint: Some(expected_callee_fingerprint.0.into()),
                 durable_input_mappings: input_mappings,
+                origin_invocation: Some(origin_invocation),
                 scope_card: scope_card
                     .as_ref()
                     .map(golem_api_grpc::proto::golem::worker::EncodedScopeCard::try_from)
                     .transpose()
                     .map_err(|details| RpcError::ProtocolError { details })?,
+                external_tool: None,
             })),
         };
+        let mut accepted_inputs = Some(accepted_inputs);
         let mut retry_delay = std::time::Duration::from_millis(25);
+        let mut request = start;
+        let mut attachment_state_retries = 0;
         loop {
             let state = Arc::new(tokio::sync::Mutex::new(InvocationSessionState::default()));
             state
                 .lock()
                 .await
-                .validate_trusted_request(&start)
+                .validate_trusted_request(&request)
                 .map_err(|details| RpcError::ProtocolError { details })?;
             let (requests, receiver) = mpsc::channel(2);
-            if requests.send(start.clone()).await.is_err() {
-                tracing::warn!("retrying durable RPC Start after the local request stream closed");
+            if requests.send(request.clone()).await.is_err() {
+                tracing::warn!(
+                    "retrying durable RPC attachment request after the local request stream closed"
+                );
                 tokio::time::sleep(retry_delay).await;
                 retry_delay = (retry_delay * 2).min(std::time::Duration::from_secs(1));
                 continue;
@@ -606,7 +624,7 @@ impl Rpc for RemoteInvocationRpc {
             {
                 Ok(inbound) => inbound,
                 Err(error) => {
-                    tracing::warn!(%error, "retrying durable RPC Start after transport establishment failed");
+                    tracing::warn!(%error, "retrying durable RPC attachment request after transport establishment failed");
                     tokio::time::sleep(retry_delay).await;
                     retry_delay = (retry_delay * 2).min(std::time::Duration::from_secs(1));
                     continue;
@@ -629,9 +647,56 @@ impl Rpc for RemoteInvocationRpc {
                     .validate_response(&response)
                     .map_err(|details| RpcError::ProtocolError { details })?;
                 match response.response {
-                    Some(invocation_response::Response::Accepted(_)) => {}
+                    Some(invocation_response::Response::Accepted(accepted)) => {
+                        attachment_state_retries = 0;
+                        if let Some(sender) = accepted_inputs.take() {
+                            let _ = sender.send(accepted.clone());
+                        }
+                        if accepted.attachment_id.is_some() {
+                            // Keep this exact attempt on ambiguous loss; only a new acceptance
+                            // supplies the epoch for the next resume attempt.
+                            request = InvocationRequest {
+                                request: Some(invocation_request::Request::ResumeAttach(
+                                    ResumeAttach {
+                                        idempotency_key: accepted.idempotency_key.clone(),
+                                        agent_id: accepted.agent_id.clone(),
+                                        environment_id: accepted.environment_id,
+                                        attachment_id: accepted.attachment_id,
+                                        expected_callee_fingerprint: accepted.callee_fingerprint,
+                                        expected_epoch: accepted.epoch,
+                                        attempt_id: Some(uuid::Uuid::new_v4().into()),
+                                        operation: ResumeOperation::Resume as i32,
+                                        cursors: Vec::new(),
+                                        auth_ctx: Some(auth_ctx.clone().into()),
+                                        principal: Some(
+                                            caller_agent_principal(self_agent_id).into(),
+                                        ),
+                                    },
+                                )),
+                            };
+                        }
+                    }
                     Some(invocation_response::Response::Rejected(rejected)) => {
                         confirm_terminal_response_is_last(&mut inbound, &state).await?;
+                        if let Some(invocation_request::Request::ResumeAttach(resume)) =
+                            &mut request.request
+                            && attachment_state_retries < 2
+                            && InvocationRejectionReason::try_from(rejected.reason)
+                                == Ok(InvocationRejectionReason::InvalidAttachmentState)
+                        {
+                            // At one epoch an attached transport can detach once; reattachment
+                            // advances the epoch and is rejected separately as stale.
+                            resume.operation = if resume.operation == ResumeOperation::Resume as i32
+                            {
+                                ResumeOperation::Takeover as i32
+                            } else {
+                                ResumeOperation::Resume as i32
+                            };
+                            resume.attempt_id = Some(uuid::Uuid::new_v4().into());
+                            attachment_state_retries += 1;
+                            retry_reason = Some("attachment state changed".to_string());
+                            break;
+                        }
                         return Err(rpc_error_from_rejection(rejected));
                     }
                     Some(invocation_response::Response::Result(invocation_result)) => {
@@ -642,6 +707,12 @@ impl Rpc for RemoteInvocationRpc {
                                     details:
                                         "durable streaming invocation returned no method result"
                                             .to_string(),
+                                });
+                            }
+                            Some(invocation_session_result::Result::ToolResult(_)) => {
+                                return Err(RpcError::ProtocolError {
+                                    details: "agent RPC returned an external-tool result"
+                                        .to_string(),
                                 });
                             }
                         };
@@ -689,12 +760,15 @@ impl Rpc for RemoteInvocationRpc {
                             _ => rpc_error_from_invocation_finished(finished),
                         });
                     }
+                    Some(invocation_response::Response::AttachmentRevoked(_)) => {
+                        retry_reason = Some("attachment revoked".to_string());
+                        break;
+                    }
                     Some(invocation_response::Response::OutputItem(_))
                     | Some(invocation_response::Response::OutputEnd(_))
                     | Some(invocation_response::Response::OutputError(_))
                     | Some(invocation_response::Response::InputAck(_))
-                    | Some(invocation_response::Response::StreamCancel(_))
-                    | Some(invocation_response::Response::AttachmentRevoked(_)) => {}
+                    | Some(invocation_response::Response::StreamCancel(_)) => {}
                     None => unreachable!("response state validation rejects empty frames"),
                 }
             }
@@ -702,7 +776,7 @@ impl Rpc for RemoteInvocationRpc {
                 reason = retry_reason
                     .as_deref()
                     .unwrap_or("durable invocation response ended before publishing a result"),
-                "retrying identical durable RPC Start after ambiguous response loss"
+                "retrying durable RPC attachment after ambiguous response loss"
             );
             tokio::time::sleep(retry_delay).await;
             retry_delay = (retry_delay * 2).min(std::time::Duration::from_secs(1));
@@ -886,8 +960,10 @@ pub struct DirectWorkerInvocationRpc<Ctx: WorkerCtx> {
     native_tool_catalog: Arc<crate::native_tool::NativeToolCatalog<Ctx>>,
     agent_types_service: Arc<dyn agent_types::AgentTypesService>,
     agent_webhooks_service: Arc<AgentWebhooksService>,
+    external_durable_streams: Arc<dyn ExternalDurableStreamService>,
     http_connection_pool: Option<HttpConnectionPool>,
     websocket_connection_pool: WebSocketConnectionPool,
+    mcp_transport: Arc<super::mcp::McpTransport>,
     extra_deps: Ctx::ExtraDeps,
     leak_sentinel: Arc<()>,
 }
@@ -928,8 +1004,10 @@ impl<Ctx: WorkerCtx> Clone for DirectWorkerInvocationRpc<Ctx> {
             native_tool_catalog: self.native_tool_catalog.clone(),
             agent_types_service: self.agent_types_service.clone(),
             agent_webhooks_service: self.agent_webhooks_service.clone(),
+            external_durable_streams: self.external_durable_streams.clone(),
             http_connection_pool: self.http_connection_pool.clone(),
             websocket_connection_pool: self.websocket_connection_pool.clone(),
+            mcp_transport: self.mcp_transport.clone(),
             extra_deps: self.extra_deps.clone(),
             leak_sentinel: self.leak_sentinel.clone(),
         }
@@ -957,6 +1035,12 @@ impl<Ctx: WorkerCtx> HasAgentTypesService for DirectWorkerInvocationRpc<Ctx> {
 impl<Ctx: WorkerCtx> HasAgentWebhooksService for DirectWorkerInvocationRpc<Ctx> {
     fn agent_webhooks(&self) -> Arc<AgentWebhooksService> {
         self.agent_webhooks_service.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx> HasExternalDurableStreamService for DirectWorkerInvocationRpc<Ctx> {
+    fn external_durable_streams(&self) -> Arc<dyn ExternalDurableStreamService> {
+        self.external_durable_streams.clone()
     }
 }
 
@@ -1144,6 +1228,12 @@ impl<Ctx: WorkerCtx> HasAgentFilesystemSnapshots for DirectWorkerInvocationRpc<C
     }
 }
 
+impl<Ctx: WorkerCtx> HasMcpTransport for DirectWorkerInvocationRpc<Ctx> {
+    fn mcp_transport(&self) -> Arc<super::mcp::McpTransport> {
+        self.mcp_transport.clone()
+    }
+}
+
 impl<Ctx: WorkerCtx> HasEnvironmentStateService for DirectWorkerInvocationRpc<Ctx> {
     fn environment_state_service(&self) -> Arc<dyn EnvironmentStateService> {
         self.environment_state_service.clone()
@@ -1195,8 +1285,10 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
         native_tool_catalog: Arc<crate::native_tool::NativeToolCatalog<Ctx>>,
         agent_types_service: Arc<dyn agent_types::AgentTypesService>,
         agent_webhooks_service: Arc<AgentWebhooksService>,
+        external_durable_streams: Arc<dyn ExternalDurableStreamService>,
         http_connection_pool: Option<HttpConnectionPool>,
         websocket_connection_pool: WebSocketConnectionPool,
+        mcp_transport: Arc<super::mcp::McpTransport>,
         extra_deps: Ctx::ExtraDeps,
         leak_sentinel: Arc<()>,
     ) -> Self {
@@ -1234,8 +1326,10 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
             native_tool_catalog,
             agent_types_service,
             agent_webhooks_service,
+            external_durable_streams,
             http_connection_pool,
             websocket_connection_pool,
+            mcp_transport,
             extra_deps,
             leak_sentinel,
         }
@@ -1484,6 +1578,8 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         input_mappings: Vec<DurableStreamMapping>,
         expected_callee_fingerprint: AgentFingerprint,
         attempt_id: uuid::Uuid,
+        origin_invocation: StreamInvocationIdentity,
+        accepted_inputs: tokio::sync::oneshot::Sender<InvocationAccepted>,
         self_created_by: AccountId,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
@@ -1508,6 +1604,8 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                     input_mappings,
                     expected_callee_fingerprint,
                     attempt_id,
+                    origin_invocation,
+                    accepted_inputs,
                     self_created_by,
                     self_agent_id,
                     self_env,
@@ -1604,11 +1702,13 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             attempt_id: Some(attempt_id.into()),
             expected_callee_fingerprint: Some(expected_callee_fingerprint.0.into()),
             durable_input_mappings: input_mappings,
+            origin_invocation: Some(origin_invocation),
             scope_card: scope_card
                 .as_ref()
                 .map(golem_api_grpc::proto::golem::worker::EncodedScopeCard::try_from)
                 .transpose()
                 .map_err(|details| RpcError::ProtocolError { details })?,
+            external_tool: None,
         };
         let invocation = AgentInvocation::AgentMethod {
             idempotency_key: idempotency_key.clone(),
@@ -1639,18 +1739,69 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         accepted.await.map_err(|_| RpcError::RemoteInternalError {
             details: "durable streaming acceptance was not committed".to_string(),
         })?;
+        let input_mappings = worker
+            .durable_stream_producer()
+            .await?
+            .materialize_bindings(&acceptance.prepared.stream_mappings)
+            .await
+            .map_err(|error| RpcError::RemoteInternalError {
+                details: error.to_string(),
+            })?;
+        let _ = accepted_inputs.send(InvocationAccepted {
+            agent_id: start.agent_id.clone(),
+            idempotency_key: start.idempotency_key.clone(),
+            component_revision: Some(component.revision.get()),
+            attachment_id: (!acceptance.joined_origin_observer)
+                .then(|| acceptance.prepared.attempt.attachment_id.0.into()),
+            attempt_id: (!acceptance.joined_origin_observer)
+                .then(|| acceptance.prepared.attempt.attempt_id.0.into()),
+            epoch: if acceptance.joined_origin_observer {
+                0
+            } else {
+                acceptance.streams.attachment_epoch()
+            },
+            stream_mappings: input_mappings
+                .iter()
+                .map(|mapping| durable_stream_mapping_to_proto(mapping, None))
+                .collect(),
+            environment_id: Some(
+                acceptance
+                    .prepared
+                    .attempt
+                    .session_key
+                    .callee_environment_id
+                    .into(),
+            ),
+            callee_fingerprint: Some(
+                acceptance
+                    .prepared
+                    .attempt
+                    .expected_callee_fingerprint
+                    .0
+                    .into(),
+            ),
+            method_name: start.method_name.clone(),
+            joined_origin_observer: acceptance.joined_origin_observer,
+            tool_name: None,
+            command_path: Vec::new(),
+            terminal_cursor_stream_ids: Vec::new(),
+        });
         acceptance
             .streams
             .recover_nested_input_mappings()
             .await
-            .map_err(|details| RpcError::RemoteInternalError { details })?;
+            .map_err(|error| RpcError::RemoteInternalError {
+                details: error.to_string(),
+            })?;
         let result = acceptance.streams.wait_persisted_result();
         let completion = worker.await_enqueued_invocation(idempotency_key);
         tokio::pin!(result);
         tokio::pin!(completion);
         let result = tokio::select! {
             result = &mut result => result
-                .map_err(|details| RpcError::RemoteInternalError { details })?,
+                .map_err(|error| RpcError::RemoteInternalError {
+                details: error.to_string(),
+            })?,
             output = &mut completion => {
                 let output = output?;
                 if !matches!(output.result, AgentInvocationResult::AgentMethod { .. }) {
@@ -1662,7 +1813,9 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                     .streams
                     .persisted_result()
                     .await
-                    .map_err(|details| RpcError::RemoteInternalError { details })?
+                    .map_err(|error| RpcError::RemoteInternalError {
+                details: error.to_string(),
+            })?
                     .ok_or_else(|| RpcError::RemoteInternalError {
                         details: "durable streaming invocation completed without a persisted result".to_string(),
                     })?

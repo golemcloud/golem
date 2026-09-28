@@ -249,6 +249,28 @@ fn check_child_process_alive(child: &mut Child, name: &str) {
     }
 }
 
+/// One gRPC health check with a bounded wait: whether the service at `host:grpc_port` answers
+/// `Serving` right now. Unlike a process-liveness check this also fails for a process that has
+/// stopped serving but not yet exited - one aborting while the OS writes its crash report.
+pub async fn is_serving_grpc(host: &str, grpc_port: u16, timeout: Duration) -> bool {
+    let probe = async {
+        let mut client =
+            golem_api_grpc::proto::grpc::health::v1::health_client::HealthClient::connect(format!(
+                "http://{host}:{grpc_port}"
+            ))
+            .await
+            .ok()?;
+        let response = client
+            .check(HealthCheckRequest {
+                service: "".to_string(),
+            })
+            .await
+            .ok()?;
+        Some(response.into_inner().status == ServingStatus::Serving as i32)
+    };
+    matches!(tokio::time::timeout(timeout, probe).await, Ok(Some(true)))
+}
+
 pub async fn wait_for_startup_grpc(
     host: &str,
     grpc_port: u16,

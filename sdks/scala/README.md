@@ -15,8 +15,24 @@ automatically derive all the serialization, RPC bindings, and metadata generatio
 - **Automatic schema derivation** - Derives schemas for component-model serialization
 - **Macro-powered autowiring** - Compile-time generation of RPC handlers, WIT types, and metadata
 - **Tool middleware** - Transparent, adapter, and universal middleware with typed wrapped-tool calls
+- **Tool reflection** - Discover caller-visible tools and invoke commands with their deployed schemas
 - **Transaction helpers** - Both fallible and infallible transaction patterns with automatic rollback
 - **Snapshot integration** - Simple hooks for state persistence across component instances
+
+## Runtime tool reflection
+
+`golem.reflection.Reflection.getToolType(name)` and `getAllToolTypes()` discover tools visible to
+the calling component. `ToolType.command(path)` resolves aliases to a canonical command path and
+returns the selected arguments, input schema, result schema, and declared errors in an `Either`.
+Use `ToolCommand.invokeJson` for canonical JSON or `invokeValue` for schema-native values. Both
+validate inputs before opening RPC and check declared results after invocation.
+
+`startValue` and `startJson` return pending invocations with stdout, result, `collect`, and
+`cancel`. Use them when a command requires caller-readable stdout. `collect` drains stdout while
+awaiting the result. `triggerValue` and `triggerJson` reject commands with required stdout.
+`DynamicToolClient` accepts a caller-packed `TypedSchemaValue` and a command path when no
+descriptor is available; it does not infer or validate a deployed schema. Reflected and dynamic
+calls return recoverable `ToolError` values, including malformed remote output.
 
 ## Quick Start
 
@@ -195,6 +211,7 @@ object Example {
 - **[Getting started](example/README.md)** - Minimal end-to-end project setup (Scala.js + golem-cli)
 - **[Snapshot helpers](docs/snapshot.md)** - State persistence helpers
 - **[Transaction helpers](docs/transactions.md)** - Infallible and fallible transaction patterns
+- **[Retry policies](docs/retry.md)** - Host-managed policies and local `Future` retries
 - **[Result helpers](docs/result.md)** - WIT-friendly `Result` type for error handling
 - **[Tool middleware](docs/tool-middleware.md)** - Transparent, adapter, and universal middleware authoring
 - **[Supported versions](docs/supported-versions.md)** - Compatibility matrix
@@ -247,7 +264,7 @@ trait MyAgent {
 
 ## Running on Golem
 
-The sbt/Mill plugins are **build adapters**: they generate the Scala.js bundle and write the ordinary, pure-middleware, and combined base guest runtimes to `.generated/`. **`golem-cli` is the driver** for build/deploy/invoke/repl.
+The sbt/Mill plugins are **build adapters**: they generate the Scala.js bundle and write the default base guest runtime to `.generated/`. **`golem-cli` is the driver** for build/deploy/invoke/repl.
 
 ```bash
 cd <your-app-dir>
@@ -260,13 +277,7 @@ See `golem/example/` for a standalone example or `golem/test-agents/` for the mo
 
 ### Base guest runtimes
 
-The SDK embeds three artifacts in both build plugins and writes them to `.generated/` when Scala.js is compiled or linked:
-
-- `agent_guest.wasm` for ordinary agent/tool components;
-- `tool_middleware_guest.wasm` for pure tool-middleware components;
-- `agent_tool_middleware_guest.wasm` for combined agent/tool/middleware components.
-
-Select them through the `scala`, `scala-tool-middleware`, and `scala-agent-tool-middleware` component templates respectively. User projects do not manage these files directly. See [Tool middleware](docs/tool-middleware.md) for role selection and authoring examples.
+The SDK embeds `agent_guest.wasm` in both build plugins and writes it to `.generated/` when Scala.js is compiled or linked. The `scala` component template uses this world for ordinary, standalone-middleware, and combined components. User projects do not manage this file directly. See [Tool middleware](docs/tool-middleware.md) for authoring examples.
 
 To regenerate when upgrading Golem/WIT versions:
 
@@ -281,6 +292,11 @@ The Scala SDK exposes host APIs in two layers:
 1) **Typed Scala wrapper**: `golem.HostApi` (idiomatic Scala helpers over `golem:api/host@1.5.0`).
 2) **Raw host modules** (forward-compatible, mirrors JS/WIT surface):
    - `golem.host.OplogApi`, `golem.host.ContextApi`, `golem.host.DurabilityApi`
+
+For external Durable Streams, `golem.streams.DurableStreams` provides JSON and
+byte readers as ordinary `AgentStream` values and serialized idempotent writers.
+See [External Durable Streams](docs/durable-streams.md) for retries, secret
+authentication, cancellation and producer/fork semantics.
 
 Example:
 

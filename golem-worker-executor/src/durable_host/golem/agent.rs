@@ -27,7 +27,8 @@ use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use chrono::Utc;
 use golem_common::model::agent::{
-    AgentConfigSource, AgentTypeName, ParsedAgentId, typed_constructor_parameters,
+    AgentConfigSource, AgentTypeName, ParsedAgentId, ResolvedOwnerContext,
+    typed_constructor_parameters,
 };
 use golem_common::model::agent_config::CanonicalAgentConfigPath;
 use golem_common::model::agent_secret::CanonicalAgentSecretPath;
@@ -106,7 +107,18 @@ fn validate_constructor_input_value(
         return Err("expected input parameter record".to_string());
     };
 
-    let fields_schema = agent_type.constructor.input_schema.fields();
+    let fields_schema: Vec<_> = agent_type
+        .constructor
+        .input_schema
+        .fields()
+        .iter()
+        .filter(|field| {
+            matches!(
+                field.source,
+                golem_common::schema::agent::FieldSource::UserSupplied
+            )
+        })
+        .collect();
     if fields.len() != fields_schema.len() {
         return Err(format!(
             "expected {} parameters, got {}",
@@ -139,6 +151,47 @@ fn validate_constructor_input_value(
 }
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
+    async fn config_value_denied(
+        &mut self,
+        path: &[String],
+        is_secret_config: bool,
+        check_wallet: bool,
+    ) -> anyhow::Result<bool> {
+        let binding_denied = self.entity_invocation_scope().is_some_and(|scope| {
+            let policy = scope.activation().policy();
+            !policy
+                .config_keys_readable()
+                .contains(&CanonicalAgentConfigPath::from_path_in_unknown_casing(path))
+                || (is_secret_config
+                    && !policy
+                        .secret_keys_readable()
+                        .contains(&CanonicalAgentSecretPath::from_path_in_unknown_casing(path)))
+        });
+        if binding_denied {
+            return Ok(true);
+        }
+
+        // Snapshot loading executes unpersisted calls without publishing live execution. Normal
+        // tail continuation has already published liveness during durable-call resolution.
+        if !check_wallet {
+            return Ok(false);
+        }
+
+        let targets = config_segments_target(agent_owner(self), path)
+            .map_err(|_| ())
+            .and_then(|target| {
+                let mut targets = vec![target];
+                if is_secret_config {
+                    targets.push(secret_hold_target_for_path(self, path).map_err(|_| ())?);
+                }
+                Ok(targets)
+            });
+        Ok(match targets {
+            Ok(targets) => self.authorize_live_permissions(&targets).await?.is_err(),
+            Err(_) => true,
+        })
+    }
+
     /// Resolve a local agent-config value.
     fn resolve_local_config(
         &self,
@@ -184,17 +237,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         declared_type: &SchemaType,
     ) -> anyhow::Result<SchemaValue> {
         let canonical_path = CanonicalAgentSecretPath::from_path_in_unknown_casing(&path);
-        if self.entity_invocation_scope().is_some_and(|scope| {
-            !scope
-                .activation()
-                .policy()
-                .secret_keys_readable()
-                .contains(&canonical_path)
-        }) {
-            return Err(anyhow!(
-                "Entity invocation is not allowed to read secret config key {path_str}"
-            ));
-        }
 
         // Future automatic-update transforms belong here, where both
         // the component-declared type and the guest-expected type are
@@ -323,12 +365,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 }
             }
 
+            let owner_component_id = self.owner_component_metadata().id;
             let result = loop {
                 let result = self
                     .agent_types_service()
                     .get_all(
                         self.owned_agent_id.environment_id,
-                        self.owned_agent_id.agent_id.component_id,
+                        owner_component_id,
                         self.owner_component_metadata().revision,
                     )
                     .await
@@ -376,12 +419,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             }
 
             let component_revision = self.owner_component_metadata().revision;
+            let owner_component_id = self.owner_component_metadata().id;
             let result = loop {
                 let result = self
                     .agent_types_service()
                     .get(
                         self.owned_agent_id.environment_id,
-                        self.owned_agent_id.agent_id.component_id,
+                        owner_component_id,
                         component_revision,
                         &agent_type_name,
                     )
@@ -438,8 +482,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         .agent_types_service()
                         .get(
                             self.owned_agent_id.environment_id,
-                            self.owned_agent_id.agent_id.component_id,
-                            self.state.component_metadata.revision,
+                            self.owner_component_metadata().id,
+                            self.owner_component_metadata().revision,
                             &agent_type_name,
                         )
                         .await?
@@ -634,8 +678,27 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     > {
         DurabilityHost::observe_function_call(self, "golem_agent", "parse_agent_id");
 
-        let component_metadata = &self.owner_component_metadata().metadata;
-        match ParsedAgentId::parse(agent_id, component_metadata) {
+        let agent_type_name = match ParsedAgentId::parse_agent_type_name(&agent_id) {
+            Ok(name) => name,
+            Err(error) => return Ok(Err(wire::AgentError::InvalidAgentId(error))),
+        };
+        let local_type = self
+            .owner_component_metadata()
+            .metadata
+            .find_agent_type_by_name(&agent_type_name);
+        let agent_type = if let Some(local_type) = local_type {
+            local_type
+        } else if let Some(registered) = self
+            .get_agent_type_schema_model(agent_type_name.clone())
+            .await?
+        {
+            registered.agent_type
+        } else {
+            return Ok(Err(wire::AgentError::InvalidAgentId(format!(
+                "Agent type not found: {agent_type_name}"
+            ))));
+        };
+        match ParsedAgentId::parse(agent_id, &agent_type) {
             Ok(agent_id) => {
                 let wire_typed = encode_typed(&agent_id.parameters)
                     .map_err(|e| anyhow!("Failed to encode agent id parameters: {e}"))?;
@@ -700,7 +763,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     .await?;
             }
 
-            let agent_type = match self.state.agent_id.as_ref() {
+            let agent_type = match self.state.owner_context.agent() {
                 Some(agent_id) => agent_id.agent_type.clone(),
                 None => {
                     let error = "Creating webhook urls is only supported for agentic components"
@@ -759,52 +822,35 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             anyhow!("Expected config type for path {path_str} is not a valid schema graph: {e}")
         })?;
 
-        let is_secret_config = self.parsed_agent_id().is_some_and(|agent_id| {
-            self.owner_component_metadata()
+        let is_secret_config = match self.owner_context() {
+            ResolvedOwnerContext::Agent(agent_id) => self
+                .owner_component_metadata()
                 .metadata
                 .find_agent_type_by_name(&agent_id.agent_type)
                 .is_some_and(|agent_type| {
                     agent_type.config.iter().any(|entry| {
                         entry.path == path && entry.source == AgentConfigSource::Secret
                     })
-                })
-        });
+                }),
+            ResolvedOwnerContext::ComponentWorker | ResolvedOwnerContext::ComponentBaseline => self
+                .owner_component_metadata()
+                .metadata
+                .config_schema()
+                .declarations
+                .iter()
+                .any(|entry| entry.path == path && entry.source == AgentConfigSource::Secret),
+        };
         let begun = DurableCallSession::<GolemAgentGetConfigValue, NotCancellable>::begin(
             self,
             DurableFunctionType::ReadRemote,
         )
         .await?;
         let (handle, denied) = match begun.resolve(self).await? {
-            ResolvedCall::Replay(handle) => (handle, false),
+            ResolvedCall::Replay(handle) => (handle, None),
             ResolvedCall::Live(begun) => {
-                let binding_denied = self.entity_invocation_scope().is_some_and(|scope| {
-                    !scope.activation().policy().config_keys_readable().contains(
-                        &CanonicalAgentConfigPath::from_path_in_unknown_casing(&path),
-                    )
-                });
-                // Snapshot loading executes unpersisted calls without publishing live execution.
-                // Normal tail continuation has already published liveness during resolution.
-                let denied = if binding_denied {
-                    true
-                } else if self.state.is_live() {
-                    let targets = config_segments_target(agent_owner(self), &path)
-                        .map_err(|_| ())
-                        .and_then(|target| {
-                            let mut targets = vec![target];
-                            if is_secret_config {
-                                targets.push(
-                                    secret_hold_target_for_path(self, &path).map_err(|_| ())?,
-                                );
-                            }
-                            Ok(targets)
-                        });
-                    match targets {
-                        Ok(targets) => self.authorize_live_permissions(&targets).await?.is_err(),
-                        Err(_) => true,
-                    }
-                } else {
-                    false
-                };
+                let denied = self
+                    .config_value_denied(&path, is_secret_config, self.state.is_live())
+                    .await?;
                 let handle = begun
                     .start_live(
                         self,
@@ -814,30 +860,48 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         },
                     )
                     .await?;
-                (handle, denied)
+                (handle, Some(denied))
             }
         };
 
         let uses_resolver = is_secret_config;
         let response = handle
             .run(self, async move |ctx| {
+                let denied = match denied {
+                    Some(denied) => denied,
+                    None => {
+                        ctx.config_value_denied(&path, is_secret_config, true)
+                            .await?
+                    }
+                };
                 if denied {
                     return Ok(HostResponseGolemAgentGetConfigValue {
                         result: Err("permission denied".to_string()),
                     });
                 }
 
-                let agent_id = ctx
-                    .parsed_agent_id()
-                    .ok_or_else(|| anyhow!("only agentic workers can access agent config"))?;
+                let (declarations, schema) = match ctx.owner_context() {
+                    ResolvedOwnerContext::Agent(agent_id) => {
+                        let agent_type = ctx
+                            .owner_component_metadata()
+                            .metadata
+                            .find_agent_type_by_name(&agent_id.agent_type)
+                            .expect(
+                                "Active agent type of agent was not declared in component metadata",
+                            );
+                        (agent_type.config, agent_type.schema)
+                    }
+                    ResolvedOwnerContext::ComponentWorker
+                    | ResolvedOwnerContext::ComponentBaseline => {
+                        let config_schema = ctx.owner_component_metadata().metadata.config_schema();
+                        (
+                            config_schema.declarations.clone(),
+                            config_schema.schema.clone(),
+                        )
+                    }
+                };
 
-                let agent_type = ctx
-                    .owner_component_metadata()
-                    .metadata
-                    .find_agent_type_by_name(&agent_id.agent_type)
-                    .expect("Active agent type of agent was not declared in component metadata");
-
-                let declaration = agent_type.config.iter().find(|c| c.path == path);
+                let declaration = declarations.iter().find(|c| c.path == path);
                 let declaration_value_type = declaration.map(|d| d.value_type.clone());
 
                 let schema_value = match declaration {
@@ -857,7 +921,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                             &path_str,
                             &expected_graph,
                             &expected_graph.root,
-                            &agent_type.schema,
+                            &schema,
                             declaration_value_type
                                 .as_ref()
                                 .expect("existing config declaration must have a value type"),
@@ -867,7 +931,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                             path,
                             &path_str,
                             expected_graph,
-                            &agent_type.schema,
+                            &schema,
                             declaration_value_type
                                 .as_ref()
                                 .expect("existing config declaration must have a value type"),

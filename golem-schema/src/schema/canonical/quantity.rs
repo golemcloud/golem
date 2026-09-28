@@ -22,13 +22,13 @@
 //!   `from_text` additionally accepts a single ASCII space between the
 //!   decimal and the unit (e.g. `1 kg`); the output form is always
 //!   no-space.
-//! - Text form is restricted to `|scale| <= 18` and rejects
-//!   `mantissa == i64::MIN`; both would either overflow representation or
-//!   produce an unbounded output string. JSON encoding is unrestricted
-//!   on both fronts. A negative-scale rendering whose absolute decimal
+//! - Text form is restricted to `|scale| <= 18`; larger scales would produce
+//!   an unbounded output string. JSON encoding is unrestricted on this front.
+//!   A negative-scale rendering whose absolute decimal
 //!   string would exceed 40 characters is rejected as
 //!   `ParseError::OutOfRange("quantity scale")`.
-//! - JSON form: `{ "mantissa": …, "scale": …, "unit": "..." }`.
+//! - JSON form: `{ "mantissa": "…", "scale": …, "unit": "..." }`, with
+//!   the mantissa encoded as a canonical signed base-10 `i64` string.
 //!
 //! Mantissa/scale equality is by numeric value, not by raw struct fields:
 //! `(15, 1)` and `(150, 2)` represent the same number and a round-trip
@@ -50,9 +50,6 @@ fn unit_regex() -> &'static Regex {
 }
 
 pub fn to_text(payload: &QuantityValue) -> Result<String, ParseError> {
-    if payload.mantissa == i64::MIN {
-        return Err(ParseError::OutOfRange("quantity mantissa"));
-    }
     if payload.scale.unsigned_abs() > MAX_ABS_SCALE_TEXT as u32 {
         return Err(ParseError::OutOfRange("quantity scale"));
     }
@@ -82,7 +79,7 @@ pub fn to_json(payload: &QuantityValue) -> Value {
     let mut obj = Map::new();
     obj.insert(
         "mantissa".to_string(),
-        Value::Number(serde_json::Number::from(payload.mantissa)),
+        Value::String(payload.mantissa.to_string()),
     );
     obj.insert(
         "scale".to_string(),
@@ -100,11 +97,19 @@ pub fn from_json(value: &Value) -> Result<QuantityValue, ParseError> {
     let mantissa = obj
         .get("mantissa")
         .ok_or(ParseError::MissingField("mantissa"))?
-        .as_i64()
+        .as_str()
         .ok_or(ParseError::TypeField {
-            expected: "integer",
+            expected: "canonical signed integer string",
             field: Some("mantissa"),
         })?;
+    if !is_canonical_signed_integer(mantissa) {
+        return Err(ParseError::BadFormat(
+            "quantity mantissa must be a canonical signed integer".to_string(),
+        ));
+    }
+    let mantissa = mantissa
+        .parse::<i64>()
+        .map_err(|_| ParseError::OutOfRange("quantity mantissa"))?;
     let scale_raw = obj
         .get("scale")
         .ok_or(ParseError::MissingField("scale"))?
@@ -135,6 +140,22 @@ pub fn from_json(value: &Value) -> Result<QuantityValue, ParseError> {
         scale,
         unit,
     })
+}
+
+fn is_canonical_signed_integer(value: &str) -> bool {
+    value == "0"
+        || value
+            .strip_prefix('-')
+            .is_some_and(canonical_nonzero_digits)
+        || canonical_nonzero_digits(value)
+}
+
+fn canonical_nonzero_digits(value: &str) -> bool {
+    value
+        .as_bytes()
+        .first()
+        .is_some_and(|digit| matches!(digit, b'1'..=b'9'))
+        && value.bytes().all(|digit| digit.is_ascii_digit())
 }
 
 /// Compares two [`QuantityValue`]s as numeric quantities (`mantissa *
@@ -238,12 +259,12 @@ fn parse_decimal(s: &str) -> Result<(i64, i32), ParseError> {
     let combined: String = format!("{whole}{frac}");
     let stripped = combined.trim_start_matches('0');
     let digits = if stripped.is_empty() { "0" } else { stripped };
-    let magnitude: i64 = digits
+    let magnitude: i128 = digits
         .parse()
         .map_err(|_| ParseError::OutOfRange("mantissa"))?;
-    let mut mantissa = sign
-        .checked_mul(magnitude)
-        .ok_or(ParseError::OutOfRange("mantissa"))?;
+    let mut mantissa: i64 = (i128::from(sign) * magnitude)
+        .try_into()
+        .map_err(|_| ParseError::OutOfRange("mantissa"))?;
     let mut scale: i32 = frac.len() as i32;
     while scale > 0 && mantissa % 10 == 0 && mantissa != 0 {
         mantissa /= 10;
@@ -260,8 +281,7 @@ fn format_decimal(mantissa: i64, scale: i32) -> String {
         return "0".to_string();
     }
     let negative = mantissa < 0;
-    // `to_text` rejects `i64::MIN` before reaching here, so `.abs()` is safe.
-    let abs_str = mantissa.abs().to_string();
+    let abs_str = mantissa.unsigned_abs().to_string();
     let body = if scale <= 0 {
         let mut s = abs_str;
         for _ in 0..(-scale) {
@@ -430,8 +450,28 @@ mod tests {
 
     #[test]
     fn json_missing_field() {
-        let v = serde_json::json!({ "mantissa": 1, "scale": 0 });
+        let v = serde_json::json!({ "mantissa": "1", "scale": 0 });
         assert_eq!(from_json(&v), Err(ParseError::MissingField("unit")));
+    }
+
+    #[test]
+    fn json_mantissa_requires_a_canonical_in_range_string() {
+        for mantissa in [
+            serde_json::json!(1),
+            serde_json::json!("+1"),
+            serde_json::json!("01"),
+            serde_json::json!("-0"),
+            serde_json::json!("9223372036854775808"),
+        ] {
+            assert!(
+                from_json(&serde_json::json!({
+                    "mantissa": mantissa,
+                    "scale": 0,
+                    "unit": "m",
+                }))
+                .is_err()
+            );
+        }
     }
 
     #[test]
@@ -502,15 +542,14 @@ mod tests {
     }
 
     #[test]
-    fn i64_min_mantissa_text_rejected() {
+    fn i64_min_mantissa_text_roundtrips() {
         let p = QuantityValue {
             mantissa: i64::MIN,
             scale: 0,
             unit: "x".into(),
         };
-        assert_eq!(
-            to_text(&p),
-            Err(ParseError::OutOfRange("quantity mantissa"))
-        );
+        let text = to_text(&p).unwrap();
+        assert_eq!(text, "-9223372036854775808x");
+        assert_eq!(from_text(&text), Ok(p));
     }
 }

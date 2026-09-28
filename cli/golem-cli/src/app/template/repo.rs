@@ -381,22 +381,6 @@ mod tests {
         let expected_commands = [
             ("moonbit", "debug", "agent-guest"),
             ("moonbit", "release", "agent-guest"),
-            ("moonbit-tool-middleware", "debug", "tool-middleware-guest"),
-            (
-                "moonbit-tool-middleware",
-                "release",
-                "tool-middleware-guest",
-            ),
-            (
-                "moonbit-agent-tool-middleware",
-                "debug",
-                "agent-tool-middleware-guest",
-            ),
-            (
-                "moonbit-agent-tool-middleware",
-                "release",
-                "agent-tool-middleware-guest",
-            ),
         ];
 
         let embed_command_count = application
@@ -488,7 +472,7 @@ mod tests {
             }
         }
 
-        // 3 component templates x 2 presets x (embed + new)
-        assert_eq!(checked, 12);
+        // 1 component template x 2 presets x (embed + new)
+        assert_eq!(checked, 4);
     }
 }

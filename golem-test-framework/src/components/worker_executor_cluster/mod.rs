@@ -23,7 +23,38 @@ pub mod unavailable;
 #[async_trait]
 pub trait WorkerExecutorCluster: Send + Sync {
     fn size(&self) -> usize;
-    async fn kill_all(&self);
+    /// Signal and reap every member, sharing one absolute deadline. All
+    /// members are attempted even if another member fails.
+    async fn kill_all_and_wait(&self, deadline: tokio::time::Instant) -> anyhow::Result<()> {
+        let executors = self.to_vec();
+        anyhow::ensure!(
+            !executors.is_empty(),
+            "kill-and-wait requires a spawned cluster"
+        );
+        let results = futures::future::join_all(
+            executors
+                .iter()
+                .map(|executor| executor.kill_and_wait(deadline)),
+        )
+        .await;
+        let errors: Vec<_> = results
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, result)| {
+                result
+                    .err()
+                    .map(|error| format!("executor {index}: {error:#}"))
+            })
+            .collect();
+        anyhow::ensure!(errors.is_empty(), "{}", errors.join("; "));
+        Ok(())
+    }
+
+    fn all_reaped(&self) -> bool {
+        let executors = self.to_vec();
+        !executors.is_empty() && executors.iter().all(|executor| executor.is_reaped())
+    }
+
     async fn restart_all(&self);
 
     /// Restart every worker executor in the cluster with `extra_env_vars`
@@ -45,6 +76,21 @@ pub trait WorkerExecutorCluster: Send + Sync {
 
     async fn stop(&self, index: usize);
     async fn start(&self, index: usize);
+
+    /// Freezes the executor at `index` in place; see [`WorkerExecutor::pause`]. It still counts
+    /// as started: only a stop takes it out of the cluster.
+    ///
+    /// Default implementation panics: only `SpawnedWorkerExecutorCluster` owns the processes.
+    async fn pause(&self, _index: usize) {
+        panic!("WorkerExecutorCluster::pause is only supported by SpawnedWorkerExecutorCluster");
+    }
+
+    /// Thaws the executor at `index`; see [`WorkerExecutor::resume`].
+    ///
+    /// Default implementation panics: only `SpawnedWorkerExecutorCluster` owns the processes.
+    async fn resume(&self, _index: usize) {
+        panic!("WorkerExecutorCluster::resume is only supported by SpawnedWorkerExecutorCluster");
+    }
 
     fn to_vec(&self) -> Vec<Arc<dyn WorkerExecutor>>;
 

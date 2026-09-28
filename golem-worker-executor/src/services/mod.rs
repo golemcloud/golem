@@ -28,10 +28,12 @@ pub mod component;
 pub mod direct_invocation_auth;
 pub mod environment_state;
 pub mod events;
+pub mod external_durable_stream;
 pub mod file_loader;
 pub mod golem_config;
 pub mod key_value;
 pub mod linear_memory;
+pub mod mcp;
 pub mod oplog;
 pub mod oplog_sweep;
 pub mod promise;
@@ -93,6 +95,12 @@ pub trait HasAgentTypesService {
 
 pub trait HasAgentWebhooksService {
     fn agent_webhooks(&self) -> Arc<AgentWebhooksService>;
+}
+
+pub trait HasExternalDurableStreamService {
+    fn external_durable_streams(
+        &self,
+    ) -> Arc<dyn external_durable_stream::ExternalDurableStreamService>;
 }
 
 pub trait HasComponentService {
@@ -219,6 +227,10 @@ pub trait HasWebSocketConnectionPool {
     fn websocket_connection_pool(&self) -> WebSocketConnectionPool;
 }
 
+pub trait HasMcpTransport {
+    fn mcp_transport(&self) -> Arc<mcp::McpTransport>;
+}
+
 pub trait HasLeakSentinel {
     fn leak_sentinel(&self) -> Arc<()>;
 }
@@ -240,6 +252,7 @@ pub trait HasAll<Ctx: WorkerCtx>:
     HasActiveAgents<Ctx>
     + HasAgentTypesService
     + HasAgentWebhooksService
+    + HasExternalDurableStreamService
     + HasNativeToolCatalog<Ctx>
     + HasCardService
     + HasComponentService
@@ -268,6 +281,7 @@ pub trait HasAll<Ctx: WorkerCtx>:
     + HasShutdownToken
     + HasHttpConnectionPool
     + HasWebSocketConnectionPool
+    + HasMcpTransport
     + HasEnvironmentStateService
     + HasAgentFilesystemSnapshots
     + HasExtraDeps<Ctx>
@@ -282,6 +296,7 @@ impl<
     T: HasActiveAgents<Ctx>
         + HasAgentTypesService
         + HasAgentWebhooksService
+        + HasExternalDurableStreamService
         + HasNativeToolCatalog<Ctx>
         + HasCardService
         + HasComponentService
@@ -310,6 +325,7 @@ impl<
         + HasShutdownToken
         + HasHttpConnectionPool
         + HasWebSocketConnectionPool
+        + HasMcpTransport
         + HasEnvironmentStateService
         + HasAgentFilesystemSnapshots
         + HasExtraDeps<Ctx>
@@ -326,6 +342,7 @@ pub struct All<Ctx: WorkerCtx> {
     active_agents: Arc<active_agents::ActiveAgents<Ctx>>,
     agent_types: Arc<dyn agent_types::AgentTypesService>,
     agent_webhooks: Arc<AgentWebhooksService>,
+    external_durable_streams: Arc<dyn external_durable_stream::ExternalDurableStreamService>,
     card_service: Arc<dyn card::CardService>,
     engine: Arc<wasmtime::Engine>,
     linker: Arc<wasmtime::component::Linker<Ctx>>,
@@ -356,6 +373,7 @@ pub struct All<Ctx: WorkerCtx> {
     shutdown_token: CancellationToken,
     http_connection_pool: Option<HttpConnectionPool>,
     websocket_connection_pool: WebSocketConnectionPool,
+    mcp_transport: Arc<mcp::McpTransport>,
     environment_state_service: Arc<dyn EnvironmentStateService>,
     agent_filesystem_snapshots: Arc<AgentFilesystemSnapshots>,
     native_tool_catalog: Arc<crate::native_tool::NativeToolCatalog<Ctx>>,
@@ -372,6 +390,7 @@ impl<Ctx: WorkerCtx> Clone for All<Ctx> {
             active_agents: self.active_agents.clone(),
             agent_types: self.agent_types.clone(),
             agent_webhooks: self.agent_webhooks.clone(),
+            external_durable_streams: self.external_durable_streams.clone(),
             card_service: self.card_service.clone(),
             engine: self.engine.clone(),
             linker: self.linker.clone(),
@@ -401,6 +420,7 @@ impl<Ctx: WorkerCtx> Clone for All<Ctx> {
             shutdown_token: self.shutdown_token.clone(),
             http_connection_pool: self.http_connection_pool.clone(),
             websocket_connection_pool: self.websocket_connection_pool.clone(),
+            mcp_transport: self.mcp_transport.clone(),
             environment_state_service: self.environment_state_service.clone(),
             agent_filesystem_snapshots: self.agent_filesystem_snapshots.clone(),
             native_tool_catalog: self.native_tool_catalog.clone(),
@@ -416,6 +436,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
         active_agents: Arc<active_agents::ActiveAgents<Ctx>>,
         agent_types: Arc<dyn agent_types::AgentTypesService>,
         agent_webhooks: Arc<AgentWebhooksService>,
+        external_durable_streams: Arc<dyn external_durable_stream::ExternalDurableStreamService>,
         card_service: Arc<dyn card::CardService>,
         engine: Arc<wasmtime::Engine>,
         linker: Arc<wasmtime::component::Linker<Ctx>>,
@@ -447,6 +468,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
         shutdown_token: CancellationToken,
         http_connection_pool: Option<HttpConnectionPool>,
         websocket_connection_pool: WebSocketConnectionPool,
+        mcp_transport: Arc<mcp::McpTransport>,
         environment_state_service: Arc<dyn EnvironmentStateService>,
         agent_filesystem_snapshots: Arc<AgentFilesystemSnapshots>,
         native_tool_catalog: Arc<crate::native_tool::NativeToolCatalog<Ctx>>,
@@ -457,6 +479,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             active_agents,
             agent_types,
             agent_webhooks,
+            external_durable_streams,
             card_service,
             engine,
             linker,
@@ -486,6 +509,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             shutdown_token,
             http_connection_pool,
             websocket_connection_pool,
+            mcp_transport,
             environment_state_service,
             agent_filesystem_snapshots,
             native_tool_catalog,
@@ -506,6 +530,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             this.active_agents(),
             this.agent_types(),
             this.agent_webhooks(),
+            this.external_durable_streams(),
             this.card_service(),
             this.engine(),
             this.linker(),
@@ -535,6 +560,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             this.shutdown_token(),
             this.http_connection_pool(),
             this.websocket_connection_pool(),
+            this.mcp_transport(),
             this.environment_state_service(),
             this.agent_filesystem_snapshots(),
             this.native_tool_catalog(),
@@ -573,6 +599,14 @@ impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasAgentTypesService for T {
 impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasAgentWebhooksService for T {
     fn agent_webhooks(&self) -> Arc<AgentWebhooksService> {
         self.all().agent_webhooks.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasExternalDurableStreamService for T {
+    fn external_durable_streams(
+        &self,
+    ) -> Arc<dyn external_durable_stream::ExternalDurableStreamService> {
+        self.all().external_durable_streams.clone()
     }
 }
 
@@ -751,6 +785,12 @@ impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasWebSocketConnectionPool for T
 impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasAgentFilesystemSnapshots for T {
     fn agent_filesystem_snapshots(&self) -> Arc<AgentFilesystemSnapshots> {
         self.all().agent_filesystem_snapshots.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasMcpTransport for T {
+    fn mcp_transport(&self) -> Arc<mcp::McpTransport> {
+        self.all().mcp_transport.clone()
     }
 }
 

@@ -280,6 +280,7 @@ dependencies = [
  "effect-fixture-guest-client",
  "golem-rust",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -417,6 +418,7 @@ dependencies = [
  "ctor",
  "golem-rust-macro",
  "golem-schema",
+ "golem-tool-metadata",
  "http",
  "log",
  "serde",
@@ -473,6 +475,13 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "golem-tool-metadata"
+version = "0.0.0"
+dependencies = [
+ "golem-schema",
 ]
 
 [[package]]

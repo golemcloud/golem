@@ -75,6 +75,7 @@ fn log_entry(message: &str) -> OplogEntry {
         LogLevel::Debug,
         "test".to_string(),
         message.to_string(),
+        None,
     )
     .rounded()
 }

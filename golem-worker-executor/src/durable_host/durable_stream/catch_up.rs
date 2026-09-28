@@ -77,7 +77,7 @@ impl DurableStreamStore {
         if index
             .registrations
             .get(&handle.stream_id)
-            .is_some_and(|record| &record.handle == handle)
+            .is_some_and(|record| record.accepts(handle, self.generation()))
         {
             Ok(())
         } else {
@@ -90,6 +90,20 @@ impl DurableStreamStore {
         handle.producer_environment_id == self.environment_id
             && handle.producer == self.producer
             && handle.expected_producer_fingerprint == self.producer_fingerprint
+    }
+
+    /// Returns the producer's role, which forwarding does not change.
+    pub(crate) async fn registered_stream_role(
+        &self,
+        handle: &DurableStreamHandle,
+    ) -> Result<SessionStreamRole, StreamStoreError> {
+        self.validate_handle(handle).await?;
+        self.index_for([ProducerMetadataKey::Stream(handle.stream_id)])
+            .await?
+            .stream_roles
+            .get(&handle.stream_id)
+            .copied()
+            .ok_or_else(|| StreamStoreError::CorruptHistory("registered stream has no role".into()))
     }
 
     pub(super) async fn validate_cursor(
@@ -357,7 +371,7 @@ impl AttachedStreamSegmentSource for DurableStreamStore {
         &self,
         attachment: &StreamAttachmentKey,
         handle: &DurableStreamHandle,
-        now_millis: u64,
+        _now_millis: u64,
         after: Option<StreamOffset>,
         through: Option<StreamOffset>,
     ) -> Result<Vec<CommittedProducerStreamEvent>, StreamStoreError> {
@@ -386,15 +400,11 @@ impl AttachedStreamSegmentSource for DurableStreamStore {
         if indexed_attachment.key != *attachment {
             return Err(StreamStoreError::AttachmentConflict);
         }
-        match indexed_attachment.state {
-            IndexedStreamAttachmentState::Active {
-                lease_expires_at_millis,
-                ..
-            } if now_millis < lease_expires_at_millis => {}
-            IndexedStreamAttachmentState::Active { .. } => {
-                return Err(StreamStoreError::LeaseExpired);
-            }
-            _ => return Err(StreamStoreError::InvalidAttachmentState),
+        if !matches!(
+            indexed_attachment.state,
+            IndexedStreamAttachmentState::Active { .. }
+        ) {
+            return Err(StreamStoreError::InvalidAttachmentState);
         }
         drop(index);
         self.read_segment(handle, after, through).await
@@ -436,7 +446,7 @@ impl AttachedStreamSegmentSource for DurableStreamStore {
         {
             event?;
         }
-        // The attachment may have been renewed, finalized, or replaced while the long poll was
+        // The attachment may have been finalized or replaced while the long poll was
         // asleep. Re-read it authoritatively and drain the full available segment rather than
         // returning only the bus event that happened to wake this waiter.
         let now_millis = now_millis.saturating_add(started.elapsed().as_millis() as u64);

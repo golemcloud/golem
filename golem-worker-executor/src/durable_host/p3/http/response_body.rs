@@ -16,16 +16,18 @@ use super::rebuild::{AbortOnDropIoTask, P3HttpSendRebuild};
 use super::rebuild::{RebuildOutcome, ResendOutcome, reissue_recorded_request};
 use super::rebuild::{recorded_request_body_replayability, resend_recorded_request};
 use super::replay::ReplayedRequestBodyDrainProgress;
+use super::send::p3_send_span_finished;
 use super::serialization::{deserialize_error_code, serialize_error_code};
 use super::serialization::{deserialize_headers, serialize_headers};
 use super::*;
 use crate::durable_host::concurrent::{
-    AccessClaimOptions, CompletionDelivery, DemandDelivery, DemandDeliveryMode, DropEvent,
-    DurableDemandItem, DurableDemandStream, ScopeReplayRecovery, demand_channel,
+    AccessClaimOptions, CompletionDelivery, DemandDelivery, DemandDeliveryMode, DurableDemandItem,
+    DurableDemandStream, ScopeReplayRecovery, demand_channel,
 };
 use crate::durable_host::durability::{
     AsyncRetryDecision, DurabilityHost, DurableCallTrapContext, HostFailureKind,
     InFunctionRetryState, TaskRetryContext, mark_durable_call_trap_context,
+    semantic_trap_retry_override_error,
 };
 use crate::durable_host::http::policy::{
     ResumeResponseAction, classify_resume_response, has_guest_range_header,
@@ -77,8 +79,8 @@ use wasmtime_wasi_http::p3::{HostBodyStreamProducer, WasiHttp, WasiHttpView};
 pub(crate) struct OpenP3HttpResponseState {
     /// The `outgoing-http-request` invocation span of the send that produced
     /// this response. Finished when the response body completes (the durable
-    /// consume-body terminal) or via a deferred [`DropEvent::FinishSpan`] when
-    /// the response is dropped unconsumed.
+    /// consume-body terminal) or by a local durable cleanup pair when the
+    /// response is dropped unconsumed.
     pub(crate) span: P3HttpSendSpan,
     /// Request method, for retry properties of body-transfer failures.
     pub(crate) method: String,
@@ -102,21 +104,6 @@ pub(crate) struct OpenP3HttpResponseState {
     pub(super) observational_owner: Option<OplogIndex>,
 }
 
-/// The send's `outgoing-http-request` invocation-context span together with
-/// how it must be finished.
-///
-/// Spans of sends recorded by the current executor are *derived*: the span id
-/// is a deterministic (UUIDv5-based) function of the send's own host-call
-/// `Start` index, so no `StartSpan`/`FinishSpan` oplog entries exist for them
-/// and finishing is in-memory only. Positional span entries are unsound under
-/// concurrent sends — overlapping sends interleave their entries live and
-/// consume each other's on replay — which is why the span identity is derived
-/// from the (claim-based, order-independent) durable `Start` instead.
-///
-/// Spans reconstructed from a legacy positional `StartSpan` entry (oplogs
-/// written by older executors) keep the legacy durable finish: the matching
-/// positional `FinishSpan` is consumed on replay, or appended when the worker
-/// has switched to live, exactly as the recording executor would have done.
 pub(super) fn register_open_response<Ctx: WorkerCtx, U: Send>(
     store: &Accessor<U, DurableP3<Ctx>>,
     response: &Resource<Response>,
@@ -152,6 +139,19 @@ impl<Ctx: WorkerCtx> types::HostResponse for DurableP3View<'_, Ctx> {
 
 /// Result fed to the guest-facing trailers `FutureReader` once the body closes.
 pub(super) type HttpTrailersOutcome = Result<Option<HeaderMap>, ErrorCode>;
+
+fn body_span_outcome(
+    cancelled: bool,
+    terminal: &HttpTrailersOutcome,
+) -> golem_common::model::oplog::SpanOutcome {
+    if cancelled {
+        golem_common::model::oplog::SpanOutcome::Cancelled
+    } else if terminal.is_ok() {
+        golem_common::model::oplog::SpanOutcome::Completed
+    } else {
+        golem_common::model::oplog::SpanOutcome::Failed
+    }
+}
 
 /// A demand from the body stream producer to the durable [`HttpConsumeBodyTask`].
 pub(super) enum HttpBodyDemand {
@@ -1052,6 +1052,7 @@ where
         // In-function retry budget of the response-body resume path, shared across all resume
         // attempts of this consume-body scope.
         let mut resume_retry_state = InFunctionRetryState::new();
+        let mut resume_semantic_override = None;
         let mut resume_retry_ctx: Option<TaskRetryContext<Ctx>> = None;
         // Bytes delivered to the guest-facing stream so far (replayed chunks +
         // live frames): the resume offset for `Range` requests.
@@ -1101,6 +1102,7 @@ where
         // The trailers / body-error terminal, set on the live path; on replay it
         // is taken from the parent marker instead.
         let mut terminal: HttpTrailersOutcome = Ok(None);
+        let mut body_cancelled = false;
         let mut cancel_ack: Option<oneshot::Sender<()>> = None;
 
         loop {
@@ -1345,7 +1347,11 @@ where
                             AsyncRetryDecision::RetryAfterDelay(delay) => {
                                 tokio::time::sleep(delay).await;
                             }
-                            AsyncRetryDecision::FallBackToTrap | AsyncRetryDecision::Exhausted => {
+                            AsyncRetryDecision::FallBackToTrap(semantic_override) => {
+                                resume_semantic_override = semantic_override;
+                                break;
+                            }
+                            AsyncRetryDecision::Exhausted => {
                                 break;
                             }
                         }
@@ -1469,29 +1475,37 @@ where
                     {
                         let for_retry: Result<(), &ErrorCode> = Err(error_code);
                         let trap_context = stream.trap_context();
-                        if let Err(error) = stream
-                            .parent_mut()
-                            .try_trigger_retry_access(
-                                accessor,
-                                durable_worker_ctx::<Ctx, U>,
-                                &for_retry,
-                                |code| {
-                                    classify_serializable_http_error_code(&serialize_error_code(
-                                        code,
-                                    ))
-                                },
-                                retry_properties,
-                            )
-                            .await
+                        let trap = if let Some(semantic_override) = resume_semantic_override.take()
                         {
-                            // The retry trap tears the invocation down;
-                            // `try_trigger_retry_access` already abandoned the
-                            // parent handle. The child `Start` is persisted but the
+                            let failure = semantic_trap_retry_override_error(
+                                semantic_override,
+                                HostFailureKind::Transient,
+                                error_code.to_string(),
+                            );
+                            Some(stream.parent_mut().trap(failure))
+                        } else {
+                            stream
+                                .parent_mut()
+                                .try_trigger_retry_access(
+                                    accessor,
+                                    durable_worker_ctx::<Ctx, U>,
+                                    &for_retry,
+                                    |code| {
+                                        classify_serializable_http_error_code(
+                                            &serialize_error_code(code),
+                                        )
+                                    },
+                                    retry_properties,
+                                )
+                                .await
+                                .err()
+                        };
+                        if let Some(error) = trap {
+                            // The retry trap tears the invocation down after the
+                            // parent handle has been abandoned. The child `Start` is persisted but the
                             // jumped scope discards it on replay; abandon the handle
                             // so its drop does not record a `Cancelled`. The span is
-                            // deliberately not finished (no `FinishSpan` after an
-                            // incomplete `Start`) — the retry's replay reconstructs
-                            // it.
+                            // deliberately left open — the retry's replay reconstructs it.
                             child.abandon_for_trap();
                             let _ = demand.send(HttpBodyChunkReply::Failed {
                                 message: error.to_string(),
@@ -1626,6 +1640,7 @@ where
                     break;
                 }
                 ProducedChunk::Cancelled => {
+                    body_cancelled = true;
                     match deliver_http_body_reply(&activity, demand, delivery, |delivery| {
                         HttpBodyChunkReply::Cancelled { delivery }
                     })
@@ -1662,16 +1677,28 @@ where
         // finalize failure can tag the guest-facing trailers trap for correct
         // retry grouping.
         let parent_trap_context = stream.trap_context();
-        let (response, mut delivery) = match stream
-            .finish_deferred(
-                accessor,
-                durable_worker_ctx::<Ctx, U>,
-                HostResponseP3HttpClientConsumeBodyResult {
-                    result: serialize_consume_body_result(&terminal),
-                },
-            )
-            .await
-        {
+        let response = HostResponseP3HttpClientConsumeBodyResult {
+            result: serialize_consume_body_result(&terminal),
+        };
+        let close_span = response_span
+            .as_ref()
+            .is_some_and(P3HttpSendSpan::claim_closure);
+        let finish = if close_span {
+            let span = response_span.as_ref().expect("checked above");
+            stream
+                .finish_deferred_with_span(
+                    accessor,
+                    durable_worker_ctx::<Ctx, U>,
+                    response,
+                    p3_send_span_finished(span, body_span_outcome(body_cancelled, &terminal)),
+                )
+                .await
+        } else {
+            stream
+                .finish_deferred(accessor, durable_worker_ctx::<Ctx, U>, response)
+                .await
+        };
+        let (response, mut delivery) = match finish {
             Ok(result) => result,
             Err(error) => {
                 return fail_consume_body_task(
@@ -1686,7 +1713,8 @@ where
         // The response body reached its terminal and the parent marker is
         // committed/replayed: finish the send's `outgoing-http-request` span
         // before resolving the guest-facing trailers.
-        if let Some(span) = &response_span {
+        if close_span {
+            let span = response_span.as_ref().expect("checked above");
             let finish_result = if delivery.is_live_armed() {
                 finish_p3_send_span_in_memory::<Ctx, U>(accessor, span)
             } else {
@@ -1889,21 +1917,33 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostResponseWithStore<U> for Dura
             "drop",
         );
 
-        // A send-created response dropped before its body was consumed still
-        // owns its `outgoing-http-request` span. This host call is synchronous,
-        // so the finish is deferred to the next drop-event drain point (a
-        // deterministic replay point), mirroring P2's `end_http_request` on response drop.
-        {
+        // Submit the whole live cleanup pair before returning from this synchronous drop.
+        // The next drain joins its receipt (or replays it); cancelling that waiter cannot
+        // cancel the actor job or cause another pair to be submitted.
+        let replay_cleanup = {
             let mut store_ctx = store.as_context_mut();
             let ctx = durable_worker_ctx::<Ctx, U>(store_ctx.data_mut());
-            if let Some(state) = ctx.state.open_p3_http_responses.remove(&res.rep())
-                && let Some(sink) = ctx.state.dropped_call_event_sender()
-            {
-                let _ = sink.send(DropEvent::FinishSpan {
-                    span_id: state.span.span_id,
-                    durable: false,
-                });
-            }
+            ctx.state
+                .open_p3_http_responses
+                .remove(&res.rep())
+                .and_then(|state| {
+                    if !state.span.claim_closure() {
+                        return None;
+                    }
+                    crate::durable_host::concurrent::HttpSpanCleanupRecorder::new(
+                        ctx,
+                        state.span.send_start_index,
+                        state.observational_owner,
+                        state.span.persisted,
+                    )
+                    .record(p3_send_span_finished(
+                        &state.span,
+                        golem_common::model::oplog::SpanOutcome::Abandoned,
+                    ))
+                })
+        };
+        if let Some(replay_cleanup) = replay_cleanup {
+            store.spawn(replay_cleanup);
         }
 
         let store = Access::<U, WasiHttp>::new(store.as_context_mut(), wasi_http_view::<Ctx, U>);
@@ -1923,6 +1963,22 @@ mod tests {
         DurableFunctionType, HostRequest, HostResponse, OplogEntry, OplogIndex, OplogPayload,
     };
     use test_r::{test, timeout};
+
+    #[test]
+    fn body_terminal_maps_to_semantic_span_outcome() {
+        assert_eq!(
+            body_span_outcome(false, &Ok(None)),
+            golem_common::model::oplog::SpanOutcome::Completed
+        );
+        assert_eq!(
+            body_span_outcome(false, &Err(ErrorCode::HttpProtocolError)),
+            golem_common::model::oplog::SpanOutcome::Failed
+        );
+        assert_eq!(
+            body_span_outcome(true, &Ok(None)),
+            golem_common::model::oplog::SpanOutcome::Cancelled
+        );
+    }
 
     #[test]
     #[timeout("10s")]
@@ -2000,8 +2056,10 @@ mod tests {
                     HostRequestNoInput {},
                 )))),
                 durable_function_type: DurableFunctionType::WriteRemoteBatched(None),
+                span_started: None,
             })
-            .await;
+            .await
+            .unwrap();
         let child_start = oplog
             .add(OplogEntry::Start {
                 timestamp: Timestamp::now_utc(),
@@ -2015,8 +2073,10 @@ mod tests {
                 durable_function_type: DurableFunctionType::WriteRemoteBatched(Some(
                     OplogIndex::from_u64(1),
                 )),
+                span_started: None,
             })
-            .await;
+            .await
+            .unwrap();
         oplog
             .add(OplogEntry::End {
                 timestamp: Timestamp::now_utc(),
@@ -2029,8 +2089,11 @@ mod tests {
                     ),
                 ))),
                 forced_commit: false,
+                span_finished: None,
+                span_attributes: None,
             })
-            .await;
+            .await
+            .unwrap();
         child_start
     }
 

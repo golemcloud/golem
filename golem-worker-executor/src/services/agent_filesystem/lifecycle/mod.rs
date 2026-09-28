@@ -61,6 +61,10 @@ pub(crate) use baseline::{
 };
 pub(crate) use initial_files::InitialFileConflict;
 use initial_files::{InitialFileSources, InitialFileState};
+mod inspection;
+pub(crate) use inspection::{FileInspection, open_file_for_inspection};
+mod inspection_stream;
+pub(crate) use inspection_stream::produce_file_read;
 
 mod lifecycle_stage {
     pub trait Sealed {}

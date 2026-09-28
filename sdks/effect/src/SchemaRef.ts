@@ -7,6 +7,7 @@ import {
   schemaValueToWit,
 } from "./internal/schema-model/wit.js"
 import {
+  assertCanonicalJsonEligible,
   jsonSchema,
   packJson,
   SchemaRenderError,
@@ -30,25 +31,37 @@ export class SchemaRef {
   readonly root: SchemaType
   constructor(wireGraph: CoreTypes.SchemaGraph, root = wireGraph.root) {
     const decoded = schemaGraphFromWit({ ...wireGraph, root })
-    this.graph = deepFreeze(decoded)
+    this.graph = freezeSchemaGraph(decoded)
     this.root = this.graph.root
     Object.freeze(this)
   }
-  /** Pack canonical JSON into the native schema-value carrier. @since 1.6.0 @category conversions */
+  /** Build a view over an already decoded, deeply immutable graph. @since 1.6.0 @category constructors */
+  static fromImmutableGraph(graph: SchemaGraph, root: SchemaType): SchemaRef {
+    const ref = Object.create(SchemaRef.prototype) as SchemaRef
+    Object.defineProperties(ref, {
+      graph: { value: Object.freeze({ defs: graph.defs, root }), enumerable: true },
+      root: { value: root, enumerable: true },
+    })
+    return Object.freeze(ref)
+  }
+  /** Pack canonical JSON and validate it against the complete schema. @since 1.6.0 @category conversions */
   packJson(value: JsonValue): CoreTypes.SchemaValueTree {
-    return schemaValueToWit(packJson(this.graph, this.root, value))
+    const model = packJson(this.graph, this.root, value)
+    if (!schemaValueConforms(this.graph, this.root, model))
+      throw new SchemaRenderError([], "schema value does not conform to the expected schema")
+    return schemaValueToWit(model)
   }
   /** Unpack a native schema value into canonical JSON. @since 1.6.0 @category conversions */
   unpackJson(value: CoreTypes.SchemaValueTree): JsonValue {
-    return unpackJson(this.graph, this.root, schemaValueFromWit(value))
+    const model = schemaValueFromWit(value)
+    if (!schemaValueConforms(this.graph, this.root, model))
+      throw new SchemaRenderError([], "schema value does not conform to the expected schema")
+    return unpackJson(this.graph, this.root, model)
   }
   /** Explicitly validate canonical JSON. @since 1.6.0 @category validation */
   validateJson(value: JsonValue): ValidationResult<CoreTypes.SchemaValueTree> {
     try {
-      const model = packJson(this.graph, this.root, value)
-      if (!schemaValueConforms(this.graph, this.root, model))
-        return invalid("schema value does not conform to the expected schema")
-      return { success: true, value: schemaValueToWit(model) }
+      return { success: true, value: this.packJson(value) }
     } catch (error) {
       return invalid(error)
     }
@@ -63,6 +76,15 @@ export class SchemaRef {
     return schemaValueTreeConforms(this.graph, this.root, value)
       ? { success: true, value }
       : invalid("schema value does not conform to the expected schema")
+  }
+  /** Check whether this root has an unambiguous canonical JSON representation. @since 1.6.0 @category validation */
+  jsonEligibility(): ValidationResult<void> {
+    try {
+      assertCanonicalJsonEligible(this.graph, this.root)
+      return { success: true, value: undefined }
+    } catch (error) {
+      return invalid(error)
+    }
   }
   /** Render this root as JSON Schema. @since 1.6.0 @category conversions */
   toJsonSchema(options: { readonly includeDraftMarker?: boolean } = {}): JsonValue {
@@ -82,13 +104,15 @@ const invalid = <T>(error: unknown): ValidationResult<T> => ({
     },
   ],
 })
-const deepFreeze = <T>(value: T, seen = new WeakSet<object>()): T => {
+/** @internal Freeze a decoded schema graph including its definition map. */
+export const freezeSchemaGraph = <T>(value: T, seen = new WeakSet<object>()): T => {
   if (value === null || typeof value !== "object" || seen.has(value)) return value
+  if (value instanceof Uint8Array) return value
   seen.add(value)
   if (value instanceof Map) {
     for (const [key, item] of value) {
-      deepFreeze(key, seen)
-      deepFreeze(item, seen)
+      freezeSchemaGraph(key, seen)
+      freezeSchemaGraph(item, seen)
     }
     Object.defineProperties(value, {
       set: {
@@ -107,8 +131,7 @@ const deepFreeze = <T>(value: T, seen = new WeakSet<object>()): T => {
         },
       },
     })
-  } else if (!(value instanceof Uint8Array))
-    for (const item of Object.values(value)) deepFreeze(item, seen)
+  } else for (const item of Object.values(value)) freezeSchemaGraph(item, seen)
   return Object.freeze(value)
 }
 
