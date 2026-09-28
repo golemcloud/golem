@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use super::super::files::SnapshotFiles;
-use super::super::holding::reached_deadline;
-use super::super::scripted::{Script, ScriptedBlobStorage};
+use super::super::tests::holding::reached_deadline;
+use super::super::tests::scripted::{Script, ScriptedBlobStorage};
 use super::{SnapshotStage, StagedSnapshot, publish, retract};
 use bytes::Bytes;
 use futures::FutureExt;

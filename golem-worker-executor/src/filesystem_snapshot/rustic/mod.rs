@@ -30,10 +30,6 @@ mod store;
 pub(crate) use store::RusticSnapshotStore;
 
 #[cfg(test)]
-mod holding;
-#[cfg(test)]
-mod scripted;
-#[cfg(test)]
 mod tests;
 
 use super::{SnapshotName, SnapshotScope};

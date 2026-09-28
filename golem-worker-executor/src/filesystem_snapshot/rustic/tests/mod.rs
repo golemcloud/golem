@@ -18,9 +18,12 @@
 //! keeps the gate of the held calls closed until the storage is dropped. So the threads of rustic
 //! stop because of the deadline, and not because the gate opens.
 
+pub(super) mod holding;
+pub(super) mod scripted;
+
+use self::holding::{holding_storage, reached_deadline};
+use self::scripted::{Script, ScriptedBlobStorage};
 use super::backend::BlobBackend;
-use super::holding::{holding_storage, reached_deadline};
-use super::scripted::{Script, ScriptedBlobStorage};
 use super::{
     ChangeDetection, Chunking, Compression, OperationPhase, PruneSettings, RepackLimits,
     Repository, RepositoryKey, RepositorySettings, SaveSettings, backup_options, config_options,

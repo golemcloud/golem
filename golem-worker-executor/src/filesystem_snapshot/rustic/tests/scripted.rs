@@ -34,7 +34,7 @@ use tokio_util::sync::CancellationToken;
 
 /// What the storage does with one call.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Script {
+pub(crate) enum Script {
     /// Passes the call to the in-memory storage.
     Pass,
     /// Gives an error and does not pass the call.
@@ -66,7 +66,7 @@ type Rule = Box<dyn Fn(&str, &Path) -> Script + Send + Sync>;
 
 /// A blob storage that records the operation label and the path of each call, and does with each
 /// call what its rule gives.
-pub(super) struct ScriptedBlobStorage {
+pub(crate) struct ScriptedBlobStorage {
     inner: Arc<InMemoryBlobStorage>,
     rule: Rule,
     calls: Mutex<Vec<(&'static str, Box<Path>)>>,
@@ -86,7 +86,7 @@ pub(super) struct ScriptedBlobStorage {
 }
 
 impl ScriptedBlobStorage {
-    pub(super) fn new(
+    pub(crate) fn new(
         inner: Arc<InMemoryBlobStorage>,
         rule: impl Fn(&str, &Path) -> Script + Send + Sync + 'static,
     ) -> Arc<Self> {
@@ -105,17 +105,17 @@ impl ScriptedBlobStorage {
     }
 
     /// Lets each call that waits for the gate, and each later such call, go on.
-    pub(super) fn open_gate(&self) {
+    pub(crate) fn open_gate(&self) {
         self.gate.cancel();
     }
 
     /// Lets one call that waits for a step, now or later, go on.
-    pub(super) fn step(&self) {
+    pub(crate) fn step(&self) {
         self.steps.add_permits(1);
     }
 
     /// Takes back one step that no call took, and tells whether one was there.
-    pub(super) fn take_back_step(&self) -> bool {
+    pub(crate) fn take_back_step(&self) -> bool {
         self.steps
             .try_acquire()
             .map(tokio::sync::SemaphorePermit::forget)
@@ -123,18 +123,18 @@ impl ScriptedBlobStorage {
     }
 
     /// Gives the number of calls that wait for a step.
-    pub(super) fn waiting_steps(&self) -> usize {
+    pub(crate) fn waiting_steps(&self) -> usize {
         self.waiting.load(Ordering::SeqCst)
     }
 
     /// Gives the number of calls that took a step and ended.
-    pub(super) fn stepped(&self) -> usize {
+    pub(crate) fn stepped(&self) -> usize {
         self.stepped.load(Ordering::SeqCst)
     }
 
     /// Gives the operation label and the path of each call that took a step, in the order of the
     /// steps. Two calls can wait for a step at one time, and the one that waited first takes it.
-    pub(super) fn took(&self) -> Vec<(&'static str, String)> {
+    pub(crate) fn took(&self) -> Vec<(&'static str, String)> {
         self.took
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -161,12 +161,12 @@ impl ScriptedBlobStorage {
     }
 
     /// Lets one late call, now or later, reach the storage.
-    pub(super) fn land_late(&self) {
+    pub(crate) fn land_late(&self) {
         self.landings.add_permits(1);
     }
 
     /// Gives the number of late calls that reached the storage.
-    pub(super) fn landed(&self) -> usize {
+    pub(crate) fn landed(&self) -> usize {
         self.landed.load(Ordering::SeqCst)
     }
 
@@ -195,7 +195,7 @@ impl ScriptedBlobStorage {
     }
 
     /// Gives the operation label and the path of each call, in the order of the calls.
-    pub(super) fn calls(&self) -> Vec<(&'static str, String)> {
+    pub(crate) fn calls(&self) -> Vec<(&'static str, String)> {
         self.calls
             .lock()
             .unwrap_or_else(PoisonError::into_inner)

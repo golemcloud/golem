@@ -18,9 +18,9 @@
 //! runtime that the backend holds, as the threads of rustic are not.
 
 use super::super::fault::{Operation, OperationCancelled, classify, is_config_exists};
-use super::super::holding::{holding_storage, reached_deadline};
 use super::super::publish::{SnapshotStage, StagedSnapshot};
-use super::super::scripted::{Script, ScriptedBlobStorage};
+use super::super::tests::holding::{holding_storage, reached_deadline};
+use super::super::tests::scripted::{Script, ScriptedBlobStorage};
 use super::{BlobBackend, Lease, file_size};
 use crate::filesystem_snapshot::SnapshotStoreError;
 use crate::services::golem_config::DEFAULT_FILESYSTEM_SNAPSHOT_STORAGE_CALL_DEADLINE as STORAGE_CALL_DEADLINE;

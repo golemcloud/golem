@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::super::files::SnapshotFiles;
-use super::super::scripted::{Script, ScriptedBlobStorage};
+use super::super::tests::scripted::{Script, ScriptedBlobStorage};
 use super::{copy_scope, delete_scope};
 use golem_common::model::environment::EnvironmentId;
 use golem_service_base::storage::blob::memory::InMemoryBlobStorage;

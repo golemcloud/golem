@@ -784,7 +784,7 @@ mod tests {
     use super::super::backend::BlobBackend;
     use super::super::fault::is_lease_expired;
     use super::super::files::SnapshotFiles;
-    use super::super::scripted::{Script, ScriptedBlobStorage};
+    use super::super::tests::scripted::{Script, ScriptedBlobStorage};
     use super::{
         CLAIMS_PATH, CLOCK_SKEW_MARGIN, ClaimChoice, ClaimEntry, FREED_PATH, FreedRecord,
         FreedRecords, LEDGERS_PATH, Lease, Percent, PruneLedger, claim_hold, claims_directory,

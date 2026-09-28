@@ -23,7 +23,7 @@ use super::super::prune::{
     CLOCK_SKEW_MARGIN, ClaimChoice, ClaimEntry, LEDGERS_PATH, Percent, PruneLedger, claim_hold,
     next_claim, parse_claim_entry, parse_freed, read_ledger,
 };
-use super::super::scripted::{Script, ScriptedBlobStorage};
+use super::super::tests::scripted::{Script, ScriptedBlobStorage};
 use super::super::tests::{copy_flat_tree, entries, three_file_tree, wait_past_change_times};
 use super::super::{PruneReport, PruneSettings, RepackLimits, RepositoryKey, open_existing};
 use super::{
