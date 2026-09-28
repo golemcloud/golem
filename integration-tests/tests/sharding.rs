@@ -1213,9 +1213,47 @@ mod tests {
         }
 
         let batches = wait_for_invocations(&received, 7, Duration::from_secs(120)).await;
-        let fn_names = extract_function_names(&batches);
+        let oplog = user
+            .get_oplog(&worker_id, OplogIndex::INITIAL)
+            .await
+            .unwrap();
+        let mut expected_completions = Vec::new();
+        let mut fn_names = Vec::new();
+        for entry in oplog {
+            match entry.entry {
+                PublicOplogEntry::AgentInvocationStarted(start) => {
+                    use golem_common::model::oplog::PublicAgentInvocation;
+                    fn_names.push(match start.invocation {
+                        PublicAgentInvocation::AgentInitialization(_) => {
+                            "agent-initialization".to_string()
+                        }
+                        PublicAgentInvocation::AgentMethodInvocation(method) => method.method_name,
+                        other => panic!("unexpected source invocation: {other:?}"),
+                    });
+                }
+                PublicOplogEntry::AgentInvocationFinished(_) => {
+                    expected_completions.push(entry.oplog_index.as_u64());
+                }
+                _ => {}
+            }
+        }
+        // A processor may receive the start and finish in different instances. Its
+        // resident name map is not authoritative; compare delivered finish indices
+        // against the source history, including duplicates and missing completions.
+        let mut delivered_completions: Vec<_> = batches
+            .iter()
+            .flat_map(|batch| {
+                batch
+                    .invocations
+                    .iter()
+                    .map(|invocation| invocation.oplog_index)
+            })
+            .collect();
+        expected_completions.sort_unstable();
+        delivered_completions.sort_unstable();
+        assert_eq!(expected_completions.len(), 7);
+        assert_eq!(delivered_completions, expected_completions);
         // Exactly-once: exactly 1 init + 6 adds, no duplicates across shard reassignment.
-        // Current bug: no checkpoint, so shard reassignment causes re-delivery.
         assert_eq!(
             fn_names
                 .iter()

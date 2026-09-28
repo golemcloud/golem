@@ -1,0 +1,110 @@
+import { Callout } from "nextra/components"
+
+# Golem-Native Tools
+
+Golem-native tools are typed, separately deployable operations that agents can call through Golem's runtime. Use them when an agent must act on the world under **operator-controlled permissions** and inside an **enforceable capability sandbox**. Unlike an in-process function or framework hook, the runtime can authorize every call, constrain what the implementation can reach, and apply middleware the caller cannot bypass.
+
+<Callout type="info">
+  Here, **Golem-native** describes the tool model. A **native tool** more narrowly means a privileged implementation compiled into the Golem host. Most tools are ordinary WebAssembly components. Golem currently ships no production inventory of built-in or host-native tools.
+</Callout>
+
+## Why use a tool?
+
+A tool creates two independent security boundaries:
+
+1. **Agent permissions** decide whether the caller has authority to perform the operation.
+2. **WebAssembly capabilities** decide what the tool implementation can physically access.
+
+This is stronger than asking agent code to follow a convention. An untrusted or generated agent cannot remove runtime middleware, mint a permission card, add a WIT import, or escape its component sandbox.
+
+Use a Golem tool when you need one or more of these properties:
+
+- fine-grained, revocable authority attached to an agent;
+- filesystem, network, environment, configuration, or secret access limited by the component's imports;
+- durable approval, audit, redaction, quota, or policy middleware;
+- a typed client across language and component boundaries;
+- a reusable operation published independently of the agent;
+- a safe agent-facing projection of an existing CLI or MCP server.
+
+For a small trusted helper that needs exactly the agent's lifecycle and privileges, a normal library function is simpler.
+
+## Exposure and authorization are separate
+
+A call succeeds only when the tool is both **exposed** and **authorized**:
+
+| Condition | Controlled by |
+| --- | --- |
+| The tool is visible to the agent | Component, environment, and agent tool bindings in `golem.yaml` |
+| The agent may invoke that command | A matching permission card in the agent's wallet |
+
+A binding does not grant authority, and a permission does not install a tool. This separation lets an operator expose a common catalog while granting each agent only the commands it needs. See [Tool authoring and lifecycle](/next/develop/tool-authoring) for bindings and [Application Manifest](/next/app-manifest) for the complete schema.
+
+Do not confuse runtime permission cards with **tool release grants**. A release grant lets an environment consume a published tool artifact. A permission-card grant authorizes a running agent operation. A registry-backed tool can require both, in addition to an agent binding.
+
+## Tool grants and resource grants
+
+Permissions are opaque, host-maintained cards held in an agent's wallet. Two layers commonly apply to one call:
+
+- A **tool grant** authorizes invocation of a command, including its command path, options, flags, and positionals.
+- A **resource grant** authorizes the operation the implementation performs, such as reading a filesystem path or acting on another agent.
+
+Authorizing `files read /reports/q3.csv` does not automatically authorize the underlying filesystem read. Conversely, filesystem authority alone does not authorize calling the tool. Tool and middleware instances act with the calling agent's wallet, narrowed by their binding; they do not receive independent ambient wallets.
+
+Cards can be derived, shared, revoked, and transferred, but derivation is attenuation-only: a child card can narrow authority and expiry, never broaden it. Runtime checks use the invocation's pinned wallet view so recovery and replay reproduce the same authorization decision.
+
+## Isolation and capability scoping
+
+Tool and middleware identity is owned per `(calling agent, entity name)` pair and is never shared between agents. Each component-tool invocation runs in a fresh isolated instance under that owner. Calls between an agent, middleware, and a leaf tool cross runtime-managed instance boundaries.
+
+The component's **WIT imports** are its structural capability declaration:
+
+- without `wasi:filesystem`, it cannot access a filesystem;
+- without socket or HTTP imports, it cannot access the network directly through those WASI interfaces;
+- without the Golem agent host import, it cannot read agent configuration;
+- without the secret-reveal import, it cannot materialize secret plaintext.
+
+When an import is present, the host aliases the owning agent's corresponding view and may narrow it with tool or middleware binding policy. Current bindings can narrow configuration and secret-key access and allow or deny filesystem access. Path- and destination-specific authorization belongs to resource permissions; per-tool path and host binding allowlists are not currently available. A binding cannot grant access the agent did not have. The effective capability is always an intersection, never a union.
+
+This structural boundary complements middleware. Imports answer “can this component perform this class of effect at all?” Middleware and permission cards answer “may this invocation perform this particular operation?”
+
+### Privileged host tools
+
+A host-native tool is the exception to WIT-import scoping because its implementation runs inside the host. It still uses the same typed metadata, permission checks, bindings, middleware chain, durable call model, streaming contract, and narrowing policy. Host implementation is not permission bypass: calls through Golem's configuration and resource helpers are checked against the effective agent scope.
+
+## Non-bypassable, durable middleware
+
+Tool middleware is configured by the operator and traversed by the runtime at the `tool-rpc` boundary. Agent code cannot enumerate, reorder, remove, or call around the effective chain. Middleware can:
+
+- reject or rewrite unsafe inputs;
+- require human approval;
+- apply rate, cost, or tenant limits;
+- audit calls and redact outputs;
+- adapt one typed tool surface to another.
+
+When invoked by a durable agent, middleware participates in that agent's durable execution. A human-in-the-loop approval can suspend for hours and survive suspension or executor restart without application-managed checkpoints. Ephemeral owners do not provide this recovery guarantee. Durability does not replace least privilege: approval middleware is an additional guardrail, not authority to exceed the agent wallet or component capabilities.
+
+Universal middleware wraps every tool without changing its schema. Monomorphic middleware wraps a known tool shape and may adapt the presented shape. In both cases the runtime owns traversal; calling the next inner layer requires an invocation-scoped handle that cannot skip layers.
+
+## Secrets remain opaque
+
+Tool schemas can carry secrets as resource handles rather than strings. Agents and pass-through middleware can forward a handle without seeing plaintext. For example, the external Durable Streams API accepts an opaque handle for authentication without revealing it to guest code. Revealing plaintext requires the reveal WIT import, the applicable binding policy, secret-reveal permission, and an audited host call.
+
+While a value remains opaque, its serialized representation carries identity rather than plaintext. After reveal, application code must avoid logging or persisting the returned value. See [Configuration and Secrets](/next/develop/config-and-secrets).
+
+## Typed clients and adapters
+
+One tool definition describes its command tree, inputs, outputs, declared errors, and streams. Golem uses that metadata for discovery, help, runtime validation, and generated or definition-owned typed clients. A tool authored in one supported language can be called from another without reducing its contract to untyped JSON.
+
+The command model is intentionally CLI-shaped: nested commands, global options, flags, fixed and variadic positionals, stdin, stdout, structured results, and exit-coded errors. You can therefore wrap `git`, `curl`, or another executable behind a typed, permission-aware surface. MCP imports are projected into the same registry and called through the same typed runtime boundary; the generated client does not embed the MCP endpoint or credentials.
+
+## Choose the right boundary
+
+| Boundary | Choose it when | Trade-off |
+| --- | --- | --- |
+| Direct library call | Code is trusted, local, and should share the agent's process and privileges | No independent binding, permission, sandbox, publication, or runtime middleware boundary |
+| Agent RPC | The callee has identity, durable state, or a lifecycle of its own | Heavier stateful abstraction; use agents for entities, not stateless utilities |
+| Component tool | You need typed reuse, per-agent isolation, capability scoping, publication, or middleware | Requires a tool component and deployment binding |
+| MCP-imported tool | The implementation already exists behind MCP | MCP transport remains external; Golem projects and governs the exposed surface |
+| Host-native tool | The operation must use privileged runtime internals | Trusted platform code; not protected by guest WIT imports |
+
+The common pattern is: keep pure computation in a library, keep durable business entities as agents, and place externally effective operations behind tools. Continue with [Tool authoring and lifecycle](/next/develop/tool-authoring).

@@ -1211,6 +1211,7 @@ mod tests {
 
     fn test_agent_type(mode: AgentMode) -> AgentTypeSchema {
         AgentTypeSchema {
+            kind: golem_common::schema::agent::AgentTypeKind::Regular,
             type_name: AgentTypeName("weather-agent".to_string()),
             description: String::new(),
             source_language: String::new(),

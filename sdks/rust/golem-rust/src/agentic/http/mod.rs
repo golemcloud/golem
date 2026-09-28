@@ -14,10 +14,12 @@
 
 pub use endpoint::*;
 pub use mount::*;
+pub use router::*;
 pub use validations::*;
 
 mod endpoint;
 mod mount;
 mod path;
 mod query;
+mod router;
 mod validations;

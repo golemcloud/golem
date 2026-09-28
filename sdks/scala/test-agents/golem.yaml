@@ -27,6 +27,13 @@ components:
     outputWasm: .golem/agents/scala_examples.wasm
 
 agents:
+  ScalaWebsite:
+    config:
+      greeting: Hello from Scala
+    files:
+    - sourcePath: ./http-assets/index.html
+      targetPath: /site/index.html
+      permissions: read-only
   ConfigAgent:
     config:
       appName: "ManifestApp"
@@ -58,6 +65,8 @@ httpApi:
     local:
     - domain: localhost:9006
       agents:
+        ScalaWebsite: { }
+        HttpDocuments: { }
         WeatherAgent: { }
         InventoryAgent: { }
         CatalogAgent: { }

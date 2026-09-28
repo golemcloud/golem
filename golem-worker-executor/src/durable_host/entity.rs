@@ -18,12 +18,13 @@
 //! an entity record here, launch the returned invocation scope through `ActiveAgent`, then hand the
 //! body handle back to [`EntityInvocationDurability::drive_access`].
 
-use crate::durable_host::DurableWorkerCtx;
 use crate::durable_host::concurrent::{
     AccessClaimOptions, DurableCallSession, HistoricalReconstruction, LeaveIncompleteOnDrop,
     ReconstructionReplayOutcome, ReplayAccessStartOutcome,
 };
 use crate::durable_host::durable_session::strip_typed_streams;
+use crate::durable_host::replay_state::ReplayState;
+use crate::durable_host::{DurableWorkerCtx, commit_replay_jumps};
 use crate::services::HasWorker;
 use crate::services::oplog::OplogOps;
 use crate::worker::entity_invocation::{EntityInvocationHandle, EntityInvocationResources};
@@ -515,16 +516,8 @@ impl EntityInvocationDurability {
                 if !regions.is_empty() {
                     let worker =
                         store.with(|mut access| get_ctx(access.data_mut()).public_state.worker());
-                    for region in &regions {
-                        worker
-                            .add_and_commit_oplog(OplogEntry::jump(
-                                Some(handle.start_index()),
-                                region.clone(),
-                            ))
-                            .await;
-                    }
-                    replay.register_entity_atomic_rollback(regions).await?;
-                    worker.reattach_worker_status().await;
+                    commit_replay_jumps(&worker, &replay, Some(handle.start_index()), regions)
+                        .await?;
                 }
                 InvocationExecutionMode::ReplayingIncomplete
             }
@@ -922,6 +915,7 @@ impl EntityInvocationDurability {
             let terminal = Arc::new(Mutex::new(None));
             let replay_terminal = terminal.clone();
             let structural_replay_state = replay_state.clone();
+            let residual_replay_state = replay_state.clone();
             let structural_start = invocation.start_index();
             let unconsumed_scope = async move {
                 structural_replay_state
@@ -964,6 +958,12 @@ impl EntityInvocationDurability {
                         || abort.abort(),
                         &mut historical_reconstruction,
                         cancellation.as_ref(),
+                    )
+                    .await?;
+                    ensure_body_claimed_retained_descendants(
+                        &residual_replay_state,
+                        &invocation,
+                        &reconstruction,
                     )
                     .await?;
                     let terminal = terminal.lock().unwrap().take().ok_or_else(|| {
@@ -1151,6 +1151,16 @@ impl EntityInvocationDurability {
             cancellation.as_ref(),
         )
         .await;
+        let reconstruction = match reconstruction {
+            Ok(reconstruction) => ensure_body_claimed_retained_descendants(
+                &replay_state,
+                &invocation,
+                &reconstruction,
+            )
+            .await
+            .map(|()| reconstruction),
+            Err(error) => Err(error),
+        };
         let reconstruction = match reconstruction {
             Ok(reconstruction) => reconstruction,
             Err(error) => {
@@ -1471,6 +1481,42 @@ where
             "failed to load entity invocation request at {start_index}: {error}"
         ))
     })
+}
+
+/// Fails a settled entity body that returned without claiming one of its recorded descendant
+/// `Start`s. The cursor retains unclaimed `Start`s instead of parking on them, so this is the
+/// structural divergence a stalled cursor used to surface through
+/// [`ReplayState::await_unconsumed_scope_entry`]. Only outcomes whose body ran to completion are
+/// checked: an aborted or cancelled body legitimately leaves its recorded subtree unclaimed.
+async fn ensure_body_claimed_retained_descendants<R, H>(
+    replay_state: &ReplayState,
+    invocation: &EntityInvocationId,
+    reconstruction: &EntityReconstructionOutcome<R, H>,
+) -> Result<(), WorkerExecutorError> {
+    let body_completed = match reconstruction {
+        EntityReconstructionOutcome::Replayed(_)
+        | EntityReconstructionOutcome::Incomplete { .. } => true,
+        EntityReconstructionOutcome::Cancelled(_)
+        | EntityReconstructionOutcome::IncompleteCancelled { .. }
+        | EntityReconstructionOutcome::IncompleteLiveAdmissionCancelled { .. } => false,
+    };
+    if !body_completed {
+        return Ok(());
+    }
+    let active_bodies = replay_state
+        .historical_reconstruction_bodies()
+        .borrow()
+        .clone();
+    match replay_state
+        .unclaimed_retained_descendant(invocation.start_index(), active_bodies)
+        .await?
+    {
+        None => Ok(()),
+        Some(unclaimed) => Err(WorkerExecutorError::unexpected_oplog_entry(
+            format!("completed replay body for {invocation}"),
+            format!("entity body returned before consuming its recorded descendant at {unclaimed}"),
+        )),
+    }
 }
 
 trait ReconstructionGuard {

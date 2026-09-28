@@ -1,61 +1,63 @@
 ---
 name: golem-add-moonbit-package
-description: "Adding MoonBit package dependencies to a Golem project. Use when the user asks to add a mooncakes dependency, library, or package to a MoonBit project."
+description: "Adds a MoonBit module and package import to a Golem project. Use when adding a mooncakes dependency or importing one of its packages."
 ---
 
-# Adding a MoonBit Package Dependency
+# Add a MoonBit dependency
 
-## Overview
+Current MoonBit projects declare module dependencies in `moon.mod` and package imports in
+`moon.pkg`. The JSON files `moon.mod.json` and `moon.pkg.json` are legacy formats; do not create
+them for application source.
 
-MoonBit projects manage dependencies through the `moon.mod.json` file at the project root. Dependencies are published on [mooncakes.io](https://mooncakes.io) and installed with the `moon` CLI.
+## Add the module
 
-## Steps
-
-1. **Edit `moon.mod.json`** — add the package to the `"deps"` section
-2. **Run `moon install`** — download and install the dependency
-3. **Use the package** — import it in your `.mbt` files
-
-## Adding a Dependency
-
-Edit `moon.mod.json` and add the package under the `"deps"` object with a version constraint:
-
-```json
-{
-  "name": "my-org/my-project",
-  "version": "0.1.0",
-  "deps": {
-    "example/json-utils": "0.2.0"
-  }
-}
-```
-
-Then install:
+Use the package manager so it selects a version and updates `moon.mod`:
 
 ```shell
-moon install
+moon add example/json-utils
 ```
 
-## Version Constraints
+The resulting module declaration has this shape:
 
-Specify the version as a string in `moon.mod.json`. Use the exact version published on mooncakes.io.
+```moonbit
+name = "my-org/my-project"
 
-## Using the Dependency
-
-After installation, reference the package in your `moon.pkg.json` file's `"import"` section and use it in your `.mbt` source files.
-
-In `moon.pkg.json`:
-
-```json
-{
-  "import": [
-    "example/json-utils"
-  ]
+import {
+  "example/json-utils@0.2.0",
 }
 ```
 
-## Key Constraints
+Use `moon add --upgrade example/json-utils` to update an existing dependency. `moon check` and
+`moon build` fetch declared dependencies automatically; the old advice to run `moon install` for
+project dependencies no longer applies.
 
-- Only packages published on [mooncakes.io](https://mooncakes.io) can be added as dependencies
-- Ensure the package is compatible with the `wasm` / `wasm-gc` backend — some MoonBit packages may only support native or JS targets
-- After adding a dependency, always run `moon install` before `golem build`
-- Check the package's documentation on mooncakes.io for usage examples and API reference
+## Import the package
+
+Module dependencies make packages available, but each source package must explicitly import the
+package it uses in `moon.pkg`:
+
+```moonbit
+import {
+  "example/json-utils/parser" @json_parser,
+}
+```
+
+Code can then call that package through `@json_parser`.
+
+For local modules, use a `moon.work` workspace and list each module directory as a member; local
+path dependencies in the new `moon.mod` format are deprecated.
+
+Golem's stock MoonBit build template currently assumes a single-module artifact path. Adding
+workspace members changes Moon's output path, so an unchanged `golem build` will not find the
+component WASM. A Golem component that uses `moon.work` must override its debug and release build,
+embed-source, and `componentWasm` paths. Do not present a workspace dependency as a drop-in change
+to a generated Golem application.
+
+Golem-generated MoonBit bridge modules are a deliberate exception: the bridge generator currently
+emits self-contained modules with `moon.mod.json`. Do not rename or edit that generated file. Put
+the application and generated module in `moon.work`, then import the generated module by its module
+name from the application's `moon.mod` and import its packages from `moon.pkg`.
+
+For an ordinary registry dependency, run `moon check` and `golem build --yes`. Confirm that the
+dependency supports the component's `wasm` target; native-only and JavaScript-only packages cannot
+be linked into a Golem agent.

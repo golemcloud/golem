@@ -87,7 +87,7 @@ The `golem` command line interface provides a set of commands to create, build, 
 
 To get started, you create an application and a single component using one of the supported programming languages with the `golem new` command. If no additional parameters are provided, the command will interactively ask for all required information.
 
-<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
   <Tabs.Tab>
   Create a TypeScript agent using the default template:
 
@@ -96,6 +96,16 @@ To get started, you create an application and a single component using one of th
   ```
 
   Note: For TypeScript, you need to have `npm` installed on your system.
+  </Tabs.Tab>
+
+  <Tabs.Tab>
+  Create an Effect TypeScript agent using the default template:
+
+  ```shell copy
+  golem new --template effect --component-name example:counter --yes agent-examples
+  ```
+
+  Note: Effect agents require `npm`; keep the generated `effect` dependency version aligned with `@golemcloud/effect-golem`.
   </Tabs.Tab>
 
     <Tabs.Tab>
@@ -139,7 +149,7 @@ This compiles the newly created application, which consists of a _single Golem c
 
 ### Write the code
 
-<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
   <Tabs.Tab>
 The default template's source code is located in the `src/counter-agent.ts` file, assuming that the `example:counter` name has been used in the `golem new` command. The directory structure allows applications to have multiple components, even implemented in multiple programming languages if needed.
 
@@ -173,6 +183,35 @@ export const CounterAgentImpl = CounterAgent.implement({
 });
 ```
 
+  </Tabs.Tab>
+
+  <Tabs.Tab>
+The default Effect template's source code is in `src/counter-agent.ts`.
+Replace that file with the following code and remove the generated `httpApi` section from the component's `golem.yaml` for now. The HTTP API section later in this guide adds a deployment matching the renamed `CounterAgent`.
+
+```typescript
+import { Effect, Ref, Schema } from "effect"
+import { defineAgent, method } from "@golemcloud/effect-golem"
+
+export const CounterAgent = defineAgent({
+  name: "CounterAgent",
+  mode: "durable",
+  id: { name: Schema.String },
+  methods: {
+    increment: method({
+      input: {},
+      success: Schema.Number,
+      promptHint: "Increase the count by one",
+      description: "Increases the count by one and returns the new value",
+    }),
+  },
+}).implement({
+  init: () => Ref.make(0),
+  methods: (count) => ({
+    increment: () => Ref.updateAndGet(count, (value) => value + 1),
+  }),
+})
+```
   </Tabs.Tab>
 
  <Tabs.Tab>
@@ -358,7 +397,7 @@ Agents can be invoked from other agents, through the REPL or CLI, or Golem's Inv
 
 To finish the Quickstart example with an HTTP POST endpoint for tracking counts, first add a **mount point** and an **endpoint** decorator to the agent code:
 
-<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
   <Tabs.Tab>
 ```typescript
 import { z } from 'zod';
@@ -388,6 +427,34 @@ export const CounterAgentImpl = CounterAgent.implement({
         },
     },
 });
+```
+  </Tabs.Tab>
+
+  <Tabs.Tab>
+```typescript
+import { Effect, Ref, Schema } from "effect"
+import { defineAgent, Http, method } from "@golemcloud/effect-golem"
+
+export const CounterAgent = defineAgent({
+  name: "CounterAgent",
+  mode: "durable",
+  id: { name: Schema.String },
+  http: Http.mount("/counters/{name}"),
+  methods: {
+    increment: method({
+      input: {},
+      success: Schema.Number,
+      http: [Http.post("/increment")],
+      promptHint: "Increase the count by one",
+      description: "Increases the count by one and returns the new value",
+    }),
+  },
+}).implement({
+  init: () => Ref.make(0),
+  methods: (count) => ({
+    increment: () => Ref.updateAndGet(count, (value) => value + 1),
+  }),
+})
 ```
   </Tabs.Tab>
 

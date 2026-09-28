@@ -253,6 +253,7 @@ impl DefaultWorkerEnumerationService {
                     let last_known_status = calculate_last_known_status_with_checkpoint(
                         self,
                         &owned_agent_id,
+                        worker_metadata.initial_worker_metadata.fingerprint,
                         agent_mode,
                         worker_metadata.last_known_status,
                     )

@@ -27,9 +27,9 @@ use anyhow::anyhow;
 use chrono::Utc;
 use cookie::Cookie;
 use golem_service_base::custom_api::SecuritySchemeDetails;
-use http::StatusCode;
+use http::{HeaderMap, HeaderValue, StatusCode};
 use openidconnect::{AuthorizationCode, CsrfToken, Nonce};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 use tracing::debug;
 use uuid::Uuid;
@@ -132,9 +132,15 @@ impl OidcHandler {
             ))
             .build();
 
-        let mut headers = HashMap::new();
-        headers.insert(http::header::SET_COOKIE, cookie.to_string());
-        headers.insert(http::header::LOCATION, pending_login.original_uri.clone());
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            http::header::SET_COOKIE,
+            HeaderValue::from_str(&cookie.to_string()).map_err(anyhow::Error::from)?,
+        );
+        headers.insert(
+            http::header::LOCATION,
+            HeaderValue::from_str(&pending_login.original_uri).map_err(anyhow::Error::from)?,
+        );
 
         Ok(RouteExecutionResult {
             status: StatusCode::FOUND,
@@ -163,7 +169,7 @@ impl OidcHandler {
         } else {
             // missing or invalid session_id -> restart flow
             let execution_result = self
-                .start_oidc_flow_for_route(request, security_scheme)
+                .start_oidc_flow_for_route(request, resolved_route, security_scheme)
                 .await?;
             return Ok(Some(execution_result));
         };
@@ -176,7 +182,7 @@ impl OidcHandler {
         let Some(session) = session_opt else {
             // session information missing, restart flow
             let auth_url = self
-                .start_oidc_flow_for_route(request, security_scheme)
+                .start_oidc_flow_for_route(request, resolved_route, security_scheme)
                 .await?;
             return Ok(Some(auth_url));
         };
@@ -189,6 +195,7 @@ impl OidcHandler {
     async fn start_oidc_flow_for_route(
         &self,
         request: &RichRequest,
+        resolved_route: &ResolvedRouteEntry,
         security_scheme: &SecuritySchemeDetails,
     ) -> Result<RouteExecutionResult, RequestHandlerError> {
         let state = CsrfToken::new_random();
@@ -197,7 +204,14 @@ impl OidcHandler {
         let pending_login = PendingOidcLogin {
             scheme_id: security_scheme.id,
             nonce: nonce.clone(),
-            original_uri: request.underlying.uri().to_string(),
+            original_uri: format!(
+                "{}://{}{}",
+                resolved_route.public_scheme,
+                resolved_route.public_authority,
+                request.underlying.uri().path_and_query().ok_or_else(|| {
+                    RequestHandlerError::invariant_violated("Selected request has no path")
+                })?
+            ),
         };
 
         self.session_store
@@ -219,8 +233,11 @@ impl OidcHandler {
             .get_authorization_url(security_scheme, scopes, state, nonce)
             .await?;
 
-        let mut headers = std::collections::HashMap::new();
-        headers.insert(http::header::LOCATION, auth_url.url.to_string());
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            http::header::LOCATION,
+            HeaderValue::from_str(auth_url.url.as_str()).map_err(anyhow::Error::from)?,
+        );
         Ok(RouteExecutionResult {
             status: http::StatusCode::FOUND,
             headers,

@@ -4449,6 +4449,7 @@ mod streaming_tests {
             SchemaType::stream(Some(SchemaType::u8())),
         ))));
         let agent_type = AgentTypeSchema {
+            kind: golem_common::schema::agent::AgentTypeKind::Regular,
             type_name: AgentTypeName("StreamingFixture".to_string()),
             description: String::new(),
             source_language: "rust".to_string(),

@@ -611,6 +611,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         let source_status = calculate_last_known_status_with_checkpoint(
             self,
             &owned_source_agent_id,
+            initial_source_worker_metadata.fingerprint,
             agent_mode,
             source.last_known_status,
         )

@@ -21,11 +21,13 @@ use golem_common::model::base64::Base64;
 use golem_common::tracing::TracingConfig;
 use golem_service_base::clients::registry::GrpcRegistryServiceConfig;
 use golem_service_base::clients::shard_manager::GrpcShardManagerConfig;
+use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::grpc::client::GrpcClientConfig;
 use golem_service_base::grpc::server::GrpcServerTlsConfig;
 use golem_service_base::service::routing_table::RoutingTableConfig;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Write};
+use std::net::IpAddr;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -34,6 +36,7 @@ pub struct WorkerServiceConfig {
     pub environment: String,
     pub tracing: TracingConfig,
     pub gateway_session_storage: SessionStoreConfig,
+    pub blob_storage: BlobStorageConfig,
     pub port: u16,
     pub custom_request_port: u16,
     pub grpc: GrpcApiConfig,
@@ -52,6 +55,8 @@ pub struct WorkerServiceConfig {
     #[serde(default)]
     pub agent_resolution_cache: AgentResolutionCacheConfig,
     #[serde(default)]
+    pub http_session: HttpSessionLimits,
+    #[serde(default)]
     pub durable_streams: DurableStreamsConfig,
 }
 
@@ -67,6 +72,12 @@ impl SafeDisplay for WorkerServiceConfig {
         let _ = writeln!(&mut result, "environment: {}", self.environment);
         let _ = writeln!(&mut result, "tracing:");
         let _ = writeln!(&mut result, "{}", self.tracing.to_safe_string_indented());
+        let _ = writeln!(&mut result, "blob storage:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.blob_storage.to_safe_string_indented()
+        );
         let _ = writeln!(&mut result, "gateway session storage:");
         let _ = writeln!(
             result,
@@ -151,6 +162,13 @@ impl SafeDisplay for WorkerServiceConfig {
             self.agent_resolution_cache.to_safe_string_indented()
         );
 
+        let _ = writeln!(&mut result, "HTTP session:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.http_session.to_safe_string_indented()
+        );
+
         let _ = writeln!(&mut result, "durable streams:");
         let _ = writeln!(
             &mut result,
@@ -167,6 +185,7 @@ impl Default for WorkerServiceConfig {
         Self {
             environment: "local".to_string(),
             gateway_session_storage: SessionStoreConfig::Redis(Default::default()),
+            blob_storage: BlobStorageConfig::default(),
             tracing: TracingConfig::local_dev("worker-service"),
             port: 9005,
             custom_request_port: 9006,
@@ -184,6 +203,7 @@ impl Default for WorkerServiceConfig {
             webhook_callback_handler: WebhookCallbackHandlerConfig::default(),
             invocation_session_tokens: InvocationSessionTokenConfig::default(),
             agent_resolution_cache: AgentResolutionCacheConfig::default(),
+            http_session: HttpSessionLimits::default(),
             durable_streams: DurableStreamsConfig::default(),
         }
     }
@@ -192,6 +212,97 @@ impl Default for WorkerServiceConfig {
 impl HasConfigExamples<WorkerServiceConfig> for WorkerServiceConfig {
     fn examples() -> Vec<ConfigExample<WorkerServiceConfig>> {
         vec![]
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct HttpSessionLimits {
+    /// Encoded input credit budget, including per-byte protobuf nodes and frame overhead.
+    /// This is not a raw HTTP body-size limit; credits are returned after executor ACKs.
+    pub retained_input_bytes: usize,
+    pub retained_input_frames: usize,
+    /// Maximum queued response frames. Together with `max_event_bytes`, this bounds queued output
+    /// allocation to `event_queue_frames * max_event_bytes` bytes.
+    pub event_queue_frames: usize,
+    pub command_queue_frames: usize,
+    /// Lifetime reattachment budget for one exchange, including successful reattachments.
+    pub max_resume_attempts: usize,
+    #[serde(with = "humantime_serde")]
+    pub retry_delay: Duration,
+    #[serde(with = "humantime_serde")]
+    pub retry_deadline: Duration,
+    #[serde(with = "humantime_serde")]
+    pub cleanup_timeout: Duration,
+    /// Hard duration cap on the whole HTTP exchange, including streaming response delivery.
+    #[serde(with = "humantime_serde")]
+    pub exchange_timeout: Duration,
+    /// Maximum encoded event size, including the start response head and every subsequent frame.
+    pub max_event_bytes: usize,
+}
+
+impl HttpSessionLimits {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.retained_input_bytes < 136 {
+            return Err("retained_input_bytes must be at least 136".into());
+        }
+        if self.retained_input_bytes > u32::MAX as usize {
+            return Err("retained_input_bytes must fit in u32".into());
+        }
+        if self.retained_input_frames == 0
+            || self.event_queue_frames == 0
+            || self.command_queue_frames == 0
+            || self.max_resume_attempts == 0
+            || self.retry_deadline.is_zero()
+            || self.cleanup_timeout.is_zero()
+            || self.exchange_timeout.is_zero()
+            || self.max_event_bytes == 0
+        {
+            return Err("HTTP session limits and durations must be non-zero".into());
+        }
+        let input_channel_capacity = self
+            .retained_input_frames
+            .checked_add(2)
+            .ok_or("retained input channel capacity overflows")?;
+        for (name, frames) in [
+            ("retained_input_frames", self.retained_input_frames),
+            ("event_queue_frames", self.event_queue_frames),
+            ("command_queue_frames", self.command_queue_frames),
+        ] {
+            if frames > tokio::sync::Semaphore::MAX_PERMITS {
+                return Err(format!("{name} exceeds the maximum supported capacity"));
+            }
+        }
+        if input_channel_capacity > tokio::sync::Semaphore::MAX_PERMITS {
+            return Err("retained input channel exceeds the maximum supported capacity".into());
+        }
+        self.event_queue_frames
+            .checked_mul(self.max_event_bytes)
+            .ok_or("queued output byte budget overflows")?;
+        Ok(())
+    }
+}
+
+impl Default for HttpSessionLimits {
+    fn default() -> Self {
+        Self {
+            retained_input_bytes: 4 * 1024 * 1024,
+            retained_input_frames: 32,
+            event_queue_frames: 2,
+            command_queue_frames: 16,
+            max_resume_attempts: 4,
+            retry_delay: Duration::from_millis(100),
+            retry_deadline: Duration::from_secs(10),
+            cleanup_timeout: Duration::from_secs(2),
+            exchange_timeout: Duration::from_secs(300),
+            // The executor permits a 16 MiB encoded item; allow its transport envelope too.
+            max_event_bytes: 17 * 1024 * 1024,
+        }
+    }
+}
+
+impl SafeDisplay for HttpSessionLimits {
+    fn to_safe_string(&self) -> String {
+        format!("{self:#?}")
     }
 }
 
@@ -316,6 +427,9 @@ pub struct RouteResolverConfig {
     pub router_cache_ttl: Duration,
     #[serde(with = "humantime_serde")]
     pub router_cache_eviction_period: Duration,
+    /// Direct peer addresses whose X-Forwarded-Proto and X-Forwarded-Host are authoritative.
+    #[serde(default)]
+    pub trusted_ingress_addresses: Vec<IpAddr>,
 }
 
 impl SafeDisplay for RouteResolverConfig {
@@ -325,6 +439,11 @@ impl SafeDisplay for RouteResolverConfig {
             &mut result,
             "router_cache_max_capacity: {}",
             self.router_cache_max_capacity
+        );
+        let _ = writeln!(
+            &mut result,
+            "trusted_ingress_addresses: {:?}",
+            self.trusted_ingress_addresses
         );
         let _ = writeln!(&mut result, "router_cache_ttl: {:?}", self.router_cache_ttl);
         let _ = writeln!(
@@ -342,6 +461,7 @@ impl Default for RouteResolverConfig {
             router_cache_max_capacity: 1024,
             router_cache_ttl: Duration::from_mins(10),
             router_cache_eviction_period: Duration::from_mins(1),
+            trusted_ingress_addresses: Vec::new(),
         }
     }
 }
@@ -707,14 +827,123 @@ pub fn make_worker_service_config_loader() -> ConfigLoader<WorkerServiceConfig> 
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use test_r::test;
 
-    use super::make_worker_service_config_loader;
+    use super::{HttpSessionLimits, WorkerServiceConfig, make_worker_service_config_loader};
 
     #[test]
     pub fn config_is_loadable() {
         make_worker_service_config_loader()
             .load_or_dump_config()
             .expect("Failed to load config");
+    }
+
+    #[test]
+    fn default_http_session_limits_and_trusted_ingress_are_safe() {
+        let config = WorkerServiceConfig::default();
+
+        assert!(config.http_session.validate().is_ok());
+        assert!(config.route_resolver.trusted_ingress_addresses.is_empty());
+    }
+
+    #[test]
+    fn http_session_limits_reject_zero_counts_and_sizes() {
+        let invalid = [
+            HttpSessionLimits {
+                retained_input_frames: 0,
+                ..Default::default()
+            },
+            HttpSessionLimits {
+                event_queue_frames: 0,
+                ..Default::default()
+            },
+            HttpSessionLimits {
+                command_queue_frames: 0,
+                ..Default::default()
+            },
+            HttpSessionLimits {
+                max_resume_attempts: 0,
+                ..Default::default()
+            },
+            HttpSessionLimits {
+                max_event_bytes: 0,
+                ..Default::default()
+            },
+        ];
+
+        for limits in invalid {
+            assert!(limits.validate().is_err());
+        }
+    }
+
+    #[test]
+    fn http_session_limits_reject_invalid_input_byte_bounds() {
+        assert!(
+            HttpSessionLimits {
+                retained_input_bytes: 135,
+                ..Default::default()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            HttpSessionLimits {
+                retained_input_bytes: u32::MAX as usize + 1,
+                ..Default::default()
+            }
+            .validate()
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn http_session_limits_reject_capacity_and_budget_overflow() {
+        let invalid = [
+            HttpSessionLimits {
+                retained_input_frames: usize::MAX,
+                ..Default::default()
+            },
+            HttpSessionLimits {
+                event_queue_frames: tokio::sync::Semaphore::MAX_PERMITS + 1,
+                ..Default::default()
+            },
+            HttpSessionLimits {
+                command_queue_frames: tokio::sync::Semaphore::MAX_PERMITS + 1,
+                ..Default::default()
+            },
+            HttpSessionLimits {
+                event_queue_frames: 2,
+                max_event_bytes: usize::MAX,
+                ..Default::default()
+            },
+        ];
+
+        for limits in invalid {
+            assert!(limits.validate().is_err());
+        }
+    }
+
+    #[test]
+    fn http_session_limits_reject_zero_required_timeouts() {
+        let invalid = [
+            HttpSessionLimits {
+                retry_deadline: Duration::ZERO,
+                ..Default::default()
+            },
+            HttpSessionLimits {
+                cleanup_timeout: Duration::ZERO,
+                ..Default::default()
+            },
+            HttpSessionLimits {
+                exchange_timeout: Duration::ZERO,
+                ..Default::default()
+            },
+        ];
+
+        for limits in invalid {
+            assert!(limits.validate().is_err());
+        }
     }
 }

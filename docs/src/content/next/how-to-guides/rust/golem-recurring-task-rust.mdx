@@ -1,211 +1,101 @@
-# Recurring Tasks via Self-Scheduling (Rust)
+# Recurring tasks via self-scheduling (Rust)
 
-## Overview
+A durable agent can schedule its own next invocation after completing each tick. Scheduled
+invocations survive recovery and execute sequentially with the agent's other invocations.
 
-A Golem agent can act as its own scheduler by calling `schedule_` on itself at the end of each invocation. This creates a durable, crash-resilient recurring task — if the agent restarts, the scheduled invocation is still pending and will fire at the designated time.
-
-## Basic Pattern
-
-The agent schedules its own method to run again after a delay:
+Use the current `#[agent_definition]` and `#[agent_implementation]` macros, construct a
+`golem_rust::ScheduledTime`, pass method arguments before the scheduled time, and handle the
+generated scheduling result:
 
 ```rust
-use golem_rust::wasip2::clocks::wall_clock::Datetime;
+use golem_rust::{ScheduledTime, agent_definition, agent_implementation};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+fn after(delay: Duration) -> ScheduledTime {
+    let at = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("time went backwards")
+        + delay;
+    ScheduledTime {
+        seconds: at.as_secs() as i64,
+        nanoseconds: at.subsec_nanos(),
+    }
+}
 
 #[agent_definition]
-pub trait PollerAgent: HasSchema {
+pub trait PollerAgent {
     fn new(name: String) -> Self;
-    fn start(&mut self);
-    fn poll(&mut self);
+    async fn poll(&mut self, endpoint: String);
 }
 
+struct PollerAgentImpl {
+    name: String,
+    stopped: bool,
+}
+
+#[agent_implementation]
 impl PollerAgent for PollerAgentImpl {
     fn new(name: String) -> Self {
-        Self { name }
+        Self { name, stopped: false }
     }
 
-    fn start(&mut self) {
-        // Kick off the first poll
-        self.poll();
-    }
+    async fn poll(&mut self, endpoint: String) {
+        if self.stopped {
+            return;
+        }
 
-    fn poll(&mut self) {
-        // 1. Do the recurring work
-        do_work();
+        do_work(&endpoint).await;
 
-        // 2. Schedule the next run (60 seconds from now)
-        let mut client = PollerAgentClient::get(self.name.clone());
-        let now_secs = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-        client.schedule_poll(Datetime {
-            seconds: now_secs + 60,
-            nanoseconds: 0,
-        });
+        let me = PollerAgentClient::get(self.name.clone());
+        me.schedule_poll(endpoint, after(Duration::from_secs(60)))
+            .expect("failed to schedule next poll");
     }
 }
 ```
 
-## Exponential Backoff
+Generated durable-agent scheduling methods return
+`Result<(), golem_rust::golem_agentic::golem::agent::host::RpcError>`. Never discard
+that result: a failed enqueue breaks the recurring chain. For a method with arguments, the
+signature is `schedule_<method>(arguments..., scheduled_time)`; `ScheduledTime` is always last.
 
-Increase the delay on repeated failures, reset on success:
+## Backoff
+
+Store the consecutive failure count in agent state. Reset it after success; otherwise compute a
+capped delay and schedule one next invocation. For example:
 
 ```rust
-fn poll(&mut self) {
-    let success = try_work();
+let delay = if succeeded {
+    self.consecutive_failures = 0;
+    60
+} else {
+    self.consecutive_failures += 1;
+    (60 * 2u64.pow(self.consecutive_failures.min(6))).min(3600)
+};
 
-    let delay = if success {
-        self.consecutive_failures = 0;
-        self.base_interval_secs // e.g. 60
-    } else {
-        self.consecutive_failures += 1;
-        let backoff = self.base_interval_secs * 2u64.pow(self.consecutive_failures.min(6));
-        backoff.min(self.max_interval_secs) // cap at e.g. 3600
-    };
-
-    let mut client = PollerAgentClient::get(self.name.clone());
-    let now_secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-    client.schedule_poll(Datetime {
-        seconds: now_secs + delay,
-        nanoseconds: 0,
-    });
-}
+PollerAgentClient::get(self.name.clone())
+    .schedule_poll(endpoint, after(Duration::from_secs(delay)))
+    .expect("failed to schedule retry");
 ```
 
-## Cancellation with CancellationToken
+## Cancel the pending tick
 
-The Rust SDK generates `schedule_cancelable_{method}` variants that return a `CancellationToken`. Store the token and cancel it to stop the next scheduled invocation:
+`schedule_cancelable_<method>(arguments..., scheduled_time)` returns
+`Result<CancellationToken, RpcError>` for a durable agent. Store the token in agent state
+and call `cancel()` to prevent that scheduled invocation from starting:
 
 ```rust
-fn poll(&mut self) {
-    if self.cancelled {
-        return; // stop the loop
-    }
+let token = PollerAgentClient::get(self.name.clone())
+    .schedule_cancelable_poll(endpoint, after(Duration::from_secs(60)))
+    .expect("failed to schedule next poll");
+self.pending = Some(token);
 
-    do_work();
-
-    // Schedule next run and store the cancellation token
-    let mut client = PollerAgentClient::get(self.name.clone());
-    let now_secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-    self.pending_token = Some(client.schedule_cancelable_poll(Datetime {
-        seconds: now_secs + 60,
-        nanoseconds: 0,
-    }));
-}
-
-fn cancel(&mut self) {
-    self.cancelled = true;
-    // Cancel the pending scheduled invocation so it never fires
-    if let Some(token) = self.pending_token.take() {
-        token.cancel();
-    }
+if let Some(token) = self.pending.take() {
+    token.cancel();
 }
 ```
 
-### Cancellation via State Flag
+A state flag is still useful because a tick may already have started when cancellation races with
+delivery. Keep only one pending tick unless overlapping schedules are intentional.
 
-For simpler cases, just use a boolean flag — the next scheduled `poll` checks it and exits early:
-
-```rust
-fn poll(&mut self) {
-    if self.cancelled {
-        return;
-    }
-    do_work();
-    self.schedule_next(60);
-}
-
-fn cancel(&mut self) {
-    self.cancelled = true;
-}
-```
-
-### Cancellation from the CLI
-
-Schedule with an explicit idempotency key and cancel the pending invocation:
-
-```shell
-# Schedule with a known idempotency key
-golem agent invoke --trigger --schedule-at 2026-03-15T10:30:00Z -i 'poll-next' 'PollerAgent("my-poller")' poll
-
-# Cancel the pending invocation
-golem agent invocation cancel 'PollerAgent("my-poller")' 'poll-next'
-```
-
-## Common Use Cases
-
-### Periodic Polling
-
-Check an external API or queue for new work at regular intervals:
-
-```rust
-fn poll(&mut self) {
-    let items = fetch_pending_items();
-    for item in items {
-        process(item);
-    }
-    self.schedule_next(60); // poll again in 60s
-}
-```
-
-### Periodic Cleanup
-
-Remove expired data or stale resources on a schedule:
-
-```rust
-fn cleanup(&mut self) {
-    self.entries.retain(|e| !e.is_expired());
-    self.schedule_next(3600); // run hourly
-}
-```
-
-### Heartbeat / Keep-Alive
-
-Periodically notify an external service that the agent is alive:
-
-```rust
-fn heartbeat(&mut self) {
-    send_heartbeat(&self.service_url);
-    self.schedule_next(30); // every 30s
-}
-```
-
-## Helper for Scheduling Self
-
-Extract the scheduling logic into a helper to keep methods clean:
-
-```rust
-impl PollerAgentImpl {
-    fn schedule_next(&self, delay_secs: u64) {
-        let mut client = PollerAgentClient::get(self.name.clone());
-        let now_secs = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-        client.schedule_poll(Datetime {
-            seconds: now_secs + delay_secs,
-            nanoseconds: 0,
-        });
-    }
-}
-```
-
-## Key Points
-
-- The agent is durable — if it crashes, the pending scheduled invocation still fires and the agent recovers
-- Invocations are sequential — no concurrent executions of `poll` on the same agent
-- Each `schedule_` call is a fire-and-forget enqueue; the current invocation completes immediately
-- Use a state flag or generation counter to stop the loop gracefully
-- Keep the scheduled method idempotent — it may be retried on recovery
-
-## Recovery & Oplog Growth
-
-Each scheduled tick (heartbeat, poll, cleanup) appends entries to the agent's oplog. For long-running or high-frequency recurring tasks, the oplog grows unboundedly, and recovery on crash will replay the full history — which becomes slow over time.
-
-**You cannot opt out of oplog writes for a durable agent.** The fix is **snapshot-based recovery**: enable periodic snapshotting so recovery starts from the latest snapshot instead of replaying every prior tick. See [`golem-custom-snapshot-rust`](/next/how-to-guides/rust/golem-custom-snapshot-rust) for the `snapshotting = "every(N)"` / `snapshotting = "periodic(...)"` attribute and serde-based or custom save/load implementations.
+Recurring invocations grow the oplog. For long-lived or frequent loops, configure periodic
+snapshots; do not try to bypass durability. Load [`golem-custom-snapshot-rust`](/next/how-to-guides/rust/golem-custom-snapshot-rust) for that workflow.

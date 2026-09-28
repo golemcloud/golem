@@ -36,9 +36,13 @@ function javascript(input, output, isExternal = external) {
       commonjs(),
       typescript({
         tsconfig: './tsconfig.json',
-        include: ['src/**/*', 'types'],
+        include: [
+          'ts/packages/golem-ts-sdk/src/**/*',
+          'ts/packages/golem-ts-sdk/types',
+          '**/http-contract/index.ts',
+        ],
         tsconfigOverride: {
-          compilerOptions: { declaration: false },
+          compilerOptions: { declaration: false, rootDir: '../../..' },
         },
       }),
       terser(),
@@ -69,12 +73,13 @@ function declarations(input, output) {
     },
     external,
     onwarn,
-    plugins: [dts(), prependVirtualTypes(output)],
+    plugins: [dts({ includeExternal: ['@golemcloud/http-contract'] }), prependVirtualTypes(output)],
   };
 }
 
 export default defineConfig([
   javascript('src/index.ts', 'dist/index.mjs'),
+  javascript('src/httpRouterContract.ts', 'dist/http-router.mjs'),
   javascript('src/schema/public.ts', 'dist/schema.mjs'),
   javascript('src/reflection.ts', 'dist/reflection.mjs'),
   javascript(
@@ -84,6 +89,7 @@ export default defineConfig([
   ),
   javascript('src/middlewareRuntime.ts', 'dist/middleware-runtime.mjs'),
   declarations('src/index.ts', 'dist/index.d.mts'),
+  declarations('src/httpRouterContract.ts', 'dist/http-router.d.mts'),
   declarations('src/schema/public.ts', 'dist/schema.d.mts'),
   declarations('src/reflection.ts', 'dist/reflection.d.mts'),
   declarations('src/middleware.ts', 'dist/middleware.d.mts'),

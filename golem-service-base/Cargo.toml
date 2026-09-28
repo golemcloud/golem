@@ -52,6 +52,7 @@ humantime-serde = { workspace = true }
 include_dir = { workspace = true }
 indexmap.workspace = true
 lazy_static = { workspace = true }
+libsqlite3-sys = { workspace = true }
 metrics-prometheus = { workspace = true }
 openidconnect.workspace = true
 pin-project = { workspace = true }

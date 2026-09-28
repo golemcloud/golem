@@ -391,13 +391,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "glob-match"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9985c9503b412198aa4197559e9a318524ebc4519c229bfa05a535828c950b9d"
+
+[[package]]
 name = "golem-rust"
 version = "0.0.0"
 dependencies = [
  "async-trait",
  "ctor",
+ "glob-match",
  "golem-rust-macro",
  "golem-schema",
+ "golem-tool-metadata",
  "http",
  "log",
  "serde",
@@ -454,6 +462,13 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "golem-tool-metadata"
+version = "0.0.0"
+dependencies = [
+ "golem-schema",
 ]
 
 [[package]]

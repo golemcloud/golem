@@ -52,7 +52,7 @@ fn[X] new_future_promise(cleanup : ((X) -> Unit)?) -> (Future[X], Promise[X]) {
       reading: false,
     },
   }
-  ({ inner: Promised(cell), }, { cell, })
+  ({ inner: Promised(cell) }, { cell, })
 }
 
 ///|

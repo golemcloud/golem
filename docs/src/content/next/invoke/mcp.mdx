@@ -99,7 +99,7 @@ Singleton agents (those with no constructor parameters) expose parameterless met
 
 Method descriptions and prompt hints become MCP tool and resource metadata, helping AI models understand what each tool does and how to use it. TypeScript defines them with the `description` and `promptHint` properties of `method(...)`; other SDKs use the corresponding language-specific annotations.
 
-<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
 <Tabs.Tab>
 ```typescript
 import { z } from 'zod';
@@ -130,6 +130,31 @@ export const CounterAgentImpl = CounterAgent.implement({
 ```
 </Tabs.Tab>
 <Tabs.Tab>
+```typescript
+import { Effect, Ref, Schema } from "effect"
+import { defineAgent, method } from "@golemcloud/effect-golem"
+
+export const CounterAgent = defineAgent({
+  name: "CounterAgent",
+  mode: "durable",
+  id: { name: Schema.String },
+  methods: {
+    incrementBy: method({
+      input: { value: Schema.Number },
+      success: Schema.Number,
+      description: "Add a value to the current counter",
+      promptHint: "Increments the counter by the given value and returns the new count",
+    }),
+  },
+}).implement({
+  init: () => Ref.make(0),
+  methods: (count) => ({
+    incrementBy: ({ value }) => Ref.updateAndGet(count, (current) => current + value),
+  }),
+})
+```
+</Tabs.Tab>
+<Tabs.Tab>
 ```rust
 #[agent_definition]
 pub trait CounterAgent {
@@ -151,9 +176,9 @@ trait CounterAgent extends BaseAgent {
 </Tabs.Tab>
 <Tabs.Tab>
 ```moonbit
+/// Add a value to the current counter
 #derive.agent
-#derive.prompt("Increments the counter by the given value and returns the new count")
-#derive.description("Add a value to the current counter")
+#derive.prompt_hint("Increments the counter by the given value and returns the new count")
 pub fn CounterAgent::increment_by(self : Self, value : UInt64) -> UInt64 {
   // ...
 }
@@ -187,6 +212,10 @@ Golem provides special data types that map naturally to MCP content types:
 - **`Multipart`** — for multipart data, supporting mixed content in a single response
 
 These types allow agents to exchange rich content with MCP clients beyond simple JSON values.
+
+<Callout type="warning">
+MoonBit currently supports schema-native multimodal values through `@multimodal.Multimodal[T]` and `#derive.multimodal`, but does not yet provide user-facing `UnstructuredText`, `UnstructuredBinary`, or multipart wrappers. Use supported structured schemas or multimodal values instead; the removed `#derive.text_languages` and `#derive.mime_types` annotations are not available.
+</Callout>
 
 ## Testing with MCP Inspector
 

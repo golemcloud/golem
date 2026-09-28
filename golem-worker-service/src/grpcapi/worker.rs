@@ -1311,12 +1311,15 @@ mod protocol_tests {
     use super::{validated_request_tail, validated_response_stream};
     use futures::{FutureExt, StreamExt, stream};
     use golem_api_grpc::invocation_session_protocol::InvocationSessionState;
-    use golem_api_grpc::proto::golem::common::Empty;
+    use golem_api_grpc::proto::golem::common::{Empty, EnvironmentId, Uuid};
     use golem_api_grpc::proto::golem::schema::{SchemaValue, schema_value};
     use golem_api_grpc::proto::golem::worker::{
-        AgentId, IdempotencyKey, InvocationAccepted, InvocationRequest, InvocationResponse,
-        InvocationSessionCompletion, InvocationSessionResult, InvocationStart, invocation_request,
-        invocation_response, invocation_session_completion, invocation_session_result,
+        AgentId, DurableStreamHandle, DurableStreamMapping, IdempotencyKey, InvocationAccepted,
+        InvocationRequest, InvocationResponse, InvocationSessionCompletion,
+        InvocationSessionResult, InvocationStart, OutputStreamEnd, OutputStreamItem, ResumeAttach,
+        ResumeOperation, StreamCursor, StreamInvocationIdentity, StreamMappingRole,
+        invocation_request, invocation_response, invocation_session_completion,
+        invocation_session_result,
     };
     use std::sync::Arc;
     use test_r::test;
@@ -1330,7 +1333,12 @@ mod protocol_tests {
 
     fn agent_id() -> Option<AgentId> {
         Some(AgentId {
-            component_id: None,
+            component_id: Some(golem_api_grpc::proto::golem::component::ComponentId {
+                value: Some(Uuid {
+                    high_bits: 0,
+                    low_bits: 20,
+                }),
+            }),
             name: "agent".to_string(),
         })
     }
@@ -1446,6 +1454,130 @@ mod protocol_tests {
             Some(invocation_response::Response::Finished(_))
         ));
         assert!(responses.next().await.is_none());
+    }
+
+    #[test]
+    async fn takeover_preserves_terminal_roots_and_requires_child_terminals() {
+        let uuid = |low_bits| Uuid {
+            high_bits: 0,
+            low_bits,
+        };
+        let offset = |index| {
+            golem_common::model::durable_stream::StreamOffset::new(
+                golem_common::model::oplog::OplogIndex::from_u64(index),
+                0,
+            )
+            .as_bytes()
+            .to_vec()
+        };
+        let environment = Some(EnvironmentId {
+            value: Some(uuid(10)),
+        });
+        let mappings = (1..=4)
+            .map(|id| DurableStreamMapping {
+                transport_stream_id: id,
+                role: StreamMappingRole::Output as i32,
+                handle: Some(DurableStreamHandle {
+                    format_version: 1,
+                    stream_id: Some(uuid(id)),
+                    producer_environment_id: environment,
+                    producer: agent_id(),
+                    expected_producer_fingerprint: Some(uuid(11)),
+                    source_invocation: Some(StreamInvocationIdentity {
+                        callee_environment_id: environment,
+                        callee: agent_id(),
+                        callee_fingerprint: Some(uuid(11)),
+                        idempotency_key: key(),
+                    }),
+                    component_revision: Some(1),
+                    element_schema_fingerprint: vec![5; 32],
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })
+            .collect::<Vec<_>>();
+        let request = InvocationRequest {
+            request: Some(invocation_request::Request::ResumeAttach(ResumeAttach {
+                agent_id: agent_id(),
+                idempotency_key: key(),
+                environment_id: environment,
+                attachment_id: Some(uuid(12)),
+                attempt_id: Some(uuid(13)),
+                expected_callee_fingerprint: Some(uuid(11)),
+                expected_epoch: 1,
+                operation: ResumeOperation::Takeover as i32,
+                cursors: (1..=4)
+                    .map(|id| StreamCursor {
+                        stream_id: Some(uuid(id)),
+                        last_observed_offset: Some(offset(1)),
+                    })
+                    .collect(),
+                ..Default::default()
+            })),
+        };
+        let decision = response(invocation_response::Response::Accepted(
+            InvocationAccepted {
+                agent_id: agent_id(),
+                idempotency_key: key(),
+                component_revision: Some(1),
+                environment_id: environment,
+                callee_fingerprint: Some(uuid(11)),
+                attachment_id: Some(uuid(12)),
+                attempt_id: Some(uuid(13)),
+                epoch: 2,
+                stream_mappings: mappings,
+                terminal_cursor_stream_ids: vec![uuid(1), uuid(2)],
+                ..Default::default()
+            },
+        ));
+        for complete_children in [false, true] {
+            let mut state = InvocationSessionState::default();
+            state.validate_trusted_request(&request).unwrap();
+            let state = Arc::new(tokio::sync::Mutex::new(state));
+            let mut frames = vec![decision.clone(), result()];
+            for id in 3..=4 {
+                frames.push(response(invocation_response::Response::OutputItem(
+                    OutputStreamItem {
+                        transport_stream_id: id,
+                        durable_stream_id: Some(uuid(id)),
+                        durable_offset: offset(2),
+                        epoch: 2,
+                        producer_sequence: 1,
+                        logical_item_count: 1,
+                        value: Some(SchemaValue {
+                            value: Some(schema_value::Value::U32Value(id as u32 * 100)),
+                        }),
+                        ..Default::default()
+                    },
+                )));
+                if complete_children {
+                    frames.push(response(invocation_response::Response::OutputEnd(
+                        OutputStreamEnd {
+                            transport_stream_id: id,
+                            durable_stream_id: Some(uuid(id)),
+                            durable_offset: offset(3),
+                            epoch: 2,
+                            producer_sequence: 2,
+                        },
+                    )));
+                }
+            }
+            frames.push(successful_completion());
+            let inbound = stream::iter(frames.clone().into_iter().map(Ok::<_, Status>));
+            let actual = validated_response_stream(inbound, state, None)
+                .collect::<Vec<_>>()
+                .await;
+            if complete_children {
+                assert_eq!(
+                    actual.into_iter().collect::<Result<Vec<_>, _>>().unwrap(),
+                    frames
+                );
+            } else {
+                let error = actual.last().unwrap().as_ref().unwrap_err();
+                assert_eq!(error.code(), tonic::Code::Internal);
+                assert!(error.message().contains("before output streams terminated"));
+            }
+        }
     }
 
     #[test]

@@ -35,6 +35,17 @@ impl ReplayState {
         .await
     }
 
+    /// Drives only terminal entries, without waiting for another positional consumer. A direct
+    /// composite call can resolve a terminal-only result or a retained Start before reconstructing
+    /// its own positional entries. Readiness does not authorize live execution.
+    pub(crate) async fn resolution_ready(
+        &self,
+        handle: &ReplayCallHandle,
+    ) -> Result<bool, WorkerExecutorError> {
+        self.drain_awaited_terminals().await?;
+        Ok(handle.resolution_ready() || self.is_live())
+    }
+
     /// Rejects a resolved delivery marker beyond the effective replay target. Debug target
     /// validation rejects such targets up front; this is defense in depth if the target changes
     /// after resolution. Fork/revert instead remove the future marker from visible history and

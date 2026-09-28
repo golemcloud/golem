@@ -169,5 +169,7 @@ test "checked-in authoring fixture generates middleware source" {
   assert_false(generated.contains("fn __golem_tool_def_Presented"))
   assert_false(generated.contains("fn __golem_tool_invoke_Presented"))
   assert_false(generated.contains("ToolClient"))
-  assert_false(generated.contains("pub impl @tool.ToolErrorSchema for RunError"))
+  assert_false(
+    generated.contains("pub impl @tool.ToolErrorSchema for RunError"),
+  )
 }

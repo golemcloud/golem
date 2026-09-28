@@ -354,6 +354,154 @@ fn durable_stream_control_records_binary_roundtrip_and_validate() {
 }
 
 #[test]
+fn durable_stream_forwarding_records_roundtrip_and_validate() {
+    use crate::model::StreamId;
+    use crate::model::durable_stream::{
+        DurableStreamHandle, LocalStreamId, LocalStreamReaderId, StreamBindingRecord,
+        StreamReaderForwardDestination, StreamReaderForwardIntentRecord,
+        StreamReaderForwardPublication, StreamRecordReference, StreamSessionMappingRecord,
+    };
+    use golem_schema::schema::SchemaFingerprintV1;
+
+    let invocation = durable_stream_test_session_key("forward-target");
+    let source = StreamRegistrationInvocation::Local(IdempotencyKey::new("source".into()));
+    let mapping = StreamSessionMappingRecord {
+        transport_stream_id: 29,
+        role: SessionStreamRole::Input,
+        handle: DurableStreamHandle {
+            format_version: 1,
+            stream_id: StreamId(Uuid::new_v4()),
+            producer_environment_id: invocation.callee_environment_id,
+            producer: invocation.callee.clone(),
+            expected_producer_fingerprint: invocation.callee_fingerprint,
+            producer_generation: OplogIndex::from_u64(4),
+            source_invocation: invocation.clone(),
+            component_revision: ComponentRevision::INITIAL,
+            element_schema_fingerprint: SchemaFingerprintV1([17; 32]),
+        },
+    };
+    let intent = StreamReaderForwardIntentRecord {
+        format_version: 1,
+        session_key: source.clone(),
+        reader_id: LocalStreamReaderId {
+            introducing_oplog_index: OplogIndex::from_u64(7),
+            binding_slot: 2,
+        },
+        destination: StreamReaderForwardDestination::InvocationInput {
+            invocation: invocation.clone(),
+            mapping: mapping.clone(),
+        },
+    };
+    let local = StreamReaderForwardIntentRecord {
+        destination: StreamReaderForwardDestination::SessionBinding {
+            session_key: StreamRegistrationInvocation::Remote(invocation),
+            binding: StreamBindingRecord::foreign(&mapping),
+            publication: StreamReaderForwardPublication::InvocationInput,
+        },
+        ..intent.clone()
+    };
+    for record in [
+        StreamSessionRecord::ReaderForwardIntent(intent.clone()),
+        StreamSessionRecord::ReaderForwardIntent(local.clone()),
+    ] {
+        assert!(record.has_supported_format());
+        let bytes = crate::serialization::serialize(&record).unwrap();
+        assert_eq!(
+            crate::serialization::deserialize::<StreamSessionRecord>(&bytes).unwrap(),
+            record
+        );
+    }
+    for publication in [
+        StreamReaderForwardPublication::InvocationResult { handle_index: 3 },
+        StreamReaderForwardPublication::ProducerItem {
+            parent_stream: LocalStreamId(OplogIndex::from_u64(17)),
+            sequence: 41,
+            handle_index: 2,
+        },
+    ] {
+        let mut changed = local.clone();
+        let StreamReaderForwardDestination::SessionBinding {
+            binding,
+            publication: target,
+            ..
+        } = &mut changed.destination
+        else {
+            unreachable!()
+        };
+        binding.role = SessionStreamRole::Output;
+        *target = publication;
+        let record = StreamSessionRecord::ReaderForwardIntent(changed);
+        assert!(record.has_supported_format());
+        let bytes = crate::serialization::serialize(&record).unwrap();
+        assert_eq!(
+            crate::serialization::deserialize::<StreamSessionRecord>(&bytes).unwrap(),
+            record
+        );
+    }
+    let mut invalid = Vec::new();
+    for publication in [
+        StreamReaderForwardPublication::InvocationResult { handle_index: 3 },
+        StreamReaderForwardPublication::ProducerItem {
+            parent_stream: LocalStreamId(OplogIndex::NONE),
+            sequence: 41,
+            handle_index: 2,
+        },
+    ] {
+        let mut changed = local.clone();
+        let StreamReaderForwardDestination::SessionBinding {
+            publication: target,
+            ..
+        } = &mut changed.destination
+        else {
+            unreachable!()
+        };
+        *target = publication;
+        invalid.push(changed);
+    }
+    let mut changed = intent.clone();
+    changed.format_version = 0;
+    invalid.push(changed);
+    let mut changed = intent.clone();
+    changed.reader_id.introducing_oplog_index = OplogIndex::NONE;
+    invalid.push(changed);
+    for mutation in 0..3 {
+        let mut changed = intent.clone();
+        let StreamReaderForwardDestination::InvocationInput {
+            invocation,
+            mapping,
+        } = &mut changed.destination
+        else {
+            unreachable!()
+        };
+        match mutation {
+            0 => invocation.callee_fingerprint = AgentFingerprint(Uuid::nil()),
+            1 => mapping.role = SessionStreamRole::Output,
+            _ => mapping.handle.format_version = 0,
+        }
+        invalid.push(changed);
+    }
+    for source in [
+        StreamRecordReference::Local(LocalStreamId(OplogIndex::NONE)),
+        StreamRecordReference::Foreign(DurableStreamHandle {
+            format_version: 0,
+            ..mapping.handle
+        }),
+    ] {
+        let mut changed = local.clone();
+        let StreamReaderForwardDestination::SessionBinding { binding, .. } =
+            &mut changed.destination
+        else {
+            unreachable!()
+        };
+        binding.source = source;
+        invalid.push(changed);
+    }
+    for record in invalid {
+        assert!(!StreamSessionRecord::ReaderForwardIntent(record).has_supported_format());
+    }
+}
+
+#[test]
 fn durable_stream_control_status_folds_after_finished_idempotently() {
     let session_key = durable_stream_test_session_key("control-fold");
     let key = session_key.idempotency_key.clone();

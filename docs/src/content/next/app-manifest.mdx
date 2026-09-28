@@ -43,7 +43,7 @@ The _Golem CLI_ commands that use _Application Manifest_ start by searching for 
 
 After resolving relative paths in the documents they are merged, then _component selection_ happens: this can be either explicit, by using `--component-name` CLI flags, or implicit, in which case only components defined in the directory - including subdirectories - from where the _Golem CLI_ was executed are used.
 
-Application Manifest documents can also be explicitly passed to the CLI, using the `--app` flag. Note that when using explicit documents the `includes` field is not used, it is expected that all relevant documents are provided for the CLI.
+An Application Manifest can also be selected explicitly with `--app-manifest-path` (`-A`). This chooses the root manifest instead of searching parent directories; its `includes` are still resolved. Use `--disable-app-manifest-discovery` (`-X`) to run without manifest discovery.
 
 ## Template variables and functions
 
@@ -462,6 +462,12 @@ For registry-backed tools, the generator reads only the release's safe tool defi
     since: Release.R_1_5_0
   }}>
     ***Built-in server subdomain*** for the deployment. Must be a single DNS label (lowercase letters, digits, and hyphens only). In a local environment it resolves to `<subdomain>.localhost:9006` by default, or `<subdomain>.localhost:<customRequestPort>` when `localServer.customRequestPort` is set to a stable nonzero port. In a cloud environment it resolves to `<subdomain>.apps.golem.cloud`. Cannot be used with custom server environments — use `domain` instead. Define exactly one of `domain` or `subdomain`.
+  </Field>
+
+  <Field meta={{
+    path: "httpApi.deployments.<environment-name>[*].scheme",
+  }}>
+    ***Public HTTP API scheme***: `http` or `https`. When omitted, defaults to `http` for the built-in local server (including the implicit local target), and `https` for the built-in cloud server. Custom server environments require an explicit value. An explicit value always overrides the default; the management API URL does not determine the public scheme. This controls the origin advertised in generated OpenAPI documents, not TLS configuration.
   </Field>
 
   <Field meta={{

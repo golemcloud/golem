@@ -45,6 +45,8 @@ impl ReplayCursor {
             st: self.state.lock().await,
             advance_gate: Some(advance_gate),
             blocked_on_completion_delivery: false,
+            resolved_retained_claim: None,
+            retaining_for: None,
             notify_progress: false,
         })
     }
@@ -186,12 +188,274 @@ pub(super) struct CursorTx<'a> {
     /// Optional readers use it to distinguish that global barrier from an ordinary predicate
     /// mismatch, which may be returned to their caller immediately.
     pub(super) blocked_on_completion_delivery: bool,
+    /// Set when this transaction claimed a retained `Start` whose terminal the cursor had already
+    /// committed: the claim was resolved on the spot, so no resolver awaiter remains for it.
+    resolved_retained_claim: Option<OplogIndex>,
+    /// Set while this transaction commits a retained `Start` or its attached terminal: the replay
+    /// events recorded meanwhile (by the entry itself and the hints skipped after it) are deferred
+    /// to that `Start` ([`RetainedStart::deferred_events`]) instead of being published. Holds the
+    /// retained `Start` index and the index of the entry currently being committed past.
+    retaining_for: Option<(OplogIndex, OplogIndex)>,
     notify_progress: bool,
 }
 
 impl CursorTx<'_> {
+    /// Marks a claimed custom invocation `Start` as a replay-inert subtree root. Descendants the
+    /// cursor already committed past and retained (a physical call recorded under this owner, a
+    /// nested call under such a call) are observational records of the root's persisted result:
+    /// they are moved out of the retained map into the subtree so no later claim can take them,
+    /// exactly as the cursor consumes not-yet-reached descendants when it gets to them.
     pub(super) fn register_custom_subtree_root(&mut self, root: OplogIndex) {
-        self.st.custom_subtrees.insert(root, HashSet::from([root]));
+        let mut members = HashSet::from([root]);
+        let adopted: Vec<OplogIndex> = self
+            .st
+            .retained_starts
+            .iter()
+            .filter_map(|(idx, retained)| {
+                let OplogEntry::Start {
+                    observational_owner,
+                    parent_start_index,
+                    ..
+                } = &retained.entry
+                else {
+                    unreachable!("only Start entries are retained");
+                };
+                // Retained entries are visited in oplog order and a parent always precedes its
+                // children, so one pass adopts whole retained chains.
+                let member = observational_owner.is_some_and(|owner| members.contains(&owner))
+                    || parent_start_index.is_some_and(|parent| members.contains(&parent));
+                member.then(|| {
+                    members.insert(*idx);
+                    *idx
+                })
+            })
+            .collect();
+        for idx in adopted {
+            let retained = self
+                .st
+                .retained_starts
+                .remove(&idx)
+                .expect("adopted retained Starts are taken from the retained map");
+            // Adoption consumes the record on the root's behalf, so it publishes the position and
+            // the replay events the cursor withheld while the Start was retained, like an
+            // in-position consumption would.
+            self.publish_claimed_position(
+                idx,
+                retained.terminal.map(|(terminal_idx, _)| terminal_idx),
+            );
+            self.publish_deferred_events(retained.deferred_events);
+        }
+        self.publish_retained_count();
+        self.st.custom_subtrees.insert(root, members);
+    }
+
+    /// Whether a `Start` nobody has claimed yet may be committed past and retained for its owner
+    /// instead of being handed to (or parking) the reader that reached it. Only replay-inert
+    /// `Start`s qualify; see [`AbandonedStarts::can_drain`] for the excluded commit effects.
+    pub(super) fn is_retainable_start(entry: &OplogEntry) -> bool {
+        matches!(entry, OplogEntry::Start { function_name, .. } if AbandonedStarts::can_drain(function_name))
+    }
+
+    fn publish_retained_count(&self) {
+        self.cursor.unclaimed_retained_starts.publish(
+            self.st
+                .retained_starts
+                .values()
+                .map(|retained| &retained.entry),
+        );
+    }
+
+    fn retain_start(&mut self, idx: OplogIndex, entry: OplogEntry) {
+        self.st.retained_starts.insert(
+            idx,
+            RetainedStart {
+                entry,
+                terminal: None,
+                deferred_events: Vec::new(),
+            },
+        );
+        self.publish_retained_count();
+    }
+
+    /// Publishes the replay events a retained `Start` withheld, once that `Start` is consumed on
+    /// its owner's behalf (claimed, adopted into a custom subtree, folded into the abandoned
+    /// tolerance, or released at a live invocation end).
+    fn publish_deferred_events(&mut self, deferred_events: Vec<(OplogIndex, ReplayEvent)>) {
+        debug_assert!(
+            self.retaining_for.is_none(),
+            "deferred replay events are published outside a retained commit"
+        );
+        for (_, event) in deferred_events {
+            self.record_replay_event(event);
+        }
+    }
+
+    /// Attaches a committed terminal to the retained `Start` it closes. Returns `false` when the
+    /// terminal does not belong to a retained `Start`.
+    fn attach_retained_terminal(
+        &mut self,
+        terminal_idx: OplogIndex,
+        entry: &OplogEntry,
+    ) -> Result<bool, WorkerExecutorError> {
+        let Some(start_index) = terminal_start_index(entry) else {
+            return Ok(false);
+        };
+        let Some(retained) = self.st.retained_starts.get_mut(&start_index) else {
+            return Ok(false);
+        };
+        if let Some((prior_idx, prior)) = &retained.terminal {
+            return Err(WorkerExecutorError::unexpected_oplog_entry(
+                "at most one End/Cancelled per durable call Start",
+                format!(
+                    "{} at {terminal_idx} closing Start {start_index} already closed by {} at {prior_idx}",
+                    terminal_kind(entry),
+                    terminal_kind(prior)
+                ),
+            ));
+        }
+        retained.terminal = Some((terminal_idx, entry.clone()));
+        Ok(true)
+    }
+
+    /// Moves every retained `Start` into the invocation-boundary abandoned-record tolerance. The
+    /// replayed guest has produced its invocation result, so no owner can claim them anymore.
+    fn fold_retained_into_abandoned(
+        &mut self,
+        abandoned: &mut AbandonedStarts,
+    ) -> Result<(), WorkerExecutorError> {
+        let retained = std::mem::take(&mut self.st.retained_starts);
+        self.publish_retained_count();
+        for (idx, retained) in retained {
+            let OplogEntry::Start {
+                function_name,
+                parent_start_index,
+                ..
+            } = &retained.entry
+            else {
+                unreachable!("only Start entries are retained");
+            };
+            abandoned.record_start(idx, function_name.clone(), *parent_start_index);
+            if let Some((terminal_idx, terminal)) = &retained.terminal {
+                abandoned.record_terminal(idx, *terminal_idx, terminal_kind(terminal))?;
+            }
+            // The boundary reader consumes abandoned records in position, so the hints trailing
+            // them take effect as they would have without the retention.
+            self.publish_deferred_events(retained.deferred_events);
+        }
+        Ok(())
+    }
+
+    /// Claims the first retained `Start` (in oplog order, outside deleted regions) whose identity
+    /// `matches_identity` accepts and — when the claim pins a request payload — whose recorded
+    /// request equals `expected_request` (the payload may need blob I/O, hence the async body).
+    /// A claimed `Start` is registered with the resolver like any other claim; when its terminal
+    /// was already committed the registration is resolved immediately, otherwise the caller
+    /// awaits the terminal through the ordinary cursor drain (or gets `Incomplete` at the replay
+    /// tail).
+    pub(super) async fn claim_retained_start(
+        &mut self,
+        matches_identity: &(dyn Fn(&OplogEntry) -> bool + Sync),
+        expected_request: Option<&RequestClaimIdentity>,
+    ) -> Result<Option<(ReplayCallHandle, Box<OplogEntry>)>, WorkerExecutorError> {
+        let candidates: Vec<OplogIndex> = self
+            .st
+            .retained_starts
+            .keys()
+            .copied()
+            .filter(|idx| !self.st.skipped_regions.is_in_deleted_region(*idx))
+            .collect();
+        for idx in candidates {
+            let accepted = {
+                let retained = self
+                    .st
+                    .retained_starts
+                    .get(&idx)
+                    .expect("retained Start candidates are taken from the retained map");
+                if !matches_identity(&retained.entry) {
+                    false
+                } else if let Some(expected_request) = expected_request {
+                    let OplogEntry::Start {
+                        request: Some(recorded_request),
+                        ..
+                    } = &retained.entry
+                    else {
+                        unreachable!(
+                            "a request-matching claim identity only accepts Starts with a request"
+                        )
+                    };
+                    recorded_request_payload_matches(
+                        self.cursor.oplog.as_ref(),
+                        recorded_request,
+                        expected_request,
+                    )
+                    .await
+                    .map_err(|err| {
+                        WorkerExecutorError::runtime(format!(
+                            "failed to load durable call request payload at retained Start {idx}: {err}"
+                        ))
+                    })?
+                } else {
+                    true
+                }
+            };
+            if !accepted {
+                continue;
+            }
+            let retained = self
+                .st
+                .retained_starts
+                .remove(&idx)
+                .expect("retained Start candidates are taken from the retained map");
+            self.publish_retained_count();
+            self.publish_claimed_position(
+                idx,
+                retained
+                    .terminal
+                    .as_ref()
+                    .map(|(terminal_idx, _)| *terminal_idx),
+            );
+            // The owner consumes the `Start` (and its attached terminal) now, so the hints the
+            // cursor skipped past on its behalf become observable to it, in oplog order, before
+            // it reads the replayed completion.
+            self.publish_deferred_events(retained.deferred_events);
+            let handle = match retained.terminal {
+                Some((terminal_idx, terminal)) => {
+                    let receiver = self.st.concurrent_resolver.register(idx);
+                    let resolution = self.terminal_resolution(idx, terminal_idx, &terminal);
+                    let resolved = self.st.concurrent_resolver.resolve_if_pending(
+                        idx,
+                        terminal_idx,
+                        resolution,
+                    );
+                    debug_assert!(resolved, "a freshly registered retained claim must resolve");
+                    self.resolved_retained_claim = Some(idx);
+                    self.notify_progress = true;
+                    ReplayCallHandle::new(idx, receiver)
+                }
+                None => self.register_claimed_start(idx).await?,
+            };
+            return Ok(Some((handle, Box::new(retained.entry))));
+        }
+        Ok(None)
+    }
+
+    /// Drops retained `Start`s (and detaches retained terminals and deferred replay events) that
+    /// `deleted` now hides.
+    fn prune_retained_starts(&mut self, mut deleted: impl FnMut(OplogIndex) -> bool) {
+        self.st.retained_starts.retain(|idx, _| !deleted(*idx));
+        for retained in self.st.retained_starts.values_mut() {
+            if retained
+                .terminal
+                .as_ref()
+                .is_some_and(|(terminal_idx, _)| deleted(*terminal_idx))
+            {
+                retained.terminal = None;
+            }
+            retained
+                .deferred_events
+                .retain(|(event_idx, _)| !deleted(*event_idx));
+        }
+        self.publish_retained_count();
     }
 
     /// Reads the next oplog entry (the one right after the committed cursor) **without** advancing
@@ -277,15 +541,35 @@ impl CursorTx<'_> {
     ///
     /// On the first non-drainable entry (a non-terminal, or an `End`/`Cancelled` nobody awaits):
     /// - if `condition` matches, it is committed and returned;
+    /// - if it is a durable-call `Start` nobody has claimed, it is committed past and **retained**
+    ///   for its owner's later identity-validated claim (see [`CursorState::retained_starts`]),
+    ///   and the drain continues. The reader is never handed another operation's `Start`, and it
+    ///   never parks on one either: the owner of that `Start` may need the Store this reader holds
+    ///   before it can claim it;
     /// - otherwise `None` is returned. The speculative read advanced nothing observable (the cursor
     ///   is published only on commit), so there is nothing to roll back. The auto-drained terminals
-    ///   stay committed — that is the correct contract under concurrent replay: draining another
-    ///   call's terminal is real progress even when this caller's own predicate then fails.
+    ///   and retained `Start`s stay committed — that is the correct contract under concurrent
+    ///   replay: draining another call's terminal or retaining its `Start` is real progress even
+    ///   when this caller's own predicate then fails.
     pub(super) async fn try_get_oplog_entry(
         &mut self,
         condition: impl FnMut(&OplogEntry) -> bool,
     ) -> Result<Option<(OplogIndex, OplogEntry)>, WorkerExecutorError> {
-        self.try_get_oplog_entry_inner(None, None, condition).await
+        self.try_get_oplog_entry_inner(None, None, UnclaimedStarts::Retain, condition)
+            .await
+    }
+
+    /// [`Self::try_get_oplog_entry`] for a `Start` claim's head fast path: an unclaimed `Start`
+    /// that is not this claim's own is left at the head instead of being retained, so a claim
+    /// whose `Start` is recorded further ahead (or not at all) falls through to the scan-ahead /
+    /// missing-`Start` classification against an unchanged cursor. Retaining is the job of the
+    /// readers that must make progress past that `Start` (positional consumers, terminal drains).
+    pub(super) async fn try_get_oplog_entry_leaving_unclaimed_starts(
+        &mut self,
+        condition: impl FnMut(&OplogEntry) -> bool,
+    ) -> Result<Option<(OplogIndex, OplogEntry)>, WorkerExecutorError> {
+        self.try_get_oplog_entry_inner(None, None, UnclaimedStarts::Leave, condition)
+            .await
     }
 
     /// Consumes exactly the `CompletionDelivered` marker owned by `start_index`. Ordinary cursor
@@ -297,7 +581,12 @@ impl CursorTx<'_> {
         marker_index: OplogIndex,
     ) -> Result<Option<tokio::sync::OwnedMutexGuard<()>>, WorkerExecutorError> {
         let consumed = self
-            .try_get_oplog_entry_inner(Some((start_index, marker_index)), None, |_| false)
+            .try_get_oplog_entry_inner(
+                Some((start_index, marker_index)),
+                None,
+                UnclaimedStarts::Retain,
+                |_| false,
+            )
             .await?;
         if consumed.is_some() {
             Ok(Some(
@@ -320,14 +609,15 @@ impl CursorTx<'_> {
         abandoned: &mut AbandonedStarts,
         condition: impl FnMut(&OplogEntry) -> bool,
     ) -> Result<Option<(OplogIndex, OplogEntry)>, WorkerExecutorError> {
-        self.try_get_oplog_entry_inner(None, Some(abandoned), condition)
+        self.try_get_oplog_entry_inner(None, Some(abandoned), UnclaimedStarts::Retain, condition)
             .await
     }
 
-    pub(super) async fn try_get_oplog_entry_inner(
+    async fn try_get_oplog_entry_inner(
         &mut self,
         expected_delivery: Option<(OplogIndex, OplogIndex)>,
         mut abandoned: Option<&mut AbandonedStarts>,
+        unclaimed_starts: UnclaimedStarts,
         mut condition: impl FnMut(&OplogEntry) -> bool,
     ) -> Result<Option<(OplogIndex, OplogEntry)>, WorkerExecutorError> {
         self.blocked_on_completion_delivery = false;
@@ -370,10 +660,7 @@ impl CursorTx<'_> {
                     self.skip_forward().await?;
                     continue;
                 }
-                if abandoned
-                    .as_deref()
-                    .is_some_and(|abandoned| abandoned.contains(*start_index))
-                {
+                if abandoned.is_some() && self.st.retained_starts.contains_key(start_index) {
                     return Err(WorkerExecutorError::unexpected_oplog_entry(
                         "AgentInvocationFinished",
                         format!(
@@ -462,63 +749,110 @@ impl CursorTx<'_> {
                 continue;
             }
 
-            if let Some(abandoned) = abandoned.as_deref_mut() {
-                // Invocation-boundary tolerance: any `Start` still unconsumed here can never be
-                // claimed anymore (the replayed guest already produced its invocation result), so
-                // it is live-only abandoned progress — drain it and its terminal instead of
-                // failing the positional reader. Terminals of starts *not* tracked as abandoned
-                // stay fatal below.
-                match &entry {
-                    OplogEntry::Start {
-                        function_name,
-                        parent_start_index,
-                        ..
-                    } => {
-                        // Reject before committing: a replay-side-effecting Start must not fire
-                        // its commit effects from the drain (see `AbandonedStarts::can_drain`).
-                        if !AbandonedStarts::can_drain(function_name) {
-                            return Err(WorkerExecutorError::unexpected_oplog_entry(
-                                "AgentInvocationFinished",
-                                format!(
-                                    "unclaimed {function_name:?} Start at {read_idx} — a \
-                                     replay-side-effecting record cannot be tolerated as \
-                                     abandoned at the invocation boundary"
-                                ),
-                            ));
-                        }
-                        abandoned.record_start(
-                            read_idx,
-                            function_name.clone(),
-                            *parent_start_index,
-                        );
-                        self.commit_consumed_entry(read_idx, &entry).await?;
-                        continue;
-                    }
-                    OplogEntry::End { start_index, .. } if abandoned.contains(*start_index) => {
-                        abandoned.record_terminal(*start_index, read_idx, "End")?;
-                        self.commit_consumed_entry(read_idx, &entry).await?;
-                        continue;
-                    }
-                    OplogEntry::Cancelled { start_index, .. }
-                        if abandoned.contains(*start_index) =>
-                    {
-                        abandoned.record_terminal(*start_index, read_idx, "Cancelled")?;
-                        self.commit_consumed_entry(read_idx, &entry).await?;
-                        continue;
-                    }
-                    _ => {}
-                }
+            if self.attach_retained_terminal(read_idx, &entry)? {
+                // The `End`/`Cancelled` of a retained, still-unclaimed `Start`: keep it with the
+                // `Start` for the owner's later claim and keep draining. Like an awaited terminal
+                // it is never handed to a positional reader; like the retained `Start` it does
+                // not publish the non-hint position before the claim.
+                self.commit_retained_entry(read_idx, &entry).await?;
+                continue;
+            }
+
+            if abandoned.is_some()
+                && let OplogEntry::Start { function_name, .. } = &entry
+                && !AbandonedStarts::can_drain(function_name)
+            {
+                // The invocation-boundary reader reached a replay-side-effecting `Start` nobody
+                // claimed. Its commit effects must not fire from the boundary drain, and the
+                // replayed guest can no longer claim it (see `AbandonedStarts::can_drain`).
+                return Err(WorkerExecutorError::unexpected_oplog_entry(
+                    "AgentInvocationFinished",
+                    format!(
+                        "unclaimed {function_name:?} Start at {read_idx} — a \
+                         replay-side-effecting record cannot be tolerated as \
+                         abandoned at the invocation boundary"
+                    ),
+                ));
             }
 
             if condition(&entry) {
                 self.commit_consumed_entry(read_idx, &entry).await?;
+                if let Some(abandoned) = abandoned.as_deref_mut() {
+                    // The replayed guest has produced its invocation result: whatever is still
+                    // retained is live-only abandoned progress nobody can claim anymore.
+                    self.fold_retained_into_abandoned(abandoned)?;
+                }
                 return Ok(Some((read_idx, entry)));
+            } else if unclaimed_starts == UnclaimedStarts::Retain
+                && Self::is_retainable_start(&entry)
+            {
+                // A durable-call `Start` this reader is not entitled to: neither its own entry
+                // (ownership is validated at claim time) nor something to park on (its owner may
+                // still need the Store this reader holds). Commit past it and retain it for the
+                // owner's claim; the terminal that closes it is attached above when reached. The
+                // non-hint position stays where the owner will observe it at its `begin_function`.
+                self.retain_start(read_idx, entry.clone());
+                self.commit_retained_entry(read_idx, &entry).await?;
+                continue;
             } else {
                 // Predicate failed: the speculative read published nothing, so the cursor,
                 // skipped-region state, and side effects are already untouched.
                 self.st.replay_buffer.push_front((read_idx, entry));
                 return Ok(None);
             }
+        }
+    }
+
+    /// Classifies a positional read (`positional_reader_accepts`) that returned nothing while the
+    /// cursor is still replaying. Such a read parked either at a reserved `CompletionDelivered`
+    /// marker or at an entry another Store recorded through this shared cursor (an entity body
+    /// interleaved with its owner, or the owner interleaved with the body). Parking on another
+    /// Store's entry is legitimate only while that Store can still consume it:
+    ///
+    /// - the primary agent Store replays for as long as the cursor does;
+    /// - an entity body replays once its invocation `Start` is claimed
+    ///   (`reconstruction_claims`), and a `Start` the cursor retained or a scan-ahead claimed is
+    ///   still going to be claimed.
+    ///
+    /// Anything else is an entity body nobody will reconstruct: waiting would hang replay, so the
+    /// head is reported as the divergence it is. The invocation-boundary reader never waits on
+    /// another Store: every entity body of the invocation has terminated before
+    /// `AgentInvocationFinished`, so an unconsumed body entry there is dead history.
+    pub(super) fn check_parked_positional_read(
+        &self,
+        reader: PositionalReader,
+    ) -> Result<(), WorkerExecutorError> {
+        if self.blocked_on_completion_delivery || self.cursor.is_live() {
+            return Ok(());
+        }
+        let Some((head_idx, head)) = self.st.replay_buffer.front() else {
+            return Ok(());
+        };
+        let owner = match (reader, head.entity_attribution()) {
+            (_, EntityAttribution::Unattributed)
+            | (PositionalReader::Ordinary, EntityAttribution::Agent) => return Ok(()),
+            (PositionalReader::InvocationBoundary, _) => {
+                return Err(WorkerExecutorError::unexpected_oplog_entry(
+                    "AgentInvocationFinished",
+                    format!(
+                        "{head:?} at {head_idx} was recorded by an entity body that replay reached the invocation boundary without reconstructing"
+                    ),
+                ));
+            }
+            (PositionalReader::Ordinary, EntityAttribution::EntityBody(owner)) => owner,
+        };
+        let owner_can_consume = self.st.retained_starts.contains_key(&owner)
+            || self.st.claimed_starts.contains(&owner)
+            || self.cursor.reconstruction_claims.is_body_active(owner);
+        if owner_can_consume {
+            Ok(())
+        } else {
+            Err(WorkerExecutorError::unexpected_oplog_entry(
+                "an entry recorded by this Store",
+                format!(
+                    "{head:?} at {head_idx} was recorded by the entity body started at {owner}, which is neither retained, claimed nor replaying"
+                ),
+            ))
         }
     }
 
@@ -564,6 +898,64 @@ impl CursorTx<'_> {
         read_idx: OplogIndex,
         entry: &OplogEntry,
     ) -> Result<(), WorkerExecutorError> {
+        self.commit_entry(read_idx, entry, None).await
+    }
+
+    /// Commits a retained `Start` the reader is not entitled to, or the terminal attached to
+    /// such a `Start`. The cursor moves past it physically, but neither the non-hint position nor
+    /// the replay events of the entry and its trailing hints are published: the owner has not
+    /// consumed it yet, publishing the position here would let the owner's `begin_function`
+    /// observe a position the live run never saw before its own `Start`, and publishing the
+    /// events would let a boundary apply them before the owner looks for them. Both are published
+    /// when the owner claims the `Start` (`publish_claimed_position`, `publish_deferred_events`).
+    async fn commit_retained_entry(
+        &mut self,
+        read_idx: OplogIndex,
+        entry: &OplogEntry,
+    ) -> Result<(), WorkerExecutorError> {
+        let start_idx = terminal_start_index(entry).unwrap_or(read_idx);
+        debug_assert!(
+            self.st.retained_starts.contains_key(&start_idx),
+            "retained commits target a retained Start"
+        );
+        self.commit_entry(read_idx, entry, Some(start_idx)).await
+    }
+
+    /// Publishes the non-hint position of a retained `Start` (and its attached terminal, if any)
+    /// on claim. The position is monotonic: a claim never moves it backwards past entries that
+    /// were consumed in position since the `Start` was retained.
+    fn publish_claimed_position(&self, start_idx: OplogIndex, terminal_idx: Option<OplogIndex>) {
+        let claimed = terminal_idx.map_or(start_idx, |terminal_idx| terminal_idx.max(start_idx));
+        let position = &self.cursor.position.last_replayed_non_hint_index;
+        if claimed > position.get() {
+            position.set(claimed);
+        }
+    }
+
+    /// Commits `entry`; `retained_for` names the retained `Start` on whose behalf a reader that is
+    /// not its owner commits past it (see [`Self::commit_retained_entry`]), in which case the
+    /// non-hint position stays unpublished and every replay event recorded by this commit is
+    /// deferred to that `Start`.
+    async fn commit_entry(
+        &mut self,
+        read_idx: OplogIndex,
+        entry: &OplogEntry,
+        retained_for: Option<OplogIndex>,
+    ) -> Result<(), WorkerExecutorError> {
+        self.retaining_for = retained_for.map(|start_idx| (start_idx, read_idx));
+        let result = self
+            .commit_entry_inner(read_idx, entry, retained_for.is_none())
+            .await;
+        self.retaining_for = None;
+        result
+    }
+
+    async fn commit_entry_inner(
+        &mut self,
+        read_idx: OplogIndex,
+        entry: &OplogEntry,
+        publish_non_hint_position: bool,
+    ) -> Result<(), WorkerExecutorError> {
         // Apply the fallible commit-only side effects *before* publishing the cursor advance, so a
         // failure (e.g. a corrupt `GolemApiFork` payload) cannot leave the cursor advanced while
         // resolver routing / progress signalling below never run — a partial-publish on the error
@@ -579,7 +971,7 @@ impl CursorTx<'_> {
         } else {
             self.skip_forward().await?;
         }
-        if !entry.is_hint() {
+        if publish_non_hint_position && !entry.is_hint() {
             self.cursor
                 .position
                 .last_replayed_non_hint_index
@@ -609,6 +1001,9 @@ impl CursorTx<'_> {
                     // This hint entry is being permanently consumed, so its commit-only side
                     // effects fire here (they must NOT fire on the rolled-back probe in the `None`
                     // branch below).
+                    if let Some((start_idx, _)) = self.retaining_for {
+                        self.retaining_for = Some((start_idx, read_idx));
+                    }
                     self.apply_commit_effects(read_idx, &entry).await?;
 
                     // Recording seen log entries
@@ -1013,54 +1408,53 @@ impl CursorTx<'_> {
     /// e.g. the guest-facing manual durability pair, consumed through this same cursor but never
     /// registered — is ignored instead of leaking.
     pub(super) fn on_committed_replay_entry(&mut self, idx: OplogIndex, entry: &OplogEntry) {
+        if let Some(start_index) = terminal_start_index(entry) {
+            let resolution = self.terminal_resolution(start_index, idx, entry);
+            self.st
+                .concurrent_resolver
+                .resolve_if_pending(start_index, idx, resolution);
+        }
+    }
+
+    /// The [`Resolution`] a durable call starting at `start_index` receives from its committed
+    /// terminal `entry` at `terminal_idx`, honouring the call's guest-delivery marker (if any).
+    fn terminal_resolution(
+        &self,
+        start_index: OplogIndex,
+        terminal_idx: OplogIndex,
+        entry: &OplogEntry,
+    ) -> Resolution {
         match entry {
             OplogEntry::End {
-                start_index,
                 response,
                 forced_commit,
                 ..
-            } => {
-                let marker = self.completion_marker(*start_index);
-                let resolution = match marker {
-                    Some(CompletionMarker::Discarded(marker_idx)) => {
-                        Resolution::CompletedButDiscarded {
-                            end_idx: idx,
-                            marker_idx,
-                            response: response.clone(),
-                        }
+            } => match self.completion_marker(start_index) {
+                Some(CompletionMarker::Discarded(marker_idx)) => {
+                    Resolution::CompletedButDiscarded {
+                        end_idx: terminal_idx,
+                        marker_idx,
+                        response: response.clone(),
                     }
-                    Some(CompletionMarker::Delivered(marker_idx)) => Resolution::Completed {
-                        end_idx: idx,
-                        response: response.clone(),
-                        forced_commit: *forced_commit,
-                        delivery_marker: Some(marker_idx),
-                    },
-                    None => Resolution::Completed {
-                        end_idx: idx,
-                        response: response.clone(),
-                        forced_commit: *forced_commit,
-                        delivery_marker: None,
-                    },
-                };
-                self.st
-                    .concurrent_resolver
-                    .resolve_if_pending(*start_index, idx, resolution);
-            }
-            OplogEntry::Cancelled {
-                start_index,
-                partial,
-                ..
-            } => {
-                self.st.concurrent_resolver.resolve_if_pending(
-                    *start_index,
-                    idx,
-                    Resolution::Cancelled {
-                        cancelled_idx: idx,
-                        partial: partial.clone(),
-                    },
-                );
-            }
-            _ => {}
+                }
+                Some(CompletionMarker::Delivered(marker_idx)) => Resolution::Completed {
+                    end_idx: terminal_idx,
+                    response: response.clone(),
+                    forced_commit: *forced_commit,
+                    delivery_marker: Some(marker_idx),
+                },
+                None => Resolution::Completed {
+                    end_idx: terminal_idx,
+                    response: response.clone(),
+                    forced_commit: *forced_commit,
+                    delivery_marker: None,
+                },
+            },
+            OplogEntry::Cancelled { partial, .. } => Resolution::Cancelled {
+                cancelled_idx: terminal_idx,
+                partial: partial.clone(),
+            },
+            _ => unreachable!("terminal_resolution is only called with End/Cancelled entries"),
         }
     }
 
@@ -1089,7 +1483,22 @@ impl CursorTx<'_> {
         }
     }
 
+    /// Publishes a replay event for the primary Store to apply at its next boundary. While a
+    /// retained `Start` is being committed past on its owner's behalf, the event is deferred to
+    /// that `Start` instead (see [`RetainedStart::deferred_events`]); `ReplayFinished` describes
+    /// the cursor rather than an entry and is never deferred.
     pub(super) fn record_replay_event(&mut self, event: ReplayEvent) {
+        if let Some((start_idx, entry_idx)) = self.retaining_for
+            && !matches!(event, ReplayEvent::ReplayFinished)
+        {
+            self.st
+                .retained_starts
+                .get_mut(&start_idx)
+                .expect("replay events are deferred to a retained Start")
+                .deferred_events
+                .push((entry_idx, event));
+            return;
+        }
         self.cursor
             .pending_replay_events
             .lock()
@@ -1207,11 +1616,23 @@ impl CursorTx<'_> {
     /// immediate head mismatch.
     pub(super) async fn claim_start_matching(
         &mut self,
-        matches_identity: impl Fn(&OplogEntry) -> bool,
+        matches_identity: impl Fn(&OplogEntry) -> bool + Sync,
     ) -> Result<StartClaimAttempt, WorkerExecutorError> {
+        // Retained `Start`s precede everything at or beyond the cursor head, so claiming them
+        // first keeps same-identity claims in oplog order.
+        if let Some((handle, entry)) = self.claim_retained_start(&matches_identity, None).await? {
+            return Ok(StartClaimAttempt::Claimed(handle, entry));
+        }
+
         // Head fast path: auto-drains awaited terminals and already-claimed `Start`s, then
-        // consumes the head iff it matches this claim's identity.
-        if let Some((start_idx, entry)) = self.try_get_oplog_entry(&matches_identity).await? {
+        // consumes the head iff it matches this claim's identity. Another operation's unclaimed
+        // `Start` at the head is left there: this claim's `Start` is either recorded further
+        // ahead (scan-ahead below) or missing, and both are classified against the unchanged
+        // cursor.
+        if let Some((start_idx, entry)) = self
+            .try_get_oplog_entry_leaving_unclaimed_starts(&matches_identity)
+            .await?
+        {
             let handle = self.register_claimed_start(start_idx).await?;
             return Ok(StartClaimAttempt::Claimed(handle, Box::new(entry)));
         }
@@ -1269,12 +1690,24 @@ impl CursorTx<'_> {
     /// or decoding failure remains an error.
     pub(super) async fn claim_start_matching_request(
         &mut self,
-        matches_identity: impl Fn(&OplogEntry) -> bool,
+        matches_identity: impl Fn(&OplogEntry) -> bool + Sync,
         expected_request: &RequestClaimIdentity,
     ) -> Result<StartClaimAttempt, WorkerExecutorError> {
+        // Retained `Start`s precede everything at or beyond the cursor head, so they are claimed
+        // before the head is inspected: a `CompletionDelivered` marker at the head may belong to
+        // a retained `Start` and must not block the claim that releases it.
+        if let Some((handle, entry)) = self
+            .claim_retained_start(&matches_identity, Some(expected_request))
+            .await?
+        {
+            return Ok(StartClaimAttempt::Claimed(handle, entry));
+        }
+
         // Drain any awaited terminals at the head and detect a delivery marker before the
-        // request-payload scan. The false predicate leaves an ordinary candidate untouched.
-        self.try_get_oplog_entry(|_| false).await?;
+        // request-payload scan. The false predicate leaves any other entry — including an
+        // unclaimed `Start` at the head — untouched for the scan below.
+        self.try_get_oplog_entry_leaving_unclaimed_starts(|_| false)
+            .await?;
         if self.blocked_on_completion_delivery {
             return Ok(StartClaimAttempt::Blocked);
         }
@@ -1446,9 +1879,11 @@ impl CursorTx<'_> {
         // its terminal is always a resolver-routed *awaited terminal* — never an orphan a parked
         // awaiter behind it could sleep on until `switch_to_live`. The only un-drained terminals
         // the cursor may leave at its head are the dedicated-positional-consumer pairs (manual
-        // durability, `GolemApiFork`).
+        // durability, `GolemApiFork`). A retained `Start` whose terminal was already committed
+        // (and attached to it) is the one claim resolved before this returns.
         debug_assert!(
-            self.st.concurrent_resolver.has_claim(handle.start_idx()),
+            self.st.concurrent_resolver.has_claim(handle.start_idx())
+                || self.resolved_retained_claim == Some(handle.start_idx()),
             "Start claim at {} must leave a registered awaiter",
             handle.start_idx()
         );
@@ -1475,6 +1910,7 @@ impl CursorTx<'_> {
 
         if self.st.concurrent_resolver.has_any_claims()
             || !self.st.claimed_starts.is_empty()
+            || !self.st.retained_starts.is_empty()
             || !self.st.claimed_custom_invocation_ids.is_empty()
             || !self.st.custom_subtrees.is_empty()
         {
@@ -1567,7 +2003,11 @@ impl CursorTx<'_> {
         // sleeping forever waiting for a cursor that will not advance again.
         self.st.concurrent_resolver.fail_all_pending_incomplete();
         // Scan-ahead-claimed `Start`s the cursor never reached are moot now: their awaiters were
-        // just failed with `Incomplete`, and the cursor will not read again.
+        // just failed with `Incomplete`, and the cursor will not read again. Retained `Start`s are
+        // deliberately kept: a still-unadmitted owner claims them after this switch (its terminal,
+        // if retained, resolves it; otherwise it observes `Incomplete` exactly like a claim whose
+        // terminal the cursor never reached), and durable-call admission keeps replaying such
+        // calls while any retained `Start` exists (see `WorkerState::durable_call_is_live`).
         self.st.claimed_starts.clear();
         self.st.claimed_custom_invocation_ids.clear();
         self.st.custom_subtrees.clear();
@@ -1724,7 +2164,9 @@ impl ReplayState {
                 claimed_starts: HashSet::new(),
                 claimed_custom_invocation_ids: HashSet::new(),
                 custom_subtrees: HashMap::new(),
+                retained_starts: std::collections::BTreeMap::new(),
             }),
+            unclaimed_retained_starts: RetainedStartCounts::default(),
             reconstruction_claims,
             completion_markers: std::sync::Mutex::new(completion_markers),
             log_hashes: std::sync::Mutex::new(HashMap::new()),
@@ -2362,9 +2804,12 @@ impl ReplayState {
         regions
     }
 
-    /// Makes entity-local rollback Jumps effective, skipping a deleted cursor head while retaining
-    /// surviving sibling history and its resolver awaiters.
-    pub(crate) async fn register_entity_atomic_rollback(
+    /// Makes Jumps appended during replay effective in the shared cursor. Positional readers skip
+    /// the deleted regions (a deleted cursor head is skipped immediately), retained `Start`s
+    /// inside them are dropped because they belong to the abandoned attempt the Jump hides, and
+    /// surviving sibling history keeps its resolver awaiters. Callers append the Jump entry and
+    /// then register its regions here; the cursor may already be live.
+    pub(crate) async fn register_replay_jump(
         &self,
         regions: Vec<OplogRegion>,
     ) -> Result<(), WorkerExecutorError> {
@@ -2374,6 +2819,8 @@ impl ReplayState {
                     for region in regions {
                         tx.st.skipped_regions.add(region);
                     }
+                    let skipped_regions = tx.st.skipped_regions.clone();
+                    tx.prune_retained_starts(|idx| skipped_regions.is_in_deleted_region(idx));
                     let head = tx.cursor.last_replayed_index().next();
                     tx.st.next_skipped_region = tx
                         .st
@@ -2592,6 +3039,85 @@ impl ReplayState {
         .await
     }
 
+    /// Returns the earliest retained, still unclaimed durable-call `Start` in `root`'s call tree
+    /// that is not owned by a still running reconstructed entity body (see
+    /// [`CursorState::retained_starts`]).
+    ///
+    /// The cursor steps over unclaimed `Start`s instead of parking on them, so a body that
+    /// returned without re-issuing one of its recorded calls no longer stalls the cursor. Callers
+    /// ask this once the body has settled: any such `Start` is the same structural divergence
+    /// [`Self::await_unconsumed_scope_entry`] reports for a stalled cursor.
+    pub(crate) async fn unclaimed_retained_descendant(
+        &self,
+        root: OplogIndex,
+        active_entity_bodies: HashSet<OplogIndex>,
+    ) -> Result<Option<OplogIndex>, WorkerExecutorError> {
+        if !self.has_unclaimed_retained_starts() {
+            return Ok(None);
+        }
+        self.run_owned_cursor_op(move |state| async move {
+            let cursor = &*state.cursor;
+            let st = cursor.state.lock().await;
+            let Some(last_retained) = st.retained_starts.keys().next_back().copied() else {
+                return Ok(None);
+            };
+            if last_retained <= root {
+                return Ok(None);
+            }
+
+            let mut parents = HashMap::new();
+            let mut next = root.next();
+            while next <= last_retained {
+                let available = u64::from(last_retained) - u64::from(next) + 1;
+                let entries = cursor
+                    .oplog
+                    .read_exact(next, CHUNK_SIZE.min(available))
+                    .await;
+                let last_read = *entries.last_key_value().unwrap().0;
+                for (index, entry) in entries {
+                    if index > last_retained {
+                        break;
+                    }
+                    if let OplogEntry::Start {
+                        parent_start_index: Some(parent),
+                        ..
+                    } = &entry
+                        && !st.skipped_regions.is_in_deleted_region(index)
+                    {
+                        parents.insert(index, *parent);
+                    }
+                }
+                next = last_read.next();
+            }
+
+            for index in st.retained_starts.keys().copied() {
+                if index <= root {
+                    continue;
+                }
+                let mut owner = index;
+                let mut owned_by_active_body = false;
+                let descendant = loop {
+                    let Some(parent) = parents.get(&owner) else {
+                        break false;
+                    };
+                    if *parent == root {
+                        break true;
+                    }
+                    if active_entity_bodies.contains(parent) {
+                        owned_by_active_body = true;
+                        break false;
+                    }
+                    owner = *parent;
+                };
+                if descendant && !owned_by_active_body {
+                    return Ok(Some(index));
+                }
+            }
+            Ok(None)
+        })
+        .await
+    }
+
     /// Sets the replay target. This is a phase-boundary operation (e.g. refreshing the target
     /// before replay resumes); it must not race with concurrent cursor advances.
     ///
@@ -2622,6 +3148,7 @@ impl ReplayState {
                 std::cmp::Ordering::Equal => {}
                 std::cmp::Ordering::Less => {
                     tx.st.replay_buffer.clear();
+                    tx.prune_retained_starts(|idx| idx > new_target);
                     cursor
                         .completion_markers
                         .lock()
@@ -2703,6 +3230,159 @@ impl ReplayState {
         self.cursor.is_live_published()
     }
 
+    /// Whether the cursor has committed past durable-call `Start`s nobody has claimed yet (see
+    /// [`CursorState::retained_starts`]). Does not take the cursor lock: read by durable-call
+    /// admission from Store-holding host calls, which must not queue on it.
+    pub(crate) fn has_unclaimed_retained_starts(&self) -> bool {
+        self.cursor.unclaimed_retained_starts.any()
+    }
+
+    /// Whether one of the unclaimed retained `Start`s records a call charged to `quota`. A live
+    /// Store about to issue a call of that quota class may still be its owner (replay is
+    /// deterministic, so the owner issues its recorded calls in order), whereas a call charged to
+    /// any other quota is known fresh. Same locking rule as
+    /// [`Self::has_unclaimed_retained_starts`].
+    pub(crate) fn retains_unclaimed_start_charged_to(&self, quota: QuotaClass) -> bool {
+        self.cursor.unclaimed_retained_starts.any_charged_to(quota)
+    }
+
+    /// Releases every still-retained `Start` when a live primary invocation finishes. The
+    /// recorded prefix those `Start`s came from belongs to the invocation that just produced its
+    /// result, so no replayed owner can claim them anymore; keeping them would make every later
+    /// durable call take the replay admission path (see `WorkerState::durable_call_is_live`) for
+    /// nothing. Mirrors the invocation-boundary tolerance of [`AbandonedStarts`] for a replayed
+    /// finish, including its structural rule: every released `Start` must already be closed by a
+    /// recorded `End`/`Cancelled`. An unclosed retained `Start` is a divergence error rather than
+    /// a warning, because appending `AgentInvocationFinished` after it would make the next
+    /// reconstruction's boundary read reject the history deterministically.
+    ///
+    /// Nothing is released while an entity body is still being reconstructed: a retained `Start`
+    /// may be a descendant of that body whose owner has not been admitted yet.
+    pub(crate) async fn release_retained_starts_at_live_invocation_end(
+        &self,
+    ) -> Result<(), WorkerExecutorError> {
+        if !self.has_unclaimed_retained_starts() {
+            return Ok(());
+        }
+        let owned_agent_id = self.cursor.owned_agent_id.clone();
+        self.run_owned_cursor_op(move |state| async move {
+            let mut st = state.cursor.state.lock().await;
+            if !state
+                .cursor
+                .reconstruction_claims
+                .subscribe_bodies()
+                .borrow()
+                .is_empty()
+            {
+                tracing::debug!(
+                    retained = st.retained_starts.len(),
+                    "Keeping unclaimed retained Starts across a live invocation end while an entity body is still reconstructing"
+                );
+                return Ok(());
+            }
+            // A retained `Start` normally has its terminal attached when the cursor commits past
+            // it. Replay may still have clamped the head to the target without reading every
+            // entry in between, so an unattached terminal is looked up in the recorded prefix
+            // before the `Start` is declared unclosed.
+            let mut unclosed: HashSet<OplogIndex> = st
+                .retained_starts
+                .iter()
+                .filter(|(_, retained)| retained.terminal.is_none())
+                .map(|(idx, _)| *idx)
+                .collect();
+            let replay_target = state.cursor.replay_target();
+            if let Some(first_unclosed) = unclosed.iter().min().copied() {
+                let mut next = first_unclosed.next();
+                while next <= replay_target && !unclosed.is_empty() {
+                    let available = u64::from(replay_target) - u64::from(next) + 1;
+                    let entries = state
+                        .cursor
+                        .read_oplog(next, CHUNK_SIZE.min(available))
+                        .await;
+                    let Some(&(last_read, _)) = entries.last() else {
+                        break;
+                    };
+                    for (index, entry) in entries {
+                        if index > replay_target {
+                            break;
+                        }
+                        if !st.skipped_regions.is_in_deleted_region(index)
+                            && let Some(start_index) = terminal_start_index(&entry)
+                        {
+                            unclosed.remove(&start_index);
+                        }
+                    }
+                    next = last_read.next();
+                }
+            }
+            if !unclosed.is_empty() {
+                let mut unclosed: Vec<_> = unclosed.into_iter().collect();
+                unclosed.sort();
+                let unclosed: Vec<_> = unclosed
+                    .into_iter()
+                    .map(|idx| {
+                        let OplogEntry::Start { function_name, .. } = &st.retained_starts[&idx].entry
+                        else {
+                            unreachable!("only Start entries are retained");
+                        };
+                        format!("{idx} ({function_name:?})")
+                    })
+                    .collect();
+                return Err(WorkerExecutorError::unexpected_oplog_entry(
+                    "an End/Cancelled closing every unclaimed retained Start before the live invocation finished",
+                    format!(
+                        "live invocation of {owned_agent_id} finished with unclosed unclaimed retained Start(s) at {}",
+                        unclosed.join(", ")
+                    ),
+                ));
+            }
+            let released = std::mem::take(&mut st.retained_starts);
+            state.cursor.unclaimed_retained_starts.clear();
+            if released.is_empty() {
+                return Ok(());
+            }
+            {
+                let mut pending = state.cursor.pending_replay_events.lock().unwrap();
+                for retained in released.values() {
+                    pending.extend(
+                        retained
+                            .deferred_events
+                            .iter()
+                            .map(|(_, event)| event.clone()),
+                    );
+                }
+            }
+            let summary: Vec<_> = released
+                .iter()
+                .map(|(idx, retained)| {
+                    let OplogEntry::Start {
+                        function_name,
+                        parent_start_index,
+                        ..
+                    } = &retained.entry
+                    else {
+                        unreachable!("only Start entries are retained");
+                    };
+                    format!(
+                        "{idx}: {function_name:?} (parent: {parent_start_index:?}, terminal: {:?})",
+                        retained
+                            .terminal
+                            .as_ref()
+                            .map(|(terminal_idx, terminal)| (terminal_kind(terminal), *terminal_idx))
+                    )
+                })
+                .collect();
+            warn!(
+                "replay of {owned_agent_id} left {} unclaimed durable-call Start(s) when the live \
+                 invocation finished — recorded progress no replayed owner claimed: [{}]",
+                released.len(),
+                summary.join("; ")
+            );
+            Ok(())
+        })
+        .await
+    }
+
     /// Returns whether we are in replay mode where we are replaying old calls.
     pub fn is_replay(&self) -> bool {
         self.cursor.is_replay()
@@ -2749,13 +3429,24 @@ impl ReplayState {
     /// Returns an error if the underlying read fails (e.g. missing oplog entry,
     /// corrupted GolemApiFork payload) so the worker can fail the agent with a
     /// non-retriable trap rather than panicking the executor.
-    pub async fn get_oplog_entry(&self) -> Result<(OplogIndex, OplogEntry), WorkerExecutorError> {
+    pub async fn get_oplog_entry(
+        &self,
+        scope: Option<OplogIndex>,
+    ) -> Result<(OplogIndex, OplogEntry), WorkerExecutorError> {
         loop {
             let progress = self.cursor.progress.notified();
             tokio::pin!(progress);
             progress.as_mut().enable();
             if let Some(entry) = self
-                .with_tx(async |tx| tx.try_get_oplog_entry(|_| true).await)
+                .with_tx(async |tx| {
+                    let entry = tx
+                        .try_get_oplog_entry(positional_reader_accepts(scope))
+                        .await?;
+                    if entry.is_none() {
+                        tx.check_parked_positional_read(PositionalReader::Ordinary)?;
+                    }
+                    Ok(entry)
+                })
                 .await?
             {
                 return Ok(entry);
@@ -2764,31 +3455,39 @@ impl ReplayState {
                 return Err(self.end_of_replay_error());
             }
             // An unconditional reader returns `None` during replay only at a reserved
-            // `CompletionDelivered` marker. Wait for its owner to consume and acknowledge it.
+            // `CompletionDelivered` marker or at another Store's entry. Wait for its owner to
+            // consume it.
             progress.await;
         }
     }
 
     /// Atomically classifies the next positional read as either an entry or the replay tail.
-    /// A reserved completion-delivery boundary is waited out rather than mistaken for the tail.
+    /// A reserved completion-delivery boundary or another Store's entry at the head is waited out
+    /// rather than mistaken for the tail.
     pub async fn get_oplog_entry_or_replay_end(
         &self,
+        scope: Option<OplogIndex>,
     ) -> Result<PositionalRead, WorkerExecutorError> {
         loop {
             let progress = self.cursor.progress.notified();
             tokio::pin!(progress);
             progress.as_mut().enable();
-            let (read, blocked) = self
+            let read = self
                 .with_tx(async |tx| {
-                    let entry = tx.try_get_oplog_entry(|_| true).await?;
-                    let read = match entry {
-                        Some((index, entry)) => PositionalRead::Entry(index, entry),
-                        None => PositionalRead::ReplayEnded,
-                    };
-                    Ok((read, tx.blocked_on_completion_delivery))
+                    let entry = tx
+                        .try_get_oplog_entry(positional_reader_accepts(scope))
+                        .await?;
+                    Ok(match entry {
+                        Some((index, entry)) => Some(PositionalRead::Entry(index, entry)),
+                        None if tx.cursor.is_live() => Some(PositionalRead::ReplayEnded),
+                        None => {
+                            tx.check_parked_positional_read(PositionalReader::Ordinary)?;
+                            None
+                        }
+                    })
                 })
                 .await?;
-            if !blocked {
+            if let Some(read) = read {
                 return Ok(read);
             }
             progress.await;
@@ -2829,9 +3528,12 @@ impl ReplayState {
     /// Owned-task variant of [`Self::get_oplog_entry_or_replay_end`].
     pub async fn get_oplog_entry_or_replay_end_owned(
         &self,
+        scope: Option<OplogIndex>,
     ) -> Result<PositionalRead, WorkerExecutorError> {
-        self.run_owned_cursor_op(|state| async move { state.get_oplog_entry_or_replay_end().await })
-            .await
+        self.run_owned_cursor_op(
+            |state| async move { state.get_oplog_entry_or_replay_end(scope).await },
+        )
+        .await
     }
 
     /// Returns true if the given log entry has unmatched persisted occurrences since the last
@@ -2893,11 +3595,16 @@ impl ReplayState {
         .await
     }
 
-    /// Forward-scans the oplog from the current cursor head for a matching entry. The scan start and
-    /// the skip-region state are snapshotted under a brief cursor-lock acquisition, then the scan
-    /// itself runs lock-free (see [`ReplayCursor::scan_oplog`]). Holding the lock only for the
-    /// snapshot — rather than across the whole (potentially full-oplog) scan — keeps the snapshot
-    /// internally consistent without blocking concurrent cursor advances for the scan's duration.
+    /// Forward-scans the replay-visible oplog after `begin_idx` (a claimed `Start`) for a matching
+    /// entry. The scan starts right after `begin_idx` rather than at the cursor head: a claimed
+    /// `Start` may lie ahead of the head (scan-ahead claim) or behind it (a `Start` the cursor
+    /// committed past and retained, possibly together with its already-committed terminal), and
+    /// in every case the recorded history between the `Start` and its terminal is what the probe
+    /// must judge. The skip-region state is snapshotted under a brief cursor-lock acquisition,
+    /// then the scan itself runs lock-free (see [`ReplayCursor::scan_oplog`]). Holding the lock
+    /// only for the snapshot — rather than across the whole (potentially full-oplog) scan — keeps
+    /// the snapshot internally consistent without blocking concurrent cursor advances for the
+    /// scan's duration.
     pub async fn lookup_oplog_entry_with_condition_and_state<State>(
         &self,
         begin_idx: OplogIndex,
@@ -2914,14 +3621,10 @@ impl ReplayState {
             .run_owned_cursor_op(|state| async move {
                 let cursor = &*state.cursor;
                 let st = cursor.state.lock().await;
-                Ok((
-                    cursor.last_replayed_index().next(),
-                    st.skipped_regions.clone(),
-                    st.next_skipped_region.clone(),
-                ))
+                Ok(st.skipped_regions.clone())
             })
             .await;
-        let (start, skipped_regions, next_skipped_region) = match snapshot {
+        let skipped_regions = match snapshot {
             Ok(snapshot) => snapshot,
             Err(err) => {
                 warn!("oplog lookup cursor snapshot did not complete: {err}");
@@ -2930,6 +3633,8 @@ impl ReplayState {
                 };
             }
         };
+        let start = begin_idx.next();
+        let next_skipped_region = skipped_regions.find_next_deleted_region(start);
         cursor
             .scan_oplog(
                 start,
@@ -2950,7 +3655,7 @@ impl ReplayState {
     ) -> Result<Option<AgentInvocationStartedEntry>, WorkerExecutorError> {
         loop {
             if self.is_replay() {
-                let (oplog_index, oplog_entry) = self.get_oplog_entry().await?;
+                let (oplog_index, oplog_entry) = self.get_oplog_entry(None).await?;
                 match oplog_entry {
                     OplogEntry::AgentInvocationStarted {
                         idempotency_key,
@@ -3055,8 +3760,16 @@ impl ReplayState {
             progress.as_mut().enable();
             if let Some(entry) = self
                 .with_tx(async |tx| {
-                    tx.try_get_oplog_entry_at_invocation_boundary(abandoned, |_| true)
-                        .await
+                    let entry = tx
+                        .try_get_oplog_entry_at_invocation_boundary(
+                            abandoned,
+                            positional_reader_accepts(None),
+                        )
+                        .await?;
+                    if entry.is_none() {
+                        tx.check_parked_positional_read(PositionalReader::InvocationBoundary)?;
+                    }
+                    Ok(entry)
                 })
                 .await?
             {
@@ -3089,6 +3802,49 @@ fn custom_subtree_entry_is_drainable(state: &CursorState, entry: &OplogEntry) ->
         entry => terminal_start_index(entry)
             .and_then(custom_root)
             .is_some_and(|root| terminal_start_index(entry) != Some(root)),
+    }
+}
+
+/// What a cursor read does with an unclaimed durable-call `Start` its predicate did not accept.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UnclaimedStarts {
+    /// Commit past the `Start` and retain it for its owner's claim (positional consumers, terminal
+    /// drains, tail waits: readers that must not park on another operation's record).
+    Retain,
+    /// Leave the `Start` at the head and return `None` (a claim's head fast path: the head is
+    /// simply not this claim's `Start`).
+    Leave,
+}
+
+/// Which unconditional positional reader parked, for [`CursorTx::check_parked_positional_read`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum PositionalReader {
+    /// A Store's ordinary positional read while its guest replays.
+    Ordinary,
+    /// The primary Store's walk to `AgentInvocationFinished` after the replayed guest produced
+    /// its invocation result.
+    InvocationBoundary,
+}
+
+/// Acceptance predicate of the unconditional positional readers of the Store whose entries are
+/// attributed to `scope` (`None` for the primary agent Store, the entity invocation `Start` index
+/// for an entity Store). A positional reader takes whatever non-hint entry is at the head *except*:
+///
+/// - an unclaimed durable-call `Start`, which only its owner's claim may consume
+///   ([`CursorTx::claim_start_matching`]): the cursor retains such a `Start` and the reader
+///   continues past it. The only `Start`s a positional reader still receives are the
+///   dedicated-positional-consumer pairs with commit effects (`GolemApiFork`);
+/// - an entry recorded by another Store sharing this cursor (an entity body interleaved with its
+///   owner). Only that Store's own positional reader may consume it; this reader parks and waits
+///   for cursor progress (see [`CursorTx::check_parked_positional_read`]).
+fn positional_reader_accepts(scope: Option<OplogIndex>) -> impl FnMut(&OplogEntry) -> bool {
+    move |entry| {
+        !CursorTx::is_retainable_start(entry)
+            && match entry.entity_attribution() {
+                EntityAttribution::Unattributed => true,
+                EntityAttribution::Agent => scope.is_none(),
+                EntityAttribution::EntityBody(owner) => scope == Some(owner),
+            }
     }
 }
 
@@ -3225,6 +3981,15 @@ fn historical_reconstruction_owner_failure(
                 "owner lifecycle changed while waiting for historical entity reconstruction: {kind:?}"
             ))
         }
+    }
+}
+
+/// Human-readable kind of a durable-call terminal entry, for diagnostics.
+pub(super) fn terminal_kind(entry: &OplogEntry) -> &'static str {
+    match entry {
+        OplogEntry::End { .. } => "End",
+        OplogEntry::Cancelled { .. } => "Cancelled",
+        _ => unreachable!("terminal_kind is only called with End/Cancelled entries"),
     }
 }
 

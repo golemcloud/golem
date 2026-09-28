@@ -646,6 +646,7 @@ async fn full_deployment(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> 
         .await?;
 
     let http_api_deployment_creation = HttpApiDeploymentCreation {
+        scheme: Default::default(),
         domain: domain.clone(),
         agents: BTreeMap::from_iter([(
             AgentTypeName("HttpAgent".to_string()),

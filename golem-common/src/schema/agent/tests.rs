@@ -239,6 +239,7 @@ fn schema_graph_empty_has_no_defs_and_placeholder_root() {
 fn sample_agent_type() -> AgentTypeSchema {
     AgentTypeSchema {
         type_name: AgentTypeName("weather-agent".into()),
+        kind: crate::schema::agent::AgentTypeKind::Regular,
         description: "An agent".into(),
         source_language: String::new(),
         schema: SchemaGraph::empty(),

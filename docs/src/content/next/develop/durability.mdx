@@ -10,11 +10,14 @@ The high-level SDKs let applications control idempotence, define atomic regions,
 
 All these features are regional - they can be changed for a section of the code within a single exported function.
 
-<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
         In TypeScript, the SDK provides scoped helpers such as `withIdempotenceMode` and
         `withRetryPolicy`. They run a sync or async callback with the requested setting, then restore the previous
         settings afterwards.
+    </Tabs.Tab>
+    <Tabs.Tab>
+        In Effect TypeScript, `Durability.withIdempotenceMode` scopes the setting to an Effect and restores it when the Effect completes, fails, or is interrupted. Other durability controls such as `atomically` and `oplogCommit` return Effect values.
     </Tabs.Tab>
     <Tabs.Tab>
         The `golem_rust` crate provides scoped helpers such as `with_idempotence_mode`,
@@ -51,13 +54,15 @@ If a live attempt traps before it is finished, recovery retries the **whole cust
 
 Requests, responses, operation names, and observational host calls can be visible to oplog search, logs, metrics, and other observability tooling. Record useful names and schemas, but redact secrets and avoid putting unnecessary or unbounded payloads into observable values.
 
-Use the SDK combinator for this lifecycle instead of managing the affine resource directly: `golem_rust::durability::Durability::run*` in Rust, `durable` in TypeScript, `DurabilityApi.durable`/`durableAsync` in Scala, or `@api.durable`/`durable_async` in MoonBit. Each combinator starts the invocation before evaluating the body, skips the body on replay, finishes after the complete live body returns, and drops an unfinished resource if the body fails.
+Use the SDK combinator for this lifecycle instead of managing the affine resource directly: `golem_rust::durability::Durability::run*` in Rust, `durable` in TypeScript, `Durability.wrap`/`wrapInfallible` in Effect TypeScript, `DurabilityApi.durable`/`durableAsync` in Scala, or `@api.durable`/`durable_async` in MoonBit. Each combinator starts the invocation before evaluating the body, skips the body on replay, finishes after the complete live body returns, and drops any live resource left unfinished.
+
+In Effect TypeScript, `Durability.wrap` records both successes and typed failures described by its error schema. Defects, interruption, and response-encoding failures leave the live invocation unfinished. `Durability.wrapInfallible` accepts an Effect with no typed error channel.
 
 ### Idempotence mode
 
 Golem assumes that HTTP requests are idempotent by default. This means that in case of a failure, if the system cannot determine whether the request successfully reached the target or not, it will be retried.
 
-<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
         This behavior can be changed using the `withIdempotenceMode` function:
 
@@ -68,6 +73,19 @@ Golem assumes that HTTP requests are idempotent by default. This means that in c
           // this closure runs with idempotence mode disabled
           return "hello"
         })
+        ```
+    </Tabs.Tab>
+    <Tabs.Tab>
+        Use `Durability.withIdempotenceMode` to scope the setting to an Effect:
+
+        ```typescript
+        import { Effect } from "effect"
+        import { Durability } from "@golemcloud/effect-golem"
+
+        const result = Durability.withIdempotenceMode(
+          false,
+          Effect.succeed("hello"),
+        )
         ```
     </Tabs.Tab>
     <Tabs.Tab>
@@ -115,7 +133,7 @@ With disabled idempotence mode, in case Golem cannot determine if the request wa
 
 By default, side effects are persisted and retried one by one. It is possible to group them together into atomic regions, in which case the execution is retried for some reason (the agent failed or interrupted within the region), all the side effects will be reexecuted.
 
-<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
         The `golem-ts-sdk` library exports the `atomically` function for using atomic regions:
 
@@ -127,6 +145,22 @@ By default, side effects are persisted and retried one by one. It is possible to
           const secondResult: string = secondSideEffect(firstResult)
           return [firstResult, secondResult]
         })
+        ```
+    </Tabs.Tab>
+    <Tabs.Tab>
+        `Durability.atomically` runs an Effect in an atomic region:
+
+        ```typescript
+        import { Effect } from "effect"
+        import { Durability } from "@golemcloud/effect-golem"
+
+        const result = Durability.atomically(
+          Effect.gen(function* () {
+            const first = yield* firstSideEffect
+            const second = yield* secondSideEffect(first)
+            return [first, second] as const
+          }),
+        )
         ```
     </Tabs.Tab>
     <Tabs.Tab>
@@ -174,7 +208,7 @@ By default, side effects are persisted and retried one by one. It is possible to
 
 ### Commit oplog
 
-<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
         Wait until the oplog is replicated to a specified number of replicas before continuing:
 
@@ -183,6 +217,15 @@ By default, side effects are persisted and retried one by one. It is possible to
 
         // Ensure oplog is replicated to 3 replicas before proceeding
         oplogCommit(3);
+        ```
+    </Tabs.Tab>
+    <Tabs.Tab>
+        Wait until the oplog is replicated to a specified number of replicas before continuing:
+
+        ```typescript
+        import { Durability } from "@golemcloud/effect-golem"
+
+        const committed = Durability.oplogCommit(3)
         ```
     </Tabs.Tab>
     <Tabs.Tab>

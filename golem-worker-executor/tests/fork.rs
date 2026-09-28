@@ -10,8 +10,8 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use golem_api_grpc::proto::golem::schema::SchemaValue as ProtoSchemaValue;
 use golem_api_grpc::proto::golem::worker::{
-    DurableStreamMapping, StreamInvocationIdentity, UpdateMode, invocation_request,
-    invocation_response,
+    DurableStreamMapping, InvocationAccepted, StreamInvocationIdentity, UpdateMode,
+    invocation_request, invocation_response,
 };
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
     CreateStreamSessionRequest, ResumeWorkerRequest, StreamSessionCreationIntent,
@@ -217,7 +217,7 @@ impl Rpc for StreamingRemoteRpc {
         fingerprint: AgentFingerprint,
         attempt: uuid::Uuid,
         origin: StreamInvocationIdentity,
-        accepted: tokio::sync::oneshot::Sender<Vec<DurableStreamMapping>>,
+        accepted: tokio::sync::oneshot::Sender<InvocationAccepted>,
         created_by: AccountId,
         caller: &AgentId,
         env: &[(String, String)],

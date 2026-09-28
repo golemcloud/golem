@@ -185,7 +185,7 @@
             "description": "Invocation arguments conflict"
           },
           "503": {
-            "description": "Executor unavailable or live-reader limit exceeded",
+            "description": "Executor unavailable",
             "headers": {
               "Retry-After": {
                 "description": "Retry delay in seconds",
@@ -196,6 +196,7 @@
             }
           }
         },
+        "security": [],
         "summary": "create-session"
       },
       "x-golem-route-mode": "durable-streams"
@@ -259,7 +260,7 @@
             "description": "Session or slot not found"
           },
           "503": {
-            "description": "Executor unavailable or live-reader limit exceeded",
+            "description": "Executor unavailable",
             "headers": {
               "Retry-After": {
                 "description": "Retry delay in seconds",
@@ -270,6 +271,7 @@
             }
           }
         },
+        "security": [],
         "summary": "get-fork"
       },
       "head": {
@@ -337,7 +339,7 @@
             "description": "Session or slot not found"
           },
           "503": {
-            "description": "Executor unavailable or live-reader limit exceeded",
+            "description": "Executor unavailable",
             "headers": {
               "Retry-After": {
                 "description": "Retry delay in seconds",
@@ -348,6 +350,7 @@
             }
           }
         },
+        "security": [],
         "summary": "head-fork"
       },
       "x-golem-route-mode": "durable-streams"
@@ -393,7 +396,7 @@
             "description": "Slot already deleted"
           },
           "503": {
-            "description": "Executor unavailable or live-reader limit exceeded",
+            "description": "Executor unavailable",
             "headers": {
               "Retry-After": {
                 "description": "Retry delay in seconds",
@@ -404,6 +407,7 @@
             }
           }
         },
+        "security": [],
         "summary": "delete-$result"
       },
       "get": {
@@ -679,10 +683,10 @@
             "description": "Slot deleted"
           },
           "429": {
-            "description": "Catch-up rate limit exceeded"
+            "description": "Gateway live-reader admission or catch-up rate limit exceeded"
           },
           "503": {
-            "description": "Executor unavailable or live-reader limit exceeded",
+            "description": "Executor unavailable",
             "headers": {
               "Retry-After": {
                 "description": "Retry delay in seconds",
@@ -693,6 +697,7 @@
             }
           }
         },
+        "security": [],
         "summary": "read-$result"
       },
       "head": {
@@ -787,7 +792,7 @@
             "description": "Slot deleted"
           },
           "503": {
-            "description": "Executor unavailable or live-reader limit exceeded",
+            "description": "Executor unavailable",
             "headers": {
               "Retry-After": {
                 "description": "Retry delay in seconds",
@@ -798,6 +803,7 @@
             }
           }
         },
+        "security": [],
         "summary": "head-$result"
       },
       "put": {
@@ -1061,7 +1067,7 @@
             }
           },
           "503": {
-            "description": "Executor unavailable or live-reader limit exceeded",
+            "description": "Executor unavailable",
             "headers": {
               "Retry-After": {
                 "description": "Retry delay in seconds",
@@ -1072,13 +1078,16 @@
             }
           }
         },
+        "security": [],
         "summary": "fork-$result"
       },
       "x-golem-route-mode": "durable-streams",
       "x-golem-stream-slot": {
+        "content-type": "application/json",
         "direction": "output",
         "element-schema-ref": "#/components/schemas/GolemDSSlot_2f73747265616d_24726573756c74",
-        "name": "$result"
+        "name": "$result",
+        "representation": "json"
       }
     },
     "/stream/forks/{fork}/invocations/{session}/streams/input": {
@@ -1122,7 +1131,7 @@
             "description": "Slot already deleted"
           },
           "503": {
-            "description": "Executor unavailable or live-reader limit exceeded",
+            "description": "Executor unavailable",
             "headers": {
               "Retry-After": {
                 "description": "Retry delay in seconds",
@@ -1133,6 +1142,7 @@
             }
           }
         },
+        "security": [],
         "summary": "delete-input"
       },
       "get": {
@@ -1408,10 +1418,10 @@
             "description": "Slot deleted"
           },
           "429": {
-            "description": "Catch-up rate limit exceeded"
+            "description": "Gateway live-reader admission or catch-up rate limit exceeded"
           },
           "503": {
-            "description": "Executor unavailable or live-reader limit exceeded",
+            "description": "Executor unavailable",
             "headers": {
               "Retry-After": {
                 "description": "Retry delay in seconds",
@@ -1422,6 +1432,7 @@
             }
           }
         },
+        "security": [],
         "summary": "read-input"
       },
       "head": {
@@ -1516,7 +1527,7 @@
             "description": "Slot deleted"
           },
           "503": {
-            "description": "Executor unavailable or live-reader limit exceeded",
+            "description": "Executor unavailable",
             "headers": {
               "Retry-After": {
                 "description": "Retry delay in seconds",
@@ -1527,6 +1538,7 @@
             }
           }
         },
+        "security": [],
         "summary": "head-input"
       },
       "post": {
@@ -1813,7 +1825,7 @@
             "description": "Append rate limit exceeded"
           },
           "503": {
-            "description": "Executor unavailable or live-reader limit exceeded",
+            "description": "Executor unavailable",
             "headers": {
               "Retry-After": {
                 "description": "Retry delay in seconds",
@@ -1824,6 +1836,7 @@
             }
           }
         },
+        "security": [],
         "summary": "append-input"
       },
       "put": {
@@ -2087,7 +2100,7 @@
             }
           },
           "503": {
-            "description": "Executor unavailable or live-reader limit exceeded",
+            "description": "Executor unavailable",
             "headers": {
               "Retry-After": {
                 "description": "Retry delay in seconds",
@@ -2098,13 +2111,16 @@
             }
           }
         },
+        "security": [],
         "summary": "fork-input"
       },
       "x-golem-route-mode": "durable-streams",
       "x-golem-stream-slot": {
+        "content-type": "application/json",
         "direction": "input",
         "element-schema-ref": "#/components/schemas/GolemDSSlot_2f73747265616d_696e707574",
-        "name": "input"
+        "name": "input",
+        "representation": "json"
       }
     },
     "/stream/invocations/{session}": {
@@ -2134,7 +2150,7 @@
             "description": "Session or slot not found"
           },
           "503": {
-            "description": "Executor unavailable or live-reader limit exceeded",
+            "description": "Executor unavailable",
             "headers": {
               "Retry-After": {
                 "description": "Retry delay in seconds",
@@ -2145,6 +2161,7 @@
             }
           }
         },
+        "security": [],
         "summary": "cancel-session"
       },
       "get": {
@@ -2194,7 +2211,7 @@
             "description": "Session or slot not found"
           },
           "503": {
-            "description": "Executor unavailable or live-reader limit exceeded",
+            "description": "Executor unavailable",
             "headers": {
               "Retry-After": {
                 "description": "Retry delay in seconds",
@@ -2205,6 +2222,7 @@
             }
           }
         },
+        "security": [],
         "summary": "get-session"
       },
       "head": {
@@ -2261,7 +2279,7 @@
             "description": "Session or slot not found"
           },
           "503": {
-            "description": "Executor unavailable or live-reader limit exceeded",
+            "description": "Executor unavailable",
             "headers": {
               "Retry-After": {
                 "description": "Retry delay in seconds",
@@ -2272,6 +2290,7 @@
             }
           }
         },
+        "security": [],
         "summary": "head-session"
       },
       "put": {
@@ -2332,7 +2351,7 @@
             "description": "Invocation arguments conflict"
           },
           "503": {
-            "description": "Executor unavailable or live-reader limit exceeded",
+            "description": "Executor unavailable",
             "headers": {
               "Retry-After": {
                 "description": "Retry delay in seconds",
@@ -2343,6 +2362,7 @@
             }
           }
         },
+        "security": [],
         "summary": "ensure-session"
       },
       "x-golem-route-mode": "durable-streams"
@@ -2377,7 +2397,7 @@
             "description": "Slot already deleted"
           },
           "503": {
-            "description": "Executor unavailable or live-reader limit exceeded",
+            "description": "Executor unavailable",
             "headers": {
               "Retry-After": {
                 "description": "Retry delay in seconds",
@@ -2388,6 +2408,7 @@
             }
           }
         },
+        "security": [],
         "summary": "delete-$result"
       },
       "get": {
@@ -2652,10 +2673,10 @@
             "description": "Slot deleted"
           },
           "429": {
-            "description": "Catch-up rate limit exceeded"
+            "description": "Gateway live-reader admission or catch-up rate limit exceeded"
           },
           "503": {
-            "description": "Executor unavailable or live-reader limit exceeded",
+            "description": "Executor unavailable",
             "headers": {
               "Retry-After": {
                 "description": "Retry delay in seconds",
@@ -2666,6 +2687,7 @@
             }
           }
         },
+        "security": [],
         "summary": "read-$result"
       },
       "head": {
@@ -2749,7 +2771,7 @@
             "description": "Slot deleted"
           },
           "503": {
-            "description": "Executor unavailable or live-reader limit exceeded",
+            "description": "Executor unavailable",
             "headers": {
               "Retry-After": {
                 "description": "Retry delay in seconds",
@@ -2760,6 +2782,7 @@
             }
           }
         },
+        "security": [],
         "summary": "head-$result"
       },
       "put": {
@@ -2925,7 +2948,7 @@
             "description": "Content type mismatch or tombstoned slot"
           },
           "503": {
-            "description": "Executor unavailable or live-reader limit exceeded",
+            "description": "Executor unavailable",
             "headers": {
               "Retry-After": {
                 "description": "Retry delay in seconds",
@@ -2936,13 +2959,16 @@
             }
           }
         },
+        "security": [],
         "summary": "ensure-$result"
       },
       "x-golem-route-mode": "durable-streams",
       "x-golem-stream-slot": {
+        "content-type": "application/json",
         "direction": "output",
         "element-schema-ref": "#/components/schemas/GolemDSSlot_2f73747265616d_24726573756c74",
-        "name": "$result"
+        "name": "$result",
+        "representation": "json"
       }
     },
     "/stream/invocations/{session}/streams/input": {
@@ -2975,7 +3001,7 @@
             "description": "Slot already deleted"
           },
           "503": {
-            "description": "Executor unavailable or live-reader limit exceeded",
+            "description": "Executor unavailable",
             "headers": {
               "Retry-After": {
                 "description": "Retry delay in seconds",
@@ -2986,6 +3012,7 @@
             }
           }
         },
+        "security": [],
         "summary": "delete-input"
       },
       "get": {
@@ -3250,10 +3277,10 @@
             "description": "Slot deleted"
           },
           "429": {
-            "description": "Catch-up rate limit exceeded"
+            "description": "Gateway live-reader admission or catch-up rate limit exceeded"
           },
           "503": {
-            "description": "Executor unavailable or live-reader limit exceeded",
+            "description": "Executor unavailable",
             "headers": {
               "Retry-After": {
                 "description": "Retry delay in seconds",
@@ -3264,6 +3291,7 @@
             }
           }
         },
+        "security": [],
         "summary": "read-input"
       },
       "head": {
@@ -3347,7 +3375,7 @@
             "description": "Slot deleted"
           },
           "503": {
-            "description": "Executor unavailable or live-reader limit exceeded",
+            "description": "Executor unavailable",
             "headers": {
               "Retry-After": {
                 "description": "Retry delay in seconds",
@@ -3358,6 +3386,7 @@
             }
           }
         },
+        "security": [],
         "summary": "head-input"
       },
       "post": {
@@ -3633,7 +3662,7 @@
             "description": "Append rate limit exceeded"
           },
           "503": {
-            "description": "Executor unavailable or live-reader limit exceeded",
+            "description": "Executor unavailable",
             "headers": {
               "Retry-After": {
                 "description": "Retry delay in seconds",
@@ -3644,6 +3673,7 @@
             }
           }
         },
+        "security": [],
         "summary": "append-input"
       },
       "put": {
@@ -3809,7 +3839,7 @@
             "description": "Content type mismatch or tombstoned slot"
           },
           "503": {
-            "description": "Executor unavailable or live-reader limit exceeded",
+            "description": "Executor unavailable",
             "headers": {
               "Retry-After": {
                 "description": "Retry delay in seconds",
@@ -3820,22 +3850,22 @@
             }
           }
         },
+        "security": [],
         "summary": "ensure-input"
       },
       "x-golem-route-mode": "durable-streams",
       "x-golem-stream-slot": {
+        "content-type": "application/json",
         "direction": "input",
         "element-schema-ref": "#/components/schemas/GolemDSSlot_2f73747265616d_696e707574",
-        "name": "input"
+        "name": "input",
+        "representation": "json"
       }
     }
   },
   "servers": [
     {
       "url": "https://example.com"
-    },
-    {
-      "url": "http://example.com"
     }
   ]
 }

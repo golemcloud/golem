@@ -37,6 +37,7 @@ use anyhow::{Context, bail};
 use camino::Utf8PathBuf;
 use golem_common::model::component::ComponentName;
 use golem_common::model::tool::ToolName;
+use golem_common::schema::agent::AgentTypeKind;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -310,6 +311,7 @@ pub(crate) async fn collect_custom_targets_lenient(
         let mut agent_types = extract_and_store_component_metadata(ctx, component_name)
             .await?
             .agent_types;
+        agent_types.retain(|agent_type| agent_type.kind == AgentTypeKind::Regular);
         if should_filter_by_agent_type_name {
             agent_types.retain(|agent_type| agent_type_names.remove(&agent_type.type_name));
         }
@@ -509,6 +511,7 @@ async fn collect_agent_manifest_targets_for_entry(
             .await?
             .agent_types;
 
+        agent_types.retain(|agent_type| agent_type.kind == AgentTypeKind::Regular);
         if !is_matching_all && !is_matching_component {
             agent_types.retain(|agent_type| matchers.contains(agent_type.type_name.as_str()));
         }
@@ -847,6 +850,9 @@ async fn collect_dependency_guest_bridge_targets(
         let metadata = extract_and_store_component_metadata(ctx, component_name).await?;
         validate_no_ambient_tool_collisions(ctx, component_name, &metadata.tools)?;
         for agent_type in &metadata.agent_types {
+            if agent_type.kind != AgentTypeKind::Regular {
+                continue;
+            }
             let dependency = ComponentDependency::Agent {
                 component_name: component_name.clone(),
                 agent_type_name: agent_type.type_name.clone(),
@@ -1135,6 +1141,7 @@ async fn collect_custom_targets(
                 .await?
                 .agent_types;
 
+            agent_types.retain(|agent_type| agent_type.kind == AgentTypeKind::Regular);
             if should_filter_by_agent_type_name {
                 agent_types.retain(|agent_type| agent_type_names.remove(&agent_type.type_name));
             }
@@ -2351,6 +2358,7 @@ components:
 
     fn agent_type(type_name: &str) -> AgentTypeSchema {
         AgentTypeSchema {
+            kind: golem_common::schema::agent::AgentTypeKind::Regular,
             type_name: AgentTypeName(type_name.to_string()),
             description: String::new(),
             source_language: String::new(),

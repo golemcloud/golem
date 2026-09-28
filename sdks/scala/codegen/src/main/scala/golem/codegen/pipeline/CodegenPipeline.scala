@@ -143,7 +143,8 @@ object CodegenPipeline {
         metadata = AgentSurfaceIR.AgentMetadataSurface(
           description = t.descriptionValue,
           mode = t.mode.getOrElse("durable"),
-          snapshotting = "disabled"
+          snapshotting = "disabled",
+          kind = t.kind
         ),
         methods = t.methods.map(m =>
           AgentSurfaceIR.MethodSurface(

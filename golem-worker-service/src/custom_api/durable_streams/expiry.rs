@@ -10,7 +10,7 @@ use golem_api_grpc::proto::golem::common::Empty;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
     StreamSessionExpiryPolicy, stream_session_expiry_policy,
 };
-use http::HeaderName;
+use http::{HeaderName, HeaderValue};
 
 const MAX_CACHE_SECONDS: u64 = 31_536_000;
 
@@ -95,14 +95,15 @@ pub(super) fn add_expiry_headers(
         stream_session_expiry_policy::Kind::TtlSeconds(ttl_seconds) => {
             response.headers.insert(
                 HeaderName::from_static("stream-ttl"),
-                ttl_seconds.to_string(),
+                HeaderValue::from(ttl_seconds),
             );
         }
         stream_session_expiry_policy::Kind::ExpiresAtMillis(expires_at_millis) => {
             if let Some(value) = canonical_expires_at(expires_at_millis) {
-                response
-                    .headers
-                    .insert(HeaderName::from_static("stream-expires-at"), value);
+                response.headers.insert(
+                    HeaderName::from_static("stream-expires-at"),
+                    HeaderValue::from_str(&value).expect("RFC 3339 timestamp is a valid header"),
+                );
             }
         }
     }

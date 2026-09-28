@@ -487,6 +487,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .lookup_durable_stream_public_binding(
                 &self.owned_agent_id,
                 self.agent_mode(),
+                self.initial_worker_metadata.fingerprint,
                 public_session_id,
             )
             .await

@@ -99,6 +99,7 @@ fn http_method(input: SchemaType, output: OutputSchema) -> AgentMethodSchema {
             cors_options: CorsOptions {
                 allowed_patterns: vec![],
             },
+            durable_streams: None,
         }],
         read_only: None,
     }

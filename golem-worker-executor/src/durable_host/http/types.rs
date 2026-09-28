@@ -14,7 +14,9 @@
 
 use crate::durable_host::HttpOutgoingBodyState;
 use crate::durable_host::concurrent::{DurableCallSession, NotCancellable};
-use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind, InFunctionRetryHost};
+use crate::durable_host::durability::{
+    ClassifiedHostError, HostFailureKind, InFunctionRetryHost, SemanticTrapRetryOverrideMarker,
+};
 use crate::durable_host::http::inline_retry::{
     StatusRetryOutcome, take_http_background_retry_fallback, try_status_code_retry,
 };
@@ -915,7 +917,8 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                 // outer retry/replay machinery. Convert that marker trap back into the
                 // same transient host failure path used by non-background HTTP calls.
                 if let Err(err) = &response
-                    && let Some(error_code) = take_http_background_retry_fallback(err)
+                    && let Some((error_code, semantic_override)) =
+                        take_http_background_retry_fallback(err)
                 {
                     self.state.set_ambient_retry_point(begin_index);
                     let failure = anyhow::Error::new(ClassifiedHostError {
@@ -931,6 +934,14 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                         "error-type",
                         golem_common::model::PredicateValue::Text("transient".to_string()),
                     );
+                    if let Some(payload) = semantic_override {
+                        return Err(wasmtime::Error::from_anyhow(anyhow::Error::new(
+                            SemanticTrapRetryOverrideMarker {
+                                payload,
+                                inner: failure,
+                            },
+                        )));
+                    }
                     self.try_trigger_retry(failure, properties)
                         .await
                         .map_err(wasmtime::Error::from_anyhow)?;
@@ -1132,16 +1143,32 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                         // Expose the most-recent rejected response as-is.
                         break (serializable_response, for_retry);
                     }
-                    Some((status, request_state, StatusRetryOutcome::FallBackToTrap)) => {
+                    Some((
+                        status,
+                        request_state,
+                        StatusRetryOutcome::FallBackToTrap(semantic_override),
+                    )) => {
                         // Escalate to the existing transient-host-failure trap path.
+                        let message = format!(
+                            "HTTP response status {status} matched user-defined retry policy"
+                        );
+                        if let Some(payload) = semantic_override {
+                            return Err(wasmtime::Error::from_anyhow(anyhow::Error::new(
+                                SemanticTrapRetryOverrideMarker {
+                                    payload,
+                                    inner: anyhow::Error::new(ClassifiedHostError {
+                                        kind: HostFailureKind::Transient,
+                                        message,
+                                    }),
+                                },
+                            )));
+                        }
                         escalate_http_to_outer_retry(
                             self,
                             &request_state,
                             Some(status),
                             "http-status",
-                            format!(
-                                "HTTP response status {status} matched user-defined retry policy"
-                            ),
+                            message,
                         )
                         .await?;
                         // If `try_trigger_retry` did not trap, the outer retry budget

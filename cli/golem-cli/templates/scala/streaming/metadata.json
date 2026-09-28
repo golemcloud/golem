@@ -1,4 +1,4 @@
 {
   "type": "agent",
-  "description": "An agent demonstrating input, output, nested or sibling, and fallible streams"
+  "description": "A runnable Durable Streams agent with HTTP routes, external streams, and forks"
 }

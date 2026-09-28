@@ -24,6 +24,29 @@ pub fn AgentMode::from(self : Int) -> AgentMode {
 }
 
 ///|
+pub(all) enum AgentTypeKind {
+  REGULAR
+  HTTP_ROUTER
+} derive(Debug, Eq)
+
+///|
+pub fn AgentTypeKind::ordinal(self : AgentTypeKind) -> Int {
+  match self {
+    REGULAR => 0
+    HTTP_ROUTER => 1
+  }
+}
+
+///|
+pub fn AgentTypeKind::from(self : Int) -> AgentTypeKind {
+  match self {
+    0 => REGULAR
+    1 => HTTP_ROUTER
+    _ => panic()
+  }
+}
+
+///|
 pub(all) enum AutoInjectedKind {
   PRINCIPAL
 } derive(Debug, Eq)
@@ -84,8 +107,54 @@ pub(all) struct ReadOnlyConfig {
 } derive(Debug, Eq)
 
 ///|
+pub(all) struct ExactFileMapping {
+  public_path : Array[String]
+  file_path : String
+} derive(Debug, Eq)
+
+///|
+pub(all) struct SubtreeFileMapping {
+  public_prefix : Array[String]
+  filesystem_root : String
+} derive(Debug, Eq)
+
+///|
+pub(all) enum FileMapping {
+  Exact(ExactFileMapping)
+  Subtree(SubtreeFileMapping)
+} derive(Debug, Eq)
+
+///|
 pub(all) struct CorsOptions {
   allowed_patterns : Array[String]
+} derive(Debug, Eq)
+
+///|
+pub(all) enum DurableStreamSlotSource {
+  Input(String)
+  Output(String)
+} derive(Debug, Eq)
+
+///|
+pub(all) struct DurableStreamSlotOptions {
+  source : DurableStreamSlotSource
+  name : String?
+  content_type : String?
+} derive(Debug, Eq)
+
+///|
+pub(all) struct DurableStreamRouteLoadOptions {
+  max_concurrent_readers_per_stream : UInt?
+  max_append_requests_per_second_per_stream : UInt?
+} derive(Debug, Eq)
+
+///|
+pub(all) struct DurableStreamRouteOptions {
+  slots : Array[DurableStreamSlotOptions]
+  allow_external_writes : Bool?
+  allow_stream_delete : Bool?
+  allow_invocation_delete : Bool?
+  load : DurableStreamRouteLoadOptions?
 } derive(Debug, Eq)
 
 ///|
@@ -100,6 +169,7 @@ pub(all) enum HttpMethod {
   Trace
   Patch
   Custom(String)
+  Any
 } derive(Debug, Eq)
 
 ///|
@@ -162,6 +232,9 @@ pub(all) struct HttpMountDetails {
   phantom_agent : Bool
   cors_options : CorsOptions
   webhook_suffix : Array[PathSegment]
+  static_bindings : Array[FileMapping]
+  filesystem_bindings : Array[FileMapping]
+  openapi_provider_method : String?
 } derive(Debug, Eq)
 
 ///|
@@ -172,6 +245,7 @@ pub(all) struct HttpEndpointDetails {
   query_vars : Array[QueryVariable]
   auth_details : AuthDetails?
   cors_options : CorsOptions
+  durable_streams : DurableStreamRouteOptions?
 } derive(Debug, Eq)
 
 ///|
@@ -288,6 +362,7 @@ pub(all) struct AgentConfigDeclaration {
 /// semantic root of the agent type.
 pub(all) struct AgentType {
   type_name : String
+  kind : AgentTypeKind
   description : String
   source_language : String
   schema : @types.SchemaGraph

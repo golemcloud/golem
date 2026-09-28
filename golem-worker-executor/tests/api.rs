@@ -1995,11 +1995,12 @@ async fn interruption(
 
 /// Shard-assignment recovery must not acknowledge an assignment whose activations failed.
 ///
-/// Recovery reads each running worker's record twice: once to enumerate the shard, once more
-/// when the worker is activated. This fails the second read only, so enumeration succeeds and
-/// activation does not. The assignment must fail - the shard manager retries a failed one,
-/// whereas a worker skipped here would stay stopped, unrecorded, until an unrelated invocation
-/// happened to arrive - and the retry, once storage is back, must restart the worker.
+/// Recovery resolves each running worker's identity and metadata while enumerating the shard,
+/// then resolves its identity again when the worker is activated. This fails the activation read
+/// only, so enumeration succeeds and activation does not. The assignment must fail - the shard
+/// manager retries a failed one, whereas a worker skipped here would stay stopped, unrecorded,
+/// until an unrelated invocation happened to arrive - and the retry, once storage is back, must
+/// restart the worker.
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
@@ -2071,16 +2072,16 @@ async fn shard_assignment_fails_when_a_recovered_worker_cannot_be_activated(
     })
     .await
     .map_err(|_| anyhow!("worker remained loaded after its shard was revoked"))?;
-    // The unloaded shell would otherwise still be cached, and activation would reuse it without
-    // reading storage. Retire it as the idle-expiry sweep would, which is also the shape of an
-    // executor restart: recovery then has to rebuild the worker from its record.
+    // Retire the unloaded shell as the idle-expiry sweep would, so activation must reconstruct the
+    // worker and load its metadata. This is also the shape of an executor restart.
     executor.retire_unloaded_worker(&owned_agent_id).await?;
     assert!(!executor.worker_is_cached(&owned_agent_id).await);
 
-    // Enumeration reads the worker's record once; activation reads it again. Fail the second.
+    // Enumeration resolves the worker's identity, then loads its metadata (which resolves the
+    // identity again); activation resolves it once more. Fail the activation read.
     faults.fail_after(
         "read_cached_agent_mode",
-        1,
+        2,
         1,
         KeyValueStorageError::Other("injected: key-value storage unavailable".to_string()),
     );
@@ -3890,6 +3891,7 @@ async fn deletion_joins_removed_shell_status_actor_before_storage_removal(
             golem_worker_executor::worker::status::calculate_last_known_status_with_checkpoint(
                 &all,
                 &owned,
+                metadata.fingerprint,
                 metadata.agent_mode,
                 None,
             )
