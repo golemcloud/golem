@@ -1594,6 +1594,7 @@ mod tests {
             _owned_agent_id: &OwnedAgentId,
             _agent_mode: AgentMode,
             _fingerprint: golem_common::model::AgentFingerprint,
+            _expected_epoch: Option<golem_common::model::ShardEpoch>,
         ) -> Result<(), WorkerExecutorError> {
             Ok(())
         }
@@ -1663,11 +1664,9 @@ mod tests {
 
     fn create_shard_service_mock() -> Arc<dyn ShardService> {
         let result = Arc::new(ShardServiceDefault::new());
-        result.register(
+        result.install_unexpiring(
             1,
             &HashMap::from([(ShardId::new(0), ShardEpoch::default())]),
-            None,
-            golem_common::model::ShardLeaseRevision::default(),
         );
         result
     }

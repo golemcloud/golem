@@ -1,6 +1,8 @@
 use crate::raw_http;
 use crate::raw_http::Method;
-use golem_rust::bindings::golem::api::context::{AttributeValue, current_context, start_span};
+use golem_rust::bindings::golem::api::context::{
+    Attribute, AttributeValue, current_context, start_span,
+};
 use golem_rust::{agent_definition, agent_implementation};
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -11,16 +13,23 @@ pub trait InvocationContext {
     async fn test1(&self);
     fn test2(&self);
     fn test3(&self);
+    fn span_roundtrip(&mut self) -> String;
+    fn last_span(&self) -> String;
+    fn mutate_finished_span(&self);
 }
 
 pub struct InvocationContextImpl {
     _name: String,
+    last_span: String,
 }
 
 #[agent_implementation]
 impl InvocationContext for InvocationContextImpl {
     fn new(name: String) -> Self {
-        Self { _name: name }
+        Self {
+            _name: name,
+            last_span: String::new(),
+        }
     }
 
     async fn test1(&self) {
@@ -46,6 +55,51 @@ impl InvocationContext for InvocationContextImpl {
 
     fn test3(&self) {
         broadcast_current_invocation_context("test3a");
+    }
+
+    fn span_roundtrip(&mut self) -> String {
+        let parent = current_context().span_id();
+        let span = start_span("roundtrip");
+        let started = span.started_at();
+        span.set_attributes(&[
+            Attribute {
+                key: "x".into(),
+                value: AttributeValue::String("first".into()),
+            },
+            Attribute {
+                key: "x".into(),
+                value: AttributeValue::String("last".into()),
+            },
+            Attribute {
+                key: "y".into(),
+                value: AttributeValue::String("other".into()),
+            },
+        ]);
+        let ctx = current_context();
+        let value = json!({
+            "id": ctx.span_id(),
+            "parent": ctx.parent().unwrap().span_id(),
+            "started": [started.seconds, u64::from(started.nanoseconds)],
+            "headers": ctx.trace_context_headers(),
+            "x": match ctx.get_attribute("x", false).unwrap() { AttributeValue::String(value) => value },
+            "y": match ctx.get_attribute("y", false).unwrap() { AttributeValue::String(value) => value },
+        }).to_string();
+        span.finish();
+        span.finish();
+        drop(span);
+        assert_eq!(current_context().span_id(), parent);
+        self.last_span = value.clone();
+        value
+    }
+
+    fn last_span(&self) -> String {
+        self.last_span.clone()
+    }
+
+    fn mutate_finished_span(&self) {
+        let span = start_span("finished");
+        span.finish();
+        span.set_attribute("x", &AttributeValue::String("invalid".into()));
     }
 }
 

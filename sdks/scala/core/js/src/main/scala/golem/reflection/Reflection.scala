@@ -206,10 +206,9 @@ final class AgentType private[reflection] (
     ReflectionInternals.sequence(entries.map { entry =>
       configDeclaration(entry.path).flatMap { declaration =>
         declaration.schema
-          .packJson(entry.value)
+          .validateJson(entry.value)
           .left
-          .map(error => GolemReflectError.Validation(error.message))
-          .flatMap(value => validate(declaration.schema, value).map(_ => value))
+          .map(errors => GolemReflectError.Validation(errors.map(_.message).mkString("; ")))
           .map(value => ConfigOverride(entry.path, TypedSchemaValue(declaration.schema.graph, value)))
       }
     })

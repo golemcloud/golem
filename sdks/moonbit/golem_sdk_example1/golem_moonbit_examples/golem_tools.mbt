@@ -5682,6 +5682,640 @@ async fn __golem_tool_invoke_CanonicalBigBound(
 
 ///|
 ///
+fn __golem_tool_def_raw_MoonBitReflectionTest() -> @tool.ToolDef {
+  try {
+    let def :@tool.ToolDef = {
+      version: "0.0.0",
+      commands: [
+        {
+          name: "moonbit-reflection-test",
+          aliases: [],
+          doc: { summary: "", description: "", examples: [] },
+          globals: { options: [], flags: [] },
+          subcommands: [1, 2, 3],
+          body: None,
+        },
+        {
+          name: "echo",
+          aliases: [],
+          doc: { summary: "", description: "", examples: [] },
+          globals: { options: [], flags: [] },
+          subcommands: [],
+          body: Some(
+            {
+              positionals: {
+                fixed: [
+                  {
+                    name: "label",
+                    doc: { summary: "", description: "", examples: [] },
+                    value_name: None,
+                    type_: @schema.into_schema_graph(
+                      (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                    ),
+                    default: None,
+                    required: true,
+                    accepts_stdio: false,
+                  },
+                ],
+                tail: None,
+              },
+              options: [],
+              flags: [],
+              constraints: [],
+              stdin: None,
+              stdout: None,
+              result: Some(
+                {
+                  type_: @schema.into_schema_graph(
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ),
+                  doc: { summary: "", description: "", examples: [] },
+                  formatters: [
+                    {
+                      name: "default",
+                      doc: { summary: "", description: "", examples: [] },
+                    },
+                  ],
+                  default_formatter: "default",
+                },
+              ),
+              errors: [],
+              annotations: Some(
+                {
+                  read_only: false,
+                  destructive: true,
+                  idempotent: false,
+                  open_world: true,
+                },
+              ),
+            },
+          ),
+        },
+        {
+          name: "optional",
+          aliases: [],
+          doc: { summary: "", description: "", examples: [] },
+          globals: { options: [], flags: [] },
+          subcommands: [],
+          body: Some(
+            {
+              positionals: { fixed: [], tail: None },
+              options: [
+                {
+                  long: "maybe",
+                  short: None,
+                  aliases: [],
+                  doc: { summary: "", description: "", examples: [] },
+                  value_name: None,
+                  shape: @tool.OptionShapeDef::Scalar(
+                    @schema.into_schema_graph(
+                      (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                    ),
+                  ),
+                  default: None,
+                  required: false,
+                  env_var: None,
+                },
+              ],
+              flags: [],
+              constraints: [],
+              stdin: None,
+              stdout: None,
+              result: Some(
+                {
+                  type_: @schema.into_schema_graph(
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ),
+                  doc: { summary: "", description: "", examples: [] },
+                  formatters: [
+                    {
+                      name: "default",
+                      doc: { summary: "", description: "", examples: [] },
+                    },
+                  ],
+                  default_formatter: "default",
+                },
+              ),
+              errors: [],
+              annotations: Some(
+                {
+                  read_only: false,
+                  destructive: true,
+                  idempotent: false,
+                  open_world: true,
+                },
+              ),
+            },
+          ),
+        },
+        {
+          name: "canonical-values",
+          aliases: [],
+          doc: { summary: "", description: "", examples: [] },
+          globals: { options: [], flags: [] },
+          subcommands: [],
+          body: Some(
+            {
+              positionals: {
+                fixed: [
+                  {
+                    name: "signed",
+                    doc: { summary: "", description: "", examples: [] },
+                    value_name: None,
+                    type_: @schema.into_schema_graph(
+                      (@schema.TypeTag::{  } : @schema.TypeTag[Int64]),
+                    ),
+                    default: None,
+                    required: true,
+                    accepts_stdio: false,
+                  },
+                  {
+                    name: "unsigned",
+                    doc: { summary: "", description: "", examples: [] },
+                    value_name: None,
+                    type_: @schema.into_schema_graph(
+                      (@schema.TypeTag::{  } : @schema.TypeTag[UInt64]),
+                    ),
+                    default: None,
+                    required: true,
+                    accepts_stdio: false,
+                  },
+                  {
+                    name: "duration",
+                    doc: { summary: "", description: "", examples: [] },
+                    value_name: None,
+                    type_: @schema.into_schema_graph(
+                      (
+                        @schema.TypeTag::{  }
+                        : @schema.TypeTag[@schema.Duration]
+                      ),
+                    ),
+                    default: None,
+                    required: true,
+                    accepts_stdio: false,
+                  },
+                  {
+                    name: "quantity",
+                    doc: { summary: "", description: "", examples: [] },
+                    value_name: None,
+                    type_: @schema.into_schema_graph(
+                      (
+                        @schema.TypeTag::{  }
+                        : @schema.TypeTag[@schema.Quantity[ReflectionMeters]]
+                      ),
+                    ),
+                    default: None,
+                    required: true,
+                    accepts_stdio: false,
+                  },
+                ],
+                tail: None,
+              },
+              options: [
+                {
+                  long: "maybe",
+                  short: None,
+                  aliases: [],
+                  doc: { summary: "", description: "", examples: [] },
+                  value_name: None,
+                  shape: @tool.OptionShapeDef::Scalar(
+                    @schema.into_schema_graph(
+                      (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                    ),
+                  ),
+                  default: None,
+                  required: false,
+                  env_var: None,
+                },
+              ],
+              flags: [],
+              constraints: [],
+              stdin: None,
+              stdout: None,
+              result: Some(
+                {
+                  type_: @schema.into_schema_graph(
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ),
+                  doc: { summary: "", description: "", examples: [] },
+                  formatters: [
+                    {
+                      name: "default",
+                      doc: { summary: "", description: "", examples: [] },
+                    },
+                  ],
+                  default_formatter: "default",
+                },
+              ),
+              errors: [],
+              annotations: Some(
+                {
+                  read_only: false,
+                  destructive: true,
+                  idempotent: false,
+                  open_world: true,
+                },
+              ),
+            },
+          ),
+        },
+      ],
+    }
+    def
+  } catch{
+    error => abort("invalid generated raw tool definition: " + repr(error))
+  }
+}
+
+///|
+///
+fn __golem_tool_def_prepare_MoonBitReflectionTest(
+  strict_ancestors : @tool.GlobalsDef,
+  parent_globals : @tool.GlobalsDef,
+  override_name : String?,
+  override_doc : @toolCommon.Doc?,
+  override_aliases : Array[String]?,
+) -> @tool.ToolDef {
+  try {
+    let carrier :@tool.ToolDef = {
+      version: "0.0.0",
+      commands: [
+        {
+          name: "__golem_ancestry",
+          aliases: [],
+          doc: { summary: "", description: "", examples: [] },
+          globals: strict_ancestors,
+          subcommands: [],
+          body: None,
+        },
+      ],
+    }
+    let prepared = __golem_tool_extract_prepared(
+      carrier.graft_subtree(
+        __golem_tool_def_raw_MoonBitReflectionTest(),
+        "moonbit-reflection-test",
+        parent_globals,
+        override_name,
+        override_doc,
+        override_aliases,
+      ),
+    )
+    let def = prepared
+    def
+  } catch{
+    error => abort("invalid generated prepared tool definition: " + repr(error))
+  }
+}
+
+///|
+///
+fn __golem_tool_def_MoonBitReflectionTest() -> @tool.ToolDef {
+  try {
+    __golem_tool_def_prepare_MoonBitReflectionTest(
+      { options: [], flags: [] },
+      { options: [], flags: [] },
+      None,
+      None,
+      None,
+    ).normalize_inherited_globals()
+  } catch{
+    error => abort("invalid generated tool definition: " + repr(error))
+  }
+}
+
+///|
+///
+#warnings("-alert_wit_bindgen")
+async fn __golem_tool_invoke_MoonBitReflectionTest(
+  __golem_command_path : Array[String],
+  __golem_input : @types.TypedSchemaValue,
+  __golem_stdin : @asyncCore.Stream[Byte]?,
+  __golem_stdout : @tool.ProviderStdout?,
+  __golem_principal : @tool.Principal,
+) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
+  if __golem_command_path.length() == 1 && ["echo"].contains(
+    __golem_command_path[0],
+  ) {
+    let __golem_reader = @schema.WireReader::new(__golem_input.value)
+    let __golem_fields = try {
+      @schema.wire_record(
+        __golem_reader,
+        __golem_input.value.root,
+        1,
+        "tool moonbit-reflection-test command echo",
+      )
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool moonbit-reflection-test command echo: " + repr(__golem_error),
+          ),
+        )
+      }
+    }
+    if __golem_stdin is Some(_) {
+      __golem_reader.abort()
+      return @tool.reject_undecoded_invocation(
+        __golem_stdin,
+        @types.ToolError::InvalidInput("command does not accept a stdin stream"),
+      )
+    }
+    if __golem_stdout is Some(_) {
+      __golem_reader.abort()
+      return @tool.reject_undecoded_invocation(
+        __golem_stdin,
+        @types.ToolError::InvalidInput(
+          "command does not accept a stdout stream",
+        ),
+      )
+    }
+    let label :String = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[0])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool moonbit-reflection-test command echo: failed decoding `label`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    try {
+      __golem_reader.finish()
+    } catch{
+      __golem_error => {
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool moonbit-reflection-test command echo: " + repr(__golem_error),
+          ),
+        )
+      }
+    }
+    return {
+      let __golem_value = MoonBitReflectionTest::echo(label)
+      Ok(
+        try {
+          @tool.invocation_result_wire(__golem_value)
+        } catch{
+          @asyncCore.Cancelled::Cancelled as error => raise  error
+          @types.ToolError::InvalidResult(message) => {
+            return Err(@types.ToolError::InvalidResult(message))
+          }
+          error => raise  error
+        },
+      )
+    }
+  }
+  if __golem_command_path.length() == 1 && ["optional"].contains(
+    __golem_command_path[0],
+  ) {
+    let __golem_reader = @schema.WireReader::new(__golem_input.value)
+    let __golem_fields = try {
+      @schema.wire_record(
+        __golem_reader,
+        __golem_input.value.root,
+        1,
+        "tool moonbit-reflection-test command optional",
+      )
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool moonbit-reflection-test command optional: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    if __golem_stdin is Some(_) {
+      __golem_reader.abort()
+      return @tool.reject_undecoded_invocation(
+        __golem_stdin,
+        @types.ToolError::InvalidInput("command does not accept a stdin stream"),
+      )
+    }
+    if __golem_stdout is Some(_) {
+      __golem_reader.abort()
+      return @tool.reject_undecoded_invocation(
+        __golem_stdin,
+        @types.ToolError::InvalidInput(
+          "command does not accept a stdout stream",
+        ),
+      )
+    }
+    let maybe :String? = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[0])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool moonbit-reflection-test command optional: failed decoding `maybe`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    try {
+      __golem_reader.finish()
+    } catch{
+      __golem_error => {
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool moonbit-reflection-test command optional: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    return {
+      let __golem_value = MoonBitReflectionTest::optional(maybe)
+      Ok(
+        try {
+          @tool.invocation_result_wire(__golem_value)
+        } catch{
+          @asyncCore.Cancelled::Cancelled as error => raise  error
+          @types.ToolError::InvalidResult(message) => {
+            return Err(@types.ToolError::InvalidResult(message))
+          }
+          error => raise  error
+        },
+      )
+    }
+  }
+  if __golem_command_path.length() == 1 && ["canonical-values"].contains(
+    __golem_command_path[0],
+  ) {
+    let __golem_reader = @schema.WireReader::new(__golem_input.value)
+    let __golem_fields = try {
+      @schema.wire_record(
+        __golem_reader,
+        __golem_input.value.root,
+        5,
+        "tool moonbit-reflection-test command canonical-values",
+      )
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool moonbit-reflection-test command canonical-values: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    if __golem_stdin is Some(_) {
+      __golem_reader.abort()
+      return @tool.reject_undecoded_invocation(
+        __golem_stdin,
+        @types.ToolError::InvalidInput("command does not accept a stdin stream"),
+      )
+    }
+    if __golem_stdout is Some(_) {
+      __golem_reader.abort()
+      return @tool.reject_undecoded_invocation(
+        __golem_stdin,
+        @types.ToolError::InvalidInput(
+          "command does not accept a stdout stream",
+        ),
+      )
+    }
+    let signed :Int64 = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[0])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool moonbit-reflection-test command canonical-values: failed decoding `signed`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    let unsigned :UInt64 = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[1])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool moonbit-reflection-test command canonical-values: failed decoding `unsigned`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    let duration :@schema.Duration = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[2])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool moonbit-reflection-test command canonical-values: failed decoding `duration`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    let quantity :@schema.Quantity[ReflectionMeters] = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[3])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool moonbit-reflection-test command canonical-values: failed decoding `quantity`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    let maybe :String? = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[4])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool moonbit-reflection-test command canonical-values: failed decoding `maybe`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    try {
+      __golem_reader.finish()
+    } catch{
+      __golem_error => {
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool moonbit-reflection-test command canonical-values: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    return {
+      let __golem_value = MoonBitReflectionTest::canonical_values(
+        signed,
+        unsigned,
+        duration,
+        quantity,
+        maybe,
+      )
+      Ok(
+        try {
+          @tool.invocation_result_wire(__golem_value)
+        } catch{
+          @asyncCore.Cancelled::Cancelled as error => raise  error
+          @types.ToolError::InvalidResult(message) => {
+            return Err(@types.ToolError::InvalidResult(message))
+          }
+          error => raise  error
+        },
+      )
+    }
+  }
+  @tool.reject_wire_invocation(
+    __golem_input,
+    __golem_stdin,
+    @types.ToolError::InvalidCommandPath(__golem_command_path),
+  )
+}
+
+///|
+///
 fn __golem_tool_wire_MoonBitStreaming() -> @toolCommon.Tool {
   try {
     let __golem_schema = @schema.WireTypeEncoder::new()
@@ -7520,35 +8154,36 @@ fn __golem_tool_wire_CanonicalBigBound() -> @toolCommon.Tool {
 
 ///|
 ///
-fn __golem_tool_def_raw_MoonBitReflectionTest() -> @tool.ToolDef {
+fn __golem_tool_wire_MoonBitReflectionTest() -> @toolCommon.Tool {
   try {
-    let def : @tool.ToolDef = {
-      version: "0.0.0",
-      commands: [
-        {
-          name: "moonbit-reflection-test",
-          aliases: [],
-          doc: { summary: "", description: "", examples: [], },
-          globals: { options: [], flags: [], },
-          subcommands: [1, 2],
-          body: None,
-        },
-        {
-          name: "echo",
-          aliases: [],
-          doc: { summary: "", description: "", examples: [], },
-          globals: { options: [], flags: [], },
-          subcommands: [],
-          body: Some({
+    let __golem_schema = @schema.WireTypeEncoder::new()
+    let nodes :Array[@toolCommon.CommandNode] = [
+      {
+        name: "moonbit-reflection-test",
+        aliases: [],
+        doc: { summary: "", description: "", examples: [] },
+        globals: { options: [], flags: [] },
+        subcommands: [1, 2, 3],
+        body: None,
+      },
+      {
+        name: "echo",
+        aliases: [],
+        doc: { summary: "", description: "", examples: [] },
+        globals: { options: [], flags: [] },
+        subcommands: [],
+        body: Some(
+          {
             positionals: {
               fixed: [
                 {
                   name: "label",
-                  doc: { summary: "", description: "", examples: [], },
+                  doc: { summary: "", description: "", examples: [] },
                   value_name: None,
-                  type_: @schema.into_schema_graph(
-                    (@schema.TypeTag::{ } : @schema.TypeTag[String]),
-                  ),
+                  type_: @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ).index,
                   default: None,
                   required: true,
                   accepts_stdio: false,
@@ -7561,47 +8196,55 @@ fn __golem_tool_def_raw_MoonBitReflectionTest() -> @tool.ToolDef {
             constraints: [],
             stdin: None,
             stdout: None,
-            result: Some({
-              type_: @schema.into_schema_graph(
-                (@schema.TypeTag::{ } : @schema.TypeTag[String]),
-              ),
-              doc: { summary: "", description: "", examples: [], },
-              formatters: [
-                {
-                  name: "default",
-                  doc: { summary: "", description: "", examples: [], },
-                },
-              ],
-              default_formatter: "default",
-            }),
+            result: Some(
+              {
+                type_: @tool.wire_tool_type(
+                  __golem_schema,
+                  (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                ).index,
+                doc: { summary: "", description: "", examples: [] },
+                formatters: [
+                  {
+                    name: "default",
+                    doc: { summary: "", description: "", examples: [] },
+                  },
+                ],
+                default_formatter: "default",
+              },
+            ),
             errors: [],
-            annotations: Some({
-              read_only: false,
-              destructive: true,
-              idempotent: false,
-              open_world: true,
-            }),
-          }),
-        },
-        {
-          name: "optional",
-          aliases: [],
-          doc: { summary: "", description: "", examples: [], },
-          globals: { options: [], flags: [], },
-          subcommands: [],
-          body: Some({
-            positionals: { fixed: [], tail: None, },
+            annotations: Some(
+              {
+                read_only: false,
+                destructive: true,
+                idempotent: false,
+                open_world: true,
+              },
+            ),
+          },
+        ),
+      },
+      {
+        name: "optional",
+        aliases: [],
+        doc: { summary: "", description: "", examples: [] },
+        globals: { options: [], flags: [] },
+        subcommands: [],
+        body: Some(
+          {
+            positionals: { fixed: [], tail: None },
             options: [
               {
                 long: "maybe",
                 short: None,
                 aliases: [],
-                doc: { summary: "", description: "", examples: [], },
+                doc: { summary: "", description: "", examples: [] },
                 value_name: None,
-                shape: @tool.OptionShapeDef::Scalar(
-                  @schema.into_schema_graph(
-                    (@schema.TypeTag::{ } : @schema.TypeTag[String]),
-                  ),
+                shape: @toolCommon.OptionShape::Scalar(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ).index,
                 ),
                 default: None,
                 required: false,
@@ -7612,198 +8255,161 @@ fn __golem_tool_def_raw_MoonBitReflectionTest() -> @tool.ToolDef {
             constraints: [],
             stdin: None,
             stdout: None,
-            result: Some({
-              type_: @schema.into_schema_graph(
-                (@schema.TypeTag::{ } : @schema.TypeTag[String]),
-              ),
-              doc: { summary: "", description: "", examples: [], },
-              formatters: [
+            result: Some(
+              {
+                type_: @tool.wire_tool_type(
+                  __golem_schema,
+                  (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                ).index,
+                doc: { summary: "", description: "", examples: [] },
+                formatters: [
+                  {
+                    name: "default",
+                    doc: { summary: "", description: "", examples: [] },
+                  },
+                ],
+                default_formatter: "default",
+              },
+            ),
+            errors: [],
+            annotations: Some(
+              {
+                read_only: false,
+                destructive: true,
+                idempotent: false,
+                open_world: true,
+              },
+            ),
+          },
+        ),
+      },
+      {
+        name: "canonical-values",
+        aliases: [],
+        doc: { summary: "", description: "", examples: [] },
+        globals: { options: [], flags: [] },
+        subcommands: [],
+        body: Some(
+          {
+            positionals: {
+              fixed: [
                 {
-                  name: "default",
-                  doc: { summary: "", description: "", examples: [], },
+                  name: "signed",
+                  doc: { summary: "", description: "", examples: [] },
+                  value_name: None,
+                  type_: @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[Int64]),
+                  ).index,
+                  default: None,
+                  required: true,
+                  accepts_stdio: false,
+                },
+                {
+                  name: "unsigned",
+                  doc: { summary: "", description: "", examples: [] },
+                  value_name: None,
+                  type_: @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[UInt64]),
+                  ).index,
+                  default: None,
+                  required: true,
+                  accepts_stdio: false,
+                },
+                {
+                  name: "duration",
+                  doc: { summary: "", description: "", examples: [] },
+                  value_name: None,
+                  type_: @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[@schema.Duration]),
+                  ).index,
+                  default: None,
+                  required: true,
+                  accepts_stdio: false,
+                },
+                {
+                  name: "quantity",
+                  doc: { summary: "", description: "", examples: [] },
+                  value_name: None,
+                  type_: @tool.wire_tool_type(
+                    __golem_schema,
+                    (
+                      @schema.TypeTag::{  }
+                      : @schema.TypeTag[@schema.Quantity[ReflectionMeters]]
+                    ),
+                  ).index,
+                  default: None,
+                  required: true,
+                  accepts_stdio: false,
                 },
               ],
-              default_formatter: "default",
-            }),
+              tail: None,
+            },
+            options: [
+              {
+                long: "maybe",
+                short: None,
+                aliases: [],
+                doc: { summary: "", description: "", examples: [] },
+                value_name: None,
+                shape: @toolCommon.OptionShape::Scalar(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ).index,
+                ),
+                default: None,
+                required: false,
+                env_var: None,
+              },
+            ],
+            flags: [],
+            constraints: [],
+            stdin: None,
+            stdout: None,
+            result: Some(
+              {
+                type_: @tool.wire_tool_type(
+                  __golem_schema,
+                  (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                ).index,
+                doc: { summary: "", description: "", examples: [] },
+                formatters: [
+                  {
+                    name: "default",
+                    doc: { summary: "", description: "", examples: [] },
+                  },
+                ],
+                default_formatter: "default",
+              },
+            ),
             errors: [],
-            annotations: Some({
-              read_only: false,
-              destructive: true,
-              idempotent: false,
-              open_world: true,
-            }),
-          }),
-        },
-      ],
-    }
-    def
-  } catch {
-    error => abort("invalid generated raw tool definition: " + repr(error))
-  }
-}
-
-///|
-///
-fn __golem_tool_def_prepare_MoonBitReflectionTest(
-  strict_ancestors : @tool.GlobalsDef,
-  parent_globals : @tool.GlobalsDef,
-  override_name : String?,
-  override_doc : @toolCommon.Doc?,
-  override_aliases : Array[String]?,
-) -> @tool.ToolDef {
-  try {
-    let carrier : @tool.ToolDef = {
+            annotations: Some(
+              {
+                read_only: false,
+                destructive: true,
+                idempotent: false,
+                open_world: true,
+              },
+            ),
+          },
+        ),
+      },
+    ]
+    let root = __golem_schema.push(@types.RecordType([]))
+    {
       version: "0.0.0",
-      commands: [
-        {
-          name: "__golem_ancestry",
-          aliases: [],
-          doc: { summary: "", description: "", examples: [], },
-          globals: strict_ancestors,
-          subcommands: [],
-          body: None,
-        },
-      ],
+      commands: { nodes, },
+      schema: {
+        type_nodes: __golem_schema.nodes,
+        defs: __golem_schema.defs,
+        root,
+      },
     }
-    let prepared = __golem_tool_extract_prepared(
-      carrier.graft_subtree(
-        __golem_tool_def_raw_MoonBitReflectionTest(),
-        "moonbit-reflection-test",
-        parent_globals,
-        override_name,
-        override_doc,
-        override_aliases,
-      ),
-    )
-    let def = prepared
-    def
-  } catch {
-    error => abort("invalid generated prepared tool definition: " + repr(error))
-  }
-}
-
-///|
-///
-fn __golem_tool_def_MoonBitReflectionTest() -> @tool.ToolDef {
-  __golem_tool_def_prepare_MoonBitReflectionTest(
-    { options: [], flags: [], },
-    { options: [], flags: [], },
-    None,
-    None,
-    None,
-  ).normalize_inherited_globals() catch {
-    error => abort("invalid generated tool definition: " + repr(error))
-  }
-}
-
-///|
-///
-#warnings("-alert_wit_bindgen")
-async fn __golem_tool_invoke_MoonBitReflectionTest(
-  __golem_command_path : Array[String],
-  __golem_input : @types.TypedSchemaValue,
-  __golem_stdin : @asyncCore.Stream[Byte]?,
-  __golem_stdout : @tool.ProviderStdout?,
-  __golem_principal : @tool.Principal,
-) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
-  let __golem_def = __golem_tool_def_MoonBitReflectionTest()
-  let __golem_index = match
-    __golem_def.command_index_by_path(__golem_command_path) {
-    Some(__golem_index) => __golem_index
-    None =>
-      return @tool.reject_wire_invocation(
-        __golem_input,
-        __golem_stdin,
-        @types.ToolError::InvalidCommandPath(__golem_command_path),
-      )
-  }
-  let __golem_decoded = @tool.decode_canonical_input(
-    __golem_def, __golem_index, __golem_input, "tool moonbit-reflection-test invocation",
-  ) catch {
-    __golem_error =>
-      return @tool.reject_undecoded_invocation(__golem_stdin, __golem_error)
-  }
-  match __golem_index {
-    1 => {
-      if __golem_stdin is Some(_) {
-        return @tool.reject_decoded_invocation(
-          __golem_decoded,
-          __golem_stdin,
-          @types.ToolError::InvalidInput(
-            "command does not accept a stdin stream",
-          ),
-        )
-      }
-      if __golem_stdout is Some(_) {
-        return @tool.reject_decoded_invocation(
-          __golem_decoded,
-          __golem_stdin,
-          @types.ToolError::InvalidInput(
-            "command does not accept a stdout stream",
-          ),
-        )
-      }
-      let label : String = @tool.decode_canonical_field(
-        __golem_decoded, "label", "tool moonbit-reflection-test command echo",
-      ) catch {
-        __golem_error =>
-          return @tool.reject_decoded_invocation(
-            __golem_decoded, __golem_stdin, __golem_error,
-          )
-      }
-      let __golem_value = MoonBitReflectionTest::echo(label)
-      Ok(
-        @tool.invocation_result_value(__golem_value) catch {
-          @asyncCore.Cancelled::Cancelled as error => raise error
-          @types.ToolError::InvalidResult(message) =>
-            return Err(@types.ToolError::InvalidResult(message))
-          error => raise error
-        },
-      )
-    }
-    2 => {
-      if __golem_stdin is Some(_) {
-        return @tool.reject_decoded_invocation(
-          __golem_decoded,
-          __golem_stdin,
-          @types.ToolError::InvalidInput(
-            "command does not accept a stdin stream",
-          ),
-        )
-      }
-      if __golem_stdout is Some(_) {
-        return @tool.reject_decoded_invocation(
-          __golem_decoded,
-          __golem_stdin,
-          @types.ToolError::InvalidInput(
-            "command does not accept a stdout stream",
-          ),
-        )
-      }
-      let maybe : String? = @tool.decode_canonical_field(
-        __golem_decoded, "maybe", "tool moonbit-reflection-test command optional",
-      ) catch {
-        __golem_error =>
-          return @tool.reject_decoded_invocation(
-            __golem_decoded, __golem_stdin, __golem_error,
-          )
-      }
-      let __golem_value = MoonBitReflectionTest::optional(maybe)
-      Ok(
-        @tool.invocation_result_value(__golem_value) catch {
-          @asyncCore.Cancelled::Cancelled as error => raise error
-          @types.ToolError::InvalidResult(message) =>
-            return Err(@types.ToolError::InvalidResult(message))
-          error => raise error
-        },
-      )
-    }
-    _ =>
-      @tool.reject_decoded_invocation(
-        __golem_decoded,
-        __golem_stdin,
-        @types.ToolError::InvalidCommandPath(__golem_command_path),
-      )
+  } catch{
+    error => abort("invalid generated tool descriptor: " + repr(error))
   }
 }
 
@@ -7826,6 +8432,10 @@ fn init {
     @tool.register_wire_tool_invoker(
       __golem_tool_wire_CanonicalBigBound(),
       __golem_tool_invoke_CanonicalBigBound,
+    )
+    @tool.register_wire_tool_invoker(
+      __golem_tool_wire_MoonBitReflectionTest(),
+      __golem_tool_invoke_MoonBitReflectionTest,
     )
   } catch{
     error => abort("failed to register generated tools: " + repr(error))

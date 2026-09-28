@@ -23,7 +23,7 @@ use crate::durable_host::http::inline_retry::{
 use crate::durable_host::http::{continue_http_request, end_http_request};
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 use crate::services::HasWorker;
-use crate::services::oplog::{CommitLevel, OplogOps};
+use crate::services::oplog::{CommitLevel, OplogError, OplogOps};
 use crate::workerctx::WorkerCtx;
 use golem_common::model::NamedRetryPolicy;
 use golem_common::model::oplog::host_functions::{
@@ -34,7 +34,7 @@ use golem_common::model::oplog::types::{
 };
 use golem_common::model::oplog::{
     DurableFunctionType, HostPayloadPair, HostRequest, HostResponse,
-    HostResponseHttpFutureTrailersGet, HostResponseHttpResponse,
+    HostResponseHttpFutureTrailersGet, HostResponseHttpResponse, SpanOutcome,
 };
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use http::{HeaderName, HeaderValue};
@@ -559,6 +559,15 @@ impl<Ctx: WorkerCtx> HostFutureTrailers for DurableWorkerCtx<Ctx> {
                 // End the HTTP request when trailers have resolved (not pending)
                 let is_resolved = !matches!(&result, Ok(None));
                 if is_resolved {
+                    if let Some(state) = self.state.open_http_requests.get(&handle) {
+                        state
+                            .session
+                            .record_outcome(if matches!(&result, Ok(Some(Ok(Ok(_))))) {
+                                SpanOutcome::Completed
+                            } else {
+                                SpanOutcome::Failed
+                            });
+                    }
                     end_http_request(self, handle).await?;
                 }
 
@@ -591,6 +600,15 @@ impl<Ctx: WorkerCtx> HostFutureTrailers for DurableWorkerCtx<Ctx> {
                 // End the HTTP request when trailers have resolved (not pending)
                 let is_resolved = !matches!(&result, Ok(None));
                 if is_resolved {
+                    if let Some(state) = self.state.open_http_requests.get(&handle) {
+                        state
+                            .session
+                            .record_outcome(if matches!(&result, Ok(Some(Ok(Ok(_))))) {
+                                SpanOutcome::Completed
+                            } else {
+                                SpanOutcome::Failed
+                            });
+                    }
                     end_http_request(self, handle).await?;
                 }
 
@@ -1187,8 +1205,13 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                     SerializableHttpResponse::HeadersReceived(headers) => Some(headers.status),
                     _ => None,
                 };
+                if !is_pending
+                    && !matches!(&serializable_response, SerializableHttpResponse::HeadersReceived(headers) if headers.status < 400)
+                {
+                    state.session.record_outcome(SpanOutcome::Failed);
+                }
             }
-            persist_http_response(self, request, &serializable_response, begin_index).await;
+            persist_http_response(self, request, &serializable_response, begin_index).await?;
 
             if !is_pending && let Ok(Some(Ok(Ok(resource)))) = &response {
                 let incoming_response_handle = resource.rep();
@@ -1222,6 +1245,13 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                 .await
                 .map_err(wasmtime::Error::from)?
                 .response;
+
+            if !matches!(&serialized_response, SerializableHttpResponse::Pending)
+                && !matches!(&serialized_response, SerializableHttpResponse::HeadersReceived(headers) if headers.status < 400)
+                && let Some(state) = self.state.open_http_requests.get(&handle)
+            {
+                state.session.record_outcome(SpanOutcome::Failed);
+            }
 
             match serialized_response {
                 SerializableHttpResponse::Pending => Ok(None),
@@ -1449,7 +1479,7 @@ async fn persist_http_response<Ctx: WorkerCtx>(
     request: golem_common::model::oplog::HostRequestHttpRequest,
     serializable_response: &SerializableHttpResponse,
     begin_index: golem_common::model::oplog::OplogIndex,
-) {
+) -> Result<(), WorkerExecutorError> {
     if !ctx.state.durability_is_suppressed() {
         ctx.state
             .oplog
@@ -1463,12 +1493,16 @@ async fn persist_http_response<Ctx: WorkerCtx>(
                 Some(begin_index),
             )
             .await
-            .unwrap_or_else(|err| panic!("failed to serialize http response: {err}"));
+            .map_err(|err| match err {
+                OplogError::Fenced(_) => err,
+                err => panic!("failed to serialize http response: {err}"),
+            })?;
         ctx.public_state
             .worker()
             .commit_oplog_and_update_state(CommitLevel::DurableOnly)
-            .await;
+            .await?;
     }
+    Ok(())
 }
 
 /// Typed HTTP failure for retry classification, preserving the original `ErrorCode`

@@ -674,13 +674,24 @@ fn from_json_body(
             }
             let mut out = Vec::with_capacity(fields.len());
             for field in fields.iter() {
-                let value = obj.get(&field.name).ok_or_else(|| {
-                    mismatch(path, format!("missing record field `{}`", field.name))
-                })?;
-                path.push(PathSegment::Field(field.name.clone()));
-                let v = from_json_inner(graph, &field.body, value, path, &mut visited, policy)?;
-                path.pop();
-                out.push(v);
+                match obj.get(&field.name) {
+                    Some(value) => {
+                        path.push(PathSegment::Field(field.name.clone()));
+                        let v =
+                            from_json_inner(graph, &field.body, value, path, &mut visited, policy)?;
+                        path.pop();
+                        out.push(v);
+                    }
+                    None if resolves_to_option(graph, &field.body) => {
+                        out.push(SchemaValue::Option { inner: None });
+                    }
+                    None => {
+                        return Err(mismatch(
+                            path,
+                            format!("missing record field `{}`", field.name),
+                        ));
+                    }
+                }
             }
             Ok(SchemaValue::Record { fields: out })
         }
@@ -875,6 +886,21 @@ fn from_json_body(
         SchemaType::Future { .. } | SchemaType::Stream { .. } => Err(RenderError::Unsupported(
             "future/stream values have no JSON representation",
         )),
+    }
+}
+
+fn resolves_to_option(graph: &SchemaGraph, ty: &SchemaType) -> bool {
+    let mut current = ty;
+    let mut visited = HashSet::new();
+    loop {
+        match current {
+            SchemaType::Option { .. } => return true,
+            SchemaType::Ref { id, .. } if visited.insert(id.clone()) => match graph.lookup(id) {
+                Some(definition) => current = &definition.body,
+                None => return false,
+            },
+            _ => return false,
+        }
     }
 }
 

@@ -1657,9 +1657,7 @@ pub fn CanonicalBigBoundClient::new() -> CanonicalBigBoundClient {
 
 ///|
 ///
-pub fn CanonicalBigBoundClient::new_for(
-  name : String,
-) -> CanonicalBigBoundClient {
+pub fn CanonicalBigBoundClient::new_for(name : String) -> CanonicalBigBoundClient {
   { client: @tool.ToolClient::new(name), }
 }
 
@@ -1766,17 +1764,13 @@ pub fn MoonbitReflectionTestClient::new() -> MoonbitReflectionTestClient {
 
 ///|
 ///
-pub fn MoonbitReflectionTestClient::new_for(
-  name : String,
-) -> MoonbitReflectionTestClient {
+pub fn MoonbitReflectionTestClient::new_for(name : String) -> MoonbitReflectionTestClient {
   { client: @tool.ToolClient::new(name), }
 }
 
 ///|
 ///
-pub fn MoonbitReflectionTestClient::drop(
-  self : MoonbitReflectionTestClient,
-) -> Unit {
+pub fn MoonbitReflectionTestClient::drop(self : MoonbitReflectionTestClient) -> Unit {
   self.client.drop()
 }
 
@@ -1786,28 +1780,49 @@ pub async fn MoonbitReflectionTestClient::echo(
   self : MoonbitReflectionTestClient,
   label : String,
 ) -> Result[String, @tool.ToolError[@tool.NoToolError]] {
-  let __golem_def = __golem_tool_def_MoonBitReflectionTest()
-  let __golem_index = match __golem_def.command_index_by_path(["echo"]) {
-    Some(__golem_index) => __golem_index
-    None =>
-      return Err(
-        @tool.tool_protocol_error(
-          "generated command path is missing from descriptor",
-        ),
-      )
+  let __golem_values :Array[&@schema.IntoWire] = []
+  __golem_values.push(label)
+  let __golem_schema = @schema.WireTypeEncoder::new()
+  let __golem_root = try {
+    __golem_schema.push(
+      @types.RecordType(
+        [
+          {
+            name: "label",
+            body: @tool.wire_tool_type(
+              __golem_schema,
+              (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+            ).index,
+            metadata: @schema.empty_wire_metadata(),
+          },
+        ],
+      ),
+    )
+  } catch{
+    error => {
+      @schema.release_wire_fields(__golem_values)
+      return Err(@tool.tool_protocol_error(repr(error)))
+    }
   }
-  let __golem_model = __golem_def.canonical_input_model(__golem_index) catch {
-    __golem_error => return Err(@tool.tool_protocol_error(repr(__golem_error)))
+  let __golem_value = try {
+    @schema.into_wire_record_async(__golem_values)
+  } catch{
+    @asyncCore.Cancelled::Cancelled as error => raise  error
+    error => return Err(@tool.tool_protocol_error(repr(error)))
   }
-  let __golem_values = []
-  __golem_values.push(("label", @schema.to_value_as(label)))
-  let __golem_input = @tool.build_canonical_input(__golem_model, __golem_values) catch {
-    __golem_error => return Err(@tool.tool_protocol_error(repr(__golem_error)))
+  let __golem_input :@types.TypedSchemaValue = {
+    graph: {
+      type_nodes: __golem_schema.nodes,
+      defs: __golem_schema.defs,
+      root: __golem_root,
+    },
+    value: __golem_value,
   }
-  match
-    self.client.invoke_and_await_no_tool_error(["echo"], __golem_input, None) {
+  match self
+    .client
+    .invoke_and_await_wire(["echo"], __golem_input, None, fn(_, _) { None }) {
     Err(__golem_error) => Err(__golem_error)
-    Ok(__golem_result) => @tool.decode_result_value(__golem_result)
+    Ok(__golem_result) => @tool.decode_wire_result_value(__golem_result)
   }
 }
 
@@ -1817,31 +1832,153 @@ pub async fn MoonbitReflectionTestClient::optional(
   self : MoonbitReflectionTestClient,
   maybe : String?,
 ) -> Result[String, @tool.ToolError[@tool.NoToolError]] {
-  let __golem_def = __golem_tool_def_MoonBitReflectionTest()
-  let __golem_index = match __golem_def.command_index_by_path(["optional"]) {
-    Some(__golem_index) => __golem_index
-    None =>
-      return Err(
-        @tool.tool_protocol_error(
-          "generated command path is missing from descriptor",
-        ),
-      )
+  let __golem_values :Array[&@schema.IntoWire] = []
+  __golem_values.push(maybe)
+  let __golem_schema = @schema.WireTypeEncoder::new()
+  let __golem_root = try {
+    __golem_schema.push(
+      @types.RecordType(
+        [
+          {
+            name: "maybe",
+            body: __golem_schema.push(
+              @types.OptionType(
+                @tool.wire_tool_type(
+                  __golem_schema,
+                  (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                ).index,
+              ),
+            ),
+            metadata: @schema.empty_wire_metadata(),
+          },
+        ],
+      ),
+    )
+  } catch{
+    error => {
+      @schema.release_wire_fields(__golem_values)
+      return Err(@tool.tool_protocol_error(repr(error)))
+    }
   }
-  let __golem_model = __golem_def.canonical_input_model(__golem_index) catch {
-    __golem_error => return Err(@tool.tool_protocol_error(repr(__golem_error)))
+  let __golem_value = try {
+    @schema.into_wire_record_async(__golem_values)
+  } catch{
+    @asyncCore.Cancelled::Cancelled as error => raise  error
+    error => return Err(@tool.tool_protocol_error(repr(error)))
   }
-  let __golem_values = []
-  __golem_values.push(("maybe", @schema.to_value_as(maybe)))
-  let __golem_input = @tool.build_canonical_input(__golem_model, __golem_values) catch {
-    __golem_error => return Err(@tool.tool_protocol_error(repr(__golem_error)))
+  let __golem_input :@types.TypedSchemaValue = {
+    graph: {
+      type_nodes: __golem_schema.nodes,
+      defs: __golem_schema.defs,
+      root: __golem_root,
+    },
+    value: __golem_value,
   }
-  match
-    self.client.invoke_and_await_no_tool_error(
-      ["optional"],
-      __golem_input,
-      None,
+  match self
+    .client
+    .invoke_and_await_wire(["optional"], __golem_input, None, fn(_, _) { None }) {
+    Err(__golem_error) => Err(__golem_error)
+    Ok(__golem_result) => @tool.decode_wire_result_value(__golem_result)
+  }
+}
+
+///|
+///
+pub async fn MoonbitReflectionTestClient::canonical_values(
+  self : MoonbitReflectionTestClient,
+  signed : Int64,
+  unsigned : UInt64,
+  duration : @schema.Duration,
+  quantity : @schema.Quantity[ReflectionMeters],
+  maybe : String?,
+) -> Result[String, @tool.ToolError[@tool.NoToolError]] {
+  let __golem_values :Array[&@schema.IntoWire] = []
+  __golem_values.push(signed)
+  __golem_values.push(unsigned)
+  __golem_values.push(duration)
+  __golem_values.push(quantity)
+  __golem_values.push(maybe)
+  let __golem_schema = @schema.WireTypeEncoder::new()
+  let __golem_root = try {
+    __golem_schema.push(
+      @types.RecordType(
+        [
+          {
+            name: "signed",
+            body: @tool.wire_tool_type(
+              __golem_schema,
+              (@schema.TypeTag::{  } : @schema.TypeTag[Int64]),
+            ).index,
+            metadata: @schema.empty_wire_metadata(),
+          },
+          {
+            name: "unsigned",
+            body: @tool.wire_tool_type(
+              __golem_schema,
+              (@schema.TypeTag::{  } : @schema.TypeTag[UInt64]),
+            ).index,
+            metadata: @schema.empty_wire_metadata(),
+          },
+          {
+            name: "duration",
+            body: @tool.wire_tool_type(
+              __golem_schema,
+              (@schema.TypeTag::{  } : @schema.TypeTag[@schema.Duration]),
+            ).index,
+            metadata: @schema.empty_wire_metadata(),
+          },
+          {
+            name: "quantity",
+            body: @tool.wire_tool_type(
+              __golem_schema,
+              (
+                @schema.TypeTag::{  }
+                : @schema.TypeTag[@schema.Quantity[ReflectionMeters]]
+              ),
+            ).index,
+            metadata: @schema.empty_wire_metadata(),
+          },
+          {
+            name: "maybe",
+            body: __golem_schema.push(
+              @types.OptionType(
+                @tool.wire_tool_type(
+                  __golem_schema,
+                  (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                ).index,
+              ),
+            ),
+            metadata: @schema.empty_wire_metadata(),
+          },
+        ],
+      ),
+    )
+  } catch{
+    error => {
+      @schema.release_wire_fields(__golem_values)
+      return Err(@tool.tool_protocol_error(repr(error)))
+    }
+  }
+  let __golem_value = try {
+    @schema.into_wire_record_async(__golem_values)
+  } catch{
+    @asyncCore.Cancelled::Cancelled as error => raise  error
+    error => return Err(@tool.tool_protocol_error(repr(error)))
+  }
+  let __golem_input :@types.TypedSchemaValue = {
+    graph: {
+      type_nodes: __golem_schema.nodes,
+      defs: __golem_schema.defs,
+      root: __golem_root,
+    },
+    value: __golem_value,
+  }
+  match self
+    .client
+    .invoke_and_await_wire(
+      ["canonical-values"], __golem_input, None, fn(_, _) { None }
     ) {
     Err(__golem_error) => Err(__golem_error)
-    Ok(__golem_result) => @tool.decode_result_value(__golem_result)
+    Ok(__golem_result) => @tool.decode_wire_result_value(__golem_result)
   }
 }

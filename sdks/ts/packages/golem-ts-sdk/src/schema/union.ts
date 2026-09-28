@@ -130,7 +130,10 @@ export function matchesSchemaType(
       // distinct required keys.
       return (
         isPlainObject(value) &&
-        body.fields.every((f) => f.body.body.tag === 'option' || f.name in value)
+        body.fields.every(
+          (f) =>
+            f.body.body.tag === 'option' || Object.prototype.hasOwnProperty.call(value, f.name),
+        )
       );
     case 'secret':
     case 'quota-token':

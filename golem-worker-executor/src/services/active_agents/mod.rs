@@ -38,7 +38,7 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
-use tracing::{Instrument, debug};
+use tracing::{Instrument, debug, info};
 
 use crate::durable_host::tool::operation::OwnerFailureWinner;
 use crate::services::HasAll;
@@ -65,7 +65,7 @@ use crate::worker::status_flusher::AgentStatusFlushQueue;
 use crate::worker::{
     EvictionClass, EvictionStopOutcome, FilesystemPressureEligibility, UnloadRequest,
 };
-use crate::worker::{Worker, WorkerCreationMode};
+use crate::worker::{RetirementReason, Worker, WorkerCreationMode};
 use crate::workerctx::WorkerCtx;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::account::AccountId;
@@ -1117,6 +1117,23 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
     /// Removes only the cache generation owned by `expected`. Bookkeeping is cleared only when
     /// that exact generation was still authoritative at the point of removal.
     pub async fn remove_worker(&self, expected: &Arc<Worker<Ctx>>, deletion_owner: bool) -> bool {
+        self.remove_worker_with(
+            expected,
+            deletion_owner,
+            OwnerFailureWinner::Lifecycle(InterruptKind::Interrupt(Timestamp::now_utc())),
+        )
+        .await
+    }
+
+    /// [`Self::remove_worker`] with an explicit reason for tearing the agent's entity bodies down.
+    /// A lost shard must not report itself as interrupted through the Golem API: it was
+    /// not, its shard moved. A deletion owner tears nothing down here, whatever the reason.
+    pub(crate) async fn remove_worker_with(
+        &self,
+        expected: &Arc<Worker<Ctx>>,
+        deletion_owner: bool,
+        owner_failure: OwnerFailureWinner,
+    ) -> bool {
         let owned_agent_id = expected.owned_agent_id().clone();
         let Some(active_agent) = self.agents.get(&owned_agent_id).await else {
             return false;
@@ -1132,11 +1149,7 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
             return false;
         };
         if !deletion_owner {
-            active_agent
-                .fence_entity_bodies(OwnerFailureWinner::Lifecycle(InterruptKind::Interrupt(
-                    Timestamp::now_utc(),
-                )))
-                .await;
+            active_agent.fence_entity_bodies(owner_failure).await;
         }
         let expected_active = active_agent.clone();
         let expected_worker = expected.clone();
@@ -1156,6 +1169,63 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
             retirement.commit();
         }
         removed
+    }
+
+    /// The worker cached for `owned_agent_id`, without waiting on a creation still in progress.
+    ///
+    /// For callers acting on one particular generation: a pending or still-unresolved entry is a
+    /// newer generation being created, never the one they hold, so waiting on it could only delay
+    /// them.
+    pub(crate) async fn try_get_cached(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Option<Arc<Worker<Ctx>>> {
+        self.agents
+            .try_get(owned_agent_id)
+            .await
+            .and_then(|active_agent| active_agent.resolved_primary())
+    }
+
+    /// [`Self::remove_worker_with`] for a caller holding the generation by reference: tears the
+    /// entry down and drops it only while it still holds `worker`. Returns whether it did.
+    ///
+    /// A retiring generation can reach its removal after a newer one is cached under the same id -
+    /// its retirement started from a stop through a handle kept past its generation. Keyed by id
+    /// alone, such a pass evicts that generation and fences its entity bodies while its loop keeps
+    /// running.
+    ///
+    /// A removal refused while this generation is still cached is retried, unless a deletion owns
+    /// its retirement and removes it itself. The only other refusal is the retirement marker held
+    /// by a concurrent attempt - an idle expiry, or another pass of this removal - which ends with
+    /// the generation removed or the marker rolled back. Without the retry, an agent retired
+    /// while an idle expiry happened to be checking it would stay cached here, and a later
+    /// re-grant of its shard would find this retired generation instead of opening the oplog at
+    /// the new epoch.
+    pub(crate) async fn remove_generation(
+        &self,
+        worker: &Worker<Ctx>,
+        owner_failure: OwnerFailureWinner,
+    ) -> bool {
+        loop {
+            let Some(cached) = self.try_get_cached(worker.owned_agent_id()).await else {
+                return false;
+            };
+            if !std::ptr::eq(Arc::as_ptr(&cached), worker) {
+                return false;
+            }
+            if self
+                .remove_worker_with(&cached, false, owner_failure.clone())
+                .await
+            {
+                return true;
+            }
+            if cached.deletion_owns_retirement().await {
+                return false;
+            }
+            drop(cached);
+            // The concurrent attempt may be draining entity bodies; poll rather than spin.
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
     }
 
     pub async fn tracked_card_ids(&self) -> Vec<CardId> {
@@ -1220,6 +1290,53 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
             .collect()
     }
 
+    /// Retires every agent the predicate selects for its lost shard: stops each one here and drops
+    /// it from this executor, so the shard's new owner recovers it.
+    ///
+    /// Concurrent rather than sequential, unlike [`Self::unload_environment`]: a revoke can name
+    /// many agents and each stop waits for that agent's invocation loop to exit. No acknowledgement
+    /// channel is awaited either - [`Worker::interrupt_and_retire`] never subscribes to one for a
+    /// lost shard - so an agent that is already stopping cannot panic the sweep, which is what the
+    /// old `set_interrupting(..).recv().await.unwrap()` shape risked.
+    ///
+    /// The snapshot includes suspended, loading and already-stopping agents; the stop state
+    /// machine has an arm for each, so none is skipped. An agent still being resolved is not in
+    /// it: one that read the assignment before the shard left opens its oplog at the epoch it
+    /// was granted, and checks the assignment again once it is published - see
+    /// `Worker::retire_if_shard_left_during_construction`.
+    pub(crate) async fn give_up_matching(
+        &self,
+        select: impl Fn(&AgentId) -> bool,
+        reason: RetirementReason,
+    ) {
+        let selected: Vec<Arc<Worker<Ctx>>> = self
+            .snapshot()
+            .await
+            .into_iter()
+            .filter(|(agent_id, _)| select(agent_id))
+            .map(|(_, worker)| worker)
+            .collect();
+
+        if !selected.is_empty() {
+            info!(
+                agents = selected.len(),
+                "Retiring agents whose shard has moved"
+            );
+        }
+
+        // Concurrent, and a failed retirement never stops the sweep: each agent's own answer is
+        // the routing miss that sends its callers to the new owner.
+        futures::future::join_all(selected.into_iter().map(|worker| {
+            let reason = reason.clone();
+            async move {
+                let _ = worker
+                    .interrupt_and_retire(InterruptKind::ShardLost, reason)
+                    .await;
+            }
+        }))
+        .await;
+    }
+
     /// Interrupts and unloads all in-memory workers whose environment matches
     /// `environment_id`.  Called when the environment is deleted so that
     /// running workers stop promptly.
@@ -1227,7 +1344,10 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
         for (_agent_id, worker) in self.snapshot().await {
             if worker.get_initial_worker_metadata().environment_id == environment_id
                 && let Err(error) = worker
-                    .interrupt_and_retire(InterruptKind::Interrupt(Timestamp::now_utc()))
+                    .interrupt_and_retire(
+                        InterruptKind::Interrupt(Timestamp::now_utc()),
+                        RetirementReason::Requested,
+                    )
                     .await
             {
                 tracing::error!(

@@ -5142,9 +5142,6 @@
         { "$ref": "#/definitions/PublicOplogEntryDeactivatePlugin" },
         { "$ref": "#/definitions/PublicOplogEntryRevert" },
         { "$ref": "#/definitions/PublicOplogEntryCancelPendingInvocation" },
-        { "$ref": "#/definitions/PublicOplogEntryStartSpan" },
-        { "$ref": "#/definitions/PublicOplogEntryFinishSpan" },
-        { "$ref": "#/definitions/PublicOplogEntrySetSpanAttribute" },
         { "$ref": "#/definitions/PublicOplogEntryBeginRemoteTransaction" },
         { "$ref": "#/definitions/PublicOplogEntryPreCommitRemoteTransaction" },
         { "$ref": "#/definitions/PublicOplogEntryPreRollbackRemoteTransaction" },
@@ -5221,7 +5218,7 @@
     },
     "PublicOplogEntryStart": {
       "type": "object",
-      "required": ["type", "timestamp", "parentStartIndex", "functionName", "invocationId", "observationalOwner", "request", "durableFunctionType"],
+      "required": ["type", "timestamp", "parentStartIndex", "functionName", "invocationId", "observationalOwner", "request", "durableFunctionType", "spanStarted"],
       "properties": {
         "type": { "const": "Start" },
         "timestamp": { "type": "string" },
@@ -5230,30 +5227,34 @@
         "invocationId": { "type": ["string", "null"] },
         "observationalOwner": { "type": ["integer", "null"], "minimum": 0 },
         "request": { "oneOf": [{ "$ref": "#/definitions/TypedSchemaValue" }, { "type": "null" }] },
-        "durableFunctionType": { "$ref": "#/definitions/PublicDurableFunctionType" }
+        "durableFunctionType": { "$ref": "#/definitions/PublicDurableFunctionType" },
+        "spanStarted": { "oneOf": [{ "$ref": "#/definitions/PublicSpanStarted" }, { "type": "null" }] }
       },
       "additionalProperties": false
     },
     "PublicOplogEntryEnd": {
       "type": "object",
-      "required": ["type", "timestamp", "startIndex", "response", "forcedCommit"],
+      "required": ["type", "timestamp", "startIndex", "response", "forcedCommit", "spanFinished", "spanAttributes"],
       "properties": {
         "type": { "const": "End" },
         "timestamp": { "type": "string" },
         "startIndex": { "type": "integer", "minimum": 0 },
         "response": { "oneOf": [{ "$ref": "#/definitions/TypedSchemaValue" }, { "type": "null" }] },
-        "forcedCommit": { "type": "boolean" }
+        "forcedCommit": { "type": "boolean" },
+        "spanFinished": { "oneOf": [{ "$ref": "#/definitions/PublicSpanFinished" }, { "type": "null" }] },
+        "spanAttributes": { "oneOf": [{ "$ref": "#/definitions/PublicSpanAttributes" }, { "type": "null" }] }
       },
       "additionalProperties": false
     },
     "PublicOplogEntryCancelled": {
       "type": "object",
-      "required": ["type", "timestamp", "startIndex", "partial"],
+      "required": ["type", "timestamp", "startIndex", "partial", "spanFinished"],
       "properties": {
         "type": { "const": "Cancelled" },
         "timestamp": { "type": "string" },
         "startIndex": { "type": "integer", "minimum": 0 },
-        "partial": { "oneOf": [{ "$ref": "#/definitions/TypedSchemaValue" }, { "type": "null" }] }
+        "partial": { "oneOf": [{ "$ref": "#/definitions/TypedSchemaValue" }, { "type": "null" }] },
+        "spanFinished": { "oneOf": [{ "$ref": "#/definitions/PublicSpanFinished" }, { "type": "null" }] }
       },
       "additionalProperties": false
     },
@@ -5368,8 +5369,17 @@
     },
     "PublicOplogEntryLog": {
       "type": "object",
-      "required": ["type", "timestamp", "level", "context", "message"],
-      "properties": { "type": { "const": "Log" }, "timestamp": { "type": "string" }, "level": { "$ref": "#/definitions/LogLevel" }, "context": { "type": "string" }, "message": { "type": "string" } },
+      "required": ["type", "timestamp", "level", "context", "message", "traceContext"],
+      "properties": { "type": { "const": "Log" }, "timestamp": { "type": "string" }, "level": { "$ref": "#/definitions/LogLevel" }, "context": { "type": "string" }, "message": { "type": "string" }, "traceContext": { "oneOf": [{ "$ref": "#/definitions/LogTraceContext" }, { "type": "null" }] } },
+      "additionalProperties": false
+    },
+    "LogTraceContext": {
+      "type": "object",
+      "required": ["traceId", "spanId"],
+      "properties": {
+        "traceId": { "type": "string" },
+        "spanId": { "type": "string" }
+      },
       "additionalProperties": false
     },
     "PublicOplogEntryActivatePlugin": {
@@ -5394,24 +5404,6 @@
       "type": "object",
       "required": ["type", "timestamp", "idempotencyKey"],
       "properties": { "type": { "const": "CancelPendingInvocation" }, "timestamp": { "type": "string" }, "idempotencyKey": { "type": "string" } },
-      "additionalProperties": false
-    },
-    "PublicOplogEntryStartSpan": {
-      "type": "object",
-      "required": ["type", "timestamp", "spanId", "attributes"],
-      "properties": { "type": { "const": "StartSpan" }, "timestamp": { "type": "string" }, "spanId": { "type": "string" }, "parentId": { "type": ["string", "null"] }, "linkedContext": { "type": ["string", "null"] }, "attributes": { "type": "array", "items": { "$ref": "#/definitions/PublicAttribute" } } },
-      "additionalProperties": false
-    },
-    "PublicOplogEntryFinishSpan": {
-      "type": "object",
-      "required": ["type", "timestamp", "spanId"],
-      "properties": { "type": { "const": "FinishSpan" }, "timestamp": { "type": "string" }, "spanId": { "type": "string" } },
-      "additionalProperties": false
-    },
-    "PublicOplogEntrySetSpanAttribute": {
-      "type": "object",
-      "required": ["type", "timestamp", "spanId", "key", "value"],
-      "properties": { "type": { "const": "SetSpanAttribute" }, "timestamp": { "type": "string" }, "spanId": { "type": "string" }, "key": { "type": "string" }, "value": { "$ref": "#/definitions/PublicAttributeValue" } },
       "additionalProperties": false
     },
     "PublicOplogEntryBeginRemoteTransaction": {
@@ -5664,6 +5656,50 @@
       "oneOf": [
         { "type": "object", "required": ["type", "value"], "properties": { "type": { "const": "String" }, "value": { "type": "string" } }, "additionalProperties": false }
       ]
+    },
+    "PublicSpanLink": {
+      "type": "object",
+      "required": ["traceId", "spanId", "traceStates"],
+      "properties": {
+        "traceId": { "type": "string" },
+        "spanId": { "type": "string" },
+        "traceStates": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    },
+    "PublicSpanStarted": {
+      "type": "object",
+      "required": ["spanId", "traceId", "traceStates", "parentSpanId", "links", "startedAt", "attributes", "kind"],
+      "properties": {
+        "spanId": { "type": "string" },
+        "traceId": { "type": "string" },
+        "traceStates": { "type": "array", "items": { "type": "string" } },
+        "parentSpanId": { "type": ["string", "null"] },
+        "links": { "type": "array", "items": { "$ref": "#/definitions/PublicSpanLink" } },
+        "startedAt": { "type": "string" },
+        "attributes": { "type": "array", "items": { "$ref": "#/definitions/PublicAttribute" } },
+        "kind": { "type": "string", "enum": ["internal", "client", "server"] }
+      },
+      "additionalProperties": false
+    },
+    "PublicSpanFinished": {
+      "type": "object",
+      "required": ["spanId", "finishedAt", "outcome"],
+      "properties": {
+        "spanId": { "type": "string" },
+        "finishedAt": { "type": "string" },
+        "outcome": { "type": "string", "enum": ["completed", "failed", "cancelled", "abandoned", "denied"] }
+      },
+      "additionalProperties": false
+    },
+    "PublicSpanAttributes": {
+      "type": "object",
+      "required": ["spanId", "attributes"],
+      "properties": {
+        "spanId": { "type": "string" },
+        "attributes": { "type": "array", "items": { "$ref": "#/definitions/PublicAttribute" } }
+      },
+      "additionalProperties": false
     },
     "PublicUpdateDescription": {
       "oneOf": [

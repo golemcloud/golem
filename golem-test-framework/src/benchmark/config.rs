@@ -57,6 +57,10 @@ pub enum BenchmarkConfig {
         /// Path to the benchmark suite specification
         path: PathBuf,
 
+        /// Check that every component artifact required by the suite exists, then exit
+        #[arg(long, default_value = "false")]
+        check_artifacts: bool,
+
         /// Save the results to a new JSON file
         #[arg(long)]
         save_to_json: Option<PathBuf>,
@@ -281,6 +285,7 @@ mod metadata_cli {
         let cli = Cli::try_parse_from([
             "test",
             "suite",
+            "--check-artifacts",
             "--runner-id",
             "amp-orb-a1.xxlarge",
             "--runner-label",
@@ -297,6 +302,7 @@ mod metadata_cli {
         .unwrap();
 
         let BenchmarkConfig::Suite {
+            check_artifacts,
             runner_id,
             runner_label,
             source_repository,
@@ -307,6 +313,7 @@ mod metadata_cli {
         else {
             panic!("expected suite configuration");
         };
+        assert!(check_artifacts);
         assert_eq!(runner_id.as_deref(), Some("amp-orb-a1.xxlarge"));
         assert_eq!(runner_label.as_deref(), Some("Amp orb (a1.xxlarge)"));
         assert_eq!(source_repository.as_deref(), Some("golemcloud/golem"));

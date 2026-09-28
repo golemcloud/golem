@@ -28,7 +28,7 @@ use futures::{SinkExt, StreamExt};
 use golem_api_grpc::invocation_session_protocol::InvocationSessionState;
 use golem_api_grpc::proto::golem::schema::SchemaValue as ProtoSchemaValue;
 use golem_api_grpc::proto::golem::worker::{
-    DurableStreamMapping, InputStreamEnd, InputStreamItem, InvocationAccepted,
+    DurableStreamMapping, InputStreamEnd, InputStreamItem, InvocationAccepted, InvocationRejected,
     InvocationRejectionReason, InvocationRequest, InvocationResponse, InvocationSessionResult,
     OutputStreamEnd, OutputStreamError, OutputStreamItem, ResumeOperation, StreamCancel,
     StreamCancelReason, StreamCancelRole, StreamCursor, StreamMappingRole, input_stream_item,
@@ -58,6 +58,7 @@ use golem_common::schema::{
     BinaryValuePayload, SchemaGraph, SchemaType, SchemaValue, schema_value_to_proto_with_streams,
 };
 use golem_service_base::clients::registry::RegistryServiceError;
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
 use poem::web::websocket::{CloseCode, Message, WebSocketStream};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -1857,13 +1858,16 @@ async fn translate_private_response(
             Ok(vec![frame(text_message(&message)?)])
         }
         invocation_response::Response::Rejected(rejected) => {
-            let code = rejection_code(rejected.reason);
+            let code = rejection_code(&rejected);
             Ok(vec![frame(text_message(
                 &PublicServerMessage::InvocationRejected {
                     attempt_id: Some(attempt_id),
                     code,
                     message: safe_rejection_message(code),
-                    retryable: matches!(code, PublicErrorCode::ResourceExhausted),
+                    retryable: matches!(
+                        code,
+                        PublicErrorCode::ResourceExhausted | PublicErrorCode::RoutingMiss
+                    ),
                     version: 1,
                 },
             )?)])
@@ -2619,8 +2623,8 @@ fn public_start_error(error: PublicAgentSessionStartError) -> (PublicErrorCode, 
     }
 }
 
-fn rejection_code(reason: i32) -> PublicErrorCode {
-    match InvocationRejectionReason::try_from(reason) {
+fn rejection_code(rejected: &InvocationRejected) -> PublicErrorCode {
+    match InvocationRejectionReason::try_from(rejected.reason) {
         Ok(InvocationRejectionReason::Validation) => PublicErrorCode::ValidationError,
         Ok(InvocationRejectionReason::Unauthorized) => PublicErrorCode::Unauthorized,
         Ok(InvocationRejectionReason::NotFound) => PublicErrorCode::NotFound,
@@ -2635,8 +2639,27 @@ fn rejection_code(reason: i32) -> PublicErrorCode {
         Ok(InvocationRejectionReason::InputConflict) => PublicErrorCode::InputConflict,
         Ok(InvocationRejectionReason::InputGap) => PublicErrorCode::InputGap,
         Ok(InvocationRejectionReason::ResourceExhausted) => PublicErrorCode::ResourceExhausted,
+        // The unary and agent-RPC paths reroute on a routing miss; a session client is told the
+        // same thing so it can retry instead of surfacing a server fault.
+        Ok(InvocationRejectionReason::Internal) if is_routing_miss(rejected) => {
+            PublicErrorCode::RoutingMiss
+        }
         _ => PublicErrorCode::InternalError,
     }
+}
+
+fn is_routing_miss(rejected: &InvocationRejected) -> bool {
+    rejected
+        .worker_error
+        .clone()
+        .and_then(|error| WorkerExecutorError::try_from(error).ok())
+        .is_some_and(|error| {
+            // A fenced oplog crosses the wire as `ShardingNotReady`.
+            matches!(
+                error,
+                WorkerExecutorError::InvalidShardId { .. } | WorkerExecutorError::ShardingNotReady
+            )
+        })
 }
 
 fn safe_rejection_message(code: PublicErrorCode) -> String {
@@ -2666,6 +2689,9 @@ fn safe_rejection_message(code: PublicErrorCode) -> String {
         PublicErrorCode::ProducerError => "stream producer failed",
         PublicErrorCode::InvocationFailed => "invocation failed",
         PublicErrorCode::ProtocolError => "invocation protocol failed",
+        PublicErrorCode::RoutingMiss => {
+            "the agent's shard is moving between executors; retry the invocation"
+        }
         PublicErrorCode::InternalError => "invocation failed",
     }
     .to_string()
@@ -3193,6 +3219,49 @@ mod tests {
             .unwrap()
             .pending_input
             .push_back(admission);
+    }
+
+    /// A routing miss is an `Internal` rejection whose carried error names a shard or a fence.
+    /// It gets its own public code, so a client retries it, and any other `Internal` stays one.
+    #[test]
+    fn a_rejection_carrying_a_routing_miss_maps_to_a_retryable_public_code() {
+        let rejected = |worker_error: Option<WorkerExecutorError>| InvocationRejected {
+            reason: InvocationRejectionReason::Internal as i32,
+            error: String::new(),
+            idempotency_key: None,
+            agent_id: None,
+            component_revision: None,
+            worker_error: worker_error.map(Into::into),
+        };
+        for miss in [
+            WorkerExecutorError::InvalidShardId {
+                shard_id: golem_common::model::ShardId::new(0),
+                shard_ids: Vec::new(),
+            },
+            WorkerExecutorError::ShardingNotReady,
+            WorkerExecutorError::OplogFenced {
+                agent_id: golem_common::model::AgentId {
+                    component_id: golem_common::model::component::ComponentId::new(),
+                    agent_id: "fenced".to_string(),
+                },
+                expected_epoch: 1,
+                actual_epoch: Some(2),
+            },
+        ] {
+            assert_eq!(
+                rejection_code(&rejected(Some(miss))),
+                PublicErrorCode::RoutingMiss
+            );
+        }
+        assert_eq!(
+            rejection_code(&rejected(Some(WorkerExecutorError::unknown("boom")))),
+            PublicErrorCode::InternalError
+        );
+        assert_eq!(
+            rejection_code(&rejected(None)),
+            PublicErrorCode::InternalError
+        );
+        assert_eq!(PublicErrorCode::RoutingMiss.as_str(), "routing-miss");
     }
 
     #[test]

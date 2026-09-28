@@ -269,6 +269,7 @@ impl WorkerExecutorServiceDefault {
                 .collect(),
             revision: assignment.revision.0,
             number_of_shards: assignment.number_of_shards as u32,
+            incarnation_id: super::model::incarnation_id(),
         };
 
         let assign_shards_response = timeout(
@@ -317,6 +318,7 @@ impl WorkerExecutorServiceDefault {
                 .map(|shard_id| shard_id.into())
                 .collect(),
             revision: revision.0,
+            incarnation_id: super::model::incarnation_id(),
         };
 
         let revoke_shards_response = timeout(

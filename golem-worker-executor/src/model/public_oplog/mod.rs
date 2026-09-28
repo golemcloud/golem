@@ -38,14 +38,17 @@ use golem_common::model::oplog::public_oplog_entry::{
     CommittedRemoteTransactionParams, CompletionDeliveredParams, CompletionDiscardedParams,
     CreateParams, CreateResourceParams, DeactivatePluginParams, DropResourceParams,
     EndAtomicRegionParams, EndParams, ErrorParams, ExitedParams, FailedUpdateParams,
-    FinishSpanParams, GrowMemoryParams, HostStreamFrameParams, InterruptedParams, JumpParams,
-    LogParams, NoOpParams, OplogProcessorCheckpointParams, PendingAgentInvocationParams,
-    PendingUpdateParams, PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams,
-    RecoverySucceededParams, RemoveRetryPolicyParams, RestartParams, ResumedParams, RevertParams,
-    RolledBackRemoteTransactionParams, SetRetryPolicyParams, SetSpanAttributeParams,
-    SnapshotParams, StartParams, StartSpanParams, StreamCancelParams, StreamEndParams,
-    StreamItemsParams, StreamRegisteredParams, StreamSessionParams, SuccessfulUpdateParams,
-    SuspendParams,
+    GrowMemoryParams, HostStreamFrameParams, InterruptedParams, JumpParams, LogParams, NoOpParams,
+    OplogProcessorCheckpointParams, PendingAgentInvocationParams, PendingUpdateParams,
+    PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, RecoverySucceededParams,
+    RemoveRetryPolicyParams, RestartParams, ResumedParams, RevertParams,
+    RolledBackRemoteTransactionParams, SetRetryPolicyParams, SnapshotParams, StartParams,
+    StreamCancelParams, StreamEndParams, StreamItemsParams, StreamRegisteredParams,
+    StreamSessionParams, SuccessfulUpdateParams, SuspendParams,
+};
+use golem_common::model::oplog::public_oplog_entry::{
+    PublicSpanAttributes, PublicSpanFinished, PublicSpanKind, PublicSpanLink, PublicSpanOutcome,
+    PublicSpanStarted,
 };
 use golem_common::model::oplog::types::encode_span_data;
 use golem_common::model::oplog::{
@@ -63,6 +66,9 @@ use golem_common::model::oplog::{
     PublicOplogEntryWithIndex, PublicSnapshotData, PublicToolInvocationOperation,
     PublicTypedAgentConfigEntry, PublicUpdateDescription, RawSnapshotData,
     SaveSnapshotResultParameters, SnapshotBasedUpdateParameters, UpdateDescription,
+};
+use golem_common::model::oplog::{
+    SpanAttributes, SpanFinished, SpanKind, SpanOutcome, SpanStarted,
 };
 use golem_common::model::{
     AgentId, AgentInvocation, AgentInvocationPayload, AgentInvocationResult, Empty, OwnedAgentId,
@@ -82,6 +88,63 @@ pub struct PublicOplogChunk {
     pub current_component_revision: ComponentRevision,
     pub first_index_in_chunk: OplogIndex,
     pub last_index: OplogIndex,
+}
+
+fn public_attributes(attributes: golem_common::model::oplog::AttributeMap) -> Vec<PublicAttribute> {
+    attributes
+        .0
+        .into_iter()
+        .map(|(key, value)| PublicAttribute {
+            key,
+            value: value.into(),
+        })
+        .collect()
+}
+
+fn public_span_started(span: SpanStarted) -> PublicSpanStarted {
+    PublicSpanStarted {
+        span_id: span.span_id,
+        trace_id: span.trace_id,
+        trace_states: span.trace_states,
+        parent_span_id: span.parent_span_id,
+        links: span
+            .links
+            .into_iter()
+            .map(|link| PublicSpanLink {
+                trace_id: link.trace_id,
+                span_id: link.span_id,
+                trace_states: link.trace_states,
+            })
+            .collect(),
+        started_at: span.started_at,
+        attributes: public_attributes(span.attributes),
+        kind: match span.kind {
+            SpanKind::Internal => PublicSpanKind::Internal,
+            SpanKind::Client => PublicSpanKind::Client,
+            SpanKind::Server => PublicSpanKind::Server,
+        },
+    }
+}
+
+fn public_span_finished(span: SpanFinished) -> PublicSpanFinished {
+    PublicSpanFinished {
+        span_id: span.span_id,
+        finished_at: span.finished_at,
+        outcome: match span.outcome {
+            SpanOutcome::Completed => PublicSpanOutcome::Completed,
+            SpanOutcome::Failed => PublicSpanOutcome::Failed,
+            SpanOutcome::Cancelled => PublicSpanOutcome::Cancelled,
+            SpanOutcome::Abandoned => PublicSpanOutcome::Abandoned,
+            SpanOutcome::Denied => PublicSpanOutcome::Denied,
+        },
+    }
+}
+
+fn public_span_attributes(span: SpanAttributes) -> PublicSpanAttributes {
+    PublicSpanAttributes {
+        span_id: span.span_id,
+        attributes: public_attributes(span.attributes),
+    }
 }
 
 #[derive(Clone)]
@@ -192,18 +255,6 @@ impl<'a> PublicOplogAttributionResolver<'a> {
                 parent_start_index, ..
             }
             | OplogEntry::Log {
-                parent_start_index: Some(parent_start_index),
-                ..
-            }
-            | OplogEntry::StartSpan {
-                parent_start_index: Some(parent_start_index),
-                ..
-            }
-            | OplogEntry::FinishSpan {
-                parent_start_index: Some(parent_start_index),
-                ..
-            }
-            | OplogEntry::SetSpanAttribute {
                 parent_start_index: Some(parent_start_index),
                 ..
             } => Some(*parent_start_index),
@@ -337,18 +388,6 @@ impl<'a> PublicOplogAttributionResolver<'a> {
             | OplogEntry::DeactivatePlugin { .. }
             | OplogEntry::Revert { .. }
             | OplogEntry::CancelPendingInvocation { .. }
-            | OplogEntry::StartSpan {
-                parent_start_index: None,
-                ..
-            }
-            | OplogEntry::FinishSpan {
-                parent_start_index: None,
-                ..
-            }
-            | OplogEntry::SetSpanAttribute {
-                parent_start_index: None,
-                ..
-            }
             | OplogEntry::Snapshot { .. }
             | OplogEntry::OplogProcessorCheckpoint { .. } => None,
         };
@@ -807,6 +846,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 observational_owner,
                 request,
                 durable_function_type,
+                span_started,
             } => {
                 let request_value = if let Some(request_payload) = request {
                     let host_request: HostRequest = oplog_service
@@ -845,6 +885,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     observational_owner,
                     request: request_value,
                     durable_function_type: durable_function_type.into(),
+                    span_started: span_started.map(|span| public_span_started(*span)),
                 }))
             }
             OplogEntry::End {
@@ -852,6 +893,8 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 start_index,
                 response,
                 forced_commit,
+                span_finished,
+                span_attributes,
             } => {
                 let response_value = if let Some(response_payload) = response {
                     let host_response: HostResponse = oplog_service
@@ -867,12 +910,15 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     start_index,
                     response: response_value,
                     forced_commit,
+                    span_finished: span_finished.map(public_span_finished),
+                    span_attributes: span_attributes.map(public_span_attributes),
                 }))
             }
             OplogEntry::Cancelled {
                 timestamp,
                 start_index,
                 partial,
+                span_finished,
             } => {
                 let partial_value = if let Some(partial_payload) = partial {
                     let host_response: HostResponse = oplog_service
@@ -887,6 +933,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     timestamp,
                     start_index,
                     partial: partial_value,
+                    span_finished: span_finished.map(public_span_finished),
                 }))
             }
             OplogEntry::CompletionDiscarded {
@@ -1161,12 +1208,14 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 level,
                 context,
                 message,
+                trace_context,
                 ..
             } => Ok(PublicOplogEntry::Log(LogParams {
                 timestamp,
                 level,
                 context,
                 message,
+                trace_context,
             })),
             OplogEntry::Restart { timestamp } => {
                 Ok(PublicOplogEntry::Restart(RestartParams { timestamp }))
@@ -1248,45 +1297,6 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     idempotency_key,
                 },
             )),
-            OplogEntry::StartSpan {
-                timestamp,
-                span_id,
-                parent: parent_id,
-                linked_context_id,
-                attributes,
-                ..
-            } => Ok(PublicOplogEntry::StartSpan(StartSpanParams {
-                timestamp,
-                span_id,
-                parent_id,
-                linked_context: linked_context_id,
-                attributes: attributes
-                    .0
-                    .into_iter()
-                    .map(|(k, v)| PublicAttribute {
-                        key: k,
-                        value: v.into(),
-                    })
-                    .collect(),
-            })),
-            OplogEntry::FinishSpan {
-                timestamp, span_id, ..
-            } => Ok(PublicOplogEntry::FinishSpan(FinishSpanParams {
-                timestamp,
-                span_id,
-            })),
-            OplogEntry::SetSpanAttribute {
-                timestamp,
-                span_id,
-                key,
-                value,
-                ..
-            } => Ok(PublicOplogEntry::SetSpanAttribute(SetSpanAttributeParams {
-                timestamp,
-                span_id,
-                key,
-                value: value.into(),
-            })),
             OplogEntry::BeginRemoteTransaction {
                 timestamp,
                 transaction_id,

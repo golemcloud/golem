@@ -725,6 +725,7 @@ cargo-test-r run --package golem-service-base --test '*' -- --nocapture --report
 cargo-test-r run --package golem-registry-service --test '*' -- --nocapture --report-time $JUNIT_OPTS
 cargo-test-r run --package golem-worker-service --test '*' -- --nocapture --report-time $JUNIT_OPTS
 cargo-test-r run --package golem-shard-manager --test integration -- --nocapture --report-time $JUNIT_OPTS
+cargo-test-r run --package golem-test-framework --test signal_unreaped_child -- --nocapture --report-time $JUNIT_OPTS
 '''
 
 [tasks.integration-tests-group6]
@@ -1135,6 +1136,20 @@ script = '''
       git --no-pager diff -- docs/src/content/next/how-to-guides/ docs/src/content/next/how-to-guides.mdx 1>&2
       exit 1
   fi
+'''
+
+[tasks.generate-reflection-conformance]
+description = "Embeds the reflection conformance corpus in Scala and MoonBit test sources"
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error node scripts/sync-reflection-conformance.mjs
+'''
+
+[tasks.check-reflection-conformance]
+description = "Fails if Scala or MoonBit reflection conformance embeds are stale"
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error node scripts/sync-reflection-conformance.mjs --check
 '''
 
 ## ** PUBLISH **
@@ -1658,7 +1673,7 @@ rm -rf build-out
 '''
 
 [tasks.build-benchmark-components]
-description = "Rebuilds only the benchmark test WASM components"
+description = "Rebuilds and verifies the test WASM components required by the CI benchmark suite"
 dependencies = ["wit", "build-sdk-ts"]
 script_runner = "@duckscript"
 script = '''
@@ -1671,6 +1686,8 @@ if ${golem_cli_empty}
 end
 cd test-components
 exec --fail-on-error ./build-components.sh benchmarks rebuild
+cd ..
+exec --fail-on-error cargo run --profile benchmarks -p integration-tests --bin benchmarks -- suite --check-artifacts integration-tests/benchmark_suites/ci.yaml spawned
 '''
 
 [tasks.run-benchmark-suite-orb]

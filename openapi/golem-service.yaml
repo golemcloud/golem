@@ -17360,6 +17360,17 @@ components:
       - Warn
       - Error
       - Critical
+    LogTraceContext:
+      title: LogTraceContext
+      type: object
+      properties:
+        traceId:
+          type: string
+        spanId:
+          type: string
+      required:
+      - traceId
+      - spanId
     ManualUpdateParameters:
       title: ManualUpdateParameters
       type: object
@@ -18489,9 +18500,6 @@ components:
           DeactivatePlugin: '#/components/schemas/PublicOplogEntry_r#DeactivatePluginParams'
           Revert: '#/components/schemas/PublicOplogEntry_r#RevertParams'
           CancelPendingInvocation: '#/components/schemas/PublicOplogEntry_r#CancelPendingInvocationParams'
-          StartSpan: '#/components/schemas/PublicOplogEntry_r#StartSpanParams'
-          FinishSpan: '#/components/schemas/PublicOplogEntry_r#FinishSpanParams'
-          SetSpanAttribute: '#/components/schemas/PublicOplogEntry_r#SetSpanAttributeParams'
           BeginRemoteTransaction: '#/components/schemas/PublicOplogEntry_r#BeginRemoteTransactionParams'
           PreCommitRemoteTransaction: '#/components/schemas/PublicOplogEntry_r#PreCommitRemoteTransactionParams'
           PreRollbackRemoteTransaction: '#/components/schemas/PublicOplogEntry_r#PreRollbackRemoteTransactionParams'
@@ -18550,9 +18558,6 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_r#DeactivatePluginParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#RevertParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#CancelPendingInvocationParams'
-      - $ref: '#/components/schemas/PublicOplogEntry_r#StartSpanParams'
-      - $ref: '#/components/schemas/PublicOplogEntry_r#FinishSpanParams'
-      - $ref: '#/components/schemas/PublicOplogEntry_r#SetSpanAttributeParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#BeginRemoteTransactionParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#PreCommitRemoteTransactionParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#PreRollbackRemoteTransactionParams'
@@ -18977,18 +18982,6 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/r#FailedUpdateParams'
-    PublicOplogEntry_r#FinishSpanParams:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: FinishSpan
-            type: string
-            enum:
-            - FinishSpan
-        required:
-        - type
-      - $ref: '#/components/schemas/r#FinishSpanParams'
     PublicOplogEntry_r#GrowMemoryParams:
       allOf:
       - type: object
@@ -19205,18 +19198,6 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/r#SetRetryPolicyParams'
-    PublicOplogEntry_r#SetSpanAttributeParams:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: SetSpanAttribute
-            type: string
-            enum:
-            - SetSpanAttribute
-        required:
-        - type
-      - $ref: '#/components/schemas/r#SetSpanAttributeParams'
     PublicOplogEntry_r#SnapshotParams:
       allOf:
       - type: object
@@ -19241,18 +19222,6 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/r#StartParams'
-    PublicOplogEntry_r#StartSpanParams:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: StartSpan
-            type: string
-            enum:
-            - StartSpan
-        required:
-        - type
-      - $ref: '#/components/schemas/r#StartSpanParams'
     PublicOplogEntry_r#StreamCancelParams:
       allOf:
       - type: object
@@ -19664,6 +19633,19 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/RawSnapshotData'
+    PublicSpanAttributes:
+      title: PublicSpanAttributes
+      type: object
+      properties:
+        spanId:
+          type: string
+        attributes:
+          type: array
+          items:
+            $ref: '#/components/schemas/PublicAttribute'
+      required:
+      - spanId
+      - attributes
     PublicSpanData:
       discriminator:
         propertyName: type
@@ -19698,6 +19680,86 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/PublicLocalSpanData'
+    PublicSpanFinished:
+      title: PublicSpanFinished
+      type: object
+      properties:
+        spanId:
+          type: string
+        finishedAt:
+          type: string
+          format: date-time
+        outcome:
+          $ref: '#/components/schemas/PublicSpanOutcome'
+      required:
+      - spanId
+      - finishedAt
+      - outcome
+    PublicSpanKind:
+      type: string
+      enum:
+      - internal
+      - client
+      - server
+    PublicSpanLink:
+      title: PublicSpanLink
+      type: object
+      properties:
+        traceId:
+          type: string
+        spanId:
+          type: string
+        traceStates:
+          type: array
+          items:
+            type: string
+      required:
+      - traceId
+      - spanId
+      - traceStates
+    PublicSpanOutcome:
+      type: string
+      enum:
+      - completed
+      - failed
+      - cancelled
+      - abandoned
+      - denied
+    PublicSpanStarted:
+      title: PublicSpanStarted
+      type: object
+      properties:
+        spanId:
+          type: string
+        traceId:
+          type: string
+        traceStates:
+          type: array
+          items:
+            type: string
+        parentSpanId:
+          type: string
+        links:
+          type: array
+          items:
+            $ref: '#/components/schemas/PublicSpanLink'
+        startedAt:
+          type: string
+          format: date-time
+        attributes:
+          type: array
+          items:
+            $ref: '#/components/schemas/PublicAttribute'
+        kind:
+          $ref: '#/components/schemas/PublicSpanKind'
+      required:
+      - spanId
+      - traceId
+      - traceStates
+      - links
+      - startedAt
+      - attributes
+      - kind
     PublicToolInvocationOperation:
       title: PublicToolInvocationOperation
       type: object
@@ -21996,6 +22058,8 @@ components:
           format: uint64
         partial:
           $ref: '#/components/schemas/TypedSchemaValue'
+        spanFinished:
+          $ref: '#/components/schemas/PublicSpanFinished'
       required:
       - timestamp
       - startIndex
@@ -22392,6 +22456,10 @@ components:
           $ref: '#/components/schemas/TypedSchemaValue'
         forcedCommit:
           type: boolean
+        spanFinished:
+          $ref: '#/components/schemas/PublicSpanFinished'
+        spanAttributes:
+          $ref: '#/components/schemas/PublicSpanAttributes'
       required:
       - timestamp
       - startIndex
@@ -22444,18 +22512,6 @@ components:
       required:
       - timestamp
       - targetRevision
-    r#FinishSpanParams:
-      title: r#FinishSpanParams
-      type: object
-      properties:
-        timestamp:
-          type: string
-          format: date-time
-        spanId:
-          type: string
-      required:
-      - timestamp
-      - spanId
     r#GrowMemoryParams:
       title: r#GrowMemoryParams
       type: object
@@ -22522,6 +22578,8 @@ components:
           type: string
         message:
           type: string
+        traceContext:
+          $ref: '#/components/schemas/LogTraceContext'
       required:
       - timestamp
       - level
@@ -22693,24 +22751,6 @@ components:
       required:
       - timestamp
       - policy
-    r#SetSpanAttributeParams:
-      title: r#SetSpanAttributeParams
-      type: object
-      properties:
-        timestamp:
-          type: string
-          format: date-time
-        spanId:
-          type: string
-        key:
-          type: string
-        value:
-          $ref: '#/components/schemas/PublicAttributeValue'
-      required:
-      - timestamp
-      - spanId
-      - key
-      - value
     r#SnapshotParams:
       title: r#SnapshotParams
       type: object
@@ -22745,31 +22785,12 @@ components:
           $ref: '#/components/schemas/TypedSchemaValue'
         durableFunctionType:
           $ref: '#/components/schemas/PublicDurableFunctionType'
+        spanStarted:
+          $ref: '#/components/schemas/PublicSpanStarted'
       required:
       - timestamp
       - functionName
       - durableFunctionType
-    r#StartSpanParams:
-      title: r#StartSpanParams
-      type: object
-      properties:
-        timestamp:
-          type: string
-          format: date-time
-        spanId:
-          type: string
-        parentId:
-          type: string
-        linkedContext:
-          type: string
-        attributes:
-          type: array
-          items:
-            $ref: '#/components/schemas/PublicAttribute'
-      required:
-      - timestamp
-      - spanId
-      - attributes
     r#StreamCancelParams:
       title: r#StreamCancelParams
       type: object

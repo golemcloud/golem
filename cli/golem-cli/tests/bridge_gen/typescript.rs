@@ -28,7 +28,7 @@ use golem_cli::bridge_gen::{
     BridgeGenerator, BridgeMode, bridge_client_directory_name, tool_bridge_client_directory_name,
 };
 use golem_cli::model::language::GuestLanguage;
-use golem_common::model::agent::AgentMode;
+use golem_common::model::agent::{AgentMode, CorsOptions, FileMapping, HttpMountDetails};
 use golem_common::schema::schema_type::{
     BinaryRestrictions, DiscriminatorRule, PathDirection, PathKind, PathSpec, QuantitySpec,
     ResultSpec, TextRestrictions, UnionBranch, UnionSpec, UrlRestrictions,
@@ -302,6 +302,100 @@ fn static_and_instance_agent_methods_can_share_names() {
         }
         install_and_build(&package_dir);
     }
+}
+
+#[test]
+fn external_rest_config_uses_canonical_json_for_named_non_streaming_values() {
+    let dir = TempDir::new().unwrap();
+    let target = Utf8Path::from_path(dir.path()).unwrap();
+    let mut agent_type = agent(
+        "ConfigAgent",
+        "typescript",
+        vec![],
+        vec![],
+        vec![def(
+            "config-shape",
+            SchemaType::record(vec![
+                named_field("maybe-region", SchemaType::option(SchemaType::string())),
+                named_field(
+                    "outcome",
+                    SchemaType::result(ResultSpec {
+                        ok: Some(Box::new(SchemaType::string())),
+                        err: None,
+                    }),
+                ),
+                named_field(
+                    "mode",
+                    SchemaType::variant(vec![
+                        variant_case("off", None),
+                        variant_case("on", Some(SchemaType::string())),
+                    ]),
+                ),
+                named_field(
+                    "target",
+                    SchemaType::union(UnionSpec {
+                        branches: vec![UnionBranch {
+                            tag: "command".to_string(),
+                            body: SchemaType::string(),
+                            discriminator: DiscriminatorRule::Prefix {
+                                prefix: "cmd:".to_string(),
+                            },
+                            metadata: MetadataEnvelope::default(),
+                        }],
+                    }),
+                ),
+                named_field(
+                    "document",
+                    unstructured_text_schema_type(TextRestrictions::default()),
+                ),
+                named_field(
+                    "attachment",
+                    unstructured_binary_schema_type(BinaryRestrictions::default()),
+                ),
+            ]),
+        )],
+        AgentMode::Durable,
+    );
+    agent_type.config = vec![local_config(
+        vec!["limits", "maximum"],
+        ref_to("config-shape"),
+    )];
+    let package_dir = target.join("config-agent-client");
+    TypeScriptBridgeGenerator::new_with_mode(
+        agent_type,
+        &package_dir,
+        true,
+        TypeScriptBridgeMode::ExternalRest,
+    )
+    .unwrap()
+    .generate()
+    .unwrap();
+
+    let source = std::fs::read_to_string(package_dir.join("config-agent-client.ts")).unwrap();
+    assert!(source.contains("function encodeCanonicalConfigShape(value: ConfigShape): any"));
+    assert!(source.contains("value: encodeCanonicalConfigShape(configLimitsMaximum)"));
+    assert!(
+        source.contains("function encodePublicConfigShape(value: ConfigShape, stream: any): any")
+    );
+    let canonical = source
+        .lines()
+        .find(|line| line.starts_with("function encodeCanonicalConfigShape"))
+        .expect("missing canonical config encoder");
+    assert!(canonical.contains("'ok' in v ? { ok:"));
+    assert!(canonical.contains("unknown variant"));
+    assert!(canonical.contains("if(v.tag === \"command\") return"));
+    assert!(canonical.contains("if(v.tag === 'inline') return { inline: { text: v.val"));
+    assert!(canonical.contains(
+        "if(v.tag === 'inline') return { inline: { bytes: Buffer.from(v.val).toString('base64url')"
+    ));
+    assert!(
+        source.contains("if(v.tag === 'inline') return { $case: 'inline', value: { text: v.val")
+    );
+    assert!(source.contains(
+        "if(v.tag === 'inline') return { $case: 'inline', value: { bytes: Buffer.from(v.val).toString('base64url')"
+    ));
+    assert!(source.contains("void ("));
+    install_and_build(&package_dir);
 }
 
 #[test]
@@ -1030,8 +1124,27 @@ fn external_streaming_generation_compiles_recursive_streams() {
                 )))),
             ),
             method("status", vec![], Some(SchemaType::string())),
+            method(
+                "document",
+                vec![field("input", SchemaType::stream(Some(SchemaType::u8())))],
+                Some(ref_to("Document")),
+            ),
+            method(
+                "attachment",
+                vec![field("input", SchemaType::stream(Some(SchemaType::u8())))],
+                Some(ref_to("Attachment")),
+            ),
         ],
-        vec![],
+        vec![
+            def(
+                "Document",
+                unstructured_text_schema_type(TextRestrictions::default()),
+            ),
+            def(
+                "Attachment",
+                unstructured_binary_schema_type(BinaryRestrictions::default()),
+            ),
+        ],
         AgentMode::Durable,
     );
     agent_type.config = vec![local_config(
@@ -1052,6 +1165,8 @@ fn external_streaming_generation_compiles_recursive_streams() {
     .unwrap();
     assert!(source.contains("createStreamingRemoteMethod"));
     assert!(source.contains("AgentStream<base.AgentBinary>"));
+    assert!(source.contains("toString('base64url')"));
+    assert!(source.contains("'base64url'"));
     assert!(source.contains("AgentStream<number>"));
     assert!(source.contains(": bigint;"));
     assert!(source.contains("amount: base.QuantityValue"));
@@ -1062,6 +1177,25 @@ fn external_streaming_generation_compiles_recursive_streams() {
     assert!(source.contains("\"stable\""));
     assert!(source.contains("config: this.publicConfig"));
     assert!(source.contains("path: [\"limits\",\"maximum\"]"));
+    assert!(source.contains(
+        "if(v.$case === 'inline') return base.UnstructuredText.fromInline(v.value.text, v.value.language)"
+    ));
+    assert!(source.contains(
+        "if(v.$case === 'inline') return base.UnstructuredBinary.fromInline(Uint8Array.from(Buffer.from(v.value.bytes, 'base64url')), v.value.mimeType)"
+    ));
+    for line in source
+        .lines()
+        .filter(|line| line.contains(".push({ path: [\"limits\",\"maximum\"]"))
+    {
+        assert!(
+            line.contains(".toString()"),
+            "config is not public JSON: {line}"
+        );
+        assert!(
+            !line.contains("kind:"),
+            "config is tagged schema JSON: {line}"
+        );
+    }
     assert!(source.contains("val: 9007199254740993n"));
     assert!(source.contains("val: 18446744073709551615n"));
     assert!(!source.contains("triggerExchange"));
@@ -1323,6 +1457,10 @@ fn generated_package_dir(target_dir: &Utf8Path, package_name: &str) -> Utf8PathB
 
 #[test]
 fn http_router_bridge_rejection_uses_kind_not_name() {
+    let corpus: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../golem-service-base/tests/fixtures/http-handlers/corpus.json"
+    ))
+    .unwrap();
     let dir = TempDir::new().unwrap();
     let path = Utf8Path::from_path(dir.path()).unwrap();
     for mode in [
@@ -1337,14 +1475,53 @@ fn http_router_bridge_rejection_uses_kind_not_name() {
             vec![],
             AgentMode::Durable,
         );
-        assert!(
-            TypeScriptBridgeGenerator::new_with_mode(metadata.clone(), path, false, mode).is_ok()
+        let regular_files_id = "tooling-regular-files-still-callable";
+        let regular_files_case = corpus["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|case| case["id"] == regular_files_id)
+            .unwrap();
+        metadata.http_mount = Some(HttpMountDetails {
+            path_prefix: vec![],
+            auth_details: None,
+            phantom_agent: false,
+            cors_options: CorsOptions {
+                allowed_patterns: vec![],
+            },
+            webhook_suffix: vec![],
+            static_bindings: vec![],
+            filesystem_bindings: FileMapping::compile_list(
+                regular_files_case["input"]["filesystem_bindings"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|mapping| (mapping[0].as_str().unwrap(), mapping[1].as_str().unwrap())),
+            )
+            .unwrap(),
+            openapi_provider_method: None,
+        });
+        assert_eq!(
+            TypeScriptBridgeGenerator::new_with_mode(metadata.clone(), path, false, mode).is_ok(),
+            regular_files_case["expect"]["included"].as_bool().unwrap(),
+            "{regular_files_id}"
         );
         metadata.type_name =
             golem_common::model::agent::AgentTypeName("OrdinaryLookingName".into());
         metadata.kind = golem_common::schema::agent::AgentTypeKind::HttpRouter;
         let result = TypeScriptBridgeGenerator::new_with_mode(metadata, path, false, mode);
-        assert!(result.is_err());
+        let router_id = "tooling-router-clients";
+        let router_case = corpus["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|case| case["id"] == router_id)
+            .unwrap();
+        assert_eq!(
+            result.is_ok(),
+            router_case["expect"]["included"].as_bool().unwrap(),
+            "{router_id}"
+        );
         assert!(
             result
                 .err()

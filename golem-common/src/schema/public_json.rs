@@ -22,7 +22,7 @@ use crate::schema::{
     SchemaValue, UnionValuePayload, VariantValuePayload,
 };
 use base64::Engine;
-use base64::engine::general_purpose::STANDARD;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use golem_schema::schema::render::{from_json_value, to_json_value};
 use serde_json::{Map, Number, Value};
 use std::collections::HashSet;
@@ -446,12 +446,12 @@ where
             ));
         }
         let encoded = required_string(object, "bytes")?;
-        let bytes = STANDARD.decode(encoded).map_err(|_| {
-            PublicSchemaValueError::malformed("binary bytes are not canonical padded base64")
+        let bytes = URL_SAFE_NO_PAD.decode(encoded).map_err(|_| {
+            PublicSchemaValueError::malformed("binary bytes are not canonical unpadded base64url")
         })?;
-        if STANDARD.encode(&bytes) != encoded {
+        if URL_SAFE_NO_PAD.encode(&bytes) != encoded {
             return Err(PublicSchemaValueError::malformed(
-                "binary bytes are not canonical padded base64",
+                "binary bytes are not canonical unpadded base64url",
             ));
         }
         let mime_type = object
@@ -605,7 +605,7 @@ where
                 let mut object = Map::new();
                 object.insert(
                     "bytes".to_string(),
-                    Value::String(STANDARD.encode(&value.bytes)),
+                    Value::String(URL_SAFE_NO_PAD.encode(&value.bytes)),
                 );
                 if let Some(mime_type) = &value.mime_type {
                     object.insert("mimeType".to_string(), Value::String(mime_type.clone()));
@@ -1357,7 +1357,7 @@ mod tests {
     }
 
     #[test]
-    fn safe_integers_and_standard_base64_round_trip() {
+    fn safe_integers_and_base64url_round_trip() {
         assert_eq!(
             decode(
                 &SchemaType::u64(),
@@ -1378,7 +1378,7 @@ mod tests {
         assert_eq!(
             decode(
                 &SchemaType::binary(BinaryRestrictions::default()),
-                json!({"bytes":"+/8=","mimeType":"application/octet-stream"}),
+                json!({"bytes":"-_8","mimeType":"application/octet-stream"}),
                 PublicStreamReferencePolicy::None,
             )
             .unwrap(),
@@ -1541,12 +1541,17 @@ mod tests {
             ),
             (
                 SchemaType::binary(BinaryRestrictions::default()),
+                json!({"bytes":"+/8=","mimeType":"application/octet-stream"}),
+                PublicErrorCode::MalformedMessage,
+            ),
+            (
+                SchemaType::binary(BinaryRestrictions::default()),
                 json!({"bytes":"-_8=","mimeType":"application/octet-stream"}),
                 PublicErrorCode::MalformedMessage,
             ),
             (
                 SchemaType::binary(BinaryRestrictions::default()),
-                json!({"bytes":"+/8","mimeType":"application/octet-stream"}),
+                json!({"bytes":"-_9","mimeType":"application/octet-stream"}),
                 PublicErrorCode::MalformedMessage,
             ),
             (
