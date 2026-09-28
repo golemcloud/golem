@@ -361,6 +361,44 @@ if [ "$single_group" = "false" ] || [ "$group" = "moonbit" ]; then
   build_sdk_apps "MoonBit" "${moonbit_test_apps[@]}"
 fi
 
+if [ "$group" = "benchmarks" ]; then
+  pushd "tool-streaming" || exit
+  if should_clean; then
+    echo "Cleaning tool-streaming..."
+    clean_current_app
+  fi
+  if [ "$check_only" = true ]; then
+    echo "Checking benchmark tool-streaming components..."
+    "$GOLEM_CLI" build golem-it:tool-streaming-rust-provider \
+      golem-it:tool-streaming-rust-caller --step check --yes
+  elif [ "$clean_only" = false ]; then
+    echo "Building benchmark tool-streaming components..."
+    "$GOLEM_CLI" --preset release build golem-it:tool-streaming-rust-provider \
+      golem-it:tool-streaming-rust-caller --yes --skip-check
+    cp golem-temp/agents/golem_it_tool_streaming_rust_provider_release.wasm \
+      ../golem_it_tool_streaming_rust_provider_release.wasm
+    cp golem-temp/agents/golem_it_tool_streaming_rust_caller_release.wasm \
+      ../golem_it_tool_streaming_rust_caller_release.wasm
+  fi
+  popd || exit
+
+  pushd "agent-rpc" || exit
+  if should_clean; then
+    echo "Cleaning agent-rpc..."
+    clean_current_app
+  fi
+  if [ "$check_only" = true ]; then
+    echo "Checking golem-it:agent-rpc-rust..."
+    "$GOLEM_CLI" build golem-it:agent-rpc-rust --step check --yes
+  elif [ "$clean_only" = false ]; then
+    echo "Building golem-it:agent-rpc-rust..."
+    "$GOLEM_CLI" --preset release build golem-it:agent-rpc-rust --yes --skip-check
+    cp golem-temp/agents/golem_it_agent_rpc_rust_release.wasm \
+      ../golem_it_agent_rpc_rust_release.wasm
+  fi
+  popd || exit
+fi
+
 if [ "$single_group" = "false" ] || [ "$group" = "benchmarks" ]; then
   GOLEM_TS_PRESET=optimized NODE_GROUP_LABEL="benchmark" build_node_apps "${benchmark_apps[@]}"
 fi

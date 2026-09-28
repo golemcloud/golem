@@ -22,10 +22,9 @@
 //!   `from_text` additionally accepts a single ASCII space between the
 //!   decimal and the unit (e.g. `1 kg`); the output form is always
 //!   no-space.
-//! - Text form is restricted to `|scale| <= 18` and rejects
-//!   `mantissa == i64::MIN`; both would either overflow representation or
-//!   produce an unbounded output string. JSON encoding is unrestricted
-//!   on both fronts. A negative-scale rendering whose absolute decimal
+//! - Text form is restricted to `|scale| <= 18`; larger scales would produce
+//!   an unbounded output string. JSON encoding is unrestricted on this front.
+//!   A negative-scale rendering whose absolute decimal
 //!   string would exceed 40 characters is rejected as
 //!   `ParseError::OutOfRange("quantity scale")`.
 //! - JSON form: `{ "mantissa": "…", "scale": …, "unit": "..." }`, with
@@ -51,9 +50,6 @@ fn unit_regex() -> &'static Regex {
 }
 
 pub fn to_text(payload: &QuantityValue) -> Result<String, ParseError> {
-    if payload.mantissa == i64::MIN {
-        return Err(ParseError::OutOfRange("quantity mantissa"));
-    }
     if payload.scale.unsigned_abs() > MAX_ABS_SCALE_TEXT as u32 {
         return Err(ParseError::OutOfRange("quantity scale"));
     }
@@ -263,12 +259,12 @@ fn parse_decimal(s: &str) -> Result<(i64, i32), ParseError> {
     let combined: String = format!("{whole}{frac}");
     let stripped = combined.trim_start_matches('0');
     let digits = if stripped.is_empty() { "0" } else { stripped };
-    let magnitude: i64 = digits
+    let magnitude: i128 = digits
         .parse()
         .map_err(|_| ParseError::OutOfRange("mantissa"))?;
-    let mut mantissa = sign
-        .checked_mul(magnitude)
-        .ok_or(ParseError::OutOfRange("mantissa"))?;
+    let mut mantissa: i64 = (i128::from(sign) * magnitude)
+        .try_into()
+        .map_err(|_| ParseError::OutOfRange("mantissa"))?;
     let mut scale: i32 = frac.len() as i32;
     while scale > 0 && mantissa % 10 == 0 && mantissa != 0 {
         mantissa /= 10;
@@ -285,8 +281,7 @@ fn format_decimal(mantissa: i64, scale: i32) -> String {
         return "0".to_string();
     }
     let negative = mantissa < 0;
-    // `to_text` rejects `i64::MIN` before reaching here, so `.abs()` is safe.
-    let abs_str = mantissa.abs().to_string();
+    let abs_str = mantissa.unsigned_abs().to_string();
     let body = if scale <= 0 {
         let mut s = abs_str;
         for _ in 0..(-scale) {
@@ -547,15 +542,14 @@ mod tests {
     }
 
     #[test]
-    fn i64_min_mantissa_text_rejected() {
+    fn i64_min_mantissa_text_roundtrips() {
         let p = QuantityValue {
             mantissa: i64::MIN,
             scale: 0,
             unit: "x".into(),
         };
-        assert_eq!(
-            to_text(&p),
-            Err(ParseError::OutOfRange("quantity mantissa"))
-        );
+        let text = to_text(&p).unwrap();
+        assert_eq!(text, "-9223372036854775808x");
+        assert_eq!(from_text(&text), Ok(p));
     }
 }

@@ -1139,6 +1139,20 @@ script = '''
   fi
 '''
 
+[tasks.generate-reflection-conformance]
+description = "Embeds the reflection conformance corpus in Scala and MoonBit test sources"
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error node scripts/sync-reflection-conformance.mjs
+'''
+
+[tasks.check-reflection-conformance]
+description = "Fails if Scala or MoonBit reflection conformance embeds are stale"
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error node scripts/sync-reflection-conformance.mjs --check
+'''
+
 ## ** PUBLISH **
 [tasks.publish]
 description = "Publishes packages to crates.io"
@@ -1657,7 +1671,7 @@ rm -rf build-out
 '''
 
 [tasks.build-benchmark-components]
-description = "Rebuilds only the benchmark test WASM components"
+description = "Rebuilds and verifies the test WASM components required by the CI benchmark suite"
 dependencies = ["wit", "build-sdk-ts"]
 script_runner = "@duckscript"
 script = '''
@@ -1670,6 +1684,8 @@ if ${golem_cli_empty}
 end
 cd test-components
 exec --fail-on-error ./build-components.sh benchmarks rebuild
+cd ..
+exec --fail-on-error cargo run --profile benchmarks -p integration-tests --bin benchmarks -- suite --check-artifacts integration-tests/benchmark_suites/ci.yaml spawned
 '''
 
 [tasks.run-benchmark-suite-orb]

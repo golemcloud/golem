@@ -10,26 +10,61 @@
 
 package example.integrationtests
 
-import golem.{BaseAgent, Principal}
+import golem.{BaseAgent, Principal, ULong}
 import golem.reflection.{AgentClientDefinition, DynamicAgentClient, DynamicToolClient, GolemReflectError, Reflection}
 import golem.runtime.annotations.*
 import golem.runtime.{InputRecordCodec, OutputCodec}
-import golem.schema.{SchemaValue, TypedSchemaValue}
+import golem.schema.{Quantity, QuantityUnit, SchemaValue, TypedSchemaValue}
 import zio.blocks.schema.json.Json
+import zio.blocks.typeid.TypeId
 
+import java.time.{Duration => JDuration}
 import scala.concurrent.{ExecutionContext, Future}
+
+sealed trait ReflectionMeters
+
+object ReflectionMeters {
+  implicit val unit: QuantityUnit[ReflectionMeters] = new QuantityUnit[ReflectionMeters] {
+    override val baseUnit: String                 = "m"
+    override val allowedSuffixes: List[String]    = Nil
+    override val typeId: TypeId[ReflectionMeters] = TypeId.of[ReflectionMeters]
+  }
+}
 
 @toolDefinition(name = "scala-reflection-test")
 trait ScalaReflectionTestTool {
   def echo(label: String): String
   @arg("maybe", scope = "option")
   def optional(maybe: Option[String]): String
+  @arg("maybe", scope = "option")
+  def canonicalValues(
+    signed: Long,
+    unsigned: ULong,
+    duration: JDuration,
+    quantity: Quantity[ReflectionMeters],
+    maybe: Option[String]
+  ): String
 }
 
 @toolImplementation()
 final class ScalaReflectionTestToolImpl extends ScalaReflectionTestTool {
   override def echo(label: String): String             = s"scala-tool:$label"
   override def optional(maybe: Option[String]): String = maybe.getOrElse("omitted")
+  override def canonicalValues(
+    signed: Long,
+    unsigned: ULong,
+    duration: JDuration,
+    quantity: Quantity[ReflectionMeters],
+    maybe: Option[String]
+  ): String =
+    if (
+      signed == Long.MinValue &&
+      unsigned.value == ((BigInt(1) << 64) - 1) &&
+      duration.toNanos == Long.MaxValue &&
+      quantity == Quantity[ReflectionMeters](Long.MinValue, -9, "m") &&
+      maybe.isEmpty
+    ) "scala-canonical-ok"
+    else "scala-canonical-mismatch"
 }
 
 @agentDefinition()
@@ -48,6 +83,7 @@ trait ScalaToolReflectionCaller extends BaseAgent {
   class Id(val name: String)
   def roundTrip(): Future[String]
   def optionalRoundTrip(): Future[String]
+  def canonicalRoundTrip(): Future[String]
   def principalRoundTrip(): Future[String]
   def agentRoundTrip(): Future[String]
 }
@@ -66,14 +102,41 @@ final class ScalaToolReflectionCallerImpl(name: String) extends ScalaToolReflect
       case Left(error)    => Future.successful(s"error:$error")
       case Right(command) =>
         for {
-          omittedJson    <- command.invokeJson(Json.Object("maybe" -> Json.Null))
+          omittedJson    <- command.invokeJson(Json.Object())
+          nullJson       <- command.invokeJson(Json.Object("maybe" -> Json.Null))
           suppliedJson   <- command.invokeJson(Json.Object("maybe" -> Json.String("supplied")))
           omittedNative  <- command.invokeValue(SchemaValue.RecordValue(List(SchemaValue.OptionValue(None))))
           suppliedNative <-
             command.invokeValue(
               SchemaValue.RecordValue(List(SchemaValue.OptionValue(Some(SchemaValue.StringValue("supplied")))))
             )
-        } yield s"$omittedJson|$suppliedJson|$omittedNative|$suppliedNative"
+        } yield s"$omittedJson|$nullJson|$suppliedJson|$omittedNative|$suppliedNative"
+    }
+  }
+
+  override def canonicalRoundTrip(): Future[String] = {
+    val prepared = for {
+      tool    <- Reflection.getToolType("scala-reflection-test").left.map(_.toString)
+      command <- tool.command(List("canonical-values")).left.map(_.toString)
+    } yield command
+
+    prepared match {
+      case Left(error)    => Future.successful(s"error:$error")
+      case Right(command) =>
+        command
+          .invokeJson(
+            Json.Object(
+              "signed"   -> Json.String(Long.MinValue.toString),
+              "unsigned" -> Json.String("18446744073709551615"),
+              "duration" -> Json.Object("nanoseconds" -> Json.String(Long.MaxValue.toString)),
+              "quantity" -> Json.Object(
+                "mantissa" -> Json.String(Long.MinValue.toString),
+                "scale"    -> Json.Number(BigDecimal(-9)),
+                "unit"     -> Json.String("m")
+              )
+            )
+          )
+          .map(_.toString)
     }
   }
 
