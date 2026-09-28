@@ -508,15 +508,18 @@ admission, runs the guest save hook, captures the tree (`agent_filesystem::captu
 `Snapshot` entry, commits, and gives the capture to an upload job. The record has no name when the
 tree holds only the initial files of the agent. When the tree did not change since the last
 confirmed snapshot, the record reuses its name and the confirmation comes with it
-(`Snapshot` then `SnapshotConfirmed`). A manual update saves its filesystem snapshot before it
-writes `PendingUpdate`, and an admission that the service refuses fails the update.
+(`Snapshot` then `SnapshotConfirmed`); the status then keeps the older usable record as the
+fallback. A manual update saves its filesystem snapshot before it writes `PendingUpdate`. When a
+periodic upload of the agent runs, the update waits for it once, for at most
+`confirmation_wait`, and asks again; another refusal fails the update. The retention of the
+update snapshots runs after `PendingUpdate` commits.
 
 The upload job saves the snapshot, then asks the worker for a confirmation
 (`worker/filesystem_snapshots.rs::WorkerConfirmer`). The worker appends `SnapshotConfirmed` only
 while the instance that took the snapshot runs, in one status job that checks that the record is
 still the status candidate. Otherwise the answer is `Deferred`, and the snapshot stays in the
 store. `Superseded` (an update or a revert replaced the record) deletes it. A stop never waits for
-an upload.
+an upload, and `forget_scope` or a shutdown ends a job also during its retention or its delete.
 
 The next start confirms instead (`Worker::confirm_filesystem_snapshot_before_start`, called from
 `WaitingWorker::new` before it takes permits). When the start would select the last record if it

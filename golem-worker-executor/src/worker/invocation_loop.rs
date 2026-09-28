@@ -22,7 +22,7 @@ use crate::services::agent_filesystem::{
     drain_sealed_filesystem, filesystem_activity, seal, set_limits,
 };
 use crate::services::agent_filesystem_snapshots::{
-    SnapshotConfirmer, SnapshotKind, SnapshotSkip, UploadAdmission,
+    SnapshotConfirmer, SnapshotKind, SnapshotSkip, UpdateRetention, UploadAdmission,
 };
 use crate::services::golem_config::SnapshotPolicy;
 use crate::services::oplog::plugin::ForwardingOplog;
@@ -2795,7 +2795,16 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         }
         let snapshots = self.parent.agent_filesystem_snapshots();
         let scope = SnapshotScope::agent(&self.owned_agent_id);
-        let admission = match snapshots.admit(&scope, SnapshotKind::Update).await {
+        // An upload of a periodic snapshot of the agent can run now. The update waits for it once
+        // and asks again, so a frequent snapshot does not fail the update.
+        let admitted = match snapshots.admit(&scope, SnapshotKind::Update).await {
+            Err(SnapshotSkip::UploadInFlight) => {
+                snapshots.wait_for_upload_of_scope(&scope).await;
+                snapshots.admit(&scope, SnapshotKind::Update).await
+            }
+            admitted => admitted,
+        };
+        let admission = match admitted {
             Ok(admission) => Some(admission),
             Err(SnapshotSkip::Disabled) => None,
             Err(skip) => {
@@ -2876,12 +2885,13 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 result: AgentInvocationResult::SaveSnapshot { snapshot },
                 ..
             }) => {
-                let filesystem_snapshot = match admission {
+                let (filesystem_snapshot, retention) = match admission {
                     Some(admission) => match self.upload_update_filesystem(admission).await {
-                        Ok(filesystem_snapshot) => filesystem_snapshot,
+                        Ok(Some((name, retention))) => (Some(name), Some(retention)),
+                        Ok(None) => (None, None),
                         Err(error) => return self.fail_update(target_revision, error).await,
                     },
-                    None => None,
+                    None => (None, None),
                 };
                 match self
                     .store
@@ -2897,8 +2907,12 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     .await
                 {
                     Ok(update_description) => {
-                        // Enqueue the update
-                        let _ = self.parent.enqueue_update(update_description).await;
+                        // Enqueue the update. Retention runs once its record committed.
+                        if self.parent.enqueue_update(update_description).await.is_ok()
+                            && let Some(retention) = retention
+                        {
+                            retention.run();
+                        }
 
                         // Reactivate the worker
                         CommandOutcome::BreakInnerLoop(RetryDecision::Immediate)
@@ -3064,12 +3078,13 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     }
 
     /// Captures the agent filesystem for a manual update and waits for its upload. Gives the name
-    /// of the filesystem snapshot, or `None` when the tree is a tree of initial files. The capture
-    /// compares with no mark, so a manual-update record never reuses a name.
+    /// of the filesystem snapshot with the retention that runs after the update record, or `None`
+    /// when the tree is a tree of initial files. The capture compares with no mark, so a
+    /// manual-update record never reuses a name.
     async fn upload_update_filesystem(
         &self,
         admission: UploadAdmission,
-    ) -> Result<Option<FilesystemSnapshotName>, String> {
+    ) -> Result<Option<(FilesystemSnapshotName, UpdateRetention)>, String> {
         let snapshots = self.parent.agent_filesystem_snapshots();
         match self
             .capture_filesystem(snapshots.capture_wait(), None)
@@ -3086,7 +3101,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 admission
                     .upload_now(capture)
                     .await
-                    .map(|_| Some(name))
+                    .map(|retention| Some((name, retention)))
                     .map_err(|error| {
                         format!("failed to upload the filesystem snapshot for the update: {error}")
                     })

@@ -587,6 +587,29 @@ impl AgentFilesystemSnapshots {
         }
     }
 
+    /// Waits until the job of `scope` decided and ended, for at most `confirmation_wait`. A
+    /// manual update calls it when its admission gave [`SnapshotSkip::UploadInFlight`], and then
+    /// asks again. The job holds the scope until it ends, after its retention, so the wait covers
+    /// both.
+    pub(crate) async fn wait_for_upload_of_scope(&self, scope: &SnapshotScope) {
+        let Some(inner) = &self.inner else {
+            return;
+        };
+        let Some(job) = inner.jobs_of_scope().jobs.get(scope).cloned() else {
+            return;
+        };
+        let mut decided = job.decided.subscribe();
+        let decided_and_ended = async {
+            let _ = decided.wait_for(|decision| decision.is_some()).await;
+            job.ended.cancelled().await;
+        };
+        tokio::select! {
+            () = decided_and_ended => {}
+            () = inner.clock.sleep(inner.settings.confirmation_wait()) => {}
+            () = inner.shutdown.cancelled() => {}
+        }
+    }
+
     /// Waits until the job of `scope` ended, for at most `limit`. Gives `true` when no job of the
     /// scope runs at the return.
     #[allow(dead_code)]
@@ -686,8 +709,9 @@ impl UploadAdmission {
     /// The job waits for a slot of the uploads, saves with retries, discards the capture, and
     /// confirms. On `Confirmed` it applies retention. On `Superseded` it deletes the snapshot and
     /// runs no retention. On `Deferred` it keeps the snapshot and runs no retention, because a
-    /// later start can confirm it. When the retries are used up, it confirms nothing. A job that
-    /// `forget_scope` or a shutdown stops writes and deletes nothing.
+    /// later start can confirm it. When the retries are used up, it confirms nothing.
+    /// `forget_scope` or a shutdown stops the job at each step, also in its retention or its
+    /// delete: it then writes nothing more and deletes nothing more.
     pub(crate) fn submit(
         mut self,
         capture: impl CapturedTree,
@@ -710,11 +734,12 @@ impl UploadAdmission {
     }
 
     /// Uploads `capture` and waits until the store holds it. A manual update calls this before it
-    /// writes its record.
+    /// writes its record. The scope stays reserved until the retention that the call gives runs
+    /// or is dropped.
     pub(crate) async fn upload_now(
         mut self,
         capture: impl CapturedTree,
-    ) -> Result<SnapshotInfo, SnapshotStoreError> {
+    ) -> Result<UpdateRetention, SnapshotStoreError> {
         let Some(job) = self.job.take() else {
             return Err(SnapshotStoreError::NotFound);
         };
@@ -725,7 +750,27 @@ impl UploadAdmission {
             name: self.name.clone(),
             kind: self.kind,
         };
-        upload.run_now(capture).await
+        upload
+            .run_now(capture)
+            .await
+            .map(|(info, upload)| UpdateRetention { upload, info })
+    }
+}
+
+/// The retention after a manual-update snapshot that the store holds. The loop runs it after the
+/// update record commits. Dropped, it deletes nothing and frees the scope.
+pub(crate) struct UpdateRetention {
+    upload: job::Upload,
+    info: SnapshotInfo,
+}
+
+impl UpdateRetention {
+    /// Applies retention in the background, under a slot of the uploads: it keeps the own
+    /// snapshot and the newest older update snapshots, with the rules of periodic retention.
+    /// `forget_scope` or a shutdown stops it.
+    pub(crate) fn run(self) {
+        let jobs = self.upload.inner.jobs.clone();
+        jobs.spawn(self.upload.retain_in_background(self.info));
     }
 }
 

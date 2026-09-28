@@ -107,11 +107,12 @@ impl Upload {
         drop(permit);
     }
 
-    /// Saves and discards the capture, and gives the info of the snapshot.
+    /// Saves and discards the capture, and gives the info of the snapshot with the upload, whose
+    /// retention runs later.
     pub(super) async fn run_now(
         self,
         capture: impl CapturedTree,
-    ) -> Result<SnapshotInfo, SnapshotStoreError> {
+    ) -> Result<(SnapshotInfo, Self), SnapshotStoreError> {
         let started = Instant::now();
         let result = match self.save(capture, None).await {
             SaveOutcome::Saved(info, _) => Ok(info),
@@ -133,7 +134,19 @@ impl Upload {
                 info.bytes,
             );
         }
-        result
+        result.map(|info| (info, self))
+    }
+
+    /// Waits for a slot of the uploads and applies retention after the save that gave `info`.
+    pub(super) async fn retain_in_background(self, info: SnapshotInfo) {
+        let _permit = tokio::select! {
+            permit = Arc::clone(&self.inner.uploads).acquire_owned() => match permit {
+                Ok(permit) => permit,
+                Err(_) => return,
+            },
+            () = self.stopped() => return,
+        };
+        self.apply_retention(&info).await;
     }
 
     /// Whether `forget_scope` or a shutdown stopped the upload.
@@ -208,8 +221,16 @@ impl Upload {
     }
 
     /// Keeps the own snapshot and the newest older snapshots of its kind, and deletes the rest of
-    /// its kind that are older than it. `info` is the info of the own snapshot.
+    /// its kind that are older than it. `info` is the info of the own snapshot. A stop ends it at
+    /// once, and a later retention deletes what it left.
     async fn apply_retention(&self, info: &SnapshotInfo) {
+        tokio::select! {
+            () = self.retain(info) => {}
+            () = self.stopped() => {}
+        }
+    }
+
+    async fn retain(&self, info: &SnapshotInfo) {
         let Ok(own) = store_name(&self.name) else {
             return;
         };
@@ -244,8 +265,16 @@ impl Upload {
             .await;
     }
 
-    /// Deletes the snapshot of this upload, which no confirmation record names.
+    /// Deletes the snapshot of this upload, which no confirmation record names. A stop ends it
+    /// at once, and the snapshot stays until a retention of its kind deletes it.
     async fn delete_own_snapshot(&self) {
+        tokio::select! {
+            () = self.delete_own() => {}
+            () = self.stopped() => {}
+        }
+    }
+
+    async fn delete_own(&self) {
         let Ok(name) = store_name(&self.name) else {
             return;
         };

@@ -41,6 +41,8 @@ struct ScriptedStore {
     save_gate: Mutex<Option<Arc<Gate>>>,
     /// When set, each restore waits for it before it runs.
     restore_gate: Mutex<Option<Arc<Gate>>>,
+    /// When set, each delete of a name waits for it before it runs.
+    delete_gate: Mutex<Option<Arc<Gate>>>,
     /// When set, each restore fails.
     restores_fail: std::sync::atomic::AtomicBool,
     /// The names that the saves were given, with the content of the tree of each call.
@@ -243,6 +245,10 @@ impl FilesystemSnapshotStore for ScriptedStore {
         scope: &SnapshotScope,
         name: &SnapshotName,
     ) -> Result<(), SnapshotStoreError> {
+        let gate = self.delete_gate.lock().unwrap().clone();
+        if let Some(gate) = gate {
+            gate.pass().await;
+        }
         let _count = self.enter();
         tokio::task::yield_now().await;
         self.deletes.lock().unwrap().push(name.as_str().to_string());
@@ -1381,5 +1387,194 @@ async fn a_parent_reaches_the_store_with_its_detection() {
             parent.as_str().to_string(),
             ChangeDetection::SizeMtime
         ))]
+    );
+}
+
+/// Uploads three manual-update snapshots of one scope, each followed by its retention, and gives
+/// the names in the order of the uploads, with the name of a periodic snapshot uploaded first.
+async fn update_uploads_with_retention(
+    snapshots: &AgentFilesystemSnapshots,
+    scope: &SnapshotScope,
+) -> (String, Vec<String>) {
+    let discarded = Arc::new(AtomicUsize::new(0));
+    let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
+    let periodic = snapshots
+        .admit(scope, SnapshotKind::Periodic)
+        .await
+        .unwrap();
+    let periodic_name = periodic.name().as_str().to_string();
+    periodic.submit(
+        TestCapture::with(b"periodic", &discarded),
+        None,
+        confirmer(&confirm),
+    );
+    ended(snapshots, scope).await;
+    let updates = futures::stream::iter(0..3)
+        .then(|index| {
+            let discarded = &discarded;
+            async move {
+                let admission = snapshots.admit(scope, SnapshotKind::Update).await.unwrap();
+                let name = admission.name().as_str().to_string();
+                admission
+                    .upload_now(TestCapture::with(format!("{index}").as_bytes(), discarded))
+                    .await
+                    .unwrap()
+                    .run();
+                ended(snapshots, scope).await;
+                name
+            }
+        })
+        .collect::<Vec<_>>()
+        .await;
+    (periodic_name, updates)
+}
+
+#[test]
+#[timeout("10s")]
+async fn an_update_retention_keeps_the_own_snapshot_and_the_newest_older_updates() {
+    let store = Arc::new(ScriptedStore::default());
+    let snapshots = service(&store, settings(4, 4, 1), ManualClock::immediate());
+    let scope = scope("update-retention");
+
+    let (periodic, updates) = update_uploads_with_retention(&snapshots, &scope).await;
+
+    let kept = store
+        .inner
+        .list(&scope)
+        .await
+        .unwrap()
+        .iter()
+        .map(|(name, _)| name.as_str().to_string())
+        .collect::<std::collections::BTreeSet<_>>();
+    let expected = [periodic, updates[1].clone(), updates[2].clone()]
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(kept, expected);
+    assert_eq!(*store.deletes.lock().unwrap(), vec![updates[0].clone()]);
+}
+
+#[test]
+#[timeout("10s")]
+async fn a_dropped_update_retention_deletes_nothing_and_frees_the_scope() {
+    let store = Arc::new(ScriptedStore::default());
+    let snapshots = service(&store, settings(4, 4, 1), ManualClock::immediate());
+    let scope = scope("dropped-update-retention");
+    let discarded = Arc::new(AtomicUsize::new(0));
+
+    let names = futures::stream::iter(0..3)
+        .then(|index| {
+            let snapshots = &snapshots;
+            let scope = &scope;
+            let discarded = &discarded;
+            async move {
+                let admission = snapshots.admit(scope, SnapshotKind::Update).await.unwrap();
+                let name = admission.name().as_str().to_string();
+                let retention = admission
+                    .upload_now(TestCapture::with(format!("{index}").as_bytes(), discarded))
+                    .await
+                    .unwrap();
+                let while_held = snapshots.admit(scope, SnapshotKind::Periodic).await.err();
+                drop(retention);
+                (name, while_held)
+            }
+        })
+        .collect::<Vec<_>>()
+        .await;
+
+    assert!(store.deletes.lock().unwrap().is_empty());
+    assert!(
+        names
+            .iter()
+            .all(|(_, while_held)| *while_held == Some(SnapshotSkip::UploadInFlight))
+    );
+    assert!(
+        snapshots
+            .admit(&scope, SnapshotKind::Periodic)
+            .await
+            .is_ok()
+    );
+}
+
+/// A service whose deletes wait at a gate, after two confirmed periodic uploads and a third
+/// upload that `outcome` answers. Gives the service, the scope and the gate, once a delete waits.
+async fn with_a_delete_held(
+    outcome: ConfirmOutcome,
+) -> (
+    Arc<ScriptedStore>,
+    AgentFilesystemSnapshots,
+    SnapshotScope,
+    Arc<Gate>,
+) {
+    let store = Arc::new(ScriptedStore::default());
+    let mut settings = settings(4, 4, 1);
+    settings = FilesystemSnapshotUploadConfig::new(
+        settings.max_concurrent_uploads().get(),
+        settings.max_concurrent_restores().get(),
+        settings.confirmation_wait(),
+        settings.store_check_limit(),
+        settings.capture_wait(),
+        1,
+        1,
+        settings.upload_retry().clone(),
+    )
+    .unwrap();
+    let snapshots = service(&store, settings, ManualClock::immediate());
+    let scope = scope("held-delete");
+    let discarded = Arc::new(AtomicUsize::new(0));
+    let deferred = ScriptedConfirmer::answering(ConfirmOutcome::Deferred);
+    let older = snapshots
+        .admit(&scope, SnapshotKind::Periodic)
+        .await
+        .unwrap();
+    older.submit(
+        TestCapture::with(b"older", &discarded),
+        None,
+        confirmer(&deferred),
+    );
+    ended(&snapshots, &scope).await;
+    let gate = Arc::new(Gate::default());
+    *store.delete_gate.lock().unwrap() = Some(Arc::clone(&gate));
+    let answering = ScriptedConfirmer::answering(outcome);
+    let newest = snapshots
+        .admit(&scope, SnapshotKind::Periodic)
+        .await
+        .unwrap();
+    newest.submit(
+        TestCapture::with(b"newest", &discarded),
+        None,
+        confirmer(&answering),
+    );
+    gate.wait_reached(1).await;
+    (store, snapshots, scope, gate)
+}
+
+#[test]
+#[timeout("10s")]
+async fn a_shutdown_ends_a_retention_that_waits_for_a_delete() {
+    let (_store, snapshots, _scope, gate) = with_a_delete_held(ConfirmOutcome::Confirmed).await;
+
+    let stopped = tokio::time::timeout(Duration::from_secs(2), snapshots.shut_down()).await;
+
+    gate.open();
+    assert!(stopped.is_ok(), "the shutdown waited for the retention");
+}
+
+#[test]
+#[timeout("10s")]
+async fn forget_scope_ends_a_delete_of_a_superseded_snapshot_at_once() {
+    let (_store, snapshots, scope, gate) = with_a_delete_held(ConfirmOutcome::Superseded).await;
+    let job = snapshots
+        .inner
+        .as_ref()
+        .and_then(|inner| inner.jobs_of_scope().jobs.get(&scope).cloned())
+        .unwrap();
+
+    snapshots.forget_scope(&scope);
+    let ended = tokio::time::timeout(Duration::from_secs(2), job.ended.cancelled()).await;
+
+    gate.open();
+    assert!(
+        ended.is_ok(),
+        "the job waited for its delete after forget_scope"
     );
 }
