@@ -158,7 +158,8 @@ fn shard_lease_from_wire(
     Ok(ShardLease {
         shard_epochs: shard_epochs_from_proto(lease.shard_epochs)?,
         expires_at: expires_at_from_ttl(lease.lease_ttl, sent_at)?,
-        revision: ShardLeaseRevision(lease.revision),
+        revision: ShardLeaseRevision::from_wire(&lease.incarnation_id, lease.revision)
+            .map_err(|error| format!("ShardLease.{error}"))?,
     })
 }
 
@@ -318,7 +319,15 @@ impl ShardManager for GrpcShardManager {
                                         .map_err(ShardManagerError::ConversionError)?,
                                     expires_at: expires_at_from_ttl(success.lease_ttl, sent_at)
                                         .map_err(ShardManagerError::ConversionError)?,
-                                    revision: ShardLeaseRevision(success.revision),
+                                    revision: ShardLeaseRevision::from_wire(
+                                        &success.incarnation_id,
+                                        success.revision,
+                                    )
+                                    .map_err(|error| {
+                                        ShardManagerError::ConversionError(format!(
+                                            "RegisterSuccess.{error}"
+                                        ))
+                                    })?,
                                 },
                             })
                         }
@@ -706,7 +715,7 @@ impl From<&'static str> for QuotaError {
 
 /// The failure arms of `RenewShardLease` and `Deregister`; the executor
 /// branches on the arm, never on the message string. There is no stale-epoch
-/// arm: a claim that does not match the manager's view is renewed and
+/// arm: a held set that does not match the manager's view is renewed and
 /// corrected in the response, not refused.
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum ShardLeaseError {
@@ -811,6 +820,7 @@ mod tests {
     /// earlier than one anchored on arrival would - by exactly the time it took.
     #[test]
     fn a_delayed_grant_is_anchored_where_the_request_was_sent_not_where_the_answer_arrived() {
+        let incarnation = Uuid::new_v4();
         let on_the_wire = golem_api_grpc::proto::golem::shardmanager::v1::ShardLease {
             shard_epochs: vec![],
             lease_ttl: Some(prost_types::Duration {
@@ -818,6 +828,7 @@ mod tests {
                 nanos: 0,
             }),
             revision: 3,
+            incarnation_id: incarnation.to_string(),
         };
         let sent_at = Instant::now();
         // the answer took its time
@@ -830,6 +841,33 @@ mod tests {
             lease.expires_at < Instant::now() + Duration::from_secs(60),
             "time the answer spent in flight must come off the lease, never on to it"
         );
-        assert_eq!(lease.revision, ShardLeaseRevision(3));
+        assert_eq!(
+            lease.revision,
+            ShardLeaseRevision {
+                incarnation,
+                number: 3
+            }
+        );
+    }
+
+    /// A lease that names no manager process is malformed, like any other bad field.
+    #[test]
+    fn a_lease_without_its_manager_process_does_not_decode() {
+        let on_the_wire = golem_api_grpc::proto::golem::shardmanager::v1::ShardLease {
+            shard_epochs: vec![],
+            lease_ttl: Some(prost_types::Duration {
+                seconds: 60,
+                nanos: 0,
+            }),
+            revision: 3,
+            incarnation_id: String::new(),
+        };
+
+        let error = shard_lease_from_wire(on_the_wire, Instant::now()).unwrap_err();
+
+        assert!(
+            error.starts_with("ShardLease.incarnation_id"),
+            "unexpected error: {error}"
+        );
     }
 }

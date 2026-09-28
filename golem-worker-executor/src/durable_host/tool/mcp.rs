@@ -132,7 +132,7 @@ async fn invoke_inner<Ctx: WorkerCtx>(
             ctx.public_state
                 .worker()
                 .commit_oplog_and_update_state(CommitLevel::DurableOnly)
-                .await;
+                .await?;
             let result = tokio::select! {
                 biased;
                 _ = async {
@@ -144,7 +144,7 @@ async fn invoke_inner<Ctx: WorkerCtx>(
                     let response = call.complete(ctx, HostResponseMcpToolCall {
                         result: Err(SerializableToolRpcError::Cancelled),
                     }).await?;
-                    ctx.public_state.worker().commit_oplog_and_update_state(CommitLevel::DurableOnly).await;
+                    ctx.public_state.worker().commit_oplog_and_update_state(CommitLevel::DurableOnly).await?;
                     break 'response response;
                 }
                 result = live_call(ctx, &activation, &tool, &invocation.input, &auth, &key, &mut unauthorized_generation) => result,
@@ -194,7 +194,7 @@ async fn invoke_inner<Ctx: WorkerCtx>(
         ctx.public_state
             .worker()
             .commit_oplog_and_update_state(CommitLevel::DurableOnly)
-            .await;
+            .await?;
         if let Some(generation) = unauthorized_generation {
             // Feedback never retries the tools/call whose response is already durable.
             let _ = ctx

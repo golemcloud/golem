@@ -373,7 +373,8 @@ async fn live_delivery_token(
             durable_function_type: DurableFunctionType::ReadLocal,
             span_started: None,
         })
-        .await;
+        .await
+        .unwrap();
     seed_oplog
         .add(OplogEntry::End {
             timestamp: Timestamp::now_utc(),
@@ -383,7 +384,8 @@ async fn live_delivery_token(
             span_finished: None,
             span_attributes: None,
         })
-        .await;
+        .await
+        .unwrap();
     let seed_oplog_dyn: Arc<dyn Oplog> = seed_oplog;
     let replay_state = ReplayState::new_for_owner(
         golem_common::model::OwnedAgentId {
@@ -471,6 +473,59 @@ async fn completion_delivery_delivered_records_marker_via_drain() {
     }
 }
 
+/// A completion marker whose oplog write is refused because the shard moved must be reported to
+/// whoever awaits the receipt. Panicking here would abort the executor - and every other healthy
+/// agent resident on it - over one agent that another executor now owns.
+#[test]
+async fn a_fenced_completion_marker_is_reported_rather_than_panicked() {
+    let agent_id = golem_common::model::AgentId {
+        component_id: golem_common::model::component::ComponentId::new(),
+        agent_id: "fenced-completion-marker-test".to_string(),
+    };
+    let oplog = Arc::new(InMemoryOplog::fenced(crate::services::oplog::OplogFence {
+        agent_id: agent_id.clone(),
+        expected_epoch: golem_common::model::ShardEpoch(3),
+        actual_epoch: Some(golem_common::model::ShardEpoch(4)),
+    }));
+    let seed_oplog = Arc::new(InMemoryOplog::new());
+    seed_oplog
+        .add(OplogEntry::NoOp {
+            timestamp: Timestamp::now_utc(),
+            entity_parent_start_index: None,
+        })
+        .await
+        .unwrap();
+    let seed_oplog_dyn: Arc<dyn Oplog> = seed_oplog;
+    let replay_state = ReplayState::new_for_owner(
+        golem_common::model::OwnedAgentId {
+            environment_id: golem_common::model::environment::EnvironmentId::new(),
+            agent_id,
+        },
+        seed_oplog_dyn,
+        golem_common::model::regions::DeletedRegions::default(),
+        None,
+        crate::durable_host::tool::operation::OwnerToolOperations::new(),
+    )
+    .await
+    .expect("failed to build replay state");
+    let oplog_dyn: Arc<dyn Oplog> = oplog;
+    let recorder = CompletionMarkerRecorder::new(oplog_dyn, replay_state);
+
+    let mut receipt = recorder.record(idx(10), CompletionMarkerKind::Delivered, None);
+
+    match await_marker_receipt(&mut receipt).await {
+        Err(WorkerExecutorError::OplogFenced {
+            expected_epoch,
+            actual_epoch,
+            ..
+        }) => {
+            assert_eq!(expected_epoch, 3);
+            assert_eq!(actual_epoch, Some(4));
+        }
+        other => panic!("expected the fenced marker append to be reported, got {other:?}"),
+    }
+}
+
 #[test]
 async fn completion_delivery_markers_preserve_handoff_order() {
     let oplog = Arc::new(InMemoryOplog::new());
@@ -480,7 +535,8 @@ async fn completion_delivery_markers_preserve_handoff_order() {
             timestamp: Timestamp::now_utc(),
             entity_parent_start_index: None,
         })
-        .await;
+        .await
+        .unwrap();
     let seed_oplog_dyn: Arc<dyn Oplog> = seed_oplog;
     let replay_state = ReplayState::new_for_owner(
         golem_common::model::OwnedAgentId {
@@ -694,7 +750,8 @@ async fn tail_gated_token_over_crash_tail(
             timestamp: Timestamp::now_utc(),
             entity_parent_start_index: None,
         })
-        .await;
+        .await
+        .unwrap();
     oplog
         .add(OplogEntry::Start {
             timestamp: Timestamp::now_utc(),
@@ -708,7 +765,8 @@ async fn tail_gated_token_over_crash_tail(
             durable_function_type: DurableFunctionType::ReadLocal,
             span_started: None,
         })
-        .await;
+        .await
+        .unwrap();
     oplog
         .add(OplogEntry::End {
             timestamp: Timestamp::now_utc(),
@@ -722,9 +780,10 @@ async fn tail_gated_token_over_crash_tail(
             span_finished: None,
             span_attributes: None,
         })
-        .await;
+        .await
+        .unwrap();
     for entry in extra_tail {
-        oplog.add(entry).await;
+        oplog.add(entry).await.unwrap();
     }
     let oplog_dyn: Arc<dyn Oplog> = oplog.clone();
     let replay_state = ReplayState::new_for_owner(
@@ -930,6 +989,9 @@ pub(super) struct InMemoryOplog {
     next_reserved: Arc<std::sync::atomic::AtomicU64>,
     next_commit: Arc<tokio::sync::Mutex<u64>>,
     append_progress: Arc<tokio::sync::Notify>,
+    /// When set, every append is refused the way a fencing backend refuses one whose asserted
+    /// shard epoch is stale: the shard moved to another executor while this oplog was open.
+    fence: Option<crate::services::oplog::OplogFence>,
 }
 
 impl InMemoryOplog {
@@ -940,6 +1002,15 @@ impl InMemoryOplog {
             next_reserved: Arc::new(std::sync::atomic::AtomicU64::new(1)),
             next_commit: Arc::new(tokio::sync::Mutex::new(1)),
             append_progress: Arc::new(tokio::sync::Notify::new()),
+            fence: None,
+        }
+    }
+
+    /// An oplog whose shard has already moved: every append is refused with `fence`.
+    fn fenced(fence: crate::services::oplog::OplogFence) -> Self {
+        Self {
+            fence: Some(fence),
+            ..Self::new()
         }
     }
 
@@ -953,17 +1024,24 @@ impl InMemoryOplog {
             next_reserved: Arc::new(std::sync::atomic::AtomicU64::new(1)),
             next_commit: Arc::new(tokio::sync::Mutex::new(1)),
             append_progress: Arc::new(tokio::sync::Notify::new()),
+            fence: None,
         }
     }
 }
 
 #[async_trait]
 impl Oplog for InMemoryOplog {
-    async fn add(&self, entry: OplogEntry) -> OplogIndex {
+    async fn add(
+        &self,
+        entry: OplogEntry,
+    ) -> Result<OplogIndex, crate::services::oplog::OplogError> {
         self.enqueue_add(entry).await
     }
 
     fn enqueue_add(&self, entry: OplogEntry) -> crate::services::oplog::OplogAddReceipt {
+        if let Some(fence) = self.fence.clone() {
+            return Box::pin(async move { Err(crate::services::oplog::OplogError::Fenced(fence)) });
+        }
         let index = self
             .next_reserved
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -1004,9 +1082,11 @@ impl Oplog for InMemoryOplog {
             }
         });
         Box::pin(async move {
-            receipt
-                .await
-                .expect("the in-memory oplog append task must reply")
+            Ok({
+                receipt
+                    .await
+                    .expect("the in-memory oplog append task must reply")
+            })
         })
     }
 
@@ -1015,6 +1095,9 @@ impl Oplog for InMemoryOplog {
         start: OplogEntry,
         make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
     ) -> crate::services::oplog::OplogAddPairReceipt {
+        if let Some(fence) = self.fence.clone() {
+            return Box::pin(async move { Err(crate::services::oplog::OplogError::Fenced(fence)) });
+        }
         let first_index = self
             .next_reserved
             .fetch_add(2, std::sync::atomic::Ordering::Relaxed);
@@ -1052,9 +1135,9 @@ impl Oplog for InMemoryOplog {
             }
         });
         Box::pin(async move {
-            receipt
+            Ok(receipt
                 .await
-                .expect("the in-memory oplog pair append task must reply")
+                .expect("the in-memory oplog pair append task must reply"))
         })
     }
 
@@ -1065,11 +1148,11 @@ impl Oplog for InMemoryOplog {
             dyn FnOnce(golem_common::model::oplog::RawOplogPayload) -> Result<OplogEntry, String>
                 + Send,
         >,
-    ) -> Result<crate::services::oplog::OrderedOplogStart, String> {
+    ) -> Result<crate::services::oplog::OrderedOplogStart, crate::services::oplog::OplogError> {
         let entry = build_start(
             golem_common::model::oplog::RawOplogPayload::SerializedInline(serialized_request),
         )?;
-        let index = self.add(entry.clone()).await;
+        let index = self.add(entry.clone()).await?;
         Ok(crate::services::oplog::OrderedOplogStart {
             index,
             entry,
@@ -1080,7 +1163,7 @@ impl Oplog for InMemoryOplog {
     async fn add_start_with_indexed_reserved_raw_payload(
         &self,
         build_request: crate::services::oplog::IndexedReservedStartBuilder,
-    ) -> Result<crate::services::oplog::OrderedOplogStart, String> {
+    ) -> Result<crate::services::oplog::OrderedOplogStart, crate::services::oplog::OplogError> {
         let mut entries = self.entries.lock().await;
         let index = OplogIndex::from_u64(entries.len() as u64 + 1);
         let (serialized_request, build_start) = build_request(index)?;
@@ -1102,8 +1185,11 @@ impl Oplog for InMemoryOplog {
     async fn commit(
         &self,
         _level: CommitLevel,
-    ) -> std::collections::BTreeMap<OplogIndex, OplogEntry> {
-        std::collections::BTreeMap::new()
+    ) -> Result<
+        std::collections::BTreeMap<OplogIndex, OplogEntry>,
+        crate::services::oplog::OplogError,
+    > {
+        Ok(std::collections::BTreeMap::new())
     }
 
     async fn current_oplog_index(&self) -> OplogIndex {
@@ -1114,8 +1200,12 @@ impl Oplog for InMemoryOplog {
         None
     }
 
-    async fn wait_for_replicas(&self, _replicas: u8, _timeout: Duration) -> bool {
-        true
+    async fn wait_for_replicas(
+        &self,
+        _replicas: u8,
+        _timeout: Duration,
+    ) -> Result<bool, crate::services::oplog::OplogError> {
+        Ok(true)
     }
 
     async fn read_exact(
@@ -1180,7 +1270,8 @@ async fn dropped_cancellable_call_records_cancelled_at_next_drain_point() {
             durable_function_type: DurableFunctionType::ReadLocal,
             span_started: None,
         })
-        .await;
+        .await
+        .unwrap();
 
     let (tx, mut rx) = mpsc::unbounded_channel();
     {
@@ -1305,7 +1396,8 @@ async fn access_terminal_end_is_appended_before_cleanup_and_permit_release() {
             durable_function_type: DurableFunctionType::ReadRemote,
             span_started: None,
         })
-        .await;
+        .await
+        .unwrap();
 
     let permit_counter = Arc::new(AtomicUsize::new(0));
     let (cleanup_tx, mut cleanup_rx) = mpsc::unbounded_channel();
@@ -1722,10 +1814,11 @@ impl InFunctionRetryHost for RetryHostProbe {
         retry_from: OplogIndex,
         inside_atomic_region: bool,
         _retry_policy_state: Option<golem_common::model::RetryPolicyState>,
-    ) {
+    ) -> Result<(), crate::services::oplog::OplogError> {
         self.appended_retry_from.push(retry_from);
         self.appended_inside_atomic_region
             .push(inside_atomic_region);
+        Ok(())
     }
 }
 

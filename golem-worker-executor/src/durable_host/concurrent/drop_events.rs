@@ -127,7 +127,7 @@ impl HttpSpanCleanupRecorder {
         if let Some((start_index, _)) = existing {
             let receipt = self.oplog.enqueue_add(end(start_index));
             async move {
-                receipt.await;
+                receipt.await?;
                 Ok(HttpSpanCleanupProgress::Complete)
             }
             .boxed()
@@ -150,7 +150,7 @@ impl HttpSpanCleanupRecorder {
             };
             let receipt = self.oplog.enqueue_add_pair(start, Box::new(end));
             async move {
-                receipt.await;
+                receipt.await?;
                 Ok(HttpSpanCleanupProgress::Complete)
             }
             .boxed()
@@ -403,7 +403,7 @@ impl DroppedCall {
             span_finished: self.span_finished.clone(),
         };
         self.notify_span_closed();
-        oplog.add(cancelled).await;
+        oplog.add(cancelled).await?;
         Ok(())
     }
 }
@@ -725,11 +725,9 @@ async fn record_dropped_call_event<Ctx: WorkerCtx>(
         DropEvent::CancelDroppedDurableInput { cancellation } => {
             let result = async {
                 if !ctx.is_live() {
-                    if cancellation
-                        .is_recorded()
-                        .await
-                        .map_err(WorkerExecutorError::runtime)?
-                    {
+                    if cancellation.is_recorded().await.map_err(|error| {
+                        error.into_worker_executor_error(WorkerExecutorError::runtime)
+                    })? {
                         return Ok(());
                     }
                     if ctx.rejects_live_continuation_at_replay_tail() {
@@ -758,7 +756,7 @@ async fn record_dropped_call_event<Ctx: WorkerCtx>(
                 cancellation
                     .cancel()
                     .await
-                    .map_err(WorkerExecutorError::runtime)
+                    .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))
             }
             .await;
             result.map_err(|error| TerminalCallError::new(error, ambient_trap_context(ctx)))?;
@@ -790,7 +788,7 @@ where
         if cancellation
             .is_recorded()
             .await
-            .map_err(WorkerExecutorError::runtime)?
+            .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?
         {
             return Ok(());
         }
@@ -826,7 +824,7 @@ where
     cancellation
         .cancel()
         .await
-        .map_err(WorkerExecutorError::runtime)
+        .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))
 }
 
 /// Accessor-window variant of [`drain_queued_dropped_call_events`]. It drains the queue from a short
@@ -1251,7 +1249,7 @@ pub(super) mod tests {
     async fn http_cleanup_replay_respects_the_recorded_send_close_owner() {
         for terminal_kind in ["closing-end", "cancelled", "open-end"] {
             let oplog = Arc::new(InMemoryOplog::new());
-            oplog.add(noop()).await;
+            oplog.add(noop()).await.unwrap();
             let send_index = oplog.add(OplogEntry::Start {
                 timestamp: Timestamp::now_utc(),
                 parent_start_index: None,
@@ -1261,7 +1259,7 @@ pub(super) mod tests {
                 request: Some(OplogPayload::Inline(Box::new(golem_common::model::oplog::HostRequestNoInput {}.into()))),
                 durable_function_type: DurableFunctionType::WriteRemote,
                 span_started: None,
-            }).await;
+            }).await.unwrap();
             let close = finished();
             let terminal = if terminal_kind == "cancelled" {
                 OplogEntry::Cancelled {
@@ -1282,7 +1280,7 @@ pub(super) mod tests {
                     span_attributes: None,
                 }
             };
-            oplog.add(terminal).await;
+            oplog.add(terminal).await.unwrap();
             if terminal_kind == "open-end" {
                 let (recorder, mut events) = cleanup_recorder(oplog.clone(), true, true).await;
                 assert!(
@@ -1345,7 +1343,7 @@ pub(super) mod tests {
             let (reached, mut reached_rx) = tokio::sync::mpsc::unbounded_channel();
             let gate = Arc::new(tokio::sync::Semaphore::new(0));
             let oplog = Arc::new(InMemoryOplog::with_end_gate(reached, gate.clone()));
-            oplog.add(noop()).await;
+            oplog.add(noop()).await.unwrap();
             let (mut recorder, mut receiver) = cleanup_recorder(oplog.clone(), true, true).await;
             recorder.parent = Some(OplogIndex::from_u64(8));
             recorder.owner = Some(OplogIndex::from_u64(11));
@@ -1378,7 +1376,7 @@ pub(super) mod tests {
                 gate.add_permits(1);
             }
             // This later writer also proves the submitted job progresses without a cleanup waiter.
-            let later = oplog.add(noop()).await;
+            let later = oplog.add(noop()).await.unwrap();
             let DropEvent::FinishP3HttpSpan { cleanup } = receiver.try_recv().unwrap() else {
                 panic!("cancelled drain must retain cleanup");
             };
@@ -1407,7 +1405,7 @@ pub(super) mod tests {
     async fn http_cleanup_replay_claim_survives_cancelled_drain() {
         for cancel_after_claim in [false, true] {
             let oplog = Arc::new(InMemoryOplog::new());
-            oplog.add(noop()).await;
+            oplog.add(noop()).await.unwrap();
             let closed = finished();
             oplog
                 .add(OplogEntry::Start {
@@ -1425,8 +1423,9 @@ pub(super) mod tests {
                     durable_function_type: DurableFunctionType::ReadLocal,
                     span_started: None,
                 })
-                .await;
-            oplog.add(noop()).await;
+                .await
+                .unwrap();
+            oplog.add(noop()).await.unwrap();
             oplog
                 .add(OplogEntry::End {
                     timestamp: closed.finished_at,
@@ -1438,7 +1437,8 @@ pub(super) mod tests {
                     span_finished: Some(closed.clone()),
                     span_attributes: None,
                 })
-                .await;
+                .await
+                .unwrap();
             let (recorder, mut receiver) = cleanup_recorder(oplog.clone(), false, true).await;
             let replay = recorder.replay.clone();
             let sink = recorder.sink.clone();
@@ -1483,7 +1483,7 @@ pub(super) mod tests {
     #[test_r::timeout("30s")]
     async fn http_cleanup_driver_unblocks_an_existing_call_without_a_new_drain() {
         let oplog = Arc::new(InMemoryOplog::new());
-        oplog.add(noop()).await;
+        oplog.add(noop()).await.unwrap();
         let other_name = HostFunctionName::Custom("other-read".to_string());
         let other_index = oplog
             .add(OplogEntry::Start {
@@ -1498,7 +1498,8 @@ pub(super) mod tests {
                 durable_function_type: DurableFunctionType::ReadRemote,
                 span_started: None,
             })
-            .await;
+            .await
+            .unwrap();
         let closed = finished();
         let (live, mut live_events) = cleanup_recorder(oplog.clone(), true, true).await;
         assert!(live.record(closed.clone()).is_none());
@@ -1515,7 +1516,8 @@ pub(super) mod tests {
                 span_finished: None,
                 span_attributes: None,
             })
-            .await;
+            .await
+            .unwrap();
         let (recorder, mut events) = cleanup_recorder(oplog.clone(), false, true).await;
         let replay = recorder.replay.clone();
         let ReplayStartClaimOutcome::Claimed { handle, .. } = replay
@@ -1557,7 +1559,7 @@ pub(super) mod tests {
     #[test_r::timeout("30s")]
     async fn http_cleanup_incomplete_repair_preserves_start_and_drop_timestamp() {
         let oplog = Arc::new(InMemoryOplog::new());
-        oplog.add(noop()).await;
+        oplog.add(noop()).await.unwrap();
         let recorded = finished();
         let index = oplog
             .add(OplogEntry::Start {
@@ -1575,7 +1577,8 @@ pub(super) mod tests {
                 durable_function_type: DurableFunctionType::ReadLocal,
                 span_started: None,
             })
-            .await;
+            .await
+            .unwrap();
         let (recorder, mut events) = cleanup_recorder(oplog.clone(), false, true).await;
         let replay = recorder.replay.clone();
         let mut closed = recorded.clone();
@@ -1632,7 +1635,7 @@ pub(super) mod tests {
     async fn http_cleanup_snapshot_provenance_suppresses_live_and_replay_work() {
         for live in [true, false] {
             let oplog = Arc::new(InMemoryOplog::new());
-            oplog.add(noop()).await;
+            oplog.add(noop()).await.unwrap();
             let (recorder, mut receiver) = cleanup_recorder(oplog.clone(), live, false).await;
             assert!(recorder.record(finished()).is_none());
             let DropEvent::FinishP3HttpSpan { cleanup } = receiver.try_recv().unwrap() else {
