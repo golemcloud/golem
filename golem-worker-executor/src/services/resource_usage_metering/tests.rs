@@ -14,6 +14,8 @@ use test_r::{test, timeout};
 use tokio::sync::Semaphore;
 use uuid::Uuid;
 
+mod monthly;
+
 const GIB: u64 = 1024 * 1024 * 1024;
 
 fn ordinary_utc() -> DateTime<Utc> {

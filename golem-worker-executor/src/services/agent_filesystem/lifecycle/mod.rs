@@ -542,15 +542,17 @@ pub(crate) fn bind_configured_resource_usage_metering<Adapter: SandboxFilesystem
             });
         }
     };
+    #[cfg(feature = "test-utils")]
+    let scripted_usage = account.scripted_filesystem_usage.clone();
     let meter = create_unbound_meter(config, account);
     let generation = Arc::new(generation);
     if config.filesystem {
-        install_filesystem_usage(
-            &meter,
-            FilesystemUsageSource::new(Arc::new(GenerationUsageReader {
-                reader: generation.allocation_reader.clone(),
-            })),
-        );
+        let source = FilesystemUsageSource::new(Arc::new(GenerationUsageReader {
+            reader: generation.allocation_reader.clone(),
+        }));
+        #[cfg(feature = "test-utils")]
+        let source = scripted_usage.map_or(source, |scripted| scripted.source());
+        install_filesystem_usage(&meter, source);
     }
     Ok(AgentFilesystem {
         generation: Some(generation),

@@ -1032,6 +1032,7 @@ resource_metering_configuration_test!(resource_metering_111, true, true, true);
 mod monthly;
 mod monthly_admission_owner_election;
 mod monthly_cause;
+mod monthly_compute;
 mod monthly_cutoff;
 mod monthly_deadline;
 mod monthly_deletion;
@@ -1042,6 +1043,7 @@ mod monthly_lifecycle_regressions;
 mod monthly_preparation;
 mod monthly_replay;
 mod monthly_stale_target;
+mod monthly_storage;
 mod monthly_tail;
 mod monthly_tick;
 

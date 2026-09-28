@@ -10963,14 +10963,32 @@ impl RunningWorker {
             retained_memory_grant,
             parent.config().effective_resource_usage_metering().memory,
         );
+        let account = ResourceUsageAccount::new(
+            parent.agent_mode(),
+            linear_memory.clone(),
+            Arc::clone(&parent.resource_entry),
+        );
+        #[cfg(feature = "test-utils")]
+        let account = {
+            let mut account = account;
+            account.scripted_filesystem_usage = parent
+                .owner_runtime_resources
+                .scripted_filesystem_usage
+                .lock()
+                .unwrap()
+                .clone();
+            account
+        };
+        let metering = parent.config().effective_resource_usage_metering();
+        #[cfg(feature = "test-utils")]
+        let metering = crate::services::golem_config::ResourceUsageMeteringConfig {
+            filesystem: metering.filesystem
+                || (parent.config().resource_usage_metering.filesystem
+                    && account.scripted_filesystem_usage.is_some()),
+            ..metering
+        };
         let reconstructing = match bind_configured_resource_usage_metering(
-            created,
-            ResourceUsageAccount::new(
-                parent.agent_mode(),
-                linear_memory.clone(),
-                Arc::clone(&parent.resource_entry),
-            ),
-            parent.config().effective_resource_usage_metering(),
+            created, account, metering,
         ) {
             Ok(filesystem) => filesystem,
             Err(failure) => {

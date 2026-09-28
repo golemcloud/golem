@@ -451,6 +451,9 @@ pub struct OwnerRuntimeResources {
     fuel_reservations: Mutex<Vec<Weak<Mutex<Option<u64>>>>>,
     fuel_transaction: Arc<Mutex<()>>,
     usage_flushers: Mutex<Vec<Weak<dyn ResourceUsageFlusher>>>,
+    #[cfg(feature = "test-utils")]
+    pub(super) scripted_filesystem_usage:
+        Mutex<Option<crate::services::resource_usage_metering::ScriptedFilesystemUsageForTest>>,
 }
 
 impl OwnerRuntimeResources {
@@ -465,7 +468,17 @@ impl OwnerRuntimeResources {
             fuel_reservations: Mutex::new(Vec::new()),
             fuel_transaction: Arc::new(Mutex::new(())),
             usage_flushers: Mutex::new(Vec::new()),
+            #[cfg(feature = "test-utils")]
+            scripted_filesystem_usage: Mutex::new(None),
         }
+    }
+
+    #[cfg(feature = "test-utils")]
+    pub fn set_scripted_filesystem_usage_for_test(
+        &self,
+        source: crate::services::resource_usage_metering::ScriptedFilesystemUsageForTest,
+    ) {
+        *self.scripted_filesystem_usage.lock().unwrap() = Some(source);
     }
 
     pub fn resource_limits(&self) -> Arc<AtomicResourceEntry> {
@@ -1158,6 +1171,9 @@ impl<Ctx: WorkerCtx> HostedInstance<Ctx> {
         self.store.data_mut().set_entity_invocation_scope(None)
     }
 }
+
+#[cfg(test)]
+mod monthly_tests;
 
 #[cfg(test)]
 mod tests {

@@ -1263,6 +1263,16 @@ impl AtomicResourceEntry {
     }
 
     #[cfg(feature = "test-utils")]
+    pub fn settled_fuel_generation_for_test(&self) -> Option<u64> {
+        self.usage_revision_state
+            .lock()
+            .unwrap()
+            .monthly_policy
+            .as_ref()
+            .map(|gate| gate.settled_generation)
+    }
+
+    #[cfg(feature = "test-utils")]
     pub fn monthly_observer_count_for_test(&self) -> usize {
         self.capacity_updates.receiver_count()
     }

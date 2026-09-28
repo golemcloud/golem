@@ -61,6 +61,50 @@ pub(crate) trait FilesystemUsageReader: Send + Sync {
     ) -> Pin<Box<dyn Future<Output = Result<FilesystemUsage, FilesystemStorageError>> + Send + '_>>;
 }
 
+/// Scripted allocation observations for Worker tests, not native filesystem quota evidence.
+#[cfg(feature = "test-utils")]
+#[derive(Clone)]
+pub struct ScriptedFilesystemUsageForTest {
+    value: Arc<Mutex<FilesystemUsage>>,
+    observations: Arc<AtomicU64>,
+}
+
+#[cfg(feature = "test-utils")]
+impl ScriptedFilesystemUsageForTest {
+    pub fn new(value: FilesystemUsage) -> Self {
+        Self {
+            value: Arc::new(Mutex::new(value)),
+            observations: Arc::new(AtomicU64::new(0)),
+        }
+    }
+
+    pub fn set(&self, value: FilesystemUsage) {
+        *self.value.lock().unwrap() = value;
+    }
+
+    pub fn observations(&self) -> u64 {
+        self.observations.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn source(self) -> FilesystemUsageSource {
+        FilesystemUsageSource::new(Arc::new(self))
+    }
+}
+
+#[cfg(feature = "test-utils")]
+impl FilesystemUsageReader for ScriptedFilesystemUsageForTest {
+    fn observe(
+        &self,
+    ) -> Pin<Box<dyn Future<Output = Result<FilesystemUsage, FilesystemStorageError>> + Send + '_>>
+    {
+        Box::pin(async move {
+            let value = *self.value.lock().unwrap();
+            self.observations.fetch_add(1, Ordering::Release);
+            Ok(value)
+        })
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct FilesystemUsageSource {
     reader: Arc<dyn FilesystemUsageReader>,
@@ -128,6 +172,8 @@ pub(crate) struct ResourceUsageAccount {
     entry: Weak<AtomicResourceEntry>,
     linear_memory: LinearMemoryTracker,
     transition: Arc<Mutex<()>>,
+    #[cfg(feature = "test-utils")]
+    pub(crate) scripted_filesystem_usage: Option<ScriptedFilesystemUsageForTest>,
 }
 
 impl ResourceUsageAccount {
@@ -141,6 +187,8 @@ impl ResourceUsageAccount {
             entry: Arc::downgrade(&entry),
             transition: linear_memory.resource_transition(),
             linear_memory,
+            #[cfg(feature = "test-utils")]
+            scripted_filesystem_usage: None,
         }
     }
 

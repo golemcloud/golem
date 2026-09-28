@@ -224,7 +224,7 @@ async fn silent_tcp_monitor_controls(
     Ok(())
 }
 
-async fn applied_refresh(
+pub(super) async fn applied_refresh(
     limits: &Arc<ResourceLimitsGrpc>,
     registry: &MutableResourceLimitsRegistry,
     account: AccountId,
