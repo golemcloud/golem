@@ -58,7 +58,7 @@ impl Upload {
         confirmer: SnapshotConfirmer,
     ) {
         let started = Instant::now();
-        let (info, permit) = match self.save(capture, parent).await {
+        let (info, permit) = match self.save(capture, parent, std::future::pending()).await {
             SaveOutcome::Saved(info, permit) => (info, permit),
             SaveOutcome::Failed(error) => {
                 self.job.decide(JobDecision::SaveFailed);
@@ -106,13 +106,15 @@ impl Upload {
     }
 
     /// Saves and discards the capture, and gives the info of the snapshot with the upload, whose
-    /// retention runs later.
+    /// retention runs later. `stop` stops the save like a shutdown does, and the capture is still
+    /// discarded.
     pub(super) async fn run_now(
         self,
         capture: impl CapturedTree,
+        stop: impl Future<Output = ()> + Send,
     ) -> Result<(SnapshotInfo, Self), SnapshotStoreError> {
         let started = Instant::now();
-        let result = match self.save(capture, None).await {
+        let result = match self.save(capture, None, stop).await {
             SaveOutcome::Saved(info, _) => Ok(info),
             SaveOutcome::Failed(error) => Err(error),
             SaveOutcome::Stopped => Err(SnapshotStoreError::Storage {
@@ -161,13 +163,15 @@ impl Upload {
         }
     }
 
-    /// Waits for a slot, saves with retries, and discards the capture in each case.
+    /// Waits for a slot, saves with retries, and discards the capture in each case. `stop`, as
+    /// `forget_scope` or a shutdown, ends the save with `Stopped`.
     async fn save(
         &self,
         capture: impl CapturedTree,
         parent: Option<(FilesystemSnapshotName, ChangeDetection)>,
+        stop: impl Future<Output = ()> + Send,
     ) -> SaveOutcome {
-        let result = self.save_capture(capture.directory(), parent).await;
+        let result = self.save_capture(capture.directory(), parent, stop).await;
         capture.discard().await;
         result
     }
@@ -176,7 +180,9 @@ impl Upload {
         &self,
         tree: &std::path::Path,
         parent: Option<(FilesystemSnapshotName, ChangeDetection)>,
+        stop: impl Future<Output = ()> + Send,
     ) -> SaveOutcome {
+        let stop = futures::FutureExt::shared(futures::FutureExt::boxed(stop));
         let (name, parent) = match (
             store_name(&self.name),
             parent
@@ -197,6 +203,7 @@ impl Upload {
                 Err(_) => return SaveOutcome::Stopped,
             },
             () = self.stopped() => return SaveOutcome::Stopped,
+            () = stop.clone() => return SaveOutcome::Stopped,
         };
         crate::metrics::filesystem_snapshots::inc_uploads_in_progress();
         self.job
@@ -210,6 +217,7 @@ impl Upload {
                 || save_own_name(&self.inner, &self.scope, &name, tree, parent),
             ) => Some(saved),
             () = self.stopped() => None,
+            () = stop.clone() => None,
         };
         crate::metrics::filesystem_snapshots::dec_uploads_in_progress();
         match saved {

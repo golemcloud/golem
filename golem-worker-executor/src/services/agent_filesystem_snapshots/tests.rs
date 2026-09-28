@@ -841,7 +841,10 @@ async fn a_confirmed_periodic_upload_keeps_the_newest_by_kind() {
                 ),
                 SnapshotKind::Update => {
                     admission
-                        .upload_now(TestCapture::with(format!("{index}").as_bytes(), discarded))
+                        .upload_now(
+                            TestCapture::with(format!("{index}").as_bytes(), discarded),
+                            std::future::pending(),
+                        )
                         .await
                         .unwrap();
                 }
@@ -1157,7 +1160,10 @@ async fn a_store_that_fails_every_scope_delete_leaves_the_service_running() {
         .admit(&scope, SnapshotKind::Update)
         .await
         .unwrap()
-        .upload_now(TestCapture::with(b"after", &discarded))
+        .upload_now(
+            TestCapture::with(b"after", &discarded),
+            std::future::pending(),
+        )
         .await
         .is_ok();
 
@@ -1221,7 +1227,10 @@ async fn at_most_the_configured_number_of_restores_run_at_the_same_time() {
         let admission = snapshots.admit(&scope, SnapshotKind::Update).await.unwrap();
         let name = admission.name().clone();
         admission
-            .upload_now(TestCapture::with(b"tree", &discarded))
+            .upload_now(
+                TestCapture::with(b"tree", &discarded),
+                std::future::pending(),
+            )
             .await
             .unwrap();
         name
@@ -1266,7 +1275,10 @@ async fn a_restore_gives_the_saved_tree() {
     let admission = snapshots.admit(&scope, SnapshotKind::Update).await.unwrap();
     let name = admission.name().clone();
     admission
-        .upload_now(TestCapture::with(b"restored", &discarded))
+        .upload_now(
+            TestCapture::with(b"restored", &discarded),
+            std::future::pending(),
+        )
         .await
         .unwrap();
     let into = tempfile::tempdir().unwrap();
@@ -1312,7 +1324,10 @@ async fn a_name_whose_save_failed_is_never_given_to_another_capture() {
     let second = snapshots.admit(&scope, SnapshotKind::Update).await.unwrap();
     let second_name = second.name().clone();
     let second_saved = second
-        .upload_now(TestCapture::with(b"second tree", &discarded))
+        .upload_now(
+            TestCapture::with(b"second tree", &discarded),
+            std::future::pending(),
+        )
         .await
         .is_ok();
 
@@ -1443,7 +1458,10 @@ async fn update_uploads_with_retention(
                 let admission = snapshots.admit(scope, SnapshotKind::Update).await.unwrap();
                 let name = admission.name().as_str().to_string();
                 admission
-                    .upload_now(TestCapture::with(format!("{index}").as_bytes(), discarded))
+                    .upload_now(
+                        TestCapture::with(format!("{index}").as_bytes(), discarded),
+                        std::future::pending(),
+                    )
                     .await
                     .unwrap()
                     .run(None);
@@ -1497,7 +1515,10 @@ async fn a_dropped_update_retention_deletes_nothing_and_frees_the_scope() {
                 let admission = snapshots.admit(scope, SnapshotKind::Update).await.unwrap();
                 let name = admission.name().as_str().to_string();
                 let retention = admission
-                    .upload_now(TestCapture::with(format!("{index}").as_bytes(), discarded))
+                    .upload_now(
+                        TestCapture::with(format!("{index}").as_bytes(), discarded),
+                        std::future::pending(),
+                    )
                     .await
                     .unwrap();
                 let while_held = snapshots.admit(scope, SnapshotKind::Periodic).await.err();
@@ -1603,5 +1624,38 @@ async fn forget_scope_ends_a_delete_of_a_superseded_snapshot_at_once() {
     assert!(
         ended.is_ok(),
         "the job waited for its delete after forget_scope"
+    );
+}
+
+#[test]
+#[timeout("10s")]
+async fn a_stop_of_an_upload_now_ends_the_save_and_discards_the_capture() {
+    let store = Arc::new(ScriptedStore::default());
+    let gate = Arc::new(Gate::default());
+    *store.save_gate.lock().unwrap() = Some(Arc::clone(&gate));
+    let snapshots = service(&store, settings(4, 4, 1), ManualClock::immediate());
+    let scope = scope("stopped-upload-now");
+    let discarded = Arc::new(AtomicUsize::new(0));
+    let admission = snapshots.admit(&scope, SnapshotKind::Update).await.unwrap();
+    let stop = Arc::new(Notify::new());
+
+    let uploading = admission.upload_now(TestCapture::with(b"tree", &discarded), {
+        let stop = Arc::clone(&stop);
+        async move { stop.notified().await }
+    });
+    let stopping = async {
+        gate.wait_reached(1).await;
+        stop.notify_one();
+    };
+    let (uploaded, ()) = futures::join!(uploading, stopping);
+    gate.open();
+
+    assert!(uploaded.is_err());
+    assert_eq!(discarded.load(Ordering::SeqCst), 1);
+    assert!(
+        snapshots
+            .admit(&scope, SnapshotKind::Periodic)
+            .await
+            .is_ok()
     );
 }

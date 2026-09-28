@@ -4337,7 +4337,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .await
     }
 
-    /// Whether a terminal interrupt request waits for this worker.
     /// Gives the filesystem snapshot name of the last successful manual update, which the status
     /// keeps as the manual-update baseline.
     pub(crate) async fn manual_update_baseline_name(&self) -> Option<FilesystemSnapshotName> {
@@ -4358,6 +4357,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
     }
 
+    /// Whether a terminal interrupt request waits for this worker.
     async fn terminal_interrupt_pending(&self) -> bool {
         matches!(
             &*self.interrupt_signal.lock().await,

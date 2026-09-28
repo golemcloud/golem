@@ -2170,7 +2170,9 @@ async fn a_terminal_interrupt_ends_a_manual_update_during_its_upload(
         .await?;
     agent.confirmed(&executor).await?;
 
+    let trees = store.saved_trees().len();
     let (failed, took) = interrupt_a_held_manual_update(&executor, &store, &agent).await?;
+    let capture = store.saved_trees()[trees..].to_vec();
 
     assert!(
         failed
@@ -2178,6 +2180,8 @@ async fn a_terminal_interrupt_ends_a_manual_update_during_its_upload(
             .any(|failure| failure.contains("interrupted while it uploaded")),
         "{failed:?}"
     );
+    assert_eq!(capture.len(), 1);
+    assert!(!capture[0].exists(), "the capture {capture:?} stays");
     assert!(
         took < Duration::from_secs(10),
         "the update ended after {took:?}"

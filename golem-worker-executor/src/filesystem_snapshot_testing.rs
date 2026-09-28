@@ -39,6 +39,8 @@ struct Faults {
     save_delay: Mutex<Duration>,
     restores_fail: AtomicBool,
     failing_restore_names: Mutex<std::collections::HashSet<String>>,
+    /// The directory of the tree of each save, in the order of the saves.
+    trees: Mutex<Vec<std::path::PathBuf>>,
     /// The time that the store adds to the time of each later save.
     clock_offset: Mutex<Duration>,
     /// The time of each saved name, with the offset of its save.
@@ -78,6 +80,15 @@ impl TestFilesystemSnapshotStore {
     /// Makes each restore fail with an error that allows no retry, or not.
     pub fn fail_restores(&self, fail: bool) {
         self.faults.restores_fail.store(fail, Ordering::SeqCst);
+    }
+
+    /// The directory of the tree of each save that started, in the order of the saves.
+    pub fn saved_trees(&self) -> Vec<std::path::PathBuf> {
+        self.faults
+            .trees
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     /// Moves the clock of the store forward by `by`: each later save gets a time that much later,
@@ -191,6 +202,11 @@ impl FilesystemSnapshotStore for TestFilesystemSnapshotStore {
         parent: Option<(&SnapshotName, ChangeDetection)>,
     ) -> Result<SnapshotInfo, SnapshotStoreError> {
         self.faults.saves.fetch_add(1, Ordering::SeqCst);
+        self.faults
+            .trees
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(tree.to_path_buf());
         let delay = *self
             .faults
             .save_delay

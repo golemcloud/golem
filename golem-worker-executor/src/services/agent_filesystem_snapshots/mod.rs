@@ -175,6 +175,8 @@ impl SnapshotClock for TokioClock {
 /// Tells whether the volume of the agent filesystems has room for a new capture.
 #[async_trait]
 pub(crate) trait VolumeRoom: Send + Sync {
+    /// Gives `true` when the volume has room for a new capture now, and `false` when it has not
+    /// or when its free space cannot be observed.
     async fn has_room(&self) -> bool;
 }
 
@@ -723,10 +725,12 @@ impl UploadAdmission {
 
     /// Uploads `capture` and waits until the store holds it. A manual update calls this before it
     /// writes its record. The scope stays reserved until the retention that the call gives runs
-    /// or is dropped.
+    /// or is dropped. When `stop` completes first, the save stops, the capture is discarded, and
+    /// the call gives an error.
     pub(crate) async fn upload_now(
         mut self,
         capture: impl CapturedTree,
+        stop: impl std::future::Future<Output = ()> + Send,
     ) -> Result<UpdateRetention, SnapshotStoreError> {
         let Some(job) = self.job.take() else {
             return Err(SnapshotStoreError::NotFound);
@@ -739,7 +743,7 @@ impl UploadAdmission {
             kind: self.kind,
         };
         upload
-            .run_now(capture)
+            .run_now(capture, stop)
             .await
             .map(|(info, upload)| UpdateRetention { upload, info })
     }

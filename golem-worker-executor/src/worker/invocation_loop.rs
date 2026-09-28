@@ -3113,19 +3113,21 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             ),
             Some(CaptureOutcome::Captured { capture, .. }) => {
                 let name = admission.name().clone();
-                // A terminal interrupt drops the upload: an interrupted save publishes nothing.
-                tokio::select! {
-                    uploaded = admission.upload_now(capture) => uploaded
-                        .map(|retention| Some((name, retention)))
-                        .map_err(|error| {
-                            format!(
-                                "failed to upload the filesystem snapshot for the update: {error}"
-                            )
-                        }),
-                    () = self.parent.clone().terminal_interrupt_queued() => Err(
+                // A terminal interrupt stops the save, and the capture is discarded. An
+                // interrupted save writes no record: a snapshot that its publish still leaves
+                // has no record, and nothing selects it.
+                match admission
+                    .upload_now(capture, self.parent.clone().terminal_interrupt_queued())
+                    .await
+                {
+                    Ok(retention) => Ok(Some((name, retention))),
+                    Err(_) if self.parent.terminal_interrupt_pending().await => Err(
                         "the update was interrupted while it uploaded the filesystem snapshot"
                             .to_string(),
                     ),
+                    Err(error) => Err(format!(
+                        "failed to upload the filesystem snapshot for the update: {error}"
+                    )),
                 }
             }
         }
