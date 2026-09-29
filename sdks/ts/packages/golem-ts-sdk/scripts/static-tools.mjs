@@ -395,6 +395,9 @@ export function staticTools(config, runtime) {
     } else if (body.tag === 'duration') {
       write = `if(typeof v!=="bigint")throw new TypeError("invalid duration");return w.add({tag:"duration-value",val:{nanoseconds:v}});`;
       read = `if(!n.val||typeof n.val.nanoseconds!=="bigint")throw new TypeError("invalid duration");return n.val.nanoseconds;`;
+    } else if (body.tag === 'uuid') {
+      write = `return w.add({tag:"uuid-value",val:v});`;
+      read = `return n.val;`;
     } else if (body.tag === 'url' || body.tag === 'path') {
       write = `if(typeof v!=="string")throw new TypeError("invalid ${body.tag}");return w.add({tag:${literal(tag)},val:v});`;
       read = `if(typeof n.val!=="string")throw new TypeError("invalid ${body.tag}");return n.val;`;
