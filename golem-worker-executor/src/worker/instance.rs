@@ -923,11 +923,17 @@ impl<Ctx: WorkerCtx> HostedInstance<Ctx> {
     }
 
     pub(crate) async fn settle_tool_children(
-        &mut self,
+        mut self,
         parent: crate::worker::owner_lane::OwnerInvocationId,
     ) -> Result<(), WorkerExecutorError> {
-        crate::durable_host::tool::settle_tool_children(&mut self.store.as_context_mut(), parent)
-            .await
+        let result = crate::durable_host::tool::settle_tool_children(
+            &mut self.store.as_context_mut(),
+            parent,
+        )
+        .await;
+        // A trapped Store is disposed of, not driven to normal guest EXIT.
+        drop(self);
+        result
     }
 
     /// Runs one entity export with an installed invocation scope and then destroys its Store.
