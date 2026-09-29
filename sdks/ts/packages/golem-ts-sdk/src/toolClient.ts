@@ -162,11 +162,8 @@ export function compiledToolClient(
             invocation.cancel();
             throw new TypeError('required stderr stream is missing');
           }
-          return startedToolInvocation(
-            invocation.stdout,
-            invocation.stderr,
-            settled,
-            () => invocation.cancel(),
+          return startedToolInvocation(invocation.stdout, invocation.stderr, settled, () =>
+            invocation.cancel(),
           );
         } catch (error) {
           throw mapCompiledFailure(error, command, callName);

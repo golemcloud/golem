@@ -632,9 +632,17 @@ describe('static component exports', () => {
       }
       const input = wireValue(z.object({ name: z.string() }), { name: 'Ada' });
       if (capabilities.tools) {
-        const result = await exports.tool.invoke('greet', [], input, undefined, undefined, undefined, {
-          tag: 'anonymous',
-        });
+        const result = await exports.tool.invoke(
+          'greet',
+          [],
+          input,
+          undefined,
+          undefined,
+          undefined,
+          {
+            tag: 'anonymous',
+          },
+        );
         expect(compileSchema(z.string()).fromValue(schemaValueFromWit(result.result.value))).toBe(
           'Hello, Ada!',
         );
@@ -660,7 +668,9 @@ describe('static component exports', () => {
         ).rejects.toMatchObject({ tag: 'invalid-input' });
       } else {
         await expect(
-          exports.tool.invoke('greet', [], input, undefined, undefined, undefined, { tag: 'anonymous' }),
+          exports.tool.invoke('greet', [], input, undefined, undefined, undefined, {
+            tag: 'anonymous',
+          }),
         ).rejects.toEqual({ tag: 'invalid-tool-name', val: 'greet' });
         let closed = false;
         const stdin = {
@@ -675,7 +685,9 @@ describe('static component exports', () => {
           },
         };
         await expect(
-          exports.tool.invoke('greet', [], input, stdin, undefined, undefined, { tag: 'anonymous' }),
+          exports.tool.invoke('greet', [], input, stdin, undefined, undefined, {
+            tag: 'anonymous',
+          }),
         ).rejects.toEqual({ tag: 'invalid-tool-name', val: 'greet' });
         expect(closed).toBe(true);
       }

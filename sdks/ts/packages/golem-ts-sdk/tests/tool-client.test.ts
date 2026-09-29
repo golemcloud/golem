@@ -472,7 +472,9 @@ describe('tool runtime client', () => {
       },
     ) as { 'missing-compiled-stderr'(args: {}): unknown };
 
-    expect(() => runtime['missing-compiled-stderr']({})).toThrow('required stderr stream is missing');
+    expect(() => runtime['missing-compiled-stderr']({})).toThrow(
+      'required stderr stream is missing',
+    );
     expect(cancel).toHaveBeenCalledOnce();
   });
 
