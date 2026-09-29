@@ -44,7 +44,6 @@ Both misconfigurations described below stop it at startup:
 |---|---|---|
 | `GOLEM__PERSISTENCE__TYPE` | `Postgres` | `Etcd` |
 | Shard manager replicas | exactly one | any number; one is elected, the rest stand by |
-| Quota service | available | **unavailable** |
 
 The endpoint list must be bracketed — `'["http://etcd:2379"]'`. Unbracketed it is read as a single
 string and fails to deserialize. Only `http://` endpoints are accepted: TLS is not configurable and
@@ -57,9 +56,6 @@ the shard manager's durable state, so a real deployment runs a cluster.
 
 **One shard manager replica.** Compose has no readiness gating, so scaling this service up here
 would not behave like a real deployment. See below.
-
-**Quota is not enforced in this mode.** In distributed mode the quota repository is wired to an
-unavailable implementation; quota state has not moved into etcd. Use local (SQL) mode if you need it.
 
 ## Running more than one replica for real
 
