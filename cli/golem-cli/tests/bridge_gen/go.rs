@@ -35,14 +35,22 @@
 //! concurrent use, so the suite runs in parallel.
 
 use crate::bridge_gen::fixtures::{agent, def, field, method, named_field, ref_to, variant_case};
+use crate::bridge_gen::scala::{command_node, doc, grep_tool, option, positional, tool_body};
 use camino::{Utf8Path, Utf8PathBuf};
 use golem_cli::app::build::go_toolchain::{GoToolchain, ensure_go_toolchain};
 use golem_cli::bridge_gen::BridgeGenerator;
+use golem_cli::bridge_gen::go::tool::GoToolBridgeGenerator;
 use golem_cli::bridge_gen::go::{GoBridgeGenerator, GoBridgeMode};
 use golem_cli::model::app::ApplicationConfig;
 use golem_cli::sdk_overrides::workspace_root;
 use golem_common::model::agent::{AgentMode, CorsOptions, FileMapping, HttpMountDetails};
 use golem_common::schema::schema_type::{DiscriminatorRule, ResultSpec, UnionBranch, UnionSpec};
+use golem_common::schema::schema_value::SchemaValue;
+use golem_common::schema::tool::{
+    CommandBody, CommandIndex, DuplicateKeyPolicy, ErrorCase, ErrorKind, Formatter, OptionShape,
+    OptionSpec, Positional, Positionals, RepeatableMapShape, Repetition,
+    ResultSpec as ToolResultSpec, StreamSpec, Tool,
+};
 use golem_common::schema::{AgentTypeSchema, AutoInjectedKind, NamedField, SchemaType};
 use std::process::Command;
 use tempfile::TempDir;
@@ -106,6 +114,19 @@ impl GeneratedGo {
             GoBridgeGenerator::new_with_mode(agent_type, target, GoBridgeMode::GuestWasmRpc)
                 .expect("a generator");
         generator.generate().expect("generation");
+        let generated = Self { dir };
+        generated.point_at_the_workspace_sdk();
+        generated.run(env, &["mod", "tidy"]);
+        generated
+    }
+
+    fn tool(env: &GoEnv, tool: Tool) -> Self {
+        let dir = TempDir::new().unwrap();
+        let target = Utf8Path::from_path(dir.path()).unwrap();
+        GoToolBridgeGenerator::new(tool, target, true)
+            .expect("a generator")
+            .generate()
+            .expect("generation");
         let generated = Self { dir };
         generated.point_at_the_workspace_sdk();
         generated.run(env, &["mod", "tidy"]);
@@ -936,4 +957,135 @@ fn go_http_router_bridge_rejection_uses_kind_not_name() {
                 .contains("HTTP routers do not have ordinary agent clients")
         );
     }
+}
+
+/// The grep tool extended with every surface a Go client spells differently:
+/// an enum default, an optional stdin, a group with its own globals, a map
+/// option, a defaulted positional, and one error name with two payloads.
+fn go_grep_tool() -> Tool {
+    let mut tool = grep_tool();
+    let root = &mut tool.commands.nodes[0];
+    root.globals.options[0].default = Some(SchemaValue::Enum { case: 2 });
+    let body = root.body.as_mut().unwrap();
+    body.stdin = Some(StreamSpec {
+        doc: doc("haystack"),
+        mime: vec![],
+        required: false,
+    });
+
+    let replace = tool.commands.nodes[1].body.as_mut().unwrap();
+    replace.errors = vec![ErrorCase {
+        name: "bad-pattern".to_string(),
+        doc: doc("bad pattern"),
+        kind: ErrorKind::UsageError,
+        exit_code: 2,
+        payload: Some(SchemaType::u32()),
+    }];
+
+    let mut config = command_node("config");
+    config.globals.options = vec![OptionSpec {
+        default: Some(SchemaValue::String("dev".to_string())),
+        ..option("profile", OptionShape::Scalar(SchemaType::string()))
+    }];
+    config.subcommands = vec![CommandIndex(3)];
+    let mut get = command_node("get");
+    get.body = Some(CommandBody {
+        positionals: Positionals {
+            fixed: vec![Positional {
+                default: Some(SchemaValue::String("all".to_string())),
+                required: false,
+                ..positional("key", SchemaType::string())
+            }],
+            tail: None,
+        },
+        options: vec![option(
+            "labels",
+            OptionShape::RepeatableMap(RepeatableMapShape {
+                repetition: Repetition::Repeated,
+                map_type: SchemaType::map(SchemaType::string(), SchemaType::string()),
+                duplicate_key_policy: DuplicateKeyPolicy::Reject,
+            }),
+        )],
+        result: Some(ToolResultSpec {
+            type_: SchemaType::option(SchemaType::string()),
+            doc: doc("value"),
+            formatters: vec![Formatter {
+                name: "text".to_string(),
+                doc: doc("text"),
+            }],
+            default_formatter: "text".to_string(),
+        }),
+        ..tool_body()
+    });
+    tool.commands.nodes[0].subcommands.push(CommandIndex(2));
+    tool.commands.nodes.push(config);
+    tool.commands.nodes.push(get);
+    tool
+}
+
+/// A tool client declares the tool and its commands with the guest SDK's own
+/// spec, so it must resolve without a definition error: the check runs a call,
+/// which resolves the command before it finds there is no host to send to.
+#[test]
+fn go_guest_tool_client_is_gofmt_clean_vets_and_resolves(env: &GoEnv) {
+    let generated = GeneratedGo::tool(env, go_grep_tool());
+    let client = generated.read("client.go");
+    for expected in [
+        "var Tool = golem.DeclareRemoteTool(\"grep\")",
+        "var ErrIo = golem.DefineToolError[golem.Unit](Tool, \"io\"",
+        "var ErrRootBadPattern = golem.DefineToolError[string](Tool, \"bad-pattern\"",
+        "var ErrReplaceBadPattern = golem.DefineToolError[uint32](Tool, \"bad-pattern\"",
+        "var _ = Tool.Globals[RootGlobals](",
+        ".Default(ColorModeAuto)",
+        "var configGroup = Tool.Group(\"config\")",
+        "var _ = configGroup.Globals[ConfigGlobals](",
+        "var Root = Tool.Body[RootArgs, []string](",
+        "var Replace = Tool.StdoutCommand[ReplaceArgs, golem.Unit](\"replace\"",
+        "var ConfigGet = configGroup.Command[ConfigGetArgs, values.Option[string]](\"get\"",
+        "s.Positional(&a.Key).Default(\"all\")",
+        "s.Map(&a.Labels)",
+        "s.Stdin(&a.Stdin).Optional()",
+        "s.CountFlag(&a.Verbosity)",
+    ] {
+        assert!(
+            client.contains(expected),
+            "missing {expected} in:\n{client}"
+        );
+    }
+    assert!(!client.contains("var ErrBadPattern"), "{client}");
+    generated.assert_gofmt_clean(env);
+    generated.assert_vets_for_wasip1(env);
+    let package = generated.package();
+    generated.run_native_test(
+        env,
+        &format!(
+            r#"package {package}
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/golemcloud/golem/sdks/go/golem"
+)
+
+func TestTheToolClientResolves(t *testing.T) {{
+	if errs := golem.DefinitionErrors(); len(errs) > 0 {{
+		t.Fatalf("definition errors: %v", errs)
+	}}
+	calls := []error{{}}
+	_, err := Root.Call(func(a *RootArgs) {{ a.Pattern = "x"; a.Files = []string{{"a"}} }})
+	calls = append(calls, err)
+	_, err = Replace.Call(func(a *ReplaceArgs) {{ a.Pattern = "x" }})
+	calls = append(calls, err)
+	_, err = ConfigGet.Call(func(a *ConfigGetArgs) {{ a.Labels = map[string]string{{"k": "v"}} }})
+	calls = append(calls, err)
+	for _, err := range calls[1:] {{
+		if err == nil || !strings.Contains(err.Error(), "only available inside a component") {{
+			t.Errorf("a call did not reach the host: %v", err)
+		}}
+	}}
+}}
+"#
+        ),
+    );
 }

@@ -41,6 +41,7 @@ pub mod external;
 #[allow(clippy::module_inception)]
 pub mod go;
 pub mod go_writer;
+pub mod tool;
 pub mod type_name;
 pub mod type_ref;
 
@@ -94,6 +95,9 @@ pub struct GoBridgeGenerator {
     /// Methods left out of an external client because they take or return a
     /// stream, which the external Go bridge does not carry yet.
     omitted: Vec<String>,
+    /// The client directory when it is not derived from the agent type: a tool
+    /// client is named after the tool.
+    client_dir: Option<String>,
 }
 
 /// The package-level names the generator emits for the agent itself. They
@@ -235,12 +239,44 @@ impl GoBridgeGenerator {
             type_naming,
             names,
             omitted,
+            client_dir: None,
+        })
+    }
+
+    /// A guest generator for the types of a tool client: the agent type is the
+    /// tool's synthetic one, the directory is the tool client's, and the names
+    /// the tool client declares are reserved before any type is named.
+    pub(crate) fn new_tool_guest(
+        agent_type: AgentTypeSchema,
+        target_path: &Utf8Path,
+        client_dir: String,
+        reserved: Vec<String>,
+    ) -> anyhow::Result<Self> {
+        let names = AgentNames::new(&agent_type);
+        let type_naming = TypeNaming::new_with_reserved_names(
+            &agent_type,
+            false,
+            reserved.into_iter().map(GoTypeName::from),
+        )?;
+        Ok(Self {
+            target_path: target_path.to_path_buf(),
+            agent_type,
+            mode: GoBridgeMode::GuestWasmRpc,
+            type_naming,
+            names,
+            omitted: Vec::new(),
+            client_dir: Some(client_dir),
         })
     }
 
     /// The directory a generated client lives in, which also names its module.
     pub fn client_dir_name(&self) -> String {
-        bridge_client_directory_name(&self.agent_type.type_name, self.mode.bridge_mode())
+        match &self.client_dir {
+            Some(dir) => dir.clone(),
+            None => {
+                bridge_client_directory_name(&self.agent_type.type_name, self.mode.bridge_mode())
+            }
+        }
     }
 
     /// The Go package name: the client directory with everything but letters

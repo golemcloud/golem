@@ -518,7 +518,7 @@ func (ce *commandEntry) resolve() (*commandLayout, bool) {
 			tails++
 		case argPositional:
 			required := !b.optional && !b.def.IsValid()
-			if required && optionalPositional != "" {
+			if required && optionalPositional != "" && !e.remote {
 				fail("the required positional %s follows the optional positional %s", b.name, optionalPositional)
 			}
 			if !required && optionalPositional == "" {

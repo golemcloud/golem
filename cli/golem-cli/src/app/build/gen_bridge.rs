@@ -5,6 +5,7 @@ use crate::app::context::{BuildContext, ResolvedEnvironmentTool};
 use crate::bridge_gen::effect::effect_external::EffectExternalBridgeGenerator;
 use crate::bridge_gen::effect::effect_guest::EffectGuestBridgeGenerator;
 use crate::bridge_gen::effect::effect_tool::EffectToolBridgeGenerator;
+use crate::bridge_gen::go::tool::GoToolBridgeGenerator;
 use crate::bridge_gen::go::{GoBridgeGenerator, GoBridgeMode};
 use crate::bridge_gen::moonbit::tool::MoonBitToolBridgeGenerator;
 use crate::bridge_gen::moonbit::{MoonBitBridgeGenerator, MoonBitBridgeMode};
@@ -1354,7 +1355,11 @@ async fn gen_bridge_sdk_target(
                             fs::remove(&output_dir)?;
                             MoonBitToolBridgeGenerator::new(tool, &output_dir, false)?.generate()
                         }
-                        _ => bail!("tool guest bridge generation is only implemented for Rust, TypeScript, Effect, Scala and MoonBit guest bridges"),
+                        (GuestLanguage::Go, BridgeMode::Guest) => {
+                            fs::remove(&output_dir)?;
+                            GoToolBridgeGenerator::new(tool, &output_dir, false)?.generate()
+                        }
+                        _ => bail!("tool guest bridge generation is only implemented for Rust, TypeScript, Effect, Scala, MoonBit and Go guest bridges"),
                     },
                 }
             },
@@ -1521,7 +1526,8 @@ tools:
             .await
             .unwrap();
         }
-        assert_eq!(targets.len(), 11);
+        // The local tool once, then an ambient and an imported tool per language.
+        assert_eq!(targets.len(), 1 + 2 * tool_guest_languages().count());
         assert!(matches!(
             targets[0].source,
             BridgeSdkTargetSource::Local { .. }
@@ -2096,7 +2102,7 @@ components:
     fn validate_supported_bridge_targets_accepts_supported_guest_targets() {
         for language in GuestLanguage::iter() {
             // Only languages whose guest agent and tool bridges are both supported
-            // should validate (e.g. Go has no bridge generation yet).
+            // should validate.
             if !(BridgeSdkTargetKind::Agent.supports(BridgeMode::Guest, language)
                 && BridgeSdkTargetKind::Tool.supports(BridgeMode::Guest, language))
             {
@@ -2134,10 +2140,8 @@ components:
     #[test]
     fn bridge_sdk_support_matrix_matches_current_capabilities() {
         use GuestLanguage::*;
-        // Every language with a full generator. Go generates agent clients
-        // only, so it is listed per capability instead.
-        let full = [TypeScript, Effect, Rust, Scala, MoonBit];
-        let agents = [TypeScript, Effect, Rust, Scala, MoonBit, Go];
+        let full = [TypeScript, Effect, Rust, Scala, MoonBit, Go];
+        let agents = full;
         let capabilities: [(BridgeSdkTargetKind, BridgeMode, &[GuestLanguage]); 4] = [
             (BridgeSdkTargetKind::Agent, BridgeMode::External, &agents),
             (BridgeSdkTargetKind::Agent, BridgeMode::Guest, &agents),

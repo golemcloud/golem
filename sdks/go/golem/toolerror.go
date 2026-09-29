@@ -161,7 +161,9 @@ func defineToolErrorOn[P any](e *toolEntry, name string, spec ToolErrorSpec) *To
 	switch {
 	case name == "":
 		e.fail("an error case needs a name")
-	case e.errorsByName[name] != nil:
+	case e.errorsByName[name] != nil && !e.remote:
+		// A remote tool may give one name different payloads on different
+		// commands, and its generated client declares a case for each.
 		e.fail("error case already declared: %s", name)
 	default:
 		e.errorsByName[name] = info
