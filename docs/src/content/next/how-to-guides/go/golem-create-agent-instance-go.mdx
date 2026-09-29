@@ -4,14 +4,14 @@
 
 `golem agent new` **creates a new agent instance** without invoking any method on it. The agent is initialized with its constructor parameters and starts in an idle state, ready to receive invocations.
 
-Unlike `golem agent invoke` — which implicitly creates the agent on first call — `golem agent new` explicitly pre-creates it, which is useful when you need to set environment variables, configuration, or WASI config at creation time.
+Unlike `golem agent invoke` — which implicitly creates the agent on first call — `golem agent new` explicitly pre-creates it, which is useful when you need to set environment variables or configuration at creation time.
 
 Both `golem` and `golem-cli` can be used — every command below works with either binary.
 
 ## Steps
 
 1. **Identify the agent** by its type name and constructor parameters (`CounterAgent("my-counter")`).
-2. **Choose any creation-time settings** — `--env`, `--config`, `--wasi-config` — if needed.
+2. **Choose any creation-time settings** — `--env`, `--config` — if needed.
 3. **Run `golem agent new`** to pre-create the instance.
 4. **Invoke it later** with `golem agent invoke` using the same agent ID.
 
@@ -66,12 +66,6 @@ golem agent new 'CounterAgent("my-counter")' --env API_KEY=sk-abc123 --env LOG_L
 golem agent new 'CounterAgent("my-counter")' --config max_retries=5 --config timeout_seconds=30
 ```
 
-### Create an agent with WASI config
-
-```shell
-golem agent new 'CounterAgent("my-counter")' --wasi-config MY_WASI_VAR=some-value
-```
-
 ### Create an agent in a specific environment
 
 ```shell
@@ -93,11 +87,10 @@ golem agent new 'CounterAgent("my-counter")' \
 |--------|-------------|
 | `-e, --env <ENV=VAL>` | Environment variables visible to the agent (can be repeated) |
 | `-c, --config <PATH=VALUE>` | Configuration entries for the agent, using dot-separated paths (can be repeated). Only configuration declared by the agent can be provided. If not provided, the default from the manifest (`agents.*.config`) is used. |
-| `-w, --wasi-config <VAR=VAL>` | WASI config entries visible to the agent (can be repeated). This is for compatibility with third-party libraries that depend on `wasi:config`; prefer typed configuration (`-c`) for your own agent config. |
 
 ## When to Use `golem agent new` vs `golem agent invoke`
 
-- Use `golem agent new` when you need to **pre-create** an agent with specific environment variables, configuration, or WASI config before any invocation.
+- Use `golem agent new` when you need to **pre-create** an agent with specific environment variables or configuration before any invocation.
 - Use `golem agent invoke` when you want to call a method — the agent is created automatically on first invocation if it doesn't exist.
 - An agent created with `golem agent new` can be invoked later with `golem agent invoke` using the same agent ID.
 

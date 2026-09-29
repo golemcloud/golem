@@ -43,7 +43,7 @@ pub(super) fn plan_go_mod_fix_steps(
     let mut steps = Vec::new();
     for component_name in ctx.application_context().selected_component_names() {
         let component = ctx.application().component(component_name);
-        if component.guess_language() != Some(GuestLanguage::Go) {
+        if component.guest_language() != Some(GuestLanguage::Go) {
             continue;
         }
 

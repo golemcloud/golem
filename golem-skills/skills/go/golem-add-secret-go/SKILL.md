@@ -101,10 +101,19 @@ secretDefaults:
 Outside local defaults, secrets are environment-scoped — each deployment environment has its own values, set through the platform CLI (paths use the same camelCase as the config keys):
 
 ```shell
-golem secret create apiKey --secret-type String --secret-value "sk-abc123"
-golem secret create db.password --secret-type String --secret-value "s3cret"
+golem secret create apiKey --type string --value "sk-abc123"
+golem secret create db.password --type string --value "s3cret"
+
+# Without a value option the value is prompted for (hidden input); or pipe it in
+printenv DB_PASSWORD | golem secret create db.password --type string --value-stdin
+
+# Create, or update the value if the secret already exists
+golem secret create apiKey --type string --value "sk-abc123" --update-existing
+
+# List, update, clear, and delete (delete asks for confirmation; --yes skips it)
 golem secret list
-golem secret update-value apiKey --secret-value "new-value"
+golem secret update apiKey --value "new-value"
+golem secret update apiKey --unset
 golem secret delete apiKey
 ```
 
