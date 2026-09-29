@@ -1,8 +1,8 @@
 use capable_streaming_tool_guest_client::CapableStreamingClient;
 use futures_concurrency::prelude::*;
 use golem_rust::agentic::{
-    AgentStream, Config, InputStream, Principal, Secret, ToolInvocation, ToolInvocationOutput,
-    RpcError, ToolError, pump_tool_stdin, spawn_local, tool_protocol_error,
+    AgentStream, Config, InputStream, Principal, RpcError, Secret, ToolError, ToolInvocation,
+    ToolInvocationOutput, pump_tool_stdin, spawn_local, tool_protocol_error,
 };
 use golem_rust::durability::{Durability, DurableFunctionType};
 use golem_rust::golem_agentic::golem::tool::host::{
@@ -488,7 +488,7 @@ async fn invoke_filesystem_tool<T: FromSchema>(
 ) -> T {
     let result = ToolRpc::create(&name)
         .expect("tool RPC creation failed")
-        .invoke_and_await(Vec::new(), input, None, None)
+        .invoke_and_await(Vec::new(), input, None, None, None)
         .await
         .unwrap_or_else(|error| panic!("invoke guest-side filesystem tool '{name}': {error:?}"));
     let value = decode_typed_schema_value_owned(
@@ -1304,7 +1304,13 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
     async fn dynamic_mcp_probe(&self, value: String) -> String {
         let result = ToolRpc::create("middleware-probe")
             .expect("tool RPC creation failed")
-            .invoke_and_await(Vec::new(), raw_middleware_probe_input(&value), None, None, None)
+            .invoke_and_await(
+                Vec::new(),
+                raw_middleware_probe_input(&value),
+                None,
+                None,
+                None,
+            )
             .await
             .expect("invoke dynamic MCP tool through universal middleware");
         decode_dynamic_mcp_result(result)
@@ -1554,10 +1560,9 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             Some(sync_target),
             Some(sync_stderr_target),
         );
-        let (sync, sync_output, sync_error) =
-            (sync, read_all(sync_stdout), read_all(sync_stderr))
-                .join()
-                .await;
+        let (sync, sync_output, sync_error) = (sync, read_all(sync_stdout), read_all(sync_stderr))
+            .join()
+            .await;
         sync.expect("native synchronous invocation");
         assert_eq!(sync_output, b"native:sync");
         assert_eq!(sync_error, b"diagnostic:echo");
@@ -1610,10 +1615,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             Some(cancel_stderr_target),
         );
         assert_eq!(raw_chunk(&mut cancel_stdout).await, b"native:started");
-        assert_eq!(
-            raw_chunk(&mut cancel_stderr).await,
-            b"diagnostic:started"
-        );
+        assert_eq!(raw_chunk(&mut cancel_stderr).await, b"diagnostic:started");
         cancelled.cancel();
         assert!(raw_result(&cancelled).await.is_err());
 
