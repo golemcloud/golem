@@ -203,9 +203,19 @@ async fn freed<S: BlobStorage + 'static>(storage: &Arc<S>, scope: &SnapshotScope
         .fold(0, u64::saturating_add)
 }
 
-/// Waits until the condition holds, or until the limit ends. Gives whether the condition holds.
+/// The longest time that a test waits for an operation to reach the call that a gate holds for
+/// it, when another operation of the same storage runs next. A save or a prune runs at nice 19, so
+/// on a busy host it can take longer than [`LIMIT`] to reach that call.
+const REACH_LIMIT: Duration = Duration::from_secs(45);
+
+/// Waits until the condition holds, or until [`LIMIT`] ends. Gives whether the condition holds.
 async fn eventually(condition: impl Fn() -> bool) -> bool {
-    tokio::time::timeout(LIMIT, async {
+    eventually_within(LIMIT, condition).await
+}
+
+/// Waits until the condition holds, or until the limit ends. Gives whether the condition holds.
+async fn eventually_within(limit: Duration, condition: impl Fn() -> bool) -> bool {
+    tokio::time::timeout(limit, async {
         futures::stream::repeat(())
             .then(|()| tokio::time::sleep(Duration::from_millis(5)))
             .take_while(|()| std::future::ready(!condition()))
@@ -625,7 +635,9 @@ async fn two_stores_that_create_one_repository_at_the_same_time_both_save() {
 #[timeout("60s")]
 async fn a_prune_during_a_save_keeps_the_packs_of_the_save() {
     // The first index write after the arm waits at the gate. That is the index write of the
-    // second save, so its packs are in no index while the delete prunes.
+    // second save, so its packs are in no index while the delete prunes. The test stops when the
+    // save does not reach that write before the delete runs, because the prune of the delete
+    // writes an index file too, and the gate would then hold the prune until the test times out.
     let hold_next_index = Arc::new(AtomicBool::new(false));
     let storage = ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), {
         let hold_next_index = hold_next_index.clone();
@@ -666,7 +678,8 @@ async fn a_prune_during_a_save_keeps_the_packs_of_the_save() {
         let path = new_tree.path().to_path_buf();
         async move { store.save(&scope, &name("p-new"), &path, None).await }
     });
-    let held = eventually(|| index_writes() > before).await;
+    let held = eventually_within(REACH_LIMIT, || index_writes() > before).await;
+    assert!(held, "the save did not reach its index write");
     let deleted = store.delete(&scope, &name("p-old")).await;
     let pruned_while_held = ledger(&storage, &scope).await.last_prune.is_some();
     storage.open_gate();
@@ -1119,7 +1132,13 @@ async fn a_delete_that_paused_after_its_ledger_read_does_not_put_back_the_old_le
         let scope = scope.clone();
         async move { store.delete(&scope, &name("p-1")).await }
     });
-    let paused_held = eventually(|| held.load(Ordering::SeqCst)).await;
+    // The second delete lists the freed records too, so the gate would hold it for ever when the
+    // first delete did not reach its listing first.
+    let paused_held = eventually_within(REACH_LIMIT, || held.load(Ordering::SeqCst)).await;
+    assert!(
+        paused_held,
+        "the first delete did not reach its listing of the freed records"
+    );
 
     let pruned = store.delete(&scope, &name("p-2")).await;
     let after_prune = ledger(&storage, &scope).await;
@@ -2766,7 +2785,13 @@ async fn two_deletes_that_read_the_same_ledger_make_one_prune() {
         let scope = scope.clone();
         async move { store.delete(&scope, &name("p-1")).await }
     });
-    let first_held = eventually(|| held.load(Ordering::SeqCst)).await;
+    // The second delete claims and reads too, so the gate would hold it for ever when the first
+    // delete did not reach its read first.
+    let first_held = eventually_within(REACH_LIMIT, || held.load(Ordering::SeqCst)).await;
+    assert!(
+        first_held,
+        "the first delete did not reach its first read after its claim"
+    );
 
     let second = store.delete(&scope, &name("p-2")).await;
     storage.open_gate();
@@ -2812,7 +2837,13 @@ async fn a_delete_that_claims_after_another_prune_removed_the_claims_does_not_pr
         let scope = scope.clone();
         async move { store.delete(&scope, &name("p-1")).await }
     });
-    let late_held = eventually(|| held.load(Ordering::SeqCst)).await;
+    // The second delete lists the claims too, so the gate would hold it for ever when the first
+    // delete did not reach its listing first.
+    let late_held = eventually_within(REACH_LIMIT, || held.load(Ordering::SeqCst)).await;
+    assert!(
+        late_held,
+        "the first delete did not reach its listing of the claims"
+    );
 
     let pruned = store.delete(&scope, &name("p-2")).await;
     storage.open_gate();
@@ -3867,9 +3898,7 @@ async fn shut_down_waits_for_the_step_of_a_prune_and_its_refresh_that_is_not_pol
     tokio::pin!(deleting);
     let reached = tokio::select! {
         biased;
-        () = async {
-            eventually(|| held.load(Ordering::SeqCst)).await;
-        } => true,
+        held = eventually(|| held.load(Ordering::SeqCst)) => held,
         _ = &mut deleting => false,
     };
 
