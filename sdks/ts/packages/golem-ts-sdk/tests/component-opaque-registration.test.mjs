@@ -24,7 +24,7 @@ it('retains a builder passed to an ambient opaque function', () => {
           paths: { '@golemcloud/golem-ts-sdk': [path.resolve('dist/index.d.mts')] },
         },
       }),
-    ).toEqual({ agents: false, tools: true, middleware: true });
+    ).toEqual({ agents: false, tools: true, middleware: true, schemas: false });
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -76,7 +76,7 @@ it.each(['inline-import', 'package-dependency'])(
             paths: { '@golemcloud/golem-ts-sdk': [path.resolve('dist/index.d.mts')] },
           },
         }),
-      ).toEqual({ agents: true, tools: true, middleware: true });
+      ).toEqual({ agents: true, tools: true, middleware: true, schemas: true });
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
