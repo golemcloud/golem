@@ -15,10 +15,10 @@
 use crate::config::S3BlobStorageConfig;
 use crate::replayable_stream::ErasedReplayableStream;
 use crate::storage::blob::{
-    BLOB_STREAM_CHUNK_SIZE, BlobMetadata, BlobMissingError, BlobNameError, BlobRangeError,
-    BlobRangeStream, BlobStorage, BlobStorageNamespace, DIR_MARKER, ExistsResult, ListedBlob,
-    NormalizedBlobPath, PutIfAbsent, agent_path_segment, blob_copy_changes_nothing,
-    blob_path_to_string, blob_positions, check_blob_name, normalized_blob_path, validate_range,
+    BLOB_STREAM_CHUNK_SIZE, BlobMetadata, BlobNameError, BlobRangeError, BlobRangeStream,
+    BlobStorageBackend, BlobStorageNamespace, DIR_MARKER, ExistsResult, ListedBlob,
+    NormalizedBlobPath, PutIfAbsent, agent_path_segment, blob_path_to_string, blob_positions,
+    check_blob_name, validate_range,
 };
 use anyhow::{Error, anyhow, ensure};
 use async_trait::async_trait;
@@ -1035,8 +1035,8 @@ impl S3BlobStorage {
     /// Tells whether the retry loop sends a `CopyObject` request again after an error.
     ///
     /// A source key that is not there stops the loop: a retry cannot make the bucket hold that
-    /// key, so each retry of it is work with no result, and `copy` gives a [`BlobMissingError`]
-    /// for it.
+    /// key, so each retry of it is work with no result, and `copy` gives a
+    /// [`BlobMissingError`](super::BlobMissingError) for it.
     fn is_copy_object_error_retriable(error: &SdkError<CopyObjectError>) -> bool {
         match error {
             SdkError::ServiceError(service_error) => {
@@ -1122,17 +1122,16 @@ impl S3BlobStorage {
 }
 
 #[async_trait]
-impl BlobStorage for S3BlobStorage {
-    async fn get_raw(
+impl BlobStorageBackend for S3BlobStorage {
+    async fn get_raw_at(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
+        path: &NormalizedBlobPath<'_>,
     ) -> Result<Option<Vec<u8>>, Error> {
-        let path = normalized_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
-        let key = self.key_of(&namespace, &path)?;
+        let key = self.key_of(&namespace, path)?;
 
         let result = with_retries_customized(
             target_label,
@@ -1171,16 +1170,15 @@ impl BlobStorage for S3BlobStorage {
         }
     }
 
-    async fn get_stream(
+    async fn get_stream_at(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
+        path: &NormalizedBlobPath<'_>,
     ) -> Result<Option<BoxStream<'static, Result<Bytes, Error>>>, Error> {
-        let path = normalized_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
-        let key = self.key_of(&namespace, &path)?;
+        let key = self.key_of(&namespace, path)?;
 
         let result = with_retries_customized(
             target_label,
@@ -1219,18 +1217,17 @@ impl BlobStorage for S3BlobStorage {
         }
     }
 
-    async fn get_range_stream(
+    async fn get_range_stream_at(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
+        path: &NormalizedBlobPath<'_>,
         offset: u64,
         length: u64,
     ) -> Result<Option<BlobRangeStream>, Error> {
-        let path = normalized_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
-        let key = self.key_of(&namespace, &path)?;
+        let key = self.key_of(&namespace, path)?;
         if length == 0 {
             // A directory has no blob at its path, so this reads the head of the blob key alone
             // and not the marker object that `get_metadata` also reads.
@@ -1303,23 +1300,17 @@ impl BlobStorage for S3BlobStorage {
         }
     }
 
-    async fn get_raw_slice(
+    async fn get_raw_slice_at(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
+        path: &NormalizedBlobPath<'_>,
         start: u64,
         end: u64,
     ) -> Result<Option<Vec<u8>>, Error> {
-        // A `start` after `end` is an invalid range (RFC 9110, section 14.1.1). RFC 9110 lets a
-        // server ignore or reject it (section 14.2), so the backend sends no request for it.
-        if start > end {
-            return Err(BlobRangeError { start, end }.into());
-        }
-        let path = normalized_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
-        let key = self.key_of(&namespace, &path)?;
+        let key = self.key_of(&namespace, path)?;
 
         let result = with_retries_customized(
             target_label,
@@ -1374,8 +1365,8 @@ impl BlobStorage for S3BlobStorage {
                     .map_err(|error| error.context(format!("the byte range {start}-{end}")))?;
                 let bytes = match response_body {
                     ResponseBody::Range { .. } => body,
-                    // The rule of the default `get_raw_slice`, so every backend gives the same
-                    // error for a range that is not in the object.
+                    // The rule of `blob_range`, which the default `get_raw_slice_at` applies, so
+                    // every backend gives the same error for a range that is not in the object.
                     ResponseBody::WholeObject => cut_range(body, start, end)?,
                 };
 
@@ -1394,16 +1385,15 @@ impl BlobStorage for S3BlobStorage {
         }
     }
 
-    async fn get_metadata(
+    async fn get_metadata_at(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
+        path: &NormalizedBlobPath<'_>,
     ) -> Result<Option<BlobMetadata>, Error> {
-        let path = normalized_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
-        let key = self.key_of(&namespace, &path)?;
+        let key = self.key_of(&namespace, path)?;
         let op_id = format!("{bucket} - {key:?}");
 
         if let Some(head) = self
@@ -1436,19 +1426,16 @@ impl BlobStorage for S3BlobStorage {
             }))
     }
 
-    async fn put_raw(
+    async fn put_raw_at(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
+        path: &NormalizedBlobPath<'_>,
         data: &[u8],
     ) -> Result<(), Error> {
-        let path = normalized_blob_path(path)?;
-        path.reject_root()?;
-
         let bucket = self.bucket_of(&namespace);
-        let key = self.key_of(&namespace, &path)?;
+        let key = self.key_of(&namespace, path)?;
         let bytes = Bytes::copy_from_slice(data);
 
         with_retries_customized(
@@ -1477,19 +1464,16 @@ impl BlobStorage for S3BlobStorage {
         Ok(())
     }
 
-    async fn put_raw_if_absent(
+    async fn put_raw_if_absent_at(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
+        path: &NormalizedBlobPath<'_>,
         data: &[u8],
     ) -> Result<PutIfAbsent, Error> {
-        let path = normalized_blob_path(path)?;
-        path.reject_root()?;
-
         let bucket = self.bucket_of(&namespace);
-        let key = self.key_of(&namespace, &path)?;
+        let key = self.key_of(&namespace, path)?;
         let bytes = Bytes::copy_from_slice(data);
 
         let result = with_retries_customized(
@@ -1527,19 +1511,16 @@ impl BlobStorage for S3BlobStorage {
         }
     }
 
-    async fn put_stream(
+    async fn put_stream_at(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
+        path: &NormalizedBlobPath<'_>,
         stream: &dyn ErasedReplayableStream<Item = Result<Vec<u8>, Error>, Error = Error>,
     ) -> Result<(), Error> {
-        let path = normalized_blob_path(path)?;
-        path.reject_root()?;
-
         let bucket = self.bucket_of(&namespace);
-        let key = self.key_of(&namespace, &path)?;
+        let key = self.key_of(&namespace, path)?;
 
         fn go<'a>(
             args: &'a (
@@ -1598,16 +1579,15 @@ impl BlobStorage for S3BlobStorage {
         Ok(())
     }
 
-    async fn delete(
+    async fn delete_at(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
+        path: &NormalizedBlobPath<'_>,
     ) -> Result<(), Error> {
-        let path = normalized_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
-        let key = self.key_of(&namespace, &path)?;
+        let key = self.key_of(&namespace, path)?;
 
         with_retries_customized(
             target_label,
@@ -1634,12 +1614,12 @@ impl BlobStorage for S3BlobStorage {
         Ok(())
     }
 
-    async fn delete_many(
+    async fn delete_many_at(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
-        paths: &[PathBuf],
+        paths: &[NormalizedBlobPath<'_>],
     ) -> Result<(), Error> {
         let bucket = self.bucket_of(&namespace);
 
@@ -1648,8 +1628,7 @@ impl BlobStorage for S3BlobStorage {
         let to_delete = paths
             .iter()
             .map(|path| {
-                let path = normalized_blob_path(path)?;
-                let key = self.key_of(&namespace, &path)?;
+                let key = self.key_of(&namespace, path)?;
                 ObjectIdentifier::builder()
                     .key(key)
                     .build()
@@ -1661,21 +1640,15 @@ impl BlobStorage for S3BlobStorage {
             .await
     }
 
-    async fn create_dir(
+    async fn create_dir_at(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
+        path: &NormalizedBlobPath<'_>,
     ) -> Result<(), Error> {
-        let path = normalized_blob_path(path)?;
-
-        if path.is_root() {
-            return Ok(());
-        }
-
         let bucket = self.bucket_of(&namespace);
-        let key = self.key_of(&namespace, &path)?;
+        let key = self.key_of(&namespace, path)?;
         let marker = Self::dir_marker_key_of(&key)?;
 
         with_retries_customized(
@@ -1704,17 +1677,16 @@ impl BlobStorage for S3BlobStorage {
         Ok(())
     }
 
-    async fn list_dir(
+    async fn list_dir_at(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
+        path: &NormalizedBlobPath<'_>,
     ) -> Result<Vec<PathBuf>, Error> {
-        let path = normalized_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
         let namespace_root = self.prefix_of(&namespace);
-        let key = self.key_of(&namespace, &path)?;
+        let key = self.key_of(&namespace, path)?;
 
         // A blob and a directory can hold one path, and then S3 has the key of the blob and the
         // marker of the directory. The set gives the path one time.
@@ -1749,17 +1721,16 @@ impl BlobStorage for S3BlobStorage {
             .collect::<Vec<_>>())
     }
 
-    async fn list_blobs_below(
+    async fn list_blobs_below_at(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
+        path: &NormalizedBlobPath<'_>,
     ) -> Result<Box<[ListedBlob]>, Error> {
-        let path = normalized_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
         let namespace_root = self.prefix_of(&namespace);
-        let key = self.key_of(&namespace, &path)?;
+        let key = self.key_of(&namespace, path)?;
 
         self.list_objects(target_label, op_label, bucket, &key)
             .await?
@@ -1781,21 +1752,15 @@ impl BlobStorage for S3BlobStorage {
             .collect()
     }
 
-    async fn delete_dir(
+    async fn delete_dir_at(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
+        path: &NormalizedBlobPath<'_>,
     ) -> Result<bool, Error> {
-        let path = normalized_blob_path(path)?;
-
-        if path.is_root() {
-            return Ok(false);
-        }
-
         let bucket = self.bucket_of(&namespace);
-        let key = self.key_of(&namespace, &path)?;
+        let key = self.key_of(&namespace, path)?;
 
         let to_delete = self
             .list_objects(target_label, op_label, bucket, &key)
@@ -1815,23 +1780,15 @@ impl BlobStorage for S3BlobStorage {
         Ok(has_entries)
     }
 
-    async fn exists(
+    async fn exists_at(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
+        path: &NormalizedBlobPath<'_>,
     ) -> Result<ExistsResult, Error> {
-        let path = normalized_blob_path(path)?;
-
-        // The root of a namespace is a directory, also when the bucket holds no object under
-        // its prefix.
-        if path.is_root() {
-            return Ok(ExistsResult::Directory);
-        }
-
         let bucket = self.bucket_of(&namespace);
-        let key = self.key_of(&namespace, &path)?;
+        let key = self.key_of(&namespace, path)?;
         let op_id = format!("{bucket} - {key:?}");
 
         if self
@@ -1869,60 +1826,47 @@ impl BlobStorage for S3BlobStorage {
         }
     }
 
-    /// Writes the blob at `from` to `to` with one `CopyObject` request, and keeps the blob at
-    /// `from`. S3 reads the source and writes the target, so no byte of the object comes to
-    /// this process.
+    /// Tells if the bucket holds an object at the key of the path, with one `HeadObject`
+    /// request.
     ///
-    /// A `from` with no object at it gives a [`BlobMissingError`], as the default `copy` of
-    /// [`BlobStorage`] does. One request gives that error: `is_copy_object_error_retriable`
-    /// stops the retry loop at it. `move` is the default one, which is this copy and then a
-    /// delete of the source, so a source that is not there gives the error from the copy and
-    /// deletes nothing.
-    ///
-    /// A copy onto the same path sends no `CopyObject` request: it sends one `HeadObject` for
-    /// the key of the source and gives the same [`BlobMissingError`] when the bucket holds no
-    /// object at that key. A root path at either end gives [`BlobNameError::NoName`]
-    /// (`blob_copy_changes_nothing`).
-    async fn copy(
+    /// A copy or a move onto the same path reads this. The head of the key of the blob answers
+    /// it, and a directory at the same path holds no blob, so the marker object of a directory
+    /// and the keys below the path say nothing here. `exists_at` reads both of them, and an
+    /// error of one of those later requests would reach the guest in place of the permanent
+    /// error of a source that is not there, which the executor would then retry.
+    async fn has_blob_at(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
-        from: &Path,
-        to: &Path,
-    ) -> Result<(), Error> {
-        // `BlobMissingError` names the path as the guest wrote it. The next line makes `from`
-        // the normalized path, so keep the path of the guest first.
-        let guest_from = from;
-        let from = normalized_blob_path(from)?;
-        let to = normalized_blob_path(to)?;
-
-        let changes_nothing = blob_copy_changes_nothing(&from, &to)?;
+        path: &NormalizedBlobPath<'_>,
+    ) -> Result<bool, Error> {
         let bucket = self.bucket_of(&namespace);
-        let from_key = self.key_of(&namespace, &from)?;
+        let key = self.key_of(&namespace, path)?;
+        let op_id = format!("{bucket} - {key:?}");
+        Ok(self
+            .head_object(target_label, op_label, bucket, key, op_id)
+            .await?
+            .is_some())
+    }
 
-        // A copy onto the same path writes nothing, and it still needs the blob that it reads.
-        // The copy asks one thing of the storage: does the bucket hold a blob at `from`? The
-        // head of the key of that blob answers it, and a directory at the same path holds no
-        // blob, so the marker object of a directory and the keys below the path say nothing
-        // here. `exists` reads both of them, and an error of one of those later requests would
-        // reach the guest in place of the permanent error of a source that is not there, which
-        // the executor would then retry.
-        if changes_nothing {
-            let op_id = format!("{bucket} - {from_key:?}");
-            return match self
-                .head_object(target_label, op_label, bucket, from_key, op_id)
-                .await?
-            {
-                Some(_) => Ok(()),
-                None => Err(BlobMissingError {
-                    path: guest_from.to_path_buf(),
-                }
-                .into()),
-            };
-        }
-
-        let to_key = self.key_of(&namespace, &to)?;
+    /// Writes the blob at `from` to `to` with one `CopyObject` request, and keeps the blob at
+    /// `from`. S3 reads the source and writes the target, so no byte of the object comes to
+    /// this process.
+    ///
+    /// A `from` with no object at it gives false. One request gives that answer:
+    /// `is_copy_object_error_retriable` stops the retry loop at the code `NoSuchKey`.
+    async fn copy_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        from: &NormalizedBlobPath<'_>,
+        to: &NormalizedBlobPath<'_>,
+    ) -> Result<bool, Error> {
+        let bucket = self.bucket_of(&namespace);
+        let from_key = self.key_of(&namespace, from)?;
+        let to_key = self.key_of(&namespace, to)?;
         let encoded_from_key = Self::encode_copy_source_key(&from_key);
 
         let result = with_retries_customized(
@@ -1949,14 +1893,11 @@ impl BlobStorage for S3BlobStorage {
         .await;
 
         match result {
-            Ok(_) => Ok(()),
+            Ok(_) => Ok(true),
             Err(SdkError::ServiceError(service_error))
                 if Self::is_copy_source_missing(service_error.err()) =>
             {
-                Err(BlobMissingError {
-                    path: guest_from.to_path_buf(),
-                }
-                .into())
+                Ok(false)
             }
             Err(err) => Err(err.into()),
         }

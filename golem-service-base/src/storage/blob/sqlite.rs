@@ -14,23 +14,19 @@
 
 use crate::db::sqlite::SqlitePool;
 use crate::db::{DBValue, PoolApi};
-use crate::replayable_stream::ErasedReplayableStream;
 use crate::repo::RepoError;
 use crate::storage::blob::{
-    BLOB_STREAM_CHUNK_SIZE, BlobMetadata, BlobRangeStream, BlobStorage, BlobStorageNamespace,
-    ExistsResult, ListedBlob, PutIfAbsent, agent_path_segment, blob_child_path,
-    normalized_blob_path, validate_range,
+    BLOB_STREAM_CHUNK_SIZE, BlobMetadata, BlobRangeStream, BlobStorageBackend,
+    BlobStorageNamespace, ExistsResult, ListedBlob, NormalizedBlobPath, PutIfAbsent,
+    agent_path_segment, blob_child_path, validate_range,
 };
 use anyhow::{Error, anyhow};
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::NaiveDateTime;
-use futures::TryStreamExt;
-use futures::stream::BoxStream;
 use sqlx::Connection;
 use std::marker::PhantomData;
-use std::path::{Path, PathBuf};
-use std::pin::Pin;
+use std::path::PathBuf;
 use std::ptr::NonNull;
 
 struct ReadBlob<'a> {
@@ -175,15 +171,14 @@ impl SqliteBlobStorage {
 }
 
 #[async_trait]
-impl BlobStorage for SqliteBlobStorage {
-    async fn get_raw(
+impl BlobStorageBackend for SqliteBlobStorage {
+    async fn get_raw_at(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
+        path: &NormalizedBlobPath<'_>,
     ) -> Result<Option<Vec<u8>>, Error> {
-        let path = normalized_blob_path(path)?;
         let query = sqlx::query_as("SELECT value FROM blob_storage WHERE namespace = ? AND parent = ? AND name = ? AND is_directory = FALSE;")
             .bind(Self::namespace(namespace))
             .bind(path.parent_text()?)
@@ -199,35 +194,15 @@ impl BlobStorage for SqliteBlobStorage {
         Ok(result)
     }
 
-    async fn get_stream(
-        &self,
-        target_label: &'static str,
-        op_label: &'static str,
-        namespace: BlobStorageNamespace,
-        path: &Path,
-    ) -> Result<Option<BoxStream<'static, Result<Bytes, Error>>>, Error> {
-        let path = normalized_blob_path(path)?;
-        let result = self
-            .get_raw(target_label, op_label, namespace, &path)
-            .await?;
-        Ok(result.map(|bytes| {
-            let stream = tokio_stream::once(Ok(Bytes::from(bytes)));
-            let boxed: Pin<Box<dyn futures::Stream<Item = Result<Bytes, Error>> + Send>> =
-                Box::pin(stream);
-            boxed
-        }))
-    }
-
-    async fn get_range_stream(
+    async fn get_range_stream_at(
         &self,
         _target_label: &'static str,
         _op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
+        path: &NormalizedBlobPath<'_>,
         offset: u64,
         length: u64,
     ) -> Result<Option<BlobRangeStream>, Error> {
-        let path = normalized_blob_path(path)?;
         let namespace = Self::namespace(namespace);
         let parent = path.parent_text()?;
         let name = path.file_name_text()?;
@@ -295,14 +270,13 @@ impl BlobStorage for SqliteBlobStorage {
         }))
     }
 
-    async fn get_metadata(
+    async fn get_metadata_at(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
+        path: &NormalizedBlobPath<'_>,
     ) -> Result<Option<BlobMetadata>, Error> {
-        let path = normalized_blob_path(path)?;
         let query = sqlx::query_as(
             "SELECT last_modified_at, size FROM blob_storage WHERE namespace = ? AND parent = ? AND name = ?;",
         )
@@ -321,15 +295,14 @@ impl BlobStorage for SqliteBlobStorage {
         Ok(result)
     }
 
-    async fn put_raw(
+    async fn put_raw_at(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
+        path: &NormalizedBlobPath<'_>,
         data: &[u8],
     ) -> Result<(), Error> {
-        let path = normalized_blob_path(path)?;
         let size = data.len() as i64;
         let query = sqlx::query(
                     r#"
@@ -352,16 +325,14 @@ impl BlobStorage for SqliteBlobStorage {
         Ok(())
     }
 
-    async fn put_raw_if_absent(
+    async fn put_raw_if_absent_at(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
+        path: &NormalizedBlobPath<'_>,
         data: &[u8],
     ) -> Result<PutIfAbsent, Error> {
-        let path = normalized_blob_path(path)?;
-        path.reject_root()?;
         let size = data.len() as i64;
         // The primary key holds the path, so the insert and the check of the key are one
         // statement. A row that is there makes the insert change no row.
@@ -392,34 +363,13 @@ impl BlobStorage for SqliteBlobStorage {
         })
     }
 
-    async fn put_stream(
+    async fn delete_at(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
-        stream: &dyn ErasedReplayableStream<Item = Result<Vec<u8>, Error>, Error = Error>,
+        path: &NormalizedBlobPath<'_>,
     ) -> Result<(), Error> {
-        let path = normalized_blob_path(path)?;
-        let data = stream
-            .make_stream_erased()
-            .await?
-            .try_collect::<Vec<_>>()
-            .await?;
-        let data = Bytes::from(data.concat());
-        self.put_raw(target_label, op_label, namespace, &path, &data)
-            .await?;
-        Ok(())
-    }
-
-    async fn delete(
-        &self,
-        target_label: &'static str,
-        op_label: &'static str,
-        namespace: BlobStorageNamespace,
-        path: &Path,
-    ) -> Result<(), Error> {
-        let path = normalized_blob_path(path)?;
         let query = sqlx::query(
             "DELETE FROM blob_storage WHERE namespace = ? AND parent = ? AND name = ?;",
         )
@@ -434,19 +384,13 @@ impl BlobStorage for SqliteBlobStorage {
         Ok(())
     }
 
-    async fn create_dir(
+    async fn create_dir_at(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
+        path: &NormalizedBlobPath<'_>,
     ) -> Result<(), Error> {
-        let path = normalized_blob_path(path)?;
-
-        if path.is_root() {
-            return Ok(());
-        }
-
         let query = sqlx::query(
                     r#"
                         INSERT INTO blob_storage (namespace, parent, name, value, size, is_directory)
@@ -466,14 +410,13 @@ impl BlobStorage for SqliteBlobStorage {
         Ok(())
     }
 
-    async fn list_dir(
+    async fn list_dir_at(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
+        path: &NormalizedBlobPath<'_>,
     ) -> Result<Vec<PathBuf>, Error> {
-        let path = normalized_blob_path(path)?;
         let query =
             sqlx::query_as("SELECT name FROM blob_storage WHERE namespace = ? AND parent = ?;")
                 .bind(Self::namespace(namespace))
@@ -489,14 +432,13 @@ impl BlobStorage for SqliteBlobStorage {
         Ok(result)
     }
 
-    async fn list_blobs_below(
+    async fn list_blobs_below_at(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
+        path: &NormalizedBlobPath<'_>,
     ) -> Result<Box<[ListedBlob]>, Error> {
-        let path = normalized_blob_path(path)?;
         let directory = path.text()?;
 
         // Text comparisons use the BINARY collation, so the match is case-sensitive. A parent
@@ -532,19 +474,13 @@ impl BlobStorage for SqliteBlobStorage {
             .collect()
     }
 
-    async fn delete_dir(
+    async fn delete_dir_at(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
+        path: &NormalizedBlobPath<'_>,
     ) -> Result<bool, Error> {
-        let path = normalized_blob_path(path)?;
-
-        if path.is_root() {
-            return Ok(false);
-        }
-
         let parent = path.parent_text()?;
         let name = path.file_name_text()?;
 
@@ -586,20 +522,13 @@ impl BlobStorage for SqliteBlobStorage {
         Ok(result)
     }
 
-    async fn exists(
+    async fn exists_at(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
+        path: &NormalizedBlobPath<'_>,
     ) -> Result<ExistsResult, Error> {
-        let path = normalized_blob_path(path)?;
-
-        // The root of a namespace is a directory, also when the namespace holds no row.
-        if path.is_root() {
-            return Ok(ExistsResult::Directory);
-        }
-
         let namespace = Self::namespace(namespace);
         let parent = path.parent_text()?;
         let name = path.file_name_text()?;
