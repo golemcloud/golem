@@ -15,7 +15,9 @@
 mod app;
 mod context_executor;
 mod input;
+mod interaction;
 mod layout;
+mod navigation;
 mod nested_cli;
 #[cfg(feature = "tui-preview")]
 mod preview;

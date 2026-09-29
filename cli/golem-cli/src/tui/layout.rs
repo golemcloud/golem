@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::app::{DevView, TuiMode, TuiWorkspace};
+use super::interaction::InteractionMode;
+use super::navigation::{DevView, Workspace};
 use ratatui::layout::Rect;
 
 pub(super) const SHELL_COMPACT_WIDTH: u16 = 72;
@@ -103,7 +104,7 @@ impl TuiLayoutState {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum RegionKind {
-    Workspace(TuiWorkspace),
+    Workspace(Workspace),
     Footer,
     WorkspaceBody,
     DevViewTitle(DevView),
@@ -153,10 +154,10 @@ impl LayoutSnapshot {
 #[derive(Debug, Clone)]
 pub(super) struct LayoutInput {
     pub(super) area: Rect,
-    pub(super) active_workspace: TuiWorkspace,
+    pub(super) active_workspace: Workspace,
     pub(super) dev_primary: DevView,
     pub(super) focused_dev_view: DevView,
-    pub(super) mode: TuiMode,
+    pub(super) mode: InteractionMode,
     pub(super) context_picker_rows: Vec<Option<usize>>,
     pub(super) context_picker_selected: usize,
     pub(super) context_picker_prefix_height: usize,
@@ -182,8 +183,8 @@ pub(super) fn compute(input: LayoutInput) -> LayoutSnapshot {
     ];
     add_workspace_regions(workspace_selector, &mut regions);
     match input.active_workspace {
-        TuiWorkspace::Dev => add_dev_regions(body, &input, &mut regions),
-        TuiWorkspace::Ops => add_ops_regions(body, &input, &mut regions),
+        Workspace::Dev => add_dev_regions(body, &input, &mut regions),
+        Workspace::Ops => add_ops_regions(body, &input, &mut regions),
     }
     add_modal_regions(&input, &mut regions);
 
@@ -220,7 +221,7 @@ fn shell_regions(area: Rect) -> (Rect, Rect, Rect) {
 
 fn add_workspace_regions(area: Rect, regions: &mut Vec<Region>) {
     let mut x = area.x.saturating_add(2);
-    for workspace in TuiWorkspace::ALL {
+    for workspace in Workspace::ALL {
         let width = workspace.title().chars().count() as u16 + 4;
         regions.push(Region {
             kind: RegionKind::Workspace(workspace),
@@ -534,7 +535,7 @@ fn compact_body(area: Rect) -> bool {
 
 fn add_modal_regions(input: &LayoutInput, regions: &mut Vec<Region>) {
     match input.mode {
-        TuiMode::ContextPicker => {
+        InteractionMode::ContextPicker => {
             let area = adaptive_data_popup_rect(input.area, 48, 10);
             let content = Rect {
                 x: area.x.saturating_add(2),
@@ -574,7 +575,7 @@ fn add_modal_regions(input: &LayoutInput, regions: &mut Vec<Region>) {
                 });
             }
         }
-        TuiMode::ContextSwitchConfirm => {
+        InteractionMode::ContextSwitchConfirm => {
             let area = centered(
                 input.area,
                 input.area.width.min(72),
@@ -667,10 +668,10 @@ mod tests {
     fn input() -> LayoutInput {
         LayoutInput {
             area: Rect::new(0, 0, 120, 32),
-            active_workspace: TuiWorkspace::Dev,
+            active_workspace: Workspace::Dev,
             dev_primary: DevView::BuildDeploy,
             focused_dev_view: DevView::BuildDeploy,
-            mode: TuiMode::Normal,
+            mode: InteractionMode::Normal,
             context_picker_rows: Vec::new(),
             context_picker_selected: 0,
             context_picker_prefix_height: 2,
@@ -742,7 +743,7 @@ mod tests {
     fn ops_details_support_right_and_bottom() {
         for placement in [PanePlacement::Right, PanePlacement::Bottom] {
             let mut input = input();
-            input.active_workspace = TuiWorkspace::Ops;
+            input.active_workspace = Workspace::Ops;
             input.layout.ops_details_placement = placement;
             let snapshot = compute(input);
             let list = snapshot.region(RegionKind::OpsList).unwrap();
@@ -800,7 +801,7 @@ mod tests {
     #[test]
     fn context_picker_rows_follow_adaptive_popup() {
         let mut input = input();
-        input.mode = TuiMode::ContextPicker;
+        input.mode = InteractionMode::ContextPicker;
         input.context_picker_rows = vec![None, Some(0), Some(1), None, Some(2)];
         input.context_picker_selected = 2;
         let snapshot = compute(input);

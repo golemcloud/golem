@@ -33,10 +33,12 @@ use crate::model::masking::Masked;
 use crate::tui::TuiEvent;
 use crate::tui::context_executor::{TuiContextExecutor, TuiContextId, TuiContextTaskResult};
 use crate::tui::input::encode_key_for_pty;
+use crate::tui::interaction::{InteractionMode, ModeStack};
 use crate::tui::layout::{
     self, DragTarget, LayoutInput, LayoutSnapshot, RegionKind, TuiLayoutState,
     adaptive_data_popup_rect,
 };
+use crate::tui::navigation::{DevView, Workspace};
 use crate::tui::nested_cli::{
     CommandExit, NestedCliRuntime, NestedCliSpec, NestedCliTarget, spawn_nested_cli,
 };
@@ -322,12 +324,12 @@ fn tui_auth_presenter(event_tx: &TuiEventSender) -> Arc<dyn AuthPresenter> {
 
 struct TuiApp {
     should_quit: bool,
-    active_workspace: TuiWorkspace,
+    active_workspace: Workspace,
     ops_subject: OpsSubject,
     ops_view: OpsView,
     dev_primary: DevView,
     dev_focus: DevView,
-    mode: TuiMode,
+    mode: ModeStack,
     leader: LeaderState,
     help_scroll: usize,
     help_content_height: Cell<usize>,
@@ -365,9 +367,9 @@ impl TuiApp {
     fn from_launch(launch: TuiLaunchConfig) -> Self {
         let context = TuiContextInfo::from_context(launch.initial_context.as_ref());
         let active_workspace = if context.dev_eligible && context.uses_local_server {
-            TuiWorkspace::Dev
+            Workspace::Dev
         } else {
-            TuiWorkspace::Ops
+            Workspace::Ops
         };
         let context_cli_args = context_args_from_flags(&launch.base_flags);
         let server = LocalServerService::from_launch(&launch);
@@ -390,7 +392,7 @@ impl TuiApp {
             ops_view: OpsView::Overview,
             dev_primary: DevView::BuildDeploy,
             dev_focus: DevView::BuildDeploy,
-            mode: TuiMode::Normal,
+            mode: ModeStack::default(),
             leader: LeaderState::default(),
             help_scroll: 0,
             help_content_height: Cell::new(0),
@@ -498,24 +500,28 @@ impl TuiApp {
     }
 
     fn handle_key_with_events(&mut self, key: KeyEvent, event_tx: Option<&TuiEventSender>) {
-        match self.mode {
-            TuiMode::Normal => self.handle_global_key(key, event_tx),
-            TuiMode::Leader => self.handle_leader_key(key, event_tx),
-            TuiMode::Layout => self.handle_layout_key(key),
-            TuiMode::Jobs => self.handle_jobs_key(key),
-            TuiMode::QuitBlocked => self.handle_quit_blocked_key(key),
-            TuiMode::Palette => self.handle_palette_key(key, event_tx),
-            TuiMode::CommandForm => self.handle_command_form_key(key, event_tx),
-            TuiMode::SessionForm => self.handle_session_form_key(key, event_tx),
-            TuiMode::ContextPicker => self.handle_context_picker_key(key, event_tx),
-            TuiMode::ContextSwitchConfirm => self.handle_context_switch_confirm_key(key, event_tx),
-            TuiMode::Help => self.handle_help_key(key),
-            TuiMode::AgentFilter => self.handle_agent_filter_key(key, event_tx),
-            TuiMode::AgentDatasetFilter => self.handle_agent_dataset_filter_key(key, event_tx),
-            TuiMode::AgentColumns => self.handle_agent_columns_key(key),
-            TuiMode::CommandInteraction => self.handle_command_interaction_key(key),
-            TuiMode::Repl => self.handle_repl_key(key),
-            TuiMode::TerminalScrollback => self.handle_terminal_scrollback_key(key),
+        match self.mode.current() {
+            InteractionMode::Normal => self.handle_global_key(key, event_tx),
+            InteractionMode::Leader => self.handle_leader_key(key, event_tx),
+            InteractionMode::Layout => self.handle_layout_key(key),
+            InteractionMode::Jobs => self.handle_jobs_key(key),
+            InteractionMode::QuitBlocked => self.handle_quit_blocked_key(key),
+            InteractionMode::Palette => self.handle_palette_key(key, event_tx),
+            InteractionMode::CommandForm => self.handle_command_form_key(key, event_tx),
+            InteractionMode::SessionForm => self.handle_session_form_key(key, event_tx),
+            InteractionMode::ContextPicker => self.handle_context_picker_key(key, event_tx),
+            InteractionMode::ContextSwitchConfirm => {
+                self.handle_context_switch_confirm_key(key, event_tx)
+            }
+            InteractionMode::Help => self.handle_help_key(key),
+            InteractionMode::AgentFilter => self.handle_agent_filter_key(key, event_tx),
+            InteractionMode::AgentDatasetFilter => {
+                self.handle_agent_dataset_filter_key(key, event_tx)
+            }
+            InteractionMode::AgentColumns => self.handle_agent_columns_key(key),
+            InteractionMode::CommandInteraction => self.handle_command_interaction_key(key),
+            InteractionMode::Repl => self.handle_repl_key(key),
+            InteractionMode::TerminalScrollback => self.handle_terminal_scrollback_key(key),
         }
     }
 
@@ -557,7 +563,7 @@ impl TuiApp {
             KeyCode::Tab => self.focus_next_pane(),
             KeyCode::BackTab => self.focus_previous_pane(),
             KeyCode::Backspace if self.agent_list_focused() && !self.agents.query.is_empty() => {
-                self.mode = TuiMode::AgentFilter;
+                self.mode.replace(InteractionMode::AgentFilter);
                 self.agents.query.pop();
                 self.agents.reset_selection();
             }
@@ -566,7 +572,7 @@ impl TuiApp {
                     && (key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT)
                     && (!character.is_whitespace() || !self.agents.query.is_empty()) =>
             {
-                self.mode = TuiMode::AgentFilter;
+                self.mode.replace(InteractionMode::AgentFilter);
                 self.agents.query.push(character);
                 self.agents.reset_selection();
             }
@@ -593,7 +599,7 @@ impl TuiApp {
                 self.open_help();
             }
             KeyCode::Char('r')
-                if self.active_workspace == TuiWorkspace::Ops
+                if self.active_workspace == Workspace::Ops
                     && key.modifiers.contains(KeyModifiers::CONTROL) =>
             {
                 match self.ops_subject.root() {
@@ -641,9 +647,7 @@ impl TuiApp {
             return;
         }
         if key.code == KeyCode::Char('x') && key.modifiers.contains(KeyModifiers::CONTROL) {
-            self.leader.return_mode = LeaderReturnMode::Palette;
-            self.leader.group = None;
-            self.mode = TuiMode::Leader;
+            self.open_leader();
             return;
         }
         if key.code == KeyCode::Char('h') && key.modifiers.contains(KeyModifiers::CONTROL) {
@@ -670,7 +674,7 @@ impl TuiApp {
             }
             KeyCode::Enter => {
                 if let Some(action) = self.filtered_actions().get(self.palette.selected).copied() {
-                    self.execute_palette_action(action.kind, event_tx);
+                    self.execute_palette_action(action.id, event_tx);
                 }
             }
             KeyCode::Char(character)
@@ -699,9 +703,9 @@ impl TuiApp {
             KeyCode::Esc if self.context_switcher.mode == ContextPickerStep::AppEnvironments => {
                 self.context_switcher.show_targets();
             }
-            KeyCode::Esc => self.mode = self.default_mode(),
+            KeyCode::Esc => self.close_transient_mode(),
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.mode = self.default_mode();
+                self.close_transient_mode();
             }
             KeyCode::Down | KeyCode::Tab => self.context_switcher.next(),
             KeyCode::Up | KeyCode::BackTab => self.context_switcher.previous(),
@@ -722,7 +726,7 @@ impl TuiApp {
             KeyCode::Esc => {
                 self.context_switcher.pending_action = None;
                 self.context_switcher.waiting_for_dev_stop = false;
-                self.mode = TuiMode::ContextPicker;
+                self.close_transient_mode();
             }
             _ => {}
         }
@@ -730,9 +734,9 @@ impl TuiApp {
 
     fn handle_help_key(&mut self, key: KeyEvent) {
         match key.code {
-            KeyCode::Esc => self.mode = TuiMode::Normal,
+            KeyCode::Esc => self.close_transient_mode(),
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.mode = TuiMode::Normal;
+                self.close_transient_mode();
             }
             KeyCode::Up => self.help_scroll = self.help_scroll.saturating_sub(1),
             KeyCode::Down => self.scroll_help_down(1),
@@ -751,7 +755,7 @@ impl TuiApp {
 
     fn open_help(&mut self) {
         self.help_scroll = 0;
-        self.mode = TuiMode::Help;
+        self.mode.push(InteractionMode::Help);
     }
 
     fn scroll_help_down(&mut self, amount: usize) {
@@ -767,9 +771,9 @@ impl TuiApp {
             return;
         }
         match key.code {
-            KeyCode::Esc | KeyCode::Enter => self.mode = TuiMode::Normal,
+            KeyCode::Esc | KeyCode::Enter => self.mode.replace(InteractionMode::Normal),
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.mode = TuiMode::Normal;
+                self.mode.replace(InteractionMode::Normal);
             }
             KeyCode::Backspace => {
                 self.agents.query.pop();
@@ -801,13 +805,13 @@ impl TuiApp {
             return;
         }
         let Some(filter) = self.agents.dataset_filter.as_mut() else {
-            self.mode = TuiMode::Normal;
+            self.mode.replace(InteractionMode::Normal);
             return;
         };
         match key.code {
             KeyCode::Esc => {
                 self.agents.dataset_filter = None;
-                self.mode = TuiMode::Normal;
+                self.mode.replace(InteractionMode::Normal);
             }
             KeyCode::Backspace => {
                 filter.query.pop();
@@ -828,7 +832,7 @@ impl TuiApp {
             KeyCode::Enter => {
                 let selected = filter.selected_choice().cloned();
                 self.agents.dataset_filter = None;
-                self.mode = TuiMode::Normal;
+                self.mode.replace(InteractionMode::Normal);
                 if let Some(selected) = selected
                     && selected != self.agents.dataset_scope
                 {
@@ -853,7 +857,7 @@ impl TuiApp {
             return;
         }
         if key.code == KeyCode::Char('x') && key.modifiers.contains(KeyModifiers::CONTROL) {
-            if self.leader.return_mode == LeaderReturnMode::Repl {
+            if self.mode.previous() == Some(InteractionMode::Repl) {
                 if let Some(runtime) = self.repl.run.runtime.as_mut() {
                     let _ = runtime.write_all(&[24]);
                 }
@@ -866,12 +870,13 @@ impl TuiApp {
             None => match key.code {
                 KeyCode::Char('w') => self.leader.group = Some(LeaderGroup::Workspaces),
                 KeyCode::Char('v') => self.leader.group = Some(LeaderGroup::Views),
-                KeyCode::Char('l') => self.mode = TuiMode::Layout,
-                KeyCode::Char('a') if self.leader.return_mode == LeaderReturnMode::Palette => {
+                KeyCode::Char('l') => self.mode.replace(InteractionMode::Layout),
+                KeyCode::Char('a') if self.mode.previous() == Some(InteractionMode::Palette) => {
                     self.palette.scope = PaletteScope::Context;
                     self.palette.selected = 0;
                     self.leader.group = None;
-                    self.mode = TuiMode::Palette;
+                    let fallback = self.default_mode();
+                    self.mode.pop_or(fallback);
                 }
                 KeyCode::Char('a') => self.open_palette(PaletteScope::Context),
                 KeyCode::Char('j') => self.open_jobs_palette(),
@@ -888,7 +893,7 @@ impl TuiApp {
                     self.close_leader();
                 }
                 KeyCode::Char('d') => {
-                    self.active_workspace = TuiWorkspace::Dev;
+                    self.active_workspace = Workspace::Dev;
                     self.close_leader();
                 }
                 KeyCode::Char('o') => {
@@ -899,18 +904,16 @@ impl TuiApp {
             },
             Some(LeaderGroup::Views) => {
                 match (self.active_workspace, key.code) {
-                    (TuiWorkspace::Dev, KeyCode::Char('b')) => {
+                    (Workspace::Dev, KeyCode::Char('b')) => {
                         self.open_dev_workspace(DevView::BuildDeploy)
                     }
-                    (TuiWorkspace::Dev, KeyCode::Char('s')) => {
+                    (Workspace::Dev, KeyCode::Char('s')) => {
                         self.open_dev_workspace(DevView::Server)
                     }
-                    (TuiWorkspace::Dev, KeyCode::Char('r')) => {
-                        self.open_dev_workspace(DevView::Repl)
-                    }
-                    (TuiWorkspace::Ops, KeyCode::Char('o')) => self.ops_view = OpsView::Overview,
-                    (TuiWorkspace::Ops, KeyCode::Char('a')) => self.ops_view = OpsView::Activity,
-                    (TuiWorkspace::Ops, KeyCode::Char('m')) => self.ops_view = OpsView::Metrics,
+                    (Workspace::Dev, KeyCode::Char('r')) => self.open_dev_workspace(DevView::Repl),
+                    (Workspace::Ops, KeyCode::Char('o')) => self.ops_view = OpsView::Overview,
+                    (Workspace::Ops, KeyCode::Char('a')) => self.ops_view = OpsView::Activity,
+                    (Workspace::Ops, KeyCode::Char('m')) => self.ops_view = OpsView::Metrics,
                     _ => {}
                 }
                 self.close_leader();
@@ -920,13 +923,13 @@ impl TuiApp {
 
     fn handle_agent_columns_key(&mut self, key: KeyEvent) {
         let Some(chooser) = self.agents.column_chooser.as_mut() else {
-            self.mode = TuiMode::Normal;
+            self.mode.replace(InteractionMode::Normal);
             return;
         };
         match key.code {
             KeyCode::Esc => {
                 self.agents.column_chooser = None;
-                self.mode = TuiMode::Normal;
+                self.mode.replace(InteractionMode::Normal);
             }
             KeyCode::Up => chooser.selected = chooser.selected.saturating_sub(1),
             KeyCode::Down => {
@@ -945,14 +948,14 @@ impl TuiApp {
                     chooser.apply(&mut self.agents.table);
                     self.save_preferences();
                 }
-                self.mode = TuiMode::Normal;
+                self.mode.replace(InteractionMode::Normal);
             }
             _ => {}
         }
     }
 
     fn handle_mouse(&mut self, mouse: MouseEvent, event_tx: Option<&TuiEventSender>) {
-        if self.mode == TuiMode::Help {
+        if self.mode == InteractionMode::Help {
             match mouse.kind {
                 MouseEventKind::ScrollUp => self.help_scroll = self.help_scroll.saturating_sub(3),
                 MouseEventKind::ScrollDown => self.scroll_help_down(3),
@@ -997,7 +1000,7 @@ impl TuiApp {
             Some(RegionKind::DevViewBody(DevView::BuildDeploy)) => {
                 if up {
                     self.scroll_output_up_by(amount);
-                    self.mode = TuiMode::TerminalScrollback;
+                    self.mode.replace(InteractionMode::TerminalScrollback);
                 } else {
                     self.scroll_output_down_by(amount);
                 }
@@ -1005,7 +1008,7 @@ impl TuiApp {
             Some(RegionKind::DevViewBody(DevView::Server)) => {
                 if up {
                     self.scroll_server_up_by(amount);
-                    self.mode = TuiMode::TerminalScrollback;
+                    self.mode.replace(InteractionMode::TerminalScrollback);
                 } else {
                     self.scroll_server_down_by(amount);
                 }
@@ -1013,7 +1016,7 @@ impl TuiApp {
             Some(RegionKind::DevViewBody(DevView::Repl)) => {
                 if up {
                     self.repl.run.screen.scroll_up(amount);
-                    self.mode = TuiMode::TerminalScrollback;
+                    self.mode.replace(InteractionMode::TerminalScrollback);
                 } else {
                     self.repl.run.screen.scroll_down(amount);
                 }
@@ -1082,10 +1085,10 @@ impl TuiApp {
             .as_ref()
             .and_then(|snapshot| snapshot.hit_test(x, y));
         match hit {
-            Some(RegionKind::Workspace(TuiWorkspace::Ops)) => self.open_ops_workspace(event_tx),
+            Some(RegionKind::Workspace(Workspace::Ops)) => self.open_ops_workspace(event_tx),
             Some(RegionKind::Workspace(workspace)) => self.active_workspace = workspace,
             Some(RegionKind::DevViewTitle(view)) | Some(RegionKind::DevViewBody(view)) => {
-                self.active_workspace = TuiWorkspace::Dev;
+                self.active_workspace = Workspace::Dev;
                 self.dev_focus = view;
             }
             Some(RegionKind::OpsList) if self.ops_agents_focused() => {
@@ -1103,7 +1106,7 @@ impl TuiApp {
             Some(RegionKind::ContextCancel) => {
                 self.context_switcher.pending_action = None;
                 self.context_switcher.waiting_for_dev_stop = false;
-                self.mode = TuiMode::ContextPicker;
+                self.mode.replace(InteractionMode::ContextPicker);
             }
             _ => {}
         }
@@ -1189,7 +1192,7 @@ impl TuiApp {
             matched: filtered.len(),
             loaded: self.agents.agents.len(),
             more_available: self.agents.has_more(),
-            editing: self.mode == TuiMode::AgentFilter,
+            editing: self.mode == InteractionMode::AgentFilter,
         }
         .height();
         let notice_rows = u16::from(self.agents.last_error.is_some() && !filtered.is_empty());
@@ -1233,311 +1236,324 @@ impl TuiApp {
         self.agents.details_scroll = 0;
     }
 
-    fn execute_action(&mut self, action: TuiActionKind, event_tx: Option<&TuiEventSender>) {
+    fn execute_action(&mut self, action: ActionId, event_tx: Option<&TuiEventSender>) {
         match action {
-            TuiActionKind::SelectView(view) => {
+            ActionId::SelectDev => {
                 self.close_palette();
-                match view {
-                    TuiWorkspace::Ops => self.open_ops_workspace(event_tx),
-                    workspace => self.active_workspace = workspace,
-                }
+                self.active_workspace = Workspace::Dev;
             }
-            TuiActionKind::Plan => {
+            ActionId::SelectOps => {
+                self.close_palette();
+                self.open_ops_workspace(event_tx);
+            }
+            ActionId::Plan => {
                 self.close_palette();
                 self.open_command_form(CommandKind::Plan);
             }
-            TuiActionKind::Build => {
+            ActionId::Build => {
                 self.close_palette();
                 self.open_command_form(CommandKind::Build);
             }
-            TuiActionKind::Deploy => {
+            ActionId::Deploy => {
                 self.close_palette();
                 self.open_command_form(CommandKind::Deploy);
             }
-            TuiActionKind::Clean => {
+            ActionId::Clean => {
                 self.close_palette();
                 self.open_command_form(CommandKind::Clean);
             }
-            TuiActionKind::ToggleServer => {
+            ActionId::ToggleServer => {
                 self.close_palette();
                 self.request_server_toggle();
             }
-            TuiActionKind::RestartServer => {
+            ActionId::RestartServer => {
                 self.close_palette();
                 self.open_server_form(true, false);
             }
-            TuiActionKind::CleanRestartServer => {
+            ActionId::CleanRestartServer => {
                 self.close_palette();
                 self.open_server_form(true, true);
             }
-            TuiActionKind::FlipPanePlacement => {
+            ActionId::FlipPanePlacement => {
                 self.layout.dev_placement = self.layout.dev_placement.flipped();
                 self.close_palette();
             }
-            TuiActionKind::ToggleServerSubview => {
+            ActionId::ToggleServerSubview => {
                 let visible = self.layout.dev_is_visible(DevView::Server);
                 self.layout.set_dev_visible(DevView::Server, !visible);
                 self.close_palette();
             }
-            TuiActionKind::RefreshAgents => {
+            ActionId::RefreshAgents => {
                 self.close_palette();
                 self.refresh_agents(event_tx);
             }
-            TuiActionKind::OpenAgentDatasetFilter => {
+            ActionId::OpenAgentDatasetFilter => {
                 self.close_palette();
                 self.open_agent_dataset_filter();
             }
-            TuiActionKind::OpenAgentColumns => {
+            ActionId::OpenAgentColumns => {
                 self.close_palette();
                 self.agents.column_chooser = Some(ColumnChooserState::new(&self.agents.table));
-                self.mode = TuiMode::AgentColumns;
+                self.mode.replace(InteractionMode::AgentColumns);
             }
-            TuiActionKind::IncludeAgentMatches => {
+            ActionId::IncludeAgentMatches => {
                 self.include_filtered_agents();
                 self.close_palette();
             }
-            TuiActionKind::ExcludeAgentMatches => {
+            ActionId::ExcludeAgentMatches => {
                 self.exclude_filtered_agents();
                 self.close_palette();
             }
-            TuiActionKind::LoadMoreAgents => {
+            ActionId::LoadMoreAgents => {
                 self.close_palette();
                 self.load_more_agents(event_tx);
             }
-            TuiActionKind::OpenContextPicker => {
+            ActionId::OpenContextPicker => {
                 self.palette.reset();
                 self.open_context_picker();
             }
-            TuiActionKind::ToggleAgentAutoRefresh => {
+            ActionId::ToggleAgentAutoRefresh => {
                 self.toggle_agent_auto_refresh(event_tx);
                 self.close_palette();
             }
-            TuiActionKind::ToggleAgentDetails => {
+            ActionId::ToggleAgentDetails => {
                 self.toggle_agent_details();
                 self.close_palette();
             }
-            TuiActionKind::CycleAgentMode => {
+            ActionId::CycleAgentMode => {
                 self.cycle_agent_mode(event_tx);
                 self.close_palette();
             }
-            TuiActionKind::CycleOpsView => {
+            ActionId::CycleOpsView => {
                 self.ops_view = self.ops_view.next();
                 self.close_palette();
             }
-            TuiActionKind::CycleAgentFindScope => {
+            ActionId::CycleAgentFindScope => {
                 self.agents.query_scope = self.agents.query_scope.next();
                 self.agents.reset_selection();
                 self.close_palette();
             }
-            TuiActionKind::SelectOpsRoot(subject) => {
+            ActionId::SelectOpsAgents => {
                 self.close_palette();
-                self.select_ops_root(subject, event_tx);
+                self.select_ops_root(OpsRootSubject::Agents, event_tx);
             }
-            TuiActionKind::StartOrFocusRepl => {
+            ActionId::SelectOpsDeployment => {
+                self.close_palette();
+                self.select_ops_root(OpsRootSubject::Deployment, event_tx);
+            }
+            ActionId::SelectOpsEnvironment => {
+                self.close_palette();
+                self.select_ops_root(OpsRootSubject::Environment, event_tx);
+            }
+            ActionId::SelectOpsServer => {
+                self.close_palette();
+                self.select_ops_root(OpsRootSubject::Server, event_tx);
+            }
+            ActionId::StartOrFocusRepl => {
                 self.close_palette();
                 self.start_or_focus_repl(event_tx);
             }
-            TuiActionKind::FocusRepl => {
+            ActionId::FocusRepl => {
                 self.close_palette();
                 self.focus_repl();
             }
-            TuiActionKind::LeaveRepl => {
+            ActionId::LeaveRepl => {
                 self.palette.reset();
-                self.mode = TuiMode::Normal;
+                self.mode.replace(InteractionMode::Normal);
             }
-            TuiActionKind::StopRepl => {
+            ActionId::StopRepl => {
                 self.close_palette();
                 self.stop_repl();
             }
-            TuiActionKind::RestartRepl => {
+            ActionId::RestartRepl => {
                 self.close_palette();
                 self.open_repl_form(true);
             }
-            TuiActionKind::OpenPalette => {
+            ActionId::OpenPalette => {
                 self.open_palette(PaletteScope::All);
             }
-            TuiActionKind::ShowHelp => {
+            ActionId::ShowHelp => {
                 self.palette.reset();
                 self.open_help();
             }
-            TuiActionKind::Quit => {
+            ActionId::Quit => {
                 self.close_palette();
                 self.request_quit();
             }
         }
     }
 
-    fn execute_palette_action(&mut self, action: TuiActionKind, event_tx: Option<&TuiEventSender>) {
-        let Some(metadata) = action_by_kind(action) else {
-            return;
-        };
+    fn execute_palette_action(&mut self, action_id: ActionId, event_tx: Option<&TuiEventSender>) {
+        let metadata = action(action_id);
 
         if self.action_availability(metadata).is_unavailable() {
             return;
         }
 
-        self.execute_action(action, event_tx);
+        self.execute_action(action_id, event_tx);
     }
 
-    fn action_availability(&self, action: &TuiAction) -> TuiActionAvailability {
+    fn action_availability(&self, action: &ActionDefinition) -> ActionAvailability {
         match action.id {
-            TuiActionId::Plan | TuiActionId::Build | TuiActionId::Deploy | TuiActionId::Clean
+            ActionId::Plan | ActionId::Build | ActionId::Deploy | ActionId::Clean
                 if let Err(reason) = self.context.capability(DevView::BuildDeploy) =>
             {
-                TuiActionAvailability::Unavailable(reason)
+                ActionAvailability::Unavailable(reason)
             }
-            TuiActionId::StartOrFocusRepl | TuiActionId::RestartRepl
+            ActionId::StartOrFocusRepl | ActionId::RestartRepl
                 if let Err(reason) = self.context.capability(DevView::Repl) =>
             {
-                TuiActionAvailability::Unavailable(reason)
+                ActionAvailability::Unavailable(reason)
             }
-            TuiActionId::Plan | TuiActionId::Build | TuiActionId::Deploy | TuiActionId::Clean
+            ActionId::Plan | ActionId::Build | ActionId::Deploy | ActionId::Clean
                 if self.command_is_running() =>
             {
-                TuiActionAvailability::Unavailable("command already running")
+                ActionAvailability::Unavailable("command already running")
             }
-            TuiActionId::RefreshAgents | TuiActionId::LoadMoreAgents
-                if self.agents.refresh_running =>
-            {
-                TuiActionAvailability::Unavailable("refresh already running")
+            ActionId::RefreshAgents | ActionId::LoadMoreAgents if self.agents.refresh_running => {
+                ActionAvailability::Unavailable("refresh already running")
             }
-            TuiActionId::RefreshAgents | TuiActionId::LoadMoreAgents
+            ActionId::RefreshAgents | ActionId::LoadMoreAgents
                 if self.context_executor.is_none() =>
             {
-                TuiActionAvailability::Unavailable("context executor unavailable")
+                ActionAvailability::Unavailable("context executor unavailable")
             }
-            TuiActionId::LoadMoreAgents if !self.agents.has_more() => {
-                TuiActionAvailability::Unavailable("no additional agent batch")
+            ActionId::LoadMoreAgents if !self.agents.has_more() => {
+                ActionAvailability::Unavailable("no additional agent batch")
             }
-            TuiActionId::IncludeAgentMatches | TuiActionId::ExcludeAgentMatches
+            ActionId::IncludeAgentMatches | ActionId::ExcludeAgentMatches
                 if self.filtered_agents().is_empty() =>
             {
-                TuiActionAvailability::Unavailable("no loaded agents match")
+                ActionAvailability::Unavailable("no loaded agents match")
             }
-            TuiActionId::OpenContextPicker if self.context_switch_busy() => {
-                TuiActionAvailability::Unavailable("context switch already running")
+            ActionId::OpenContextPicker if self.context_switch_busy() => {
+                ActionAvailability::Unavailable("context switch already running")
             }
-            TuiActionId::ToggleServer
-            | TuiActionId::RestartServer
-            | TuiActionId::CleanRestartServer
+            ActionId::ToggleServer | ActionId::RestartServer | ActionId::CleanRestartServer
                 if !self.server.available || self.context.capability(DevView::Server).is_err() =>
             {
-                TuiActionAvailability::Unavailable("requires an available local server target")
+                ActionAvailability::Unavailable("requires an available local server target")
             }
-            _ => TuiActionAvailability::Available,
+            _ => ActionAvailability::Available,
         }
     }
 
-    fn action_target_summary(&self, action: &TuiAction) -> String {
+    fn action_target_summary(&self, action: &ActionDefinition) -> String {
         match action.target() {
-            TuiActionTarget::Interface => "TUI session".to_string(),
-            TuiActionTarget::ApplicationEnvironment => format!(
+            ActionTarget::Interface => "TUI session".to_string(),
+            ActionTarget::ApplicationEnvironment => format!(
                 "{}/{}/{}",
                 self.context.application, self.context.environment, self.context.server
             ),
-            TuiActionTarget::LocalServer => self.context.server.clone(),
-            TuiActionTarget::LoadedAgents => {
+            ActionTarget::LocalServer => self.context.server.clone(),
+            ActionTarget::LoadedAgents => {
                 format!("{} loaded agents", self.filtered_agents().len())
             }
         }
     }
 
     fn open_palette(&mut self, scope: PaletteScope) {
-        if self.mode != TuiMode::Palette {
-            self.palette.reset();
-            self.palette.return_mode = match self.mode {
-                TuiMode::AgentFilter => PaletteReturnMode::AgentFilter,
-                TuiMode::CommandForm => PaletteReturnMode::CommandForm,
-                TuiMode::SessionForm => PaletteReturnMode::SessionForm,
-                _ => PaletteReturnMode::Default,
-            };
+        match self.mode.current() {
+            InteractionMode::Palette => {}
+            InteractionMode::Leader => {
+                self.palette.reset();
+                self.mode.replace(InteractionMode::Palette);
+            }
+            _ => {
+                self.palette.reset();
+                self.mode.push(InteractionMode::Palette);
+            }
         }
         self.palette.scope = scope;
-        self.mode = TuiMode::Palette;
     }
 
     fn open_jobs_palette(&mut self) {
         self.selected_job = 0;
-        self.mode = TuiMode::Jobs;
+        self.open_transient_mode(InteractionMode::Jobs);
     }
 
-    fn filtered_actions(&self) -> Vec<TuiAction> {
+    fn filtered_actions(&self) -> Vec<ActionDefinition> {
         filtered_actions(&self.palette.query, self.palette.scope, self)
     }
 
     fn open_leader(&mut self) {
-        self.leader = LeaderState {
-            group: None,
-            return_mode: match self.mode {
-                TuiMode::AgentFilter => LeaderReturnMode::AgentFilter,
-                TuiMode::Palette => LeaderReturnMode::Palette,
-                TuiMode::CommandForm => LeaderReturnMode::CommandForm,
-                TuiMode::SessionForm => LeaderReturnMode::SessionForm,
-                TuiMode::Repl => LeaderReturnMode::Repl,
-                TuiMode::TerminalScrollback => LeaderReturnMode::TerminalScrollback,
-                _ => LeaderReturnMode::Normal,
-            },
-        };
-        self.mode = TuiMode::Leader;
+        self.leader.group = None;
+        self.mode.push(InteractionMode::Leader);
     }
 
     fn close_leader(&mut self) {
-        self.mode = match self.leader.return_mode {
-            LeaderReturnMode::Normal => self.default_mode(),
-            LeaderReturnMode::AgentFilter => TuiMode::AgentFilter,
-            LeaderReturnMode::Palette => TuiMode::Palette,
-            LeaderReturnMode::CommandForm if self.command_form.is_some() => TuiMode::CommandForm,
-            LeaderReturnMode::CommandForm => self.default_mode(),
-            LeaderReturnMode::SessionForm if self.session_form.is_some() => TuiMode::SessionForm,
-            LeaderReturnMode::SessionForm => self.default_mode(),
-            LeaderReturnMode::Repl => TuiMode::Repl,
-            LeaderReturnMode::TerminalScrollback => TuiMode::TerminalScrollback,
-        };
+        let fallback = self.default_mode();
+        self.mode.pop_or(fallback);
+        self.normalize_mode();
         self.leader.group = None;
     }
 
     fn open_context_picker(&mut self) {
         self.context_switcher.last_error = None;
         self.context_switcher.clamp_selection();
-        self.mode = TuiMode::ContextPicker;
+        self.open_transient_mode(InteractionMode::ContextPicker);
     }
 
     fn close_palette(&mut self) {
         self.palette.reset();
-        self.mode = match self.palette.return_mode {
-            PaletteReturnMode::AgentFilter => TuiMode::AgentFilter,
-            PaletteReturnMode::CommandForm if self.command_form.is_some() => TuiMode::CommandForm,
-            PaletteReturnMode::SessionForm if self.session_form.is_some() => TuiMode::SessionForm,
-            PaletteReturnMode::CommandForm
-            | PaletteReturnMode::SessionForm
-            | PaletteReturnMode::Default => self.default_mode(),
-        };
+        let fallback = self.default_mode();
+        self.mode.pop_or(fallback);
+        self.normalize_mode();
     }
 
-    fn default_mode(&self) -> TuiMode {
+    fn default_mode(&self) -> InteractionMode {
         if self.dev_panel_focused(DevView::BuildDeploy) && self.command_is_running() {
-            TuiMode::CommandInteraction
+            InteractionMode::CommandInteraction
         } else if self.dev_panel_focused(DevView::Repl) && self.repl.is_running() {
-            TuiMode::Repl
+            InteractionMode::Repl
         } else {
-            TuiMode::Normal
+            InteractionMode::Normal
+        }
+    }
+
+    fn restore_default_mode(&mut self) {
+        let mode = self.default_mode();
+        self.mode.reset(mode);
+    }
+
+    fn open_transient_mode(&mut self, mode: InteractionMode) {
+        match self.mode.current() {
+            InteractionMode::Leader | InteractionMode::Palette => self.mode.replace(mode),
+            _ => self.mode.push(mode),
+        }
+    }
+
+    fn close_transient_mode(&mut self) {
+        let fallback = self.default_mode();
+        self.mode.pop_or(fallback);
+        self.normalize_mode();
+    }
+
+    fn normalize_mode(&mut self) {
+        let valid = match self.mode.current() {
+            InteractionMode::CommandForm => self.command_form.is_some(),
+            InteractionMode::SessionForm => self.session_form.is_some(),
+            _ => true,
+        };
+        if !valid {
+            self.restore_default_mode();
         }
     }
 
     fn next_workspace(&mut self) {
         self.active_workspace =
-            TuiWorkspace::from_index((self.active_workspace.index() + 1) % TuiWorkspace::ALL.len());
+            Workspace::from_index((self.active_workspace.index() + 1) % Workspace::ALL.len());
     }
 
     fn previous_workspace(&mut self) {
-        self.active_workspace = TuiWorkspace::from_index(
-            (self.active_workspace.index() + TuiWorkspace::ALL.len() - 1) % TuiWorkspace::ALL.len(),
+        self.active_workspace = Workspace::from_index(
+            (self.active_workspace.index() + Workspace::ALL.len() - 1) % Workspace::ALL.len(),
         );
     }
 
     fn focus_next_pane(&mut self) {
         match self.active_workspace {
-            TuiWorkspace::Dev => {
+            Workspace::Dev => {
                 let visible = self.layout.visible_dev_views(self.dev_primary);
                 let current = visible
                     .iter()
@@ -1545,13 +1561,13 @@ impl TuiApp {
                     .unwrap_or(0);
                 self.dev_focus = visible[(current + 1) % visible.len()];
             }
-            TuiWorkspace::Ops => self.cycle_ops_pane_focus(),
+            Workspace::Ops => self.cycle_ops_pane_focus(),
         }
     }
 
     fn focus_previous_pane(&mut self) {
         match self.active_workspace {
-            TuiWorkspace::Dev => {
+            Workspace::Dev => {
                 let visible = self.layout.visible_dev_views(self.dev_primary);
                 let current = visible
                     .iter()
@@ -1559,7 +1575,7 @@ impl TuiApp {
                     .unwrap_or(0);
                 self.dev_focus = visible[(current + visible.len() - 1) % visible.len()];
             }
-            TuiWorkspace::Ops => self.cycle_ops_pane_focus(),
+            Workspace::Ops => self.cycle_ops_pane_focus(),
         }
     }
 
@@ -1576,7 +1592,7 @@ impl TuiApp {
     }
 
     fn select_ops_root(&mut self, subject: OpsRootSubject, event_tx: Option<&TuiEventSender>) {
-        self.active_workspace = TuiWorkspace::Ops;
+        self.active_workspace = Workspace::Ops;
         self.ops_subject = OpsSubject::Root(subject);
         self.ops_view = OpsView::Overview;
         self.agents.details_scroll = 0;
@@ -1602,23 +1618,21 @@ impl TuiApp {
             KeyCode::Tab => self.focus_next_pane(),
             KeyCode::BackTab => self.focus_previous_pane(),
             KeyCode::Char('f') => match self.active_workspace {
-                TuiWorkspace::Dev => {
-                    self.layout.dev_placement = self.layout.dev_placement.flipped()
-                }
-                TuiWorkspace::Ops => {
+                Workspace::Dev => self.layout.dev_placement = self.layout.dev_placement.flipped(),
+                Workspace::Ops => {
                     self.layout.ops_details_placement = self.layout.ops_details_placement.flipped()
                 }
             },
-            KeyCode::Char('b') if self.active_workspace == TuiWorkspace::Dev => {
+            KeyCode::Char('b') if self.active_workspace == Workspace::Dev => {
                 self.toggle_dev_subview(DevView::BuildDeploy)
             }
-            KeyCode::Char('s') if self.active_workspace == TuiWorkspace::Dev => {
+            KeyCode::Char('s') if self.active_workspace == Workspace::Dev => {
                 self.toggle_dev_subview(DevView::Server)
             }
-            KeyCode::Char('r') if self.active_workspace == TuiWorkspace::Dev => {
+            KeyCode::Char('r') if self.active_workspace == Workspace::Dev => {
                 self.toggle_dev_subview(DevView::Repl)
             }
-            KeyCode::Char('d') if self.active_workspace == TuiWorkspace::Ops => {
+            KeyCode::Char('d') if self.active_workspace == Workspace::Ops => {
                 self.toggle_agent_details()
             }
             KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down => {
@@ -1636,7 +1650,7 @@ impl TuiApp {
     fn handle_jobs_key(&mut self, key: KeyEvent) {
         let count = self.job_count();
         match key.code {
-            KeyCode::Esc => self.mode = self.default_mode(),
+            KeyCode::Esc => self.close_transient_mode(),
             KeyCode::Up => self.selected_job = self.selected_job.saturating_sub(1),
             KeyCode::Down => {
                 self.selected_job = self
@@ -1646,7 +1660,7 @@ impl TuiApp {
             }
             KeyCode::Enter if count > 0 => {
                 self.open_dev_workspace(DevView::BuildDeploy);
-                self.mode = self.default_mode();
+                self.close_transient_mode();
             }
             _ => {}
         }
@@ -1654,13 +1668,13 @@ impl TuiApp {
 
     fn handle_quit_blocked_key(&mut self, key: KeyEvent) {
         if matches!(key.code, KeyCode::Esc | KeyCode::Enter) {
-            self.mode = self.default_mode();
+            self.close_transient_mode();
         }
     }
 
     fn request_quit(&mut self) {
         if self.has_active_work() {
-            self.mode = TuiMode::QuitBlocked;
+            self.mode.push(InteractionMode::QuitBlocked);
         } else {
             self.should_quit = true;
         }
@@ -1703,7 +1717,7 @@ impl TuiApp {
             return;
         };
         match self.active_workspace {
-            TuiWorkspace::Ops if self.agent_details_open() => {
+            Workspace::Ops if self.agent_details_open() => {
                 let placement = self.layout.ops_details_placement;
                 let delta = physical_ratio_delta(area, placement, direction, cells);
                 if delta != 0 {
@@ -1712,7 +1726,7 @@ impl TuiApp {
                         layout::clamp_ops_details_ratio(area, placement, requested);
                 }
             }
-            TuiWorkspace::Dev => {
+            Workspace::Dev => {
                 let placement = self.layout.dev_placement;
                 let visible = self.layout.visible_dev_views(self.dev_primary);
                 if visible.len() < 2 {
@@ -1736,12 +1750,12 @@ impl TuiApp {
                     }
                 }
             }
-            TuiWorkspace::Ops => {}
+            Workspace::Ops => {}
         }
     }
 
     fn open_dev_workspace(&mut self, panel: DevView) {
-        self.active_workspace = TuiWorkspace::Dev;
+        self.active_workspace = Workspace::Dev;
         if panel != self.dev_primary && !self.layout.dev_is_visible(panel) {
             self.layout.set_dev_visible(self.dev_primary, false);
             self.dev_primary = panel;
@@ -1751,7 +1765,7 @@ impl TuiApp {
     }
 
     fn open_ops_workspace(&mut self, event_tx: Option<&TuiEventSender>) {
-        self.active_workspace = TuiWorkspace::Ops;
+        self.active_workspace = Workspace::Ops;
         match self.ops_subject.root() {
             OpsRootSubject::Agents => {
                 if self.agents.agents.is_empty() && !self.agents.refresh_running {
@@ -1768,11 +1782,11 @@ impl TuiApp {
     }
 
     fn dev_panel_focused(&self, panel: DevView) -> bool {
-        self.active_workspace == TuiWorkspace::Dev && self.dev_focus == panel
+        self.active_workspace == Workspace::Dev && self.dev_focus == panel
     }
 
     fn ops_agents_focused(&self) -> bool {
-        self.active_workspace == TuiWorkspace::Ops
+        self.active_workspace == Workspace::Ops
             && matches!(self.ops_subject, OpsSubject::Root(OpsRootSubject::Agents))
             && self.ops_view == OpsView::Overview
     }
@@ -1782,7 +1796,7 @@ impl TuiApp {
     }
 
     fn ops_document_focused(&self) -> bool {
-        self.active_workspace == TuiWorkspace::Ops
+        self.active_workspace == Workspace::Ops
             && self.ops_view == OpsView::Overview
             && !matches!(self.ops_subject, OpsSubject::Root(OpsRootSubject::Agents))
     }
@@ -1822,7 +1836,7 @@ impl TuiApp {
                     AgentOverviewFocus::Details => AgentOverviewFocus::List,
                 };
                 if self.agents.focus == AgentOverviewFocus::Details {
-                    self.mode = TuiMode::Normal;
+                    self.mode.replace(InteractionMode::Normal);
                 }
             }
             OpsView::Metrics => {}
@@ -1941,13 +1955,13 @@ impl TuiApp {
         } else {
             self.context_switcher.pending_action = Some(action);
             self.context_switcher.waiting_for_dev_stop = false;
-            self.mode = TuiMode::ContextSwitchConfirm;
+            self.mode.push(InteractionMode::ContextSwitchConfirm);
         }
     }
 
     fn confirm_context_switch(&mut self, event_tx: Option<&TuiEventSender>) {
         if self.context_switcher.pending_action.is_none() {
-            self.mode = TuiMode::ContextPicker;
+            self.close_transient_mode();
             return;
         }
         self.close_ops_for_context_switch();
@@ -1980,10 +1994,10 @@ impl TuiApp {
         }
         self.context_switcher.waiting_for_dev_stop = false;
         if let Some(action) = self.context_switcher.pending_action.take() {
-            self.mode = TuiMode::ContextPicker;
+            self.mode.replace(InteractionMode::ContextPicker);
             self.start_context_switch_action(action, event_tx);
         } else {
-            self.mode = TuiMode::ContextPicker;
+            self.mode.replace(InteractionMode::ContextPicker);
         }
     }
 
@@ -2134,8 +2148,8 @@ impl TuiApp {
                 self.reset_agents_for_context_switch();
                 self.invalidate_ops_environment();
                 self.context_switcher.last_error = None;
-                self.mode = self.default_mode();
-                if self.active_workspace == TuiWorkspace::Ops {
+                self.restore_default_mode();
+                if self.active_workspace == Workspace::Ops {
                     match self.ops_subject.root() {
                         OpsRootSubject::Agents => self.refresh_agents(Some(event_tx)),
                         OpsRootSubject::Deployment | OpsRootSubject::Environment => {
@@ -2340,7 +2354,7 @@ impl TuiApp {
 
     fn open_agent_dataset_filter(&mut self) {
         self.agents.open_dataset_filter();
-        self.mode = TuiMode::AgentDatasetFilter;
+        self.mode.replace(InteractionMode::AgentDatasetFilter);
     }
 
     fn reset_agent_dataset(&mut self) {
@@ -2685,7 +2699,7 @@ impl TuiApp {
             }
             KeyCode::PageUp => {
                 self.scroll_output_up();
-                self.mode = TuiMode::TerminalScrollback;
+                self.mode.replace(InteractionMode::TerminalScrollback);
             }
             KeyCode::PageDown => self.scroll_output_down(),
             KeyCode::Home => self.scroll_output_top(),
@@ -2716,7 +2730,7 @@ impl TuiApp {
             .cloned()
             .unwrap_or_default();
         self.command_form = Some(CommandReviewForm::new(kind, values));
-        self.mode = TuiMode::CommandForm;
+        self.mode.replace(InteractionMode::CommandForm);
     }
 
     fn handle_command_form_key(&mut self, key: KeyEvent, event_tx: Option<&TuiEventSender>) {
@@ -2738,7 +2752,7 @@ impl TuiApp {
         }
 
         let Some(form) = self.command_form.as_mut() else {
-            self.mode = self.default_mode();
+            self.restore_default_mode();
             return;
         };
         if form.editing {
@@ -2760,7 +2774,7 @@ impl TuiApp {
         match key.code {
             KeyCode::Esc => {
                 self.command_form = None;
-                self.mode = self.default_mode();
+                self.restore_default_mode();
             }
             KeyCode::Up => form.selected = form.selected.saturating_sub(1),
             KeyCode::Down | KeyCode::Tab => {
@@ -2790,7 +2804,7 @@ impl TuiApp {
         remembered.yes = false;
         self.command_form_memory
             .insert(self.context.short_label(), remembered);
-        self.mode = TuiMode::Normal;
+        self.mode.replace(InteractionMode::Normal);
         self.start_command_with_values(kind, values, event_tx);
     }
 
@@ -2837,7 +2851,7 @@ impl TuiApp {
         let command_id = self.next_command_id;
         self.next_command_id += 1;
         self.open_dev_workspace(DevView::BuildDeploy);
-        self.mode = TuiMode::CommandInteraction;
+        self.mode.replace(InteractionMode::CommandInteraction);
         self.command_run = Some(CommandRun::new(
             command_id,
             kind,
@@ -2861,7 +2875,7 @@ impl TuiApp {
             Err(error) => {
                 self.append_local_command_line(format!("failed to prepare command: {error:#}"));
                 self.set_command_status(CommandStatus::Failed);
-                self.mode = TuiMode::Normal;
+                self.mode.replace(InteractionMode::Normal);
                 return;
             }
         };
@@ -2881,7 +2895,7 @@ impl TuiApp {
             Err(error) => {
                 self.append_local_command_line(format!("failed to start command: {error:#}"));
                 self.set_command_status(CommandStatus::Failed);
-                self.mode = TuiMode::Normal;
+                self.mode.replace(InteractionMode::Normal);
             }
         }
     }
@@ -2995,10 +3009,11 @@ impl TuiApp {
             });
         }
         self.trim_completed_job_capacity();
-        if self.mode == TuiMode::CommandInteraction
-            || (self.mode == TuiMode::TerminalScrollback && self.dev_focus == DevView::BuildDeploy)
+        if self.mode == InteractionMode::CommandInteraction
+            || (self.mode == InteractionMode::TerminalScrollback
+                && self.dev_focus == DevView::BuildDeploy)
         {
-            self.mode = TuiMode::Normal;
+            self.mode.replace(InteractionMode::Normal);
         }
         self.resume_pending_context_switch_if_ready(Some(event_tx));
     }
@@ -3040,7 +3055,7 @@ impl TuiApp {
                 run.finished_at = Some(Instant::now());
                 run.stop_spinner();
                 run.terminal.feed_local_line("force killed");
-                self.mode = TuiMode::Normal;
+                self.mode.replace(InteractionMode::Normal);
             }
             CommandStatus::Succeeded | CommandStatus::Failed | CommandStatus::Killed => {}
         }
@@ -3120,7 +3135,7 @@ impl TuiApp {
             active_workspace: self.active_workspace,
             dev_primary: self.dev_primary,
             focused_dev_view: self.dev_focus,
-            mode: self.mode,
+            mode: self.mode.current(),
             context_picker_rows: context_picker_layout_rows(&self.context_switcher),
             context_picker_selected: self.context_switcher.selected,
             context_picker_prefix_height: context_picker_prefix_height(&self.context_switcher),
@@ -3211,7 +3226,7 @@ impl TuiApp {
             restart,
             error: None,
         });
-        self.mode = TuiMode::SessionForm;
+        self.mode.replace(InteractionMode::SessionForm);
     }
 
     fn open_repl_form(&mut self, restart: bool) {
@@ -3224,7 +3239,7 @@ impl TuiApp {
             selected: 0,
             restart,
         });
-        self.mode = TuiMode::SessionForm;
+        self.mode.replace(InteractionMode::SessionForm);
     }
 
     fn handle_session_form_key(&mut self, key: KeyEvent, event_tx: Option<&TuiEventSender>) {
@@ -3245,7 +3260,7 @@ impl TuiApp {
             return;
         }
         let Some(form) = self.session_form.as_mut() else {
-            self.mode = self.default_mode();
+            self.restore_default_mode();
             return;
         };
 
@@ -3279,7 +3294,7 @@ impl TuiApp {
         match key.code {
             KeyCode::Esc => {
                 self.session_form = None;
-                self.mode = self.default_mode();
+                self.restore_default_mode();
             }
             KeyCode::Up => form.set_selected(form.selected().saturating_sub(1)),
             KeyCode::Down | KeyCode::Tab => form.set_selected((form.selected() + 1) % count),
@@ -3316,7 +3331,7 @@ impl TuiApp {
                 remembered.yes = false;
                 self.server_form_memory
                     .insert(self.context.short_label(), remembered);
-                self.mode = TuiMode::Normal;
+                self.mode.replace(InteractionMode::Normal);
                 if *restart && self.server.run.is_running() {
                     self.pending_server_restart = Some(values);
                     self.stop_server();
@@ -3332,7 +3347,7 @@ impl TuiApp {
                 remembered.yes = false;
                 self.repl_form_memory
                     .insert(self.context.short_label(), remembered);
-                self.mode = TuiMode::Normal;
+                self.mode.replace(InteractionMode::Normal);
                 if *restart && self.repl.is_running() {
                     self.pending_repl_restart = Some(values);
                     self.stop_repl();
@@ -3543,11 +3558,11 @@ impl TuiApp {
         self.open_dev_workspace(DevView::Repl);
         if self.dev_context_unavailable() {
             self.repl.run.last_error = Some("selected context is ops-only".to_string());
-            self.mode = TuiMode::Normal;
+            self.mode.replace(InteractionMode::Normal);
             return;
         }
         if self.repl.is_running() {
-            self.mode = TuiMode::Repl;
+            self.mode.replace(InteractionMode::Repl);
             return;
         }
 
@@ -3571,7 +3586,7 @@ impl TuiApp {
             screen_cols,
             self.context.short_label(),
         );
-        self.mode = TuiMode::Repl;
+        self.mode.replace(InteractionMode::Repl);
         self.repl
             .run
             .screen
@@ -3586,7 +3601,7 @@ impl TuiApp {
             Err(error) => {
                 self.repl.run.status = ReplStatus::Failed;
                 self.repl.run.last_error = Some(format!("failed to prepare REPL: {error:#}"));
-                self.mode = TuiMode::Normal;
+                self.mode.replace(InteractionMode::Normal);
                 return;
             }
         };
@@ -3600,7 +3615,7 @@ impl TuiApp {
             Err(error) => {
                 self.repl.run.status = ReplStatus::Failed;
                 self.repl.run.last_error = Some(format!("failed to start REPL: {error:#}"));
-                self.mode = TuiMode::Normal;
+                self.mode.replace(InteractionMode::Normal);
             }
         }
     }
@@ -3640,7 +3655,7 @@ impl TuiApp {
     fn focus_repl(&mut self) {
         self.open_dev_workspace(DevView::Repl);
         if self.repl.is_running() {
-            self.mode = TuiMode::Repl;
+            self.mode.replace(InteractionMode::Repl);
         }
     }
 
@@ -3652,7 +3667,7 @@ impl TuiApp {
 
         if key.code == KeyCode::PageUp {
             self.repl.run.screen.scroll_up(10);
-            self.mode = TuiMode::TerminalScrollback;
+            self.mode.replace(InteractionMode::TerminalScrollback);
             return;
         }
 
@@ -3676,7 +3691,7 @@ impl TuiApp {
         match key.code {
             KeyCode::Esc => {
                 self.scroll_terminal_bottom();
-                self.mode = self.default_mode();
+                self.restore_default_mode();
             }
             KeyCode::Up => self.scroll_terminal_up(1),
             KeyCode::Down => self.scroll_terminal_down(1),
@@ -3753,11 +3768,10 @@ impl TuiApp {
             .as_bytes(),
         );
         let pending_restart = self.pending_repl_restart.take();
-        if self.mode == TuiMode::Repl
-            || (self.mode == TuiMode::TerminalScrollback && self.dev_focus == DevView::Repl)
-            || (self.mode == TuiMode::Leader && self.leader.return_mode == LeaderReturnMode::Repl)
+        if self.mode.contains(InteractionMode::Repl)
+            || (self.mode == InteractionMode::TerminalScrollback && self.dev_focus == DevView::Repl)
         {
-            self.mode = TuiMode::Normal;
+            self.mode.reset(InteractionMode::Normal);
         }
         if let Some(values) = pending_restart {
             self.start_repl_with_values(values, Some(event_tx));
@@ -3818,27 +3832,6 @@ impl TuiApp {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum TuiMode {
-    Normal,
-    Leader,
-    Layout,
-    Jobs,
-    QuitBlocked,
-    Palette,
-    ContextPicker,
-    ContextSwitchConfirm,
-    Help,
-    AgentFilter,
-    AgentDatasetFilter,
-    AgentColumns,
-    CommandForm,
-    SessionForm,
-    CommandInteraction,
-    Repl,
-    TerminalScrollback,
-}
-
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 enum LeaderGroup {
     #[default]
@@ -3847,21 +3840,8 @@ enum LeaderGroup {
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-enum LeaderReturnMode {
-    #[default]
-    Normal,
-    AgentFilter,
-    Palette,
-    CommandForm,
-    SessionForm,
-    Repl,
-    TerminalScrollback,
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct LeaderState {
     group: Option<LeaderGroup>,
-    return_mode: LeaderReturnMode,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -5512,57 +5492,6 @@ fn write_tui_preferences(
     Ok(())
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum TuiWorkspace {
-    Dev,
-    Ops,
-}
-
-impl TuiWorkspace {
-    pub(super) const ALL: [Self; 2] = [Self::Dev, Self::Ops];
-
-    pub(super) fn title(self) -> &'static str {
-        match self {
-            Self::Dev => "Dev",
-            Self::Ops => "Ops",
-        }
-    }
-
-    fn index(self) -> usize {
-        Self::ALL.iter().position(|view| *view == self).unwrap_or(0)
-    }
-
-    fn from_index(index: usize) -> Self {
-        Self::ALL[index]
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum DevView {
-    BuildDeploy,
-    Server,
-    Repl,
-}
-
-impl DevView {
-    pub(super) const ALL: [Self; 3] = [Self::BuildDeploy, Self::Server, Self::Repl];
-
-    pub(super) fn title(self) -> &'static str {
-        match self {
-            Self::BuildDeploy => "Build & Deploy",
-            Self::Repl => "REPL",
-            Self::Server => "Server",
-        }
-    }
-
-    pub(super) fn index(self) -> usize {
-        Self::ALL
-            .iter()
-            .position(|panel| *panel == self)
-            .unwrap_or(0)
-    }
-}
-
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 enum PaletteScope {
     #[default]
@@ -5570,21 +5499,11 @@ enum PaletteScope {
     Context,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-enum PaletteReturnMode {
-    #[default]
-    Default,
-    AgentFilter,
-    CommandForm,
-    SessionForm,
-}
-
 #[derive(Debug, Clone, Default)]
 struct CommandPalette {
     query: String,
     selected: usize,
     scope: PaletteScope,
-    return_mode: PaletteReturnMode,
 }
 
 impl CommandPalette {
@@ -6402,7 +6321,7 @@ fn render_tree(frame: &mut Frame<'_>, app: &TuiApp) {
         active_workspace: app.active_workspace,
         dev_primary: app.dev_primary,
         focused_dev_view: app.dev_focus,
-        mode: app.mode,
+        mode: app.mode.current(),
         context_picker_rows,
         context_picker_selected: app.context_switcher.selected,
         context_picker_prefix_height: context_picker_prefix_height(&app.context_switcher),
@@ -6414,29 +6333,29 @@ fn render_tree(frame: &mut Frame<'_>, app: &TuiApp) {
     render_shell_header(frame, snapshot.header, app);
 
     match app.active_workspace {
-        TuiWorkspace::Dev => render_dev_workspace(frame, snapshot.workspace_body, app),
-        TuiWorkspace::Ops => render_ops_workspace(frame, snapshot.workspace_body, app),
+        Workspace::Dev => render_dev_workspace(frame, snapshot.workspace_body, app),
+        Workspace::Ops => render_ops_workspace(frame, snapshot.workspace_body, app),
     }
     render_shell_footer(frame, snapshot.footer, app);
 
-    match app.mode {
-        TuiMode::Normal => {}
-        TuiMode::Leader => render_leader_hint(frame, app),
-        TuiMode::Layout => {}
-        TuiMode::Jobs => render_jobs(frame, app),
-        TuiMode::QuitBlocked => render_quit_blocked(frame, app),
-        TuiMode::ContextPicker => render_context_picker(frame, app),
-        TuiMode::ContextSwitchConfirm => render_context_switch_confirm(frame, app),
-        TuiMode::AgentFilter => {}
-        TuiMode::AgentDatasetFilter => render_agent_dataset_filter(frame, app),
-        TuiMode::AgentColumns => render_agent_columns(frame, app),
-        TuiMode::CommandForm => render_command_form(frame, app),
-        TuiMode::SessionForm => render_session_form(frame, app),
-        TuiMode::CommandInteraction => {}
-        TuiMode::Repl => {}
-        TuiMode::TerminalScrollback => {}
-        TuiMode::Palette => render_palette(frame, app),
-        TuiMode::Help => render_help(frame, app),
+    match app.mode.current() {
+        InteractionMode::Normal => {}
+        InteractionMode::Leader => render_leader_hint(frame, app),
+        InteractionMode::Layout => {}
+        InteractionMode::Jobs => render_jobs(frame, app),
+        InteractionMode::QuitBlocked => render_quit_blocked(frame, app),
+        InteractionMode::ContextPicker => render_context_picker(frame, app),
+        InteractionMode::ContextSwitchConfirm => render_context_switch_confirm(frame, app),
+        InteractionMode::AgentFilter => {}
+        InteractionMode::AgentDatasetFilter => render_agent_dataset_filter(frame, app),
+        InteractionMode::AgentColumns => render_agent_columns(frame, app),
+        InteractionMode::CommandForm => render_command_form(frame, app),
+        InteractionMode::SessionForm => render_session_form(frame, app),
+        InteractionMode::CommandInteraction => {}
+        InteractionMode::Repl => {}
+        InteractionMode::TerminalScrollback => {}
+        InteractionMode::Palette => render_palette(frame, app),
+        InteractionMode::Help => render_help(frame, app),
     }
 }
 
@@ -6865,7 +6784,7 @@ fn render_ops_agents_overview(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
         matched: filtered.len(),
         loaded: app.agents.agents.len(),
         more_available: app.agents.has_more(),
-        editing: app.mode == TuiMode::AgentFilter,
+        editing: app.mode == InteractionMode::AgentFilter,
     };
     let query_height = query_bar.height() as usize;
     let stale_result_notice = usize::from(app.agents.last_error.is_some() && !filtered.is_empty());
@@ -7401,12 +7320,12 @@ fn render_shell_footer(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
         WorkspaceItem {
             key: "",
             label: "Dev",
-            active: app.active_workspace == TuiWorkspace::Dev,
+            active: app.active_workspace == Workspace::Dev,
         },
         WorkspaceItem {
             key: "",
             label: "Ops",
-            active: app.active_workspace == TuiWorkspace::Ops,
+            active: app.active_workspace == Workspace::Ops,
         },
     ];
     WorkspaceSelector {
@@ -7507,11 +7426,11 @@ fn render_shell_footer(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
                 label: "Return to live input",
             },
         ];
-        let items = if app.mode == TuiMode::Layout {
+        let items = if app.mode == InteractionMode::Layout {
             layout_mode.as_slice()
-        } else if app.mode == TuiMode::TerminalScrollback {
+        } else if app.mode == InteractionMode::TerminalScrollback {
             scrollback_mode.as_slice()
-        } else if app.active_workspace == TuiWorkspace::Dev {
+        } else if app.active_workspace == Workspace::Dev {
             dev.as_slice()
         } else {
             ops.as_slice()
@@ -9802,7 +9721,7 @@ fn render_dev_workspace(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
         active_workspace: app.active_workspace,
         dev_primary: app.dev_primary,
         focused_dev_view: app.dev_focus,
-        mode: app.mode,
+        mode: app.mode.current(),
         context_picker_rows: context_picker_layout_rows(&app.context_switcher),
         context_picker_selected: app.context_switcher.selected,
         context_picker_prefix_height: context_picker_prefix_height(&app.context_switcher),
@@ -9851,7 +9770,7 @@ fn render_repl_view(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
         .areas(area);
 
     frame.render_widget(
-        Paragraph::new(repl_status_line(&app.repl, app.mode)).style(surface_style()),
+        Paragraph::new(repl_status_line(&app.repl, app.mode.current())).style(surface_style()),
         summary_area,
     );
 
@@ -9870,7 +9789,7 @@ fn render_repl_view(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
     );
     render_output_scrollbar(frame, terminal_area, &app.repl.run.screen);
 
-    if app.mode == TuiMode::Repl
+    if app.mode == InteractionMode::Repl
         && let Some(cursor) = app
             .repl
             .run
@@ -10073,10 +9992,10 @@ fn help_lines(app: &TuiApp, width: usize) -> Vec<Line<'static>> {
         width,
         "Global",
         &[
-            TuiActionId::OpenPalette,
-            TuiActionId::OpenContextPicker,
-            TuiActionId::ShowHelp,
-            TuiActionId::Quit,
+            ActionId::OpenPalette,
+            ActionId::OpenContextPicker,
+            ActionId::ShowHelp,
+            ActionId::Quit,
         ],
     );
     push_section_break(&mut lines, width, "Leader");
@@ -10093,7 +10012,7 @@ fn help_lines(app: &TuiApp, width: usize) -> Vec<Line<'static>> {
     push_raw_help(&mut lines, width, "enter", "Execute selected action");
     push_raw_help(&mut lines, width, "esc / ctrl+c", "Close palette");
 
-    if app.active_workspace == TuiWorkspace::Dev {
+    if app.active_workspace == Workspace::Dev {
         push_section_break(&mut lines, width, "Dev panes");
         push_raw_help(&mut lines, width, "tab / shift+tab", "Focus visible pane");
         push_raw_help(
@@ -10130,14 +10049,14 @@ fn help_lines(app: &TuiApp, width: usize) -> Vec<Line<'static>> {
             width,
             "Agents Overview",
             &[
-                TuiActionId::RefreshAgents,
-                TuiActionId::OpenAgentDatasetFilter,
-                TuiActionId::IncludeAgentMatches,
-                TuiActionId::ExcludeAgentMatches,
-                TuiActionId::LoadMoreAgents,
-                TuiActionId::ToggleAgentAutoRefresh,
-                TuiActionId::ToggleAgentDetails,
-                TuiActionId::CycleAgentMode,
+                ActionId::RefreshAgents,
+                ActionId::OpenAgentDatasetFilter,
+                ActionId::IncludeAgentMatches,
+                ActionId::ExcludeAgentMatches,
+                ActionId::LoadMoreAgents,
+                ActionId::ToggleAgentAutoRefresh,
+                ActionId::ToggleAgentDetails,
+                ActionId::CycleAgentMode,
             ],
         );
         push_raw_help(&mut lines, width, "type", "Find within loaded agents");
@@ -10190,7 +10109,7 @@ fn push_action_section_for_app(
     app: &TuiApp,
     width: usize,
     title: &'static str,
-    ids: &[TuiActionId],
+    ids: &[ActionId],
 ) {
     push_section_break(lines, width, title);
     for id in ids {
@@ -10216,13 +10135,13 @@ fn push_section_break(lines: &mut Vec<Line<'static>>, width: usize, title: &'sta
 fn push_action_help_for_app(
     lines: &mut Vec<Line<'static>>,
     app: &TuiApp,
-    action: &TuiAction,
+    action: &ActionDefinition,
     width: usize,
 ) {
     let shortcut = action.shortcut.unwrap_or("-");
     let suffix = match app.action_availability(action) {
-        TuiActionAvailability::Available => String::new(),
-        TuiActionAvailability::Unavailable(reason) => format!(" ({reason})"),
+        ActionAvailability::Available => String::new(),
+        ActionAvailability::Unavailable(reason) => format!(" ({reason})"),
     };
     let label = format!("{}{suffix}", action.label);
     lines.push(
@@ -10268,7 +10187,7 @@ fn render_leader_hint(frame: &mut Frame<'_>, app: &TuiApp) {
         Some(LeaderGroup::Workspaces) => {
             &[("n", "Next"), ("p", "Previous"), ("d", "Dev"), ("o", "Ops")]
         }
-        Some(LeaderGroup::Views) if app.active_workspace == TuiWorkspace::Dev => {
+        Some(LeaderGroup::Views) if app.active_workspace == Workspace::Dev => {
             &[("b", "Build & Deploy"), ("s", "Server"), ("r", "REPL")]
         }
         Some(LeaderGroup::Views) => &[("o", "Overview"), ("a", "Activity"), ("m", "Metrics")],
@@ -10341,7 +10260,7 @@ fn render_output_view(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
 }
 
 fn show_command_input(app: &TuiApp) -> bool {
-    app.mode == TuiMode::CommandInteraction
+    app.mode == InteractionMode::CommandInteraction
         && app.command_run.as_ref().is_some_and(|run| {
             matches!(
                 run.status,
@@ -10446,7 +10365,7 @@ fn server_status_line(server: &LocalServerService, local_server_available: bool)
     )
 }
 
-fn repl_status_line(repl: &ReplState, mode: TuiMode) -> Line<'static> {
+fn repl_status_line(repl: &ReplState, mode: InteractionMode) -> Line<'static> {
     let run = &repl.run;
     status_summary_line(
         repl_status_kind(run.status),
@@ -10468,10 +10387,10 @@ fn repl_status_kind(status: ReplStatus) -> StatusKind {
     }
 }
 
-fn repl_mode_hint(run: &ReplRun, mode: TuiMode) -> &'static str {
+fn repl_mode_hint(run: &ReplRun, mode: InteractionMode) -> &'static str {
     match mode {
-        TuiMode::Repl => "ctrl+x q leave  ctrl+x k stop",
-        TuiMode::Leader => "ctrl+x ctrl+x send literal ctrl+x",
+        InteractionMode::Repl => "ctrl+x q leave  ctrl+x k stop",
+        InteractionMode::Leader => "ctrl+x ctrl+x send literal ctrl+x",
         _ if run.is_running() => "ctrl+x a focus / stop",
         _ => "ctrl+x a start",
     }
@@ -11517,12 +11436,12 @@ fn render_palette(frame: &mut Frame<'_>, app: &TuiApp) {
         for (index, action) in visible_actions.iter().enumerate() {
             let availability = app.action_availability(action);
             let reason = match availability {
-                TuiActionAvailability::Available => String::new(),
-                TuiActionAvailability::Unavailable(reason) => {
+                ActionAvailability::Available => String::new(),
+                ActionAvailability::Unavailable(reason) => {
                     format!(" — unavailable: {reason}")
                 }
             };
-            let review = if action.review() == TuiActionReview::ReviewForm {
+            let review = if action.review() == ActionReview::ReviewForm {
                 " · review"
             } else {
                 ""
@@ -11644,7 +11563,7 @@ fn centered_rect_fixed(width: u16, height: u16, area: Rect) -> Rect {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-enum TuiActionId {
+enum ActionId {
     Plan,
     Build,
     Deploy,
@@ -11683,7 +11602,7 @@ enum TuiActionId {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TuiActionCategory {
+enum ActionCategory {
     Navigation,
     Dev,
     Ops,
@@ -11692,7 +11611,7 @@ enum TuiActionCategory {
     System,
 }
 
-impl TuiActionCategory {
+impl ActionCategory {
     fn label(self) -> &'static str {
         match self {
             Self::Navigation => "navigation",
@@ -11706,7 +11625,7 @@ impl TuiActionCategory {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TuiActionScope {
+enum ActionSurface {
     Global,
     Leader,
     Agents,
@@ -11715,7 +11634,7 @@ enum TuiActionScope {
     System,
 }
 
-impl TuiActionScope {
+impl ActionSurface {
     fn label(self) -> &'static str {
         match self {
             Self::Global => "Global",
@@ -11729,7 +11648,7 @@ impl TuiActionScope {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TuiActionExecutionKind {
+enum ActionExecution {
     Internal,
     Direct,
     NestedCli,
@@ -11737,14 +11656,14 @@ enum TuiActionExecutionKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TuiActionRisk {
+enum ActionRisk {
     ReadOnly,
     RoutineWrite,
     Disruptive,
     Destructive,
 }
 
-impl TuiActionRisk {
+impl ActionRisk {
     fn label(self) -> &'static str {
         match self {
             Self::ReadOnly => "read-only",
@@ -11756,12 +11675,12 @@ impl TuiActionRisk {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TuiActionReview {
+enum ActionReview {
     None,
     ReviewForm,
 }
 
-impl TuiActionReview {
+impl ActionReview {
     fn label(self) -> &'static str {
         match self {
             Self::None => "no-review",
@@ -11771,14 +11690,14 @@ impl TuiActionReview {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TuiActionTarget {
+enum ActionTarget {
     Interface,
     ApplicationEnvironment,
     LocalServer,
     LoadedAgents,
 }
 
-impl TuiActionTarget {
+impl ActionTarget {
     fn label(self) -> &'static str {
         match self {
             Self::Interface => "interface",
@@ -11789,7 +11708,7 @@ impl TuiActionTarget {
     }
 }
 
-impl TuiActionExecutionKind {
+impl ActionExecution {
     fn label(self) -> &'static str {
         match self {
             Self::Internal => "internal",
@@ -11801,541 +11720,466 @@ impl TuiActionExecutionKind {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct TuiAction {
-    id: TuiActionId,
+struct ActionDefinition {
+    id: ActionId,
     label: &'static str,
     description: &'static str,
     shortcut: Option<&'static str>,
-    category: TuiActionCategory,
-    scope: TuiActionScope,
-    execution_kind: TuiActionExecutionKind,
+    category: ActionCategory,
+    scope: ActionSurface,
+    execution_kind: ActionExecution,
     palette_visible: bool,
-    kind: TuiActionKind,
 }
 
-impl TuiAction {
+impl ActionDefinition {
     fn leader_path(self) -> Option<&'static str> {
         match self.id {
-            TuiActionId::SelectDev | TuiActionId::SelectOps => Some("ctrl+x w"),
-            TuiActionId::CycleOpsView => Some("ctrl+x v"),
-            TuiActionId::FlipPanePlacement | TuiActionId::ToggleServerSubview => Some("ctrl+x l"),
-            TuiActionId::OpenContextPicker => Some("ctrl+x e"),
-            TuiActionId::OpenPalette | TuiActionId::ShowHelp | TuiActionId::Quit => None,
+            ActionId::SelectDev | ActionId::SelectOps => Some("ctrl+x w"),
+            ActionId::CycleOpsView => Some("ctrl+x v"),
+            ActionId::FlipPanePlacement | ActionId::ToggleServerSubview => Some("ctrl+x l"),
+            ActionId::OpenContextPicker => Some("ctrl+x e"),
+            ActionId::OpenPalette | ActionId::ShowHelp | ActionId::Quit => None,
             _ => Some("ctrl+x a"),
         }
     }
 
-    fn risk(self) -> TuiActionRisk {
+    fn risk(self) -> ActionRisk {
         match self.id {
-            TuiActionId::Clean | TuiActionId::CleanRestartServer => TuiActionRisk::Destructive,
-            TuiActionId::Deploy | TuiActionId::RestartServer | TuiActionId::StopRepl => {
-                TuiActionRisk::Disruptive
+            ActionId::Clean | ActionId::CleanRestartServer => ActionRisk::Destructive,
+            ActionId::Deploy | ActionId::RestartServer | ActionId::StopRepl => {
+                ActionRisk::Disruptive
             }
-            TuiActionId::Build
-            | TuiActionId::ToggleServer
-            | TuiActionId::StartOrFocusRepl
-            | TuiActionId::RestartRepl => TuiActionRisk::RoutineWrite,
-            _ => TuiActionRisk::ReadOnly,
+            ActionId::Build
+            | ActionId::ToggleServer
+            | ActionId::StartOrFocusRepl
+            | ActionId::RestartRepl => ActionRisk::RoutineWrite,
+            _ => ActionRisk::ReadOnly,
         }
     }
 
-    fn review(self) -> TuiActionReview {
+    fn review(self) -> ActionReview {
         match self.id {
-            TuiActionId::Plan
-            | TuiActionId::Build
-            | TuiActionId::Deploy
-            | TuiActionId::Clean
-            | TuiActionId::ToggleServer
-            | TuiActionId::RestartServer
-            | TuiActionId::CleanRestartServer
-            | TuiActionId::StartOrFocusRepl
-            | TuiActionId::RestartRepl => TuiActionReview::ReviewForm,
-            _ => TuiActionReview::None,
+            ActionId::Plan
+            | ActionId::Build
+            | ActionId::Deploy
+            | ActionId::Clean
+            | ActionId::ToggleServer
+            | ActionId::RestartServer
+            | ActionId::CleanRestartServer
+            | ActionId::StartOrFocusRepl
+            | ActionId::RestartRepl => ActionReview::ReviewForm,
+            _ => ActionReview::None,
         }
     }
 
-    fn target(self) -> TuiActionTarget {
+    fn target(self) -> ActionTarget {
         match self.id {
-            TuiActionId::Plan
-            | TuiActionId::Build
-            | TuiActionId::Deploy
-            | TuiActionId::Clean
-            | TuiActionId::StartOrFocusRepl
-            | TuiActionId::RestartRepl => TuiActionTarget::ApplicationEnvironment,
-            TuiActionId::ToggleServer
-            | TuiActionId::RestartServer
-            | TuiActionId::CleanRestartServer => TuiActionTarget::LocalServer,
-            TuiActionId::RefreshAgents
-            | TuiActionId::OpenAgentDatasetFilter
-            | TuiActionId::OpenAgentColumns
-            | TuiActionId::IncludeAgentMatches
-            | TuiActionId::ExcludeAgentMatches
-            | TuiActionId::LoadMoreAgents
-            | TuiActionId::ToggleAgentAutoRefresh
-            | TuiActionId::CycleAgentMode
-            | TuiActionId::ToggleAgentDetails
-            | TuiActionId::CycleAgentFindScope => TuiActionTarget::LoadedAgents,
-            _ => TuiActionTarget::Interface,
+            ActionId::Plan
+            | ActionId::Build
+            | ActionId::Deploy
+            | ActionId::Clean
+            | ActionId::StartOrFocusRepl
+            | ActionId::RestartRepl => ActionTarget::ApplicationEnvironment,
+            ActionId::ToggleServer | ActionId::RestartServer | ActionId::CleanRestartServer => {
+                ActionTarget::LocalServer
+            }
+            ActionId::RefreshAgents
+            | ActionId::OpenAgentDatasetFilter
+            | ActionId::OpenAgentColumns
+            | ActionId::IncludeAgentMatches
+            | ActionId::ExcludeAgentMatches
+            | ActionId::LoadMoreAgents
+            | ActionId::ToggleAgentAutoRefresh
+            | ActionId::CycleAgentMode
+            | ActionId::ToggleAgentDetails
+            | ActionId::CycleAgentFindScope => ActionTarget::LoadedAgents,
+            _ => ActionTarget::Interface,
         }
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TuiActionAvailability {
+enum ActionAvailability {
     Available,
     Unavailable(&'static str),
 }
 
-impl TuiActionAvailability {
+impl ActionAvailability {
     fn is_unavailable(self) -> bool {
         matches!(self, Self::Unavailable(_))
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TuiActionKind {
-    SelectView(TuiWorkspace),
-    Plan,
-    Build,
-    Deploy,
-    Clean,
-    ToggleServer,
-    RestartServer,
-    CleanRestartServer,
-    FlipPanePlacement,
-    ToggleServerSubview,
-    RefreshAgents,
-    OpenAgentDatasetFilter,
-    OpenAgentColumns,
-    IncludeAgentMatches,
-    ExcludeAgentMatches,
-    LoadMoreAgents,
-    ToggleAgentAutoRefresh,
-    CycleAgentMode,
-    ToggleAgentDetails,
-    CycleOpsView,
-    CycleAgentFindScope,
-    SelectOpsRoot(OpsRootSubject),
-    StartOrFocusRepl,
-    FocusRepl,
-    LeaveRepl,
-    StopRepl,
-    RestartRepl,
-    OpenPalette,
-    OpenContextPicker,
-    ShowHelp,
-    Quit,
-}
-
-const ACTIONS: [TuiAction; 35] = [
-    TuiAction {
-        id: TuiActionId::Plan,
+const ACTIONS: [ActionDefinition; 35] = [
+    ActionDefinition {
+        id: ActionId::Plan,
         label: "Plan",
         description: "Review a golem deploy --plan command",
         shortcut: None,
-        category: TuiActionCategory::Dev,
-        scope: TuiActionScope::Global,
-        execution_kind: TuiActionExecutionKind::NestedCli,
+        category: ActionCategory::Dev,
+        scope: ActionSurface::Global,
+        execution_kind: ActionExecution::NestedCli,
         palette_visible: true,
-        kind: TuiActionKind::Plan,
     },
-    TuiAction {
-        id: TuiActionId::Build,
+    ActionDefinition {
+        id: ActionId::Build,
         label: "Build",
         description: "Run golem build",
         shortcut: None,
-        category: TuiActionCategory::Dev,
-        scope: TuiActionScope::Global,
-        execution_kind: TuiActionExecutionKind::NestedCli,
+        category: ActionCategory::Dev,
+        scope: ActionSurface::Global,
+        execution_kind: ActionExecution::NestedCli,
         palette_visible: true,
-        kind: TuiActionKind::Build,
     },
-    TuiAction {
-        id: TuiActionId::Deploy,
+    ActionDefinition {
+        id: ActionId::Deploy,
         label: "Deploy",
         description: "Run golem deploy",
         shortcut: None,
-        category: TuiActionCategory::Dev,
-        scope: TuiActionScope::Global,
-        execution_kind: TuiActionExecutionKind::NestedCli,
+        category: ActionCategory::Dev,
+        scope: ActionSurface::Global,
+        execution_kind: ActionExecution::NestedCli,
         palette_visible: true,
-        kind: TuiActionKind::Deploy,
     },
-    TuiAction {
-        id: TuiActionId::Clean,
+    ActionDefinition {
+        id: ActionId::Clean,
         label: "Clean",
         description: "Run golem clean",
         shortcut: None,
-        category: TuiActionCategory::Dev,
-        scope: TuiActionScope::Global,
-        execution_kind: TuiActionExecutionKind::NestedCli,
+        category: ActionCategory::Dev,
+        scope: ActionSurface::Global,
+        execution_kind: ActionExecution::NestedCli,
         palette_visible: true,
-        kind: TuiActionKind::Clean,
     },
-    TuiAction {
-        id: TuiActionId::ToggleServer,
+    ActionDefinition {
+        id: ActionId::ToggleServer,
         label: "Start/Stop Server",
         description: "Focus Dev Server and toggle it",
         shortcut: None,
-        category: TuiActionCategory::Dev,
-        scope: TuiActionScope::Global,
-        execution_kind: TuiActionExecutionKind::NestedCli,
+        category: ActionCategory::Dev,
+        scope: ActionSurface::Global,
+        execution_kind: ActionExecution::NestedCli,
         palette_visible: true,
-        kind: TuiActionKind::ToggleServer,
     },
-    TuiAction {
-        id: TuiActionId::RestartServer,
+    ActionDefinition {
+        id: ActionId::RestartServer,
         label: "Restart Server",
         description: "Restart the local server",
         shortcut: None,
-        category: TuiActionCategory::Dev,
-        scope: TuiActionScope::Leader,
-        execution_kind: TuiActionExecutionKind::NestedCli,
+        category: ActionCategory::Dev,
+        scope: ActionSurface::Leader,
+        execution_kind: ActionExecution::NestedCli,
         palette_visible: true,
-        kind: TuiActionKind::RestartServer,
     },
-    TuiAction {
-        id: TuiActionId::CleanRestartServer,
+    ActionDefinition {
+        id: ActionId::CleanRestartServer,
         label: "Clean Restart Server",
         description: "Restart local server with --clean",
         shortcut: None,
-        category: TuiActionCategory::Dev,
-        scope: TuiActionScope::Leader,
-        execution_kind: TuiActionExecutionKind::NestedCli,
+        category: ActionCategory::Dev,
+        scope: ActionSurface::Leader,
+        execution_kind: ActionExecution::NestedCli,
         palette_visible: true,
-        kind: TuiActionKind::CleanRestartServer,
     },
-    TuiAction {
-        id: TuiActionId::FlipPanePlacement,
+    ActionDefinition {
+        id: ActionId::FlipPanePlacement,
         label: "Flip Pane Placement",
         description: "Place secondary panes on the right or bottom",
         shortcut: None,
-        category: TuiActionCategory::Settings,
-        scope: TuiActionScope::Leader,
-        execution_kind: TuiActionExecutionKind::Internal,
+        category: ActionCategory::Settings,
+        scope: ActionSurface::Leader,
+        execution_kind: ActionExecution::Internal,
         palette_visible: true,
-        kind: TuiActionKind::FlipPanePlacement,
     },
-    TuiAction {
-        id: TuiActionId::ToggleServerSubview,
+    ActionDefinition {
+        id: ActionId::ToggleServerSubview,
         label: "Toggle Server Subview",
         description: "Show or hide Server beside the primary Dev view",
         shortcut: None,
-        category: TuiActionCategory::Dev,
-        scope: TuiActionScope::Leader,
-        execution_kind: TuiActionExecutionKind::Internal,
+        category: ActionCategory::Dev,
+        scope: ActionSurface::Leader,
+        execution_kind: ActionExecution::Internal,
         palette_visible: true,
-        kind: TuiActionKind::ToggleServerSubview,
     },
-    TuiAction {
-        id: TuiActionId::RefreshAgents,
+    ActionDefinition {
+        id: ActionId::RefreshAgents,
         label: "Refresh Agents",
         description: "Refresh the Ops agent list",
         shortcut: Some("ctrl+r"),
-        category: TuiActionCategory::Ops,
-        scope: TuiActionScope::Agents,
-        execution_kind: TuiActionExecutionKind::Direct,
+        category: ActionCategory::Ops,
+        scope: ActionSurface::Agents,
+        execution_kind: ActionExecution::Direct,
         palette_visible: true,
-        kind: TuiActionKind::RefreshAgents,
     },
-    TuiAction {
-        id: TuiActionId::OpenAgentDatasetFilter,
+    ActionDefinition {
+        id: ActionId::OpenAgentDatasetFilter,
         label: "Filter Agent Dataset",
         description: "Choose a server-side component or agent-type filter",
         shortcut: Some("ctrl+f"),
-        category: TuiActionCategory::Ops,
-        scope: TuiActionScope::Agents,
-        execution_kind: TuiActionExecutionKind::Internal,
+        category: ActionCategory::Ops,
+        scope: ActionSurface::Agents,
+        execution_kind: ActionExecution::Internal,
         palette_visible: true,
-        kind: TuiActionKind::OpenAgentDatasetFilter,
     },
-    TuiAction {
-        id: TuiActionId::OpenAgentColumns,
+    ActionDefinition {
+        id: ActionId::OpenAgentColumns,
         label: "Configure Agent Columns",
         description: "Choose visible Agent collection columns",
         shortcut: None,
-        category: TuiActionCategory::Ops,
-        scope: TuiActionScope::Agents,
-        execution_kind: TuiActionExecutionKind::Internal,
+        category: ActionCategory::Ops,
+        scope: ActionSurface::Agents,
+        execution_kind: ActionExecution::Internal,
         palette_visible: true,
-        kind: TuiActionKind::OpenAgentColumns,
     },
-    TuiAction {
-        id: TuiActionId::IncludeAgentMatches,
+    ActionDefinition {
+        id: ActionId::IncludeAgentMatches,
         label: "Include Loaded Matches",
         description: "Include every loaded agent matching the local find",
         shortcut: Some("ctrl+a"),
-        category: TuiActionCategory::Ops,
-        scope: TuiActionScope::Agents,
-        execution_kind: TuiActionExecutionKind::Internal,
+        category: ActionCategory::Ops,
+        scope: ActionSurface::Agents,
+        execution_kind: ActionExecution::Internal,
         palette_visible: true,
-        kind: TuiActionKind::IncludeAgentMatches,
     },
-    TuiAction {
-        id: TuiActionId::ExcludeAgentMatches,
+    ActionDefinition {
+        id: ActionId::ExcludeAgentMatches,
         label: "Exclude Loaded Matches",
         description: "Exclude every loaded agent matching the local find",
         shortcut: Some("ctrl+n"),
-        category: TuiActionCategory::Ops,
-        scope: TuiActionScope::Agents,
-        execution_kind: TuiActionExecutionKind::Internal,
+        category: ActionCategory::Ops,
+        scope: ActionSurface::Agents,
+        execution_kind: ActionExecution::Internal,
         palette_visible: true,
-        kind: TuiActionKind::ExcludeAgentMatches,
     },
-    TuiAction {
-        id: TuiActionId::LoadMoreAgents,
+    ActionDefinition {
+        id: ActionId::LoadMoreAgents,
         label: "Load Next 200 Agents",
         description: "Fetch one additional batch of up to 200 agents",
         shortcut: Some("ctrl+l"),
-        category: TuiActionCategory::Ops,
-        scope: TuiActionScope::Agents,
-        execution_kind: TuiActionExecutionKind::Direct,
+        category: ActionCategory::Ops,
+        scope: ActionSurface::Agents,
+        execution_kind: ActionExecution::Direct,
         palette_visible: true,
-        kind: TuiActionKind::LoadMoreAgents,
     },
-    TuiAction {
-        id: TuiActionId::ToggleAgentAutoRefresh,
+    ActionDefinition {
+        id: ActionId::ToggleAgentAutoRefresh,
         label: "Toggle Agent Auto Refresh",
         description: "Toggle automatic agent refresh",
         shortcut: None,
-        category: TuiActionCategory::Ops,
-        scope: TuiActionScope::Agents,
-        execution_kind: TuiActionExecutionKind::Internal,
+        category: ActionCategory::Ops,
+        scope: ActionSurface::Agents,
+        execution_kind: ActionExecution::Internal,
         palette_visible: true,
-        kind: TuiActionKind::ToggleAgentAutoRefresh,
     },
-    TuiAction {
-        id: TuiActionId::CycleAgentMode,
+    ActionDefinition {
+        id: ActionId::CycleAgentMode,
         label: "Cycle Agent Mode",
         description: "Cycle durable, ephemeral, all",
         shortcut: None,
-        category: TuiActionCategory::Ops,
-        scope: TuiActionScope::Agents,
-        execution_kind: TuiActionExecutionKind::Internal,
+        category: ActionCategory::Ops,
+        scope: ActionSurface::Agents,
+        execution_kind: ActionExecution::Internal,
         palette_visible: true,
-        kind: TuiActionKind::CycleAgentMode,
     },
-    TuiAction {
-        id: TuiActionId::ToggleAgentDetails,
+    ActionDefinition {
+        id: ActionId::ToggleAgentDetails,
         label: "Toggle Agent Details",
         description: "Show or hide selected agent details",
         shortcut: None,
-        category: TuiActionCategory::Ops,
-        scope: TuiActionScope::Agents,
-        execution_kind: TuiActionExecutionKind::Internal,
+        category: ActionCategory::Ops,
+        scope: ActionSurface::Agents,
+        execution_kind: ActionExecution::Internal,
         palette_visible: true,
-        kind: TuiActionKind::ToggleAgentDetails,
     },
-    TuiAction {
-        id: TuiActionId::CycleOpsView,
+    ActionDefinition {
+        id: ActionId::CycleOpsView,
         label: "Cycle Ops View",
         description: "Cycle Overview, Activity, and Metrics for the current subject",
         shortcut: None,
-        category: TuiActionCategory::Navigation,
-        scope: TuiActionScope::Leader,
-        execution_kind: TuiActionExecutionKind::ViewNavigation,
+        category: ActionCategory::Navigation,
+        scope: ActionSurface::Leader,
+        execution_kind: ActionExecution::ViewNavigation,
         palette_visible: true,
-        kind: TuiActionKind::CycleOpsView,
     },
-    TuiAction {
-        id: TuiActionId::CycleAgentFindScope,
+    ActionDefinition {
+        id: ActionId::CycleAgentFindScope,
         label: "Cycle Agent Find Field",
         description: "Search loaded agents by AgentID, component, or agent type",
         shortcut: None,
-        category: TuiActionCategory::Ops,
-        scope: TuiActionScope::Agents,
-        execution_kind: TuiActionExecutionKind::Internal,
+        category: ActionCategory::Ops,
+        scope: ActionSurface::Agents,
+        execution_kind: ActionExecution::Internal,
         palette_visible: true,
-        kind: TuiActionKind::CycleAgentFindScope,
     },
-    TuiAction {
-        id: TuiActionId::SelectDev,
+    ActionDefinition {
+        id: ActionId::SelectDev,
         label: "Go to Dev",
         description: "Switch to Dev workspace",
         shortcut: None,
-        category: TuiActionCategory::Navigation,
-        scope: TuiActionScope::Global,
-        execution_kind: TuiActionExecutionKind::ViewNavigation,
+        category: ActionCategory::Navigation,
+        scope: ActionSurface::Global,
+        execution_kind: ActionExecution::ViewNavigation,
         palette_visible: true,
-        kind: TuiActionKind::SelectView(TuiWorkspace::Dev),
     },
-    TuiAction {
-        id: TuiActionId::SelectOps,
+    ActionDefinition {
+        id: ActionId::SelectOps,
         label: "Go to Ops",
         description: "Switch to Ops workspace",
         shortcut: None,
-        category: TuiActionCategory::Navigation,
-        scope: TuiActionScope::Global,
-        execution_kind: TuiActionExecutionKind::ViewNavigation,
+        category: ActionCategory::Navigation,
+        scope: ActionSurface::Global,
+        execution_kind: ActionExecution::ViewNavigation,
         palette_visible: true,
-        kind: TuiActionKind::SelectView(TuiWorkspace::Ops),
     },
-    TuiAction {
-        id: TuiActionId::SelectOpsAgents,
+    ActionDefinition {
+        id: ActionId::SelectOpsAgents,
         label: "Open Agents",
         description: "Open the Ops Agents collection",
         shortcut: None,
-        category: TuiActionCategory::Ops,
-        scope: TuiActionScope::Global,
-        execution_kind: TuiActionExecutionKind::ViewNavigation,
+        category: ActionCategory::Ops,
+        scope: ActionSurface::Global,
+        execution_kind: ActionExecution::ViewNavigation,
         palette_visible: true,
-        kind: TuiActionKind::SelectOpsRoot(OpsRootSubject::Agents),
     },
-    TuiAction {
-        id: TuiActionId::SelectOpsDeployment,
+    ActionDefinition {
+        id: ActionId::SelectOpsDeployment,
         label: "Open Deployment",
         description: "Open the current Deployment overview",
         shortcut: None,
-        category: TuiActionCategory::Ops,
-        scope: TuiActionScope::Global,
-        execution_kind: TuiActionExecutionKind::ViewNavigation,
+        category: ActionCategory::Ops,
+        scope: ActionSurface::Global,
+        execution_kind: ActionExecution::ViewNavigation,
         palette_visible: true,
-        kind: TuiActionKind::SelectOpsRoot(OpsRootSubject::Deployment),
     },
-    TuiAction {
-        id: TuiActionId::SelectOpsEnvironment,
+    ActionDefinition {
+        id: ActionId::SelectOpsEnvironment,
         label: "Open Environment",
         description: "Open the selected Environment overview",
         shortcut: None,
-        category: TuiActionCategory::Ops,
-        scope: TuiActionScope::Global,
-        execution_kind: TuiActionExecutionKind::ViewNavigation,
+        category: ActionCategory::Ops,
+        scope: ActionSurface::Global,
+        execution_kind: ActionExecution::ViewNavigation,
         palette_visible: true,
-        kind: TuiActionKind::SelectOpsRoot(OpsRootSubject::Environment),
     },
-    TuiAction {
-        id: TuiActionId::SelectOpsServer,
+    ActionDefinition {
+        id: ActionId::SelectOpsServer,
         label: "Open Server",
         description: "Open the selected Server overview",
         shortcut: None,
-        category: TuiActionCategory::Ops,
-        scope: TuiActionScope::Global,
-        execution_kind: TuiActionExecutionKind::ViewNavigation,
+        category: ActionCategory::Ops,
+        scope: ActionSurface::Global,
+        execution_kind: ActionExecution::ViewNavigation,
         palette_visible: true,
-        kind: TuiActionKind::SelectOpsRoot(OpsRootSubject::Server),
     },
-    TuiAction {
-        id: TuiActionId::StartOrFocusRepl,
+    ActionDefinition {
+        id: ActionId::StartOrFocusRepl,
         label: "Start or Focus REPL",
         description: "Run golem repl and send input there",
         shortcut: None,
-        category: TuiActionCategory::Repl,
-        scope: TuiActionScope::Global,
-        execution_kind: TuiActionExecutionKind::NestedCli,
+        category: ActionCategory::Repl,
+        scope: ActionSurface::Global,
+        execution_kind: ActionExecution::NestedCli,
         palette_visible: true,
-        kind: TuiActionKind::StartOrFocusRepl,
     },
-    TuiAction {
-        id: TuiActionId::FocusRepl,
+    ActionDefinition {
+        id: ActionId::FocusRepl,
         label: "Focus REPL",
         description: "Send keyboard input to the running REPL",
         shortcut: None,
-        category: TuiActionCategory::Repl,
-        scope: TuiActionScope::Repl,
-        execution_kind: TuiActionExecutionKind::Internal,
+        category: ActionCategory::Repl,
+        scope: ActionSurface::Repl,
+        execution_kind: ActionExecution::Internal,
         palette_visible: false,
-        kind: TuiActionKind::FocusRepl,
     },
-    TuiAction {
-        id: TuiActionId::LeaveRepl,
+    ActionDefinition {
+        id: ActionId::LeaveRepl,
         label: "Leave REPL Mode",
         description: "Return keyboard input to the TUI",
         shortcut: None,
-        category: TuiActionCategory::Repl,
-        scope: TuiActionScope::ReplLeader,
-        execution_kind: TuiActionExecutionKind::Internal,
+        category: ActionCategory::Repl,
+        scope: ActionSurface::ReplLeader,
+        execution_kind: ActionExecution::Internal,
         palette_visible: true,
-        kind: TuiActionKind::LeaveRepl,
     },
-    TuiAction {
-        id: TuiActionId::StopRepl,
+    ActionDefinition {
+        id: ActionId::StopRepl,
         label: "Stop REPL",
         description: "Send ctrl+c to the embedded REPL",
         shortcut: None,
-        category: TuiActionCategory::Repl,
-        scope: TuiActionScope::ReplLeader,
-        execution_kind: TuiActionExecutionKind::Internal,
+        category: ActionCategory::Repl,
+        scope: ActionSurface::ReplLeader,
+        execution_kind: ActionExecution::Internal,
         palette_visible: true,
-        kind: TuiActionKind::StopRepl,
     },
-    TuiAction {
-        id: TuiActionId::RestartRepl,
+    ActionDefinition {
+        id: ActionId::RestartRepl,
         label: "Restart REPL",
         description: "Restart the embedded REPL",
         shortcut: None,
-        category: TuiActionCategory::Repl,
-        scope: TuiActionScope::ReplLeader,
-        execution_kind: TuiActionExecutionKind::NestedCli,
+        category: ActionCategory::Repl,
+        scope: ActionSurface::ReplLeader,
+        execution_kind: ActionExecution::NestedCli,
         palette_visible: true,
-        kind: TuiActionKind::RestartRepl,
     },
-    TuiAction {
-        id: TuiActionId::OpenPalette,
+    ActionDefinition {
+        id: ActionId::OpenPalette,
         label: "Open Palette",
         description: "Open the command palette",
         shortcut: Some("ctrl+p"),
-        category: TuiActionCategory::System,
-        scope: TuiActionScope::System,
-        execution_kind: TuiActionExecutionKind::Internal,
+        category: ActionCategory::System,
+        scope: ActionSurface::System,
+        execution_kind: ActionExecution::Internal,
         palette_visible: false,
-        kind: TuiActionKind::OpenPalette,
     },
-    TuiAction {
-        id: TuiActionId::OpenContextPicker,
+    ActionDefinition {
+        id: ActionId::OpenContextPicker,
         label: "Switch Context",
         description: "Switch selected TUI context",
         shortcut: Some("ctrl+x e"),
-        category: TuiActionCategory::Settings,
-        scope: TuiActionScope::Leader,
-        execution_kind: TuiActionExecutionKind::Internal,
+        category: ActionCategory::Settings,
+        scope: ActionSurface::Leader,
+        execution_kind: ActionExecution::Internal,
         palette_visible: true,
-        kind: TuiActionKind::OpenContextPicker,
     },
-    TuiAction {
-        id: TuiActionId::ShowHelp,
+    ActionDefinition {
+        id: ActionId::ShowHelp,
         label: "Show Help",
         description: "Show TUI shortcuts",
         shortcut: Some("ctrl+h"),
-        category: TuiActionCategory::System,
-        scope: TuiActionScope::System,
-        execution_kind: TuiActionExecutionKind::Internal,
+        category: ActionCategory::System,
+        scope: ActionSurface::System,
+        execution_kind: ActionExecution::Internal,
         palette_visible: true,
-        kind: TuiActionKind::ShowHelp,
     },
-    TuiAction {
-        id: TuiActionId::Quit,
+    ActionDefinition {
+        id: ActionId::Quit,
         label: "Quit",
         description: "Exit the TUI",
         shortcut: Some("ctrl+q"),
-        category: TuiActionCategory::System,
-        scope: TuiActionScope::Global,
-        execution_kind: TuiActionExecutionKind::Internal,
+        category: ActionCategory::System,
+        scope: ActionSurface::Global,
+        execution_kind: ActionExecution::Internal,
         palette_visible: true,
-        kind: TuiActionKind::Quit,
     },
 ];
 
-fn action(id: TuiActionId) -> &'static TuiAction {
+fn action(id: ActionId) -> &'static ActionDefinition {
     ACTIONS
         .iter()
         .find(|action| action.id == id)
         .expect("registered action")
 }
 
-fn action_by_kind(kind: TuiActionKind) -> Option<&'static TuiAction> {
-    ACTIONS.iter().find(|action| action.kind == kind)
-}
-
 #[cfg(all(feature = "tui-preview", test))]
 fn preview_production_app() -> TuiApp {
     let mut app = TuiApp {
         should_quit: false,
-        active_workspace: TuiWorkspace::Ops,
+        active_workspace: Workspace::Ops,
         ops_subject: OpsSubject::Root(OpsRootSubject::Agents),
         ops_view: OpsView::Overview,
         dev_primary: DevView::Repl,
         dev_focus: DevView::Repl,
-        mode: TuiMode::Normal,
+        mode: ModeStack::default(),
         leader: LeaderState::default(),
         help_scroll: 0,
         help_content_height: Cell::new(0),
@@ -12414,7 +12258,7 @@ fn preview_production_app() -> TuiApp {
     app
 }
 
-fn palette_actions(scope: PaletteScope, app: &TuiApp) -> Vec<TuiAction> {
+fn palette_actions(scope: PaletteScope, app: &TuiApp) -> Vec<ActionDefinition> {
     ACTIONS
         .iter()
         .copied()
@@ -12423,20 +12267,19 @@ fn palette_actions(scope: PaletteScope, app: &TuiApp) -> Vec<TuiAction> {
         .collect()
 }
 
-fn action_relevant_to_context(action: &TuiAction, app: &TuiApp) -> bool {
+fn action_relevant_to_context(action: &ActionDefinition, app: &TuiApp) -> bool {
     match app.active_workspace {
-        TuiWorkspace::Dev => matches!(
+        Workspace::Dev => matches!(
             action.category,
-            TuiActionCategory::Dev | TuiActionCategory::Repl | TuiActionCategory::Settings
+            ActionCategory::Dev | ActionCategory::Repl | ActionCategory::Settings
         ),
-        TuiWorkspace::Ops => {
-            action.category == TuiActionCategory::Ops
-                || matches!(action.id, TuiActionId::CycleOpsView)
+        Workspace::Ops => {
+            action.category == ActionCategory::Ops || matches!(action.id, ActionId::CycleOpsView)
         }
     }
 }
 
-fn filtered_actions(query: &str, scope: PaletteScope, app: &TuiApp) -> Vec<TuiAction> {
+fn filtered_actions(query: &str, scope: PaletteScope, app: &TuiApp) -> Vec<ActionDefinition> {
     let query = query.trim();
     if query.is_empty() {
         return palette_actions(scope, app);
@@ -12528,7 +12371,7 @@ mod tests {
         let ops_header = ops_text.lines().next().unwrap_or_default().to_string();
 
         let mut dev = test_app();
-        dev.active_workspace = TuiWorkspace::Dev;
+        dev.active_workspace = Workspace::Dev;
         dev.dev_primary = DevView::BuildDeploy;
         dev.dev_focus = DevView::BuildDeploy;
         dev.layout.dev_visible = [false, false, false];
@@ -12577,7 +12420,7 @@ mod tests {
     #[test]
     fn dev_panes_use_shared_titles_boundaries_and_status_colors() {
         let mut app = test_app();
-        app.active_workspace = TuiWorkspace::Dev;
+        app.active_workspace = Workspace::Dev;
         app.dev_primary = DevView::BuildDeploy;
         app.dev_focus = DevView::BuildDeploy;
         app.layout.dev_visible = [false, true, false];
@@ -12648,7 +12491,7 @@ mod tests {
         for placement in [layout::PanePlacement::Right, layout::PanePlacement::Bottom] {
             for (width, height) in [(160, 40), (100, 16), (60, 24), (1, 1)] {
                 let mut app = test_app();
-                app.active_workspace = TuiWorkspace::Dev;
+                app.active_workspace = Workspace::Dev;
                 app.dev_primary = DevView::BuildDeploy;
                 app.dev_focus = DevView::BuildDeploy;
                 app.layout.dev_visible = [false, true, true];
@@ -12666,7 +12509,7 @@ mod tests {
             (layout::PanePlacement::Bottom, "┬"),
         ] {
             let mut app = test_app();
-            app.active_workspace = TuiWorkspace::Dev;
+            app.active_workspace = Workspace::Dev;
             app.dev_primary = DevView::BuildDeploy;
             app.dev_focus = DevView::BuildDeploy;
             app.layout.dev_visible = [false, true, true];
@@ -12689,7 +12532,7 @@ mod tests {
     #[test]
     fn dev_terminal_scrollbars_use_the_shared_trailing_slot() {
         let mut app = test_app();
-        app.active_workspace = TuiWorkspace::Dev;
+        app.active_workspace = Workspace::Dev;
         app.dev_primary = DevView::BuildDeploy;
         app.dev_focus = DevView::BuildDeploy;
         app.layout.dev_visible = [false, false, false];
@@ -12779,7 +12622,7 @@ mod tests {
         app.handle_key(modified_key(KeyCode::Char('x'), KeyModifiers::CONTROL));
         let frame = render_app_text(&app);
 
-        assert_eq!(app.mode, TuiMode::Leader);
+        assert_eq!(app.mode, InteractionMode::Leader);
         assert!(frame.contains("Workspaces"), "{frame}");
         assert!(frame.contains("Views"), "{frame}");
         assert!(frame.contains("Layout"), "{frame}");
@@ -12813,8 +12656,8 @@ mod tests {
 
         app.handle_key(modified_key(KeyCode::Char('1'), KeyModifiers::ALT));
 
-        assert_eq!(app.active_workspace, TuiWorkspace::Ops);
-        assert_eq!(app.mode, TuiMode::Normal);
+        assert_eq!(app.active_workspace, Workspace::Ops);
+        assert_eq!(app.mode, InteractionMode::Normal);
     }
 
     #[test]
@@ -12822,9 +12665,9 @@ mod tests {
         let mut app = test_app();
         app.handle_key(key(KeyCode::Char('2')));
 
-        assert_eq!(app.active_workspace, TuiWorkspace::Ops);
+        assert_eq!(app.active_workspace, Workspace::Ops);
         assert_eq!(app.dev_focus, DevView::Repl);
-        assert_eq!(app.mode, TuiMode::AgentFilter);
+        assert_eq!(app.mode, InteractionMode::AgentFilter);
         assert_eq!(app.agents.query, "2");
     }
 
@@ -12913,16 +12756,16 @@ mod tests {
 
     #[test]
     fn action_metadata_captures_path_risk_review_and_target() {
-        let clean = *action(TuiActionId::Clean);
+        let clean = *action(ActionId::Clean);
         assert_eq!(clean.leader_path(), Some("ctrl+x a"));
-        assert_eq!(clean.risk(), TuiActionRisk::Destructive);
-        assert_eq!(clean.review(), TuiActionReview::ReviewForm);
-        assert_eq!(clean.target(), TuiActionTarget::ApplicationEnvironment);
+        assert_eq!(clean.risk(), ActionRisk::Destructive);
+        assert_eq!(clean.review(), ActionReview::ReviewForm);
+        assert_eq!(clean.target(), ActionTarget::ApplicationEnvironment);
 
-        let refresh = *action(TuiActionId::RefreshAgents);
-        assert_eq!(refresh.risk(), TuiActionRisk::ReadOnly);
-        assert_eq!(refresh.review(), TuiActionReview::None);
-        assert_eq!(refresh.target(), TuiActionTarget::LoadedAgents);
+        let refresh = *action(ActionId::RefreshAgents);
+        assert_eq!(refresh.risk(), ActionRisk::ReadOnly);
+        assert_eq!(refresh.review(), ActionReview::None);
+        assert_eq!(refresh.target(), ActionTarget::LoadedAgents);
     }
 
     #[test]
@@ -12931,15 +12774,13 @@ mod tests {
         app.context.uses_local_server = false;
 
         assert_eq!(
-            app.action_availability(action(TuiActionId::Build)),
-            TuiActionAvailability::Unavailable(
-                "remote Dev mutations are not enabled in this slice"
-            )
+            app.action_availability(action(ActionId::Build)),
+            ActionAvailability::Unavailable("remote Dev mutations are not enabled in this slice")
         );
         assert!(
             filtered_actions("build", PaletteScope::All, &app)
                 .iter()
-                .any(|action| action.id == TuiActionId::Build)
+                .any(|action| action.id == ActionId::Build)
         );
     }
 
@@ -12972,18 +12813,18 @@ mod tests {
     fn refresh_agents_action_metadata_is_direct() {
         let app = test_app();
         assert_eq!(
-            action(TuiActionId::RefreshAgents).execution_kind,
-            TuiActionExecutionKind::Direct
+            action(ActionId::RefreshAgents).execution_kind,
+            ActionExecution::Direct
         );
         assert!(
             filtered_actions("nested-cli", PaletteScope::All, &app)
                 .iter()
-                .all(|action| action.id != TuiActionId::RefreshAgents)
+                .all(|action| action.id != ActionId::RefreshAgents)
         );
         assert!(
             filtered_actions("direct", PaletteScope::All, &app)
                 .iter()
-                .any(|action| action.id == TuiActionId::RefreshAgents)
+                .any(|action| action.id == ActionId::RefreshAgents)
         );
     }
 
@@ -12998,14 +12839,14 @@ mod tests {
         assert!(
             filtered_actions("", PaletteScope::All, &app)
                 .iter()
-                .all(|action| action.id != TuiActionId::OpenPalette)
+                .all(|action| action.id != ActionId::OpenPalette)
         );
 
         let ops_actions = filtered_actions("ops", PaletteScope::All, &app);
         assert!(
             ops_actions
                 .iter()
-                .any(|action| action.id == TuiActionId::RefreshAgents),
+                .any(|action| action.id == ActionId::RefreshAgents),
             "{ops_actions:?}"
         );
     }
@@ -13057,7 +12898,7 @@ mod tests {
         app.handle_key(modified_key(KeyCode::Char('x'), KeyModifiers::CONTROL));
         app.handle_key(key(KeyCode::Char('e')));
 
-        assert_eq!(app.mode, TuiMode::ContextPicker);
+        assert_eq!(app.mode, InteractionMode::ContextPicker);
         let frame = render_app_text(&app);
         assert!(frame.contains("Switch Context"), "{frame}");
         assert!(frame.contains("sample-app/local"), "{frame}");
@@ -13095,7 +12936,7 @@ mod tests {
         app.open_context_picker();
         app.handle_key(key(KeyCode::Enter));
 
-        assert_eq!(app.mode, TuiMode::ContextPicker);
+        assert_eq!(app.mode, InteractionMode::ContextPicker);
         assert!(app.context_switcher.last_error.is_none());
         assert!(!app.context_switcher.switch_running);
         assert!(!app.context_switcher.environment_list_running);
@@ -13352,7 +13193,7 @@ mod tests {
         app.handle_key(key(KeyCode::Down));
         app.handle_key_with_events(key(KeyCode::Enter), Some(&tx));
 
-        assert_eq!(app.mode, TuiMode::ContextSwitchConfirm);
+        assert_eq!(app.mode, InteractionMode::ContextSwitchConfirm);
         assert!(app.context_switcher.pending_action.is_some());
         assert!(app.context_switcher.last_error.is_none());
         assert!(!app.context_switcher.switch_running);
@@ -13439,7 +13280,7 @@ mod tests {
 
         assert!(!app.agents.refresh_running);
         assert_eq!(app.agents.refresh_generation, 8);
-        assert_ne!(app.mode, TuiMode::ContextSwitchConfirm);
+        assert_ne!(app.mode, InteractionMode::ContextSwitchConfirm);
         assert!(app.context_switcher.pending_action.is_none());
     }
 
@@ -13477,14 +13318,14 @@ mod tests {
         app.context.dev_eligible = false;
 
         assert_eq!(
-            app.action_availability(action(TuiActionId::ToggleServer)),
-            TuiActionAvailability::Unavailable("requires an available local server target")
+            app.action_availability(action(ActionId::ToggleServer)),
+            ActionAvailability::Unavailable("requires an available local server target")
         );
 
         app.handle_key(key(KeyCode::Char('s')));
 
         assert_eq!(app.server.run.status, ServerStatus::Stopped);
-        assert_eq!(app.active_workspace, TuiWorkspace::Ops);
+        assert_eq!(app.active_workspace, Workspace::Ops);
     }
 
     #[test]
@@ -13500,7 +13341,7 @@ mod tests {
         app.handle_key(key(KeyCode::Down));
         app.handle_key(key(KeyCode::Enter));
 
-        assert_ne!(app.mode, TuiMode::ContextSwitchConfirm);
+        assert_ne!(app.mode, InteractionMode::ContextSwitchConfirm);
         assert_eq!(app.server.run.status, ServerStatus::Running);
         assert!(app.context_switcher.pending_action.is_none());
     }
@@ -13541,13 +13382,13 @@ mod tests {
         app.context.dev_eligible = false;
 
         assert_eq!(
-            app.action_availability(action(TuiActionId::Build)),
-            TuiActionAvailability::Unavailable("requires a manifest-backed application")
+            app.action_availability(action(ActionId::Build)),
+            ActionAvailability::Unavailable("requires a manifest-backed application")
         );
 
         app.handle_key(key(KeyCode::Char('b')));
 
-        assert_eq!(app.active_workspace, TuiWorkspace::Ops);
+        assert_eq!(app.active_workspace, Workspace::Ops);
         assert!(app.command_run.is_none());
     }
 
@@ -13572,7 +13413,7 @@ mod tests {
 
         app.handle_key(key(KeyCode::Esc));
 
-        assert_eq!(app.mode, TuiMode::ContextPicker);
+        assert_eq!(app.mode, InteractionMode::ContextPicker);
         assert_eq!(app.context_switcher.mode, ContextPickerStep::Targets);
     }
 
@@ -13639,7 +13480,7 @@ mod tests {
         app.agents.agents = sample_agents();
 
         assert_eq!(app.agents.query_scope, AgentQueryScope::AgentId);
-        app.mode = TuiMode::AgentFilter;
+        app.mode.replace(InteractionMode::AgentFilter);
         for character in "CART".chars() {
             app.handle_key(key(KeyCode::Char(character)));
         }
@@ -13721,7 +13562,7 @@ mod tests {
         app.handle_key(modified_key(KeyCode::Char('f'), KeyModifiers::CONTROL));
         let frame = render_app_text_at(&app, 100, 30);
 
-        assert_eq!(app.mode, TuiMode::AgentDatasetFilter);
+        assert_eq!(app.mode, InteractionMode::AgentDatasetFilter);
         assert!(frame.contains("Agent dataset"), "{frame}");
         assert!(
             frame.contains("Server-side filter; applied before loading agents"),
@@ -13790,10 +13631,10 @@ mod tests {
         let mut app = test_app();
         app.agents.agents = sample_agents();
 
-        app.execute_action(TuiActionKind::OpenAgentColumns, None);
+        app.execute_action(ActionId::OpenAgentColumns, None);
         let frame = render_app_text_at(&app, 100, 30);
 
-        assert_eq!(app.mode, TuiMode::AgentColumns);
+        assert_eq!(app.mode, InteractionMode::AgentColumns);
         assert!(frame.contains("Revision"), "{frame}");
         assert!(frame.contains("Pending"), "{frame}");
         assert!(frame.contains("Created at"), "{frame}");
@@ -13877,18 +13718,18 @@ mod tests {
         render_app_text_at(&app, 120, 30);
 
         app.handle_key(key(KeyCode::Char('c')));
-        assert_eq!(app.mode, TuiMode::AgentFilter);
+        assert_eq!(app.mode, InteractionMode::AgentFilter);
 
         let old_ratio = app.layout.ops_details_ratio;
         app.handle_key(modified_key(KeyCode::Char('x'), KeyModifiers::CONTROL));
         app.handle_key(key(KeyCode::Char('l')));
         app.handle_key(key(KeyCode::Right));
         app.handle_key(key(KeyCode::Enter));
-        assert_eq!(app.mode, TuiMode::AgentFilter);
+        assert_eq!(app.mode, InteractionMode::AgentFilter);
         assert!(app.layout.ops_details_ratio > old_ratio);
 
         app.handle_key(key(KeyCode::Tab));
-        assert_eq!(app.mode, TuiMode::Normal);
+        assert_eq!(app.mode, InteractionMode::Normal);
         assert_eq!(app.agents.focus, AgentOverviewFocus::Details);
         assert!(app.agents.detail_visible);
 
@@ -13909,7 +13750,7 @@ mod tests {
         app.handle_key(modified_key(KeyCode::Right, KeyModifiers::CONTROL));
 
         assert_eq!(app.agents.focus, AgentOverviewFocus::List);
-        assert_eq!(app.mode, TuiMode::Normal);
+        assert_eq!(app.mode, InteractionMode::Normal);
     }
 
     #[test]
@@ -13917,12 +13758,12 @@ mod tests {
         let mut app = test_app();
         app.agents.agents = sample_agents();
         app.handle_key(key(KeyCode::Char('c')));
-        assert_eq!(app.mode, TuiMode::AgentFilter);
+        assert_eq!(app.mode, InteractionMode::AgentFilter);
 
         app.handle_key(modified_key(KeyCode::Char('x'), KeyModifiers::CONTROL));
         app.handle_key(key(KeyCode::Char('a')));
 
-        assert_eq!(app.mode, TuiMode::Palette);
+        assert_eq!(app.mode, InteractionMode::Palette);
         assert_eq!(app.palette.scope, PaletteScope::Context);
         assert_eq!(app.agents.query, "c");
     }
@@ -13933,16 +13774,16 @@ mod tests {
         app.agents.agents = sample_agents();
 
         app.handle_key(key(KeyCode::Char('c')));
-        assert_eq!(app.mode, TuiMode::AgentFilter);
+        assert_eq!(app.mode, InteractionMode::AgentFilter);
         assert_eq!(app.agents.query, "c");
 
         let selected = app.filtered_agents()[app.agents.selected].identity();
         app.handle_key(modified_key(KeyCode::Char(' '), KeyModifiers::CONTROL));
         assert!(app.agents.included.contains(&selected));
-        assert_eq!(app.mode, TuiMode::AgentFilter);
+        assert_eq!(app.mode, InteractionMode::AgentFilter);
 
         app.handle_key(modified_key(KeyCode::Char('p'), KeyModifiers::CONTROL));
-        assert_eq!(app.mode, TuiMode::Palette);
+        assert_eq!(app.mode, InteractionMode::Palette);
     }
 
     #[test]
@@ -14028,7 +13869,7 @@ mod tests {
     fn agent_find_exposes_only_explicit_scopes() {
         let mut app = test_app();
         app.agents.agents = sample_agents();
-        app.mode = TuiMode::AgentFilter;
+        app.mode.replace(InteractionMode::AgentFilter);
 
         for (scope, label) in [
             (AgentQueryScope::AgentId, "AgentID"),
@@ -14098,7 +13939,7 @@ mod tests {
             agent_id: "cart-1".to_string(),
         }));
 
-        app.mode = TuiMode::AgentFilter;
+        app.mode.replace(InteractionMode::AgentFilter);
         for character in "order".chars() {
             app.handle_key(key(KeyCode::Char(character)));
         }
@@ -14116,14 +13957,14 @@ mod tests {
     fn column_chooser_applies_only_on_confirmation() {
         let mut app = test_app();
 
-        app.execute_action(TuiActionKind::OpenAgentColumns, None);
+        app.execute_action(ActionId::OpenAgentColumns, None);
         app.handle_key(key(KeyCode::Down));
         app.handle_key(key(KeyCode::Down));
         app.handle_key(key(KeyCode::Char(' ')));
         app.handle_key(key(KeyCode::Esc));
         assert!(app.agents.table.column_visible("type"));
 
-        app.execute_action(TuiActionKind::OpenAgentColumns, None);
+        app.execute_action(ActionId::OpenAgentColumns, None);
         app.handle_key(key(KeyCode::Down));
         app.handle_key(key(KeyCode::Down));
         app.handle_key(key(KeyCode::Char(' ')));
@@ -14161,11 +14002,11 @@ mod tests {
     #[test]
     fn agent_mode_cycles_and_preserves_filter() {
         let mut app = test_app();
-        app.active_workspace = TuiWorkspace::Ops;
+        app.active_workspace = Workspace::Ops;
         app.agents.query = "cart".to_string();
         app.agents.selected = 3;
 
-        app.execute_action(TuiActionKind::CycleAgentMode, None);
+        app.execute_action(ActionId::CycleAgentMode, None);
 
         assert_eq!(app.agents.mode, AgentModeFilter::Ephemeral);
         assert_eq!(app.agents.query, "cart");
@@ -14188,7 +14029,7 @@ mod tests {
     #[test]
     fn agent_details_panel_toggles() {
         let mut app = test_app();
-        app.active_workspace = TuiWorkspace::Ops;
+        app.active_workspace = Workspace::Ops;
         app.agents.agents = sample_agents();
 
         let frame = render_app_text(&app);
@@ -14205,7 +14046,7 @@ mod tests {
     #[test]
     fn enter_opens_agent_subject_and_escape_unwinds() {
         let mut app = test_app();
-        app.active_workspace = TuiWorkspace::Ops;
+        app.active_workspace = Workspace::Ops;
         app.agents.agents = sample_agents();
 
         app.handle_key(key(KeyCode::Enter));
@@ -14218,7 +14059,7 @@ mod tests {
     #[test]
     fn narrow_agent_view_keeps_keyboard_focus_on_the_visible_list() {
         let mut app = test_app();
-        app.active_workspace = TuiWorkspace::Ops;
+        app.active_workspace = Workspace::Ops;
         app.agents.agents = sample_agents();
         app.agents.focus = AgentOverviewFocus::Details;
 
@@ -14454,7 +14295,7 @@ mod tests {
         );
         app.handle_leader_key(key(KeyCode::Char('a')), None);
 
-        assert_eq!(app.mode, TuiMode::Palette);
+        assert_eq!(app.mode, InteractionMode::Palette);
         assert_eq!(app.palette.scope, PaletteScope::Context);
         assert_eq!(app.palette.query, "agent");
 
@@ -14522,9 +14363,9 @@ mod tests {
             modified_key(KeyCode::Char('h'), KeyModifiers::CONTROL),
         );
 
-        driver.assert_visible(&app, action(TuiActionId::RefreshAgents).label);
+        driver.assert_visible(&app, action(ActionId::RefreshAgents).label);
         driver.assert_visible(&app, "Workspaces");
-        driver.assert_visible(&app, action(TuiActionId::ShowHelp).label);
+        driver.assert_visible(&app, action(ActionId::ShowHelp).label);
         driver.key(&mut app, key(KeyCode::End));
         driver.assert_visible(&app, "Columns and collection actions");
     }
@@ -14539,7 +14380,7 @@ mod tests {
             modified_key(KeyCode::Char('h'), KeyModifiers::CONTROL),
         );
 
-        assert_eq!(app.mode, TuiMode::Help);
+        assert_eq!(app.mode, InteractionMode::Help);
         driver.assert_visible(&app, "Agents Overview");
         driver.key(&mut app, key(KeyCode::End));
         driver.assert_visible(&app, "left / right");
@@ -14552,7 +14393,7 @@ mod tests {
         let mut driver = TuiTestDriver::new(120, 48);
 
         driver.key(&mut app, key(KeyCode::Char('r')));
-        assert_eq!(app.mode, TuiMode::AgentFilter);
+        assert_eq!(app.mode, InteractionMode::AgentFilter);
         assert_eq!(app.agents.query, "r");
         driver.key(&mut app, key(KeyCode::Esc));
         driver.key(
@@ -14560,7 +14401,7 @@ mod tests {
             modified_key(KeyCode::Char('h'), KeyModifiers::CONTROL),
         );
 
-        assert_eq!(app.mode, TuiMode::Help);
+        assert_eq!(app.mode, InteractionMode::Help);
         driver.assert_visible(&app, "Agents Overview");
     }
 
@@ -14570,7 +14411,7 @@ mod tests {
         let mut driver = TuiTestDriver::new(120, 48);
 
         driver.key(&mut app, key(KeyCode::Char('b')));
-        assert_eq!(app.mode, TuiMode::AgentFilter);
+        assert_eq!(app.mode, InteractionMode::AgentFilter);
         assert_eq!(app.agents.query, "b");
         driver.key(&mut app, key(KeyCode::Esc));
         driver.key(
@@ -14578,7 +14419,7 @@ mod tests {
             modified_key(KeyCode::Char('h'), KeyModifiers::CONTROL),
         );
 
-        assert_eq!(app.mode, TuiMode::Help);
+        assert_eq!(app.mode, InteractionMode::Help);
         driver.assert_visible(&app, "Agents Overview");
     }
 
@@ -14598,7 +14439,7 @@ mod tests {
 
         app.handle_key(key(KeyCode::Enter));
 
-        assert_eq!(app.mode, TuiMode::Palette);
+        assert_eq!(app.mode, InteractionMode::Palette);
         assert!(!app.agents.refresh_running);
         assert!(app.agents.last_error.is_none());
     }
@@ -14659,8 +14500,8 @@ mod tests {
         app.handle_key(key(KeyCode::Char('b')));
 
         assert!(app.command_run.is_none());
-        assert_eq!(app.active_workspace, TuiWorkspace::Ops);
-        assert_eq!(app.mode, TuiMode::AgentFilter);
+        assert_eq!(app.active_workspace, Workspace::Ops);
+        assert_eq!(app.mode, InteractionMode::AgentFilter);
         assert_eq!(app.agents.query, "b");
     }
 
@@ -14671,8 +14512,8 @@ mod tests {
         app.handle_key(key(KeyCode::Char('c')));
 
         assert!(app.command_run.is_none());
-        assert_eq!(app.active_workspace, TuiWorkspace::Ops);
-        assert_eq!(app.mode, TuiMode::AgentFilter);
+        assert_eq!(app.active_workspace, Workspace::Ops);
+        assert_eq!(app.mode, InteractionMode::AgentFilter);
         assert_eq!(app.agents.query, "c");
     }
 
@@ -14687,7 +14528,7 @@ mod tests {
         app.handle_key(key(KeyCode::Enter));
 
         assert!(app.command_run.is_none());
-        assert_eq!(app.mode, TuiMode::CommandForm);
+        assert_eq!(app.mode, InteractionMode::CommandForm);
         assert!(matches!(
             app.command_form,
             Some(CommandReviewForm {
@@ -14716,7 +14557,7 @@ mod tests {
     #[test]
     fn output_input_row_is_hidden_when_idle() {
         let mut app = test_app();
-        app.active_workspace = TuiWorkspace::Dev;
+        app.active_workspace = Workspace::Dev;
 
         let frame = render_app_text(&app);
         assert!(!frame.contains("stdin"), "{frame}");
@@ -14800,7 +14641,7 @@ mod tests {
     #[test]
     fn output_scroll_helpers_remain_available_for_future_dev_views() {
         let mut app = test_app();
-        app.active_workspace = TuiWorkspace::Dev;
+        app.active_workspace = Workspace::Dev;
         app.dev_focus = DevView::BuildDeploy;
         app.command_run = Some(CommandRun::new(
             1,
@@ -14842,7 +14683,7 @@ mod tests {
     #[test]
     fn command_page_up_enters_explicit_scrollback_and_escape_returns_live() {
         let mut app = test_app();
-        app.active_workspace = TuiWorkspace::Dev;
+        app.active_workspace = Workspace::Dev;
         app.dev_primary = DevView::BuildDeploy;
         app.dev_focus = DevView::BuildDeploy;
         app.command_run = Some(CommandRun::new(
@@ -14855,14 +14696,14 @@ mod tests {
         for index in 0..30 {
             app.append_command_output(format!("line {index}\r\n").as_bytes());
         }
-        app.mode = TuiMode::CommandInteraction;
+        app.mode.replace(InteractionMode::CommandInteraction);
 
         app.handle_command_interaction_key(key(KeyCode::PageUp));
-        assert_eq!(app.mode, TuiMode::TerminalScrollback);
+        assert_eq!(app.mode, InteractionMode::TerminalScrollback);
         assert!(app.command_run.as_ref().unwrap().terminal.scrollback() > 0);
 
         app.handle_key(key(KeyCode::Esc));
-        assert_eq!(app.mode, TuiMode::CommandInteraction);
+        assert_eq!(app.mode, InteractionMode::CommandInteraction);
         assert_eq!(app.command_run.as_ref().unwrap().terminal.scrollback(), 0);
     }
 
@@ -14884,7 +14725,7 @@ mod tests {
             app.command_run.as_ref().map(|run| run.status),
             Some(CommandStatus::Killed)
         );
-        assert_eq!(app.mode, TuiMode::Normal);
+        assert_eq!(app.mode, InteractionMode::Normal);
     }
 
     #[test]
@@ -14903,7 +14744,7 @@ mod tests {
             app.command_run.as_ref().map(|run| run.spinner_frame),
             Some(1)
         );
-        assert_eq!(app.active_workspace, TuiWorkspace::Dev);
+        assert_eq!(app.active_workspace, Workspace::Dev);
     }
 
     #[test]
@@ -14938,7 +14779,7 @@ mod tests {
         app.open_dev_workspace(DevView::Server);
         let frame = render_app_text(&app);
 
-        assert_eq!(app.active_workspace, TuiWorkspace::Dev);
+        assert_eq!(app.active_workspace, Workspace::Dev);
         assert!(frame.contains("( Ops )"), "{frame}");
         assert!(frame.contains("Server"), "{frame}");
         assert_eq!(
@@ -15189,7 +15030,7 @@ mod tests {
         let mut app = test_app();
         app.request_server_toggle();
         assert_eq!(app.server.run.status, ServerStatus::Stopped);
-        assert_eq!(app.mode, TuiMode::SessionForm);
+        assert_eq!(app.mode, InteractionMode::SessionForm);
         assert!(matches!(
             app.session_form,
             Some(SessionReviewForm::Server { restart: false, .. })
@@ -15213,7 +15054,7 @@ mod tests {
         let mut app = test_app();
 
         app.handle_key(key(KeyCode::Char('s')));
-        assert_eq!(app.active_workspace, TuiWorkspace::Ops);
+        assert_eq!(app.active_workspace, Workspace::Ops);
         assert_eq!(app.server.run.status, ServerStatus::Stopped);
 
         app.server.run.status = ServerStatus::Running;
@@ -15225,12 +15066,12 @@ mod tests {
     fn server_palette_action_switches_to_server_and_opens_review() {
         let mut app = test_app();
 
-        app.execute_action(TuiActionKind::ToggleServer, None);
+        app.execute_action(ActionId::ToggleServer, None);
 
-        assert_eq!(app.active_workspace, TuiWorkspace::Dev);
+        assert_eq!(app.active_workspace, Workspace::Dev);
         assert_eq!(app.dev_focus, DevView::Server);
         assert_eq!(app.server.run.status, ServerStatus::Stopped);
-        assert_eq!(app.mode, TuiMode::SessionForm);
+        assert_eq!(app.mode, InteractionMode::SessionForm);
     }
 
     #[test]
@@ -15272,7 +15113,7 @@ mod tests {
         );
 
         assert_eq!(app.server.run.terminal.scrollback(), 3);
-        assert_eq!(app.mode, TuiMode::TerminalScrollback);
+        assert_eq!(app.mode, InteractionMode::TerminalScrollback);
     }
 
     #[test]
@@ -15297,12 +15138,12 @@ mod tests {
         let snapshot = snapshot.as_ref().unwrap();
         assert!(
             snapshot
-                .region(RegionKind::Workspace(TuiWorkspace::Ops))
+                .region(RegionKind::Workspace(Workspace::Ops))
                 .is_some()
         );
         assert!(
             snapshot
-                .region(RegionKind::Workspace(TuiWorkspace::Dev))
+                .region(RegionKind::Workspace(Workspace::Dev))
                 .is_some()
         );
     }
@@ -15324,7 +15165,7 @@ mod tests {
     #[test]
     fn mouse_click_agent_row_selects_agent() {
         let mut app = test_app();
-        app.active_workspace = TuiWorkspace::Ops;
+        app.active_workspace = Workspace::Ops;
         app.agents.agents = sample_agents();
         render_app_text_at(&app, 120, 32);
         let list = snapshot_region(&app, RegionKind::OpsList);
@@ -15382,7 +15223,7 @@ mod tests {
     #[test]
     fn mouse_wheel_moves_the_agent_list_selection() {
         let mut app = test_app();
-        app.active_workspace = TuiWorkspace::Ops;
+        app.active_workspace = Workspace::Ops;
         app.agents.agents = sample_agents();
         render_app_text_at(&app, 120, 32);
         let list = snapshot_region(&app, RegionKind::OpsList);
@@ -15405,7 +15246,7 @@ mod tests {
     fn continuation_is_requested_explicitly_not_by_navigation() {
         let mut app = test_app();
         let (tx, _rx) = test_event_channel();
-        app.active_workspace = TuiWorkspace::Ops;
+        app.active_workspace = Workspace::Ops;
         app.agents.agents = sample_agents();
         app.agents.paging.finish_request(
             false,
@@ -15454,7 +15295,9 @@ mod tests {
     #[test]
     fn mouse_click_context_confirm_and_cancel_regions_match_keyboard_actions() {
         let mut confirm_app = test_app();
-        confirm_app.mode = TuiMode::ContextSwitchConfirm;
+        confirm_app
+            .mode
+            .replace(InteractionMode::ContextSwitchConfirm);
         confirm_app.command_run = Some(CommandRun::new(
             1,
             CommandKind::Build,
@@ -15481,7 +15324,9 @@ mod tests {
         assert!(confirm_app.context_switcher.waiting_for_dev_stop);
 
         let mut cancel_app = test_app();
-        cancel_app.mode = TuiMode::ContextSwitchConfirm;
+        cancel_app
+            .mode
+            .replace(InteractionMode::ContextSwitchConfirm);
         cancel_app.context_switcher.pending_action = Some(PendingContextSwitchAction::Switch {
             global_flags: GolemCliGlobalFlags::default(),
             environment_reference: None,
@@ -15498,7 +15343,7 @@ mod tests {
             None,
         );
 
-        assert_eq!(cancel_app.mode, TuiMode::ContextPicker);
+        assert_eq!(cancel_app.mode, InteractionMode::ContextPicker);
         assert!(cancel_app.context_switcher.pending_action.is_none());
     }
 
@@ -15537,9 +15382,9 @@ mod tests {
 
         app.handle_key(key(KeyCode::Char('r')));
 
-        assert_eq!(app.active_workspace, TuiWorkspace::Ops);
+        assert_eq!(app.active_workspace, Workspace::Ops);
         assert_eq!(app.dev_focus, DevView::Repl);
-        assert_eq!(app.mode, TuiMode::AgentFilter);
+        assert_eq!(app.mode, InteractionMode::AgentFilter);
         assert_eq!(app.agents.query, "r");
         assert_eq!(app.repl.run.status, ReplStatus::Stopped);
 
@@ -15576,27 +15421,27 @@ mod tests {
         let mut app = test_app();
 
         app.handle_key(modified_key(KeyCode::Char('x'), KeyModifiers::CONTROL));
-        assert_eq!(app.mode, TuiMode::Leader);
+        assert_eq!(app.mode, InteractionMode::Leader);
 
         app.handle_key(key(KeyCode::Char('q')));
-        assert_eq!(app.mode, TuiMode::Normal);
+        assert_eq!(app.mode, InteractionMode::Normal);
         assert_eq!(app.repl.run.status, ReplStatus::Stopped);
 
         app.handle_key(modified_key(KeyCode::Char('x'), KeyModifiers::CONTROL));
         app.handle_key(key(KeyCode::Char('k')));
-        assert_eq!(app.mode, TuiMode::Normal);
+        assert_eq!(app.mode, InteractionMode::Normal);
         assert_eq!(app.repl.run.status, ReplStatus::Stopped);
     }
 
     fn test_app() -> TuiApp {
         TuiApp {
             should_quit: false,
-            active_workspace: TuiWorkspace::Ops,
+            active_workspace: Workspace::Ops,
             ops_subject: OpsSubject::Root(OpsRootSubject::Agents),
             ops_view: OpsView::Overview,
             dev_primary: DevView::Repl,
             dev_focus: DevView::Repl,
-            mode: TuiMode::Normal,
+            mode: ModeStack::default(),
             leader: LeaderState::default(),
             help_scroll: 0,
             help_content_height: Cell::new(0),
