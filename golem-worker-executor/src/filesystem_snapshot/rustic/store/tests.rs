@@ -1808,7 +1808,7 @@ async fn a_ledger_entry_ahead_within_the_margin_of_the_moved_clock_holds_the_pru
 
 /// Gives the time in the name of each blob that the calls with the operation label wrote. The time
 /// is the number before the first `-` of the name, after the `@` of a marker.
-fn written_times(calls: &[(&'static str, String)], op_label: &str) -> Vec<u64> {
+fn written_times(calls: &[(&'static str, String)], op_label: &str) -> Box<[u64]> {
     calls
         .iter()
         .filter(|(label, _)| *label == op_label)
