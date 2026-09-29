@@ -918,8 +918,6 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             .await;
     }
 
-    /// Handles an interrupt that arrived while the loop waits, unloaded, for a concurrent-agent
-    /// permit. Returns whether the loop exits.
     /// Handles an interrupt that came before the instance of the start ran: the kind that
     /// `create_instance` gave, or the interrupt that waits. It records the same lifecycle oplog
     /// entry that the invocation failure path records (`Suspend` or `Interrupted`), then parks,
@@ -1020,6 +1018,8 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
         }
     }
 
+    /// Handles an interrupt that arrived while the loop waits, unloaded, for a concurrent-agent
+    /// permit. Returns whether the loop exits.
     async fn handle_unloaded_interrupt(
         &self,
         interrupt: PendingWorkerInterrupt,
