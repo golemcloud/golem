@@ -3392,7 +3392,10 @@ mod tests {
             state.application = Some("app".to_string());
             state.environment = Some("env".to_string());
             let schema = SchemaType::u8();
-            let graph = SchemaGraph::anonymous(schema.clone());
+            let graph = SchemaGraph {
+                defs: Vec::new(),
+                root: SchemaType::stream(Some(schema.clone())),
+            };
             state.graph = Some(graph.clone());
             let fingerprint = schema_fingerprint_v1(&graph, Some(&schema)).unwrap().0;
             let accepted = translate_accepted(
@@ -3413,10 +3416,11 @@ mod tests {
                         Vec::new()
                     },
                     stream_mappings: if native {
-                        vec![
-                            private_mapping(7, StreamMappingRole::Input, fingerprint),
-                            private_mapping(8, StreamMappingRole::Output, fingerprint),
-                        ]
+                        let mut stdin = private_mapping(7, StreamMappingRole::Input, fingerprint);
+                        stdin.tool_byte_stream_role = Some(ToolByteStreamRole::Stdin as i32);
+                        let mut stdout = private_mapping(8, StreamMappingRole::Output, fingerprint);
+                        stdout.tool_byte_stream_role = Some(ToolByteStreamRole::Stdout as i32);
+                        vec![stdin, stdout]
                     } else {
                         Vec::new()
                     },
