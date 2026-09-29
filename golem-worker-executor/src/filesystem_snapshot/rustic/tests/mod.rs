@@ -243,7 +243,7 @@ async fn prune(
 
 /// Gives a backend over the repository of the scope in the storage, on the current runtime, whose
 /// calls wait for at most `deadline`.
-fn backend_of(
+pub(super) fn backend_of(
     storage: Arc<dyn BlobStorage>,
     scope: &SnapshotScope,
     deadline: Duration,

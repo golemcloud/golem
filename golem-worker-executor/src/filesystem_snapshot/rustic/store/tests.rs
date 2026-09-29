@@ -17,7 +17,6 @@
 //! The contract suite runs on the store with the policy of the configuration. The other tests
 //! give the store a short or a long deadline and a prune policy that the test controls.
 
-use super::super::backend::KEPT_PACKS_LIMIT;
 use super::super::fault::is_lease_expired;
 use super::super::prune::{
     CLOCK_SKEW_MARGIN, ClaimChoice, ClaimEntry, LEDGERS_PATH, Percent, PruneLedger, claim_hold,
@@ -26,7 +25,7 @@ use super::super::prune::{
 use super::super::publish::StagedSnapshot;
 use super::super::tests::scripted::{Script, ScriptedBlobStorage};
 use super::super::tests::{
-    copy_flat_tree, entries, files_of, three_file_tree, wait_past_change_times,
+    backend_of, copy_flat_tree, entries, files_of, three_file_tree, wait_past_change_times,
 };
 use super::super::{PruneReport, PruneSettings, RepositoryKey, open_existing};
 use super::{
@@ -352,14 +351,9 @@ async fn a_new_repository_uses_the_rabin_chunker_zstd_level_3_and_extra_verify()
         .save(&scope, &name("p-settings"), tree.path(), None)
         .await
         .unwrap();
-    let namespace = scope.0.clone();
+    let backend = backend_of(storage, &scope, LONG_DEADLINE);
     let config = tokio::task::spawn_blocking(move || {
-        let backend = super::super::backend::BlobBackend::new(
-            files_of(storage, namespace, LONG_DEADLINE, CancellationToken::new()),
-            tokio::runtime::Handle::current(),
-            KEPT_PACKS_LIMIT,
-        );
-        let repository = open_existing(Arc::new(backend), &key()).unwrap().unwrap();
+        let repository = open_existing(backend, &key()).unwrap().unwrap();
         let config = repository.config();
         (
             config.chunker,
@@ -405,14 +399,9 @@ async fn a_tree_saved_through_a_proc_self_fd_path_is_stored_below_the_root() {
         .save(&scope, &name("p-fd"), Path::new(&through_fd), None)
         .await
         .unwrap();
-    let namespace = scope.0.clone();
+    let backend = backend_of(storage, &scope, LONG_DEADLINE);
     let paths = tokio::task::spawn_blocking(move || {
-        let backend = super::super::backend::BlobBackend::new(
-            files_of(storage, namespace, LONG_DEADLINE, CancellationToken::new()),
-            tokio::runtime::Handle::current(),
-            KEPT_PACKS_LIMIT,
-        );
-        let repository = open_existing(Arc::new(backend), &key()).unwrap().unwrap();
+        let repository = open_existing(backend, &key()).unwrap().unwrap();
         scope_snapshots(&repository)
             .unwrap()
             .readable
@@ -4737,14 +4726,9 @@ async fn snapshot_files(
     storage: Arc<dyn BlobStorage>,
     scope: &SnapshotScope,
 ) -> Vec<rustic_core::repofile::SnapshotFile> {
-    let namespace = scope.0.clone();
+    let backend = backend_of(storage, scope, LONG_DEADLINE);
     tokio::task::spawn_blocking(move || {
-        let backend = super::super::backend::BlobBackend::new(
-            files_of(storage, namespace, LONG_DEADLINE, CancellationToken::new()),
-            tokio::runtime::Handle::current(),
-            KEPT_PACKS_LIMIT,
-        );
-        let repository = open_existing(Arc::new(backend), &key()).unwrap().unwrap();
+        let repository = open_existing(backend, &key()).unwrap().unwrap();
         scope_snapshots(&repository).unwrap().readable
     })
     .await
