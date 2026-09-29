@@ -151,7 +151,7 @@ impl SnapshotFiles {
                 let answer = answer_or_cancel(self.deadline, &self.cancel, future);
                 match &self.lease {
                     None => answer.await,
-                    Some(lease) => within_lease(lease, Instant::now(), answer).await,
+                    Some(lease) => within_lease(lease, answer).await,
                 }
             })
             .await
@@ -291,18 +291,18 @@ impl SnapshotFiles {
     }
 }
 
-/// Gives the output of the future, or [`LeaseExpired`] when the lease runs out first. A call does
-/// not start when the lease has run out at `now`.
+/// Gives the output of the future, or [`LeaseExpired`] when the lease runs out first. The bound is
+/// the expiry of the lease that the call reads once. A call does not start when the lease ran out
+/// at that read.
 async fn within_lease<T>(
     lease: &Lease,
-    now: Instant,
     future: impl Future<Output = anyhow::Result<T>>,
 ) -> anyhow::Result<T> {
-    let left = lease.expiry().saturating_duration_since(now);
-    if left.is_zero() {
+    let expiry = lease.expiry();
+    if Instant::now() >= expiry {
         return Err(anyhow::Error::new(LeaseExpired));
     }
-    tokio::time::timeout(left, future)
+    tokio::time::timeout_at(tokio::time::Instant::from_std(expiry), future)
         .await
         .unwrap_or_else(|_| Err(anyhow::Error::new(LeaseExpired)))
 }

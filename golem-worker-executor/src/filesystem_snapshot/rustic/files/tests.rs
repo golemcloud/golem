@@ -219,3 +219,31 @@ fn the_location_of_the_files_names_their_namespace() {
         format!("golem-blob-storage:{namespace:?}")
     );
 }
+
+#[test]
+#[timeout("60s")]
+async fn a_leased_call_that_gets_no_answer_ends_at_the_expiry_of_the_lease() {
+    // The deadline of the files is 10 s, so only the lease can end the call near 50 ms.
+    let storage = ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |_, _| {
+        Script::NeverAnswer
+    });
+    let files = files_over(storage, CancellationToken::new(), TaskTracker::new());
+    let started = Instant::now();
+    let expiry = started + Duration::from_millis(50);
+
+    let read = files
+        .leased(Arc::new(Lease::until(expiry)))
+        .get("read", Path::new("a"))
+        .await;
+    let ended = Instant::now();
+
+    assert!(
+        read.as_ref().is_err_and(|error| error.is::<LeaseExpired>()),
+        "{read:?}"
+    );
+    assert!(
+        ended >= expiry && ended < expiry + Duration::from_millis(250),
+        "the call ended {:?} after its start",
+        ended - started
+    );
+}
