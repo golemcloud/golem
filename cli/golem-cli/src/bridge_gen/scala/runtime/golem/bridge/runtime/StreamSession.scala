@@ -204,7 +204,8 @@ object StreamSession {
     parameters: () => SchemaValue,
     constructorCodec: PublicValueCodec.Codec,
     inputCodec: PublicValueCodec.Codec,
-    outputCodec: Option[PublicValueCodec.Codec]
+    outputCodec: Option[PublicValueCodec.Codec],
+    configCodecs: List[(List[String], PublicValueCodec.Codec)]
   ): Future[AgentInvocationResult] = {
     implicit val ec: ExecutionContext = resolved.configuration.executionContext
     val session = new Session(resolved)
@@ -540,8 +541,13 @@ object StreamSession {
                 if (outputCodec.nonEmpty) throw BridgeException("method result is unexpectedly absent")
                 None
               case "value" =>
-                StreamSessionProtocol.validateObject(resultValue, Set("kind", "value"), "invocation result")
-                Some(scoped(session)(outputCodec.getOrElse(throw BridgeException("unexpected invocation result value")).decode(Json.requireField(resultValue, "value").toOption.get)))
+                StreamSessionProtocol.validateObject(resultValue, Set("graph", "kind", "value"), "invocation result")
+                val expected = outputCodec.getOrElse(throw BridgeException("unexpected invocation result value"))
+                val graph = Json.requireField(resultValue, "graph").fold(e => throw BridgeException(e), identity)
+                val wireCodec = PublicValueCodec.fromSchemaGraphJson(graph.render)
+                val decoded = scoped(session)(wireCodec.decode(Json.requireField(resultValue, "value").toOption.get))
+                expected.encode(decoded)
+                Some(decoded)
               case _ => throw BridgeException("invalid invocation result kind")
             }
             if (!result.trySuccess(AgentInvocationResult(resolved.agentId.getOrElse(AgentId("", "")), idempotencyKey, value, None)))
@@ -729,8 +735,10 @@ object StreamSession {
     }
     val base = resolved.configuration.server.url.stripSuffix("/").replaceFirst("^http", "ws")
     val selector = Json.obj("agentType" -> Json.string(resolved.agentTypeName), "application" -> Json.string(resolved.configuration.appName), "constructorParameters" -> constructorCodec.encode(resolved.parameters), "environment" -> Json.string(resolved.configuration.envName), "method" -> Json.string(method))
+    val codecsByPath = configCodecs.toMap
     val config = Json.arr(resolved.config.map { e =>
-      Json.obj("path" -> Json.arr(e.path.map(Json.string).toVector), "value" -> e.codec.encode(e.value))
+      codecsByPath.getOrElse(e.path, throw BridgeException(s"missing public config codec for ${e.path.mkString(".")}"))
+      Json.obj("path" -> Json.arr(e.path.map(Json.string).toVector), "value" -> e.value)
     }.toVector)
     pendingAttempt = UUID.randomUUID.toString
     pendingDescriptor = StreamSessionProtocol.message("invocationStart", Vector("attemptId" -> Json.string(pendingAttempt), "config" -> config, "idempotencyKey" -> Json.string(idempotencyKey), "methodParameters" -> inputCodec.encode(encodedParameters), "selector" -> selector))
