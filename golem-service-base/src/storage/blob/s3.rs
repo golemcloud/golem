@@ -165,20 +165,42 @@ const NO_SUCH_KEY_CODE: &str = "NoSuchKey";
 /// error with this limit in it.
 const MAX_KEY_BYTES: usize = 1024;
 
+/// The range of the bytes in the body of a response, and the size of the object, that a
+/// `Content-Range` gives.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ContentRange {
+    /// The offset of the first byte of the range.
+    first: u64,
+    /// The offset of the last byte of the range. The range holds this byte.
+    last: u64,
+    /// The size of the object, or `None` when the value does not give it as a number. RFC 9110
+    /// lets a server give `*` when it does not know the size (section 14.4).
+    total: Option<u64>,
+}
+
+/// Reads a `Content-Range` of the form `bytes <first>-<last>/<total>` (RFC 9110, section 14.4),
+/// or gives `None` for a value of another form.
+fn parse_content_range(value: &str) -> Option<ContentRange> {
+    let (range, total) = value.strip_prefix("bytes ")?.split_once('/')?;
+    let (first, last) = range.split_once('-')?;
+    Some(ContentRange {
+        first: first.parse().ok()?,
+        last: last.parse().ok()?,
+        total: total.parse().ok(),
+    })
+}
+
+/// Gives the size of the object from the `Content-Range` of a response to a read of the bytes
+/// from `start` to `end`. The range of the response must be that range, and the size must be a
+/// number that holds `end`.
 fn ranged_object_size(content_range: Option<&str>, start: u64, end: u64) -> Result<u64, Error> {
-    let (range, total) = content_range
-        .and_then(|value| value.strip_prefix("bytes "))
-        .and_then(|value| value.split_once('/'))
+    let range = content_range
+        .and_then(parse_content_range)
         .ok_or_else(|| anyhow!("Missing or invalid S3 Content-Range"))?;
-    let (actual_start, actual_end) = range
-        .split_once('-')
-        .ok_or_else(|| anyhow!("Invalid S3 range"))?;
-    let total: u64 = total.parse()?;
-    ensure!(
-        actual_start.parse::<u64>()? == start && actual_end.parse::<u64>()? == end && end < total,
-        "Unexpected S3 range"
-    );
-    Ok(total)
+    range
+        .total
+        .filter(|&total| range.first == start && range.last == end && end < total)
+        .ok_or_else(|| anyhow!("Unexpected S3 range"))
 }
 
 #[derive(Debug)]
@@ -754,17 +776,15 @@ impl S3BlobStorage {
                 )),
             };
         };
-        let returned = content_range
-            .strip_prefix("bytes ")
-            .and_then(|value| value.split_once('/'))
-            .and_then(|(range, _)| range.split_once('-'))
-            .and_then(|(first, last)| first.parse::<u64>().ok().zip(last.parse::<u64>().ok()));
+        let returned = parse_content_range(content_range);
         let length = end.checked_sub(start).and_then(|last| last.checked_add(1));
         match (returned, length) {
-            (Some((first, last)), Some(length)) if first == start && last == end => {
+            (Some(ContentRange { first, last, .. }), Some(length))
+                if first == start && last == end =>
+            {
                 Ok(ResponseBody::Range { length })
             }
-            (Some((first, last)), _) if first == start && last < end => {
+            (Some(ContentRange { first, last, .. }), _) if first == start && last < end => {
                 Err(BlobRangeError { start, end }.into())
             }
             _ => Err(anyhow!(

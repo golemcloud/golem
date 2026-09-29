@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use super::{
-    BodyLengthError, RETRIABLE_SERVICE_ERROR_CODES, S3BlobStorage, cut_range, ranged_object_size,
-    read_body,
+    BodyLengthError, ContentRange, RETRIABLE_SERVICE_ERROR_CODES, S3BlobStorage, cut_range,
+    parse_content_range, ranged_object_size, read_body,
 };
 use crate::config::{S3BlobStorageConfig, S3BlobStorageCredentialsConfig};
 use crate::replayable_stream::ReplayableStream;
@@ -3242,6 +3242,45 @@ async fn an_oplog_payload_goes_to_the_key_of_its_agent_path_segment() {
                 Uuid::nil()
             )]
         )
+    );
+}
+
+#[test]
+fn a_content_range_gives_the_range_and_a_size_that_is_a_number() {
+    let range = |first, last, total| Some(ContentRange { first, last, total });
+    let values = [
+        "bytes 7-10/123",
+        "bytes 0-0/1",
+        "bytes 7-10/*",
+        "bytes 7-10/18446744073709551616",
+        "bytes 10-7/123",
+        "items 7-10/123",
+        "bytes 7-10",
+        "bytes 7/123",
+        "bytes x-10/123",
+        "bytes 7-/123",
+        "bytes */123",
+        "bytes  7-10/123",
+        "",
+    ];
+
+    assert_eq!(
+        values.map(parse_content_range),
+        [
+            range(7, 10, Some(123)),
+            range(0, 0, Some(1)),
+            range(7, 10, None),
+            range(7, 10, None),
+            range(10, 7, Some(123)),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        ]
     );
 }
 
