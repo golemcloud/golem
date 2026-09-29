@@ -520,6 +520,15 @@ impl RusticSnapshotStore {
         Ok(BlobBackend::new(files, runtime, KEPT_PACKS_LIMIT).tracked_by(self.tracker.token()))
     }
 
+    /// Gives a backend over the repository of the scope for the operation with the token.
+    fn scope_backend(
+        &self,
+        scope: &SnapshotScope,
+        token: &CancellationToken,
+    ) -> Result<BlobBackend, SnapshotStoreError> {
+        self.backend(self.files(scope, token))
+    }
+
     /// Runs the task on a blocking thread that the tracker counts, and classifies its error.
     async fn blocking<T: Send + 'static>(
         &self,
@@ -805,10 +814,7 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
         let (token, _guard) = self.start()?;
         self.check_tree(tree).await?;
         let stage = Arc::new(SnapshotStage::default());
-        let backend = Arc::new(
-            self.backend(self.files(scope, &token))?
-                .staging_in(stage.clone()),
-        );
+        let backend = Arc::new(self.scope_backend(scope, &token)?.staging_in(stage.clone()));
         let key = self.key.clone();
         let policy = self.policy;
         let name = name.clone();
@@ -838,7 +844,7 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
     ) -> Result<SnapshotInfo, SnapshotStoreError> {
         let (token, _guard) = self.start()?;
         self.check_destination(into).await?;
-        let backend = Arc::new(self.backend(self.files(scope, &token))?);
+        let backend = Arc::new(self.scope_backend(scope, &token)?);
         let key = self.key.clone();
         let options = store_restore_options(&self.policy);
         let name = name.clone();
@@ -874,7 +880,7 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
         name: &SnapshotName,
     ) -> Result<Option<SnapshotInfo>, SnapshotStoreError> {
         let (token, _guard) = self.start()?;
-        let backend = Arc::new(self.backend(self.files(scope, &token))?);
+        let backend = Arc::new(self.scope_backend(scope, &token)?);
         let key = self.key.clone();
         let name = name.clone();
         self.blocking(Operation::Repository, move || {
@@ -892,7 +898,7 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
         scope: &SnapshotScope,
     ) -> Result<Box<[(SnapshotName, SnapshotInfo)]>, SnapshotStoreError> {
         let (token, _guard) = self.start()?;
-        let backend = Arc::new(self.backend(self.files(scope, &token))?);
+        let backend = Arc::new(self.scope_backend(scope, &token)?);
         let key = self.key.clone();
         self.blocking(Operation::Repository, move || {
             Ok(match open_existing(backend, &key)? {
@@ -909,7 +915,7 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
         name: &SnapshotName,
     ) -> Result<(), SnapshotStoreError> {
         let (token, _guard) = self.start()?;
-        let backend = Arc::new(self.backend(self.files(scope, &token))?);
+        let backend = Arc::new(self.scope_backend(scope, &token)?);
         let key = self.key.clone();
         let name = name.clone();
         let found = self
