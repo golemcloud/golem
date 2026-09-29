@@ -35,6 +35,7 @@ pub(super) struct DurableStreamProducerSlot {
 struct SlotState {
     responses: usize,
     producer: Option<Arc<DurableStreamStore>>,
+    deletion_load: Option<LoadResult>,
     loading: Option<watch::Receiver<Option<LoadResult>>>,
     failure: Option<StreamStoreError>,
     retired: bool,
@@ -129,6 +130,23 @@ impl DurableStreamProducerSlot {
             producer.poison();
         }
         self.state_changed.notify_waiters();
+    }
+
+    pub(super) fn publish_deletion_load(&self, result: LoadResult) {
+        self.state.lock().unwrap().deletion_load = Some(result);
+        self.state_changed.notify_waiters();
+    }
+
+    pub(super) async fn deletion_producer(&self) -> LoadResult {
+        loop {
+            let changed = self.state_changed.notified();
+            tokio::pin!(changed);
+            changed.as_mut().enable();
+            if let Some(result) = self.state.lock().unwrap().deletion_load.clone() {
+                return result;
+            }
+            changed.await;
+        }
     }
 
     pub(super) fn retire(

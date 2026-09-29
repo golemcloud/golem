@@ -42,6 +42,12 @@ pub struct ShardManagerConfig {
     pub rebalance_threshold: f64,
     #[serde(with = "humantime_serde")]
     pub shard_lease_duration: Duration,
+    #[serde(with = "humantime_serde")]
+    pub state_read_timeout: Duration,
+    #[serde(with = "humantime_serde")]
+    pub state_write_timeout: Duration,
+    #[serde(with = "humantime_serde")]
+    pub initial_health_check_timeout: Duration,
     pub registry_service: GrpcRegistryServiceConfig,
     pub resource_definition_fetcher: ResourceDefinitionFetcherConfig,
     pub quota: QuotaServiceConfig,
@@ -91,6 +97,21 @@ impl SafeDisplay for ShardManagerConfig {
             "shard lease duration: {:?}",
             self.shard_lease_duration
         );
+        let _ = writeln!(
+            &mut result,
+            "state read timeout: {:?}",
+            self.state_read_timeout
+        );
+        let _ = writeln!(
+            &mut result,
+            "state write timeout: {:?}",
+            self.state_write_timeout
+        );
+        let _ = writeln!(
+            &mut result,
+            "initial health check timeout: {:?}",
+            self.initial_health_check_timeout
+        );
         let _ = writeln!(&mut result, "registry service:");
         let _ = writeln!(
             &mut result,
@@ -122,6 +143,11 @@ impl Default for ShardManagerConfig {
             number_of_shards: 1024,
             rebalance_threshold: 0.1,
             shard_lease_duration: Duration::from_secs(60),
+            state_read_timeout: crate::sharding::shard_management::DEFAULT_STATE_READ_TIMEOUT,
+            state_write_timeout: golem_common::base_model::shard_lease::default_state_write_timeout(
+            ),
+            initial_health_check_timeout:
+                crate::sharding::shard_management::DEFAULT_INITIAL_HEALTH_CHECK_TIMEOUT,
             registry_service: GrpcRegistryServiceConfig::default(),
             resource_definition_fetcher: ResourceDefinitionFetcherConfig::default(),
             quota: QuotaServiceConfig::default(),
@@ -222,12 +248,19 @@ pub struct EtcdConfig {
     /// `GOLEM__PERSISTENCE__CONFIG__ENDPOINTS=["http://a:2379","http://b:2379"]`
     pub endpoints: Vec<String>,
     /// Defaulted, so that selecting etcd by environment variable does not also require setting
-    /// every timeout: figment merges `GOLEM__PERSISTENCE__CONFIG__*` over the *default* variant's
-    /// map, which is SQLite's, so these two would otherwise be missing rather than inherited.
+    /// every setting: figment merges `GOLEM__PERSISTENCE__CONFIG__*` over the *default* variant's
+    /// map, which is SQLite's, so these would otherwise be missing rather than inherited.
     #[serde(with = "humantime_serde", default = "default_etcd_connect_timeout")]
     pub connect_timeout: Duration,
     #[serde(with = "humantime_serde", default = "default_etcd_request_timeout")]
     pub request_timeout: Duration,
+    /// How long a state read may retry retriable etcd failures before returning the last one.
+    #[serde(with = "humantime_serde", default = "default_etcd_read_retry_timeout")]
+    pub read_retry_timeout: Duration,
+    #[serde(with = "humantime_serde", default = "default_etcd_retry_min_delay")]
+    pub retry_min_delay: Duration,
+    #[serde(with = "humantime_serde", default = "default_etcd_retry_max_delay")]
+    pub retry_max_delay: Duration,
     /// How long etcd holds this replica's leadership lease without a renewal; renewed at TTL/3.
     #[serde(with = "humantime_serde", default = "default_leader_lease_ttl")]
     pub leader_lease_ttl: Duration,
@@ -252,6 +285,18 @@ fn default_etcd_request_timeout() -> Duration {
     Duration::from_secs(5)
 }
 
+fn default_etcd_read_retry_timeout() -> Duration {
+    Duration::from_secs(10)
+}
+
+fn default_etcd_retry_min_delay() -> Duration {
+    Duration::from_millis(100)
+}
+
+fn default_etcd_retry_max_delay() -> Duration {
+    Duration::from_secs(5)
+}
+
 /// Generous against what anything needs: nothing reads an old revision of the state key, so the
 /// retention only has to outlast in-flight reads and the leader election's watches. At ten
 /// executors this is about half an hour of renewals, and about 50 MB of history.
@@ -265,6 +310,9 @@ impl Default for EtcdConfig {
             endpoints: vec!["http://localhost:2379".to_string()],
             connect_timeout: default_etcd_connect_timeout(),
             request_timeout: default_etcd_request_timeout(),
+            read_retry_timeout: default_etcd_read_retry_timeout(),
+            retry_min_delay: default_etcd_retry_min_delay(),
+            retry_max_delay: default_etcd_retry_max_delay(),
             leader_lease_ttl: default_leader_lease_ttl(),
             compaction_retention_revisions: default_etcd_compaction_retention_revisions(),
         }
@@ -277,6 +325,9 @@ impl SafeDisplay for EtcdConfig {
             endpoints,
             connect_timeout,
             request_timeout,
+            read_retry_timeout,
+            retry_min_delay,
+            retry_max_delay,
             leader_lease_ttl,
             compaction_retention_revisions,
         } = self;
@@ -285,6 +336,9 @@ impl SafeDisplay for EtcdConfig {
         let _ = writeln!(&mut result, "endpoints: {}", endpoints.join(", "));
         let _ = writeln!(&mut result, "connect timeout: {connect_timeout:?}");
         let _ = writeln!(&mut result, "request timeout: {request_timeout:?}");
+        let _ = writeln!(&mut result, "read retry timeout: {read_retry_timeout:?}");
+        let _ = writeln!(&mut result, "retry min delay: {retry_min_delay:?}");
+        let _ = writeln!(&mut result, "retry max delay: {retry_max_delay:?}");
         let _ = writeln!(&mut result, "leader lease ttl: {leader_lease_ttl:?}");
         let _ = writeln!(
             &mut result,

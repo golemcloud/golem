@@ -3174,8 +3174,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             )
             .await
             {
-                Ok(producer) => producer,
+                Ok(producer) => {
+                    self.durable_stream_producer
+                        .publish_deletion_load(Ok(producer.clone()));
+                    producer
+                }
                 Err(error) => {
+                    self.durable_stream_producer
+                        .publish_deletion_load(Err(error.clone()));
                     let error = error.into_worker_executor_error(WorkerExecutorError::runtime);
                     return Err(self.deletion_step_failed(error).await);
                 }
@@ -7820,7 +7826,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 "durable stream attachment mapping does not match the producer key",
             ));
         }
-        let producer = self.durable_stream_producer().await?;
+        let producer = if self.deletion_owns_retirement().await {
+            self.durable_stream_producer
+                .deletion_producer()
+                .await
+                .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?
+        } else {
+            self.durable_stream_producer().await?
+        };
         producer
             .validate_handle(&mapping.handle)
             .await

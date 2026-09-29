@@ -53,6 +53,25 @@ async fn first_load_and_retirement_wake_parked_recovery() {
 
 #[test]
 #[test_r::timeout("10s")]
+async fn deletion_control_waits_for_the_replacement_producer() {
+    let slot = Arc::new(DurableStreamProducerSlot::default());
+    slot.fence();
+    let waiting = tokio::spawn({
+        let slot = slot.clone();
+        async move { slot.deletion_producer().await }
+    });
+    tokio::task::yield_now().await;
+    assert!(!waiting.is_finished());
+
+    let producer = load().await.unwrap();
+    slot.publish_deletion_load(Ok(producer.clone()));
+    let published = waiting.await.unwrap().unwrap();
+    assert!(Arc::ptr_eq(&published, &producer));
+    published.ensure_healthy().unwrap();
+}
+
+#[test]
+#[test_r::timeout("10s")]
 async fn nested_lookup_does_not_wait_for_its_own_activity_to_drain() {
     for external_reload in [false, true] {
         let slot = Arc::new(DurableStreamProducerSlot::default());

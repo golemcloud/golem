@@ -61,6 +61,7 @@ use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 use tempfile::TempDir;
 use tracing::Level;
 use url::Url;
@@ -233,6 +234,8 @@ pub enum TestMode {
         shard_manager_http_port: u16,
         #[arg(long, default_value = "9096")]
         shard_manager_grpc_port: u16,
+        #[arg(long, default_value = "4500")]
+        shard_manager_state_write_timeout_millis: u64,
         #[arg(long, default_value = "8081")]
         registry_service_http_port: u16,
         #[arg(long, default_value = "9091")]
@@ -352,6 +355,7 @@ impl BenchmarkTestDependencies {
         redis_prefix: &str,
         shard_manager_http_port: u16,
         shard_manager_grpc_port: u16,
+        shard_manager_state_write_timeout_millis: u64,
         registry_service_http_port: u16,
         registry_service_grpc_port: u16,
         component_compilation_service_http_port: u16,
@@ -438,6 +442,10 @@ impl BenchmarkTestDependencies {
                 &build_root.join("golem-shard-manager"),
                 &workspace_root.join("golem-shard-manager"),
                 None,
+                Some(Duration::from_millis(
+                    shard_manager_state_write_timeout_millis,
+                )),
+                true,
                 shard_manager_http_port,
                 shard_manager_grpc_port,
                 rdb.clone(),
@@ -642,6 +650,7 @@ impl BenchmarkTestDependencies {
                 redis_prefix,
                 shard_manager_http_port,
                 shard_manager_grpc_port,
+                shard_manager_state_write_timeout_millis,
                 registry_service_http_port,
                 registry_service_grpc_port,
                 component_compilation_service_http_port,
@@ -664,6 +673,7 @@ impl BenchmarkTestDependencies {
                     redis_prefix,
                     *shard_manager_http_port,
                     *shard_manager_grpc_port,
+                    *shard_manager_state_write_timeout_millis,
                     *registry_service_http_port,
                     *registry_service_grpc_port,
                     *component_compilation_service_http_port,
@@ -871,5 +881,34 @@ impl CliTestService {
                 panic!("Test mode {:?} not supported", mode)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BenchmarkCliParameters, TestMode};
+    use crate::benchmark::BenchmarkConfig;
+    use clap::Parser;
+    use test_r::test;
+
+    #[test]
+    fn spawned_benchmarks_default_to_a_4500ms_shard_state_write_timeout() {
+        let parameters =
+            BenchmarkCliParameters::try_parse_from(["benchmark", "benchmark", "noop", "spawned"])
+                .expect("the minimal spawned benchmark command must parse");
+
+        let BenchmarkConfig::Benchmark {
+            mode:
+                TestMode::Spawned {
+                    shard_manager_state_write_timeout_millis,
+                    ..
+                },
+            ..
+        } = parameters.benchmark_config
+        else {
+            panic!("expected spawned benchmark mode");
+        };
+
+        assert_eq!(shard_manager_state_write_timeout_millis, 4_500);
     }
 }

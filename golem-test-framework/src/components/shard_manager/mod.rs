@@ -88,6 +88,7 @@ async fn wait_for_startup(
 
 async fn env_vars(
     number_of_shards_override: Option<usize>,
+    state_write_timeout_override: Option<Duration>,
     http_port: u16,
     grpc_port: u16,
     rdb: &Arc<dyn Rdb>,
@@ -126,6 +127,12 @@ async fn env_vars(
 
     if let Some(number_of_shards) = number_of_shards_override {
         builder = builder.with("GOLEM__NUMBER_OF_SHARDS", number_of_shards.to_string());
+    }
+    if let Some(state_write_timeout) = state_write_timeout_override {
+        builder = builder.with(
+            "GOLEM__STATE_WRITE_TIMEOUT",
+            format!("{}ms", state_write_timeout.as_millis()),
+        );
     }
 
     builder.build()

@@ -1760,6 +1760,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let mut acceptance = match result {
             Ok(acceptance) => acceptance,
             Err(error) => {
+                tracing::warn!(
+                    agent_id = ?resume.agent_id,
+                    attempt_id = ?resume.attempt_id,
+                    error = %error,
+                    "Durable invocation session resume was rejected"
+                );
                 let rejection = InvocationResponse {
                     response: Some(invocation_response::Response::Rejected(
                         InvocationRejected {
