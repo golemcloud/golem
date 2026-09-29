@@ -67,15 +67,16 @@ final class ScalaStreamingToolImpl extends ScalaStreamingTool {
       stdin: ToolInputStream,
       stdout: ToolOutputStream
   ): Future[Long] = {
-    val copied = stdin.stream
-      .runFoldAsync(0L) { (bytesRead, byte) =>
-        Async.fromFuture(stdout.write(Array(byte)).flatMap(requireWrite)).map(_ => bytesRead + 1L)
-      }
-      .toFuture
-      .flatMap {
-        case Right(bytesRead) => Future.successful(bytesRead)
-        case Left(error)      => Future.failed(new IllegalStateException(s"stream input failed: $error"))
-      }
+    def copied =
+      stdin.stream
+        .runFoldAsync(0L) { (bytesRead, byte) =>
+          Async.fromFuture(stdout.write(Array(byte)).flatMap(requireWrite)).map(_ => bytesRead + 1L)
+        }
+        .toFuture
+        .flatMap {
+          case Right(bytesRead) => Future.successful(bytesRead)
+          case Left(error)      => Future.failed(new IllegalStateException(s"stream input failed: $error"))
+        }
 
     val marker =
       if (mode == "marker-echo") stdout.write("scala-marker:".getBytes("UTF-8")).flatMap(requireWrite)
