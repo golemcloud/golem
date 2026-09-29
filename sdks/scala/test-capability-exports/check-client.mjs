@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { registerHooks } from "node:module";
+import { register } from "node:module";
 import { loadFixture } from "./check.mjs";
 
 const [providerPath, clientPath] = process.argv.slice(2);
@@ -15,25 +15,28 @@ globalThis.__capabilityToolInvoke = (name, path, input, stdin, stdout) => {
     tag: "anonymous",
   });
 };
-registerHooks({
-  resolve(specifier, context, next) {
-    if (specifier === "golem:tool/host@0.1.0") {
-      const source = `export class ToolRpc {
+register("./host-module-hooks.mjs", import.meta.url, {
+  data: {
+    modules: [
+      [
+        "golem:tool/host@0.1.0",
+        `export class ToolRpc {
         constructor(name) { this.name = name; }
         static create(name) { return new ToolRpc(name); }
         asyncInvokeAndAwait(...args) {
           const result = globalThis.__capabilityToolInvoke(this.name, ...args);
           return { get: () => result, cancel() { throw new Error("unexpected cancellation"); } };
         }
-      }`;
-      return {
-        url: `data:text/javascript,${encodeURIComponent(source)}`,
-        shortCircuit: true,
-      };
-    }
-    return next(specifier, context);
+      }`,
+      ],
+    ],
   },
 });
+const ambient = await import("golem:agent/host@2.0.0");
+assert.throws(
+  () => ambient.parseAgentId(),
+  /Unexpected host call: golem:agent\/host@2\.0\.0/,
+);
 const { linked: client, source } = await loadFixture(clientPath);
 assert.deepEqual(client.golemAgent200Guest.discoverAgentTypes(), []);
 assert.deepEqual(client.golemTool010Guest.discoverTools(), []);

@@ -1,31 +1,25 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { registerHooks } from "node:module";
+import { register } from "node:module";
 import { pathToFileURL } from "node:url";
 
 // These fixtures do not use streams or ambient host APIs. Resolve the static
 // imports, but fail if a fixture unexpectedly calls one.
-const hostModules = new Set([
+const hostModules = [
   "golem:core/types@2.0.0",
   "golem:agent/host@2.0.0",
   "golem:api/host@1.5.0",
-]);
-registerHooks({
-  resolve(specifier, context, next) {
-    if (hostModules.has(specifier)) {
-      const source = `
+].map((specifier) => [
+  specifier,
+  `
         const unavailable = () => { throw new Error("Unexpected host call: ${specifier}"); };
         export const SchemaValueStream = { wrap: unavailable, unwrap: unavailable };
         export const parseAgentId = unavailable;
         export const getSelfMetadata = unavailable;
-      `;
-      return {
-        url: `data:text/javascript,${encodeURIComponent(source)}`,
-        shortCircuit: true,
-      };
-    }
-    return next(specifier, context);
-  },
+      `,
+]);
+register("./host-module-hooks.mjs", import.meta.url, {
+  data: { modules: hostModules },
 });
 
 export async function loadFixture(path) {

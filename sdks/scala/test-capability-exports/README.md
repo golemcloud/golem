@@ -28,9 +28,9 @@ node test-capability-exports/check.mjs mixed test-capability-exports/mixedExport
 node test-capability-exports/check-client.mjs test-capability-exports/toolExportsFixture/target/scala-3.8.2/toolexportsfixture-opt/main.js test-capability-exports/clientExportsFixture/target/scala-3.8.2/clientexportsfixture-opt/main.js
 ```
 
-Node 24 checks the actual linked entry modules, synchronous discovery, externally
-called guest exports, middleware underlying dispatch, error behavior, snapshot
-exports, and static import pruning. Unexpected ambient host calls fail. The
+Node 20.6 or newer checks the actual linked entry modules, synchronous discovery,
+externally called guest exports, middleware underlying dispatch, error behavior,
+snapshot exports, and static import pruning. Unexpected ambient host calls fail. The
 client-only fixture exercises generated typed tool RPC through a host stub into
 the real provider entry; it must import tool RPC while keeping local discovery
 empty. These checks do not test platform permissions, durable RPC, or scheduling.
