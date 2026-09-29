@@ -104,14 +104,6 @@ impl Interrupts {
     }
 }
 
-/// Completes when `terminal` says that a terminal request waits. It never completes when the
-/// sender is gone.
-pub(crate) async fn terminal_queued(mut terminal: watch::Receiver<bool>) {
-    if terminal.wait_for(|pending| *pending).await.is_err() {
-        std::future::pending::<()>().await;
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -192,21 +184,5 @@ mod tests {
         let busy = interrupts.when_idle(|| 2).await;
 
         assert_eq!((idle, busy), (Some(1), None));
-    }
-
-    #[test]
-    async fn terminal_queued_completes_once_a_terminal_request_waits() {
-        let interrupts = Interrupts::default();
-        let waiting = terminal_queued(interrupts.terminal());
-        let mut waiting = std::pin::pin!(waiting);
-        let before = futures::poll!(waiting.as_mut()).is_ready();
-        interrupts.try_queue(interrupt(InterruptKind::Restart));
-        let after_restart = futures::poll!(waiting.as_mut()).is_ready();
-        interrupts.try_queue(interrupt(InterruptKind::Interrupt(Timestamp::now_utc())));
-
-        tokio::time::timeout(std::time::Duration::from_secs(5), waiting)
-            .await
-            .unwrap();
-        assert_eq!((before, after_restart), (false, false));
     }
 }

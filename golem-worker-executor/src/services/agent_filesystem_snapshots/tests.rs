@@ -15,15 +15,16 @@
 use super::*;
 use crate::filesystem_snapshot::InMemorySnapshotStore;
 use crate::services::agent_filesystem::RestoreTree;
+use async_trait::async_trait;
 use futures::StreamExt as _;
 use golem_common::model::RetryConfig;
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{AgentId, OwnedAgentId};
 use std::collections::{BTreeMap, HashMap};
-use std::sync::atomic::AtomicUsize;
-use test_r::{test, timeout};
-use tokio::sync::Notify;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use test_r::test;
 
 /// A store over the in-memory store that a test can make fail, hold and count.
 #[derive(Default)]
@@ -273,47 +274,6 @@ impl FilesystemSnapshotStore for ScriptedStore {
     }
 }
 
-/// A clock whose sleeps complete when the test releases them. It records each sleep.
-#[derive(Default)]
-struct ManualClock {
-    sleeps: Mutex<Vec<Duration>>,
-    /// Whether each sleep completes at once.
-    immediate: std::sync::atomic::AtomicBool,
-    released: Arc<Notify>,
-}
-
-impl ManualClock {
-    fn immediate() -> Arc<Self> {
-        let clock = Self::default();
-        clock.immediate.store(true, Ordering::SeqCst);
-        Arc::new(clock)
-    }
-
-    fn held() -> Arc<Self> {
-        Arc::new(Self::default())
-    }
-
-    fn release(&self) {
-        self.released.notify_waiters();
-    }
-
-    fn sleeps(&self) -> Vec<Duration> {
-        self.sleeps.lock().unwrap().clone()
-    }
-}
-
-impl SnapshotClock for ManualClock {
-    fn sleep(&self, duration: Duration) -> BoxFuture<'static, ()> {
-        self.sleeps.lock().unwrap().push(duration);
-        if self.immediate.load(Ordering::SeqCst) {
-            Box::pin(std::future::ready(()))
-        } else {
-            let released = Arc::clone(&self.released);
-            Box::pin(async move { released.notified().await })
-        }
-    }
-}
-
 /// A confirmer that answers with a programmed outcome and records each name.
 struct ScriptedConfirmer {
     outcome: Mutex<ConfirmOutcome>,
@@ -334,12 +294,9 @@ impl ScriptedConfirmer {
     fn names(&self) -> Vec<FilesystemSnapshotName> {
         self.names.lock().unwrap().clone()
     }
-}
 
-#[async_trait]
-impl ConfirmSnapshot for ScriptedConfirmer {
-    async fn confirm(&self, name: &FilesystemSnapshotName) -> ConfirmOutcome {
-        self.names.lock().unwrap().push(name.clone());
+    async fn confirm(&self, name: FilesystemSnapshotName) -> ConfirmOutcome {
+        self.names.lock().unwrap().push(name);
         if let Some(gate) = &self.gate {
             gate.pass().await;
         }
@@ -347,53 +304,75 @@ impl ConfirmSnapshot for ScriptedConfirmer {
     }
 }
 
-fn confirmer(confirm: &Arc<ScriptedConfirmer>) -> SnapshotConfirmer {
-    SnapshotConfirmer::new(Arc::clone(confirm) as Arc<dyn ConfirmSnapshot>)
+fn confirmer(confirm: &Arc<ScriptedConfirmer>) -> Confirm {
+    let confirm = Arc::clone(confirm);
+    Box::new(move |name| Box::pin(async move { confirm.confirm(name).await }))
+}
+
+/// A capture in a temporary directory with one file of `content`. Its discard is counted, and
+/// waits for `discard_gate` when it is set.
+fn gated_capture(
+    content: &[u8],
+    discarded: &Arc<AtomicUsize>,
+    discard_gate: Option<Arc<Gate>>,
+) -> CapturedTree {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(directory.path().join("content"), content).unwrap();
+    let discarded = Arc::clone(discarded);
+    CapturedTree::new(
+        Arc::from(directory.path()),
+        Box::pin(async move {
+            if let Some(gate) = &discard_gate {
+                gate.pass().await;
+            }
+            drop(directory);
+            discarded.fetch_add(1, Ordering::SeqCst);
+        }),
+    )
 }
 
 /// A capture in a temporary directory with one file of `content`. Its discard is counted.
-struct TestCapture {
-    directory: tempfile::TempDir,
-    discarded: Arc<AtomicUsize>,
-    /// When set, the discard waits for it.
-    discard_gate: Option<Arc<Gate>>,
+fn capture(content: &[u8], discarded: &Arc<AtomicUsize>) -> CapturedTree {
+    gated_capture(content, discarded, None)
 }
 
-impl TestCapture {
-    fn with(content: &[u8], discarded: &Arc<AtomicUsize>) -> Self {
-        let directory = tempfile::tempdir().unwrap();
-        std::fs::write(directory.path().join("content"), content).unwrap();
-        Self {
-            directory,
-            discarded: Arc::clone(discarded),
-            discard_gate: None,
+/// Runs `test` on a runtime whose time is paused, so each wait of the service ends as soon as
+/// the runtime has nothing else to do.
+fn paused<T>(test: impl std::future::Future<Output = T>) -> T {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .start_paused(true)
+        .build()
+        .unwrap()
+        .block_on(test)
+}
+
+impl AgentFilesystemSnapshots {
+    /// Admits a job of `kind` without the wait of a manual update.
+    async fn admit(
+        &self,
+        scope: &SnapshotScope,
+        kind: SnapshotKind,
+    ) -> Result<Admission, SnapshotSkip> {
+        match &self.core {
+            Some(core) => Core::admit(core, scope, kind)
+                .await
+                .map_err(|(skip, _)| skip),
+            None => Err(SnapshotSkip::Disabled),
         }
     }
-}
 
-impl CapturedTree for TestCapture {
-    fn directory(&self) -> &Path {
-        self.directory.path()
-    }
-
-    fn discard(self) -> BoxFuture<'static, ()> {
-        Box::pin(async move {
-            if let Some(gate) = &self.discard_gate {
-                gate.pass().await;
-            }
-            self.discarded.fetch_add(1, Ordering::SeqCst);
-        })
+    /// Whether no job runs for `scope`.
+    fn is_free(&self, scope: &SnapshotScope) -> bool {
+        self.core
+            .as_ref()
+            .is_none_or(|core| core.registry.read(|scopes| rules::is_free(scopes, scope)))
     }
 }
 
-/// A volume without room.
-struct NoRoom;
-
-#[async_trait]
-impl VolumeRoom for NoRoom {
-    async fn has_room(&self) -> bool {
-        false
-    }
+/// A receiver that never reports a terminal interrupt.
+fn no_interrupt() -> watch::Receiver<bool> {
+    watch::channel(false).1
 }
 
 fn retry(max_attempts: u32) -> RetryConfig {
@@ -424,17 +403,15 @@ fn settings(
     .unwrap()
 }
 
-/// A service over `store` with `settings` and `clock`, and room on the volume.
+/// A service over `store` with `settings`, and room on the volume.
 fn service(
     store: &Arc<ScriptedStore>,
     settings: FilesystemSnapshotUploadConfig,
-    clock: Arc<ManualClock>,
 ) -> AgentFilesystemSnapshots {
     AgentFilesystemSnapshots::enabled(
         Arc::clone(store) as Arc<dyn FilesystemSnapshotStore>,
         settings,
-        clock,
-        Arc::new(UnlimitedRoom),
+        VolumeRoom::Unlimited,
         CancellationToken::new(),
     )
 }
@@ -449,258 +426,233 @@ fn scope(name: &str) -> SnapshotScope {
     ))
 }
 
-/// Waits until `condition` holds, and fails the test after five seconds.
+/// The time that a test waits for a condition. The time of the tests is paused, so it only has
+/// to be longer than the waits of the service.
+const PATIENCE: Duration = Duration::from_secs(600);
+
+/// Waits until `condition` holds, and fails the test after [`PATIENCE`].
 async fn eventually(condition: impl Fn() -> bool) {
     let held = futures::stream::repeat(())
         .then(|()| tokio::time::sleep(Duration::from_millis(5)))
         .filter(|()| std::future::ready(condition()));
     assert!(
-        tokio::time::timeout(Duration::from_secs(5), std::pin::pin!(held).next())
+        tokio::time::timeout(PATIENCE, std::pin::pin!(held).next())
             .await
             .is_ok(),
         "the condition did not hold in time"
     );
 }
 
-/// Waits until the job of `scope` ended, and fails the test after five seconds.
+/// Waits until no job runs for `scope`, and fails the test after [`PATIENCE`].
 async fn ended(snapshots: &AgentFilesystemSnapshots, scope: &SnapshotScope) {
-    let job = snapshots
-        .enabled
-        .as_ref()
-        .and_then(|enabled| enabled.jobs_of_scope().jobs.get(scope).cloned());
-    if let Some(job) = job {
+    if let Some(core) = &snapshots.core {
         assert!(
-            tokio::time::timeout(Duration::from_secs(5), job.ended.cancelled())
-                .await
-                .is_ok(),
+            tokio::time::timeout(
+                PATIENCE,
+                core.registry
+                    .until(|scopes| rules::is_free(scopes, scope).then_some(()))
+            )
+            .await
+            .is_ok(),
             "the job did not end in time"
         );
     }
 }
 
 #[test]
-#[timeout("10s")]
-async fn each_admission_makes_a_new_name_with_the_prefix_of_its_kind() {
-    let store = Arc::new(ScriptedStore::default());
-    let snapshots = service(&store, settings(4, 4, 1), ManualClock::immediate());
-    let scope = scope("names");
+fn each_admission_makes_a_new_name_with_the_prefix_of_its_kind() {
+    paused(async {
+        let store = Arc::new(ScriptedStore::default());
+        let snapshots = service(&store, settings(4, 4, 1));
+        let scope = scope("names");
 
-    let names = futures::stream::iter([
-        SnapshotKind::Periodic,
-        SnapshotKind::Periodic,
-        SnapshotKind::Update,
-        SnapshotKind::Update,
-    ])
-    .then(|kind| {
-        let snapshots = &snapshots;
-        let scope = &scope;
-        async move { snapshots.admit(scope, kind).await.unwrap().name().clone() }
+        let names = futures::stream::iter([
+            SnapshotKind::Periodic,
+            SnapshotKind::Periodic,
+            SnapshotKind::Update,
+            SnapshotKind::Update,
+        ])
+        .then(|kind| {
+            let snapshots = &snapshots;
+            let scope = &scope;
+            async move { snapshots.admit(scope, kind).await.unwrap().name().clone() }
+        })
+        .collect::<Vec<_>>()
+        .await;
+
+        let prefixes = names
+            .iter()
+            .map(|name| &name.as_str()[..2])
+            .collect::<Vec<_>>();
+        let unique = names.iter().collect::<std::collections::HashSet<_>>();
+        assert_eq!(prefixes, vec!["p-", "p-", "u-", "u-"]);
+        assert_eq!(unique.len(), 4);
     })
-    .collect::<Vec<_>>()
-    .await;
-
-    let prefixes = names
-        .iter()
-        .map(|name| &name.as_str()[..2])
-        .collect::<Vec<_>>();
-    let unique = names.iter().collect::<std::collections::HashSet<_>>();
-    assert_eq!(prefixes, vec!["p-", "p-", "u-", "u-"]);
-    assert_eq!(unique.len(), 4);
 }
 
 #[test]
-#[timeout("10s")]
-async fn a_second_admission_of_a_scope_gets_upload_in_flight_until_the_first_ends() {
-    let store = Arc::new(ScriptedStore::default());
-    let gate = Arc::new(Gate::default());
-    *store.save_gate.lock().unwrap() = Some(Arc::clone(&gate));
-    let snapshots = service(&store, settings(4, 4, 1), ManualClock::immediate());
-    let scope = scope("in-flight");
-    let other = self::scope("other");
-    let discarded = Arc::new(AtomicUsize::new(0));
-    let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
+fn a_second_admission_of_a_scope_gets_upload_in_flight_until_the_first_ends() {
+    paused(async {
+        let store = Arc::new(ScriptedStore::default());
+        let gate = Arc::new(Gate::default());
+        *store.save_gate.lock().unwrap() = Some(Arc::clone(&gate));
+        let snapshots = service(&store, settings(4, 4, 1));
+        let scope = scope("in-flight");
+        let other = self::scope("other");
+        let discarded = Arc::new(AtomicUsize::new(0));
+        let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
 
-    let admission = snapshots
-        .admit(&scope, SnapshotKind::Periodic)
-        .await
-        .unwrap();
-    let while_admitted = snapshots.admit(&scope, SnapshotKind::Update).await.err();
-    let other_scope = snapshots
-        .admit(&other, SnapshotKind::Periodic)
-        .await
-        .is_ok();
-    admission.submit(
-        TestCapture::with(b"one", &discarded),
-        None,
-        confirmer(&confirm),
-    );
-    gate.wait_reached(1).await;
-    let while_uploading = snapshots.admit(&scope, SnapshotKind::Periodic).await.err();
-    gate.open();
-    ended(&snapshots, &scope).await;
-    let after = snapshots
-        .admit(&scope, SnapshotKind::Periodic)
-        .await
-        .is_ok();
-
-    assert_eq!(
-        (while_admitted, other_scope, while_uploading, after),
-        (
-            Some(SnapshotSkip::UploadInFlight),
-            true,
-            Some(SnapshotSkip::UploadInFlight),
-            true
-        )
-    );
-}
-
-#[test]
-#[timeout("10s")]
-async fn a_dropped_admission_frees_its_scope_and_writes_nothing() {
-    let store = Arc::new(ScriptedStore::default());
-    let snapshots = service(&store, settings(4, 4, 1), ManualClock::immediate());
-    let scope = scope("dropped");
-
-    drop(
-        snapshots
+        let admission = snapshots
             .admit(&scope, SnapshotKind::Periodic)
             .await
-            .unwrap(),
-    );
-    let again = snapshots
-        .admit(&scope, SnapshotKind::Periodic)
-        .await
-        .is_ok();
+            .unwrap();
+        let while_admitted = snapshots.admit(&scope, SnapshotKind::Update).await.err();
+        let other_scope = snapshots
+            .admit(&other, SnapshotKind::Periodic)
+            .await
+            .is_ok();
+        admission.submit(capture(b"one", &discarded), None, confirmer(&confirm));
+        gate.wait_reached(1).await;
+        let while_uploading = snapshots.admit(&scope, SnapshotKind::Periodic).await.err();
+        gate.open();
+        ended(&snapshots, &scope).await;
+        let after = snapshots
+            .admit(&scope, SnapshotKind::Periodic)
+            .await
+            .is_ok();
 
-    assert!(again);
-    assert!(store.saved_names().is_empty());
+        assert_eq!(
+            (while_admitted, other_scope, while_uploading, after),
+            (
+                Some(SnapshotSkip::UploadInFlight),
+                true,
+                Some(SnapshotSkip::UploadInFlight),
+                true
+            )
+        );
+    })
 }
 
 #[test]
-#[timeout("10s")]
-async fn a_disabled_service_admits_nothing_and_restores_nothing() {
-    let snapshots = AgentFilesystemSnapshots::disabled();
-    let scope = scope("disabled");
+fn a_dropped_admission_frees_its_scope_and_writes_nothing() {
+    paused(async {
+        let store = Arc::new(ScriptedStore::default());
+        let snapshots = service(&store, settings(4, 4, 1));
+        let scope = scope("dropped");
 
-    let admitted = snapshots.admit(&scope, SnapshotKind::Periodic).await.err();
-    let restored = snapshots
-        .restore(&scope, &FilesystemSnapshotName::periodic())
-        .err();
+        drop(
+            snapshots
+                .admit(&scope, SnapshotKind::Periodic)
+                .await
+                .unwrap(),
+        );
+        let again = snapshots
+            .admit(&scope, SnapshotKind::Periodic)
+            .await
+            .is_ok();
 
-    assert_eq!(
-        (admitted, restored),
-        (Some(SnapshotSkip::Disabled), Some(SnapshotsDisabled))
-    );
+        assert!(again);
+        assert!(store.saved_names().is_empty());
+    })
 }
 
 #[test]
-#[timeout("10s")]
-async fn a_volume_without_room_gives_volume_under_pressure() {
-    let store = Arc::new(ScriptedStore::default());
-    let snapshots = AgentFilesystemSnapshots::enabled(
-        Arc::clone(&store) as Arc<dyn FilesystemSnapshotStore>,
-        settings(4, 4, 1),
-        ManualClock::immediate(),
-        Arc::new(NoRoom),
-        CancellationToken::new(),
-    );
+fn a_disabled_service_admits_nothing_and_restores_nothing() {
+    paused(async {
+        let snapshots = AgentFilesystemSnapshots::disabled();
+        let scope = scope("disabled");
 
-    let admitted = snapshots
-        .admit(&scope("full"), SnapshotKind::Periodic)
-        .await
-        .err();
+        let admitted = snapshots.admit(&scope, SnapshotKind::Periodic).await.err();
+        let restored = snapshots
+            .restore(&scope, &FilesystemSnapshotName::periodic())
+            .err();
 
-    assert_eq!(admitted, Some(SnapshotSkip::VolumeUnderPressure));
+        assert_eq!(
+            (admitted, restored),
+            (Some(SnapshotSkip::Disabled), Some(SnapshotsDisabled))
+        );
+    })
 }
 
 #[test]
-#[timeout("10s")]
-async fn a_job_saves_discards_and_calls_the_confirmer_once_with_its_own_name() {
-    let store = Arc::new(ScriptedStore::default());
-    let snapshots = service(&store, settings(4, 4, 1), ManualClock::immediate());
-    let scope = scope("confirmed");
-    let discarded = Arc::new(AtomicUsize::new(0));
-    let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
+fn a_job_saves_discards_and_calls_the_confirmer_once_with_its_own_name() {
+    paused(async {
+        let store = Arc::new(ScriptedStore::default());
+        let snapshots = service(&store, settings(4, 4, 1));
+        let scope = scope("confirmed");
+        let discarded = Arc::new(AtomicUsize::new(0));
+        let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
 
-    let admission = snapshots
-        .admit(&scope, SnapshotKind::Periodic)
-        .await
-        .unwrap();
-    let name = admission.name().clone();
-    admission.submit(
-        TestCapture::with(b"tree", &discarded),
-        None,
-        confirmer(&confirm),
-    );
-    ended(&snapshots, &scope).await;
+        let admission = snapshots
+            .admit(&scope, SnapshotKind::Periodic)
+            .await
+            .unwrap();
+        let name = admission.name().clone();
+        admission.submit(capture(b"tree", &discarded), None, confirmer(&confirm));
+        ended(&snapshots, &scope).await;
 
-    let listed = store
-        .memory
-        .list(&scope)
-        .await
-        .unwrap()
-        .iter()
-        .map(|(name, _)| name.as_str().to_string())
-        .collect::<Vec<_>>();
-    assert_eq!(confirm.names(), vec![name.clone()]);
-    assert_eq!(listed, vec![name.as_str().to_string()]);
-    assert_eq!(discarded.load(Ordering::SeqCst), 1);
+        let listed = store
+            .memory
+            .list(&scope)
+            .await
+            .unwrap()
+            .iter()
+            .map(|(name, _)| name.as_str().to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(confirm.names(), vec![name.clone()]);
+        assert_eq!(listed, vec![name.as_str().to_string()]);
+        assert_eq!(discarded.load(Ordering::SeqCst), 1);
+    })
 }
 
 #[test]
-#[timeout("10s")]
-async fn after_the_retry_budget_the_job_discards_the_capture_and_calls_no_confirmer() {
-    let store = Arc::new(ScriptedStore::default());
-    store.failing_saves.store(usize::MAX, Ordering::SeqCst);
-    let clock = ManualClock::immediate();
-    let snapshots = service(&store, settings(4, 4, 3), Arc::clone(&clock));
-    let scope = scope("budget");
-    let discarded = Arc::new(AtomicUsize::new(0));
-    let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
+fn after_the_retry_budget_the_job_discards_the_capture_and_calls_no_confirmer() {
+    paused(async {
+        let store = Arc::new(ScriptedStore::default());
+        store.failing_saves.store(usize::MAX, Ordering::SeqCst);
+        let snapshots = service(&store, settings(4, 4, 3));
+        let scope = scope("budget");
+        let discarded = Arc::new(AtomicUsize::new(0));
+        let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
 
-    let admission = snapshots
-        .admit(&scope, SnapshotKind::Periodic)
-        .await
-        .unwrap();
-    admission.submit(
-        TestCapture::with(b"tree", &discarded),
-        None,
-        confirmer(&confirm),
-    );
-    ended(&snapshots, &scope).await;
+        let admission = snapshots
+            .admit(&scope, SnapshotKind::Periodic)
+            .await
+            .unwrap();
+        admission.submit(capture(b"tree", &discarded), None, confirmer(&confirm));
+        let started = tokio::time::Instant::now();
+        ended(&snapshots, &scope).await;
 
-    assert_eq!(store.saved_names().len(), 3);
-    assert_eq!(
-        clock.sleeps(),
-        vec![Duration::from_secs(2), Duration::from_secs(8)]
-    );
-    assert!(confirm.names().is_empty());
-    assert_eq!(discarded.load(Ordering::SeqCst), 1);
+        assert_eq!(store.saved_names().len(), 3);
+        assert_eq!(
+            started.elapsed(),
+            Duration::from_secs(2) + Duration::from_secs(8)
+        );
+        assert!(confirm.names().is_empty());
+        assert_eq!(discarded.load(Ordering::SeqCst), 1);
+    })
 }
 
 #[test]
-#[timeout("10s")]
-async fn an_error_that_allows_no_retry_ends_the_job_after_one_attempt() {
-    let store = Arc::new(ScriptedStore::default());
-    store.saves_fail_for_good.store(true, Ordering::SeqCst);
-    let snapshots = service(&store, settings(4, 4, 5), ManualClock::immediate());
-    let scope = scope("for-good");
-    let discarded = Arc::new(AtomicUsize::new(0));
-    let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
+fn an_error_that_allows_no_retry_ends_the_job_after_one_attempt() {
+    paused(async {
+        let store = Arc::new(ScriptedStore::default());
+        store.saves_fail_for_good.store(true, Ordering::SeqCst);
+        let snapshots = service(&store, settings(4, 4, 5));
+        let scope = scope("for-good");
+        let discarded = Arc::new(AtomicUsize::new(0));
+        let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
 
-    let admission = snapshots
-        .admit(&scope, SnapshotKind::Periodic)
-        .await
-        .unwrap();
-    admission.submit(
-        TestCapture::with(b"tree", &discarded),
-        None,
-        confirmer(&confirm),
-    );
-    ended(&snapshots, &scope).await;
+        let admission = snapshots
+            .admit(&scope, SnapshotKind::Periodic)
+            .await
+            .unwrap();
+        admission.submit(capture(b"tree", &discarded), None, confirmer(&confirm));
+        ended(&snapshots, &scope).await;
 
-    assert_eq!(store.saved_names().len(), 1);
-    assert!(confirm.names().is_empty());
+        assert_eq!(store.saved_names().len(), 1);
+        assert!(confirm.names().is_empty());
+    })
 }
 
 /// Uploads three older periodic snapshots that the confirmer confirms, then one that it answers
@@ -720,7 +672,7 @@ async fn after_older_uploads(outcome: ConfirmOutcome) -> (Vec<String>, String, b
         settings.upload_retry().clone(),
     )
     .unwrap();
-    let snapshots = service(&store, settings, ManualClock::immediate());
+    let snapshots = service(&store, settings);
     let scope = scope("dropped-confirmation");
     let discarded = Arc::new(AtomicUsize::new(0));
     let confirmed = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
@@ -737,7 +689,7 @@ async fn after_older_uploads(outcome: ConfirmOutcome) -> (Vec<String>, String, b
                     .unwrap();
                 let name = admission.name().clone();
                 admission.submit(
-                    TestCapture::with(format!("older-{index}").as_bytes(), discarded),
+                    capture(format!("older-{index}").as_bytes(), discarded),
                     None,
                     confirmer(confirmed),
                 );
@@ -755,11 +707,7 @@ async fn after_older_uploads(outcome: ConfirmOutcome) -> (Vec<String>, String, b
         .await
         .unwrap();
     let name = admission.name().clone();
-    admission.submit(
-        TestCapture::with(b"newest", &discarded),
-        None,
-        confirmer(&confirm),
-    );
+    admission.submit(capture(b"newest", &discarded), None, confirmer(&confirm));
     ended(&snapshots, &scope).await;
 
     let deletes = store.deletes.lock().unwrap()[deletes_before..].to_vec();
@@ -788,95 +736,100 @@ async fn after_older_uploads(outcome: ConfirmOutcome) -> (Vec<String>, String, b
 }
 
 #[test]
-#[timeout("10s")]
-async fn superseded_deletes_the_snapshot_and_runs_no_retention() {
-    let (deletes, name, held, older_held) = after_older_uploads(ConfirmOutcome::Superseded).await;
+fn superseded_deletes_the_snapshot_and_runs_no_retention() {
+    paused(async {
+        let (deletes, name, held, older_held) =
+            after_older_uploads(ConfirmOutcome::Superseded).await;
 
-    assert_eq!(deletes, vec![name]);
-    assert!(!held);
-    assert_eq!(older_held, vec![true, true, true]);
+        assert_eq!(deletes, vec![name]);
+        assert!(!held);
+        assert_eq!(older_held, vec![true, true, true]);
+    })
 }
 
 #[test]
-#[timeout("10s")]
-async fn deferred_keeps_the_snapshot_and_runs_no_retention() {
-    let (deletes, _, held, older_held) = after_older_uploads(ConfirmOutcome::Deferred).await;
+fn deferred_keeps_the_snapshot_and_runs_no_retention() {
+    paused(async {
+        let (deletes, _, held, older_held) = after_older_uploads(ConfirmOutcome::Deferred).await;
 
-    assert!(deletes.is_empty());
-    assert!(held);
-    assert_eq!(older_held, vec![true, true, true]);
+        assert!(deletes.is_empty());
+        assert!(held);
+        assert_eq!(older_held, vec![true, true, true]);
+    })
 }
 
 #[test]
-#[timeout("10s")]
-async fn confirmed_runs_retention_after_the_confirmation() {
-    let (deletes, _, held, older_held) = after_older_uploads(ConfirmOutcome::Confirmed).await;
+fn confirmed_runs_retention_after_the_confirmation() {
+    paused(async {
+        let (deletes, _, held, older_held) = after_older_uploads(ConfirmOutcome::Confirmed).await;
 
-    assert_eq!(deletes.len(), 1);
-    assert!(held);
-    assert_eq!(older_held, vec![false, true, true]);
+        assert_eq!(deletes.len(), 1);
+        assert!(held);
+        assert_eq!(older_held, vec![false, true, true]);
+    })
 }
 
 #[test]
-#[timeout("10s")]
-async fn a_confirmed_periodic_upload_keeps_the_newest_by_kind() {
-    let store = Arc::new(ScriptedStore::default());
-    let snapshots = service(&store, settings(4, 4, 1), ManualClock::immediate());
-    let scope = scope("retention");
-    let discarded = Arc::new(AtomicUsize::new(0));
-    let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
-    let upload = |kind: SnapshotKind, index: usize| {
-        let snapshots = &snapshots;
-        let scope = &scope;
-        let discarded = &discarded;
-        let confirm = &confirm;
-        async move {
-            let admission = snapshots.admit(scope, kind).await.unwrap();
-            let name = admission.name().clone();
-            match kind {
-                SnapshotKind::Periodic => admission.submit(
-                    TestCapture::with(format!("{index}").as_bytes(), discarded),
-                    None,
-                    confirmer(confirm),
-                ),
-                SnapshotKind::Update => {
-                    admission
-                        .upload_now(
-                            TestCapture::with(format!("{index}").as_bytes(), discarded),
-                            std::future::pending(),
-                        )
-                        .await
-                        .unwrap();
+fn a_confirmed_periodic_upload_keeps_the_newest_by_kind() {
+    paused(async {
+        let store = Arc::new(ScriptedStore::default());
+        let snapshots = service(&store, settings(4, 4, 1));
+        let scope = scope("retention");
+        let discarded = Arc::new(AtomicUsize::new(0));
+        let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
+        let upload = |kind: SnapshotKind, index: usize| {
+            let snapshots = &snapshots;
+            let scope = &scope;
+            let discarded = &discarded;
+            let confirm = &confirm;
+            async move {
+                let admission = snapshots.admit(scope, kind).await.unwrap();
+                let name = admission.name().clone();
+                match kind {
+                    SnapshotKind::Periodic => admission.submit(
+                        capture(format!("{index}").as_bytes(), discarded),
+                        None,
+                        confirmer(confirm),
+                    ),
+                    SnapshotKind::Update => {
+                        admission
+                            .upload_now(
+                                capture(format!("{index}").as_bytes(), discarded),
+                                no_interrupt(),
+                            )
+                            .await
+                            .unwrap();
+                    }
                 }
+                ended(snapshots, scope).await;
+                name
             }
-            ended(snapshots, scope).await;
-            name
-        }
-    };
+        };
 
-    let updates = futures::stream::iter(0..3)
-        .then(|index| upload(SnapshotKind::Update, index))
-        .collect::<Vec<_>>()
-        .await;
-    let periodic = futures::stream::iter(10..14)
-        .then(|index| upload(SnapshotKind::Periodic, index))
-        .collect::<Vec<_>>()
-        .await;
+        let updates = futures::stream::iter(0..3)
+            .then(|index| upload(SnapshotKind::Update, index))
+            .collect::<Vec<_>>()
+            .await;
+        let periodic = futures::stream::iter(10..14)
+            .then(|index| upload(SnapshotKind::Periodic, index))
+            .collect::<Vec<_>>()
+            .await;
 
-    let kept = store
-        .memory
-        .list(&scope)
-        .await
-        .unwrap()
-        .iter()
-        .map(|(name, _)| name.as_str().to_string())
-        .collect::<std::collections::BTreeSet<_>>();
-    let expected = periodic[2..]
-        .iter()
-        .chain(&updates)
-        .map(|name| name.as_str().to_string())
-        .collect::<std::collections::BTreeSet<_>>();
-    assert_eq!(kept, expected);
+        let kept = store
+            .memory
+            .list(&scope)
+            .await
+            .unwrap()
+            .iter()
+            .map(|(name, _)| name.as_str().to_string())
+            .collect::<std::collections::BTreeSet<_>>();
+        let expected = periodic[2..]
+            .iter()
+            .chain(&updates)
+            .map(|name| name.as_str().to_string())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(kept, expected);
+    })
 }
 
 fn info_at(minutes: u64) -> SnapshotInfo {
@@ -944,492 +897,655 @@ fn retention_never_deletes_the_kept_snapshot() {
 }
 
 #[test]
-#[timeout("10s")]
-async fn an_admission_during_a_scope_delete_gets_scope_deleting_until_the_delete_ends() {
-    let store = Arc::new(ScriptedStore::default());
-    store.scope_deletes_fail.store(true, Ordering::SeqCst);
-    let clock = ManualClock::held();
-    let snapshots = service(&store, settings(4, 4, 2), Arc::clone(&clock));
-    let scope = scope("deleting");
+fn an_admission_during_a_scope_delete_gets_scope_deleting_until_the_delete_ends() {
+    paused(async {
+        let store = Arc::new(ScriptedStore::default());
+        store.scope_deletes_fail.store(true, Ordering::SeqCst);
+        let snapshots = service(&store, settings(4, 4, 2));
+        let scope = scope("deleting");
 
-    snapshots.forget_scope(&scope);
-    eventually(|| store.scope_deletes.load(Ordering::SeqCst) == 1).await;
-    let while_deleting = snapshots.admit(&scope, SnapshotKind::Periodic).await.err();
-    eventually(|| !clock.sleeps().is_empty()).await;
-    clock.release();
-    eventually(|| store.scope_deletes.load(Ordering::SeqCst) == 2).await;
-    let after = {
-        let admitted = snapshots.admit(&scope, SnapshotKind::Periodic).await;
-        let retried = futures::stream::repeat(())
-            .then(|()| tokio::time::sleep(Duration::from_millis(5)))
-            .then(|()| snapshots.admit(&scope, SnapshotKind::Periodic))
-            .filter(|admitted| std::future::ready(admitted.is_ok()));
-        match admitted {
-            Ok(_) => true,
-            Err(_) => tokio::time::timeout(Duration::from_secs(5), std::pin::pin!(retried).next())
-                .await
-                .is_ok(),
-        }
-    };
+        snapshots.forget_scope(&scope);
+        eventually(|| store.scope_deletes.load(Ordering::SeqCst) == 1).await;
+        let while_deleting = snapshots.admit(&scope, SnapshotKind::Periodic).await.err();
+        eventually(|| store.scope_deletes.load(Ordering::SeqCst) == 2).await;
+        let after = {
+            let admitted = snapshots.admit(&scope, SnapshotKind::Periodic).await;
+            let retried = futures::stream::repeat(())
+                .then(|()| tokio::time::sleep(Duration::from_millis(5)))
+                .then(|()| snapshots.admit(&scope, SnapshotKind::Periodic))
+                .filter(|admitted| std::future::ready(admitted.is_ok()));
+            match admitted {
+                Ok(_) => true,
+                Err(_) => {
+                    tokio::time::timeout(Duration::from_secs(5), std::pin::pin!(retried).next())
+                        .await
+                        .is_ok()
+                }
+            }
+        };
 
-    assert_eq!(while_deleting, Some(SnapshotSkip::ScopeDeleting));
-    assert!(after);
+        assert_eq!(while_deleting, Some(SnapshotSkip::ScopeDeleting));
+        assert!(after);
+    })
 }
 
 #[test]
-#[timeout("10s")]
-async fn the_decision_of_a_job_carries_its_outcome_before_the_job_ends() {
-    let store = Arc::new(ScriptedStore::default());
-    let snapshots = service(&store, settings(4, 4, 1), ManualClock::immediate());
-    let scope = scope("decided");
-    let discarded = Arc::new(AtomicUsize::new(0));
-    let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Deferred);
-    let admission = snapshots
-        .admit(&scope, SnapshotKind::Periodic)
-        .await
-        .unwrap();
-    let job = snapshots
-        .enabled
-        .as_ref()
-        .and_then(|enabled| enabled.jobs_of_scope().jobs.get(&scope).cloned())
-        .unwrap();
-    let mut decided = job.decided.subscribe();
+fn the_decision_of_a_job_carries_its_outcome_before_the_job_ends() {
+    paused(async {
+        let store = Arc::new(ScriptedStore::default());
+        let gate = Arc::new(Gate::default());
+        *store.save_gate.lock().unwrap() = Some(Arc::clone(&gate));
+        let snapshots = service(&store, settings(4, 4, 1));
+        let core = snapshots.core.as_ref().unwrap();
+        let scope = scope("decided");
+        let discarded = Arc::new(AtomicUsize::new(0));
+        let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Deferred);
+        let admission = snapshots
+            .admit(&scope, SnapshotKind::Periodic)
+            .await
+            .unwrap();
+        let name = admission.name().clone();
 
-    admission.submit(
-        TestCapture::with(b"tree", &discarded),
-        None,
-        confirmer(&confirm),
-    );
-    let decision = *decided
-        .wait_for(|decision| decision.is_some())
-        .await
-        .unwrap();
-    ended(&snapshots, &scope).await;
+        admission.submit(capture(b"tree", &discarded), None, confirmer(&confirm));
+        gate.wait_reached(1).await;
+        let waiting = WaitTicket::start_wait(&core.registry, &scope, &name);
+        gate.open();
+        let decision = match &waiting {
+            Ok(ticket) => Some(ticket.decided().await),
+            Err(_) => None,
+        };
+        ended(&snapshots, &scope).await;
+        let after_end = match &waiting {
+            Ok(ticket) => Some(ticket.decided().await),
+            Err(_) => None,
+        };
 
-    assert_eq!(
-        decision,
-        Some(JobDecision::Confirmed(ConfirmOutcome::Deferred))
-    );
-    assert!(job.holds_slot.load(Ordering::SeqCst));
+        assert_eq!(
+            (decision, after_end),
+            (
+                Some(JobDecision::Confirmed(ConfirmOutcome::Deferred)),
+                Some(JobDecision::Confirmed(ConfirmOutcome::Deferred))
+            )
+        );
+    })
 }
 
-#[test]
-#[timeout("10s")]
-async fn the_wait_for_an_upload_of_a_scope_returns_at_the_limit_and_when_the_job_ends() {
+/// A service whose save waits at a gate, with a periodic job of `scope` that saves now. Gives the
+/// store, the service, the gate and the name of the job.
+async fn with_a_save_held(
+    scope: &SnapshotScope,
+    outcome: ConfirmOutcome,
+) -> (
+    Arc<ScriptedStore>,
+    AgentFilesystemSnapshots,
+    Arc<Gate>,
+    FilesystemSnapshotName,
+) {
     let store = Arc::new(ScriptedStore::default());
     let gate = Arc::new(Gate::default());
     *store.save_gate.lock().unwrap() = Some(Arc::clone(&gate));
-    let clock = ManualClock::held();
-    let snapshots = service(&store, settings(4, 4, 1), Arc::clone(&clock));
-    let scope = scope("pending");
-    let discarded = Arc::new(AtomicUsize::new(0));
-    let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
-    let admission = snapshots
-        .admit(&scope, SnapshotKind::Periodic)
-        .await
-        .unwrap();
-    admission.submit(
-        TestCapture::with(b"tree", &discarded),
-        None,
-        confirmer(&confirm),
-    );
-    gate.wait_reached(1).await;
-
-    let job_runs = || {
-        snapshots
-            .enabled
-            .as_ref()
-            .is_some_and(|enabled| enabled.jobs_of_scope().jobs.contains_key(&scope))
-    };
-    let waiting = snapshots.wait_for_upload_of_scope(&scope);
-    let at_limit = {
-        let mut waiting = std::pin::pin!(waiting);
-        let not_yet = tokio::time::timeout(Duration::from_millis(50), &mut waiting)
-            .await
-            .is_err();
-        eventually(|| clock.sleeps().contains(&Duration::from_secs(60))).await;
-        clock.release();
-        waiting.await;
-        (not_yet, job_runs())
-    };
-    let second = snapshots.wait_for_upload_of_scope(&scope);
-    gate.open();
-    second.await;
-    let after_end = !job_runs();
-    tokio::time::timeout(
-        Duration::from_millis(50),
-        snapshots.wait_for_upload_of_scope(&self::scope("no-job")),
-    )
-    .await
-    .unwrap();
-
-    assert_eq!((at_limit, after_end), ((true, true), true));
-}
-
-#[test]
-#[timeout("10s")]
-async fn forget_scope_cancels_the_job_and_deletes_the_scope_after_the_job_ended() {
-    let store = Arc::new(ScriptedStore::default());
-    let save_gate = Arc::new(Gate::default());
-    *store.save_gate.lock().unwrap() = Some(Arc::clone(&save_gate));
-    let snapshots = service(&store, settings(4, 4, 1), ManualClock::immediate());
-    let scope = scope("forget-scope");
-    let discarded = Arc::new(AtomicUsize::new(0));
-    let discard_gate = Arc::new(Gate::default());
-    let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
-    let admission = snapshots
-        .admit(&scope, SnapshotKind::Periodic)
-        .await
-        .unwrap();
-    admission.submit(
-        TestCapture {
-            discard_gate: Some(Arc::clone(&discard_gate)),
-            ..TestCapture::with(b"tree", &discarded)
-        },
-        None,
-        confirmer(&confirm),
-    );
-    save_gate.wait_reached(1).await;
-
-    snapshots.forget_scope(&scope);
-    discard_gate.wait_reached(1).await;
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    let while_the_job_runs = store.scope_deletes.load(Ordering::SeqCst);
-    discard_gate.open();
-    ended(&snapshots, &scope).await;
-    eventually(|| store.scope_deletes.load(Ordering::SeqCst) == 1).await;
-
-    assert_eq!(while_the_job_runs, 0);
-    assert!(confirm.names().is_empty());
-    assert!(store.deletes.lock().unwrap().is_empty());
-    assert_eq!(discarded.load(Ordering::SeqCst), 1);
-}
-
-#[test]
-#[timeout("10s")]
-async fn a_cancelled_confirmation_deletes_nothing() {
-    let store = Arc::new(ScriptedStore::default());
-    let gate = Arc::new(Gate::default());
-    let confirm = Arc::new(ScriptedConfirmer {
-        outcome: Mutex::new(ConfirmOutcome::Confirmed),
-        names: Mutex::default(),
-        gate: Some(Arc::clone(&gate)),
-    });
-    let snapshots = service(&store, settings(4, 4, 1), ManualClock::immediate());
-    let scope = scope("cancelled-confirmation");
+    let snapshots = service(&store, settings(4, 4, 1));
     let discarded = Arc::new(AtomicUsize::new(0));
     let admission = snapshots
-        .admit(&scope, SnapshotKind::Periodic)
+        .admit(scope, SnapshotKind::Periodic)
         .await
         .unwrap();
     let name = admission.name().clone();
     admission.submit(
-        TestCapture::with(b"tree", &discarded),
+        capture(b"tree", &discarded),
         None,
-        confirmer(&confirm),
+        confirmer(&ScriptedConfirmer::answering(outcome)),
     );
     gate.wait_reached(1).await;
-
-    snapshots.forget_scope(&scope);
-    ended(&snapshots, &scope).await;
-    eventually(|| store.scope_deletes.load(Ordering::SeqCst) == 1).await;
-
-    assert!(
-        !store
-            .deletes
-            .lock()
-            .unwrap()
-            .contains(&name.as_str().to_string())
-    );
-    assert!(store.memory.list(&scope).await.unwrap().is_empty());
+    (store, snapshots, gate, name)
 }
 
 #[test]
-#[timeout("10s")]
-async fn a_store_that_fails_every_scope_delete_leaves_the_service_running() {
-    let store = Arc::new(ScriptedStore::default());
-    store.scope_deletes_fail.store(true, Ordering::SeqCst);
-    let clock = ManualClock::immediate();
-    let snapshots = service(&store, settings(4, 4, 3), Arc::clone(&clock));
-    let scope = scope("failing-delete");
+fn a_manual_update_waits_for_a_running_upload_up_to_the_limit_and_then_is_refused() {
+    paused(async {
+        let scope = scope("update-at-limit");
+        let (_store, snapshots, gate, _) =
+            with_a_save_held(&scope, ConfirmOutcome::Confirmed).await;
 
-    snapshots.forget_scope(&scope);
-    eventually(|| store.scope_deletes.load(Ordering::SeqCst) == 3).await;
-    let discarded = Arc::new(AtomicUsize::new(0));
-    let saved = snapshots
-        .admit(&scope, SnapshotKind::Update)
-        .await
-        .unwrap()
-        .upload_now(
-            TestCapture::with(b"after", &discarded),
-            std::future::pending(),
-        )
-        .await
-        .is_ok();
+        let started = tokio::time::Instant::now();
+        let admitted = snapshots.admit_update(&scope, no_interrupt()).await.err();
+        let waited = started.elapsed();
+        gate.open();
+        ended(&snapshots, &scope).await;
 
-    assert!(saved);
-}
-
-#[test]
-#[timeout("10s")]
-async fn each_delete_holds_a_slot_of_the_uploads() {
-    let store = Arc::new(ScriptedStore::default());
-    let gate = Arc::new(Gate::default());
-    *store.save_gate.lock().unwrap() = Some(Arc::clone(&gate));
-    let snapshots = service(&store, settings(1, 4, 1), ManualClock::immediate());
-    let uploading = scope("uploading");
-    let forgotten = scope("forgotten");
-    let discarded = Arc::new(AtomicUsize::new(0));
-    let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
-    let admission = snapshots
-        .admit(&uploading, SnapshotKind::Periodic)
-        .await
-        .unwrap();
-    admission.submit(
-        TestCapture::with(b"tree", &discarded),
-        None,
-        confirmer(&confirm),
-    );
-    gate.wait_reached(1).await;
-
-    snapshots.forget(
-        &forgotten,
-        Box::new([
-            FilesystemSnapshotName::periodic(),
-            FilesystemSnapshotName::periodic(),
-        ]),
-    );
-    snapshots.forget_scope(&self::scope("deleted"));
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    let before = (
-        store.deletes.lock().unwrap().len(),
-        store.scope_deletes.load(Ordering::SeqCst),
-    );
-    gate.open();
-    ended(&snapshots, &uploading).await;
-    eventually(|| {
-        store.deletes.lock().unwrap().len() == 2 && store.scope_deletes.load(Ordering::SeqCst) == 1
+        assert_eq!(
+            admitted,
+            Some(UpdateRefusal::Skip(SnapshotSkip::UploadInFlight))
+        );
+        assert_eq!(waited, Duration::from_secs(60));
     })
-    .await;
-
-    assert_eq!(before, (0, 0));
-    assert_eq!(store.most_store_calls_at_once.load(Ordering::SeqCst), 1);
 }
 
 #[test]
-#[timeout("10s")]
-async fn at_most_the_configured_number_of_restores_run_at_the_same_time() {
-    let store = Arc::new(ScriptedStore::default());
-    let snapshots = service(&store, settings(4, 2, 1), ManualClock::immediate());
-    let scope = scope("restores");
-    let discarded = Arc::new(AtomicUsize::new(0));
-    let name = {
+fn a_manual_update_is_admitted_once_the_running_upload_ends() {
+    paused(async {
+        let scope = scope("update-after-end");
+        let (_store, snapshots, gate, _) =
+            with_a_save_held(&scope, ConfirmOutcome::Confirmed).await;
+
+        let started = tokio::time::Instant::now();
+        let admitting = snapshots.admit_update(&scope, no_interrupt());
+        let opening = async {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            gate.open();
+        };
+        let (admitted, ()) = futures::join!(admitting, opening);
+        let waited = started.elapsed();
+        let without_job = snapshots
+            .admit_update(&self::scope("update-without-job"), no_interrupt())
+            .await
+            .is_ok();
+
+        assert!(admitted.is_ok());
+        assert!(waited < Duration::from_secs(60), "waited {waited:?}");
+        assert!(without_job);
+    })
+}
+
+#[test]
+fn a_terminal_interrupt_ends_the_wait_of_a_manual_update() {
+    paused(async {
+        let scope = scope("update-interrupted");
+        let (_store, snapshots, gate, _) =
+            with_a_save_held(&scope, ConfirmOutcome::Confirmed).await;
+        let (interrupt, interrupted) = watch::channel(false);
+
+        let admitting = snapshots.admit_update(&scope, interrupted);
+        let interrupting = async {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            interrupt.send_replace(true);
+        };
+        let (admitted, ()) = futures::join!(admitting, interrupting);
+        gate.open();
+
+        assert_eq!(admitted.err(), Some(UpdateRefusal::Interrupted));
+    })
+}
+
+#[test]
+fn a_start_without_a_running_upload_asks_the_store_at_once() {
+    paused(async {
+        let store = Arc::new(ScriptedStore::default());
+        let snapshots = service(&store, settings(4, 4, 1));
+        let scope = scope("start-without-upload");
+        let discarded = Arc::new(AtomicUsize::new(0));
+        let admission = snapshots
+            .admit(&scope, SnapshotKind::Periodic)
+            .await
+            .unwrap();
+        let name = admission.name().clone();
+        admission.submit(
+            capture(b"tree", &discarded),
+            None,
+            confirmer(&ScriptedConfirmer::answering(ConfirmOutcome::Deferred)),
+        );
+        ended(&snapshots, &scope).await;
+
+        let started = tokio::time::Instant::now();
+        let stored = snapshots.prepare_start(&scope, &name, no_interrupt()).await;
+        let other = snapshots
+            .prepare_start(&scope, &FilesystemSnapshotName::periodic(), no_interrupt())
+            .await;
+        let disabled = AgentFilesystemSnapshots::disabled()
+            .prepare_start(&scope, &name, no_interrupt())
+            .await;
+
+        assert_eq!(
+            (stored, other, disabled),
+            (
+                StartCheck::Stored,
+                StartCheck::NotStored,
+                StartCheck::NotStored
+            )
+        );
+        assert_eq!(started.elapsed(), Duration::ZERO);
+    })
+}
+
+#[test]
+fn a_start_waits_for_the_upload_of_its_name_up_to_the_limit() {
+    paused(async {
+        let scope = scope("start-at-limit");
+        let (_store, snapshots, gate, name) =
+            with_a_save_held(&scope, ConfirmOutcome::Deferred).await;
+
+        let started = tokio::time::Instant::now();
+        let at_limit = snapshots.prepare_start(&scope, &name, no_interrupt()).await;
+        let waited = started.elapsed();
+        gate.open();
+        ended(&snapshots, &scope).await;
+
+        assert_eq!(at_limit, StartCheck::NotStored);
+        assert_eq!(waited, Duration::from_secs(60));
+    })
+}
+
+#[test]
+fn a_start_that_waited_checks_the_store_after_the_decision() {
+    paused(async {
+        let scope = scope("start-after-decision");
+        let (_store, snapshots, gate, name) =
+            with_a_save_held(&scope, ConfirmOutcome::Deferred).await;
+
+        let started = tokio::time::Instant::now();
+        let preparing = snapshots.prepare_start(&scope, &name, no_interrupt());
+        let opening = async {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            gate.open();
+        };
+        let (stored, ()) = futures::join!(preparing, opening);
+
+        assert_eq!(stored, StartCheck::Stored);
+        assert!(started.elapsed() < Duration::from_secs(60));
+    })
+}
+
+#[test]
+fn a_start_after_a_superseded_upload_does_not_ask_the_store() {
+    paused(async {
+        let scope = scope("start-after-superseded");
+        let (store, snapshots, gate, name) =
+            with_a_save_held(&scope, ConfirmOutcome::Superseded).await;
+        let delete_gate = Arc::new(Gate::default());
+        *store.delete_gate.lock().unwrap() = Some(Arc::clone(&delete_gate));
+
+        let preparing = snapshots.prepare_start(&scope, &name, no_interrupt());
+        let opening = async {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            gate.open();
+        };
+        let (checked, ()) = futures::join!(preparing, opening);
+        let held = store
+            .memory
+            .stat(&scope, &store_name(&name).unwrap())
+            .await
+            .unwrap()
+            .is_some();
+        delete_gate.open();
+
+        assert_eq!(checked, StartCheck::NotStored);
+        assert!(held);
+    })
+}
+
+#[test]
+fn a_terminal_interrupt_ends_the_wait_of_a_start_and_skips_the_check() {
+    paused(async {
+        let scope = scope("start-interrupted");
+        let (store, snapshots, gate, name) =
+            with_a_save_held(&scope, ConfirmOutcome::Deferred).await;
+        let (interrupt, interrupted) = watch::channel(false);
+
+        let started = tokio::time::Instant::now();
+        let preparing = snapshots.prepare_start(&scope, &name, interrupted.clone());
+        let interrupting = async {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            interrupt.send_replace(true);
+        };
+        let (during_wait, ()) = futures::join!(preparing, interrupting);
+        let waited = started.elapsed();
+        gate.open();
+        ended(&snapshots, &scope).await;
+        let stored = store
+            .memory
+            .stat(&scope, &store_name(&name).unwrap())
+            .await
+            .unwrap()
+            .is_some();
+        let after_upload = snapshots.prepare_start(&scope, &name, interrupted).await;
+
+        assert_eq!(during_wait, StartCheck::NotStored);
+        assert_eq!(waited, Duration::from_secs(1));
+        assert!(stored);
+        assert_eq!(after_upload, StartCheck::NotStored);
+    })
+}
+
+#[test]
+fn forget_scope_cancels_the_job_and_deletes_the_scope_after_the_job_ended() {
+    paused(async {
+        let store = Arc::new(ScriptedStore::default());
+        let save_gate = Arc::new(Gate::default());
+        *store.save_gate.lock().unwrap() = Some(Arc::clone(&save_gate));
+        let snapshots = service(&store, settings(4, 4, 1));
+        let scope = scope("forget-scope");
+        let discarded = Arc::new(AtomicUsize::new(0));
+        let discard_gate = Arc::new(Gate::default());
+        let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
+        let admission = snapshots
+            .admit(&scope, SnapshotKind::Periodic)
+            .await
+            .unwrap();
+        admission.submit(
+            gated_capture(b"tree", &discarded, Some(Arc::clone(&discard_gate))),
+            None,
+            confirmer(&confirm),
+        );
+        save_gate.wait_reached(1).await;
+
+        snapshots.forget_scope(&scope);
+        discard_gate.wait_reached(1).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let while_the_job_runs = store.scope_deletes.load(Ordering::SeqCst);
+        discard_gate.open();
+        ended(&snapshots, &scope).await;
+        eventually(|| store.scope_deletes.load(Ordering::SeqCst) == 1).await;
+
+        assert_eq!(while_the_job_runs, 0);
+        assert!(confirm.names().is_empty());
+        assert!(store.deletes.lock().unwrap().is_empty());
+        assert_eq!(discarded.load(Ordering::SeqCst), 1);
+    })
+}
+
+#[test]
+fn a_cancelled_confirmation_deletes_nothing() {
+    paused(async {
+        let store = Arc::new(ScriptedStore::default());
+        let gate = Arc::new(Gate::default());
+        let confirm = Arc::new(ScriptedConfirmer {
+            outcome: Mutex::new(ConfirmOutcome::Confirmed),
+            names: Mutex::default(),
+            gate: Some(Arc::clone(&gate)),
+        });
+        let snapshots = service(&store, settings(4, 4, 1));
+        let scope = scope("cancelled-confirmation");
+        let discarded = Arc::new(AtomicUsize::new(0));
+        let admission = snapshots
+            .admit(&scope, SnapshotKind::Periodic)
+            .await
+            .unwrap();
+        let name = admission.name().clone();
+        admission.submit(capture(b"tree", &discarded), None, confirmer(&confirm));
+        gate.wait_reached(1).await;
+
+        snapshots.forget_scope(&scope);
+        ended(&snapshots, &scope).await;
+        eventually(|| store.scope_deletes.load(Ordering::SeqCst) == 1).await;
+
+        assert!(
+            !store
+                .deletes
+                .lock()
+                .unwrap()
+                .contains(&name.as_str().to_string())
+        );
+        assert!(store.memory.list(&scope).await.unwrap().is_empty());
+    })
+}
+
+#[test]
+fn a_store_that_fails_every_scope_delete_leaves_the_service_running() {
+    paused(async {
+        let store = Arc::new(ScriptedStore::default());
+        store.scope_deletes_fail.store(true, Ordering::SeqCst);
+        let snapshots = service(&store, settings(4, 4, 3));
+        let scope = scope("failing-delete");
+
+        snapshots.forget_scope(&scope);
+        eventually(|| store.scope_deletes.load(Ordering::SeqCst) == 3).await;
+        let discarded = Arc::new(AtomicUsize::new(0));
+        let saved = snapshots
+            .admit(&scope, SnapshotKind::Update)
+            .await
+            .unwrap()
+            .upload_now(capture(b"after", &discarded), no_interrupt())
+            .await
+            .is_ok();
+
+        assert!(saved);
+    })
+}
+
+#[test]
+fn each_delete_holds_a_slot_of_the_uploads() {
+    paused(async {
+        let store = Arc::new(ScriptedStore::default());
+        let gate = Arc::new(Gate::default());
+        *store.save_gate.lock().unwrap() = Some(Arc::clone(&gate));
+        let snapshots = service(&store, settings(1, 4, 1));
+        let uploading = scope("uploading");
+        let forgotten = scope("forgotten");
+        let discarded = Arc::new(AtomicUsize::new(0));
+        let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
+        let admission = snapshots
+            .admit(&uploading, SnapshotKind::Periodic)
+            .await
+            .unwrap();
+        admission.submit(capture(b"tree", &discarded), None, confirmer(&confirm));
+        gate.wait_reached(1).await;
+
+        snapshots.forget(
+            &forgotten,
+            Box::new([
+                FilesystemSnapshotName::periodic(),
+                FilesystemSnapshotName::periodic(),
+            ]),
+        );
+        snapshots.forget_scope(&self::scope("deleted"));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let before = (
+            store.deletes.lock().unwrap().len(),
+            store.scope_deletes.load(Ordering::SeqCst),
+        );
+        gate.open();
+        ended(&snapshots, &uploading).await;
+        eventually(|| {
+            store.deletes.lock().unwrap().len() == 2
+                && store.scope_deletes.load(Ordering::SeqCst) == 1
+        })
+        .await;
+
+        assert_eq!(before, (0, 0));
+        assert_eq!(store.most_store_calls_at_once.load(Ordering::SeqCst), 1);
+    })
+}
+
+#[test]
+fn at_most_the_configured_number_of_restores_run_at_the_same_time() {
+    paused(async {
+        let store = Arc::new(ScriptedStore::default());
+        let snapshots = service(&store, settings(4, 2, 1));
+        let scope = scope("restores");
+        let discarded = Arc::new(AtomicUsize::new(0));
+        let name = {
+            let admission = snapshots.admit(&scope, SnapshotKind::Update).await.unwrap();
+            let name = admission.name().clone();
+            admission
+                .upload_now(capture(b"tree", &discarded), no_interrupt())
+                .await
+                .unwrap();
+            name
+        };
+        let gate = Arc::new(Gate::default());
+        *store.restore_gate.lock().unwrap() = Some(Arc::clone(&gate));
+        store.restores_fail.store(true, Ordering::SeqCst);
+        let targets = (0..5)
+            .map(|_| tempfile::tempdir().unwrap())
+            .collect::<Vec<_>>();
+
+        let restores = targets
+            .iter()
+            .map(|target| {
+                let restore = snapshots.restore(&scope, &name).unwrap();
+                let into = target.path().to_path_buf();
+                tokio::spawn(async move { restore.restore(&into).await })
+            })
+            .collect::<Vec<_>>();
+        gate.wait_reached(2).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let while_held = store.restores_now.load(Ordering::SeqCst);
+        gate.open();
+        let results = futures::future::join_all(restores).await;
+
+        assert_eq!(while_held, 2);
+        assert_eq!(store.most_restores_at_once.load(Ordering::SeqCst), 2);
+        assert!(
+            results
+                .into_iter()
+                .all(|result| result.unwrap().is_err_and(|error| !error.retryable))
+        );
+    })
+}
+
+#[test]
+fn a_restore_gives_the_saved_tree() {
+    paused(async {
+        let store = Arc::new(ScriptedStore::default());
+        let snapshots = service(&store, settings(4, 2, 1));
+        let scope = scope("restore");
+        let discarded = Arc::new(AtomicUsize::new(0));
         let admission = snapshots.admit(&scope, SnapshotKind::Update).await.unwrap();
         let name = admission.name().clone();
         admission
-            .upload_now(
-                TestCapture::with(b"tree", &discarded),
-                std::future::pending(),
-            )
+            .upload_now(capture(b"restored", &discarded), no_interrupt())
             .await
             .unwrap();
-        name
-    };
-    let gate = Arc::new(Gate::default());
-    *store.restore_gate.lock().unwrap() = Some(Arc::clone(&gate));
-    store.restores_fail.store(true, Ordering::SeqCst);
-    let targets = (0..5)
-        .map(|_| tempfile::tempdir().unwrap())
-        .collect::<Vec<_>>();
+        let into = tempfile::tempdir().unwrap();
 
-    let restores = targets
-        .iter()
-        .map(|target| {
-            let restore = snapshots.restore(&scope, &name).unwrap();
-            let into = target.path().to_path_buf();
-            tokio::spawn(async move { restore.restore(&into).await })
-        })
-        .collect::<Vec<_>>();
-    gate.wait_reached(2).await;
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    let while_held = store.restores_now.load(Ordering::SeqCst);
-    gate.open();
-    let results = futures::future::join_all(restores).await;
-
-    assert_eq!(while_held, 2);
-    assert_eq!(store.most_restores_at_once.load(Ordering::SeqCst), 2);
-    assert!(
-        results
-            .into_iter()
-            .all(|result| result.unwrap().is_err_and(|error| !error.retryable))
-    );
-}
-
-#[test]
-#[timeout("10s")]
-async fn a_restore_gives_the_saved_tree() {
-    let store = Arc::new(ScriptedStore::default());
-    let snapshots = service(&store, settings(4, 2, 1), ManualClock::immediate());
-    let scope = scope("restore");
-    let discarded = Arc::new(AtomicUsize::new(0));
-    let admission = snapshots.admit(&scope, SnapshotKind::Update).await.unwrap();
-    let name = admission.name().clone();
-    admission
-        .upload_now(
-            TestCapture::with(b"restored", &discarded),
-            std::future::pending(),
-        )
-        .await
-        .unwrap();
-    let into = tempfile::tempdir().unwrap();
-
-    snapshots
-        .restore(&scope, &name)
-        .unwrap()
-        .restore(into.path())
-        .await
-        .unwrap();
-
-    assert_eq!(
-        std::fs::read(into.path().join("content")).unwrap(),
-        b"restored"
-    );
-}
-
-#[test]
-#[timeout("10s")]
-async fn a_name_whose_save_failed_is_never_given_to_another_capture() {
-    let store = Arc::new(ScriptedStore::default());
-    // The first save publishes its tree and then fails, as a PUT that lands after its error does.
-    store.failing_saves.store(1, Ordering::SeqCst);
-    store.publish_before_failing.store(true, Ordering::SeqCst);
-    let snapshots = service(&store, settings(4, 4, 3), ManualClock::immediate());
-    let scope = scope("names-of-failed-saves");
-    let discarded = Arc::new(AtomicUsize::new(0));
-    let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
-
-    let first = snapshots
-        .admit(&scope, SnapshotKind::Periodic)
-        .await
-        .unwrap();
-    let first_name = first.name().clone();
-    first.submit(
-        TestCapture::with(b"first tree", &discarded),
-        None,
-        confirmer(&confirm),
-    );
-    ended(&snapshots, &scope).await;
-    store.failing_saves.store(1, Ordering::SeqCst);
-    store.publish_before_failing.store(false, Ordering::SeqCst);
-    let second = snapshots.admit(&scope, SnapshotKind::Update).await.unwrap();
-    let second_name = second.name().clone();
-    let second_saved = second
-        .upload_now(
-            TestCapture::with(b"second tree", &discarded),
-            std::future::pending(),
-        )
-        .await
-        .is_ok();
-
-    let trees_of_names = store.saved.lock().unwrap().iter().fold(
-        BTreeMap::<String, std::collections::BTreeSet<Vec<u8>>>::new(),
-        |mut names, (name, tree)| {
-            names.entry(name.clone()).or_default().insert(tree.clone());
-            names
-        },
-    );
-    assert_ne!(first_name, second_name);
-    assert!(second_saved);
-    // The retry of the first job used its own name, and the store gave `AlreadyExists` for the
-    // tree that the failed attempt published.
-    assert_eq!(
-        store.saved_names(),
-        vec![
-            first_name.as_str().to_string(),
-            first_name.as_str().to_string(),
-            second_name.as_str().to_string(),
-            second_name.as_str().to_string(),
-        ]
-    );
-    assert!(trees_of_names.values().all(|trees| trees.len() == 1));
-    assert_eq!(confirm.names(), vec![first_name]);
-}
-
-#[test]
-#[timeout("10s")]
-async fn a_shutdown_before_the_confirmation_stops_the_job_without_a_confirmation_or_a_delete() {
-    let store = Arc::new(ScriptedStore::default());
-    let gate = Arc::new(Gate::default());
-    *store.save_gate.lock().unwrap() = Some(Arc::clone(&gate));
-    let shutdown = CancellationToken::new();
-    let snapshots = AgentFilesystemSnapshots::enabled(
-        Arc::clone(&store) as Arc<dyn FilesystemSnapshotStore>,
-        settings(4, 4, 1),
-        ManualClock::immediate(),
-        Arc::new(UnlimitedRoom),
-        shutdown.clone(),
-    );
-    let scope = scope("shutdown");
-    let discarded = Arc::new(AtomicUsize::new(0));
-    let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
-    let admission = snapshots
-        .admit(&scope, SnapshotKind::Periodic)
-        .await
-        .unwrap();
-    admission.submit(
-        TestCapture::with(b"tree", &discarded),
-        None,
-        confirmer(&confirm),
-    );
-    gate.wait_reached(1).await;
-
-    let stopping = tokio::spawn(async move {
-        snapshots.shut_down().await;
         snapshots
-    });
-    eventually(|| shutdown.is_cancelled()).await;
-    gate.open();
-    let snapshots = stopping.await.unwrap();
+            .restore(&scope, &name)
+            .unwrap()
+            .restore(into.path())
+            .await
+            .unwrap();
 
-    assert!(confirm.names().is_empty());
-    assert!(store.deletes.lock().unwrap().is_empty());
-    assert_eq!(discarded.load(Ordering::SeqCst), 1);
-    assert!(
-        snapshots
-            .enabled
-            .as_ref()
-            .is_some_and(|enabled| !enabled.jobs_of_scope().jobs.contains_key(&scope))
-    );
+        assert_eq!(
+            std::fs::read(into.path().join("content")).unwrap(),
+            b"restored"
+        );
+    })
 }
 
 #[test]
-#[timeout("10s")]
-async fn a_parent_reaches_the_store_with_its_detection() {
-    let store = Arc::new(ScriptedStore::default());
-    let snapshots = service(&store, settings(4, 4, 1), ManualClock::immediate());
-    let scope = scope("parent");
-    let discarded = Arc::new(AtomicUsize::new(0));
-    let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
-    let parent = FilesystemSnapshotName::periodic();
+fn a_name_whose_save_failed_is_never_given_to_another_capture() {
+    paused(async {
+        let store = Arc::new(ScriptedStore::default());
+        // The first save publishes its tree and then fails, as a PUT that lands after its error does.
+        store.failing_saves.store(1, Ordering::SeqCst);
+        store.publish_before_failing.store(true, Ordering::SeqCst);
+        let snapshots = service(&store, settings(4, 4, 3));
+        let scope = scope("names-of-failed-saves");
+        let discarded = Arc::new(AtomicUsize::new(0));
+        let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
 
-    let admission = snapshots
-        .admit(&scope, SnapshotKind::Periodic)
-        .await
-        .unwrap();
-    admission.submit(
-        TestCapture::with(b"tree", &discarded),
-        Some((parent.clone(), ChangeDetection::SizeMtime)),
-        confirmer(&confirm),
-    );
-    ended(&snapshots, &scope).await;
+        let first = snapshots
+            .admit(&scope, SnapshotKind::Periodic)
+            .await
+            .unwrap();
+        let first_name = first.name().clone();
+        first.submit(
+            capture(b"first tree", &discarded),
+            None,
+            confirmer(&confirm),
+        );
+        ended(&snapshots, &scope).await;
+        store.failing_saves.store(1, Ordering::SeqCst);
+        store.publish_before_failing.store(false, Ordering::SeqCst);
+        let second = snapshots.admit(&scope, SnapshotKind::Update).await.unwrap();
+        let second_name = second.name().clone();
+        let second_saved = second
+            .upload_now(capture(b"second tree", &discarded), no_interrupt())
+            .await
+            .is_ok();
 
-    assert_eq!(
-        store.parents.lock().unwrap().clone(),
-        vec![Some((
-            parent.as_str().to_string(),
-            ChangeDetection::SizeMtime
-        ))]
-    );
+        let trees_of_names = store.saved.lock().unwrap().iter().fold(
+            BTreeMap::<String, std::collections::BTreeSet<Vec<u8>>>::new(),
+            |mut names, (name, tree)| {
+                names.entry(name.clone()).or_default().insert(tree.clone());
+                names
+            },
+        );
+        assert_ne!(first_name, second_name);
+        assert!(second_saved);
+        // The retry of the first job used its own name, and the store gave `AlreadyExists` for the
+        // tree that the failed attempt published.
+        assert_eq!(
+            store.saved_names(),
+            vec![
+                first_name.as_str().to_string(),
+                first_name.as_str().to_string(),
+                second_name.as_str().to_string(),
+                second_name.as_str().to_string(),
+            ]
+        );
+        assert!(trees_of_names.values().all(|trees| trees.len() == 1));
+        assert_eq!(confirm.names(), vec![first_name]);
+    })
+}
+
+#[test]
+fn a_shutdown_before_the_confirmation_stops_the_job_without_a_confirmation_or_a_delete() {
+    paused(async {
+        let store = Arc::new(ScriptedStore::default());
+        let gate = Arc::new(Gate::default());
+        *store.save_gate.lock().unwrap() = Some(Arc::clone(&gate));
+        let shutdown = CancellationToken::new();
+        let snapshots = AgentFilesystemSnapshots::enabled(
+            Arc::clone(&store) as Arc<dyn FilesystemSnapshotStore>,
+            settings(4, 4, 1),
+            VolumeRoom::Unlimited,
+            shutdown.clone(),
+        );
+        let scope = scope("shutdown");
+        let discarded = Arc::new(AtomicUsize::new(0));
+        let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
+        let admission = snapshots
+            .admit(&scope, SnapshotKind::Periodic)
+            .await
+            .unwrap();
+        admission.submit(capture(b"tree", &discarded), None, confirmer(&confirm));
+        gate.wait_reached(1).await;
+
+        let stopping = tokio::spawn(async move {
+            snapshots.shut_down().await;
+            snapshots
+        });
+        eventually(|| shutdown.is_cancelled()).await;
+        gate.open();
+        let snapshots = stopping.await.unwrap();
+
+        assert!(confirm.names().is_empty());
+        assert!(store.deletes.lock().unwrap().is_empty());
+        assert_eq!(discarded.load(Ordering::SeqCst), 1);
+        assert!(snapshots.is_free(&scope));
+    })
+}
+
+#[test]
+fn a_parent_reaches_the_store_with_its_detection() {
+    paused(async {
+        let store = Arc::new(ScriptedStore::default());
+        let snapshots = service(&store, settings(4, 4, 1));
+        let scope = scope("parent");
+        let discarded = Arc::new(AtomicUsize::new(0));
+        let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
+        let parent = FilesystemSnapshotName::periodic();
+
+        let admission = snapshots
+            .admit(&scope, SnapshotKind::Periodic)
+            .await
+            .unwrap();
+        admission.submit(
+            capture(b"tree", &discarded),
+            Some((parent.clone(), ChangeDetection::SizeMtime)),
+            confirmer(&confirm),
+        );
+        ended(&snapshots, &scope).await;
+
+        assert_eq!(
+            store.parents.lock().unwrap().clone(),
+            vec![Some((
+                parent.as_str().to_string(),
+                ChangeDetection::SizeMtime
+            ))]
+        );
+    })
 }
 
 /// Uploads three manual-update snapshots of one scope, each followed by its retention, and gives
@@ -1445,11 +1561,7 @@ async fn update_uploads_with_retention(
         .await
         .unwrap();
     let periodic_name = periodic.name().as_str().to_string();
-    periodic.submit(
-        TestCapture::with(b"periodic", &discarded),
-        None,
-        confirmer(&confirm),
-    );
+    periodic.submit(capture(b"periodic", &discarded), None, confirmer(&confirm));
     ended(snapshots, scope).await;
     let updates = futures::stream::iter(0..3)
         .then(|index| {
@@ -1459,12 +1571,12 @@ async fn update_uploads_with_retention(
                 let name = admission.name().as_str().to_string();
                 admission
                     .upload_now(
-                        TestCapture::with(format!("{index}").as_bytes(), discarded),
-                        std::future::pending(),
+                        capture(format!("{index}").as_bytes(), discarded),
+                        no_interrupt(),
                     )
                     .await
                     .unwrap()
-                    .run(None);
+                    .retain(None);
                 ended(snapshots, scope).await;
                 name
             }
@@ -1475,72 +1587,74 @@ async fn update_uploads_with_retention(
 }
 
 #[test]
-#[timeout("10s")]
-async fn an_update_retention_keeps_the_own_snapshot_and_the_newest_older_updates() {
-    let store = Arc::new(ScriptedStore::default());
-    let snapshots = service(&store, settings(4, 4, 1), ManualClock::immediate());
-    let scope = scope("update-retention");
+fn an_update_retention_keeps_the_own_snapshot_and_the_newest_older_updates() {
+    paused(async {
+        let store = Arc::new(ScriptedStore::default());
+        let snapshots = service(&store, settings(4, 4, 1));
+        let scope = scope("update-retention");
 
-    let (periodic, updates) = update_uploads_with_retention(&snapshots, &scope).await;
+        let (periodic, updates) = update_uploads_with_retention(&snapshots, &scope).await;
 
-    let kept = store
-        .memory
-        .list(&scope)
-        .await
-        .unwrap()
-        .iter()
-        .map(|(name, _)| name.as_str().to_string())
-        .collect::<std::collections::BTreeSet<_>>();
-    let expected = [periodic, updates[1].clone(), updates[2].clone()]
-        .into_iter()
-        .collect::<std::collections::BTreeSet<_>>();
-    assert_eq!(kept, expected);
-    assert_eq!(*store.deletes.lock().unwrap(), vec![updates[0].clone()]);
+        let kept = store
+            .memory
+            .list(&scope)
+            .await
+            .unwrap()
+            .iter()
+            .map(|(name, _)| name.as_str().to_string())
+            .collect::<std::collections::BTreeSet<_>>();
+        let expected = [periodic, updates[1].clone(), updates[2].clone()]
+            .into_iter()
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(kept, expected);
+        assert_eq!(*store.deletes.lock().unwrap(), vec![updates[0].clone()]);
+    })
 }
 
 #[test]
-#[timeout("10s")]
-async fn a_dropped_update_retention_deletes_nothing_and_frees_the_scope() {
-    let store = Arc::new(ScriptedStore::default());
-    let snapshots = service(&store, settings(4, 4, 1), ManualClock::immediate());
-    let scope = scope("dropped-update-retention");
-    let discarded = Arc::new(AtomicUsize::new(0));
+fn a_dropped_update_retention_deletes_nothing_and_frees_the_scope() {
+    paused(async {
+        let store = Arc::new(ScriptedStore::default());
+        let snapshots = service(&store, settings(4, 4, 1));
+        let scope = scope("dropped-update-retention");
+        let discarded = Arc::new(AtomicUsize::new(0));
 
-    let names = futures::stream::iter(0..3)
-        .then(|index| {
-            let snapshots = &snapshots;
-            let scope = &scope;
-            let discarded = &discarded;
-            async move {
-                let admission = snapshots.admit(scope, SnapshotKind::Update).await.unwrap();
-                let name = admission.name().as_str().to_string();
-                let retention = admission
-                    .upload_now(
-                        TestCapture::with(format!("{index}").as_bytes(), discarded),
-                        std::future::pending(),
-                    )
-                    .await
-                    .unwrap();
-                let while_held = snapshots.admit(scope, SnapshotKind::Periodic).await.err();
-                drop(retention);
-                (name, while_held)
-            }
-        })
-        .collect::<Vec<_>>()
-        .await;
+        let names = futures::stream::iter(0..3)
+            .then(|index| {
+                let snapshots = &snapshots;
+                let scope = &scope;
+                let discarded = &discarded;
+                async move {
+                    let admission = snapshots.admit(scope, SnapshotKind::Update).await.unwrap();
+                    let name = admission.name().as_str().to_string();
+                    let retention = admission
+                        .upload_now(
+                            capture(format!("{index}").as_bytes(), discarded),
+                            no_interrupt(),
+                        )
+                        .await
+                        .unwrap();
+                    let while_held = snapshots.admit(scope, SnapshotKind::Periodic).await.err();
+                    drop(retention);
+                    (name, while_held)
+                }
+            })
+            .collect::<Vec<_>>()
+            .await;
 
-    assert!(store.deletes.lock().unwrap().is_empty());
-    assert!(
-        names
-            .iter()
-            .all(|(_, while_held)| *while_held == Some(SnapshotSkip::UploadInFlight))
-    );
-    assert!(
-        snapshots
-            .admit(&scope, SnapshotKind::Periodic)
-            .await
-            .is_ok()
-    );
+        assert!(store.deletes.lock().unwrap().is_empty());
+        assert!(
+            names
+                .iter()
+                .all(|(_, while_held)| *while_held == Some(SnapshotSkip::UploadInFlight))
+        );
+        assert!(
+            snapshots
+                .admit(&scope, SnapshotKind::Periodic)
+                .await
+                .is_ok()
+        );
+    })
 }
 
 /// A service whose deletes wait at a gate, after two confirmed periodic uploads and a third
@@ -1566,7 +1680,7 @@ async fn with_a_delete_held(
         settings.upload_retry().clone(),
     )
     .unwrap();
-    let snapshots = service(&store, settings, ManualClock::immediate());
+    let snapshots = service(&store, settings);
     let scope = scope("held-delete");
     let discarded = Arc::new(AtomicUsize::new(0));
     let deferred = ScriptedConfirmer::answering(ConfirmOutcome::Deferred);
@@ -1574,11 +1688,7 @@ async fn with_a_delete_held(
         .admit(&scope, SnapshotKind::Periodic)
         .await
         .unwrap();
-    older.submit(
-        TestCapture::with(b"older", &discarded),
-        None,
-        confirmer(&deferred),
-    );
+    older.submit(capture(b"older", &discarded), None, confirmer(&deferred));
     ended(&snapshots, &scope).await;
     let gate = Arc::new(Gate::default());
     *store.delete_gate.lock().unwrap() = Some(Arc::clone(&gate));
@@ -1587,75 +1697,72 @@ async fn with_a_delete_held(
         .admit(&scope, SnapshotKind::Periodic)
         .await
         .unwrap();
-    newest.submit(
-        TestCapture::with(b"newest", &discarded),
-        None,
-        confirmer(&answering),
-    );
+    newest.submit(capture(b"newest", &discarded), None, confirmer(&answering));
     gate.wait_reached(1).await;
     (store, snapshots, scope, gate)
 }
 
 #[test]
-#[timeout("10s")]
-async fn a_shutdown_ends_a_retention_that_waits_for_a_delete() {
-    let (_store, snapshots, _scope, gate) = with_a_delete_held(ConfirmOutcome::Confirmed).await;
+fn a_shutdown_ends_a_retention_that_waits_for_a_delete() {
+    paused(async {
+        let (_store, snapshots, _scope, gate) = with_a_delete_held(ConfirmOutcome::Confirmed).await;
 
-    let stopped = tokio::time::timeout(Duration::from_secs(2), snapshots.shut_down()).await;
+        let stopped = tokio::time::timeout(Duration::from_secs(2), snapshots.shut_down()).await;
 
-    gate.open();
-    assert!(stopped.is_ok(), "the shutdown waited for the retention");
+        gate.open();
+        assert!(stopped.is_ok(), "the shutdown waited for the retention");
+    })
 }
 
 #[test]
-#[timeout("10s")]
-async fn forget_scope_ends_a_delete_of_a_superseded_snapshot_at_once() {
-    let (_store, snapshots, scope, gate) = with_a_delete_held(ConfirmOutcome::Superseded).await;
-    let job = snapshots
-        .enabled
-        .as_ref()
-        .and_then(|enabled| enabled.jobs_of_scope().jobs.get(&scope).cloned())
-        .unwrap();
+fn forget_scope_ends_a_delete_of_a_superseded_snapshot_at_once() {
+    paused(async {
+        let (_store, snapshots, scope, gate) = with_a_delete_held(ConfirmOutcome::Superseded).await;
+        let core = snapshots.core.as_ref().unwrap();
 
-    snapshots.forget_scope(&scope);
-    let ended = tokio::time::timeout(Duration::from_secs(2), job.ended.cancelled()).await;
+        snapshots.forget_scope(&scope);
+        let ended = tokio::time::timeout(
+            Duration::from_secs(2),
+            core.registry
+                .until(|scopes| rules::is_free(scopes, &scope).then_some(())),
+        )
+        .await;
 
-    gate.open();
-    assert!(
-        ended.is_ok(),
-        "the job waited for its delete after forget_scope"
-    );
+        gate.open();
+        assert!(
+            ended.is_ok(),
+            "the job waited for its delete after forget_scope"
+        );
+    })
 }
 
 #[test]
-#[timeout("10s")]
-async fn a_stop_of_an_upload_now_ends_the_save_and_discards_the_capture() {
-    let store = Arc::new(ScriptedStore::default());
-    let gate = Arc::new(Gate::default());
-    *store.save_gate.lock().unwrap() = Some(Arc::clone(&gate));
-    let snapshots = service(&store, settings(4, 4, 1), ManualClock::immediate());
-    let scope = scope("stopped-upload-now");
-    let discarded = Arc::new(AtomicUsize::new(0));
-    let admission = snapshots.admit(&scope, SnapshotKind::Update).await.unwrap();
-    let stop = Arc::new(Notify::new());
+fn a_stop_of_an_upload_now_ends_the_save_and_discards_the_capture() {
+    paused(async {
+        let store = Arc::new(ScriptedStore::default());
+        let gate = Arc::new(Gate::default());
+        *store.save_gate.lock().unwrap() = Some(Arc::clone(&gate));
+        let snapshots = service(&store, settings(4, 4, 1));
+        let scope = scope("stopped-upload-now");
+        let discarded = Arc::new(AtomicUsize::new(0));
+        let admission = snapshots.admit(&scope, SnapshotKind::Update).await.unwrap();
+        let (stop, stopped) = watch::channel(false);
 
-    let uploading = admission.upload_now(TestCapture::with(b"tree", &discarded), {
-        let stop = Arc::clone(&stop);
-        async move { stop.notified().await }
-    });
-    let stopping = async {
-        gate.wait_reached(1).await;
-        stop.notify_one();
-    };
-    let (uploaded, ()) = futures::join!(uploading, stopping);
-    gate.open();
+        let uploading = admission.upload_now(capture(b"tree", &discarded), stopped);
+        let stopping = async {
+            gate.wait_reached(1).await;
+            stop.send_replace(true);
+        };
+        let (uploaded, ()) = futures::join!(uploading, stopping);
+        gate.open();
 
-    assert!(uploaded.is_err());
-    assert_eq!(discarded.load(Ordering::SeqCst), 1);
-    assert!(
-        snapshots
-            .admit(&scope, SnapshotKind::Periodic)
-            .await
-            .is_ok()
-    );
+        assert!(uploaded.is_err());
+        assert_eq!(discarded.load(Ordering::SeqCst), 1);
+        assert!(
+            snapshots
+                .admit(&scope, SnapshotKind::Periodic)
+                .await
+                .is_ok()
+        );
+    })
 }

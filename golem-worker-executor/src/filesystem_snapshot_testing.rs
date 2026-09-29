@@ -178,7 +178,7 @@ impl TestFilesystemSnapshotStore {
         let snapshots = Arc::new(AgentFilesystemSnapshots::enabled_without_storage_check(
             Arc::new(self.clone()),
             uploads,
-            Arc::new(crate::services::agent_filesystem_snapshots::UnlimitedRoom),
+            crate::services::agent_filesystem_snapshots::VolumeRoom::Unlimited,
             shutdown.token(),
         ));
         let stopping = Arc::clone(&snapshots);

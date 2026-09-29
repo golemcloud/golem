@@ -22,7 +22,7 @@ use crate::services::agent_filesystem::{
     capture, capture_whole, drain_sealed_filesystem, filesystem_activity, seal, set_limits,
 };
 use crate::services::agent_filesystem_snapshots::{
-    SnapshotConfirmer, SnapshotKind, SnapshotSkip, UpdateRetention, UploadAdmission,
+    Admission, SavedUpdate, SnapshotSkip, UpdateRefusal,
 };
 use crate::services::golem_config::SnapshotPolicy;
 use crate::services::oplog::plugin::ForwardingOplog;
@@ -33,10 +33,9 @@ use crate::services::{
     HasShardService, HasWorker,
 };
 use crate::worker::filesystem_snapshots::{
-    CaptureFinding, ConfirmedFilesystemSnapshot, PeriodicRecord, WorkerConfirmer,
-    plan_periodic_record,
+    CaptureFinding, ConfirmedFilesystemSnapshot, PeriodicRecord, confirm_by, plan_periodic_record,
 };
-use crate::worker::interrupt::{Interrupts, terminal_queued};
+use crate::worker::interrupt::Interrupts;
 use crate::worker::invocation::{
     InvocationMode, InvokeResult, invocation_uses_streams, invoke_observed_and_traced,
     lower_invocation, materialize_streaming_result,
@@ -3026,33 +3025,26 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         // and asks again, so a frequent snapshot does not fail the update. A terminal interrupt
         // ends the wait and fails the update, except on a lost shard: then nothing is written,
         // and the update stays pending for the shard's new owner.
-        let admitted = match snapshots.admit(&scope, SnapshotKind::Update).await {
-            Err(SnapshotSkip::UploadInFlight) => {
-                let waited = tokio::select! {
-                    () = snapshots.wait_for_upload_of_scope(&scope) => true,
-                    () = terminal_queued(self.parent.terminal_interrupt()) => false,
-                };
-                if !waited {
-                    if self.parent.retired_for_lost_shard() {
-                        return CommandOutcome::BreakInnerLoop(RetryDecision::None);
-                    }
-                    return self
-                        .fail_update(
-                            target_revision,
-                            "the update was interrupted while it waited for an upload of a \
-                             filesystem snapshot of the agent"
-                                .to_string(),
-                        )
-                        .await;
-                }
-                snapshots.admit(&scope, SnapshotKind::Update).await
-            }
-            admitted => admitted,
-        };
-        let admission = match admitted {
+        let admission = match snapshots
+            .admit_update(&scope, self.parent.terminal_interrupt())
+            .await
+        {
             Ok(admission) => Some(admission),
-            Err(SnapshotSkip::Disabled) => None,
-            Err(skip) => {
+            Err(UpdateRefusal::Skip(SnapshotSkip::Disabled)) => None,
+            Err(UpdateRefusal::Interrupted) => {
+                if self.parent.retired_for_lost_shard() {
+                    return CommandOutcome::BreakInnerLoop(RetryDecision::None);
+                }
+                return self
+                    .fail_update(
+                        target_revision,
+                        "the update was interrupted while it waited for an upload of a \
+                         filesystem snapshot of the agent"
+                            .to_string(),
+                    )
+                    .await;
+            }
+            Err(UpdateRefusal::Skip(skip)) => {
                 return self
                     .fail_update(
                         target_revision,
@@ -3186,9 +3178,9 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                                 CommandOutcome::BreakInnerLoop(RetryDecision::Immediate)
                             }
                             Some(Ok(_)) => {
-                                if let Some(retention) = retention {
+                                if let Some(saved) = retention {
                                     let baseline = self.parent.manual_update_baseline_name().await;
-                                    retention.run(baseline.as_ref());
+                                    saved.retain(baseline.as_ref());
                                 }
                                 CommandOutcome::BreakInnerLoop(RetryDecision::Immediate)
                             }
@@ -3319,10 +3311,9 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     /// `None` when the capture failed: the loop then writes no record.
     async fn capture_filesystem(
         &self,
-        wait: Option<std::time::Duration>,
+        wait: std::time::Duration,
         since: Option<TreeMark>,
     ) -> Option<CaptureOutcome> {
-        let wait = wait.unwrap_or(std::time::Duration::from_secs(5));
         measured_capture(
             || capture(self.filesystem, wait, since),
             CaptureOutcome::label,
@@ -3336,12 +3327,9 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     /// manual-update record never reuses a name.
     async fn upload_update_filesystem(
         &self,
-        admission: UploadAdmission,
-    ) -> Result<Option<(FilesystemSnapshotName, UpdateRetention)>, UpdateUploadError> {
-        let snapshots = self.parent.agent_filesystem_snapshots();
-        let wait = snapshots
-            .capture_wait()
-            .unwrap_or(std::time::Duration::from_secs(5));
+        admission: Admission,
+    ) -> Result<Option<(FilesystemSnapshotName, SavedUpdate)>, UpdateUploadError> {
+        let wait = admission.capture_wait();
         match measured_capture(|| capture_whole(self.filesystem, wait), WholeCapture::label).await {
             None => Err(UpdateUploadError::Failed(
                 "failed to capture the agent filesystem for the update".to_string(),
@@ -3353,10 +3341,10 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 // interrupted save writes no record: a snapshot that its publish still leaves
                 // has no record, and nothing selects it.
                 match admission
-                    .upload_now(capture, terminal_queued(self.parent.terminal_interrupt()))
+                    .upload_now(capture.into(), self.parent.terminal_interrupt())
                     .await
                 {
-                    Ok(retention) => Ok(Some((name, retention))),
+                    Ok(saved) => Ok(Some((name, saved))),
                     Err(_) if self.parent.terminal_interrupt_pending() => {
                         Err(UpdateUploadError::Interrupted)
                     }
@@ -3442,7 +3430,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         }
         let snapshots = self.parent.agent_filesystem_snapshots();
         let scope = SnapshotScope::agent(&self.owned_agent_id);
-        let admission = match snapshots.admit(&scope, SnapshotKind::Periodic).await {
+        let admission = match snapshots.admit_periodic(&scope).await {
             Ok(admission) => Some(admission),
             Err(SnapshotSkip::Disabled) => None,
             Err(skip) => {
@@ -3532,7 +3520,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                         let since = self.parent.filesystem_snapshot_since();
                         match self
                             .capture_filesystem(
-                                snapshots.capture_wait(),
+                                admission.capture_wait(),
                                 since.as_ref().map(|since| since.mark),
                             )
                             .await
@@ -3802,7 +3790,7 @@ where
 struct PeriodicSnapshotRecord {
     plan: PeriodicRecord,
     /// The admission, the capture and its mark, when the record uploads a capture.
-    upload: Option<(UploadAdmission, FilesystemCapture, TreeMark)>,
+    upload: Option<(Admission, FilesystemCapture, TreeMark)>,
 }
 
 impl PeriodicSnapshotRecord {
@@ -3811,7 +3799,7 @@ impl PeriodicSnapshotRecord {
     /// admission is dropped unless the record uploads the capture.
     fn new(
         capture: Option<(
-            UploadAdmission,
+            Admission,
             Option<ConfirmedFilesystemSnapshot>,
             CaptureOutcome,
         )>,
@@ -3885,12 +3873,9 @@ impl PeriodicSnapshotRecord {
             (self.plan, self.upload)
         {
             admission.submit(
-                capture,
+                capture.into(),
                 parent,
-                SnapshotConfirmer::new(Arc::new(WorkerConfirmer::new(
-                    Arc::downgrade(worker),
-                    mark,
-                ))),
+                confirm_by(Arc::downgrade(worker), mark),
             );
         }
     }

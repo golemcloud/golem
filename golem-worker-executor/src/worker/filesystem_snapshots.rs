@@ -23,9 +23,8 @@ use crate::filesystem_snapshot::ChangeDetection as StoreChangeDetection;
 use crate::services::agent_filesystem::{
     ChangeDetection, InitialFilesRestore, RestoreError, RestoreTree, TreeMark,
 };
-use crate::services::agent_filesystem_snapshots::{ConfirmOutcome, ConfirmSnapshot, StoreRestore};
+use crate::services::agent_filesystem_snapshots::{Confirm, ConfirmOutcome, StoreRestore};
 use crate::workerctx::WorkerCtx;
-use async_trait::async_trait;
 use golem_common::model::UsableAutomaticSnapshot;
 use golem_common::model::oplog::{FilesystemSnapshotName, OplogIndex};
 use std::path::Path;
@@ -176,37 +175,24 @@ impl RestoreTree for StartRestore {
     }
 }
 
-/// The confirmer of one upload. It holds a weak handle to the worker, so an upload never keeps a
-/// worker in memory, and the mark of the capture, which a confirmation gives to the slot.
-pub(crate) struct WorkerConfirmer<Ctx: WorkerCtx> {
-    worker: Weak<Worker<Ctx>>,
-    mark: TreeMark,
-}
-
-impl<Ctx: WorkerCtx> WorkerConfirmer<Ctx> {
-    pub(crate) fn new(worker: Weak<Worker<Ctx>>, mark: TreeMark) -> Self {
-        Self { worker, mark }
-    }
-}
-
-#[async_trait]
-impl<Ctx: WorkerCtx> ConfirmSnapshot for WorkerConfirmer<Ctx> {
-    async fn confirm(&self, name: &FilesystemSnapshotName) -> ConfirmOutcome {
-        let Some(worker) = self.worker.upgrade() else {
-            return ConfirmOutcome::Deferred;
-        };
-        match worker
-            .confirm_filesystem_snapshot(name.clone(), self.mark)
-            .await
-        {
-            ConfirmationReply::Confirmed => {
-                worker.record_confirmed_filesystem_snapshot(name.clone(), self.mark);
-                ConfirmOutcome::Confirmed
+/// The confirmation of one upload. It holds a weak handle to the worker, so an upload never keeps
+/// a worker in memory, and the mark of the capture, which a confirmation gives to the slot.
+pub(crate) fn confirm_by<Ctx: WorkerCtx>(worker: Weak<Worker<Ctx>>, mark: TreeMark) -> Confirm {
+    Box::new(move |name| {
+        Box::pin(async move {
+            let Some(worker) = worker.upgrade() else {
+                return ConfirmOutcome::Deferred;
+            };
+            match worker.confirm_filesystem_snapshot(name.clone(), mark).await {
+                ConfirmationReply::Confirmed => {
+                    worker.record_confirmed_filesystem_snapshot(name, mark);
+                    ConfirmOutcome::Confirmed
+                }
+                ConfirmationReply::Superseded => ConfirmOutcome::Superseded,
+                ConfirmationReply::Deferred => ConfirmOutcome::Deferred,
             }
-            ConfirmationReply::Superseded => ConfirmOutcome::Superseded,
-            ConfirmationReply::Deferred => ConfirmOutcome::Deferred,
-        }
-    }
+        })
+    })
 }
 
 #[cfg(test)]

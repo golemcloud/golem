@@ -5338,23 +5338,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Confirms the filesystem snapshot of the last automatic snapshot record before a start, when
     /// the start would select that record if it were confirmed.
     ///
-    /// When an upload of the snapshot runs on this executor and holds a slot of the uploads, the
-    /// start first waits for its decision, for at most `confirmation_wait`. Then, unless the
-    /// upload gave `Superseded`, the start asks the store once whether it holds the whole
-    /// snapshot, for at most what is left of `confirmation_wait` after a wait, or at most
-    /// `store_check_limit` without one. When it does, the start writes the confirmation record
-    /// as the owner of the agent: while the instance waits for its permits with this start
-    /// attempt, the status is attached, no retirement of the owner is requested, and the shard
-    /// admits the agent. A terminal interrupt ends the wait and the check. This start holds no
-    /// slot, no memory and no lock while it waits.
+    /// The service waits for an upload of the snapshot on this executor and asks the store, as
+    /// [`agent_filesystem_snapshots::AgentFilesystemSnapshots::prepare_start`] says. When the store
+    /// holds the whole snapshot, the start writes the confirmation record as the owner of the
+    /// agent: while the instance waits for its permits with this start attempt, no terminal
+    /// interrupt waits, the status is attached, no retirement of the owner is requested, and the
+    /// shard admits the agent. This start holds no slot, no memory and no lock while it waits.
     async fn confirm_filesystem_snapshot_before_start(self: &Arc<Self>, start_attempt: Uuid) {
-        let snapshots = self.agent_filesystem_snapshots();
-        let Some((limit, check_limit)) = snapshots
-            .confirmation_wait()
-            .zip(snapshots.store_check_limit())
-        else {
-            return;
-        };
         let status = self.last_known_status.load_full();
         let Some(name) = self.with_exclusions(|exclusions| {
             start_candidate(
@@ -5365,51 +5355,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             return;
         };
         let scope = crate::filesystem_snapshot::SnapshotScope::agent(&self.owned_agent_id);
-        let started = std::time::Instant::now();
-        let interrupted = interrupt::terminal_queued(self.terminal_interrupt());
-        let mut interrupted = std::pin::pin!(interrupted);
-        let upload = snapshots
-            .upload_of(&scope, &name)
-            .filter(|upload| upload.holds_slot);
-        let (waited, decision) = match upload {
-            Some(mut upload) if upload.decided.borrow().is_none() => {
-                let decided = tokio::select! {
-                    decided = upload.decided.wait_for(|decision| decision.is_some()) => {
-                        decided.ok().and_then(|decision| *decision)
-                    }
-                    () = tokio::time::sleep(limit) => None,
-                    () = &mut interrupted => return,
-                };
-                (true, decided)
-            }
-            Some(upload) => (false, *upload.decided.borrow()),
-            None => (false, None),
-        };
-        if decision
-            == Some(agent_filesystem_snapshots::JobDecision::Confirmed(
-                agent_filesystem_snapshots::ConfirmOutcome::Superseded,
-            ))
-            || self.terminal_interrupt_pending()
+        if self
+            .agent_filesystem_snapshots()
+            .prepare_start(&scope, &name, self.terminal_interrupt())
+            .await
+            != agent_filesystem_snapshots::StartCheck::Stored
         {
             return;
-        }
-        let stat_limit = if waited {
-            limit.saturating_sub(started.elapsed())
-        } else {
-            check_limit
-        };
-        let stored = tokio::select! {
-            stored = tokio::time::timeout(stat_limit, snapshots.is_stored(&scope, &name)) => stored,
-            () = &mut interrupted => return,
-        };
-        match stored {
-            Ok(Ok(true)) => {}
-            Ok(Ok(false)) => return,
-            Ok(Err(error)) => {
-                warn!(error = %error, "Failed to check a filesystem snapshot before a start");
-                return;
-            }
-            Err(_) => return,
         }
         let instance_guard = self.instance.clone().lock_owned().await;
         if !matches!(

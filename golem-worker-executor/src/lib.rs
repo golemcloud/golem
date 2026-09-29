@@ -68,7 +68,7 @@ use self::services::worker_fork::DefaultWorkerFork;
 use self::wasi_host::create_linker;
 use crate::grpc::WorkerExecutorImpl;
 use crate::services::active_agents::{ActiveAgents, InvocationLoops};
-use crate::services::agent_filesystem_snapshots::{AgentFilesystemSnapshots, PressureTargetRoom};
+use crate::services::agent_filesystem_snapshots::{AgentFilesystemSnapshots, VolumeRoom};
 use crate::services::agent_types::AgentTypesService;
 use crate::services::blob_store::{BlobStoreService, DefaultBlobStoreService};
 use crate::services::card::{CardService, CardServiceDefault};
@@ -200,10 +200,10 @@ pub fn bind_agent_filesystem_snapshots<Ctx: WorkerCtx>(
         &golem_config.filesystem_snapshots,
         filesystems.provisioning().uses_managed_storage(),
         |config| filesystem_snapshot::managed_store(blob_storage, config),
-        Arc::new(PressureTargetRoom::new(
-            filesystems.volume().clone(),
-            filesystems.pressure_policy().clone(),
-        )),
+        VolumeRoom::Pressure {
+            volume: filesystems.volume().clone(),
+            pressure: filesystems.pressure_policy().clone(),
+        },
         shutdown.token(),
     )
     .map_err(|error| anyhow!(error))?;

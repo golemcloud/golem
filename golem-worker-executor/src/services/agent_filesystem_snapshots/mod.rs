@@ -16,13 +16,19 @@
 //! the background, confirmations, retention, restores and clean-up.
 //!
 //! This is the only module that knows both a capture of an agent filesystem and a name of the
-//! store. It does not know the oplog entry types or the worker: a [`SnapshotConfirmer`] writes the
+//! store. It does not know the oplog entry types or the worker: a [`Confirm`] closure writes the
 //! confirmation record.
+//!
+//! The rules are pure functions in `rules`. The registry keeps the state of the scopes and changes
+//! it only through them, and the jobs are straight-line mechanisms that call a rule at each
+//! decision.
 
 mod cleanup;
 mod job;
+mod registry;
 mod restore;
 mod retention;
+mod rules;
 #[cfg(test)]
 mod tests;
 
@@ -30,19 +36,19 @@ use crate::filesystem_snapshot::{
     ChangeDetection, FilesystemSnapshotStore, InvalidSnapshotName, SnapshotInfo, SnapshotName,
     SnapshotScope, SnapshotStoreError,
 };
+use crate::sandbox_filesystem::FilesystemVolume;
 use crate::services::agent_filesystem::FilesystemCapture;
 use crate::services::golem_config::{
-    FilesystemSnapshotStoreConfig, FilesystemSnapshotUploadConfig, FilesystemSnapshotsConfig,
+    FilesystemPressureConfig, FilesystemSnapshotStoreConfig, FilesystemSnapshotUploadConfig,
+    FilesystemSnapshotsConfig,
 };
-use async_trait::async_trait;
 use futures::future::BoxFuture;
 use golem_common::model::oplog::FilesystemSnapshotName;
-use std::collections::HashMap;
+use registry::{DeleteTicket, JobTicket, Registry, WaitTicket};
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::Semaphore;
+use tokio::sync::{Semaphore, watch};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
@@ -137,118 +143,106 @@ pub(crate) enum JobDecision {
     Stopped,
 }
 
-/// Writes the confirmation record of a filesystem snapshot.
-#[async_trait]
-pub(crate) trait ConfirmSnapshot: Send + Sync {
-    /// Writes a `SnapshotConfirmed` record with `name` when the status of the worker still holds
-    /// the snapshot record with the name.
-    async fn confirm(&self, name: &FilesystemSnapshotName) -> ConfirmOutcome;
+/// Writes the confirmation record of the snapshot with the name it gets, and gives what it
+/// found. The invocation loop makes it from a weak handle to the worker, so the service never
+/// holds a worker.
+pub(crate) type Confirm =
+    Box<dyn FnOnce(FilesystemSnapshotName) -> BoxFuture<'static, ConfirmOutcome> + Send>;
+
+/// Whether the store holds the snapshot that a start asked for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum StartCheck {
+    /// The store holds the whole snapshot.
+    Stored,
+    /// The store does not hold it, the check was skipped or stopped, or it failed.
+    NotStored,
 }
 
-/// The writer of the confirmation record of one upload. The invocation loop makes it from a weak
-/// handle to the worker, so the service never holds a worker.
-#[derive(Clone)]
-pub(crate) struct SnapshotConfirmer(Arc<dyn ConfirmSnapshot>);
-
-impl SnapshotConfirmer {
-    pub(crate) fn new(confirm: Arc<dyn ConfirmSnapshot>) -> Self {
-        Self(confirm)
-    }
+/// Why a manual update gets no admission.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum UpdateRefusal {
+    /// The admission gave this answer.
+    Skip(SnapshotSkip),
+    /// A terminal interrupt ended the wait for a running upload.
+    Interrupted,
 }
 
-/// The source of the waits of the service. A sleep completes when its clock says the duration
-/// passed.
-pub(crate) trait SnapshotClock: Send + Sync {
-    /// Completes after `duration`.
-    fn sleep(&self, duration: Duration) -> BoxFuture<'static, ()>;
+/// Why a manual-update upload did not save.
+#[derive(Debug)]
+pub(crate) enum UploadNowError {
+    /// A terminal interrupt, `forget_scope` or a shutdown stopped the save.
+    Stopped,
+    /// The save failed, after the retries when the error allows them.
+    Store(SnapshotStoreError),
 }
 
-/// The clock of the runtime.
-pub(crate) struct TokioClock;
-
-impl SnapshotClock for TokioClock {
-    fn sleep(&self, duration: Duration) -> BoxFuture<'static, ()> {
-        Box::pin(tokio::time::sleep(duration))
-    }
-}
-
-/// Tells whether the volume of the agent filesystems has room for a new capture.
-#[async_trait]
-pub(crate) trait VolumeRoom: Send + Sync {
-    /// Gives `true` when the volume has room for a new capture now, and `false` when it has not
-    /// or when its free space cannot be observed.
-    async fn has_room(&self) -> bool;
-}
-
-/// A volume that always has room.
-#[cfg(any(test, feature = "test-utils"))]
-pub(crate) struct UnlimitedRoom;
-
-#[cfg(any(test, feature = "test-utils"))]
-#[async_trait]
-impl VolumeRoom for UnlimitedRoom {
-    async fn has_room(&self) -> bool {
-        true
-    }
-}
-
-/// The room of the volume of the agent filesystems: it has room when its free space reaches the
-/// targets of the pressure configuration. An unmanaged volume always has room.
-pub(crate) struct PressureTargetRoom {
-    volume: crate::sandbox_filesystem::FilesystemVolume,
-    pressure: crate::services::golem_config::FilesystemPressureConfig,
-}
-
-impl PressureTargetRoom {
-    pub(crate) fn new(
-        volume: crate::sandbox_filesystem::FilesystemVolume,
-        pressure: crate::services::golem_config::FilesystemPressureConfig,
-    ) -> Self {
-        Self { volume, pressure }
-    }
-}
-
-#[async_trait]
-impl VolumeRoom for PressureTargetRoom {
-    async fn has_room(&self) -> bool {
-        match crate::sandbox_filesystem::observe_space(&self.volume).await {
-            Ok(crate::sandbox_filesystem::FilesystemSpace::Unlimited) => true,
-            Ok(crate::sandbox_filesystem::FilesystemSpace::Observed {
-                available_bytes,
-                available_filesystem_objects,
-                ..
-            }) => {
-                available_bytes >= self.pressure.target_available_bytes()
-                    && available_filesystem_objects
-                        >= self.pressure.target_available_filesystem_objects()
+impl std::fmt::Display for UploadNowError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Stopped => {
+                formatter.write_str("the upload of the filesystem snapshot was stopped")
             }
-            Err(error) => {
-                tracing::warn!(error = %error, "Failed to observe the free space of the volume");
-                false
+            Self::Store(error) => write!(formatter, "{error}"),
+        }
+    }
+}
+
+/// The volume of the agent filesystems, which tells whether it has room for a new capture.
+pub(crate) enum VolumeRoom {
+    /// The volume has room when its free space reaches the targets of `pressure`. An unmanaged
+    /// volume always has room.
+    Pressure {
+        volume: FilesystemVolume,
+        pressure: FilesystemPressureConfig,
+    },
+    /// The volume always has room.
+    #[cfg(any(test, feature = "test-utils"))]
+    Unlimited,
+}
+
+impl VolumeRoom {
+    async fn has_room(&self) -> bool {
+        match self {
+            Self::Pressure { volume, pressure } => {
+                let space = crate::sandbox_filesystem::observe_space(volume)
+                    .await
+                    .inspect_err(|error| {
+                        tracing::warn!(error = %error, "Failed to observe the free space of the volume")
+                    })
+                    .ok();
+                rules::has_room(space.as_ref(), pressure)
             }
+            #[cfg(any(test, feature = "test-utils"))]
+            Self::Unlimited => true,
         }
     }
 }
 
 /// A tree that a capture copied, which an upload saves and then discards.
-pub(crate) trait CapturedTree: Send + 'static {
+pub(crate) struct CapturedTree {
     /// The directory that the store saves.
-    fn directory(&self) -> &Path;
+    directory: Arc<Path>,
     /// Removes the directory with all that is in it.
-    fn discard(self) -> BoxFuture<'static, ()>;
+    discard: BoxFuture<'static, ()>,
 }
 
-impl CapturedTree for FilesystemCapture {
-    fn directory(&self) -> &Path {
-        FilesystemCapture::directory(self)
+impl CapturedTree {
+    #[cfg(test)]
+    fn new(directory: Arc<Path>, discard: BoxFuture<'static, ()>) -> Self {
+        Self { directory, discard }
     }
+}
 
-    fn discard(self) -> BoxFuture<'static, ()> {
-        Box::pin(async move {
-            if let Err(error) = FilesystemCapture::discard(self).await {
-                tracing::warn!(error = %error, "Failed to discard a filesystem capture");
-            }
-        })
+impl From<FilesystemCapture> for CapturedTree {
+    fn from(capture: FilesystemCapture) -> Self {
+        Self {
+            directory: Arc::from(capture.directory()),
+            discard: Box::pin(async move {
+                if let Err(error) = capture.discard().await {
+                    tracing::warn!(error = %error, "Failed to discard a filesystem capture");
+                }
+            }),
+        }
     }
 }
 
@@ -262,107 +256,27 @@ pub(crate) fn store_name(
 
 /// The filesystem snapshots of the agents of this executor.
 ///
-/// A disabled service answers each admission with [`SnapshotSkip::Disabled`] and each restore
-/// with [`SnapshotsDisabled`].
+/// A disabled service answers each admission with [`SnapshotSkip::Disabled`], each restore with
+/// [`SnapshotsDisabled`] and each start with [`StartCheck::NotStored`].
 pub struct AgentFilesystemSnapshots {
-    enabled: Option<Arc<EnabledSnapshots>>,
+    core: Option<Arc<Core>>,
 }
 
-/// The state of an enabled service.
-struct EnabledSnapshots {
+/// What an enabled service holds.
+struct Core {
     store: Arc<dyn FilesystemSnapshotStore>,
     settings: FilesystemSnapshotUploadConfig,
     /// The slots of the store operations that save or delete.
     uploads: Arc<Semaphore>,
     /// The slots of the restores.
     restores: Arc<Semaphore>,
-    /// The job of each scope that has an admission or an upload, and the scopes whose delete is
-    /// queued or runs.
-    scopes: Arc<Mutex<Scopes>>,
-    next_job: AtomicU64,
-    clock: Arc<dyn SnapshotClock>,
-    room: Arc<dyn VolumeRoom>,
+    registry: Arc<Registry>,
+    room: VolumeRoom,
     cleanup: cleanup::CleanupQueue,
-    /// Cancelled when the executor shuts down.
+    /// Cancelled when the executor shuts down. The stop of each job is a child of it.
     shutdown: CancellationToken,
     /// The upload jobs, so that a shutdown can wait for them.
     jobs: TaskTracker,
-}
-
-/// The jobs of the scopes, and the scopes whose delete is queued or runs.
-#[derive(Default)]
-struct Scopes {
-    jobs: HashMap<SnapshotScope, ScopeJob>,
-    /// The number of queued or running deletes of each scope.
-    deleting: HashMap<SnapshotScope, usize>,
-}
-
-/// Gives the scopes behind `scopes`. No lock is held across an await, so the scopes of a
-/// poisoned lock are used as they are.
-fn scopes_of(scopes: &Mutex<Scopes>) -> MutexGuard<'_, Scopes> {
-    scopes.lock().unwrap_or_else(PoisonError::into_inner)
-}
-
-/// The job of one scope, from its admission to its end.
-#[derive(Clone)]
-struct ScopeJob {
-    id: u64,
-    /// The name of the snapshot of the job.
-    name: FilesystemSnapshotName,
-    /// Cancelled by `forget_scope`. The job stops and sends nothing more; a confirmation that it
-    /// already sent can still be appended.
-    cancel: CancellationToken,
-    /// Cancelled when the job ended.
-    ended: CancellationToken,
-    /// Set while the save of the job holds a slot of the uploads.
-    holds_slot: Arc<std::sync::atomic::AtomicBool>,
-    /// The decision of the job, sent once, before its retention or delete.
-    decided: Arc<tokio::sync::watch::Sender<Option<JobDecision>>>,
-}
-
-impl ScopeJob {
-    /// Records the decision of the job. A later decision does not replace the first one.
-    fn decide(&self, decision: JobDecision) {
-        self.decided.send_if_modified(|current| {
-            let first = current.is_none();
-            if first {
-                *current = Some(decision);
-            }
-            first
-        });
-    }
-}
-
-/// What a start can see of an upload of its agent.
-pub(crate) struct UploadView {
-    /// Whether the save holds a slot of the uploads. A job that waits for a slot is not waited
-    /// for.
-    pub(crate) holds_slot: bool,
-    /// The decision of the job, once it is known.
-    pub(crate) decided: tokio::sync::watch::Receiver<Option<JobDecision>>,
-}
-
-/// The mark of a scope whose delete is queued or runs. Dropping it removes the mark.
-pub(super) struct DeletingMark {
-    scopes: Arc<Mutex<Scopes>>,
-    scope: SnapshotScope,
-}
-
-impl Drop for DeletingMark {
-    fn drop(&mut self) {
-        let mut scopes = scopes_of(&self.scopes);
-        let left = scopes
-            .deleting
-            .get_mut(&self.scope)
-            .map(|count| {
-                *count = count.saturating_sub(1);
-                *count
-            })
-            .unwrap_or(0);
-        if left == 0 {
-            scopes.deleting.remove(&self.scope);
-        }
-    }
 }
 
 impl AgentFilesystemSnapshots {
@@ -375,7 +289,7 @@ impl AgentFilesystemSnapshots {
         config: &FilesystemSnapshotsConfig,
         managed_storage: bool,
         store: impl FnOnce(&FilesystemSnapshotStoreConfig) -> Arc<dyn FilesystemSnapshotStore>,
-        room: Arc<dyn VolumeRoom>,
+        room: VolumeRoom,
         shutdown: CancellationToken,
     ) -> Result<Self, String> {
         match config {
@@ -386,7 +300,6 @@ impl AgentFilesystemSnapshots {
             FilesystemSnapshotsConfig::Managed(config) => Ok(Self::enabled(
                 store(config),
                 config.uploads().clone(),
-                Arc::new(TokioClock),
                 room,
                 shutdown,
             )),
@@ -395,7 +308,7 @@ impl AgentFilesystemSnapshots {
 
     /// Makes a service that keeps no filesystem snapshots.
     fn disabled() -> Self {
-        Self { enabled: None }
+        Self { core: None }
     }
 
     /// Makes an enabled service over `store` without the storage check of [`Self::bind`], so
@@ -404,18 +317,17 @@ impl AgentFilesystemSnapshots {
     pub(crate) fn enabled_without_storage_check(
         store: Arc<dyn FilesystemSnapshotStore>,
         settings: FilesystemSnapshotUploadConfig,
-        room: Arc<dyn VolumeRoom>,
+        room: VolumeRoom,
         shutdown: CancellationToken,
     ) -> Self {
-        Self::enabled(store, settings, Arc::new(TokioClock), room, shutdown)
+        Self::enabled(store, settings, room, shutdown)
     }
 
     /// Makes a service over `store` with `settings`.
     fn enabled(
         store: Arc<dyn FilesystemSnapshotStore>,
         settings: FilesystemSnapshotUploadConfig,
-        clock: Arc<dyn SnapshotClock>,
-        room: Arc<dyn VolumeRoom>,
+        room: VolumeRoom,
         shutdown: CancellationToken,
     ) -> Self {
         let uploads = Arc::new(Semaphore::new(settings.max_concurrent_uploads().get()));
@@ -424,19 +336,16 @@ impl AgentFilesystemSnapshots {
             Arc::clone(&store),
             Arc::clone(&uploads),
             settings.upload_retry().clone(),
-            Arc::clone(&clock),
             shutdown.clone(),
             &jobs,
         );
         Self {
-            enabled: Some(Arc::new(EnabledSnapshots {
+            core: Some(Arc::new(Core {
                 restores: Arc::new(Semaphore::new(settings.max_concurrent_restores().get())),
                 store,
                 settings,
                 uploads,
-                scopes: Arc::default(),
-                next_job: AtomicU64::new(1),
-                clock,
+                registry: Arc::default(),
                 room,
                 cleanup,
                 shutdown,
@@ -447,91 +356,113 @@ impl AgentFilesystemSnapshots {
 
     /// Whether this executor keeps filesystem snapshots.
     pub(crate) fn is_enabled(&self) -> bool {
-        self.enabled.is_some()
+        self.core.is_some()
     }
 
-    /// Gives the upload of the snapshot `name` of `scope` that runs on this executor now.
-    pub(crate) fn upload_of(
-        &self,
-        scope: &SnapshotScope,
-        name: &FilesystemSnapshotName,
-    ) -> Option<UploadView> {
-        let enabled = self.enabled.as_ref()?;
-        let scopes = enabled.jobs_of_scope();
-        let job = scopes.jobs.get(scope).filter(|job| &job.name == name)?;
-        Some(UploadView {
-            holds_slot: job.holds_slot.load(Ordering::Acquire),
-            decided: job.decided.subscribe(),
-        })
-    }
-
-    /// Tells whether the store holds the whole snapshot `name` of `scope`.
-    pub(crate) async fn is_stored(
-        &self,
-        scope: &SnapshotScope,
-        name: &FilesystemSnapshotName,
-    ) -> Result<bool, SnapshotStoreError> {
-        let enabled = self.enabled.as_ref().ok_or(SnapshotStoreError::NotFound)?;
-        let name = store_name(name).map_err(|error| SnapshotStoreError::Storage {
-            retryable: false,
-            source: anyhow::Error::new(error),
-        })?;
-        enabled
-            .store
-            .stat(scope, &name)
-            .await
-            .map(|info| info.is_some())
-    }
-
-    /// How long a capture waits for open file calls, or `None` when the service is disabled.
-    pub(crate) fn capture_wait(&self) -> Option<Duration> {
-        self.enabled
-            .as_ref()
-            .map(|enabled| enabled.settings.capture_wait())
-    }
-
-    /// How long a start waits for an upload of its agent in progress, or `None` when the
-    /// service is disabled.
-    pub(crate) fn confirmation_wait(&self) -> Option<Duration> {
-        self.enabled
-            .as_ref()
-            .map(|enabled| enabled.settings.confirmation_wait())
-    }
-
-    /// How long a start that did not wait for an upload asks the store for its snapshot, or
-    /// `None` when the service is disabled.
-    pub(crate) fn store_check_limit(&self) -> Option<Duration> {
-        self.enabled
-            .as_ref()
-            .map(|enabled| enabled.settings.store_check_limit())
-    }
-
-    /// Asks for an upload of the agent of `scope`, before the guest saves.
+    /// Asks for an upload of a periodic snapshot of the agent of `scope`, before the guest saves.
     ///
-    /// The admission holds a new name of `kind`. While it exists, and while the upload that it
-    /// starts runs, each other admission of the scope gives [`SnapshotSkip::UploadInFlight`]. A
-    /// dropped admission frees the scope and writes nothing durable.
-    pub(crate) async fn admit(
+    /// The admission holds a new name. While it exists, and while the upload that it starts
+    /// runs, each other admission of the scope gives [`SnapshotSkip::UploadInFlight`]. A dropped
+    /// admission frees the scope and writes nothing durable.
+    pub(crate) async fn admit_periodic(
         &self,
         scope: &SnapshotScope,
-        kind: SnapshotKind,
-    ) -> Result<UploadAdmission, SnapshotSkip> {
-        let enabled = self.enabled.as_ref().ok_or(SnapshotSkip::Disabled)?;
-        if !enabled.room.has_room().await {
-            return Err(SnapshotSkip::VolumeUnderPressure);
-        }
-        let name = match kind {
-            SnapshotKind::Periodic => FilesystemSnapshotName::periodic(),
-            SnapshotKind::Update => FilesystemSnapshotName::update(),
+    ) -> Result<Admission, SnapshotSkip> {
+        let core = self.core.as_ref().ok_or(SnapshotSkip::Disabled)?;
+        Core::admit(core, scope, SnapshotKind::Periodic)
+            .await
+            .map_err(|(skip, _)| skip)
+    }
+
+    /// Asks for an upload of a manual-update snapshot of the agent of `scope`. When an upload of
+    /// the scope runs, the call waits once for its end, for at most `confirmation_wait`, and asks
+    /// again. A shutdown ends the wait like its limit does, and a terminal interrupt that
+    /// `interrupt` reports ends it with [`UpdateRefusal::Interrupted`].
+    pub(crate) async fn admit_update(
+        &self,
+        scope: &SnapshotScope,
+        interrupt: watch::Receiver<bool>,
+    ) -> Result<Admission, UpdateRefusal> {
+        let core = self
+            .core
+            .as_ref()
+            .ok_or(UpdateRefusal::Skip(SnapshotSkip::Disabled))?;
+        let (skip, running) = match Core::admit(core, scope, SnapshotKind::Update).await {
+            Ok(admission) => return Ok(admission),
+            Err(refusal) => refusal,
         };
-        let job = enabled.reserve(scope, &name)?;
-        Ok(UploadAdmission {
-            enabled: Arc::clone(enabled),
-            scope: scope.clone(),
-            job: Some(job),
-            name,
-            kind,
-        })
+        let rules::UpdateAdmit::WaitForEnd(id) = rules::update_admission(skip, running) else {
+            return Err(UpdateRefusal::Skip(skip));
+        };
+        tokio::select! {
+            () = registry::job_ended(&core.registry, scope, id) => {}
+            () = tokio::time::sleep(core.settings.confirmation_wait()) => {}
+            () = core.shutdown.cancelled() => {}
+            () = job::raised(interrupt) => return Err(UpdateRefusal::Interrupted),
+        }
+        Core::admit(core, scope, SnapshotKind::Update)
+            .await
+            .map_err(|(skip, _)| UpdateRefusal::Skip(skip))
+    }
+
+    /// Tells whether the store holds the whole snapshot `name` of `scope`, before a start
+    /// confirms it.
+    ///
+    /// When an upload of the name runs on this executor and holds a slot of the uploads, the call
+    /// first waits for its decision, for at most `confirmation_wait`. Then, unless the upload gave
+    /// `Superseded` or a terminal interrupt waits, it asks the store once, for at most what is
+    /// left of `confirmation_wait` after a wait, or at most `store_check_limit` without one. A
+    /// terminal interrupt that `interrupt` reports ends the wait and the check. The call holds no
+    /// slot and no lock while it waits.
+    pub(crate) async fn prepare_start(
+        &self,
+        scope: &SnapshotScope,
+        name: &FilesystemSnapshotName,
+        interrupt: watch::Receiver<bool>,
+    ) -> StartCheck {
+        let Some(core) = &self.core else {
+            return StartCheck::NotStored;
+        };
+        let started = tokio::time::Instant::now();
+        let limit = core.settings.confirmation_wait();
+        let (waited, decision) = match WaitTicket::start_wait(&core.registry, scope, name) {
+            Ok(ticket) => {
+                let decision = tokio::select! {
+                    decision = ticket.decided() => Some(decision),
+                    () = tokio::time::sleep(limit) => None,
+                    () = job::raised(interrupt.clone()) => return StartCheck::NotStored,
+                };
+                (Some(started.elapsed()), decision)
+            }
+            Err(decision) => (None, decision),
+        };
+        let limit = match rules::store_check(
+            decision,
+            *interrupt.borrow(),
+            waited,
+            rules::StoreCheckLimits {
+                confirmation_wait: limit,
+                store_check_limit: core.settings.store_check_limit(),
+            },
+        ) {
+            rules::StoreCheck::Skip => return StartCheck::NotStored,
+            rules::StoreCheck::Stat(limit) => limit,
+        };
+        let Ok(store_name) = store_name(name) else {
+            return StartCheck::NotStored;
+        };
+        tokio::select! {
+            biased;
+            () = job::raised(interrupt) => StartCheck::NotStored,
+            stat = tokio::time::timeout(limit, core.store.stat(scope, &store_name)) => match stat {
+                Ok(Ok(Some(_))) => StartCheck::Stored,
+                Ok(Ok(None)) | Err(_) => StartCheck::NotStored,
+                Ok(Err(error)) => {
+                    tracing::warn!(error = %error, "Failed to check a filesystem snapshot before a start");
+                    StartCheck::NotStored
+                }
+            },
+        }
     }
 
     /// Gives the restore of the filesystem snapshot `name` of `scope`. The restore does its work
@@ -542,12 +473,12 @@ impl AgentFilesystemSnapshots {
         scope: &SnapshotScope,
         name: &FilesystemSnapshotName,
     ) -> Result<StoreRestore, SnapshotsDisabled> {
-        let enabled = self.enabled.as_ref().ok_or(SnapshotsDisabled)?;
+        let core = self.core.as_ref().ok_or(SnapshotsDisabled)?;
         Ok(StoreRestore::new(
-            Arc::clone(&enabled.store),
+            Arc::clone(&core.store),
             scope.clone(),
             name.clone(),
-            Arc::clone(&enabled.restores),
+            Arc::clone(&core.restores),
         ))
     }
 
@@ -556,12 +487,12 @@ impl AgentFilesystemSnapshots {
     /// names that stay.
     #[allow(dead_code)]
     pub(crate) fn forget(&self, scope: &SnapshotScope, names: Box<[FilesystemSnapshotName]>) {
-        if let Some(enabled) = &self.enabled {
-            enabled.cleanup.delete(scope.clone(), names);
+        if let Some(core) = &self.core {
+            core.cleanup.delete(scope.clone(), names);
         }
     }
 
-    /// Deletes the scope in the background, after the job of the scope ended. The call cancels
+    /// Deletes the scope in the background, after the job of the scope ended. The call stops
     /// that job first, so it sends nothing more; a confirmation that it already sent can still be
     /// appended. The call returns at once and cannot fail.
     ///
@@ -569,25 +500,12 @@ impl AgentFilesystemSnapshots {
     /// [`SnapshotSkip::ScopeDeleting`].
     #[allow(dead_code)]
     pub(crate) fn forget_scope(&self, scope: &SnapshotScope) {
-        if let Some(enabled) = &self.enabled {
-            let (job, mark) = {
-                let mut scopes = scopes_of(&enabled.scopes);
-                let job = scopes.jobs.get(scope).cloned();
-                *scopes.deleting.entry(scope.clone()).or_insert(0) += 1;
-                (
-                    job,
-                    DeletingMark {
-                        scopes: Arc::clone(&enabled.scopes),
-                        scope: scope.clone(),
-                    },
-                )
-            };
-            if let Some(job) = &job {
-                job.cancel.cancel();
+        if let Some(core) = &self.core {
+            let (ticket, stop) = DeleteTicket::forget_scope(&core.registry, scope);
+            if let Some(stop) = stop {
+                stop.cancel();
             }
-            enabled
-                .cleanup
-                .delete_scope(scope.clone(), job.map(|job| job.ended), mark);
+            core.cleanup.delete_scope(scope.clone(), ticket);
         }
     }
 
@@ -598,116 +516,76 @@ impl AgentFilesystemSnapshots {
         from: &SnapshotScope,
         to: &SnapshotScope,
     ) -> Result<(), SnapshotStoreError> {
-        match &self.enabled {
-            Some(enabled) => enabled.store.copy_scope(from, to).await,
+        match &self.core {
+            Some(core) => core.store.copy_scope(from, to).await,
             None => Ok(()),
-        }
-    }
-
-    /// Waits until the job of `scope` decided and ended, for at most `confirmation_wait`. A
-    /// manual update calls it when its admission gave [`SnapshotSkip::UploadInFlight`], and then
-    /// asks again. The job holds the scope until it ends, after its retention, so the wait covers
-    /// both.
-    pub(crate) async fn wait_for_upload_of_scope(&self, scope: &SnapshotScope) {
-        let Some(enabled) = &self.enabled else {
-            return;
-        };
-        let Some(job) = enabled.jobs_of_scope().jobs.get(scope).cloned() else {
-            return;
-        };
-        let mut decided = job.decided.subscribe();
-        let decided_and_ended = async {
-            let _ = decided.wait_for(|decision| decision.is_some()).await;
-            job.ended.cancelled().await;
-        };
-        tokio::select! {
-            () = decided_and_ended => {}
-            () = enabled.clock.sleep(enabled.settings.confirmation_wait()) => {}
-            () = enabled.shutdown.cancelled() => {}
         }
     }
 
     /// Stops the jobs and the clean-up queue, and waits for them. Call it once, when the executor
     /// shuts down.
     pub(crate) async fn shut_down(&self) {
-        if let Some(enabled) = &self.enabled {
-            enabled.shutdown.cancel();
-            enabled.jobs.close();
-            enabled.jobs.wait().await;
-            enabled.store.shut_down().await;
+        if let Some(core) = &self.core {
+            core.shutdown.cancel();
+            core.jobs.close();
+            core.jobs.wait().await;
+            core.store.shut_down().await;
         }
     }
 }
 
-impl EnabledSnapshots {
-    /// Gives the jobs of the scopes. No lock is held across an await, so the map of a poisoned
-    /// lock is used as it is.
-    fn jobs_of_scope(&self) -> MutexGuard<'_, Scopes> {
-        scopes_of(&self.scopes)
-    }
-
-    /// Reserves `scope` for a new job with the snapshot `name`. Gives `UploadInFlight` when a job
-    /// of the scope exists, and `ScopeDeleting` when a delete of the scope is queued or runs.
-    fn reserve(
-        &self,
+impl Core {
+    /// Admits a job of `kind` for `scope` with a new name. The error carries the job that runs
+    /// for the scope.
+    async fn admit(
+        core: &Arc<Self>,
         scope: &SnapshotScope,
-        name: &FilesystemSnapshotName,
-    ) -> Result<ScopeJob, SnapshotSkip> {
-        let mut scopes = self.jobs_of_scope();
-        if scopes.deleting.contains_key(scope) {
-            return Err(SnapshotSkip::ScopeDeleting);
-        }
-        if scopes.jobs.contains_key(scope) {
-            return Err(SnapshotSkip::UploadInFlight);
-        }
-        let job = ScopeJob {
-            id: self.next_job.fetch_add(1, Ordering::Relaxed),
-            name: name.clone(),
-            cancel: CancellationToken::new(),
-            ended: CancellationToken::new(),
-            holds_slot: Arc::default(),
-            decided: Arc::new(tokio::sync::watch::channel(None).0),
+        kind: SnapshotKind,
+    ) -> Result<Admission, (SnapshotSkip, Option<rules::JobId>)> {
+        let room = core.room.has_room().await;
+        let name = match kind {
+            SnapshotKind::Periodic => FilesystemSnapshotName::periodic(),
+            SnapshotKind::Update => FilesystemSnapshotName::update(),
         };
-        scopes.jobs.insert(scope.clone(), job.clone());
-        Ok(job)
-    }
-
-    /// Frees `scope` when `job` is its job, and marks the job as decided and ended.
-    fn end(&self, scope: &SnapshotScope, job: &ScopeJob) {
-        let mut scopes = self.jobs_of_scope();
-        if scopes
-            .jobs
-            .get(scope)
-            .is_some_and(|current| current.id == job.id)
-        {
-            scopes.jobs.remove(scope);
-        }
-        drop(scopes);
-        job.decide(JobDecision::Stopped);
-        job.ended.cancel();
+        let ticket = JobTicket::admit(
+            &core.registry,
+            scope,
+            &name,
+            core.shutdown.child_token(),
+            room,
+        )?;
+        Ok(Admission {
+            core: Arc::clone(core),
+            ticket,
+            name,
+            kind,
+        })
     }
 }
 
 /// The permission of one upload, with its name. Only an admission gives a name, and an admission
-/// cannot be cloned, so each name reaches at most one capture.
-pub(crate) struct UploadAdmission {
-    enabled: Arc<EnabledSnapshots>,
-    scope: SnapshotScope,
-    /// The job of the scope. `None` after the admission handed it to an upload.
-    job: Option<ScopeJob>,
+/// cannot be cloned, so each name reaches at most one capture. Dropped, it frees the scope.
+pub(crate) struct Admission {
+    core: Arc<Core>,
+    ticket: JobTicket,
     name: FilesystemSnapshotName,
     kind: SnapshotKind,
 }
 
-impl UploadAdmission {
+impl Admission {
     /// The name that the admission made.
     pub(crate) fn name(&self) -> &FilesystemSnapshotName {
         &self.name
     }
 
-    /// Uploads `capture` in the background, then confirms it with `confirmer`.
+    /// How long the capture of the upload waits for open file calls.
+    pub(crate) fn capture_wait(&self) -> Duration {
+        self.core.settings.capture_wait()
+    }
+
+    /// Uploads `tree` in the background, then confirms it with `confirm`.
     ///
-    /// The job waits for a slot of the uploads, saves with retries, discards the capture, and
+    /// The job waits for a slot of the uploads, saves with retries, discards the tree, and
     /// confirms. On `Confirmed` it applies retention. On `Superseded` it deletes the snapshot and
     /// runs no retention. On `Deferred` it keeps the snapshot and runs no retention, because a
     /// later start can confirm it. When the retries are used up, it confirms nothing.
@@ -715,75 +593,46 @@ impl UploadAdmission {
     /// delete: it then sends nothing more and deletes nothing more. A confirmation that it
     /// already sent can still be appended.
     pub(crate) fn submit(
-        mut self,
-        capture: impl CapturedTree,
+        self,
+        tree: CapturedTree,
         parent: Option<(FilesystemSnapshotName, ChangeDetection)>,
-        confirmer: SnapshotConfirmer,
+        confirm: Confirm,
     ) {
-        let Some(job) = self.job.take() else {
-            return;
-        };
-        let upload = job::Upload {
-            enabled: Arc::clone(&self.enabled),
-            scope: self.scope.clone(),
-            job,
-            name: self.name.clone(),
-            kind: self.kind,
-        };
-        self.enabled
-            .jobs
-            .spawn(upload.run_in_background(capture, parent, confirmer));
+        let jobs = self.core.jobs.clone();
+        jobs.spawn(job::run_job(self, tree, parent, confirm));
     }
 
-    /// Uploads `capture` and waits until the store holds it. A manual update calls this before it
-    /// writes its record. The scope stays reserved until the retention that the call gives runs
-    /// or is dropped. When `stop` completes first, the save stops, the capture is discarded, and
-    /// the call gives an error.
+    /// Uploads `tree` and waits until the store holds it. A manual update calls this before it
+    /// writes its record. The scope stays reserved until the [`SavedUpdate`] is retained or
+    /// dropped. When `stop` reports a terminal interrupt, or `forget_scope` or a shutdown stops
+    /// the upload, the save stops, the tree is discarded, and the call gives
+    /// [`UploadNowError::Stopped`].
     pub(crate) async fn upload_now(
-        mut self,
-        capture: impl CapturedTree,
-        stop: impl std::future::Future<Output = ()> + Send,
-    ) -> Result<UpdateRetention, SnapshotStoreError> {
-        let Some(job) = self.job.take() else {
-            return Err(SnapshotStoreError::NotFound);
-        };
-        let upload = job::Upload {
-            enabled: Arc::clone(&self.enabled),
-            scope: self.scope.clone(),
-            job,
-            name: self.name.clone(),
-            kind: self.kind,
-        };
-        upload
-            .run_now(capture, stop)
-            .await
-            .map(|(info, upload)| UpdateRetention { upload, info })
+        self,
+        tree: CapturedTree,
+        stop: watch::Receiver<bool>,
+    ) -> Result<SavedUpdate, UploadNowError> {
+        job::upload_now(self, tree, stop).await
     }
 }
 
-/// The retention after a manual-update snapshot that the store holds. The loop runs it after the
-/// update record commits. Dropped, it deletes nothing and frees the scope.
-pub(crate) struct UpdateRetention {
-    upload: job::Upload,
+/// A manual-update snapshot that the store holds. The loop retains it after the update record
+/// commits. Dropped, it deletes nothing and frees the scope.
+pub(crate) struct SavedUpdate {
+    core: Arc<Core>,
+    ticket: JobTicket,
+    name: FilesystemSnapshotName,
     info: SnapshotInfo,
 }
 
-impl UpdateRetention {
+impl SavedUpdate {
     /// Applies retention in the background, under a slot of the uploads: it keeps the own
     /// snapshot and the newest older update snapshots, with the rules of periodic retention, and
-    /// it never deletes `baseline`, the snapshot of the last successful manual update, whose
-    /// record a start restores without a fallback. `forget_scope` or a shutdown stops it.
-    pub(crate) fn run(self, baseline: Option<&FilesystemSnapshotName>) {
-        let kept = baseline.and_then(|name| store_name(name).ok());
-        let jobs = self.upload.enabled.jobs.clone();
-        jobs.spawn(self.upload.retain_in_background(self.info, kept));
-    }
-}
-
-impl Drop for UploadAdmission {
-    fn drop(&mut self) {
-        if let Some(job) = self.job.take() {
-            self.enabled.end(&self.scope, &job);
-        }
+    /// it never deletes `kept`, the snapshot of the last successful manual update, whose record a
+    /// start restores without a fallback. `forget_scope` or a shutdown stops it.
+    pub(crate) fn retain(self, kept: Option<&FilesystemSnapshotName>) {
+        let kept = kept.and_then(|name| store_name(name).ok());
+        let jobs = self.core.jobs.clone();
+        jobs.spawn(job::retain_update(self, kept));
     }
 }

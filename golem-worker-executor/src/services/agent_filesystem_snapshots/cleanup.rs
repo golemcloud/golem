@@ -15,7 +15,8 @@
 //! The clean-up queue of `forget` and `forget_scope`. Nothing on it can stop the executor: each
 //! job catches its own error, and a failure after the retries is logged and counted.
 
-use super::{SnapshotClock, job::retrying, store_name};
+use super::registry::DeleteTicket;
+use super::{job::retrying, store_name};
 use crate::filesystem_snapshot::{FilesystemSnapshotStore, SnapshotScope};
 use futures::StreamExt as _;
 use golem_common::model::RetryConfig;
@@ -34,12 +35,11 @@ enum Cleanup {
         scope: SnapshotScope,
         names: Box<[FilesystemSnapshotName]>,
     },
-    /// Deletes a scope, after the job that `after` marks ended. The mark goes away with the
+    /// Deletes a scope, after the job of the scope ended. The ticket goes away with the
     /// clean-up, on each exit.
     DeleteScope {
         scope: SnapshotScope,
-        after: Option<CancellationToken>,
-        mark: super::DeletingMark,
+        ticket: DeleteTicket,
     },
 }
 
@@ -54,7 +54,6 @@ struct Cleaner {
     /// The slots of the store operations that save or delete. Each delete holds one.
     uploads: Arc<Semaphore>,
     retry: RetryConfig,
-    clock: Arc<dyn SnapshotClock>,
 }
 
 impl CleanupQueue {
@@ -63,7 +62,6 @@ impl CleanupQueue {
         store: Arc<dyn FilesystemSnapshotStore>,
         uploads: Arc<Semaphore>,
         retry: RetryConfig,
-        clock: Arc<dyn SnapshotClock>,
         shutdown: CancellationToken,
         jobs: &TaskTracker,
     ) -> Self {
@@ -72,7 +70,6 @@ impl CleanupQueue {
             store,
             uploads,
             retry,
-            clock,
         });
         jobs.spawn(async move {
             let cleanups =
@@ -92,13 +89,8 @@ impl CleanupQueue {
         self.send(Cleanup::Delete { scope, names }, "delete");
     }
 
-    pub(super) fn delete_scope(
-        &self,
-        scope: SnapshotScope,
-        after: Option<CancellationToken>,
-        mark: super::DeletingMark,
-    ) {
-        self.send(Cleanup::DeleteScope { scope, after, mark }, "delete_scope");
+    pub(super) fn delete_scope(&self, scope: SnapshotScope, ticket: DeleteTicket) {
+        self.send(Cleanup::DeleteScope { scope, ticket }, "delete_scope");
     }
 
     fn send(&self, cleanup: Cleanup, operation: &'static str) {
@@ -120,20 +112,10 @@ impl Cleaner {
                     .for_each(|name| self.delete(&scope, name))
                     .await
             }
-            Cleanup::DeleteScope {
-                scope,
-                after,
-                mark: _mark,
-            } => {
-                if let Some(after) = after {
-                    after.cancelled().await;
-                }
+            Cleanup::DeleteScope { scope, ticket } => {
+                ticket.jobs_ended().await;
                 let deleted = self
-                    .with_slot(|| {
-                        retrying(&self.retry, self.clock.as_ref(), || {
-                            self.store.delete_scope(&scope)
-                        })
-                    })
+                    .with_slot(|| retrying(&self.retry, || self.store.delete_scope(&scope)))
                     .await;
                 if let Err(error) = deleted {
                     tracing::warn!(
@@ -151,11 +133,7 @@ impl Cleaner {
             return;
         };
         let deleted = self
-            .with_slot(|| {
-                retrying(&self.retry, self.clock.as_ref(), || {
-                    self.store.delete(scope, &store_name)
-                })
-            })
+            .with_slot(|| retrying(&self.retry, || self.store.delete(scope, &store_name)))
             .await;
         if let Err(error) = deleted {
             tracing::warn!(
