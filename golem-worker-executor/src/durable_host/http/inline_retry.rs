@@ -61,7 +61,7 @@ use wasmtime_wasi::OutputStream;
 use wasmtime_wasi_http::HttpConnectionPool;
 use wasmtime_wasi_http::p2::bindings::http::types as wasi_http_types;
 use wasmtime_wasi_http::p2::body::{
-    HostIncomingBody, HostOutgoingBody, HyperOutgoingBody, StreamContext,
+    FailingStream, HostIncomingBody, HostOutgoingBody, HyperOutgoingBody, StreamContext,
 };
 use wasmtime_wasi_http::p2::default_send_request_with_pool;
 use wasmtime_wasi_http::p2::types::{
@@ -138,6 +138,41 @@ pub enum HttpStreamInlineRetryOutcome {
     Retried,
     NotRetried,
     FallBackToTrap(SemanticTrapRetryOverride),
+}
+
+fn retire_failed_response_body_transport<Ctx: crate::workerctx::WorkerCtx>(
+    ctx: &mut crate::durable_host::DurableWorkerCtx<Ctx>,
+    stream_handle: u32,
+    body_handle: u32,
+) -> Result<(), anyhow::Error> {
+    use wasmtime::component::Resource;
+    use wasmtime_wasi::p2::bindings::io::streams::InputStream as WasiInputStream;
+    use wasmtime_wasi_http::p2::bindings::http::types::IncomingBody as WasiIncomingBody;
+
+    let retired_error = Arc::<str>::from("HTTP response body transport retired for retry");
+    let old_stream = {
+        let stream_entry: &mut wasmtime_wasi::DynInputStream =
+            ctx.table()
+                .get_mut(&Resource::<WasiInputStream>::new_borrow(stream_handle))?;
+        std::mem::replace(
+            stream_entry,
+            Box::new(FailingStream(Arc::clone(&retired_error))),
+        )
+    };
+    drop(old_stream);
+
+    let old_body = {
+        let body_entry: &mut HostIncomingBody = ctx
+            .table()
+            .get_mut(&Resource::<WasiIncomingBody>::new_borrow(body_handle))?;
+        std::mem::replace(
+            body_entry,
+            HostIncomingBody::failing(retired_error.to_string()),
+        )
+    };
+    drop(old_body);
+
+    Ok(())
 }
 
 /// Reasons why an HTTP request is not eligible for transparent inline retry.
@@ -1460,6 +1495,14 @@ pub async fn try_resuming_response_body_inline_retry<Ctx: crate::workerctx::Work
         }
     }
 
+    // The failed stream no longer owns an active Hyper body: a terminal body
+    // error closes HostIncomingBodyStream and destroys that transport. Replace
+    // the stream before its parent body so it cannot return a transport into a
+    // retired body, then drop the parent to release its worker and pool permits
+    // before replacement admission. Resource IDs and table relationships stay
+    // unchanged.
+    retire_failed_response_body_transport(ctx, stream_handle, body_handle)?;
+
     let extra_headers = resume_range_headers(consumed_len);
     // 6. Send the reconstructed request (with interrupt-aware retries)
     let connection_pool = ctx.wasi_http.connection_pool.clone();
@@ -1507,7 +1550,11 @@ pub async fn try_resuming_response_body_inline_retry<Ctx: crate::workerctx::Work
             let skip_len = if status == 206 { 0 } else { consumed_len };
 
             let (_parts, body) = response.resp.into_parts();
-            let new_body = HostIncomingBody::new(body, between_bytes_timeout);
+            let mut new_body = HostIncomingBody::new(body, between_bytes_timeout);
+            if let Some(worker) = response.worker {
+                new_body.retain_worker(worker, response.worker_error_receiver);
+            }
+            new_body.retain_connection_permits(response.connection_permits);
 
             // Swap IncomingBody at body_handle first, then take stream from it
             let body_entry: &mut HostIncomingBody =
