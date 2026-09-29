@@ -85,10 +85,11 @@ impl LowPriority {
         }
     }
 
-    /// Runs the work on the calling thread, at the priority of that thread, inside a new rayon pool
-    /// with the name, and gives its result. So the rayon work of one operation does not wait for the
+    /// Runs the work inside a new rayon pool with the name, on a thread of that pool that the calling
+    /// thread starts, so the work has the priority of the calling thread. The calling thread waits
+    /// for the work and gives its result. So the rayon work of one operation does not wait for the
     /// rayon work of another operation on the global pool. A pool that does not build gives a
-    /// warning, and the work runs without it.
+    /// warning, and the work runs on the calling thread without it.
     pub(super) fn in_own_pool<T: Send>(
         self,
         name: &'static str,
