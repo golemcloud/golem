@@ -441,7 +441,7 @@ pub(crate) struct UpdateRetention {
 
 impl UpdateRetention {
     /// Applies the retention in the background. Call it after the update record commits.
-    pub(crate) fn run(self) {
+    pub(crate) fn retain(self) {
         self.saved.retain(self.kept.as_ref());
     }
 }

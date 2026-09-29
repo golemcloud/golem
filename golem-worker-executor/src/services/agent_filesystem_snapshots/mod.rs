@@ -660,7 +660,24 @@ impl SavedUpdate {
     /// start restores without a fallback. `forget_scope` or a shutdown stops it.
     pub(crate) fn retain(self, kept: Option<&FilesystemSnapshotName>) {
         let kept = kept.and_then(|name| store_name(name).ok());
-        let jobs = self.core.jobs.clone();
-        jobs.spawn(job::retain_update(self, kept));
+        let Self {
+            core,
+            ticket,
+            name,
+            info,
+        } = self;
+        let jobs = core.jobs.clone();
+        jobs.spawn(async move {
+            job::retain(
+                &core,
+                &ticket,
+                &name,
+                SnapshotKind::Update,
+                &info,
+                kept.as_ref(),
+                None,
+            )
+            .await;
+        });
     }
 }

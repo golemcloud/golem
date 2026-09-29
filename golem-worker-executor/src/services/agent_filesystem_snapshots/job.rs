@@ -100,14 +100,13 @@ pub(super) async fn run_job(
         started.elapsed(),
     );
     match rules::follow_up(kind, outcome) {
-        FollowUp::Retain => apply_retention(&core, &ticket, &name, kind, &info, None).await,
+        FollowUp::Retain => retain(&core, &ticket, &name, kind, &info, None, Some(permit)).await,
         FollowUp::DeleteOwn => {
             crate::metrics::filesystem_snapshots::record_dropped_confirmation(outcome.label());
-            delete_own_snapshot(&core, &ticket, &name).await;
+            delete_own(&core, &ticket, &name).await;
         }
         FollowUp::Keep => {}
     }
-    drop(permit);
 }
 
 /// Saves the tree of `admission` and discards it, as [`Admission::upload_now`] says.
@@ -154,33 +153,6 @@ pub(super) async fn upload_now(
         name,
         info,
     })
-}
-
-/// Waits for a slot of the uploads and applies the retention of a saved manual update. `kept` is
-/// a snapshot that the retention never deletes.
-pub(super) async fn retain_update(saved: SavedUpdate, kept: Option<SnapshotName>) {
-    let SavedUpdate {
-        core,
-        ticket,
-        name,
-        info,
-    } = saved;
-    let _slot = tokio::select! {
-        slot = Arc::clone(&core.uploads).acquire_owned() => match slot {
-            Ok(slot) => slot,
-            Err(_) => return,
-        },
-        () = ticket.stop().cancelled() => return,
-    };
-    apply_retention(
-        &core,
-        &ticket,
-        &name,
-        SnapshotKind::Update,
-        &info,
-        kept.as_ref(),
-    )
-    .await;
 }
 
 /// Completes when `stop` reports a terminal interrupt. It never completes when the sender is
@@ -271,16 +243,29 @@ async fn save_once(
 }
 
 /// Keeps the own snapshot and the newest older snapshots of its kind, and deletes the rest of
-/// its kind that are older than it. `info` is the info of the own snapshot. A stop ends it at
-/// once, and a later retention deletes what it left.
-async fn apply_retention(
+/// its kind that are older than it, under the slot of the uploads `slot`. Without a slot it
+/// first waits for one. `info` is the info of the own snapshot, and `kept` a snapshot that it
+/// never deletes. A stop ends it at once, and a later retention deletes what it left.
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn retain(
     core: &Core,
     ticket: &JobTicket,
     name: &FilesystemSnapshotName,
     kind: SnapshotKind,
     info: &SnapshotInfo,
     kept: Option<&SnapshotName>,
+    slot: Option<OwnedSemaphorePermit>,
 ) {
+    let _slot = match slot {
+        Some(slot) => slot,
+        None => tokio::select! {
+            slot = Arc::clone(&core.uploads).acquire_owned() => match slot {
+                Ok(slot) => slot,
+                Err(_) => return,
+            },
+            () = ticket.stop().cancelled() => return,
+        },
+    };
     let scope = ticket.scope();
     let retention = async {
         let Ok(own) = store_name(name) else {
@@ -322,7 +307,7 @@ async fn apply_retention(
 
 /// Deletes the snapshot of the job, which no confirmation record names. A stop ends it at once,
 /// and the snapshot stays until a retention of its kind deletes it.
-async fn delete_own_snapshot(core: &Core, ticket: &JobTicket, name: &FilesystemSnapshotName) {
+async fn delete_own(core: &Core, ticket: &JobTicket, name: &FilesystemSnapshotName) {
     let scope = ticket.scope();
     let delete = async {
         let Ok(name) = store_name(name) else {

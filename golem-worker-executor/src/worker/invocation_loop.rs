@@ -3119,7 +3119,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     Some(Err(_)) => CommandOutcome::BreakInnerLoop(RetryDecision::Immediate),
                     Some(Ok(_)) => {
                         if let Some(retention) = retention {
-                            retention.run();
+                            retention.retain();
                         }
                         CommandOutcome::BreakInnerLoop(RetryDecision::Immediate)
                     }
