@@ -1630,7 +1630,7 @@ async fn single_manual_update() {
         .unwrap();
     assert_eq!(
         successful.pending_update.as_ref().unwrap().admission_index,
-        OplogIndex::from_u64(5)
+        OplogIndex::from_u64(6)
     );
 
     run_test_case(test_case).await;
@@ -1723,7 +1723,7 @@ async fn single_manual_failed_update_during_snapshot() {
         .unwrap();
     assert_eq!(
         failed.pending_update.as_ref().unwrap().admission_index,
-        OplogIndex::from_u64(5)
+        OplogIndex::from_u64(6)
     );
 
     run_test_case(test_case).await;
