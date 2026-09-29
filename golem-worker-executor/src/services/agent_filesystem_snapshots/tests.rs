@@ -1874,3 +1874,39 @@ fn a_stop_of_an_upload_now_ends_the_save_and_discards_the_capture() {
         );
     })
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires the privileged managed XFS test runner"]
+#[test_r::timeout("60s")]
+async fn managed_xfs_a_volume_below_the_pressure_target_admits_no_periodic_upload() {
+    let root = std::env::var_os("GOLEM_MANAGED_XFS_TEST_ROOT")
+        .map(std::path::PathBuf::from)
+        .expect("GOLEM_MANAGED_XFS_TEST_ROOT must name the mounted XFS test root");
+    let storage = crate::services::golem_config::FilesystemStorageConfig {
+        managed_xfs_root_dir: Some(root),
+        ..crate::services::golem_config::FilesystemStorageConfig::default()
+    };
+    let provisioning = crate::sandbox_filesystem::SandboxFilesystemProvisioning::new(
+        storage.deterministic_root_dir.clone(),
+        storage.managed_xfs_root_dir.clone(),
+        storage.cleanup_retry.clone(),
+    )
+    .unwrap();
+    let pressure = FilesystemPressureConfig::new(1, u64::MAX, 1, 2, 1, Duration::ZERO).unwrap();
+    let snapshots = AgentFilesystemSnapshots::enabled(
+        Arc::new(InMemorySnapshotStore::default()) as Arc<dyn FilesystemSnapshotStore>,
+        settings(4, 4, 1),
+        VolumeRoom::Pressure {
+            volume: provisioning.volume().clone(),
+            pressure,
+        },
+        CancellationToken::new(),
+    );
+
+    let admitted = snapshots
+        .admit_periodic(&scope("managed-xfs-pressure"))
+        .await;
+
+    assert_eq!(admitted.err(), Some(SnapshotSkip::VolumeUnderPressure));
+}

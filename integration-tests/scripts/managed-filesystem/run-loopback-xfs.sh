@@ -726,6 +726,11 @@ run_privileged_test \
   services::agent_filesystem::lifecycle::tests::managed_xfs_lifecycle_installs_limits_and_deletes_verified
 
 run_privileged_test \
+  lib \
+  "${lib_test_binary}" \
+  services::agent_filesystem_snapshots::tests::managed_xfs_a_volume_below_the_pressure_target_admits_no_periodic_upload
+
+run_privileged_test \
   integration \
   "${integration_test_binary}" \
   wasi::p2_p3_quota_classification_on_managed_xfs
