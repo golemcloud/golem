@@ -393,7 +393,7 @@ dependencies = [
 
 [[package]]
 name = "golem_filesystem_tools"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "golem-rust",
 ]
