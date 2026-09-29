@@ -18,18 +18,23 @@ use crate::storage::indexed::{
 };
 use async_trait::async_trait;
 use golem_common::model::AgentId;
+use golem_common::model::ShardEpoch;
 use regex::Regex;
 use std::collections::{BTreeMap, BinaryHeap};
 use std::ops::Bound::Included;
+use std::sync::Arc;
 #[cfg(test)]
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 #[derive(Debug)]
 pub struct InMemoryIndexedStorage {
-    data: scc::HashMap<String, BTreeMap<u64, Vec<u8>>>,
+    data: Arc<scc::HashMap<String, BTreeMap<u64, Vec<u8>>>>,
+    /// The writer generation recorded per key. An append that asserts an epoch holds this entry
+    /// while it writes `data`, which is what makes the check and the insert one step.
+    key_epochs: Arc<scc::HashMap<String, ShardEpoch>>,
     #[cfg(test)]
-    read_count: AtomicU64,
+    read_count: Arc<AtomicU64>,
 }
 
 impl Default for InMemoryIndexedStorage {
@@ -41,10 +46,66 @@ impl Default for InMemoryIndexedStorage {
 impl InMemoryIndexedStorage {
     pub fn new() -> Self {
         Self {
-            data: scc::HashMap::new(),
+            data: Arc::new(scc::HashMap::new()),
+            key_epochs: Arc::new(scc::HashMap::new()),
             #[cfg(test)]
-            read_count: AtomicU64::new(0),
+            read_count: Arc::new(AtomicU64::new(0)),
         }
+    }
+
+    /// Refuses unless `record` holds exactly `expected`; an absent record refuses too. The same
+    /// terms as the SQL backends' check.
+    fn check_record(
+        &self,
+        key: &str,
+        expected: ShardEpoch,
+        record: &scc::hash_map::Entry<'_, String, ShardEpoch>,
+    ) -> Result<(), IndexedStorageError> {
+        let stored = match record {
+            scc::hash_map::Entry::Occupied(occupied) => Some(*occupied.get()),
+            scc::hash_map::Entry::Vacant(_) => None,
+        };
+        match stored {
+            Some(epoch) if epoch == expected => Ok(()),
+            actual => Err(IndexedStorageError::Fenced {
+                key: key.to_string(),
+                expected,
+                actual,
+            }),
+        }
+    }
+
+    /// Inserts `pairs` under `composite_key`, all or nothing, after checking `expected_epoch`
+    /// against the key's record. The record's entry is held until the insert is done.
+    async fn append_checked(
+        &self,
+        composite_key: String,
+        key: &str,
+        pairs: &[(u64, Vec<u8>)],
+        expected_epoch: Option<ShardEpoch>,
+        primary_oplog_insert: bool,
+    ) -> Result<(), IndexedStorageError> {
+        let _record = match expected_epoch {
+            None => None,
+            Some(expected) => {
+                let record = self.key_epochs.entry_async(composite_key.clone()).await;
+                self.check_record(key, expected, &record)?;
+                Some(record)
+            }
+        };
+
+        let mut entry = self.data.entry_async(composite_key).await.or_default();
+        if pairs.iter().any(|(id, _)| entry.contains_key(id)) {
+            return Err(if primary_oplog_insert {
+                IndexedStorageError::Conflict("Key already exists".to_string())
+            } else {
+                IndexedStorageError::Other("Key already exists".to_string())
+            });
+        }
+        for (id, value) in pairs {
+            entry.get_mut().insert(*id, value.clone());
+        }
+        Ok(())
     }
 
     #[cfg(test)]
@@ -210,27 +271,113 @@ impl IndexedStorage for InMemoryIndexedStorage {
         key: &str,
         id: u64,
         value: Vec<u8>,
+        expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
         let primary_oplog_insert = matches!(
             &namespace,
             IndexedStorageNamespace::OpLog { .. } | IndexedStorageNamespace::StagedOpLog { .. }
         );
         let composite_key = Self::composite_key(namespace, key);
-        let mut entry = self
-            .data
-            .entry_async(composite_key.clone())
-            .await
-            .or_default();
-        if let std::collections::btree_map::Entry::Vacant(e) = entry.entry(id) {
-            e.insert(value.to_vec());
-            Ok(())
-        } else if primary_oplog_insert {
-            Err(IndexedStorageError::Conflict(
-                "Key already exists".to_string(),
-            ))
-        } else {
-            Err(IndexedStorageError::Other("Key already exists".to_string()))
+        self.append_checked(
+            composite_key,
+            key,
+            &[(id, value)],
+            expected_epoch,
+            primary_oplog_insert,
+        )
+        .await
+    }
+
+    async fn append_many(
+        &self,
+        _svc_name: &'static str,
+        _api_name: &'static str,
+        _entity_name: &'static str,
+        namespace: &IndexedStorageNamespace,
+        key: &str,
+        pairs: Arc<[(u64, bytes::Bytes)]>,
+        expected_epoch: Option<ShardEpoch>,
+    ) -> Result<(), IndexedStorageError> {
+        // Nothing to write is nothing to fence, as on every other backend.
+        if pairs.is_empty() {
+            return Ok(());
         }
+        let primary_oplog_insert = matches!(
+            namespace,
+            IndexedStorageNamespace::OpLog { .. } | IndexedStorageNamespace::StagedOpLog { .. }
+        );
+        let composite_key = Self::composite_key(namespace.clone(), key);
+        let pairs: Vec<(u64, Vec<u8>)> = pairs
+            .iter()
+            .map(|(id, value)| (*id, value.to_vec()))
+            .collect();
+        self.append_checked(
+            composite_key,
+            key,
+            &pairs,
+            expected_epoch,
+            primary_oplog_insert,
+        )
+        .await
+    }
+
+    async fn set_key_epoch(
+        &self,
+        _svc_name: &'static str,
+        _api_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        epoch: ShardEpoch,
+    ) -> Result<(), IndexedStorageError> {
+        let composite_key = Self::composite_key(namespace, key);
+        match self.key_epochs.entry_async(composite_key).await {
+            scc::hash_map::Entry::Vacant(vacant) => {
+                vacant.insert_entry(epoch);
+                Ok(())
+            }
+            scc::hash_map::Entry::Occupied(mut occupied) => {
+                let stored = *occupied.get();
+                if epoch >= stored {
+                    *occupied.get_mut() = epoch;
+                    Ok(())
+                } else {
+                    Err(IndexedStorageError::Fenced {
+                        key: key.to_string(),
+                        expected: epoch,
+                        actual: Some(stored),
+                    })
+                }
+            }
+        }
+    }
+
+    async fn delete_with_epoch(
+        &self,
+        _svc_name: &'static str,
+        _api_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        expected_epoch: Option<ShardEpoch>,
+    ) -> Result<(), IndexedStorageError> {
+        let composite_key = Self::composite_key(namespace, key);
+        // The record's guard first and held across the data removal, in the order an append takes
+        // them, so nobody can record a new generation between the check and the deletes.
+        let record = self.key_epochs.entry_async(composite_key.clone()).await;
+        if let Some(expected) = expected_epoch {
+            // Neither a record nor entries: already gone, most often by an earlier attempt of
+            // this same deletion (see the trait).
+            if matches!(record, scc::hash_map::Entry::Vacant(_))
+                && !self.data.contains_async(&composite_key).await
+            {
+                return Ok(());
+            }
+            self.check_record(key, expected, &record)?;
+        }
+        self.data.remove_async(&composite_key).await;
+        if let scc::hash_map::Entry::Occupied(occupied) = record {
+            let _ = occupied.remove();
+        }
+        Ok(())
     }
 
     async fn move_if_absent(
@@ -474,6 +621,7 @@ mod tests {
                     "stage",
                     id,
                     value.to_vec(),
+                    None,
                 )
                 .await
                 .unwrap();
@@ -549,6 +697,7 @@ mod tests {
                         key,
                         id,
                         value,
+                        None,
                     )
                     .await
                     .unwrap();
@@ -597,6 +746,7 @@ mod tests {
                     stage,
                     1,
                     stage.as_bytes().to_vec(),
+                    None,
                 )
                 .await
                 .unwrap();
@@ -697,6 +847,7 @@ mod tests {
                 "third",
                 1,
                 b"staged".to_vec(),
+                None,
             )
             .await
             .unwrap();
@@ -732,6 +883,7 @@ mod tests {
                         "ordinary-race",
                         1,
                         b"ordinary".to_vec(),
+                        None,
                     )
                     .await
                     .is_ok()
@@ -755,6 +907,7 @@ mod tests {
                 key,
                 1,
                 &100,
+                None,
             )
             .await
             .unwrap();
@@ -822,6 +975,7 @@ mod tests {
             key,
             1,
             &100,
+            None,
         )
         .await
         .unwrap();
@@ -833,6 +987,7 @@ mod tests {
             key,
             2,
             &200,
+            None,
         )
         .await
         .unwrap();
@@ -844,6 +999,7 @@ mod tests {
             key,
             3,
             &300,
+            None,
         )
         .await
         .unwrap();
@@ -855,6 +1011,7 @@ mod tests {
             key,
             4,
             &400,
+            None,
         )
         .await
         .unwrap();
@@ -888,6 +1045,7 @@ mod tests {
             key,
             1,
             &100,
+            None,
         )
         .await
         .unwrap();
@@ -899,6 +1057,7 @@ mod tests {
             key,
             2,
             &200,
+            None,
         )
         .await
         .unwrap();
@@ -910,6 +1069,7 @@ mod tests {
             key,
             3,
             &300,
+            None,
         )
         .await
         .unwrap();
@@ -921,6 +1081,7 @@ mod tests {
             key,
             4,
             &400,
+            None,
         )
         .await
         .unwrap();
@@ -954,6 +1115,7 @@ mod tests {
             key,
             10,
             &100,
+            None,
         )
         .await
         .unwrap();
@@ -965,6 +1127,7 @@ mod tests {
             key,
             20,
             &200,
+            None,
         )
         .await
         .unwrap();
@@ -976,6 +1139,7 @@ mod tests {
             key,
             30,
             &300,
+            None,
         )
         .await
         .unwrap();
@@ -987,6 +1151,7 @@ mod tests {
             key,
             40,
             &400,
+            None,
         )
         .await
         .unwrap();
@@ -1020,6 +1185,7 @@ mod tests {
             key,
             10,
             &100,
+            None,
         )
         .await
         .unwrap();
@@ -1031,6 +1197,7 @@ mod tests {
             key,
             20,
             &200,
+            None,
         )
         .await
         .unwrap();
@@ -1042,6 +1209,7 @@ mod tests {
             key,
             30,
             &300,
+            None,
         )
         .await
         .unwrap();
@@ -1053,6 +1221,7 @@ mod tests {
             key,
             40,
             &400,
+            None,
         )
         .await
         .unwrap();
@@ -1087,6 +1256,7 @@ mod tests {
             key,
             10,
             &100,
+            None,
         )
         .await
         .unwrap();
@@ -1098,6 +1268,7 @@ mod tests {
             key,
             20,
             &200,
+            None,
         )
         .await
         .unwrap();
@@ -1109,6 +1280,7 @@ mod tests {
             key,
             30,
             &300,
+            None,
         )
         .await
         .unwrap();
@@ -1120,6 +1292,7 @@ mod tests {
             key,
             40,
             &400,
+            None,
         )
         .await
         .unwrap();
@@ -1154,6 +1327,7 @@ mod tests {
             key,
             10,
             &100,
+            None,
         )
         .await
         .unwrap();
@@ -1165,6 +1339,7 @@ mod tests {
             key,
             20,
             &200,
+            None,
         )
         .await
         .unwrap();
@@ -1197,6 +1372,7 @@ mod tests {
             key,
             10,
             &100,
+            None,
         )
         .await
         .unwrap();
@@ -1208,6 +1384,7 @@ mod tests {
             key,
             20,
             &200,
+            None,
         )
         .await
         .unwrap();
@@ -1240,6 +1417,7 @@ mod tests {
             key,
             1,
             &100,
+            None,
         )
         .await
         .unwrap();
@@ -1251,6 +1429,7 @@ mod tests {
             key,
             2,
             &200,
+            None,
         )
         .await
         .unwrap();
@@ -1262,6 +1441,7 @@ mod tests {
             key,
             3,
             &300,
+            None,
         )
         .await
         .unwrap();
@@ -1273,6 +1453,7 @@ mod tests {
             key,
             4,
             &400,
+            None,
         )
         .await
         .unwrap();

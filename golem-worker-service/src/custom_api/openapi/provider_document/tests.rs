@@ -11,6 +11,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 
 use super::*;
+use crate::custom_api::openapi::test_support::corpus_case;
 use serde_json::json;
 use test_r::test;
 
@@ -55,6 +56,19 @@ fn validates_openapi_and_schema_objects_offline() {
 
 #[test]
 fn rejects_duplicate_keys_invalid_unicode_numbers_roots_and_trailing_json() {
+    let duplicate = corpus_case("openapi-duplicate-json-key");
+    assert_eq!(
+        parse(
+            duplicate["id"].as_str().unwrap(),
+            duplicate["input"]["raw_document"].as_str().unwrap()
+        )
+        .err()
+        .unwrap()
+        .category,
+        Category::Json,
+        "{}",
+        duplicate["id"]
+    );
     for text in [
         r#"{"openapi":"3.1.0","info":{"title":"x","version":"1"},"paths":{},"x-data":{"a":1,"\u0061":2}}"#,
         r#"{"openapi":"3.1.0","info":{"title":"\ud800","version":"1"},"paths":{}}"#,
@@ -72,6 +86,47 @@ fn rejects_duplicate_keys_invalid_unicode_numbers_roots_and_trailing_json() {
 #[test]
 fn inclusive_container_depth_and_utf8_byte_limit() {
     let base = document().to_string();
+    for (id, valid, category) in [
+        ("openapi-byte-limit-inclusive", true, None),
+        ("openapi-depth-limit", false, Some(Category::Depth)),
+    ] {
+        let case = corpus_case(id);
+        let depth = case["input"]["limit_check"]["depth"].as_u64().unwrap() as usize;
+        let output_bytes = case["input"]["limit_check"]["output_bytes"]
+            .as_u64()
+            .unwrap() as usize;
+        let prefix = format!(
+            "{},\"x-data\":{}\"",
+            &base[..base.len() - 1],
+            "[".repeat(depth - 1)
+        );
+        let suffix = format!("\"{}}}", "]".repeat(depth - 1));
+        let padding = "a".repeat(output_bytes - prefix.len() - suffix.len());
+        let text = format!("{prefix}{padding}{suffix}");
+        assert_eq!(text.len(), output_bytes, "{id}");
+        let result = parse(id, &text);
+        assert_eq!(result.is_ok(), valid, "{id}");
+        if let Some(category) = category {
+            assert_eq!(result.err().unwrap().category, category, "{id}");
+        }
+    }
+
+    let exceeded = corpus_case("openapi-byte-limit-exceeded");
+    let output_bytes = exceeded["input"]["limit_check"]["output_bytes"]
+        .as_u64()
+        .unwrap() as usize;
+    let oversized = format!("{}{}", base, " ".repeat(output_bytes - base.len()));
+    assert_eq!(oversized.len(), output_bytes);
+    assert_eq!(
+        parse(exceeded["id"].as_str().unwrap(), &oversized)
+            .err()
+            .unwrap()
+            .category,
+        Category::Size,
+        "{}",
+        exceeded["id"]
+    );
+
     for (depth, valid) in [(64, true), (65, false)] {
         let text = format!(
             "{},\"x-data\":{}0{}}}",

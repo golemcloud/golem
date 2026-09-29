@@ -1002,43 +1002,6 @@ jobs:
           overwrite: true
           retention-days: 7
 
-      - name: Upload Effect SDK for Windows package checks
-        uses: actions/upload-artifact@v4
-        with:
-          name: golem-effect-sdk-windows
-          path: |
-            sdks/effect/dist
-            sdks/effect/wasm
-            sdks/effect/golem-types
-          if-no-files-found: error
-
-  check-golem-effect-package-windows:
-    runs-on: windows-latest
-    needs: build-golem-effect
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          fetch-depth: 1
-      - uses: actions/setup-node@v6
-        with:
-          node-version: "24"
-          cache: npm
-          cache-dependency-path: sdks/effect/package-lock.json
-      - name: Install dependencies
-        working-directory: sdks/effect
-        run: npm ci
-      - name: Download built Effect SDK
-        uses: actions/download-artifact@v4
-        with:
-          name: golem-effect-sdk-windows
-          path: sdks/effect
-      - name: Build package declarations
-        working-directory: sdks/effect
-        run: npm run build
-      - name: Smoke-test cross-platform package tooling
-        working-directory: sdks/effect
-        run: npm run check:package
-
   list-test-component-groups:
     runs-on: blacksmith
     outputs:

@@ -731,6 +731,7 @@ The v1 code set is frozen:
 | `resource-exhausted` | a frozen protocol or configured account/session resource limit was exceeded |
 | `producer-error` | output producer terminated one stream with an application error |
 | `invocation-failed` | invocation failed after acceptance |
+| `routing-miss` | the agent's shard is moving between executors; `retryable` is `true` and a new attempt reaches its owner |
 | `internal-error` | safe, non-sensitive internal failure |
 
 Handshake failures use the existing public HTTP error envelope. Before

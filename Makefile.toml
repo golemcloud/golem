@@ -606,12 +606,13 @@ args = [
 
 [tasks.worker-executor-tests-misc]
 dependencies = ["wit"]
-description = "Runs untagged, oplog blob archive, and service-specific worker-executor tests"
+description = "Runs untagged, sequential storage, oplog blob archive, and service-specific worker-executor tests"
 env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script_runner = "@duckscript"
 script = '''
 exec --fail-on-error cargo-test-r run --package golem-common --test agent_extraction -- --report-time --nocapture %{JUNIT_OPTS}
 exec --fail-on-error cargo-test-r run --package golem-worker-executor --test integration ":tag:" -- --report-time --nocapture %{JUNIT_OPTS}
+exec --fail-on-error cargo-test-r run --package golem-worker-executor --test integration -- key_value_storage namespace_routed_key_value_storage indexed_storage --report-time --nocapture %{JUNIT_OPTS}
 exec --fail-on-error cargo-test-r run --package golem-worker-executor --test integration oplog_blob_archive -- --report-time --nocapture %{JUNIT_OPTS}
 exec --fail-on-error cargo-test-r run --package golem-worker-executor --test integration ":tag:rdbms_service" -- --flaky-run=5 --report-time --nocapture %{JUNIT_OPTS}
 exec --fail-on-error cargo-test-r run --package golem-worker-executor --test integration ":tag:ignite_service" -- --flaky-run=5 --report-time --nocapture %{JUNIT_OPTS}
@@ -727,6 +728,7 @@ cargo-test-r run --package golem-service-base --test '*' -- --nocapture --report
 cargo-test-r run --package golem-registry-service --test '*' -- --nocapture --report-time $JUNIT_OPTS
 cargo-test-r run --package golem-worker-service --test '*' -- --nocapture --report-time $JUNIT_OPTS
 cargo-test-r run --package golem-shard-manager --test integration -- --nocapture --report-time $JUNIT_OPTS
+cargo-test-r run --package golem-test-framework --test signal_unreaped_child -- --nocapture --report-time $JUNIT_OPTS
 '''
 
 [tasks.integration-tests-group6]

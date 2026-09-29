@@ -875,6 +875,16 @@ where
         }
     };
 
+    // Recording the request body was refused: the send failed because this agent's shard has a
+    // new owner, which traps as the lost shard instead of reaching the guest as a request error.
+    if send_result.is_err()
+        && let Some(fence) = physical.body.recording_fence()
+    {
+        return Err(HttpError::trap(WorkerExecutorError::from(
+            crate::services::oplog::OplogError::Fenced(fence),
+        )));
+    }
+
     match send_result {
         Ok((http_response, io)) => {
             let response_status = http_response.status().as_u16();
@@ -1919,7 +1929,8 @@ mod terminal_tests {
                     timestamp: Timestamp::now_utc(),
                     entity_parent_start_index: None,
                 })
-                .await;
+                .await
+                .unwrap();
             let (recorder, mut events) = cleanup_recorder(oplog.clone(), true, true).await;
             let lifecycle = Arc::new(P3SendSpanLifecycle::new(recorder));
             let entry = opening();
@@ -1930,7 +1941,7 @@ mod terminal_tests {
                 assert!(events.try_recv().is_err());
                 assert_eq!(oplog.entry_count(), 1);
             }
-            let index = oplog.add(entry.clone()).await;
+            let index = oplog.add(entry.clone()).await.unwrap();
             lifecycle.clone().started(index, &entry, false);
             if !abandon_before_start {
                 lifecycle.state.lock().unwrap().abandonment = Some(finished_at);
@@ -1970,11 +1981,12 @@ mod terminal_tests {
                     timestamp: Timestamp::now_utc(),
                     entity_parent_start_index: None,
                 })
-                .await;
+                .await
+                .unwrap();
             let (recorder, mut events) = cleanup_recorder(oplog.clone(), true, true).await;
             let lifecycle = Arc::new(P3SendSpanLifecycle::new(recorder));
             let entry = opening();
-            let index = oplog.add(entry.clone()).await;
+            let index = oplog.add(entry.clone()).await.unwrap();
             lifecycle.clone().started(index, &entry, false);
             lifecycle.closed(&SpanFinished {
                 span_id: lifecycle.started_span().unwrap().span_id,
@@ -1996,7 +2008,8 @@ mod terminal_tests {
                     timestamp: Timestamp::now_utc(),
                     entity_parent_start_index: None,
                 })
-                .await;
+                .await
+                .unwrap();
             let (recorder, mut events) = cleanup_recorder(oplog.clone(), true, persisted).await;
             let lifecycle = Arc::new(P3SendSpanLifecycle::new(recorder));
             let entry = opening();
@@ -2038,7 +2051,8 @@ mod terminal_tests {
                     durable_function_type: DurableFunctionType::WriteRemote,
                     span_started: None,
                 })
-                .await;
+                .await
+                .unwrap();
             oplog
                 .add(OplogEntry::End {
                     timestamp: Timestamp::now_utc(),
@@ -2048,7 +2062,8 @@ mod terminal_tests {
                     span_finished: None,
                     span_attributes: None,
                 })
-                .await;
+                .await
+                .unwrap();
             let delivery = CompletionDelivery::test_live_armed(oplog.clone(), start_index)
                 .await
                 .unwrap();
