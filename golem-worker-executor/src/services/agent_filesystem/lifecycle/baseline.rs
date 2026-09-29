@@ -69,50 +69,29 @@ impl std::error::Error for RestoreError {}
 /// A baseline with this restore seeds the files of `files` and then applies the initial-file rule
 /// from `files` to the declarations of the start, as an update from `files` does. A start from a
 /// manual-update record without a name uses it with the declarations of the source revision, so
-/// the start gives what the update gives in a replay. Each declaration of `files` must be
-/// read-only, because only a read-only file comes from the initial-file cache.
+/// the start gives what the update gives in a replay. [`InitialFilesRestore::of_read_only`] is
+/// the only constructor, so each declaration of `files` is read-only, because only a read-only
+/// file comes from the initial-file cache.
 pub(crate) struct InitialFilesRestore {
     files: Box<[InitialAgentFile]>,
 }
 
 impl InitialFilesRestore {
-    #[cfg(test)]
-    pub(crate) fn new(files: impl IntoIterator<Item = InitialAgentFile>) -> Self {
-        Self {
-            files: files.into_iter().collect(),
-        }
-    }
-
     /// The restore of `files` when they are all read-only. Only a tree of read-only initial files
     /// gives a record without a name. A record without a name and with other declarations comes
     /// from an executor without filesystem snapshots, and its start seeds the initial files of
     /// the target revision, so it gets `None`.
     pub(crate) fn of_read_only(files: Box<[InitialAgentFile]>) -> Option<Self> {
         (!files.is_empty()
-            && files.iter().all(|file| {
-                file.permissions == golem_common::model::component::AgentFilePermissions::ReadOnly
-            }))
+            && files
+                .iter()
+                .all(|file| file.permissions == AgentFilePermissions::ReadOnly))
         .then_some(Self { files })
     }
 }
 
 impl RestoreTree for InitialFilesRestore {
     async fn restore(self, into: &Path) -> Result<(), RestoreError> {
-        let refused = |source: anyhow::Error| RestoreError {
-            retryable: false,
-            source,
-        };
-        if let Some(file) = self
-            .files
-            .iter()
-            .find(|file| file.permissions != AgentFilePermissions::ReadOnly)
-        {
-            return Err(refused(anyhow::anyhow!(
-                "the initial file {} is not read-only, so it has no content in the initial-file \
-                 cache",
-                file.path
-            )));
-        }
         let paths = self
             .files
             .iter()
@@ -130,8 +109,10 @@ impl RestoreTree for InitialFilesRestore {
             left_out: paths.into_iter().collect(),
             link_groups: Box::new([]),
         };
-        let bytes = serde_json::to_vec(&record)
-            .map_err(|error| refused(anyhow::Error::new(error).context("encode the record")))?;
+        let bytes = serde_json::to_vec(&record).map_err(|error| RestoreError {
+            retryable: false,
+            source: anyhow::Error::new(error).context("encode the record"),
+        })?;
         futures::stream::iter(std::iter::once(tree.clone()).chain(directories))
             .map(Ok)
             .try_for_each(|directory| async move { tokio::fs::create_dir_all(directory).await })

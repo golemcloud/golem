@@ -2777,7 +2777,7 @@ async fn compare_start_from_initial_files(
                 .start(
                     &manual_agent,
                     &declared,
-                    Some(InitialFilesRestore::new(source)),
+                    InitialFilesRestore::of_read_only(source.into_boxed_slice()),
                 )
                 .await,
         ) {
