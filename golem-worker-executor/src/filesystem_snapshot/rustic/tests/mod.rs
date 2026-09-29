@@ -972,7 +972,7 @@ fn seconds(span: rustic_core::jiff::Span) -> f64 {
 }
 
 #[test]
-fn the_save_and_prune_settings_with_the_values_of_rustic_give_the_options_of_rustic() {
+fn the_off_side_of_each_save_and_prune_setting_goes_into_its_rustic_option() {
     let backup = backup_options(&SaveSettings {
         threads: None,
         detection: ChangeDetection::Ctime,
@@ -982,7 +982,6 @@ fn the_save_and_prune_settings_with_the_values_of_rustic_give_the_options_of_rus
         keep_delete: Duration::from_secs(23 * 3600),
     })
     .unwrap();
-    let rustic_prune = rustic_core::PruneOptions::default();
 
     assert_eq!(
         (
@@ -991,16 +990,8 @@ fn the_save_and_prune_settings_with_the_values_of_rustic_give_the_options_of_rus
             backup.parent_opts.ignore_inode,
             prune.fast_repack,
             seconds(prune.keep_delete),
-            format!("{:?}", (prune.max_unused, prune.max_repack)),
         ),
-        (
-            None,
-            false,
-            false,
-            false,
-            seconds(rustic_prune.keep_delete),
-            format!("{:?}", (rustic_prune.max_unused, rustic_prune.max_repack)),
-        )
+        (None, false, false, false, 82_800.0)
     );
 }
 

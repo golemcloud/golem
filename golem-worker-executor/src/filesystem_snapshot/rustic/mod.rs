@@ -80,12 +80,11 @@ impl Debug for RepositoryKey {
 }
 
 /// How a save finds the files that did not change since its parent.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ChangeDetection {
     /// A file is unchanged when its type, size, modification time and change time equal those in
-    /// the parent. This is the default of rustic. A copy of a tree gives each file a new change
-    /// time, so a save of a copy reads every file.
-    #[default]
+    /// the parent. A copy of a tree gives each file a new change time, so a save of a copy reads
+    /// every file.
     Ctime,
     /// A file is unchanged when its type, size and modification time equal those in the parent.
     /// A save does not see a change that keeps the size and gives the file its old modification
@@ -228,8 +227,9 @@ const CHUNKER: Chunker = Chunker::Rabin;
 /// The zstd level of a new repository, which compresses each blob.
 const ZSTD_LEVEL: i32 = 3;
 
-/// Whether a save into a new repository decrypts and decompresses each blob and each file again
-/// after it encrypts them, so data that does not read back gives an error before it is written.
+/// Whether each write into a repository made with these options decrypts and decompresses each blob
+/// and each file again after it encrypts them, so data that does not read back gives an error
+/// before it is written.
 const EXTRA_VERIFY: bool = true;
 
 /// The target of unused data after a prune: while the unused data that would stay is 5% or more of
