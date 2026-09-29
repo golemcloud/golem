@@ -196,6 +196,15 @@ a handler is not operation cancellation (`tool/operation/mod.rs`). The entity `E
 completion, not full descendant settlement. A forward-only parent may record its `End` first to
 release nested filesystem work; its resources and admitted children remain retained.
 
+The selected failure's cleanup runs in an owner-retained task, not a Store-spawned task.
+Destroying a healthy ancestor Store may drop its result observer but cannot drop the global
+settlement wait or primary wakeup. Replay-generation reset and owner retirement join the retained
+result. Ordinary cleanup errors still wait for the other operations before waking the primary;
+they prevent generation reuse without replacing the selected trap. A cleanup panic retains a
+failed join but does not authorize primary completion. Wakeups use the original execution's
+channel, and host waits subscribe before checking the settled-failure latch so a late subscriber
+cannot miss completion. None of this invents entity terminals or changes oplog recovery.
+
 ### Native bodies
 
 Native tools use the same owner-oplog entity boundary with a retained worker context instead of
