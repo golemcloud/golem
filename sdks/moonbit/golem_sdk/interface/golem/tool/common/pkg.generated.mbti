@@ -231,6 +231,7 @@ pub(all) struct TailPositional {
 
 pub(all) struct Tool {
   version : String
+  requires_filesystem : Bool
   commands : CommandTree
   schema : @types.SchemaGraph
 } derive(Eq, @debug.Debug)

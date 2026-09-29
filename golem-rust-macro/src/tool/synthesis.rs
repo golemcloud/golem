@@ -21,20 +21,28 @@ use quote::quote;
 
 /// Emits a `golem_rust::agentic::Doc` value from a [`DocIr`].
 pub fn doc_tokens(doc: &DocIr) -> TokenStream {
+    doc_tokens_with_namespace(doc, quote! { golem_rust::agentic })
+}
+
+pub fn wire_doc_tokens(doc: &DocIr) -> TokenStream {
+    doc_tokens_with_namespace(doc, quote! { golem_rust::schema::tool::wit::wire })
+}
+
+fn doc_tokens_with_namespace(doc: &DocIr, namespace: TokenStream) -> TokenStream {
     let summary = &doc.summary;
     let description = &doc.description;
     let examples = doc.examples.iter().map(|ex| {
         let title = &ex.title;
         let body = &ex.body;
         quote! {
-            golem_rust::agentic::Example {
+            #namespace::Example {
                 title: #title.to_string(),
                 body: #body.to_string(),
             }
         }
     });
     quote! {
-        golem_rust::agentic::Doc {
+        #namespace::Doc {
             summary: #summary.to_string(),
             description: #description.to_string(),
             examples: vec![ #(#examples),* ],

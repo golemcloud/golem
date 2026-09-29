@@ -113,6 +113,7 @@ fn sample_tool() -> @toolCommon.Tool raise {
   let string = string_graph()
   let def : ToolDef = {
     version: "1.0.0",
+    requires_filesystem: true,
     commands: [
       {
         name: "grep",
@@ -194,6 +195,11 @@ fn[T] unwrap_tool_result(result : Result[T, ToolBuildError]) -> T {
 }
 
 ///|
+test "built descriptor preserves filesystem requirement" {
+  assert_true(sample_tool().requires_filesystem)
+}
+
+///|
 test "subtree-only tool cannot be invoked as a top-level tool" {
   let def = canonical_test_def()
   register_subtool_def(def)
@@ -220,6 +226,7 @@ test "forwarding matches short forms in their separate namespace" {
   }
   let child : ToolDef = {
     version: "1",
+    requires_filesystem: false,
     commands: [
       {
         name: "short-forward-child",
@@ -243,6 +250,7 @@ test "forwarding matches short forms in their separate namespace" {
   }
   let parent : ToolDef = {
     version: "1",
+    requires_filesystem: false,
     commands: [
       {
         name: "short-forward-parent",
@@ -300,6 +308,7 @@ test "forwarding keeps authored aliases separate from short forms" {
   }
   let def : ToolDef = {
     version: "1",
+    requires_filesystem: false,
     commands: [
       {
         name: "root",
@@ -373,6 +382,7 @@ test "forwarding prefers an exact name over an unrelated short form" {
   }
   let source : ToolDef = {
     version: "1",
+    requires_filesystem: false,
     commands: [
       {
         name: "source",
@@ -396,6 +406,7 @@ test "forwarding prefers an exact name over an unrelated short form" {
   }
   let target : ToolDef = {
     version: "1",
+    requires_filesystem: false,
     commands: [
       {
         name: "target",
@@ -444,6 +455,7 @@ test "grafting rejects child short collision with strict ancestor" {
   }
   let child : ToolDef = {
     version: "1",
+    requires_filesystem: false,
     commands: [
       {
         name: "child",
@@ -457,6 +469,7 @@ test "grafting rejects child short collision with strict ancestor" {
   }
   let parent : ToolDef = {
     version: "1",
+    requires_filesystem: false,
     commands: [
       {
         name: "parent",
@@ -503,6 +516,7 @@ test "grafting rejects distinct parent and child globals sharing only a short fo
   }
   let parent : ToolDef = {
     version: "1",
+    requires_filesystem: false,
     commands: [
       {
         name: "parent",
@@ -516,6 +530,7 @@ test "grafting rejects distinct parent and child globals sharing only a short fo
   }
   let child : ToolDef = {
     version: "1",
+    requires_filesystem: false,
     commands: [
       {
         name: "child",
@@ -562,6 +577,7 @@ test "grafting rejects a child global matching two inherited identities" {
   }
   let parent : ToolDef = {
     version: "1",
+    requires_filesystem: false,
     commands: [
       {
         name: "parent",
@@ -575,6 +591,7 @@ test "grafting rejects a child global matching two inherited identities" {
   }
   let child : ToolDef = {
     version: "1",
+    requires_filesystem: false,
     commands: [
       {
         name: "child",
@@ -625,6 +642,7 @@ test "deprojected child global does not consume a descendant local input" {
   }
   let child_raw : ToolDef = {
     version: "1",
+    requires_filesystem: false,
     commands: [
       {
         name: "deproject-child",
@@ -670,6 +688,7 @@ test "deprojected child global does not consume a descendant local input" {
   let child = child_raw.normalize_inherited_globals()
   let parent_base : ToolDef = {
     version: "1",
+    requires_filesystem: false,
     commands: [
       {
         name: "deproject-parent",
@@ -737,6 +756,7 @@ test "bug finder forwarding prefers surviving descendant over ancestor alias" {
   }
   let child_raw : ToolDef = {
     version: "1",
+    requires_filesystem: false,
     commands: [
       {
         name: "ranked-forward-child",
@@ -775,6 +795,7 @@ test "bug finder forwarding prefers surviving descendant over ancestor alias" {
   )
   let parent_base : ToolDef = {
     version: "1",
+    requires_filesystem: false,
     commands: [
       {
         name: "ranked-forward-parent",
@@ -851,6 +872,7 @@ test "reverse-alias deprojection retains the surviving canonical value" {
   }
   let raw : ToolDef = {
     version: "1",
+    requires_filesystem: false,
     commands: [
       {
         name: "reverse-alias",
@@ -913,6 +935,7 @@ test "reverse-alias deprojection retains the surviving canonical value" {
 test "panic top-level registration rejects an existing private subtool name" {
   let def : ToolDef = {
     version: "1",
+    requires_filesystem: false,
     commands: [
       {
         name: "registry-collision",
@@ -1093,6 +1116,7 @@ test "normalization rejects a local field overlapping two inherited globals" {
   }
   let def : ToolDef = {
     version: "1",
+    requires_filesystem: false,
     commands: [
       {
         name: "root",
@@ -1156,6 +1180,7 @@ test "normalization rejects distinct options sharing an inherited short form" {
   }
   let def : ToolDef = {
     version: "1",
+    requires_filesystem: false,
     commands: [
       {
         name: "root",
@@ -1208,6 +1233,7 @@ test "normalization resolves value-is literals against inherited globals" {
   }
   let child_raw : ToolDef = {
     version: "1",
+    requires_filesystem: false,
     commands: [
       {
         name: "constraint-child",
@@ -1246,6 +1272,7 @@ test "normalization resolves value-is literals against inherited globals" {
   }
   let parent_raw : ToolDef = {
     version: "1",
+    requires_filesystem: false,
     commands: [
       {
         name: "constraint-parent",
@@ -1288,6 +1315,7 @@ test "normalization does not resolve value-is literals by short form" {
   }
   let def : ToolDef = {
     version: "1",
+    requires_filesystem: false,
     commands: [
       {
         name: "root",
@@ -1369,6 +1397,7 @@ fn canonical_test_def() -> ToolDef raise {
   }
   {
     version: "1",
+    requires_filesystem: false,
     commands: [
       {
         name: "root",
@@ -1727,6 +1756,7 @@ test "text-refined string canonical input round-trips through typed values" {
   let refined = refine_text(string_graph(), Some("^[a-z]+$"), None, None)
   let def : ToolDef = {
     version: "1",
+    requires_filesystem: false,
     commands: [
       {
         name: "echo",
@@ -1780,6 +1810,7 @@ test "text-refined string canonical input round-trips through typed values" {
 test "optional canonical fields use option wire schemas" {
   let def : ToolDef = {
     version: "1",
+    requires_filesystem: false,
     commands: [
       {
         name: "optional",

@@ -30,7 +30,8 @@ import scala.collection.immutable.SortedSet
  */
 final case class ExtendedToolType(
   version: String,
-  commands: Vector[ExtendedCommandNode]
+  commands: Vector[ExtendedCommandNode],
+  requiresFilesystem: Boolean = false
 ) {
 
   /** The tool's identity: its root command name. */

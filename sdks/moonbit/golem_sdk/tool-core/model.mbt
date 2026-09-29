@@ -18,6 +18,7 @@ pub suberror ToolBuildError {
 ///|
 pub(all) struct ToolDef {
   version : String
+  requires_filesystem : Bool
   commands : Array[CommandNodeDef]
 }
 
@@ -247,6 +248,7 @@ pub fn ToolDef::to_tool(
   }
   {
     version: self.version,
+    requires_filesystem: self.requires_filesystem,
     commands: @toolCommon.CommandTree::{ nodes, },
     schema,
   }

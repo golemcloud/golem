@@ -420,6 +420,11 @@ function walkTaggedVariant(members: Ast[], reg: RecursionRegistry): SchemaCodec 
 
   return {
     graph: { defs, root: t.variant(variantCases) },
+    concrete: {
+      tag: 'variant',
+      sourceTag: '_tag',
+      cases: cases.map((entry) => ({ codec: entry.payload, value: entry.tag })),
+    },
     toValue: (value) => {
       const obj = value as Record<string, unknown> & { _tag: string };
       const i = tagToIdx.get(obj._tag);

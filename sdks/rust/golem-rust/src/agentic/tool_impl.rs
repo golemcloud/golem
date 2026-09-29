@@ -15,8 +15,6 @@
 #[cfg(feature = "export_golem_agentic")]
 use crate::agentic::InputStream;
 #[cfg(feature = "export_golem_agentic")]
-use crate::agentic::agent_impl::Component;
-#[cfg(feature = "export_golem_agentic")]
 use crate::agentic::tool_registry::{get_all_tools, get_tool_by_name, get_tool_invoker_by_name};
 #[cfg(feature = "export_golem_agentic")]
 use crate::golem_agentic::exports::golem::tool::guest::{
@@ -89,7 +87,26 @@ impl OutputStream {
 }
 
 #[cfg(feature = "export_golem_agentic")]
-impl Guest for Component {
+#[doc(hidden)]
+pub fn install_tool_exports() {
+    let _ = super::exports::TOOL.set(super::exports::ToolHooks {
+        discover: ToolRuntime::discover_tools,
+        get: ToolRuntime::get_tool,
+        invoke: |name, path, input, stdin, stdout, principal| {
+            Box::pin(ToolRuntime::invoke(
+                name, path, input, stdin, stdout, principal,
+            ))
+        },
+    });
+    #[cfg(target_arch = "wasm32")]
+    super::exports::raw::tool_exports::install::<ToolRuntime>();
+}
+
+#[cfg(feature = "export_golem_agentic")]
+struct ToolRuntime;
+
+#[cfg(feature = "export_golem_agentic")]
+impl Guest for ToolRuntime {
     fn discover_tools() -> Result<Vec<Tool>, ToolError> {
         Ok(get_all_tools())
     }

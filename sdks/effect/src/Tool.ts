@@ -9,15 +9,12 @@ import { AbortableStreamIterable } from "./internal/abortableStreamIterable.js"
 import { ToolClient } from "./host/ToolClient.js"
 import {
   type BodyModel,
-  canonicalInputDefaults,
   canonicalInputFields,
   type CommandModel,
   type ToolDefinition,
   registerToolClientFactory,
 } from "./internal/tool/model.js"
-import { schemaShapesMatch } from "./internal/schema-model/model.js"
-import { schemaGraphFromWit } from "./internal/schema-model/wit.js"
-import { compile } from "./WitCodec.js"
+import { compile, type CompiledWitCodec } from "./WitCodec.js"
 
 export { ToolClient } from "./host/ToolClient.js"
 
@@ -176,6 +173,48 @@ export function client<D extends ToolDefinition<any, any>>(
   definition: D,
   options: ClientOptions = {},
 ): Client<D, ToolClient> {
+  const commands: CompiledToolCommand[] = []
+  const collect = (model: CommandModel, path: string[]) => {
+    if (model.body) {
+      const fields = canonicalInputFields(definition, path)!
+      commands.push({
+        path,
+        fields: Object.keys(fields),
+        stdout: !!model.body.stdout,
+        input: compile(Schema.Struct(fields)),
+        output: model.body.output ? compile(model.body.output) : undefined,
+        errors: model.body.errors.map((entry) => ({
+          name: entry.name,
+          codec: compile(entry.schema),
+        })),
+      })
+    }
+    for (const child of Object.values(model.children)) collect(child, [...path, child.name])
+  }
+  collect(definition.model, [])
+  return clientCompiled(definition.name, commands, options)
+}
+
+type ClientWireCodec = Pick<CompiledWitCodec<any>, "schemaGraph" | "encodeAsync" | "decode"> & {
+  readonly decodeTyped?: (value: Common.TypedSchemaValue) => Effect.Effect<any, unknown, any>
+}
+
+/** @internal Concrete command codecs supplied by the component compiler. */
+export interface CompiledToolCommand {
+  readonly path: readonly string[]
+  readonly fields: readonly string[]
+  readonly stdout: boolean
+  readonly input: Effect.Effect<ClientWireCodec, unknown, any>
+  readonly output?: Effect.Effect<ClientWireCodec, unknown, any>
+  readonly errors: readonly { name: string; codec: Effect.Effect<ClientWireCodec, unknown, any> }[]
+}
+
+/** @internal Shared transport for generated and dynamically compiled tool clients. */
+export function clientCompiled(
+  name: string,
+  commands: readonly CompiledToolCommand[],
+  options: ClientOptions = {},
+): any {
   const start: (
     tool: string,
     path: readonly string[],
@@ -184,30 +223,18 @@ export function client<D extends ToolDefinition<any, any>>(
     stdout: boolean,
   ) => Effect.Effect<TransportInvocation, unknown, ToolClient | Scope.Scope> =
     options.transport?.start ?? liveToolStart
-  const call = (
-    model: CommandModel,
-    path: readonly string[],
-    input: Record<string, unknown>,
-    streams?: Streams,
-  ) =>
+  const call = (command: CompiledToolCommand, input: Record<string, unknown>, streams?: Streams) =>
     Effect.scoped(
       Effect.gen(function* () {
-        if (!model.body) return yield* Effect.fail(new ToolClientError("input", "missing body"))
-        const fields = canonicalInputFields(definition, path)
-        const defaults = canonicalInputDefaults(definition, path)
-        if (!fields) return yield* Effect.fail(new ToolClientError("input", "missing command"))
-        const codec = yield* compile(Schema.Struct(fields)).pipe(
+        const codec = yield* command.input.pipe(
           Effect.mapError((cause) => new ToolClientError("input", cause)),
         )
-        const canonicalInput = {
-          ...defaults,
-          ...Object.fromEntries(
-            Object.keys(fields).flatMap((name) => {
-              const inputName = name.replace(/-([a-z0-9])/g, (_, c: string) => c.toUpperCase())
-              return Object.hasOwn(input, inputName) ? [[name, input[inputName]]] : []
-            }),
-          ),
-        }
+        const canonicalInput = Object.fromEntries(
+          command.fields.flatMap((name) => {
+            const inputName = name.replace(/-([a-z0-9])/g, (_, c: string) => c.toUpperCase())
+            return Object.hasOwn(input, inputName) ? [[name, input[inputName]]] : []
+          }),
+        )
         const value = yield* codec
           .encodeAsync(canonicalInput)
           .pipe(Effect.mapError((cause) => new ToolClientError("input", cause)))
@@ -216,11 +243,11 @@ export function client<D extends ToolDefinition<any, any>>(
           : undefined
         if (stdin) yield* Effect.addFinalizer(() => Effect.promise(() => stdin.close()))
         const started = yield* start(
-          options.lookupName ?? definition.name,
-          path,
+          options.lookupName ?? name,
+          command.path,
           { graph: codec.schemaGraph, value },
           stdin,
-          !!model.body.stdout,
+          command.stdout,
         ).pipe(Effect.mapError((cause) => new ToolClientError("invoke", cause)))
         yield* Effect.addFinalizer(() => started.cancel)
         const stdoutIterator = started.stdout?.[Symbol.asyncIterator]()
@@ -247,9 +274,7 @@ export function client<D extends ToolDefinition<any, any>>(
             (cause: unknown) => {
               const toolError = remoteToolError(cause)
               if (toolError?.tag === "custom-error") {
-                const declared = model.body!.errors.find(
-                  (entry) => entry.name === toolError.val.name,
-                )
+                const declared = command.errors.find((entry) => entry.name === toolError.val.name)
                 if (!declared)
                   return Effect.fail(
                     new ToolClientError("declared-error", {
@@ -259,19 +284,24 @@ export function client<D extends ToolDefinition<any, any>>(
                     }),
                   )
                 return Effect.gen(function* () {
-                  const codec = yield* compile(declared.schema).pipe(
+                  const codec = yield* declared.codec.pipe(
                     Effect.mapError((error) => new ToolClientError("declared-error", error)),
                   )
-                  if (!sameWireGraph(codec.schemaGraph, toolError.val.payload.graph))
+                  if (
+                    !codec.decodeTyped &&
+                    !sameWireGraph(codec.schemaGraph, toolError.val.payload.graph)
+                  )
                     return yield* Effect.fail(
                       new ToolClientError(
                         "declared-error",
                         `custom error '${declared.name}' schema does not match`,
                       ),
                     )
-                  const value = yield* codec
-                    .decode(toolError.val.payload.value)
-                    .pipe(Effect.mapError((error) => new ToolClientError("declared-error", error)))
+                  const value = yield* (
+                    codec.decodeTyped
+                      ? codec.decodeTyped(toolError.val.payload)
+                      : codec.decode(toolError.val.payload.value)
+                  ).pipe(Effect.mapError((error) => new ToolClientError("declared-error", error)))
                   return yield* Effect.fail({
                     _tag: "ToolFailure",
                     name: declared.name,
@@ -285,20 +315,19 @@ export function client<D extends ToolDefinition<any, any>>(
         )
         const decodedResult = invocationResult.pipe(
           Effect.flatMap((result) => {
-            if (!model.body!.output)
+            if (!command.output)
               return result.result === undefined
                 ? Effect.succeed(undefined)
                 : Effect.fail(new ToolClientError("result", "unexpected remote result"))
             if (!result.result) return Effect.fail(new ToolClientError("result", "missing result"))
-            return compile(model.body!.output).pipe(
+            return command.output.pipe(
               Effect.mapError((cause) => new ToolClientError("result", cause)),
-              Effect.flatMap((output) => {
-                if (!sameWireGraph(output.schemaGraph, result.result!.graph))
-                  return Effect.fail(new ToolClientError("result", "result schema does not match"))
-                return output
-                  .decode(result.result!.value)
-                  .pipe(Effect.mapError((cause) => new ToolClientError("result", cause)))
-              }),
+              Effect.flatMap((output) =>
+                (output.decodeTyped
+                  ? output.decodeTyped(result.result!)
+                  : output.decode(result.result!.value)
+                ).pipe(Effect.mapError((cause) => new ToolClientError("result", cause))),
+              ),
             )
           }),
         )
@@ -309,9 +338,7 @@ export function client<D extends ToolDefinition<any, any>>(
         )
         const [consumeExit, resultExit] = yield* Effect.all(
           [Effect.exit(normalizedConsume), Effect.exit(decodedResult)] as const,
-          {
-            concurrency: "unbounded",
-          },
+          { concurrency: "unbounded" },
         )
         if (Exit.isFailure(resultExit)) return yield* Effect.failCause(resultExit.cause)
         if (Exit.isFailure(consumeExit)) return yield* Effect.failCause(consumeExit.cause)
@@ -319,19 +346,22 @@ export function client<D extends ToolDefinition<any, any>>(
       }),
     )
 
-  const build = (model: CommandModel, path: readonly string[]): any => {
-    const node: any = model.body
-      ? (input: Record<string, unknown>, streams?: Streams) => call(model, path, input, streams)
-      : {}
-    for (const child of Object.values(model.children)) {
-      node[child.name.replace(/-([a-z0-9])/g, (_, c: string) => c.toUpperCase())] = build(child, [
-        ...path,
-        child.name,
-      ])
+  const nodes = new Map<string, any>()
+  for (const command of commands)
+    nodes.set(command.path.join("/"), (input: Record<string, unknown>, streams?: Streams) =>
+      call(command, input, streams),
+    )
+  if (!nodes.has("")) nodes.set("", {})
+  for (const command of commands) {
+    for (let i = 0; i < command.path.length; i++) {
+      const parent = command.path.slice(0, i).join("/")
+      const path = command.path.slice(0, i + 1).join("/")
+      if (!nodes.has(path)) nodes.set(path, {})
+      const name = command.path[i]!.replace(/-([a-z0-9])/g, (_, c: string) => c.toUpperCase())
+      nodes.get(parent)[name] = nodes.get(path)
     }
-    return node
   }
-  return build(definition.model, [])
+  return nodes.get("")
 }
 
 registerToolClientFactory(client)
@@ -371,10 +401,6 @@ const remoteToolError = (value: unknown): Common.ToolError | undefined => {
   if (tagged.tag !== "remote-tool-error") return undefined
   return isToolError(tagged.val) ? tagged.val : undefined
 }
-const sameWireGraph = (left: Common.SchemaGraph, right: Common.SchemaGraph): boolean => {
-  try {
-    return schemaShapesMatch(schemaGraphFromWit(left), schemaGraphFromWit(right))
-  } catch {
-    return false
-  }
-}
+const sameWireGraph = (left: unknown, right: unknown): boolean =>
+  JSON.stringify(left, (_key, value) => (typeof value === "bigint" ? `${value}n` : value)) ===
+  JSON.stringify(right, (_key, value) => (typeof value === "bigint" ? `${value}n` : value))

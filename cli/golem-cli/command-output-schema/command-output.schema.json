@@ -4175,9 +4175,10 @@
     },
     "Tool": {
       "type": "object",
-      "required": ["version", "commands", "schema"],
+      "required": ["version", "requires_filesystem", "commands", "schema"],
       "properties": {
         "version": { "type": "string" },
+        "requires_filesystem": { "type": "boolean" },
         "commands": { "$ref": "#/definitions/CommandTree" },
         "schema": { "$ref": "#/definitions/SchemaGraph" }
       },

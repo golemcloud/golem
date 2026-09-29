@@ -21743,12 +21743,15 @@ components:
       properties:
         version:
           type: string
+        requires_filesystem:
+          type: boolean
         commands:
           $ref: '#/components/schemas/CommandTree'
         schema:
           $ref: '#/components/schemas/SchemaGraph'
       required:
       - version
+      - requires_filesystem
       - commands
     ToolResultSpec:
       type: object

@@ -177,6 +177,7 @@ describe("typed tool middleware", () => {
       "ignored",
       {
         version: "0.1.0",
+        requiresFilesystem: false,
         commands: { nodes: [] },
         schema: { root: 0, typeNodes: [], defs: [] },
       },

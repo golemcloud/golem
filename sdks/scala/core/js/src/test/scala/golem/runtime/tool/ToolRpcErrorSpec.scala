@@ -19,9 +19,9 @@ package golem.runtime.tool
 import golem.host.ToolWireInterop
 import golem.FutureInterop
 import golem.runtime.tool.host.ToolHostApi
-import golem.runtime.tool.client.JsToolRpcTransport
+import golem.runtime.tool.client.{JsToolRpcTransport, JsWireToolRpcTransport}
 import golem.schema.{IntoSchema, TypedSchemaValue}
-import golem.schema.wire.SchemaWire
+import golem.schema.wire.{SchemaWire, WitTypedSchemaValue}
 import golem.tool.{
   ByteStreamCloseCause,
   ByteStreamFailure,
@@ -139,6 +139,37 @@ object ToolRpcErrorSpec extends ZIOSpecDefault {
         .asInstanceOf[ToolHostApi.RawToolStdoutWriter]
       ZIO.fromFuture(_ => new JsToolOutputStream(writer).write(Array.emptyByteArray)).map { result =>
         assertTrue(result == Right(()), writes == 0)
+      }
+    },
+    test("failed asynchronous wire encoding closes the unbound stdout reader") {
+      var returns  = 0
+      val iterator = js.Dynamic
+        .literal(
+          "return" -> js.Any.fromFunction0 { () =>
+            returns += 1
+            js.Promise.resolve(js.Dynamic.literal("done" -> true))
+          }
+        )
+        .asInstanceOf[ToolHostApi.RawByteIterator]
+      val rawStream = js.Dynamic.literal()
+      js.Dynamic.global.Reflect
+        .set(rawStream, js.Symbol.asyncIterator, js.Any.fromFunction0(() => iterator))
+      val stream    = rawStream.asInstanceOf[ToolHostApi.RawByteStream]
+      val transport = new JsWireToolRpcTransport(
+        null.asInstanceOf[ToolHostApi.RawToolRpc],
+        _ => Future.failed(new RuntimeException("codec failed")),
+        () => (null.asInstanceOf[ToolHostApi.RawToolStdout], stream)
+      )
+      val started = transport
+        .start(Nil, null.asInstanceOf[WitTypedSchemaValue], None, stdout = true)
+        .toOption
+        .get
+
+      ZIO.fromFuture(_ => started.result).map { result =>
+        assertTrue(
+          result == Left(golem.tool.WireToolRpcFailure.ProtocolError("failed to encode tool input: codec failed")),
+          returns == 1
+        )
       }
     },
     test("retries a terminal rejected because another operation is outstanding") {

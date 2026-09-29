@@ -36,7 +36,6 @@ import golem.FutureInterop
 import scala.concurrent.Future
 import scala.scalajs.js
 import scala.scalajs.js.JSConverters._
-import scala.scalajs.js.annotation.JSExportTopLevel
 
 object ToolMiddlewareGuest {
   private implicit val ec: scala.concurrent.ExecutionContext =
@@ -375,8 +374,7 @@ object ToolMiddlewareGuest {
       }.orUndefined
     )
 
-  @JSExportTopLevel("golemTool010ToolMiddlewareGuest")
-  val golemTool010ToolMiddlewareGuest: js.Dynamic =
+  def golemTool010ToolMiddlewareGuest: js.Dynamic =
     js.Dynamic.literal(
       discoverToolMiddlewares = js.Any.fromFunction0(() => discoverToolMiddlewares()),
       getToolMiddleware = js.Any.fromFunction1((name: String) => getToolMiddleware(name)),
@@ -408,6 +406,4 @@ object ToolMiddlewareGuest {
       )
     )
 
-  @JSExportTopLevel("toolMiddlewareGuest")
-  val toolMiddlewareGuest: js.Dynamic = golemTool010ToolMiddlewareGuest
 }

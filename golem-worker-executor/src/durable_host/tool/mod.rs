@@ -6566,6 +6566,7 @@ mod tests {
         let component_id = ComponentId::new();
         let definition = Tool {
             version: "1.0.0".to_string(),
+            requires_filesystem: false,
             commands: CommandTree {
                 nodes: vec![CommandNode {
                     name: "search".to_string(),

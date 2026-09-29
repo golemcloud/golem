@@ -268,6 +268,7 @@ pub(super) fn grep_tool() -> Tool {
 
     Tool {
         version: "1".to_string(),
+        requires_filesystem: false,
         commands: CommandTree {
             nodes: vec![root, replace],
         },
@@ -691,6 +692,44 @@ class StreamRuntimeTest extends munit.FunSuite {
     queue.offer(Delivery(5, Right(() => Item(2))))
     Await.result(queue.drop(), 1.second)
     assertEquals(charged, 0)
+  }
+
+  test("accepted packed output drains before a later terminal") {
+    val payload = Vector(7, 11, 19)
+    var charged = payload.size
+    val output = StreamSession.Output[Int](n => charged -= n)
+    var released = false
+    def releaseBatch(): Unit = if (!released) { released = true; charged -= payload.size }
+    def delivery(index: Int): () => AgentStreamStep[Int] = () => {
+      if (index + 1 < payload.size)
+        assert(output.continueAccepted(payload.size, Right(delivery(index + 1))))
+      else releaseBatch()
+      Item(payload(index))
+    }
+    output.offer(payload.size, Right(delivery(0)))
+    output.offer(0, Right(() => End))
+    output.markTerminal()
+
+    assertEquals(Await.result(output.pull(), 1.second), Item(7))
+    assertEquals(Await.result(output.pull(), 1.second), Item(11))
+    assertEquals(Await.result(output.pull(), 1.second), Item(19))
+    assertEquals(Await.result(output.pull(), 1.second), End)
+    assertEquals(charged, 0)
+    charged += 1
+    intercept[BridgeException](output.offer(1, Right(() => Item(23))))
+    assertEquals(charged, 0)
+  }
+
+  test("stopping after a protocol terminal records local consumer state without cancelling remotely") {
+    var cancelled = 0
+    val output = StreamSession.Output[Int](_ => ())
+    output.cancelWith = _ => { cancelled += 1; Future.successful(()) }
+    output.offer(0, Right(() => End))
+    output.markTerminal()
+
+    Await.result(output.drop(), 1.second)
+    assertEquals(cancelled, 0)
+    assert(!output.continueAccepted(0, Right(() => Item(1))))
   }
 
   test("stream consumption and cancellation are affine") {

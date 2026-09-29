@@ -111,6 +111,48 @@ const parsed = ts.parseJsonConfigFileContent(config.config, ts.sys, root)
 const program = ts.createProgram(parsed.fileNames, { ...parsed.options, noEmit: true })
 const checker = program.getTypeChecker()
 const index = program.getSourceFile(resolve(root, "src/index.ts"))
+const witCodecFacade = resolve(distDir, "src/WitCodec.js")
+const witCodecImplementation = resolve(distDir, "src/internal/WitCodec.js")
+
+function relativeImport(fromFile, toFile) {
+  const path = relative(dirname(fromFile), toFile).replaceAll("\\", "/")
+  return path.startsWith(".") ? path : `./${path}`
+}
+
+function rewriteRelativeImports(source, fromFile, rewrite, outputFile = fromFile) {
+  return source.replace(/(["'])(\.\.?\/[^"']+)\1/g, (match, quote, specifier) => {
+    const target = resolve(dirname(fromFile), specifier)
+    const replacement = rewrite(target)
+    return replacement ? `${quote}${relativeImport(outputFile, replacement)}${quote}` : match
+  })
+}
+
+const witCodecSource = readFileSync(witCodecFacade, "utf8")
+writeFileSync(
+  witCodecImplementation,
+  rewriteRelativeImports(
+    witCodecSource,
+    witCodecFacade,
+    (target) => target,
+    witCodecImplementation,
+  ),
+)
+function redirectWitCodecImports(directory) {
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    const path = resolve(directory, entry.name)
+    if (entry.isDirectory()) {
+      redirectWitCodecImports(path)
+    } else if (path.endsWith(".js") && path !== witCodecImplementation) {
+      const source = readFileSync(path, "utf8")
+      const rewritten = rewriteRelativeImports(source, path, (target) =>
+        target === witCodecFacade ? witCodecImplementation : undefined,
+      )
+      if (rewritten !== source) writeFileSync(path, rewritten)
+    }
+  }
+}
+redirectWitCodecImports(resolve(distDir, "src"))
+
 const facades = index.statements
   .filter(
     (node) =>
@@ -118,16 +160,49 @@ const facades = index.statements
   )
   .map((node) => [
     node.moduleSpecifier.text.slice(2, -3),
-    "@golemcloud/effect-golem",
+    resolve(distDir, "index.mjs"),
     node.exportClause.name.text,
   ])
 facades.push(
-  ["ToolReflection", "@golemcloud/effect-golem", "Reflection"],
-  ["Sqlite/SqliteClient", "@golemcloud/effect-golem/sqlite"],
-  ["Postgres/PgClient", "@golemcloud/effect-golem/postgres"],
-  ["Mysql/MySqlClient", "@golemcloud/effect-golem/mysql"],
-  ["Ignite/IgniteClient", "@golemcloud/effect-golem/ignite2"],
+  ["ToolReflection", resolve(distDir, "index.mjs"), "Reflection"],
+  ["Sqlite/SqliteClient", resolve(distDir, "sqlite.mjs")],
+  ["Postgres/PgClient", resolve(distDir, "postgres.mjs")],
+  ["Mysql/MySqlClient", resolve(distDir, "mysql.mjs")],
+  ["Ignite/IgniteClient", resolve(distDir, "ignite.mjs")],
 )
+
+// Component builds need the tree-shakeable source modules, while published
+// subpath imports use the facades below to share state with the bundled entry.
+// Preserve the source implementations under one private root before replacing
+// the public files, and keep their relative imports within that same graph.
+const componentDir = resolve(distDir, "src/internal/component")
+const componentFiles = new Map(
+  [
+    ["index", resolve(distDir, "src/index.js")],
+    ["HttpRouter", resolve(distDir, "src/HttpRouter.js")],
+  ].map(([modulePath, source]) => [source, resolve(componentDir, `${modulePath}.js`)]),
+)
+for (const [source, output] of componentFiles) {
+  mkdirSync(dirname(output), { recursive: true })
+  const input = readFileSync(source, "utf8")
+  const componentSource =
+    source === resolve(distDir, "src/index.js")
+      ? input.replace(
+          /^export \{ (?:guest as golemAgent200Guest|toolGuest as golemTool010Guest|toolMiddlewareGuest)[^\n]*\n/gm,
+          "",
+        )
+      : input
+  writeFileSync(
+    output,
+    rewriteRelativeImports(
+      componentSource,
+      source,
+      (target) => componentFiles.get(target) ?? target,
+      output,
+    ),
+  )
+}
+
 for (const [modulePath, owner, namespace] of facades) {
   const source = program.getSourceFile(resolve(root, "src", `${modulePath}.ts`))
   const exports = checker
@@ -151,11 +226,13 @@ for (const [modulePath, owner, namespace] of facades) {
       }
     }
   }
+  const output = resolve(distDir, "src", `${modulePath}.js`)
+  const ownerImport = relativeImport(output, owner)
   const imports = namespace
-    ? `import { ${namespace} as shared } from ${JSON.stringify(owner)};`
-    : `import * as shared from ${JSON.stringify(owner)};`
+    ? `import { ${namespace} as shared } from ${JSON.stringify(ownerImport)};`
+    : `import * as shared from ${JSON.stringify(ownerImport)};`
   writeFileSync(
-    resolve(distDir, "src", `${modulePath}.js`),
+    output,
     [
       imports,
       ...[...names].map(
@@ -166,4 +243,4 @@ for (const [modulePath, owner, namespace] of facades) {
     ].join("\n"),
   )
 }
-writeFileSync(resolve(distDir, "src/index.js"), 'export * from "@golemcloud/effect-golem";\n')
+writeFileSync(resolve(distDir, "src/index.js"), 'export * from "../index.mjs";\n')

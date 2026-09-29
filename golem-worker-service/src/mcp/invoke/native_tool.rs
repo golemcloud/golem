@@ -715,6 +715,7 @@ mod tests {
         };
         let definition = NativeTool {
             version: "1.0.0".to_string(),
+            requires_filesystem: false,
             schema: SchemaGraph::empty(),
             commands: CommandTree {
                 nodes: vec![CommandNode {

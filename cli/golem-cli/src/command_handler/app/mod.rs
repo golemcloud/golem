@@ -4515,6 +4515,7 @@ mod tests {
         let name = ToolName::try_from(name).unwrap();
         let definition = Tool {
             version: version.to_string(),
+            requires_filesystem: false,
             commands: CommandTree {
                 nodes: vec![CommandNode {
                     name: name.to_string(),
