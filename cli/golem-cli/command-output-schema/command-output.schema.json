@@ -8063,7 +8063,7 @@
           "required": ["kind", "value"],
           "properties": {
             "kind": {
-              "enum": ["bool", "s8", "s16", "s32", "s64", "u8", "u16", "u32", "u64", "f32", "f64", "char", "string", "datetime", "duration"]
+              "enum": ["bool", "s8", "s16", "s32", "s64", "u8", "u16", "u32", "u64", "f32", "f64", "char", "string", "uuid", "datetime", "duration"]
             },
             "value": {
               "type": "object",
@@ -8582,7 +8582,7 @@
         {
           "type": "object",
           "required": ["kind", "value"],
-          "properties": { "kind": { "enum": ["string", "char"] }, "value": { "type": "string" } },
+          "properties": { "kind": { "enum": ["string", "char", "uuid"] }, "value": { "type": "string" } },
           "additionalProperties": false
         },
         {
@@ -8835,10 +8835,15 @@
       "additionalProperties": false
     },
     "EnvironmentId": {
-      "type": "object",
-      "required": ["uuid"],
-      "properties": { "uuid": { "type": "string" } },
-      "additionalProperties": false
+      "oneOf": [
+        { "type": "string", "format": "uuid" },
+        {
+          "type": "object",
+          "required": ["uuid"],
+          "properties": { "uuid": { "type": "string", "format": "uuid" } },
+          "additionalProperties": false
+        }
+      ]
     },
     "JsonValue": {
       "description": "Arbitrary JSON value.",

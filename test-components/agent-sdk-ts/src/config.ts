@@ -8,12 +8,13 @@ import {
 } from '@golemcloud/golem-ts-sdk';
 import type { PromiseId } from 'golem:api/host@1.5.0';
 
-// A `PromiseId` is a nested host record carrying bigints; declare it as an
-// explicit Standard Schema so it can be returned / accepted by a method.
+// A `PromiseId` is a nested host record carrying bigints and a UUID; declare
+// it as an explicit Standard Schema so it can be returned / accepted by a
+// method.
 const PromiseIdSchema = z.object({
   agentId: z.object({
     componentId: z.object({
-      uuid: z.object({ highBits: s.u64(), lowBits: s.u64() }),
+      uuid: s.uuid(),
     }),
     agentId: z.string(),
   }),

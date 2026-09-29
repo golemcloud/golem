@@ -1592,7 +1592,7 @@ mod tests {
         assert_contains_all(
             &rendered,
             &[
-                "low-bits: 3",
+                &secret_id.to_string(),
                 "secret-reveal-auditor",
                 "database",
                 "password",
