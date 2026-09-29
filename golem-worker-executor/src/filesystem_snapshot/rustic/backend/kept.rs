@@ -36,16 +36,59 @@ pub(super) struct KeptPacks {
     read_ended: Condvar,
 }
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 struct State {
     packs: HashMap<Id, Bytes>,
     bytes: usize,
     /// A pack that was read whole did not fit in the limit.
     closed: bool,
     reading: HashSet<Id>,
-    /// The threads that wait for the read of a pack by another thread.
-    #[cfg(test)]
-    waiters: usize,
+}
+
+/// What a thread that wants a pack does.
+#[derive(Debug, PartialEq, Eq)]
+enum Want<'a> {
+    /// Another thread reads the pack, so this thread waits for that read.
+    Wait,
+    /// The set keeps the pack.
+    Kept(&'a Bytes),
+    /// The set is closed or full and does not keep the pack, so the pack is not read whole.
+    Skip,
+    /// This thread reads the pack whole.
+    Read,
+}
+
+/// Gives what a thread that wants the pack does in the state, with the limit of the kept bytes.
+fn want<'a>(state: &'a State, id: &Id, limit: usize) -> Want<'a> {
+    if state.reading.contains(id) {
+        Want::Wait
+    } else if let Some(pack) = state.packs.get(id) {
+        Want::Kept(pack)
+    } else if state.closed || state.bytes >= limit {
+        Want::Skip
+    } else {
+        Want::Read
+    }
+}
+
+/// What the set does with a pack that a thread read whole.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Admit {
+    /// Keeps the pack, and then keeps `bytes` in total.
+    Keep { bytes: usize },
+    /// Closes the set, because the pack does not fit.
+    Close,
+}
+
+/// Gives what the set that keeps `kept_bytes` does with a pack of `len` bytes, with the limit of
+/// the kept bytes.
+fn admit(kept_bytes: usize, len: usize, limit: usize) -> Admit {
+    let bytes = kept_bytes.saturating_add(len);
+    if bytes <= limit {
+        Admit::Keep { bytes }
+    } else {
+        Admit::Close
+    }
 }
 
 impl KeptPacks {
@@ -68,29 +111,16 @@ impl KeptPacks {
         id: &Id,
         read: impl FnOnce() -> RusticResult<Bytes>,
     ) -> Option<RusticResult<Bytes>> {
-        #[cfg(test)]
-        let mut counted = false;
         let mut state = self
             .read_ended
             .wait_while(self.state(), |state| {
-                let waits = state.reading.contains(id);
-                #[cfg(test)]
-                if waits && !counted {
-                    state.waiters += 1;
-                    counted = true;
-                }
-                waits
+                want(state, id, self.limit) == Want::Wait
             })
             .unwrap_or_else(PoisonError::into_inner);
-        #[cfg(test)]
-        if counted {
-            state.waiters -= 1;
-        }
-        if let Some(pack) = state.packs.get(id) {
-            return Some(Ok(pack.clone()));
-        }
-        if state.closed || state.bytes >= self.limit {
-            return None;
+        match want(&state, id, self.limit) {
+            Want::Kept(pack) => return Some(Ok(pack.clone())),
+            Want::Skip => return None,
+            Want::Wait | Want::Read => {}
         }
         state.reading.insert(*id);
         drop(state);
@@ -103,12 +133,6 @@ impl KeptPacks {
             reading.keep(pack);
         }
         Some(read)
-    }
-
-    /// Gives the number of threads that wait for the read of a pack by another thread.
-    #[cfg(test)]
-    pub(super) fn waiters(&self) -> usize {
-        self.state().waiters
     }
 
     fn state(&self) -> MutexGuard<'_, State> {
@@ -139,12 +163,12 @@ impl Reading<'_> {
     /// Keeps the pack when it fits in the limit, and closes the set when it does not.
     fn keep(&self, pack: &Bytes) {
         let mut state = self.kept.state();
-        let bytes = state.bytes.saturating_add(pack.len());
-        if bytes <= self.kept.limit {
-            state.bytes = bytes;
-            state.packs.insert(self.id, pack.clone());
-        } else {
-            state.closed = true;
+        match admit(state.bytes, pack.len(), self.kept.limit) {
+            Admit::Keep { bytes } => {
+                state.bytes = bytes;
+                state.packs.insert(self.id, pack.clone());
+            }
+            Admit::Close => state.closed = true,
         }
     }
 }
@@ -155,3 +179,6 @@ impl Drop for Reading<'_> {
         self.kept.read_ended.notify_all();
     }
 }
+
+#[cfg(test)]
+mod tests;

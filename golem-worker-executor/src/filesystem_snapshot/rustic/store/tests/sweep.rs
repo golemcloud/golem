@@ -347,8 +347,9 @@ impl Case {
     }
 }
 
-/// What a case found.
+/// What a case found. The tests check the rules inside the case, and read none of these fields.
 #[derive(Debug)]
+#[allow(dead_code)]
 pub(super) struct Found {
     pub(super) prunes: usize,
     pub(super) failed: bool,

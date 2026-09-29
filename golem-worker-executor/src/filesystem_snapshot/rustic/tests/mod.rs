@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Save, restore, forget and prune of a repository on the in-memory blob storage.
+//! Save, restore, delete and prune of a repository on the in-memory blob storage, through the
+//! store and through the free functions of the bridge.
 //!
 //! The tests in which a held call gets no answer give each call a short deadline. Each of them
 //! keeps the gate of the held calls closed until the storage is dropped. So the threads of rustic
@@ -23,17 +24,23 @@ pub(super) mod scripted;
 
 use self::holding::{holding_storage, reached_deadline};
 use self::scripted::{Script, ScriptedBlobStorage};
-use super::backend::BlobBackend;
+use super::backend::{BlobBackend, KEPT_PACKS_LIMIT};
+use super::files::SnapshotFiles;
+use super::prune::Percent;
+use super::store::{RusticSnapshotStore, StorePolicy};
 use super::{
-    ChangeDetection, Chunking, Compression, OperationPhase, PruneSettings, RepackLimits,
-    Repository, RepositoryKey, RepositorySettings, SaveSettings, backup_options, config_options,
-    open_existing, open_or_create, prune_options, repository_options, run_blocking,
+    ChangeDetection, PruneReport, PruneSettings, RepositoryKey, SaveSettings, backup_options,
+    open_existing, prune_options, repository_options, restore_snapshot, run_blocking,
 };
+use crate::filesystem_snapshot::clock::SystemClock;
 use crate::filesystem_snapshot::contract_tests::fixture::{
     Scratch, Spec, fixture, listing, write_tree,
 };
 use crate::filesystem_snapshot::contract_tests::new_scope;
-use crate::filesystem_snapshot::{SnapshotName, SnapshotScope};
+use crate::filesystem_snapshot::{
+    ChangeDetection as StoreChangeDetection, FilesystemSnapshotStore, SnapshotName, SnapshotScope,
+    SnapshotStoreError,
+};
 use crate::services::golem_config::DEFAULT_FILESYSTEM_SNAPSHOT_STORAGE_CALL_DEADLINE as STORAGE_CALL_DEADLINE;
 use anyhow::Context;
 use async_trait::async_trait;
@@ -44,8 +51,10 @@ use golem_service_base::storage::blob::{
 };
 use pretty_assertions::assert_eq;
 use rustic_core::repofile::{BlobType, IndexFile};
-use rustic_core::{OpenStatus, PruneOptions, Repository as RusticRepository, RusticResult};
-use std::num::{NonZeroI32, NonZeroU32, NonZeroUsize};
+use rustic_core::{
+    OpenStatus, PruneOptions, Repository as RusticRepository, RestoreOptions, RusticResult,
+};
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -54,6 +63,8 @@ use test_r::{test, timeout};
 use tokio::runtime::Handle;
 use tokio::sync::{Notify, oneshot, watch};
 use tokio::time::error::Elapsed;
+use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 
 /// The deadline of each call in the tests that hold a call.
 const SHORT_DEADLINE: Duration = Duration::from_millis(200);
@@ -61,6 +72,17 @@ const SHORT_DEADLINE: Duration = Duration::from_millis(200);
 /// The longest time that a test waits for an operation, or for the threads of an operation to
 /// stop.
 const LIMIT: Duration = Duration::from_secs(10);
+
+/// Gives the blobs of the namespace of the storage, whose calls wait for at most the deadline and
+/// stop when the token is cancelled, with a tracker of their own.
+pub(super) fn files_of(
+    storage: Arc<dyn BlobStorage>,
+    namespace: BlobStorageNamespace,
+    deadline: Duration,
+    cancel: CancellationToken,
+) -> SnapshotFiles {
+    SnapshotFiles::new(storage, namespace, deadline, cancel, TaskTracker::new())
+}
 
 fn name(text: &str) -> SnapshotName {
     SnapshotName::new(text).unwrap()
@@ -70,8 +92,23 @@ fn key() -> RepositoryKey {
     RepositoryKey::new(std::array::from_fn(|index| index as u8))
 }
 
-fn repository(storage: &Arc<InMemoryBlobStorage>, scope: &SnapshotScope) -> Repository {
-    Repository::new(storage.clone(), scope.clone(), key(), STORAGE_CALL_DEADLINE)
+/// Gives a store over the storage whose calls wait for at most `deadline`. A delete never prunes.
+fn store(storage: Arc<dyn BlobStorage>, deadline: Duration) -> RusticSnapshotStore {
+    RusticSnapshotStore::with_policy(
+        storage,
+        key(),
+        StorePolicy {
+            deadline,
+            save_threads: None,
+            restore_reader_threads: NonZeroUsize::new(6).unwrap(),
+            prune: PruneSettings {
+                fast_repack: true,
+                keep_delete: Duration::from_secs(15 * 60),
+            },
+            prune_threshold: Percent(u16::MAX),
+        },
+        Arc::new(SystemClock),
+    )
 }
 
 /// Writes the fixture of the contract suite into a new directory, and gives the directory.
@@ -203,6 +240,59 @@ async fn prune(
     .await
 }
 
+/// Prunes the repository of the scope with the settings through the prune of the store, on a
+/// blocking thread.
+async fn prune_with(
+    storage: Arc<dyn BlobStorage>,
+    scope: &SnapshotScope,
+    settings: PruneSettings,
+) -> anyhow::Result<Option<PruneReport>> {
+    let backend = Arc::new(BlobBackend::new(
+        files_of(
+            storage,
+            scope.0.clone(),
+            STORAGE_CALL_DEADLINE,
+            CancellationToken::new(),
+        ),
+        Handle::current(),
+        KEPT_PACKS_LIMIT,
+    ));
+    run_blocking(move || super::prune(backend, &key(), &settings)).await
+}
+
+/// Restores the oldest snapshot with the name in the scope into the empty directory `into` with
+/// the options, through the restore of the store, on a blocking thread.
+async fn restore_named(
+    storage: Arc<dyn BlobStorage>,
+    scope: &SnapshotScope,
+    name: &SnapshotName,
+    into: &Path,
+    options: RestoreOptions,
+) -> anyhow::Result<()> {
+    let backend = Arc::new(BlobBackend::new(
+        files_of(
+            storage,
+            scope.0.clone(),
+            STORAGE_CALL_DEADLINE,
+            CancellationToken::new(),
+        ),
+        Handle::current(),
+        KEPT_PACKS_LIMIT,
+    ));
+    let (name, into) = (name.clone(), into.to_path_buf());
+    run_blocking(move || {
+        let repository = open_existing(backend, &key())?.context("the scope has no repository")?;
+        let snapshot = repository
+            .get_all_snapshots()?
+            .into_iter()
+            .filter(|snapshot| snapshot.label == name.as_str())
+            .min_by_key(|snapshot| (snapshot.time.timestamp(), snapshot.id))
+            .context("no snapshot has the name")?;
+        restore_snapshot(repository, &snapshot, &into, &options)
+    })
+    .await
+}
+
 /// Opens the repository of the scope over the storage, and does the work with it on a blocking
 /// thread. Each call on the storage waits for at most `deadline`.
 async fn with_existing_repository<R: Send + 'static>(
@@ -212,10 +302,9 @@ async fn with_existing_repository<R: Send + 'static>(
     work: impl FnOnce(&RusticRepository<OpenStatus>) -> anyhow::Result<R> + Send + 'static,
 ) -> anyhow::Result<R> {
     let backend = Arc::new(BlobBackend::new(
-        storage,
-        scope.0.clone(),
+        files_of(storage, scope.0.clone(), deadline, CancellationToken::new()),
         Handle::current(),
-        deadline,
+        KEPT_PACKS_LIMIT,
     ));
     run_blocking(move || {
         let repository = open_existing(backend, &key())?.context("the scope has no repository")?;
@@ -224,12 +313,13 @@ async fn with_existing_repository<R: Send + 'static>(
     .await
 }
 
-/// Tells whether an operation ended within the limit with the error of a call that got no answer
-/// within its deadline. `None` means that the operation did not end within the limit.
-fn failed_at_deadline<T>(outcome: Result<anyhow::Result<T>, Elapsed>) -> Option<bool> {
-    outcome
-        .ok()
-        .map(|result| result.is_err_and(|error| reached_deadline(error.as_ref())))
+/// Tells whether an operation of the store ended within the limit with the storage error of a
+/// call that got no answer within its deadline. `None` means that the operation did not end within
+/// the limit.
+fn failed_at_deadline<T>(outcome: Result<Result<T, SnapshotStoreError>, Elapsed>) -> Option<bool> {
+    outcome.ok().map(|result| {
+        matches!(result, Err(SnapshotStoreError::Storage { source, .. }) if reached_deadline(source.as_ref()))
+    })
 }
 
 /// Tells whether the storage is dropped within the limit. The storage is dropped only when each
@@ -240,71 +330,20 @@ async fn dropped_within_limit(dropped: oneshot::Receiver<()>) -> bool {
 
 #[test]
 #[timeout("60s")]
-async fn a_saved_tree_comes_back_the_same() {
-    let storage = Arc::new(InMemoryBlobStorage::new());
-    let repository = repository(&storage, &new_scope());
-    let tree = fixture_tree();
-    let into = Scratch::new();
-
-    repository.save(&name("first"), tree.path()).await.unwrap();
-    let restored = repository
-        .restore(&name("first"), into.path(), None)
-        .await
-        .unwrap();
-
-    assert_eq!(
-        (restored.is_some(), listing(into.path())),
-        (true, listing(tree.path()))
-    );
-}
-
-#[test]
-#[timeout("60s")]
-async fn a_restore_report_gives_each_phase_of_the_restore_in_order() {
-    let storage = Arc::new(InMemoryBlobStorage::new());
-    let repository = repository(&storage, &new_scope());
-    let tree = fixture_tree();
-    let into = Scratch::new();
-    repository.save(&name("first"), tree.path()).await.unwrap();
-
-    let restored = repository
-        .restore(&name("first"), into.path(), None)
-        .await
-        .unwrap()
-        .unwrap();
-
-    assert_eq!(
-        restored
-            .phases
-            .iter()
-            .map(|phase| phase.phase)
-            .collect::<Vec<_>>(),
-        vec![
-            OperationPhase::Open,
-            OperationPhase::Lookup,
-            OperationPhase::IndexLoad,
-            OperationPhase::RestorePlan,
-            OperationPhase::Restore,
-        ]
-    );
-}
-
-#[test]
-#[timeout("60s")]
 async fn a_restore_reads_each_tree_pack_one_time_in_full_and_no_range_of_a_tree_pack() {
     let inner = Arc::new(InMemoryBlobStorage::new());
     let scope = new_scope();
     let tree = many_directories_tree(60);
-    repository(&inner, &scope)
-        .save(&name("first"), tree.path())
+    store(inner.clone(), STORAGE_CALL_DEADLINE)
+        .save(&scope, &name("p-first"), tree.path(), None)
         .await
         .unwrap();
     let tree_packs = tree_packs(&inner, &scope).await;
     let storage = ScriptedBlobStorage::new(inner.clone(), |_, _| Script::Pass);
     let into = Scratch::new();
 
-    Repository::new(storage.clone(), scope.clone(), key(), STORAGE_CALL_DEADLINE)
-        .restore(&name("first"), into.path(), None)
+    store(storage.clone(), STORAGE_CALL_DEADLINE)
+        .restore(&scope, &name("p-first"), into.path())
         .await
         .unwrap();
     let calls_on_tree_packs = |op: &str| {
@@ -332,155 +371,41 @@ async fn a_restore_reads_each_tree_pack_one_time_in_full_and_no_range_of_a_tree_
 
 #[test]
 #[timeout("60s")]
-async fn a_second_save_has_the_first_as_parent_and_reads_only_the_changed_file() {
-    let storage = Arc::new(InMemoryBlobStorage::new());
-    let repository = repository(&storage, &new_scope());
-    let tree = fixture_tree();
-    let first_listing = listing(tree.path());
-
-    let first = repository.save(&name("first"), tree.path()).await.unwrap();
-    std::fs::write(tree.path().join("a.txt"), b"changed").unwrap();
-    let second = repository.save(&name("second"), tree.path()).await.unwrap();
-    let first_into = Scratch::new();
-    let second_into = Scratch::new();
-    repository
-        .restore(&name("first"), first_into.path(), None)
-        .await
-        .unwrap();
-    repository
-        .restore(&name("second"), second_into.path(), None)
-        .await
-        .unwrap();
-
-    assert_eq!(
-        (
-            second.parent.as_deref(),
-            second.files_new,
-            second.files_changed,
-            second.files_unmodified,
-            listing(first_into.path()),
-            listing(second_into.path()),
-        ),
-        (
-            Some(&*first.snapshot),
-            0,
-            1,
-            first.files_new - 1,
-            first_listing,
-            listing(tree.path()),
-        )
-    );
-}
-
-#[test]
-#[timeout("60s")]
-async fn a_forgotten_name_does_not_restore_and_the_other_names_do() {
-    let storage = Arc::new(InMemoryBlobStorage::new());
-    let repository = repository(&storage, &new_scope());
-    let tree = fixture_tree();
-    repository.save(&name("first"), tree.path()).await.unwrap();
-    repository.save(&name("second"), tree.path()).await.unwrap();
-    let first_into = Scratch::new();
-    let second_into = Scratch::new();
-
-    let forgotten = repository.forget(&name("first")).await.unwrap();
-    let forgotten_again = repository.forget(&name("first")).await.unwrap();
-    let first = repository
-        .restore(&name("first"), first_into.path(), None)
-        .await
-        .unwrap();
-    let second = repository
-        .restore(&name("second"), second_into.path(), None)
-        .await
-        .unwrap();
-
-    assert_eq!(
-        (
-            forgotten,
-            forgotten_again,
-            first.is_none(),
-            second.is_some(),
-            listing(second_into.path())
-        ),
-        (1, 0, true, true, listing(tree.path()))
-    );
-}
-
-#[test]
-#[timeout("60s")]
 async fn the_first_save_creates_the_repository_with_no_key_file_and_later_saves_open_it() {
     let storage = Arc::new(InMemoryBlobStorage::new());
     let scope = new_scope();
-    let repository = repository(&storage, &scope);
+    let store = store(storage.clone(), STORAGE_CALL_DEADLINE);
     let tree = fixture_tree();
-    let phases = |report: &super::SaveReport| {
-        report
-            .phases
-            .iter()
-            .map(|time| time.phase)
-            .collect::<Vec<_>>()
-    };
 
-    let first = repository.save(&name("first"), tree.path()).await.unwrap();
-    let second = repository.save(&name("second"), tree.path()).await.unwrap();
+    store
+        .save(&scope, &name("p-first"), tree.path(), None)
+        .await
+        .unwrap();
+    let config_after_the_first = stored_paths(&storage, &scope)
+        .await
+        .into_iter()
+        .filter(|path| path == "config")
+        .count();
+    store
+        .save(&scope, &name("p-second"), tree.path(), None)
+        .await
+        .unwrap();
     let paths = stored_paths(&storage, &scope).await;
 
     assert_eq!(
         (
-            phases(&first),
-            phases(&second),
+            config_after_the_first,
             paths.iter().filter(|path| *path == "config").count(),
             paths
                 .iter()
                 .filter(|path| path.starts_with("keys/"))
                 .count(),
+            paths
+                .iter()
+                .filter(|path| path.starts_with("snapshots/"))
+                .count(),
         ),
-        (
-            vec![
-                OperationPhase::Create,
-                OperationPhase::IndexLoad,
-                OperationPhase::Backup
-            ],
-            vec![
-                OperationPhase::Open,
-                OperationPhase::IndexLoad,
-                OperationPhase::Backup
-            ],
-            1,
-            0,
-        )
-    );
-}
-
-#[test]
-#[timeout("60s")]
-async fn each_scope_is_its_own_repository() {
-    let storage = Arc::new(InMemoryBlobStorage::new());
-    let (one, other) = (new_scope(), new_scope());
-    let tree = fixture_tree();
-    let into = Scratch::new();
-
-    repository(&storage, &one)
-        .save(&name("first"), tree.path())
-        .await
-        .unwrap();
-    let restored = repository(&storage, &other)
-        .restore(&name("first"), into.path(), None)
-        .await
-        .unwrap();
-    let forgotten = repository(&storage, &other)
-        .forget(&name("first"))
-        .await
-        .unwrap();
-
-    assert_eq!(
-        (
-            restored.is_none(),
-            forgotten,
-            stored_paths(&storage, &one).await.is_empty(),
-            stored_paths(&storage, &other).await,
-        ),
-        (true, 0, false, Vec::<String>::new())
+        (1, 1, 0, 2)
     );
 }
 
@@ -491,27 +416,28 @@ async fn a_restore_reads_data_on_at_most_its_reader_threads() {
     // reads the data of both packs, one read for each pack.
     let storage = Arc::new(InMemoryBlobStorage::new());
     let scope = new_scope();
+    let store = store(storage.clone(), STORAGE_CALL_DEADLINE);
     let tree = Scratch::new();
     std::fs::write(tree.path().join("first.txt"), b"first").unwrap();
-    repository(&storage, &scope)
-        .save(&name("first"), tree.path())
+    store
+        .save(&scope, &name("p-first"), tree.path(), None)
         .await
         .unwrap();
     std::fs::write(tree.path().join("second.txt"), b"second").unwrap();
-    repository(&storage, &scope)
-        .save(&name("second"), tree.path())
+    store
+        .save(&scope, &name("p-second"), tree.path(), None)
         .await
         .unwrap();
     let restore = async |reader_threads| {
         let counting = Arc::new(OverlapCountingStorage::new(storage.clone()));
         let into = Scratch::new();
-        Repository::new(
+        restore_named(
             counting.clone(),
-            scope.clone(),
-            key(),
-            STORAGE_CALL_DEADLINE,
+            &scope,
+            &name("p-second"),
+            into.path(),
+            RestoreOptions::default().reader_threads(reader_threads),
         )
-        .restore(&name("second"), into.path(), reader_threads)
         .await
         .unwrap();
         (counting.most(), listing(into.path()))
@@ -754,11 +680,15 @@ async fn a_save_whose_pack_write_gets_no_answer_fails_with_no_snapshot_and_its_t
     let (storage, _gate, dropped) = holding_storage(inner.clone(), |op_label, path| {
         op_label == "write" && path.starts_with("data")
     });
-    let repository = Repository::new(storage, scope.clone(), key(), SHORT_DEADLINE);
+    let store = store(storage, SHORT_DEADLINE);
     let tree = fixture_tree();
 
-    let saved = tokio::time::timeout(LIMIT, repository.save(&name("first"), tree.path())).await;
-    drop(repository);
+    let saved = tokio::time::timeout(
+        LIMIT,
+        store.save(&scope, &name("p-first"), tree.path(), None),
+    )
+    .await;
+    drop(store);
     let stopped = dropped_within_limit(dropped).await;
     let snapshots = stored_paths(&inner, &scope)
         .await
@@ -788,7 +718,7 @@ async fn a_save_whose_pack_writes_answer_before_the_deadline_succeeds_and_restor
             selected
         }
     });
-    let repository = Repository::new(storage, scope, key(), Duration::from_secs(2));
+    let store = store(storage, Duration::from_secs(2));
     let tree = fixture_tree();
     let into = Scratch::new();
     let opener = tokio::spawn(async move {
@@ -797,19 +727,19 @@ async fn a_save_whose_pack_writes_answer_before_the_deadline_succeeds_and_restor
         drop(gate);
     });
 
-    let saved = tokio::time::timeout(LIMIT, repository.save(&name("first"), tree.path()))
-        .await
-        .map(|result| result.map(|_| ()).map_err(|error| format!("{error:#}")));
+    let saved = tokio::time::timeout(
+        LIMIT,
+        store.save(&scope, &name("p-first"), tree.path(), None),
+    )
+    .await
+    .map(|result| result.map(|_| ()).map_err(|error| format!("{error:#}")));
     let opened = tokio::time::timeout(LIMIT, opener)
         .await
         .is_ok_and(|joined| joined.is_ok());
-    let restored = repository
-        .restore(&name("first"), into.path(), None)
-        .await
-        .unwrap();
+    let restored = store.restore(&scope, &name("p-first"), into.path()).await;
 
     assert_eq!(
-        (saved, opened, restored.is_some(), listing(into.path())),
+        (saved, opened, restored.is_ok(), listing(into.path())),
         (Ok(Ok(())), true, true, listing(tree.path()))
     );
 }
@@ -820,8 +750,8 @@ async fn a_restore_whose_data_pack_reads_get_no_answer_fails_and_stops_its_threa
     let inner = Arc::new(InMemoryBlobStorage::new());
     let scope = new_scope();
     let tree = fixture_tree();
-    repository(&inner, &scope)
-        .save(&name("first"), tree.path())
+    store(inner.clone(), STORAGE_CALL_DEADLINE)
+        .save(&scope, &name("p-first"), tree.path(), None)
         .await
         .unwrap();
     let data_packs = data_packs(&inner, &scope).await;
@@ -833,7 +763,7 @@ async fn a_restore_whose_data_pack_reads_get_no_answer_fails_and_stops_its_threa
                 .and_then(|file| file.to_str())
                 .is_some_and(|file| data_packs.iter().any(|pack| **pack == *file))
     });
-    let repository = Repository::new(storage, scope, key(), SHORT_DEADLINE);
+    let store = store(storage, SHORT_DEADLINE);
     let into = Scratch::new();
     let directories = fixture()
         .into_iter()
@@ -842,8 +772,8 @@ async fn a_restore_whose_data_pack_reads_get_no_answer_fails_and_stops_its_threa
         .collect::<Vec<_>>();
 
     let restored =
-        tokio::time::timeout(LIMIT, repository.restore(&name("first"), into.path(), None)).await;
-    drop(repository);
+        tokio::time::timeout(LIMIT, store.restore(&scope, &name("p-first"), into.path())).await;
+    drop(store);
     let stopped = dropped_within_limit(dropped).await;
     // The plan phase of a restore makes each directory before the content phase reads data.
     let made = directories
@@ -878,8 +808,8 @@ async fn a_prune_whose_tree_pack_reads_get_no_answer_fails_and_stops_its_threads
     let inner = Arc::new(InMemoryBlobStorage::new());
     let scope = new_scope();
     let tree = fixture_tree();
-    repository(&inner, &scope)
-        .save(&name("first"), tree.path())
+    store(inner.clone(), STORAGE_CALL_DEADLINE)
+        .save(&scope, &name("p-first"), tree.path(), None)
         .await
         .unwrap();
     // A prune reads the trees of the snapshots, and each tree read is a full read of a pack.
@@ -894,24 +824,32 @@ async fn a_prune_whose_tree_pack_reads_get_no_answer_fails_and_stops_its_threads
     .await;
     let stopped = dropped_within_limit(dropped).await;
 
-    assert_eq!((failed_at_deadline(pruned), stopped), (Some(true), true));
+    assert_eq!(
+        (
+            pruned
+                .ok()
+                .map(|result| result.is_err_and(|error| reached_deadline(error.as_ref()))),
+            stopped
+        ),
+        (Some(true), true)
+    );
 }
 
 #[test]
 #[timeout("60s")]
-async fn a_prune_after_a_forget_deletes_the_packs_of_that_name_and_the_other_name_restores() {
+async fn a_prune_after_a_delete_deletes_the_packs_of_that_name_and_the_other_name_restores() {
     let inner = Arc::new(InMemoryBlobStorage::new());
     let scope = new_scope();
-    let repository = repository(&inner, &scope);
+    let store = store(inner.clone(), STORAGE_CALL_DEADLINE);
     let first_tree = one_file_tree("first.txt", "only in the first tree");
     let second_tree = one_file_tree("second.txt", "only in the second tree");
-    repository
-        .save(&name("first"), first_tree.path())
+    store
+        .save(&scope, &name("p-first"), first_tree.path(), None)
         .await
         .unwrap();
     let first_packs = pack_paths(&inner, &scope).await;
-    repository
-        .save(&name("second"), second_tree.path())
+    store
+        .save(&scope, &name("p-second"), second_tree.path(), None)
         .await
         .unwrap();
     let second_packs = pack_paths(&inner, &scope)
@@ -921,7 +859,7 @@ async fn a_prune_after_a_forget_deletes_the_packs_of_that_name_and_the_other_nam
         .collect::<Vec<_>>();
     let into = Scratch::new();
 
-    repository.forget(&name("first")).await.unwrap();
+    store.delete(&scope, &name("p-first")).await.unwrap();
     prune(
         inner.clone(),
         &scope,
@@ -930,17 +868,14 @@ async fn a_prune_after_a_forget_deletes_the_packs_of_that_name_and_the_other_nam
     )
     .await
     .unwrap();
-    let restored = repository
-        .restore(&name("second"), into.path(), None)
-        .await
-        .unwrap();
+    let restored = store.restore(&scope, &name("p-second"), into.path()).await;
 
     assert_eq!(
         (
             first_packs.is_empty(),
             second_packs.is_empty(),
             pack_paths(&inner, &scope).await,
-            restored.is_some(),
+            restored.is_ok(),
             listing(into.path()),
         ),
         (
@@ -1037,18 +972,20 @@ fn seconds(span: rustic_core::jiff::Span) -> f64 {
 }
 
 #[test]
-fn the_default_settings_give_the_options_of_rustic() {
-    let config = config_options(&RepositorySettings::default());
-    let backup = backup_options(&SaveSettings::default());
-    let prune = prune_options(&PruneSettings::default()).unwrap();
+fn the_save_and_prune_settings_with_the_values_of_rustic_give_the_options_of_rustic() {
+    let backup = backup_options(&SaveSettings {
+        threads: None,
+        detection: ChangeDetection::Ctime,
+    });
+    let prune = prune_options(&PruneSettings {
+        fast_repack: false,
+        keep_delete: Duration::from_secs(23 * 3600),
+    })
+    .unwrap();
     let rustic_prune = rustic_core::PruneOptions::default();
 
     assert_eq!(
         (
-            config.set_chunker,
-            config.set_chunk_size,
-            config.set_compression,
-            config.set_extra_verify,
             backup.threads,
             backup.parent_opts.ignore_ctime,
             backup.parent_opts.ignore_inode,
@@ -1057,10 +994,6 @@ fn the_default_settings_give_the_options_of_rustic() {
             format!("{:?}", (prune.max_unused, prune.max_repack)),
         ),
         (
-            None,
-            None,
-            None,
-            None,
             None,
             false,
             false,
@@ -1073,15 +1006,6 @@ fn the_default_settings_give_the_options_of_rustic() {
 
 #[test]
 fn each_setting_goes_into_its_rustic_option() {
-    let config = config_options(&RepositorySettings {
-        chunking: Chunking::Fixed(NonZeroU32::new(65_536).unwrap()),
-        compression: Compression::Level(NonZeroI32::new(9).unwrap()),
-        extra_verify: false,
-    });
-    let off = config_options(&RepositorySettings {
-        compression: Compression::Off,
-        ..RepositorySettings::default()
-    });
     let backup = backup_options(&SaveSettings {
         threads: NonZeroUsize::new(2),
         detection: ChangeDetection::SizeMtime,
@@ -1089,19 +1013,11 @@ fn each_setting_goes_into_its_rustic_option() {
     let prune = prune_options(&PruneSettings {
         fast_repack: true,
         keep_delete: Duration::ZERO,
-        repack: RepackLimits::Unlimited,
     })
     .unwrap();
 
     assert_eq!(
         (
-            (
-                config.set_chunker,
-                config.set_chunk_size.map(|size| size.as_u64()),
-                config.set_compression,
-                config.set_extra_verify,
-                off.set_compression,
-            ),
             backup.threads,
             backup.parent_opts.ignore_ctime,
             backup.parent_opts.ignore_inode,
@@ -1112,13 +1028,6 @@ fn each_setting_goes_into_its_rustic_option() {
             format!("{:?}", (prune.max_unused, prune.max_repack)),
         ),
         (
-            (
-                Some(rustic_core::repofile::Chunker::FixedSize),
-                Some(65_536),
-                Some(9),
-                Some(false),
-                Some(0),
-            ),
             NonZeroUsize::new(2),
             true,
             false,
@@ -1129,8 +1038,8 @@ fn each_setting_goes_into_its_rustic_option() {
             format!(
                 "{:?}",
                 (
-                    rustic_core::LimitOption::Percentage(0),
-                    rustic_core::LimitOption::Unlimited
+                    rustic_core::LimitOption::Percentage(5),
+                    rustic_core::LimitOption::Percentage(10)
                 )
             ),
         )
@@ -1138,161 +1047,10 @@ fn each_setting_goes_into_its_rustic_option() {
 }
 
 #[test]
-async fn a_repository_keeps_the_settings_of_its_creation_and_a_bridge_save_uses_the_defaults() {
-    let storage = Arc::new(InMemoryBlobStorage::new());
-    let (fixed_scope, default_scope) = (new_scope(), new_scope());
-    let settings = RepositorySettings {
-        chunking: Chunking::Fixed(NonZeroU32::new(65_536).unwrap()),
-        compression: Compression::Off,
-        extra_verify: false,
-    };
-    let backend = Arc::new(BlobBackend::new(
-        storage.clone(),
-        fixed_scope.0.clone(),
-        Handle::current(),
-        STORAGE_CALL_DEADLINE,
-    ));
-    run_blocking(move || {
-        open_or_create(backend, &key(), &settings)?;
-        Ok(())
-    })
-    .await
-    .unwrap();
-    // 4 chunks of 64 KiB and one of 1 byte, each with other bytes. Rabin keeps a file below its
-    // smallest chunk of 512 KiB in one chunk.
-    let tree = Scratch::new();
-    let content = (0..4 * 65_536 + 1)
-        .map(|index| (index % 251) as u8)
-        .collect::<Vec<_>>();
-    std::fs::write(tree.path().join("data"), &content).unwrap();
-    let config = async |scope: &SnapshotScope| {
-        with_existing_repository(
-            storage.clone(),
-            scope,
-            STORAGE_CALL_DEADLINE,
-            |repository| {
-                let config = repository.config();
-                Ok((
-                    config.chunker(),
-                    config.chunk_size(),
-                    config.compression,
-                    config.extra_verify(),
-                ))
-            },
-        )
-        .await
-        .unwrap()
-    };
-
-    let fixed_save = repository(&storage, &fixed_scope)
-        .save(&name("first"), tree.path())
-        .await
-        .unwrap();
-    let default_save = repository(&storage, &default_scope)
-        .save(&name("first"), tree.path())
-        .await
-        .unwrap();
-    let (fixed_chunker, fixed_chunk_size, fixed_compression, fixed_extra_verify) =
-        config(&fixed_scope).await;
-    let (default_chunker, default_chunk_size, default_compression, default_extra_verify) =
-        config(&default_scope).await;
-
-    assert_eq!(
-        (
-            (
-                fixed_save.data_blobs,
-                fixed_save.data_added_packed >= fixed_save.data_added,
-                fixed_chunker,
-                fixed_chunk_size,
-                fixed_compression,
-                fixed_extra_verify,
-            ),
-            (
-                default_save.data_blobs,
-                default_save.data_added_packed < default_save.data_added,
-                default_chunker,
-                default_chunk_size,
-                default_compression,
-                default_extra_verify,
-            ),
-        ),
-        (
-            (
-                5,
-                true,
-                rustic_core::repofile::Chunker::FixedSize,
-                65_536,
-                Some(0),
-                false,
-            ),
-            (
-                1,
-                true,
-                rustic_core::repofile::Chunker::Rabin,
-                1_048_576,
-                None,
-                true,
-            ),
-        )
-    );
-}
-
-#[test]
 #[timeout("60s")]
-async fn a_size_and_mtime_save_of_a_copied_tree_reads_no_file_and_a_ctime_save_reads_each() {
-    // A copy gives each file a new inode and a new change time, and keeps its size and its
-    // modification time. The size-and-mtime form must also not compare inodes: in rustic,
-    // `ignore_inode` is false by default, and then no inode is compared.
+async fn a_size_and_mtime_save_misses_a_rewrite_of_the_same_size_with_the_old_mtime_and_a_full_save_reads_it()
+ {
     let storage = Arc::new(InMemoryBlobStorage::new());
-    let tree = three_file_tree();
-    let copy = Scratch::new();
-    wait_past_change_times(&entries(tree.path()));
-    copy_flat_tree(tree.path(), copy.path());
-    let same_change_time = entries(tree.path())
-        .iter()
-        .zip(entries(copy.path()))
-        .filter(|(original, copied)| changed_at(original) == changed_at(copied))
-        .map(|(original, _)| original.display().to_string())
-        .collect::<Vec<_>>();
-    assert!(
-        same_change_time.is_empty(),
-        "a copy has the change time of its original: {same_change_time:?}"
-    );
-    let second_save = async |detection| {
-        let repository = repository(&storage, &new_scope());
-        repository.save(&name("first"), tree.path()).await.unwrap();
-        let report = repository
-            .save_with(
-                &name("second"),
-                copy.path(),
-                SaveSettings {
-                    threads: None,
-                    detection,
-                },
-            )
-            .await
-            .unwrap();
-        (
-            report.files_new,
-            report.files_changed,
-            report.files_unmodified,
-        )
-    };
-
-    let size_mtime = second_save(ChangeDetection::SizeMtime).await;
-    let ctime = second_save(ChangeDetection::Ctime).await;
-
-    assert_eq!((size_mtime, ctime), ((0, 0, 3), (0, 3, 0)));
-}
-
-#[test]
-#[timeout("60s")]
-async fn a_size_and_mtime_save_misses_a_rewrite_of_the_same_size_with_the_old_mtime() {
-    let storage = Arc::new(InMemoryBlobStorage::new());
-    let size_mtime = SaveSettings {
-        threads: None,
-        detection: ChangeDetection::SizeMtime,
-    };
     let rewrite = |tree: &Path| {
         let path = tree.join("a.txt");
         let old = modified(&path);
@@ -1306,47 +1064,78 @@ async fn a_size_and_mtime_save_misses_a_rewrite_of_the_same_size_with_the_old_mt
             "the rewrite kept the change time of the file"
         );
     };
-    let changed = async |detection: SaveSettings| {
+    let changed = async |detection: StoreChangeDetection| {
         let tree = three_file_tree();
-        let repository = repository(&storage, &new_scope());
-        repository
-            .save_with(&name("first"), tree.path(), detection)
+        let scope = new_scope();
+        let store = store(storage.clone(), STORAGE_CALL_DEADLINE);
+        store
+            .save(&scope, &name("p-first"), tree.path(), None)
             .await
             .unwrap();
         rewrite(tree.path());
-        let report = repository
-            .save_with(&name("second"), tree.path(), detection)
+        store
+            .save(
+                &scope,
+                &name("p-second"),
+                tree.path(),
+                Some((&name("p-first"), detection)),
+            )
             .await
             .unwrap();
         let into = Scratch::new();
-        repository
-            .restore(&name("second"), into.path(), None)
+        store
+            .restore(&scope, &name("p-second"), into.path())
             .await
             .unwrap();
-        (
-            report.files_changed,
-            std::fs::read(into.path().join("a.txt")).unwrap(),
+        let counts = with_existing_repository(
+            storage.clone(),
+            &scope,
+            STORAGE_CALL_DEADLINE,
+            |repository| {
+                repository
+                    .get_all_snapshots()?
+                    .into_iter()
+                    .find(|snapshot| snapshot.label == "p-second")
+                    .and_then(|snapshot| snapshot.summary)
+                    .map(|summary| {
+                        (
+                            summary.files_new,
+                            summary.files_changed,
+                            summary.files_unmodified,
+                        )
+                    })
+                    .context("the second snapshot has no summary")
+            },
         )
+        .await
+        .unwrap();
+        (counts, std::fs::read(into.path().join("a.txt")).unwrap())
     };
 
-    let missed = changed(size_mtime).await;
-    let seen = changed(SaveSettings::default()).await;
+    let missed = changed(StoreChangeDetection::SizeMtime).await;
+    let seen = changed(StoreChangeDetection::Full).await;
 
     assert_eq!(
         (missed, seen),
-        ((0, b"a.txt".to_vec()), (1, b"A.TXT".to_vec()))
+        (
+            ((0, 0, 3), b"a.txt".to_vec()),
+            ((3, 0, 0), b"A.TXT".to_vec())
+        )
     );
 }
 
 #[test]
 #[timeout("60s")]
-async fn two_prunes_without_a_grace_period_give_back_the_data_that_no_snapshot_uses() {
+async fn two_prunes_without_a_grace_period_under_the_limits_of_rustic_give_back_the_data_that_no_snapshot_uses()
+ {
     // The first save puts both files in one pack. The second save rewrites one of them. After the
-    // forget, that pack holds a used and an unused blob, so a prune without limits repacks it.
+    // delete, that pack holds a used and an unused blob. The used blob is far below 10% of the
+    // repository and the unused blob is above 5% of the used data, so a prune under the limits of
+    // rustic repacks it.
     let prune_twice = async |fast_repack| {
         let storage = Arc::new(InMemoryBlobStorage::new());
         let scope = new_scope();
-        let repository = repository(&storage, &scope);
+        let store = store(storage.clone(), STORAGE_CALL_DEADLINE);
         let tree = Scratch::new();
         std::fs::write(tree.path().join("kept.txt"), b"kept in both snapshots").unwrap();
         std::fs::write(
@@ -1354,15 +1143,20 @@ async fn two_prunes_without_a_grace_period_give_back_the_data_that_no_snapshot_u
             b"only in the first snapshot",
         )
         .unwrap();
-        repository.save(&name("first"), tree.path()).await.unwrap();
+        store
+            .save(&scope, &name("p-first"), tree.path(), None)
+            .await
+            .unwrap();
         let first_packs = data_packs(&storage, &scope).await;
         std::fs::write(tree.path().join("changed.txt"), b"in the second snapshot").unwrap();
-        repository.save(&name("second"), tree.path()).await.unwrap();
-        repository.forget(&name("first")).await.unwrap();
+        store
+            .save(&scope, &name("p-second"), tree.path(), None)
+            .await
+            .unwrap();
+        store.delete(&scope, &name("p-first")).await.unwrap();
         let settings = PruneSettings {
             fast_repack,
             keep_delete: Duration::ZERO,
-            repack: RepackLimits::Unlimited,
         };
 
         let stored = |paths: Vec<String>| {
@@ -1372,46 +1166,33 @@ async fn two_prunes_without_a_grace_period_give_back_the_data_that_no_snapshot_u
                 .collect::<Vec<_>>()
         };
 
-        let marked = repository.prune(settings).await.unwrap().unwrap();
+        let marked = prune_with(storage.clone(), &scope, settings)
+            .await
+            .unwrap()
+            .unwrap();
         let after_mark = stored(pack_paths(&storage, &scope).await);
-        let deleted = repository.prune(settings).await.unwrap().unwrap();
+        let deleted = prune_with(storage.clone(), &scope, settings)
+            .await
+            .unwrap()
+            .unwrap();
         let after_delete = stored(pack_paths(&storage, &scope).await);
         let into = Scratch::new();
-        repository
-            .restore(&name("second"), into.path(), None)
+        store
+            .restore(&scope, &name("p-second"), into.path())
             .await
             .unwrap();
         (
             marked.packs_repacked,
-            marked.bytes_repack_removed > 0,
             first_packs.len(),
             after_mark,
             after_delete,
-            deleted.marked_packs_deleted,
-            marked
-                .phases
-                .iter()
-                .map(|time| time.phase)
-                .collect::<Vec<_>>(),
+            deleted.packs_repacked,
             listing(into.path()) == listing(tree.path()),
         )
     };
-    // The first prune repacks 2 packs, and the second deletes the 3 packs that the first marked.
-    // The data pack of the first save is one of them.
-    let expected = (
-        2,
-        true,
-        1,
-        vec![true],
-        vec![false],
-        3,
-        vec![
-            OperationPhase::Open,
-            OperationPhase::PrunePlan,
-            OperationPhase::Prune,
-        ],
-        true,
-    );
+    // The first prune repacks the data pack of the first save and marks it. The second prune
+    // deletes it.
+    let expected = (1, 1, vec![true], vec![false], 0, true);
 
     assert_eq!(
         (prune_twice(false).await, prune_twice(true).await),
@@ -1424,10 +1205,16 @@ async fn two_prunes_without_a_grace_period_give_back_the_data_that_no_snapshot_u
 async fn a_prune_of_a_scope_without_a_repository_gives_nothing() {
     let storage = Arc::new(InMemoryBlobStorage::new());
 
-    let pruned = repository(&storage, &new_scope())
-        .prune(PruneSettings::default())
-        .await
-        .unwrap();
+    let pruned = prune_with(
+        storage,
+        &new_scope(),
+        PruneSettings {
+            fast_repack: false,
+            keep_delete: Duration::ZERO,
+        },
+    )
+    .await
+    .unwrap();
 
     assert_eq!(pruned, None);
 }

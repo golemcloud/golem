@@ -19,9 +19,10 @@
 
 use super::super::fault::{Operation, OperationCancelled, classify, is_config_exists};
 use super::super::publish::{SnapshotStage, StagedSnapshot};
+use super::super::tests::files_of;
 use super::super::tests::holding::{holding_storage, reached_deadline};
 use super::super::tests::scripted::{Script, ScriptedBlobStorage};
-use super::{BlobBackend, Lease, file_size};
+use super::{BlobBackend, KEPT_PACKS_LIMIT, file_size};
 use crate::filesystem_snapshot::SnapshotStoreError;
 use crate::services::golem_config::DEFAULT_FILESYSTEM_SNAPSHOT_STORAGE_CALL_DEADLINE as STORAGE_CALL_DEADLINE;
 use anyhow::anyhow;
@@ -60,10 +61,14 @@ impl Fixture {
         let storage = Arc::new(InMemoryBlobStorage::new());
         let namespace = new_namespace();
         let backend = BlobBackend::new(
-            storage.clone(),
-            namespace.clone(),
+            files_of(
+                storage.clone(),
+                namespace.clone(),
+                STORAGE_CALL_DEADLINE,
+                CancellationToken::new(),
+            ),
             runtime.handle().clone(),
-            STORAGE_CALL_DEADLINE,
+            KEPT_PACKS_LIMIT,
         );
         Self {
             runtime,
@@ -350,10 +355,14 @@ fn a_remove_deletes_the_file_and_a_missing_file_is_no_error() {
 fn each_call_gives_an_error_of_the_storage_that_names_the_path() {
     let runtime = Runtime::new().unwrap();
     let backend = BlobBackend::new(
-        Arc::new(FailingBlobStorage),
-        new_namespace(),
+        files_of(
+            Arc::new(FailingBlobStorage),
+            new_namespace(),
+            STORAGE_CALL_DEADLINE,
+            CancellationToken::new(),
+        ),
         runtime.handle().clone(),
-        STORAGE_CALL_DEADLINE,
+        KEPT_PACKS_LIMIT,
     );
     let pack = format!("data/ab/{}", "ab".repeat(32));
 
@@ -386,7 +395,11 @@ fn a_call_that_gets_no_answer_gives_a_storage_error_at_the_deadline() {
     let (storage, _gate, _dropped) =
         holding_storage(Arc::new(InMemoryBlobStorage::new()), |_, _| true);
     let deadline = Duration::from_millis(100);
-    let backend = BlobBackend::new(storage, new_namespace(), runtime.handle().clone(), deadline);
+    let backend = BlobBackend::new(
+        files_of(storage, new_namespace(), deadline, CancellationToken::new()),
+        runtime.handle().clone(),
+        KEPT_PACKS_LIMIT,
+    );
     let pack = format!("data/ab/{}", "ab".repeat(32));
 
     let outcome = within_limit(move || {
@@ -439,10 +452,14 @@ fn a_call_that_answers_before_the_deadline_gives_its_answer() {
             op_label == "write"
         });
     let backend = BlobBackend::new(
-        storage,
-        new_namespace(),
+        files_of(
+            storage,
+            new_namespace(),
+            Duration::from_secs(2),
+            CancellationToken::new(),
+        ),
         runtime.handle().clone(),
-        Duration::from_secs(2),
+        KEPT_PACKS_LIMIT,
     );
     let answer_after = Duration::from_millis(100);
     let started = Instant::now();
@@ -516,12 +533,15 @@ impl PackFixture {
         });
         let storage = ScriptedBlobStorage::new(inner, rule);
         let backend = BlobBackend::new(
-            storage.clone(),
-            namespace,
+            files_of(
+                storage.clone(),
+                namespace,
+                STORAGE_CALL_DEADLINE,
+                CancellationToken::new(),
+            ),
             runtime.handle().clone(),
-            STORAGE_CALL_DEADLINE,
-        )
-        .keeping_packs_up_to(limit);
+            limit,
+        );
         Self {
             _runtime: runtime,
             storage,
@@ -598,8 +618,9 @@ fn a_range_that_is_not_cacheable_is_a_ranged_read_each_time() {
 
 #[test]
 fn two_threads_that_miss_one_pack_make_one_storage_read() {
-    // The first read waits at the gate. The gate opens only when the second thread waits for that
-    // read, or when the second thread reads the pack itself.
+    // The first read waits at the gate. The gate opens after the second thread had 200 ms to ask
+    // for the same pack while the first read was held. A second read in that time fails the test.
+    // The value tests of the kept packs hold the rule that the second thread waits.
     let fixture = PackFixture::new(1024, |op_label, _| {
         if op_label == "read" {
             Script::WaitForGate
@@ -619,23 +640,23 @@ fn two_threads_that_miss_one_pack_make_one_storage_read() {
         let backend = fixture.backend.clone();
         move || tree_range(&backend, 50, 10).ok()
     });
-    let second_asked = (0..1000).any(|_| {
+    let second_read_during_the_hold = (0..20).any(|_| {
         std::thread::sleep(Duration::from_millis(10));
-        fixture.backend.kept.waiters() == 1 || fixture.pack_calls().len() > 1
+        fixture.pack_calls().len() > 1
     });
     fixture.storage.open_gate();
 
     assert_eq!(
         (
             first_read_started,
-            second_asked,
+            second_read_during_the_hold,
             first.recv_timeout(LIMIT).ok().flatten(),
             second.recv_timeout(LIMIT).ok().flatten(),
             fixture.pack_calls()
         ),
         (
             true,
-            true,
+            false,
             Some(Bytes::from_iter(0..10)),
             Some(Bytes::from_iter(50..60)),
             vec!["read"]
@@ -795,10 +816,14 @@ fn a_tracked_backend_counts_in_its_tracker_until_it_drops() {
     let fixture = Fixture::new();
     let tracker = tokio_util::task::TaskTracker::new();
     let backend = BlobBackend::new(
-        fixture.storage.clone(),
-        fixture.namespace.clone(),
+        files_of(
+            fixture.storage.clone(),
+            fixture.namespace.clone(),
+            STORAGE_CALL_DEADLINE,
+            CancellationToken::new(),
+        ),
         fixture.runtime.handle().clone(),
-        STORAGE_CALL_DEADLINE,
+        KEPT_PACKS_LIMIT,
     )
     .tracked_by(tracker.token());
 
@@ -815,12 +840,15 @@ fn a_cancelled_backend_makes_no_storage_call() {
         ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |_, _| Script::Pass);
     let cancel = CancellationToken::new();
     let backend = BlobBackend::new(
-        storage.clone(),
-        new_namespace(),
+        files_of(
+            storage.clone(),
+            new_namespace(),
+            STORAGE_CALL_DEADLINE,
+            cancel.clone(),
+        ),
         runtime.handle().clone(),
-        STORAGE_CALL_DEADLINE,
-    )
-    .cancelled_by(cancel.clone());
+        KEPT_PACKS_LIMIT,
+    );
     cancel.cancel();
 
     let cancelled = [
@@ -841,23 +869,6 @@ fn a_cancelled_backend_makes_no_storage_call() {
 }
 
 #[test]
-fn a_marker_write_that_starts_at_the_end_of_the_lease_does_not_move_it_and_one_that_starts_before_does()
- {
-    let end = Instant::now() + Duration::from_secs(60);
-    let span = Duration::from_secs(10);
-    let at_the_end = Lease::until(end);
-    let just_before = Lease::until(end);
-
-    at_the_end.extend_from(end, span);
-    just_before.extend_from(end - Duration::from_nanos(1), span);
-
-    assert_eq!(
-        (at_the_end.expiry(), just_before.expiry()),
-        (end, end - Duration::from_nanos(1) + span)
-    );
-}
-
-#[test]
 fn a_cancel_ends_a_call_that_runs() {
     let runtime = Runtime::new().unwrap();
     let held = CancellationToken::new();
@@ -870,12 +881,15 @@ fn a_cancel_ends_a_call_that_runs() {
     });
     let cancel = CancellationToken::new();
     let backend = BlobBackend::new(
-        storage,
-        new_namespace(),
+        files_of(
+            storage,
+            new_namespace(),
+            Duration::from_secs(60),
+            cancel.clone(),
+        ),
         runtime.handle().clone(),
-        Duration::from_secs(60),
-    )
-    .cancelled_by(cancel.clone());
+        KEPT_PACKS_LIMIT,
+    );
     runtime.spawn(async move {
         held.cancelled().await;
         cancel.cancel();
@@ -895,12 +909,15 @@ fn a_cancel_ends_a_call_that_runs() {
 fn a_backend_whose_token_is_not_cancelled_answers() {
     let fixture = Fixture::new();
     let backend = BlobBackend::new(
-        fixture.storage.clone(),
-        fixture.namespace.clone(),
+        files_of(
+            fixture.storage.clone(),
+            fixture.namespace.clone(),
+            STORAGE_CALL_DEADLINE,
+            CancellationToken::new(),
+        ),
         fixture.runtime.handle().clone(),
-        STORAGE_CALL_DEADLINE,
-    )
-    .cancelled_by(CancellationToken::new());
+        KEPT_PACKS_LIMIT,
+    );
 
     let read = backend
         .write_bytes(FileType::Pack, &id("ab"), false, bytes("pack"))
@@ -973,10 +990,14 @@ fn a_backend_with_a_stage_keeps_the_snapshot_file_and_does_not_write_it() {
     let fixture = Fixture::new();
     let stage = Arc::new(SnapshotStage::default());
     let backend = BlobBackend::new(
-        fixture.storage.clone(),
-        fixture.namespace.clone(),
+        files_of(
+            fixture.storage.clone(),
+            fixture.namespace.clone(),
+            STORAGE_CALL_DEADLINE,
+            CancellationToken::new(),
+        ),
         fixture.runtime.handle().clone(),
-        STORAGE_CALL_DEADLINE,
+        KEPT_PACKS_LIMIT,
     )
     .staging_in(stage.clone());
     let content = [Bytes::from_static(b"snap"), Bytes::from_static(b"shot")]
@@ -1015,10 +1036,14 @@ fn a_backend_with_a_stage_keeps_the_snapshot_file_and_does_not_write_it() {
 fn each_failed_call_is_a_storage_failure_to_the_classification() {
     let runtime = Runtime::new().unwrap();
     let backend = BlobBackend::new(
-        Arc::new(FailingBlobStorage),
-        new_namespace(),
+        files_of(
+            Arc::new(FailingBlobStorage),
+            new_namespace(),
+            STORAGE_CALL_DEADLINE,
+            CancellationToken::new(),
+        ),
         runtime.handle().clone(),
-        STORAGE_CALL_DEADLINE,
+        KEPT_PACKS_LIMIT,
     );
 
     let classified = [

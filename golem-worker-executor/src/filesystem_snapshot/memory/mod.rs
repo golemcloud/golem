@@ -24,6 +24,7 @@ mod tree;
 #[cfg(test)]
 mod tests;
 
+use super::clock::{Clock, SystemClock};
 use super::{
     ChangeDetection, FilesystemSnapshotStore, SnapshotInfo, SnapshotName, SnapshotScope,
     SnapshotStoreError, newest_first, snapshot_time,
@@ -39,9 +40,10 @@ use tree::{TreeEntry, read_tree, tree_info, write_tree};
 ///
 /// A clone of the store is one more store over the same snapshots, as another executor has. On a
 /// platform other than unix, a save of a tree with a symlink gives `Source` and publishes nothing.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub(crate) struct InMemorySnapshotStore {
     scopes: Arc<Mutex<HashMap<SnapshotScope, Arc<[Stored]>>>>,
+    clock: Arc<dyn Clock>,
 }
 
 /// One snapshot of a scope.
@@ -54,8 +56,17 @@ struct Stored {
 
 impl InMemorySnapshotStore {
     /// Makes a store that holds no snapshot.
+    #[allow(dead_code)]
     pub(crate) fn new() -> Self {
-        Self::default()
+        Self::with_clock(Arc::new(SystemClock))
+    }
+
+    /// Makes a store that holds no snapshot and reads the time from the clock.
+    fn with_clock(clock: Arc<dyn Clock>) -> Self {
+        Self {
+            scopes: Arc::default(),
+            clock,
+        }
     }
 
     /// Gives the snapshots of each scope. No lock is held across an await, so a panic cannot leave
@@ -67,6 +78,12 @@ impl InMemorySnapshotStore {
     /// Gives the snapshots of the scope. A scope that holds nothing gives an empty slice.
     fn snapshots_of(&self, scope: &SnapshotScope) -> Arc<[Stored]> {
         self.scopes().get(scope).cloned().unwrap_or_default()
+    }
+}
+
+impl Default for InMemorySnapshotStore {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -132,7 +149,7 @@ impl FilesystemSnapshotStore for InMemorySnapshotStore {
         let tree = blocking(move || read_tree(&root))
             .await?
             .map_err(SnapshotStoreError::Source)?;
-        let info = tree_info(&tree, snapshot_time(Timestamp::now_utc(), newest));
+        let info = tree_info(&tree, snapshot_time(self.clock.now(), newest));
 
         // A save of the same name can finish during the read, so the check runs again in the
         // step that publishes the snapshot.

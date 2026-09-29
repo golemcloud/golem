@@ -41,13 +41,13 @@ fn files<S: BlobStorage + 'static>(
     storage: &Arc<S>,
     namespace: &BlobStorageNamespace,
 ) -> SnapshotFiles {
-    SnapshotFiles {
-        storage: storage.clone(),
-        namespace: namespace.clone(),
-        deadline: DEADLINE,
-        cancel: tokio_util::sync::CancellationToken::new(),
-        tracker: tokio_util::task::TaskTracker::new(),
-    }
+    SnapshotFiles::new(
+        storage.clone(),
+        namespace.clone(),
+        DEADLINE,
+        tokio_util::sync::CancellationToken::new(),
+        tokio_util::task::TaskTracker::new(),
+    )
 }
 
 fn new_namespace() -> BlobStorageNamespace {

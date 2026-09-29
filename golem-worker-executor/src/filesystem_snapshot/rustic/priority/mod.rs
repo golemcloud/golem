@@ -51,17 +51,8 @@ impl LowPriority {
     /// Runs the work at nice 19 on a new thread with the name, inside a new rayon pool, and waits
     /// for it. The threads that the work starts get the same nice value. On a platform other than
     /// Linux the priority stays as it is, and the work still runs on its own thread in its own pool.
+    /// A failure of a step gives a warning, and the work runs without that step.
     pub(super) fn run<T: Send + 'static>(
-        self,
-        name: &'static str,
-        work: impl FnOnce() -> anyhow::Result<T> + Send + 'static,
-    ) -> anyhow::Result<T> {
-        self.on_own_thread(name, work)
-    }
-
-    /// Runs the work on a new thread that first lowers its priority and builds the pool. A failure
-    /// of a step gives a warning, and the work runs without that step.
-    fn on_own_thread<T: Send + 'static>(
         self,
         name: &'static str,
         work: impl FnOnce() -> anyhow::Result<T> + Send + 'static,
@@ -77,7 +68,7 @@ impl LowPriority {
                         "Failed to lower the CPU priority of filesystem snapshot work, so it runs at the normal priority"
                     );
                 }
-                self.in_own_pool(name, || run_taken(&slot))
+                self.run_at_normal_priority(name, || run_taken(&slot))
             }
         });
         match spawned {
@@ -93,23 +84,12 @@ impl LowPriority {
             }
         }
     }
-}
 
-impl LowPriority {
-    /// Runs the work at the normal priority on the calling thread, inside a new rayon pool with
-    /// the name, and gives its result. So the rayon work of one operation does not wait for the
-    /// rayon work of another operation on the global pool.
-    pub(super) fn run_at_normal_priority<T: Send>(
-        self,
-        name: &'static str,
-        work: impl FnOnce() -> anyhow::Result<T> + Send,
-    ) -> anyhow::Result<T> {
-        self.in_own_pool(name, work)
-    }
-
-    /// Runs the work inside a new rayon pool. A pool that does not build gives a warning, and the
+    /// Runs the work on the calling thread, at its priority, inside a new rayon pool with the name,
+    /// and gives its result. So the rayon work of one operation does not wait for the rayon work of
+    /// another operation on the global pool. A pool that does not build gives a warning, and the
     /// work runs without it.
-    fn in_own_pool<T: Send>(
+    pub(super) fn run_at_normal_priority<T: Send>(
         self,
         name: &'static str,
         work: impl FnOnce() -> anyhow::Result<T> + Send,
