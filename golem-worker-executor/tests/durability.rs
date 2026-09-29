@@ -106,6 +106,46 @@ pub(crate) async fn assert_snapshot_recovery_loaded(events: &mut UnboundedReceiv
     .expect("Timed out waiting for snapshot recovery event");
 }
 
+/// Expects the recovery to reject the snapshot at one index with `expected_error` and then to
+/// load the snapshot at another index. Gives the rejected index and the loaded index.
+async fn snapshot_recovery_fell_back(
+    events: &mut UnboundedReceiver<LogEvent>,
+    expected_error: &str,
+) -> (OplogIndex, OplogIndex) {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        let mut rejected = None;
+        while let Some(event) = events.recv().await {
+            match AgentEvent::try_from(event) {
+                Ok(AgentEvent::SnapshotRecoveryFailed {
+                    snapshot_index,
+                    error,
+                    ..
+                }) => {
+                    assert!(
+                        rejected.is_none(),
+                        "Snapshot recovery from {snapshot_index} failed after an earlier failure: {error}"
+                    );
+                    assert!(
+                        error.contains(expected_error),
+                        "Snapshot recovery failed with unexpected error: {error}"
+                    );
+                    rejected = Some(snapshot_index);
+                }
+                Ok(AgentEvent::SnapshotRecoverySucceeded { snapshot_index, .. }) => {
+                    let rejected = rejected.unwrap_or_else(|| {
+                        panic!("Snapshot recovery from {snapshot_index} succeeded before a failure")
+                    });
+                    return (rejected, snapshot_index);
+                }
+                _ => {}
+            }
+        }
+        panic!("Worker event stream ended before the snapshot recovery events");
+    })
+    .await
+    .expect("Timed out waiting for the snapshot recovery events")
+}
+
 pub(crate) async fn assert_snapshot_recovery_failed(
     events: &mut UnboundedReceiver<LogEvent>,
     expected_error: &str,
@@ -1127,7 +1167,7 @@ async fn snapshot_load_restores_without_initialization_and_replays_only_the_suff
 #[test]
 #[timeout("120s")]
 #[tracing::instrument]
-async fn snapshot_load_rejects_write_http_and_rpc_and_falls_back_to_full_replay(
+async fn snapshot_load_rejects_write_http_and_rpc_and_falls_back_to_the_older_snapshot(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("agent_sdk_rust")] agent_sdk_rust: &PrecompiledComponent,
@@ -1180,13 +1220,21 @@ async fn snapshot_load_rejects_write_http_and_rpc_and_falls_back_to_full_replay(
             .await?
             .iter()
             .filter(|entry| matches!(entry.entry, PublicOplogEntry::Snapshot(_)))
-            .count();
-        assert!(
-            snapshots >= 2,
-            "{mode} probe should have an older loadable snapshot before the failing latest snapshot"
-        );
+            .map(|entry| entry.oplog_index)
+            .collect::<Vec<_>>();
+        let [.., older, newest] = snapshots[..] else {
+            panic!(
+                "{mode} probe should have an older loadable snapshot before the failing latest snapshot"
+            );
+        };
         let oplog_before_recovery = executor.oplog_max_index(&worker_id).await?;
-        probes.push((mode, agent_id, worker_id, oplog_before_recovery));
+        probes.push((
+            mode,
+            agent_id,
+            worker_id,
+            oplog_before_recovery,
+            (newest, older),
+        ));
     }
 
     drop(executor);
@@ -1197,21 +1245,26 @@ async fn snapshot_load_rejects_write_http_and_rpc_and_falls_back_to_full_replay(
     )
     .await?;
 
-    for (mode, agent_id, worker_id, oplog_before_recovery) in probes {
+    for (mode, agent_id, worker_id, oplog_before_recovery, (newest, older)) in probes {
         let mut events = executor.capture_output(&worker_id).await?;
         executor.resume(&worker_id, false).await?;
-        assert_snapshot_recovery_failed(
+        let recovery = snapshot_recovery_fell_back(
             &mut events,
             "Read-only agent method attempted a side effect",
         )
         .await;
+        assert_eq!(
+            recovery,
+            (newest, older),
+            "{mode}: only the failing latest snapshot is rejected, and the start loads the older one"
+        );
         executor
             .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(10))
             .await?;
         assert_eq!(
             executor.oplog_max_index(&worker_id).await?,
             oplog_before_recovery,
-            "{mode}: failed snapshot loading and full replay must not write to the oplog"
+            "{mode}: the rejected snapshot and the replay after the older one must not write to the oplog"
         );
 
         let status = executor
@@ -1226,22 +1279,29 @@ async fn snapshot_load_rejects_write_http_and_rpc_and_falls_back_to_full_replay(
             .into_typed::<String>()?;
         let status: SnapshotLoadProbeStatus = serde_json::from_str(&status)?;
 
-        assert_eq!(status.value, 2, "{mode}: full replay should restore state");
-        assert_eq!(status.loaded_value, None, "{mode}: no partial load state");
-        assert_eq!(status.origin, "initialized", "{mode}: constructor replay");
+        assert_eq!(
+            status.value, 2,
+            "{mode}: the older snapshot and the replay after it restore state"
+        );
+        assert_eq!(
+            status.loaded_value,
+            Some(1),
+            "{mode}: the older snapshot was loaded"
+        );
+        assert_eq!(status.origin, "restored", "{mode}: snapshot restore");
         assert_eq!(status.mode, mode);
         assert_eq!(status.config_marker, config_marker);
         assert_eq!(
-            status.read_bytes, 0,
-            "{mode}: failed component was discarded"
+            status.read_bytes, 4,
+            "{mode}: the load of the older snapshot read its bytes"
         );
         assert_eq!(
-            status.constructor_calls_now, 1,
-            "{mode}: full replay ran init"
+            status.constructor_calls_now, 0,
+            "{mode}: the start from the older snapshot ran no constructor"
         );
         assert_eq!(
-            status.load_calls_now, 0,
-            "{mode}: failed load state was discarded"
+            status.load_calls_now, 1,
+            "{mode}: the failed load state was discarded, and the older snapshot loaded once"
         );
     }
 
