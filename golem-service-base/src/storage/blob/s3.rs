@@ -1849,11 +1849,11 @@ impl BlobStorageBackend for S3BlobStorage {
     /// Tells if the bucket holds an object at the key of the path, with one `HeadObject`
     /// request.
     ///
-    /// A copy or a move onto the same path reads this. The head of the key of the blob answers
-    /// it, and a directory at the same path holds no blob, so the marker object of a directory
-    /// and the keys below the path say nothing here. `exists_at` reads both of them, and an
-    /// error of one of those later requests would reach the guest in place of the permanent
-    /// error of a source that is not there, which the executor would then retry.
+    /// The head of the key of the blob answers it, and a directory at the same path holds no blob,
+    /// so the marker object of a directory and the keys below the path say nothing here.
+    /// `exists_at` reads both of them, and an error of one of those later requests would reach the
+    /// guest in place of the permanent error of a source that is not there, which the executor
+    /// would then retry.
     async fn has_blob_at(
         &self,
         target_label: &'static str,

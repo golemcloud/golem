@@ -303,11 +303,12 @@ pub trait BlobStorage: sealed::Sealed + Debug + Send + Sync {
     /// Writes the blob at the `from` path as the blob at the `to` path, and then deletes the
     /// blob at `from`.
     ///
-    /// A move onto the same path keeps the blob where it is, and two forms of one path are the
-    /// same path. A blob cannot be where a directory is, so a root path at either end gives
-    /// [`BlobNameError::NoName`]. The copy comes before the delete, so each error of `copy` is
-    /// an error of `move` and the blob at `from` stays: a `from` path with no blob at it gives
-    /// [`BlobMissingError`] from the copy, the move onto the same path as well.
+    /// A move onto the same path keeps the blob where it is, and two forms of one path are the same
+    /// path. A blob cannot be where a directory is, so a root path at either end gives
+    /// [`BlobNameError::NoName`]. The copy comes before the delete, so each error of `copy` is an
+    /// error of `move` and the blob at `from` stays: a `from` path with no blob at it gives the
+    /// error of the copy, which is [`BlobMissingError`] where `copy` gives it, the move onto the
+    /// same path as well.
     async fn r#move(
         &self,
         target_label: &'static str,
@@ -328,13 +329,13 @@ mod sealed {
 
 /// Keeps the blobs of the namespaces of one backend.
 ///
-/// Each backend gets [`BlobStorage`] from this trait, and that implementation applies the rules
-/// of a path before a method of this trait runs. It makes the one form of each path
-/// (`normalized_blob_path`), so a path that breaks a rule that `normalized_blob_path` applies
-/// gets that error and no method of this trait gets the path. It gives the answer of [`BlobStorage`] at a root
-/// path, so only `list_dir_at` and `list_blobs_below_at` get a root path. It gives the
-/// [`BlobRangeError`] of a `start` after `end`, and the [`BlobMissingError`] of `copy` and
-/// `move`. It reads every path of `delete_many` before `delete_many_at` runs.
+/// Each backend gets [`BlobStorage`] from this trait, and that implementation applies the rules of
+/// a path before a method of this trait runs. It makes the one form of each path
+/// (`normalized_blob_path`), so a path that breaks a rule that `normalized_blob_path` applies gets
+/// that error and no method of this trait gets the path. It gives the answer of [`BlobStorage`] at
+/// a root path, so only `list_dir_at` and `list_blobs_below_at` get a root path. It gives the
+/// [`BlobRangeError`] of a `start` after `end`, and the [`BlobMissingError`] of `copy` and `move`.
+/// It reads every path of `delete_many` before `delete_many_at` runs.
 ///
 /// Each method has the rules of the method of [`BlobStorage`] with the same name without `_at`,
 /// except where its own doc says otherwise.
@@ -1244,20 +1245,20 @@ pub struct BlobRangeError {
 /// The name is good: the rules of [`BlobNameError`] accept it, and the backend can use it. The
 /// storage holds no blob at it.
 ///
-/// `copy` of [`BlobStorage`] gives this error when the storage holds no blob at its source path
-/// and the backend tells it so. A copy onto the same path gives it on each backend. For a copy
-/// to another path, the in-memory and the SQLite backends use the default `copy_at` of
+/// `copy` of [`BlobStorage`] gives this error when the storage holds no blob at its source path and
+/// the backend tells it so. A copy onto the same path gives it on each backend. For a copy to
+/// another path, the in-memory and the SQLite backends use the default `copy_at` of
 /// [`BlobStorageBackend`], which reads the blob at the source path, and the S3 backend has a
-/// `copy_at` of its own, which sends one `CopyObject` request and reads the code `NoSuchKey` of
-/// the source key. The filesystem backend has a `copy_at` of its own too, which gives the error
-/// of the filesystem for a source with no blob, and not this error. `move` is a copy and then a
-/// delete of the source, so it gives the error of the copy too, and it deletes nothing. A guest picks the source container name and the source
-/// object name of `copy_object` and of `move_object`, so the path is of the guest. The storage
-/// names the path as the guest wrote it, and not in the normalized form that the storage uses.
-/// Each [`BlobNameError`] does the same, because the guest reads the message, except
-/// [`BlobNameError::NoName`], which names the one form of the path. The one form of a path
-/// with no name in it is the empty path, and each spelling of such a path says the same thing
-/// to the guest.
+/// `copy_at` of its own, which sends one `CopyObject` request and reads the code `NoSuchKey` of the
+/// source key. The filesystem backend has a `copy_at` of its own too, which gives the error of the
+/// filesystem for a source with no blob, and not this error. `move` is a copy and then a delete of
+/// the source, so it gives the error of the copy too, and it deletes nothing. A guest picks the
+/// source container name and the source object name of `copy_object` and of `move_object`, so the
+/// path is of the guest. The storage names the path as the guest wrote it, and not in the
+/// normalized form that the storage uses. Each [`BlobNameError`] does the same, because the guest
+/// reads the message, except [`BlobNameError::NoName`], which names the one form of the path. The
+/// one form of a path with no name in it is the empty path, and each spelling of such a path says
+/// the same thing to the guest.
 ///
 /// The error is permanent. `blob_store_error` in
 /// `golem_worker_executor::services::blob_store` maps it to `BlobStoreError::NotFound`, and
@@ -1484,12 +1485,11 @@ mod normalized_path {
 
     /// The one form of a relative blob path (`normalized_blob_path`).
     ///
-    /// [`BlobStorage`](super::BlobStorage) makes this form of the path of each operation, and
-    /// each method of [`BlobStorageBackend`](super::BlobStorageBackend) gets this form and
-    /// stores it. The functions that make a key of a path take this type and nothing else, so a
-    /// path that has not been through `normalized_blob_path` cannot reach them and no comment
-    /// has to say that it must not. Code outside this crate can read the path of this type, and
-    /// it cannot make one.
+    /// [`BlobStorage`](super::BlobStorage) makes this form of the path of each operation, and each
+    /// method of [`BlobStorageBackend`](super::BlobStorageBackend) gets this form. The functions
+    /// that make a key of a path take this type and nothing else, so a path that has not been
+    /// through `normalized_blob_path` cannot reach them and no comment has to say that it must not.
+    /// Code outside this crate can read the path of this type, and it cannot make one.
     ///
     /// The form borrows the path of the caller when that path is already in its one form, so
     /// this form of such a path allocates nothing. The operation that follows still builds the
@@ -1686,9 +1686,8 @@ pub(crate) fn blob_copy_changes_nothing(
 /// in it, because a `.` is not a name (`NormalizedBlobPath::is_root`). The root is a directory,
 /// so it names no blob.
 ///
-/// A path that breaks a rule of a name does not name the root, whatever else it holds: a `..`
-/// path and an absolute path give `false` here, and the backend that reads such a path gives the
-/// rule that it breaks.
+/// A path that breaks a rule of a name does not name the root, whatever else it holds: a `..` path
+/// and an absolute path give `false` here, and the storage gives the rule that it breaks.
 ///
 /// `golem_worker_executor::services::blob_store` reads this for the container name that a guest
 /// gives, because a name that names the root names the namespace and not a container.
