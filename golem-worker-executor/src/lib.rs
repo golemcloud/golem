@@ -1332,11 +1332,13 @@ pub async fn run_grpc_server<Ctx: WorkerCtx>(
         .initialize(grpc_port)
         .await;
 
-    let worker_impl = WorkerExecutorImpl::<Ctx, All<Ctx>>::new(
+    // The start of the service recovers the agents, and its future is large. It lives on the
+    // heap, so the stack of the caller stays small.
+    let worker_impl = Box::pin(WorkerExecutorImpl::<Ctx, All<Ctx>>::new(
         service_dependencies,
         lazy_worker_activator,
         grpc_port,
-    )
+    ))
     .await?;
 
     let service = WorkerExecutorServer::new(worker_impl)

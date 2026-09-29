@@ -2172,7 +2172,9 @@ async fn start_executor_with_config(
     let services = Arc::new(Mutex::new(None));
 
     context.wait_for_shut_down_executors().await;
-    let details = run(
+    // The future of an executor start is large. It lives on the heap, so a test that starts
+    // several executors keeps a small stack.
+    let details = Box::pin(run(
         config,
         prometheus.clone(),
         handle,
@@ -2181,7 +2183,7 @@ async fn start_executor_with_config(
         additional_test_deps.clone(),
         services.clone(),
         &mut join_set,
-    )
+    ))
     .await?;
     context.register_executor(details.invocation_loops.clone());
     let grpc_port = details.grpc_port;

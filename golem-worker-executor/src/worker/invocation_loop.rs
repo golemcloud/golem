@@ -1298,11 +1298,13 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
         async {
             debug!("Creating the worker instance");
             self.parent.unload_cleanup.lock().unwrap().take();
-            match RunningWorker::create_instance(
+            // The future of a start is large; it lives on the heap, so the stack of the
+            // invocation loop stays small.
+            match Box::pin(RunningWorker::create_instance(
                 self.parent.clone(),
                 permit,
                 &self.filesystem_snapshot_slot,
-            )
+            ))
             .await
             {
                 Ok((agent, window, recovery_decision)) => CreateInstanceResult::Created {
