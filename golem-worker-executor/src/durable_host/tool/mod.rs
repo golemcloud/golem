@@ -2184,15 +2184,15 @@ fn publish_output_completions(
     stdout: Option<&AttachmentController>,
     stderr: Option<&AttachmentController>,
 ) {
-    if stage_attachments || stdout_completion_only {
-        if let Some(stdout) = stdout {
-            stdout.publish_completion();
-        }
+    if (stage_attachments || stdout_completion_only)
+        && let Some(stdout) = stdout
+    {
+        stdout.publish_completion();
     }
-    if stage_attachments || stderr_completion_only {
-        if let Some(stderr) = stderr {
-            stderr.publish_completion();
-        }
+    if (stage_attachments || stderr_completion_only)
+        && let Some(stderr) = stderr
+    {
+        stderr.publish_completion();
     }
 }
 
