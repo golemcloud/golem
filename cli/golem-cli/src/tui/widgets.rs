@@ -344,6 +344,24 @@ impl PaneTableState {
         self.visible_columns.iter().any(|visible| visible == id)
     }
 
+    pub fn visible_columns(&self) -> &[String] {
+        &self.visible_columns
+    }
+
+    pub fn restore_visible_columns(
+        &mut self,
+        columns: &[PaneTableColumn<'_>],
+        visible_columns: &[String],
+    ) {
+        self.visible_columns = columns
+            .iter()
+            .filter(|column| {
+                column.required || visible_columns.iter().any(|visible| visible == column.id)
+            })
+            .map(|column| column.id.to_string())
+            .collect();
+    }
+
     pub fn set_column_visible(&mut self, columns: &[PaneTableColumn<'_>], id: &str, visible: bool) {
         let Some(column) = columns.iter().find(|column| column.id == id) else {
             return;

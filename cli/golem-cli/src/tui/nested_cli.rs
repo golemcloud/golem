@@ -34,8 +34,6 @@ pub enum NestedCliTarget {
     Command,
     Server,
     Repl,
-    AgentOplog,
-    AgentStream,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -214,8 +212,6 @@ fn output_event(target: NestedCliTarget, bytes: Vec<u8>) -> TuiEvent {
         NestedCliTarget::Command => TuiEvent::CommandOutput(bytes),
         NestedCliTarget::Server => TuiEvent::ServerOutput(bytes),
         NestedCliTarget::Repl => TuiEvent::ReplOutput(bytes),
-        NestedCliTarget::AgentOplog => TuiEvent::AgentOplogOutput(bytes),
-        NestedCliTarget::AgentStream => TuiEvent::AgentStreamOutput(bytes),
     }
 }
 
@@ -224,8 +220,6 @@ fn output_closed_event(target: NestedCliTarget, error: Option<String>) -> TuiEve
         NestedCliTarget::Command => TuiEvent::CommandOutputClosed(error),
         NestedCliTarget::Server => TuiEvent::ServerOutputClosed(error),
         NestedCliTarget::Repl => TuiEvent::ReplOutputClosed(error),
-        NestedCliTarget::AgentOplog => TuiEvent::AgentOplogOutputClosed(error),
-        NestedCliTarget::AgentStream => TuiEvent::AgentStreamOutputClosed(error),
     }
 }
 
@@ -234,8 +228,6 @@ fn exit_event(target: NestedCliTarget, exit: CommandExit) -> TuiEvent {
         NestedCliTarget::Command => TuiEvent::CommandExited(exit),
         NestedCliTarget::Server => TuiEvent::ServerExited(exit),
         NestedCliTarget::Repl => TuiEvent::ReplExited(exit),
-        NestedCliTarget::AgentOplog => TuiEvent::AgentOplogExited(exit),
-        NestedCliTarget::AgentStream => TuiEvent::AgentStreamExited(exit),
     }
 }
 
@@ -258,14 +250,6 @@ mod tests {
             output_event(NestedCliTarget::Repl, b"repl".to_vec()),
             TuiEvent::ReplOutput(bytes) if bytes == b"repl"
         ));
-        assert!(matches!(
-            output_event(NestedCliTarget::AgentOplog, b"oplog".to_vec()),
-            TuiEvent::AgentOplogOutput(bytes) if bytes == b"oplog"
-        ));
-        assert!(matches!(
-            output_event(NestedCliTarget::AgentStream, b"stream".to_vec()),
-            TuiEvent::AgentStreamOutput(bytes) if bytes == b"stream"
-        ));
     }
 
     #[test]
@@ -281,14 +265,6 @@ mod tests {
         assert!(matches!(
             output_closed_event(NestedCliTarget::Repl, None),
             TuiEvent::ReplOutputClosed(None)
-        ));
-        assert!(matches!(
-            output_closed_event(NestedCliTarget::AgentOplog, None),
-            TuiEvent::AgentOplogOutputClosed(None)
-        ));
-        assert!(matches!(
-            output_closed_event(NestedCliTarget::AgentStream, None),
-            TuiEvent::AgentStreamOutputClosed(None)
         ));
     }
 
@@ -310,14 +286,6 @@ mod tests {
         assert!(matches!(
             exit_event(NestedCliTarget::Repl, exit),
             TuiEvent::ReplExited(value) if value == exit
-        ));
-        assert!(matches!(
-            exit_event(NestedCliTarget::AgentOplog, exit),
-            TuiEvent::AgentOplogExited(value) if value == exit
-        ));
-        assert!(matches!(
-            exit_event(NestedCliTarget::AgentStream, exit),
-            TuiEvent::AgentStreamExited(value) if value == exit
         ));
     }
 

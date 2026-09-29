@@ -327,6 +327,64 @@ impl EnvironmentCommandHandler {
         }
     }
 
+    pub async fn resolve_opt_environment_reference_read_only(
+        &self,
+        mode: EnvironmentResolveMode,
+        environment_reference: Option<&EnvironmentReference>,
+    ) -> anyhow::Result<ResolvedEnvironmentIdentity> {
+        let environment_reference = environment_reference.or(self.ctx.environment_reference());
+        let resolved = match environment_reference {
+            Some(environment_reference @ EnvironmentReference::ApplicationEnvironment { .. })
+            | Some(
+                environment_reference @ EnvironmentReference::AccountApplicationEnvironment {
+                    ..
+                },
+            ) => {
+                self.resolve_environment_reference(mode, environment_reference)
+                    .await?
+            }
+            Some(EnvironmentReference::Environment { .. }) | None => {
+                if let Some(environment_reference) = environment_reference
+                    && !mode.allowed(environment_reference)
+                {
+                    return self.environment_is_required_error(mode);
+                }
+                let manifest_environment = self
+                    .ctx
+                    .selected_manifest_environment()
+                    .ok_or(HintError::NoApplicationManifestFound)?;
+                let summary = self
+                    .ctx
+                    .golem_clients()
+                    .await?
+                    .me
+                    .list_visible_environments(
+                        manifest_environment.environment.account.as_deref(),
+                        Some(&manifest_environment.application_name.0),
+                        Some(&manifest_environment.environment_name.0),
+                    )
+                    .await
+                    .map_service_error()?
+                    .values
+                    .into_iter()
+                    .find(|summary| {
+                        summary.application.name == manifest_environment.application_name
+                            && summary.environment.name == manifest_environment.environment_name
+                    })
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "Environment {}/{} is not visible",
+                            manifest_environment.application_name.0,
+                            manifest_environment.environment_name.0
+                        )
+                    })?;
+                ResolvedEnvironmentIdentity::from_summary(environment_reference, summary)
+            }
+        };
+
+        self.ensure_diff_model_version_compatible(resolved)
+    }
+
     async fn get_server_environment(
         &self,
         application_id: &ApplicationId,

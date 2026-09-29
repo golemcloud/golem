@@ -60,7 +60,6 @@ use crate::tui::widgets::{
     WorkspaceSelector, fit, key_span, pane_table_virtual_width, render_scrollbar,
     responsive_table_columns, shortcut_line,
 };
-use ansi_to_tui::IntoText;
 use crossterm::event::{
     Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
     MouseEventKind,
@@ -77,13 +76,15 @@ use ratatui::layout::{Alignment, Constraint, Direction, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::cell::{Cell, RefCell};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::io::{Write, stdout};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Instant, SystemTime};
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{
     mpsc::{self, Sender},
@@ -94,6 +95,8 @@ use tokio::time::{Duration, sleep};
 const TUI_EVENT_CHANNEL_CAPACITY: usize = 1024;
 const CONTEXT_PICKER_RIGHT_PADDING: usize = 4;
 const AGENT_PAGE_SIZE: u64 = 200;
+const COMPLETED_JOB_LIMIT: usize = 20;
+const FORCE_STOP_DELAY: Duration = Duration::from_secs(5);
 
 type TuiEventSender = Sender<TuiEvent>;
 
@@ -149,6 +152,7 @@ pub async fn run(ctx: Arc<Context>, global_flags: GolemCliGlobalFlags) -> anyhow
         }
     }
 
+    app.save_preferences();
     app.cleanup_running_command();
     Ok(())
 }
@@ -319,19 +323,31 @@ fn tui_auth_presenter(event_tx: &TuiEventSender) -> Arc<dyn AuthPresenter> {
 struct TuiApp {
     should_quit: bool,
     active_workspace: TuiWorkspace,
+    ops_subject: OpsSubject,
     ops_view: OpsView,
-    fake_otlp: FakeOtlpExplorerState,
-    dev_focus: DevPanel,
+    dev_primary: DevView,
+    dev_focus: DevView,
     mode: TuiMode,
+    leader: LeaderState,
     help_scroll: usize,
     help_content_height: Cell<usize>,
     help_viewport_height: Cell<usize>,
     palette: CommandPalette,
     command_options: CommandOptions,
+    command_form: Option<CommandReviewForm>,
+    command_form_memory: HashMap<String, CommandFormValues>,
+    session_form: Option<SessionReviewForm>,
+    server_form_memory: HashMap<String, ServerFormValues>,
+    repl_form_memory: HashMap<String, ReplFormValues>,
     command_run: Option<CommandRun>,
+    completed_jobs: VecDeque<CommandRun>,
+    selected_job: usize,
     server: LocalServerService,
+    pending_server_restart: Option<ServerFormValues>,
     repl: ReplState,
+    pending_repl_restart: Option<ReplFormValues>,
     agents: AgentsState,
+    ops_environment: OpsEnvironmentState,
     next_command_id: u64,
     context: TuiContextInfo,
     context_switcher: ContextSwitcherState,
@@ -341,13 +357,27 @@ struct TuiApp {
     auth_prompt: Option<AuthPromptState>,
     layout: TuiLayoutState,
     layout_snapshot: RefCell<Option<LayoutSnapshot>>,
+    preferences_path: PathBuf,
+    preferences_error: Option<String>,
 }
 
 impl TuiApp {
     fn from_launch(launch: TuiLaunchConfig) -> Self {
         let context = TuiContextInfo::from_context(launch.initial_context.as_ref());
+        let active_workspace = if context.dev_eligible && context.uses_local_server {
+            TuiWorkspace::Dev
+        } else {
+            TuiWorkspace::Ops
+        };
         let context_cli_args = context_args_from_flags(&launch.base_flags);
         let server = LocalServerService::from_launch(&launch);
+        let preferences_path = tui_preferences_path(&context.config_dir);
+        let (preferences, preferences_error) = load_tui_preferences(&preferences_path);
+        let mut layout = TuiLayoutState::default();
+        let mut agents = AgentsState::default();
+        if let Some(preferences) = preferences {
+            preferences.apply(&mut layout, &mut agents.table);
+        }
         let targets = context_targets_from_launch(&launch).unwrap_or_else(|error| {
             vec![TuiContextTarget::error(format!(
                 "failed to load context targets: {error:#}"
@@ -355,20 +385,32 @@ impl TuiApp {
         });
         Self {
             should_quit: false,
-            active_workspace: TuiWorkspace::Ops,
+            active_workspace,
+            ops_subject: OpsSubject::Root(OpsRootSubject::Agents),
             ops_view: OpsView::Overview,
-            fake_otlp: FakeOtlpExplorerState::default(),
-            dev_focus: DevPanel::Repl,
+            dev_primary: DevView::BuildDeploy,
+            dev_focus: DevView::BuildDeploy,
             mode: TuiMode::Normal,
+            leader: LeaderState::default(),
             help_scroll: 0,
             help_content_height: Cell::new(0),
             help_viewport_height: Cell::new(0),
             palette: CommandPalette::default(),
             command_options: CommandOptions::default(),
+            command_form: None,
+            command_form_memory: HashMap::new(),
+            session_form: None,
+            server_form_memory: HashMap::new(),
+            repl_form_memory: HashMap::new(),
             command_run: None,
+            completed_jobs: VecDeque::new(),
+            selected_job: 0,
             server,
+            pending_server_restart: None,
             repl: ReplState::default(),
-            agents: AgentsState::default(),
+            pending_repl_restart: None,
+            agents,
+            ops_environment: OpsEnvironmentState::default(),
             next_command_id: 1,
             context,
             context_switcher: ContextSwitcherState::new(targets),
@@ -376,8 +418,10 @@ impl TuiApp {
             selected_environment_reference: None,
             context_executor: None,
             auth_prompt: None,
-            layout: TuiLayoutState::default(),
+            layout,
             layout_snapshot: RefCell::new(None),
+            preferences_path,
+            preferences_error,
         }
     }
 
@@ -387,7 +431,7 @@ impl TuiApp {
                 self.handle_key_with_events(key, Some(event_tx));
             }
             TuiEvent::Terminal(Event::Resize(cols, rows)) => {
-                self.resize_running_command(cols, rows)
+                self.resize_nested_sessions(cols, rows)
             }
             TuiEvent::Terminal(Event::Mouse(mouse)) => self.handle_mouse(mouse, Some(event_tx)),
             TuiEvent::Terminal(_) => {}
@@ -399,13 +443,13 @@ impl TuiApp {
             }
             TuiEvent::CommandExited(exit) => self.finish_command(exit, event_tx),
             TuiEvent::SpinnerTick(command_id) => self.handle_spinner_tick(command_id),
-            TuiEvent::ServerOutput(bytes) => self.server.run.output.append(&bytes),
+            TuiEvent::ServerOutput(bytes) => self.server.run.terminal.feed(&bytes),
             TuiEvent::ServerOutputClosed(error) => {
                 if let Some(error) = error {
                     self.server
                         .run
-                        .output
-                        .append_local_line(format!("server output closed: {error}"));
+                        .terminal
+                        .feed_local_line(format!("server output closed: {error}"));
                 }
             }
             TuiEvent::ServerExited(exit) => self.finish_server(exit, event_tx),
@@ -413,32 +457,6 @@ impl TuiApp {
             TuiEvent::ReplOutput(bytes) => self.append_repl_output(&bytes),
             TuiEvent::ReplOutputClosed(error) => self.handle_repl_output_closed(error),
             TuiEvent::ReplExited(exit) => self.finish_repl(exit, event_tx),
-            TuiEvent::AgentOplogOutput(bytes) => self.agents.inspect.oplog.output.append(&bytes),
-            TuiEvent::AgentOplogOutputClosed(error) => {
-                if let Some(error) = error {
-                    self.agents
-                        .inspect
-                        .oplog
-                        .output
-                        .append_local_line(format!("oplog output closed: {error}"));
-                }
-            }
-            TuiEvent::AgentOplogExited(exit) => {
-                self.finish_agent_inspect_job(AgentInspectPane::Oplog, exit)
-            }
-            TuiEvent::AgentStreamOutput(bytes) => self.agents.inspect.stream.output.append(&bytes),
-            TuiEvent::AgentStreamOutputClosed(error) => {
-                if let Some(error) = error {
-                    self.agents
-                        .inspect
-                        .stream
-                        .output
-                        .append_local_line(format!("stream output closed: {error}"));
-                }
-            }
-            TuiEvent::AgentStreamExited(exit) => {
-                self.finish_agent_inspect_job(AgentInspectPane::Stream, exit)
-            }
             TuiEvent::AgentRefreshTick => self.refresh_agents(Some(event_tx)),
             TuiEvent::AgentRefreshSpinnerTick { generation } => {
                 if self.agents.refresh_running && generation == self.agents.refresh_generation {
@@ -451,6 +469,9 @@ impl TuiApp {
                 append,
                 result,
             } => self.finish_agent_refresh(generation, append, result),
+            TuiEvent::OpsEnvironmentRefreshFinished { generation, result } => {
+                self.finish_ops_environment_refresh(generation, result)
+            }
             TuiEvent::ContextSwitchFinished { generation, result } => {
                 self.finish_context_switch(generation, result, event_tx)
             }
@@ -479,11 +500,13 @@ impl TuiApp {
     fn handle_key_with_events(&mut self, key: KeyEvent, event_tx: Option<&TuiEventSender>) {
         match self.mode {
             TuiMode::Normal => self.handle_global_key(key, event_tx),
-            TuiMode::LeaderNormal => self.handle_leader_key(key, event_tx, TuiMode::Normal),
-            TuiMode::LeaderAgentFilter => {
-                self.handle_leader_key(key, event_tx, TuiMode::AgentFilter)
-            }
+            TuiMode::Leader => self.handle_leader_key(key, event_tx),
+            TuiMode::Layout => self.handle_layout_key(key),
+            TuiMode::Jobs => self.handle_jobs_key(key),
+            TuiMode::QuitBlocked => self.handle_quit_blocked_key(key),
             TuiMode::Palette => self.handle_palette_key(key, event_tx),
+            TuiMode::CommandForm => self.handle_command_form_key(key, event_tx),
+            TuiMode::SessionForm => self.handle_session_form_key(key, event_tx),
             TuiMode::ContextPicker => self.handle_context_picker_key(key, event_tx),
             TuiMode::ContextSwitchConfirm => self.handle_context_switch_confirm_key(key, event_tx),
             TuiMode::Help => self.handle_help_key(key),
@@ -492,7 +515,7 @@ impl TuiApp {
             TuiMode::AgentColumns => self.handle_agent_columns_key(key),
             TuiMode::CommandInteraction => self.handle_command_interaction_key(key),
             TuiMode::Repl => self.handle_repl_key(key),
-            TuiMode::LeaderRepl => self.handle_leader_key(key, event_tx, TuiMode::Repl),
+            TuiMode::TerminalScrollback => self.handle_terminal_scrollback_key(key),
         }
     }
 
@@ -504,38 +527,16 @@ impl TuiApp {
             KeyCode::Esc if self.agent_details_focused() => {
                 self.agents.focus = AgentOverviewFocus::List
             }
-            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.should_quit = true;
+            KeyCode::Esc if matches!(self.ops_subject, OpsSubject::Agent(_)) => {
+                self.ops_subject = OpsSubject::Root(OpsRootSubject::Agents)
             }
-            KeyCode::Enter if self.agent_list_focused() => self.toggle_agent_details(),
-            KeyCode::Up
-                if self.ops_view == OpsView::Metrics
-                    && self.fake_otlp.focus == FakeOtlpFocus::Details =>
-            {
-                self.fake_otlp.scroll_details(1, true)
-            }
-            KeyCode::Down
-                if self.ops_view == OpsView::Metrics
-                    && self.fake_otlp.focus == FakeOtlpFocus::Details =>
-            {
-                self.fake_otlp.scroll_details(1, false)
-            }
-            KeyCode::PageUp
-                if self.ops_view == OpsView::Metrics
-                    && self.fake_otlp.focus == FakeOtlpFocus::Details =>
-            {
-                self.fake_otlp.scroll_details(10, true)
-            }
-            KeyCode::PageDown
-                if self.ops_view == OpsView::Metrics
-                    && self.fake_otlp.focus == FakeOtlpFocus::Details =>
-            {
-                self.fake_otlp.scroll_details(10, false)
-            }
-            KeyCode::Up if self.ops_view == OpsView::Metrics => self.fake_otlp.previous(),
-            KeyCode::Down if self.ops_view == OpsView::Metrics => self.fake_otlp.next(),
-            KeyCode::Home if self.ops_view == OpsView::Metrics => self.fake_otlp.first(),
-            KeyCode::End if self.ops_view == OpsView::Metrics => self.fake_otlp.last(),
+            KeyCode::Enter if self.agent_list_focused() => self.open_selected_agent(),
+            KeyCode::Up if self.ops_document_focused() => self.scroll_agent_details_up(1),
+            KeyCode::Down if self.ops_document_focused() => self.scroll_agent_details_down(1),
+            KeyCode::PageUp if self.ops_document_focused() => self.scroll_agent_details_up(10),
+            KeyCode::PageDown if self.ops_document_focused() => self.scroll_agent_details_down(10),
+            KeyCode::Home if self.ops_document_focused() => self.agents.details_scroll = 0,
+            KeyCode::End if self.ops_document_focused() => self.scroll_agent_details_bottom(),
             KeyCode::Up if self.agent_list_focused() => self.select_previous_agent(),
             KeyCode::Down if self.agent_list_focused() => self.select_next_agent(),
             KeyCode::PageUp if self.agent_list_focused() => self.select_previous_agent_page(),
@@ -553,7 +554,8 @@ impl TuiApp {
                 self.agents.table_virtual_width.get(),
                 self.agents.table_viewport_width.get(),
             ),
-            KeyCode::Tab | KeyCode::BackTab => self.cycle_ops_pane_focus(),
+            KeyCode::Tab => self.focus_next_pane(),
+            KeyCode::BackTab => self.focus_previous_pane(),
             KeyCode::Backspace if self.agent_list_focused() && !self.agents.query.is_empty() => {
                 self.mode = TuiMode::AgentFilter;
                 self.agents.query.pop();
@@ -579,25 +581,28 @@ impl TuiApp {
     ) -> bool {
         match key.code {
             KeyCode::Char('q') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.should_quit = true;
+                self.request_quit();
             }
             KeyCode::Char('x') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.mode = if self.mode == TuiMode::AgentFilter {
-                    TuiMode::LeaderAgentFilter
-                } else {
-                    TuiMode::LeaderNormal
-                };
+                self.open_leader();
             }
             KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.open_palette();
+                self.open_palette(PaletteScope::All);
             }
             KeyCode::Char('h') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.open_help();
             }
             KeyCode::Char('r')
-                if self.agent_list_focused() && key.modifiers.contains(KeyModifiers::CONTROL) =>
+                if self.active_workspace == TuiWorkspace::Ops
+                    && key.modifiers.contains(KeyModifiers::CONTROL) =>
             {
-                self.refresh_agents(event_tx);
+                match self.ops_subject.root() {
+                    OpsRootSubject::Agents => self.refresh_agents(event_tx),
+                    OpsRootSubject::Deployment | OpsRootSubject::Environment => {
+                        self.refresh_ops_environment(event_tx)
+                    }
+                    OpsRootSubject::Server => {}
+                }
             }
             KeyCode::Char(' ')
                 if self.agent_list_focused() && key.modifiers.contains(KeyModifiers::CONTROL) =>
@@ -630,6 +635,25 @@ impl TuiApp {
     }
 
     fn handle_palette_key(&mut self, key: KeyEvent, event_tx: Option<&TuiEventSender>) {
+        if key.code == KeyCode::Char('p') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            self.palette.scope = PaletteScope::All;
+            self.palette.selected = 0;
+            return;
+        }
+        if key.code == KeyCode::Char('x') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            self.leader.return_mode = LeaderReturnMode::Palette;
+            self.leader.group = None;
+            self.mode = TuiMode::Leader;
+            return;
+        }
+        if key.code == KeyCode::Char('h') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            self.open_help();
+            return;
+        }
+        if key.code == KeyCode::Char('q') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            self.request_quit();
+            return;
+        }
         match key.code {
             KeyCode::Esc => self.close_palette(),
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -637,18 +661,15 @@ impl TuiApp {
             }
             KeyCode::Backspace => self.palette.backspace(),
             KeyCode::Down | KeyCode::Tab => {
-                let action_count = filtered_actions(&self.palette.query).len();
+                let action_count = self.filtered_actions().len();
                 self.palette.next(action_count);
             }
             KeyCode::Up | KeyCode::BackTab => {
-                let action_count = filtered_actions(&self.palette.query).len();
+                let action_count = self.filtered_actions().len();
                 self.palette.previous(action_count);
             }
             KeyCode::Enter => {
-                if let Some(action) = filtered_actions(&self.palette.query)
-                    .get(self.palette.selected)
-                    .copied()
-                {
+                if let Some(action) = self.filtered_actions().get(self.palette.selected).copied() {
                     self.execute_palette_action(action.kind, event_tx);
                 }
             }
@@ -668,7 +689,7 @@ impl TuiApp {
                 KeyCode::Char('q') | KeyCode::Char('c')
                     if key.modifiers.contains(KeyModifiers::CONTROL) =>
                 {
-                    self.should_quit = true;
+                    self.request_quit();
                 }
                 _ => {}
             }
@@ -776,6 +797,9 @@ impl TuiApp {
         key: KeyEvent,
         event_tx: Option<&TuiEventSender>,
     ) {
+        if self.handle_modified_shortcut(key, event_tx) {
+            return;
+        }
         let Some(filter) = self.agents.dataset_filter.as_mut() else {
             self.mode = TuiMode::Normal;
             return;
@@ -823,53 +847,74 @@ impl TuiApp {
         }
     }
 
-    fn handle_leader_key(
-        &mut self,
-        key: KeyEvent,
-        event_tx: Option<&TuiEventSender>,
-        return_mode: TuiMode,
-    ) {
-        match key.code {
-            KeyCode::Esc => self.mode = return_mode,
-            KeyCode::Left if self.agent_details_open() => {
-                self.resize_agent_details(-5);
-                self.mode = return_mode;
+    fn handle_leader_key(&mut self, key: KeyEvent, event_tx: Option<&TuiEventSender>) {
+        if key.code == KeyCode::Esc {
+            self.close_leader();
+            return;
+        }
+        if key.code == KeyCode::Char('x') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            if self.leader.return_mode == LeaderReturnMode::Repl {
+                if let Some(runtime) = self.repl.run.runtime.as_mut() {
+                    let _ = runtime.write_all(&[24]);
+                }
             }
-            KeyCode::Right if self.agent_details_open() => {
-                self.resize_agent_details(5);
-                self.mode = return_mode;
+            self.close_leader();
+            return;
+        }
+
+        match self.leader.group {
+            None => match key.code {
+                KeyCode::Char('w') => self.leader.group = Some(LeaderGroup::Workspaces),
+                KeyCode::Char('v') => self.leader.group = Some(LeaderGroup::Views),
+                KeyCode::Char('l') => self.mode = TuiMode::Layout,
+                KeyCode::Char('a') if self.leader.return_mode == LeaderReturnMode::Palette => {
+                    self.palette.scope = PaletteScope::Context;
+                    self.palette.selected = 0;
+                    self.leader.group = None;
+                    self.mode = TuiMode::Palette;
+                }
+                KeyCode::Char('a') => self.open_palette(PaletteScope::Context),
+                KeyCode::Char('j') => self.open_jobs_palette(),
+                KeyCode::Char('e') => self.open_context_picker(),
+                _ => self.close_leader(),
+            },
+            Some(LeaderGroup::Workspaces) => match key.code {
+                KeyCode::Char('n') => {
+                    self.next_workspace();
+                    self.close_leader();
+                }
+                KeyCode::Char('p') => {
+                    self.previous_workspace();
+                    self.close_leader();
+                }
+                KeyCode::Char('d') => {
+                    self.active_workspace = TuiWorkspace::Dev;
+                    self.close_leader();
+                }
+                KeyCode::Char('o') => {
+                    self.open_ops_workspace(event_tx);
+                    self.close_leader();
+                }
+                _ => self.close_leader(),
+            },
+            Some(LeaderGroup::Views) => {
+                match (self.active_workspace, key.code) {
+                    (TuiWorkspace::Dev, KeyCode::Char('b')) => {
+                        self.open_dev_workspace(DevView::BuildDeploy)
+                    }
+                    (TuiWorkspace::Dev, KeyCode::Char('s')) => {
+                        self.open_dev_workspace(DevView::Server)
+                    }
+                    (TuiWorkspace::Dev, KeyCode::Char('r')) => {
+                        self.open_dev_workspace(DevView::Repl)
+                    }
+                    (TuiWorkspace::Ops, KeyCode::Char('o')) => self.ops_view = OpsView::Overview,
+                    (TuiWorkspace::Ops, KeyCode::Char('a')) => self.ops_view = OpsView::Activity,
+                    (TuiWorkspace::Ops, KeyCode::Char('m')) => self.ops_view = OpsView::Metrics,
+                    _ => {}
+                }
+                self.close_leader();
             }
-            KeyCode::Char('h') => self.open_help(),
-            KeyCode::Char('p') => self.open_palette(),
-            KeyCode::Char('e') => {
-                self.open_context_picker();
-            }
-            KeyCode::Char('a') if self.agents_focused() => {
-                self.toggle_agent_auto_refresh(event_tx);
-                self.mode = return_mode;
-            }
-            KeyCode::Char('d') if self.agents_focused() => {
-                self.toggle_agent_details();
-                self.mode = return_mode;
-            }
-            KeyCode::Char('m') if self.agents_focused() => {
-                self.cycle_agent_mode(event_tx);
-                self.mode = return_mode;
-            }
-            KeyCode::Char('v') => {
-                self.ops_view = self.ops_view.next();
-                self.mode = return_mode;
-            }
-            KeyCode::Char('f') if self.ops_view == OpsView::Overview => {
-                self.agents.query_scope = self.agents.query_scope.next();
-                self.agents.reset_selection();
-                self.mode = TuiMode::AgentFilter;
-            }
-            KeyCode::Char('c') if self.agents_focused() => {
-                self.agents.column_chooser = Some(ColumnChooserState::new(&self.agents.table));
-                self.mode = TuiMode::AgentColumns;
-            }
-            _ => self.mode = return_mode,
         }
     }
 
@@ -898,6 +943,7 @@ impl TuiApp {
             KeyCode::Enter => {
                 if let Some(chooser) = self.agents.column_chooser.take() {
                     chooser.apply(&mut self.agents.table);
+                    self.save_preferences();
                 }
                 self.mode = TuiMode::Normal;
             }
@@ -931,6 +977,7 @@ impl TuiApp {
             MouseEventKind::Up(MouseButton::Left) => {
                 self.drag_layout(mouse.column, mouse.row);
                 self.layout.dragging = None;
+                self.save_preferences();
             }
             _ => {}
         }
@@ -947,29 +994,31 @@ impl TuiApp {
             return;
         }
         match region {
-            Some(RegionKind::DevPanelBody(DevPanel::Output)) => {
+            Some(RegionKind::DevViewBody(DevView::BuildDeploy)) => {
                 if up {
                     self.scroll_output_up_by(amount);
+                    self.mode = TuiMode::TerminalScrollback;
                 } else {
                     self.scroll_output_down_by(amount);
                 }
             }
-            Some(RegionKind::DevPanelBody(DevPanel::Server)) | Some(RegionKind::ServerDrawer) => {
+            Some(RegionKind::DevViewBody(DevView::Server)) => {
                 if up {
                     self.scroll_server_up_by(amount);
+                    self.mode = TuiMode::TerminalScrollback;
                 } else {
                     self.scroll_server_down_by(amount);
                 }
             }
-            Some(RegionKind::OpsInspectPane(pane)) => {
-                self.agents.inspect.focus = pane;
+            Some(RegionKind::DevViewBody(DevView::Repl)) => {
                 if up {
-                    self.scroll_agent_inspect_up_by(amount);
+                    self.repl.run.screen.scroll_up(amount);
+                    self.mode = TuiMode::TerminalScrollback;
                 } else {
-                    self.scroll_agent_inspect_down_by(amount);
+                    self.repl.run.screen.scroll_down(amount);
                 }
             }
-            Some(RegionKind::OpsDetails) => {
+            Some(RegionKind::OpsDetails) if self.ops_agents_focused() => {
                 self.agents.focus = AgentOverviewFocus::Details;
                 if up {
                     self.scroll_agent_details_up(amount);
@@ -977,26 +1026,39 @@ impl TuiApp {
                     self.scroll_agent_details_down(amount);
                 }
             }
-            Some(RegionKind::OpsList) => {
+            Some(RegionKind::OpsList) if self.ops_agents_focused() => {
                 self.agents.focus = AgentOverviewFocus::List;
                 self.scroll_agent_list(amount, up);
+            }
+            Some(RegionKind::OpsList) if self.ops_document_focused() => {
+                if up {
+                    self.scroll_agent_details_up(amount);
+                } else {
+                    self.scroll_agent_details_down(amount);
+                }
             }
             _ => {}
         }
     }
 
     fn scroll_focused_region(&mut self, amount: usize, up: bool) {
-        if self.dev_panel_focused(DevPanel::Output) {
+        if self.dev_panel_focused(DevView::BuildDeploy) {
             if up {
                 self.scroll_output_up_by(amount);
             } else {
                 self.scroll_output_down_by(amount);
             }
-        } else if self.dev_panel_focused(DevPanel::Server) {
+        } else if self.dev_panel_focused(DevView::Server) {
             if up {
                 self.scroll_server_up_by(amount);
             } else {
                 self.scroll_server_down_by(amount);
+            }
+        } else if self.dev_panel_focused(DevView::Repl) {
+            if up {
+                self.repl.run.screen.scroll_up(amount);
+            } else {
+                self.repl.run.screen.scroll_down(amount);
             }
         } else if self.agent_details_focused() {
             if up {
@@ -1004,11 +1066,11 @@ impl TuiApp {
             } else {
                 self.scroll_agent_details_down(amount);
             }
-        } else if self.ops_agents_focused() && self.agents.view_mode == AgentsViewMode::Inspect {
+        } else if self.ops_document_focused() {
             if up {
-                self.scroll_agent_inspect_up_by(amount);
+                self.scroll_agent_details_up(amount);
             } else {
-                self.scroll_agent_inspect_down_by(amount);
+                self.scroll_agent_details_down(amount);
             }
         }
     }
@@ -1020,21 +1082,19 @@ impl TuiApp {
             .as_ref()
             .and_then(|snapshot| snapshot.hit_test(x, y));
         match hit {
-            Some(RegionKind::HeaderTab(TuiWorkspace::Ops)) => self.open_ops_workspace(event_tx),
-            Some(RegionKind::HeaderTab(workspace)) => self.active_workspace = workspace,
-            Some(RegionKind::DevPanelTitle(panel)) | Some(RegionKind::DevPanelBody(panel)) => {
+            Some(RegionKind::Workspace(TuiWorkspace::Ops)) => self.open_ops_workspace(event_tx),
+            Some(RegionKind::Workspace(workspace)) => self.active_workspace = workspace,
+            Some(RegionKind::DevViewTitle(view)) | Some(RegionKind::DevViewBody(view)) => {
                 self.active_workspace = TuiWorkspace::Dev;
-                self.dev_focus = panel;
+                self.dev_focus = view;
             }
-            Some(RegionKind::ServerDrawer) => {
-                self.layout.server_drawer_open = true;
-            }
-            Some(RegionKind::OpsList) => {
+            Some(RegionKind::OpsList) if self.ops_agents_focused() => {
                 self.agents.focus = AgentOverviewFocus::List;
                 self.select_agent_at_row(y);
             }
-            Some(RegionKind::OpsDetails) => self.agents.focus = AgentOverviewFocus::Details,
-            Some(RegionKind::OpsInspectPane(pane)) => self.agents.inspect.focus = pane,
+            Some(RegionKind::OpsDetails) if self.ops_agents_focused() => {
+                self.agents.focus = AgentOverviewFocus::Details
+            }
             Some(RegionKind::ContextPickerRow(index)) => {
                 self.context_switcher.selected = index;
                 self.select_context_picker_row(event_tx);
@@ -1056,7 +1116,6 @@ impl TuiApp {
             .and_then(|snapshot| match snapshot.hit_test(x, y) {
                 Some(RegionKind::DevPrimarySplit) => Some(DragTarget::DevPrimary),
                 Some(RegionKind::DevSecondarySplit) => Some(DragTarget::DevSecondary),
-                Some(RegionKind::ServerDrawerSplit) => Some(DragTarget::ServerDrawer),
                 Some(RegionKind::OpsDetailsSplit) => Some(DragTarget::OpsDetails),
                 _ => None,
             })
@@ -1071,45 +1130,41 @@ impl TuiApp {
         };
         match target {
             DragTarget::DevPrimary => {
-                let ratio = layout::ratio_from_pointer(
+                let ratio = layout::dev_primary_ratio_from_pointer(
                     snapshot.workspace_body,
-                    self.layout.dev_preset,
+                    self.layout.dev_placement,
                     x,
                     y,
                 );
                 self.layout.dev_primary_ratio = layout::clamp_dev_primary_ratio(
                     snapshot.workspace_body,
-                    self.layout.dev_preset,
+                    self.layout.dev_placement,
                     ratio,
                 );
             }
             DragTarget::DevSecondary => {
-                let ratio = layout::secondary_ratio_from_pointer(
+                let ratio = layout::dev_secondary_ratio_from_pointer(
                     snapshot.workspace_body,
-                    self.layout.dev_preset,
+                    self.layout.dev_placement,
                     x,
                     y,
                 );
                 self.layout.dev_secondary_ratio = layout::clamp_dev_secondary_ratio(
                     snapshot.workspace_body,
-                    self.layout.dev_preset,
+                    self.layout.dev_placement,
                     ratio,
                 );
             }
-            DragTarget::ServerDrawer => {
-                let ratio = layout::drawer_ratio_from_pointer(snapshot.body, x);
-                self.layout.server_drawer_ratio = layout::clamp_drawer_ratio(snapshot.body, ratio);
-            }
             DragTarget::OpsDetails => {
-                let area = if self.ops_agents_focused() {
-                    snapshot.workspace_body
-                } else {
-                    snapshot
-                        .region(RegionKind::DevPanelBody(DevPanel::Agents))
-                        .unwrap_or(snapshot.workspace_body)
-                };
-                let ratio = layout::ops_details_ratio_from_pointer(area, x);
-                self.layout.ops_details_ratio = layout::clamp_ops_details_ratio(area, ratio);
+                let area = snapshot.workspace_body;
+                let ratio = layout::ops_details_ratio_from_pointer(
+                    area,
+                    self.layout.ops_details_placement,
+                    x,
+                    y,
+                );
+                self.layout.ops_details_ratio =
+                    layout::clamp_ops_details_ratio(area, self.layout.ops_details_placement, ratio);
             }
         }
     }
@@ -1187,50 +1242,41 @@ impl TuiApp {
                     workspace => self.active_workspace = workspace,
                 }
             }
+            TuiActionKind::Plan => {
+                self.close_palette();
+                self.open_command_form(CommandKind::Plan);
+            }
             TuiActionKind::Build => {
                 self.close_palette();
-                self.start_command(CommandKind::Build, event_tx);
+                self.open_command_form(CommandKind::Build);
             }
             TuiActionKind::Deploy => {
                 self.close_palette();
-                self.start_command(CommandKind::Deploy, event_tx);
+                self.open_command_form(CommandKind::Deploy);
             }
             TuiActionKind::Clean => {
                 self.close_palette();
-                self.start_command(CommandKind::Clean, event_tx);
-            }
-            TuiActionKind::ToggleYes => {
-                self.command_options.yes = !self.command_options.yes;
-                self.close_palette();
-            }
-            TuiActionKind::ToggleReset => {
-                self.command_options.reset = !self.command_options.reset;
-                self.close_palette();
+                self.open_command_form(CommandKind::Clean);
             }
             TuiActionKind::ToggleServer => {
                 self.close_palette();
-                self.open_and_toggle_server(event_tx);
+                self.request_server_toggle();
             }
             TuiActionKind::RestartServer => {
                 self.close_palette();
-                self.restart_server(ServerStartMode::Current, event_tx);
+                self.open_server_form(true, false);
             }
             TuiActionKind::CleanRestartServer => {
                 self.close_palette();
-                self.restart_server(ServerStartMode::Clean, event_tx);
+                self.open_server_form(true, true);
             }
-            TuiActionKind::ToggleServerClean => {
-                if self.server.available {
-                    self.server.clean = !self.server.clean;
-                }
+            TuiActionKind::FlipPanePlacement => {
+                self.layout.dev_placement = self.layout.dev_placement.flipped();
                 self.close_palette();
             }
-            TuiActionKind::CycleDevLayoutPreset => {
-                self.layout.dev_preset = self.layout.dev_preset.next();
-                self.close_palette();
-            }
-            TuiActionKind::ToggleServerDrawer => {
-                self.layout.server_drawer_open = !self.layout.server_drawer_open;
+            TuiActionKind::ToggleServerSubview => {
+                let visible = self.layout.dev_is_visible(DevView::Server);
+                self.layout.set_dev_visible(DevView::Server, !visible);
                 self.close_palette();
             }
             TuiActionKind::RefreshAgents => {
@@ -1240,6 +1286,11 @@ impl TuiApp {
             TuiActionKind::OpenAgentDatasetFilter => {
                 self.close_palette();
                 self.open_agent_dataset_filter();
+            }
+            TuiActionKind::OpenAgentColumns => {
+                self.close_palette();
+                self.agents.column_chooser = Some(ColumnChooserState::new(&self.agents.table));
+                self.mode = TuiMode::AgentColumns;
             }
             TuiActionKind::IncludeAgentMatches => {
                 self.include_filtered_agents();
@@ -1278,6 +1329,10 @@ impl TuiApp {
                 self.agents.reset_selection();
                 self.close_palette();
             }
+            TuiActionKind::SelectOpsRoot(subject) => {
+                self.close_palette();
+                self.select_ops_root(subject, event_tx);
+            }
             TuiActionKind::StartOrFocusRepl => {
                 self.close_palette();
                 self.start_or_focus_repl(event_tx);
@@ -1296,10 +1351,10 @@ impl TuiApp {
             }
             TuiActionKind::RestartRepl => {
                 self.close_palette();
-                self.restart_repl(event_tx);
+                self.open_repl_form(true);
             }
             TuiActionKind::OpenPalette => {
-                self.open_palette();
+                self.open_palette(PaletteScope::All);
             }
             TuiActionKind::ShowHelp => {
                 self.palette.reset();
@@ -1307,7 +1362,7 @@ impl TuiApp {
             }
             TuiActionKind::Quit => {
                 self.close_palette();
-                self.should_quit = true;
+                self.request_quit();
             }
         }
     }
@@ -1326,16 +1381,17 @@ impl TuiApp {
 
     fn action_availability(&self, action: &TuiAction) -> TuiActionAvailability {
         match action.id {
-            TuiActionId::Build
-            | TuiActionId::Deploy
-            | TuiActionId::Clean
-            | TuiActionId::StartOrFocusRepl
-            | TuiActionId::RestartRepl
-                if !self.context.dev_eligible =>
+            TuiActionId::Plan | TuiActionId::Build | TuiActionId::Deploy | TuiActionId::Clean
+                if let Err(reason) = self.context.capability(DevView::BuildDeploy) =>
             {
-                TuiActionAvailability::Unavailable("selected context is ops-only")
+                TuiActionAvailability::Unavailable(reason)
             }
-            TuiActionId::Build | TuiActionId::Deploy | TuiActionId::Clean
+            TuiActionId::StartOrFocusRepl | TuiActionId::RestartRepl
+                if let Err(reason) = self.context.capability(DevView::Repl) =>
+            {
+                TuiActionAvailability::Unavailable(reason)
+            }
+            TuiActionId::Plan | TuiActionId::Build | TuiActionId::Deploy | TuiActionId::Clean
                 if self.command_is_running() =>
             {
                 TuiActionAvailability::Unavailable("command already running")
@@ -1364,18 +1420,80 @@ impl TuiApp {
             TuiActionId::ToggleServer
             | TuiActionId::RestartServer
             | TuiActionId::CleanRestartServer
-            | TuiActionId::ToggleServerClean
-                if !self.server.available =>
+                if !self.server.available || self.context.capability(DevView::Server).is_err() =>
             {
-                TuiActionAvailability::Unavailable("local server is unavailable")
+                TuiActionAvailability::Unavailable("requires an available local server target")
             }
             _ => TuiActionAvailability::Available,
         }
     }
 
-    fn open_palette(&mut self) {
-        self.palette.reset();
+    fn action_target_summary(&self, action: &TuiAction) -> String {
+        match action.target() {
+            TuiActionTarget::Interface => "TUI session".to_string(),
+            TuiActionTarget::ApplicationEnvironment => format!(
+                "{}/{}/{}",
+                self.context.application, self.context.environment, self.context.server
+            ),
+            TuiActionTarget::LocalServer => self.context.server.clone(),
+            TuiActionTarget::LoadedAgents => {
+                format!("{} loaded agents", self.filtered_agents().len())
+            }
+        }
+    }
+
+    fn open_palette(&mut self, scope: PaletteScope) {
+        if self.mode != TuiMode::Palette {
+            self.palette.reset();
+            self.palette.return_mode = match self.mode {
+                TuiMode::AgentFilter => PaletteReturnMode::AgentFilter,
+                TuiMode::CommandForm => PaletteReturnMode::CommandForm,
+                TuiMode::SessionForm => PaletteReturnMode::SessionForm,
+                _ => PaletteReturnMode::Default,
+            };
+        }
+        self.palette.scope = scope;
         self.mode = TuiMode::Palette;
+    }
+
+    fn open_jobs_palette(&mut self) {
+        self.selected_job = 0;
+        self.mode = TuiMode::Jobs;
+    }
+
+    fn filtered_actions(&self) -> Vec<TuiAction> {
+        filtered_actions(&self.palette.query, self.palette.scope, self)
+    }
+
+    fn open_leader(&mut self) {
+        self.leader = LeaderState {
+            group: None,
+            return_mode: match self.mode {
+                TuiMode::AgentFilter => LeaderReturnMode::AgentFilter,
+                TuiMode::Palette => LeaderReturnMode::Palette,
+                TuiMode::CommandForm => LeaderReturnMode::CommandForm,
+                TuiMode::SessionForm => LeaderReturnMode::SessionForm,
+                TuiMode::Repl => LeaderReturnMode::Repl,
+                TuiMode::TerminalScrollback => LeaderReturnMode::TerminalScrollback,
+                _ => LeaderReturnMode::Normal,
+            },
+        };
+        self.mode = TuiMode::Leader;
+    }
+
+    fn close_leader(&mut self) {
+        self.mode = match self.leader.return_mode {
+            LeaderReturnMode::Normal => self.default_mode(),
+            LeaderReturnMode::AgentFilter => TuiMode::AgentFilter,
+            LeaderReturnMode::Palette => TuiMode::Palette,
+            LeaderReturnMode::CommandForm if self.command_form.is_some() => TuiMode::CommandForm,
+            LeaderReturnMode::CommandForm => self.default_mode(),
+            LeaderReturnMode::SessionForm if self.session_form.is_some() => TuiMode::SessionForm,
+            LeaderReturnMode::SessionForm => self.default_mode(),
+            LeaderReturnMode::Repl => TuiMode::Repl,
+            LeaderReturnMode::TerminalScrollback => TuiMode::TerminalScrollback,
+        };
+        self.leader.group = None;
     }
 
     fn open_context_picker(&mut self) {
@@ -1386,13 +1504,20 @@ impl TuiApp {
 
     fn close_palette(&mut self) {
         self.palette.reset();
-        self.mode = self.default_mode();
+        self.mode = match self.palette.return_mode {
+            PaletteReturnMode::AgentFilter => TuiMode::AgentFilter,
+            PaletteReturnMode::CommandForm if self.command_form.is_some() => TuiMode::CommandForm,
+            PaletteReturnMode::SessionForm if self.session_form.is_some() => TuiMode::SessionForm,
+            PaletteReturnMode::CommandForm
+            | PaletteReturnMode::SessionForm
+            | PaletteReturnMode::Default => self.default_mode(),
+        };
     }
 
     fn default_mode(&self) -> TuiMode {
-        if self.command_is_running() {
+        if self.dev_panel_focused(DevView::BuildDeploy) && self.command_is_running() {
             TuiMode::CommandInteraction
-        } else if self.dev_panel_focused(DevPanel::Repl) && self.repl.is_running() {
+        } else if self.dev_panel_focused(DevView::Repl) && self.repl.is_running() {
             TuiMode::Repl
         } else {
             TuiMode::Normal
@@ -1410,44 +1535,264 @@ impl TuiApp {
         );
     }
 
-    fn next_dev_panel(&mut self) {
-        self.dev_focus = self.dev_focus.next();
+    fn focus_next_pane(&mut self) {
+        match self.active_workspace {
+            TuiWorkspace::Dev => {
+                let visible = self.layout.visible_dev_views(self.dev_primary);
+                let current = visible
+                    .iter()
+                    .position(|view| *view == self.dev_focus)
+                    .unwrap_or(0);
+                self.dev_focus = visible[(current + 1) % visible.len()];
+            }
+            TuiWorkspace::Ops => self.cycle_ops_pane_focus(),
+        }
     }
 
-    fn previous_dev_panel(&mut self) {
-        self.dev_focus = self.dev_focus.previous();
+    fn focus_previous_pane(&mut self) {
+        match self.active_workspace {
+            TuiWorkspace::Dev => {
+                let visible = self.layout.visible_dev_views(self.dev_primary);
+                let current = visible
+                    .iter()
+                    .position(|view| *view == self.dev_focus)
+                    .unwrap_or(0);
+                self.dev_focus = visible[(current + visible.len() - 1) % visible.len()];
+            }
+            TuiWorkspace::Ops => self.cycle_ops_pane_focus(),
+        }
     }
 
-    fn open_dev_workspace(&mut self, panel: DevPanel) {
+    fn open_selected_agent(&mut self) {
+        let identity = self
+            .filtered_agents()
+            .get(self.agents.selected)
+            .map(|agent| agent.identity());
+        if let Some(identity) = identity {
+            self.ops_subject = OpsSubject::Agent(identity);
+            self.ops_view = OpsView::Overview;
+            self.agents.details_scroll = 0;
+        }
+    }
+
+    fn select_ops_root(&mut self, subject: OpsRootSubject, event_tx: Option<&TuiEventSender>) {
+        self.active_workspace = TuiWorkspace::Ops;
+        self.ops_subject = OpsSubject::Root(subject);
+        self.ops_view = OpsView::Overview;
+        self.agents.details_scroll = 0;
+        match subject {
+            OpsRootSubject::Agents => {
+                if self.agents.agents.is_empty() && !self.agents.refresh_running {
+                    self.refresh_agents(event_tx);
+                }
+            }
+            OpsRootSubject::Deployment | OpsRootSubject::Environment => {
+                self.refresh_ops_environment(event_tx)
+            }
+            OpsRootSubject::Server => {}
+        }
+    }
+
+    fn handle_layout_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc | KeyCode::Enter => {
+                self.save_preferences();
+                self.close_leader();
+            }
+            KeyCode::Tab => self.focus_next_pane(),
+            KeyCode::BackTab => self.focus_previous_pane(),
+            KeyCode::Char('f') => match self.active_workspace {
+                TuiWorkspace::Dev => {
+                    self.layout.dev_placement = self.layout.dev_placement.flipped()
+                }
+                TuiWorkspace::Ops => {
+                    self.layout.ops_details_placement = self.layout.ops_details_placement.flipped()
+                }
+            },
+            KeyCode::Char('b') if self.active_workspace == TuiWorkspace::Dev => {
+                self.toggle_dev_subview(DevView::BuildDeploy)
+            }
+            KeyCode::Char('s') if self.active_workspace == TuiWorkspace::Dev => {
+                self.toggle_dev_subview(DevView::Server)
+            }
+            KeyCode::Char('r') if self.active_workspace == TuiWorkspace::Dev => {
+                self.toggle_dev_subview(DevView::Repl)
+            }
+            KeyCode::Char('d') if self.active_workspace == TuiWorkspace::Ops => {
+                self.toggle_agent_details()
+            }
+            KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down => {
+                let cells = if key.modifiers.contains(KeyModifiers::SHIFT) {
+                    5
+                } else {
+                    1
+                };
+                self.move_layout_divider(key.code, cells);
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_jobs_key(&mut self, key: KeyEvent) {
+        let count = self.job_count();
+        match key.code {
+            KeyCode::Esc => self.mode = self.default_mode(),
+            KeyCode::Up => self.selected_job = self.selected_job.saturating_sub(1),
+            KeyCode::Down => {
+                self.selected_job = self
+                    .selected_job
+                    .saturating_add(1)
+                    .min(count.saturating_sub(1))
+            }
+            KeyCode::Enter if count > 0 => {
+                self.open_dev_workspace(DevView::BuildDeploy);
+                self.mode = self.default_mode();
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_quit_blocked_key(&mut self, key: KeyEvent) {
+        if matches!(key.code, KeyCode::Esc | KeyCode::Enter) {
+            self.mode = self.default_mode();
+        }
+    }
+
+    fn request_quit(&mut self) {
+        if self.has_active_work() {
+            self.mode = TuiMode::QuitBlocked;
+        } else {
+            self.should_quit = true;
+        }
+    }
+
+    fn has_active_work(&self) -> bool {
+        self.command_is_running() || self.server.run.is_running() || self.repl.is_running()
+    }
+
+    fn job_count(&self) -> usize {
+        usize::from(self.command_run.is_some()) + self.completed_jobs.len()
+    }
+
+    fn toggle_dev_subview(&mut self, view: DevView) {
+        if view == self.dev_primary {
+            for other in DevView::ALL {
+                if other != self.dev_primary {
+                    self.layout.set_dev_visible(other, false);
+                }
+            }
+            self.dev_focus = self.dev_primary;
+            return;
+        }
+        let visible = !self.layout.dev_is_visible(view);
+        self.layout.set_dev_visible(view, visible);
+        if visible {
+            self.dev_focus = view;
+        } else if self.dev_focus == view {
+            self.dev_focus = self.dev_primary;
+        }
+    }
+
+    fn move_layout_divider(&mut self, direction: KeyCode, cells: u16) {
+        let Some(area) = self
+            .layout_snapshot
+            .borrow()
+            .as_ref()
+            .map(|snapshot| snapshot.workspace_body)
+        else {
+            return;
+        };
+        match self.active_workspace {
+            TuiWorkspace::Ops if self.agent_details_open() => {
+                let placement = self.layout.ops_details_placement;
+                let delta = physical_ratio_delta(area, placement, direction, cells);
+                if delta != 0 {
+                    let requested = apply_ratio_delta(self.layout.ops_details_ratio, delta);
+                    self.layout.ops_details_ratio =
+                        layout::clamp_ops_details_ratio(area, placement, requested);
+                }
+            }
+            TuiWorkspace::Dev => {
+                let placement = self.layout.dev_placement;
+                let visible = self.layout.visible_dev_views(self.dev_primary);
+                if visible.len() < 2 {
+                    return;
+                }
+                let primary_delta = physical_ratio_delta(area, placement, direction, cells);
+                if primary_delta != 0 {
+                    let requested = apply_ratio_delta(self.layout.dev_primary_ratio, primary_delta);
+                    self.layout.dev_primary_ratio =
+                        layout::clamp_dev_primary_ratio(area, placement, requested);
+                    return;
+                }
+                if visible.len() == 3 {
+                    let cross = placement.flipped();
+                    let secondary_delta = physical_ratio_delta(area, cross, direction, cells);
+                    if secondary_delta != 0 {
+                        let requested =
+                            apply_ratio_delta(self.layout.dev_secondary_ratio, secondary_delta);
+                        self.layout.dev_secondary_ratio =
+                            layout::clamp_dev_secondary_ratio(area, placement, requested);
+                    }
+                }
+            }
+            TuiWorkspace::Ops => {}
+        }
+    }
+
+    fn open_dev_workspace(&mut self, panel: DevView) {
         self.active_workspace = TuiWorkspace::Dev;
+        if panel != self.dev_primary && !self.layout.dev_is_visible(panel) {
+            self.layout.set_dev_visible(self.dev_primary, false);
+            self.dev_primary = panel;
+            self.layout.set_dev_visible(panel, true);
+        }
         self.dev_focus = panel;
     }
 
     fn open_ops_workspace(&mut self, event_tx: Option<&TuiEventSender>) {
         self.active_workspace = TuiWorkspace::Ops;
-        if self.agents.agents.is_empty() && !self.agents.refresh_running {
-            self.refresh_agents(event_tx);
+        match self.ops_subject.root() {
+            OpsRootSubject::Agents => {
+                if self.agents.agents.is_empty() && !self.agents.refresh_running {
+                    self.refresh_agents(event_tx);
+                }
+            }
+            OpsRootSubject::Deployment | OpsRootSubject::Environment
+                if self.ops_environment.snapshot.is_none() && !self.ops_environment.loading =>
+            {
+                self.refresh_ops_environment(event_tx)
+            }
+            OpsRootSubject::Deployment | OpsRootSubject::Environment | OpsRootSubject::Server => {}
         }
     }
 
-    fn dev_panel_focused(&self, panel: DevPanel) -> bool {
+    fn dev_panel_focused(&self, panel: DevView) -> bool {
         self.active_workspace == TuiWorkspace::Dev && self.dev_focus == panel
     }
 
     fn ops_agents_focused(&self) -> bool {
-        self.active_workspace == TuiWorkspace::Ops && self.ops_view == OpsView::Overview
+        self.active_workspace == TuiWorkspace::Ops
+            && matches!(self.ops_subject, OpsSubject::Root(OpsRootSubject::Agents))
+            && self.ops_view == OpsView::Overview
     }
 
     fn agents_focused(&self) -> bool {
-        self.ops_agents_focused() || self.dev_panel_focused(DevPanel::Agents)
+        self.ops_agents_focused()
+    }
+
+    fn ops_document_focused(&self) -> bool {
+        self.active_workspace == TuiWorkspace::Ops
+            && self.ops_view == OpsView::Overview
+            && !matches!(self.ops_subject, OpsSubject::Root(OpsRootSubject::Agents))
     }
 
     fn agent_details_open(&self) -> bool {
         self.agents_focused()
             && self.agents.detail_visible
-            && self
-                .agent_details_layout_area()
-                .is_none_or(|area| layout::ops_details_visible(area, true))
+            && self.agent_details_layout_area().is_none_or(|area| {
+                layout::ops_details_visible(area, true, self.layout.ops_details_placement)
+            })
     }
 
     fn agent_details_layout_area(&self) -> Option<Rect> {
@@ -1455,8 +1800,6 @@ impl TuiApp {
         let snapshot = snapshot.as_ref()?;
         if self.ops_agents_focused() {
             Some(snapshot.workspace_body)
-        } else if self.dev_panel_focused(DevPanel::Agents) {
-            snapshot.region(RegionKind::DevPanelBody(DevPanel::Agents))
         } else {
             None
         }
@@ -1482,19 +1825,9 @@ impl TuiApp {
                     self.mode = TuiMode::Normal;
                 }
             }
-            OpsView::Metrics => {
-                let details_visible = self
-                    .layout_snapshot
-                    .borrow()
-                    .as_ref()
-                    .is_some_and(|snapshot| fake_otlp_details_visible(snapshot.workspace_body));
-                if details_visible {
-                    self.fake_otlp.toggle_focus();
-                } else {
-                    self.fake_otlp.focus = FakeOtlpFocus::Series;
-                }
-            }
-            _ => {}
+            OpsView::Metrics => {}
+            OpsView::Overview => {}
+            OpsView::Activity => {}
         }
     }
 
@@ -1655,7 +1988,6 @@ impl TuiApp {
     }
 
     fn close_ops_for_context_switch(&mut self) {
-        self.close_agent_inspect_jobs();
         self.agents.refresh_running = false;
         self.agents.refresh_context_id = None;
         self.agents.refresh_generation += 1;
@@ -1800,10 +2132,17 @@ impl TuiApp {
                 self.context_cli_args = self.selected_switch_context_args();
                 self.selected_environment_reference = environment_reference;
                 self.reset_agents_for_context_switch();
+                self.invalidate_ops_environment();
                 self.context_switcher.last_error = None;
                 self.mode = self.default_mode();
-                if self.agents_focused() {
-                    self.refresh_agents(Some(event_tx));
+                if self.active_workspace == TuiWorkspace::Ops {
+                    match self.ops_subject.root() {
+                        OpsRootSubject::Agents => self.refresh_agents(Some(event_tx)),
+                        OpsRootSubject::Deployment | OpsRootSubject::Environment => {
+                            self.refresh_ops_environment(Some(event_tx))
+                        }
+                        OpsRootSubject::Server => {}
+                    }
                 }
             }
             Err(error) => {
@@ -1889,8 +2228,6 @@ impl TuiApp {
     }
 
     fn reset_agents_for_context_switch(&mut self) {
-        self.close_agent_inspect_jobs();
-        self.agents.view_mode = AgentsViewMode::List;
         self.agents.reset_selection();
         self.agents.included.clear();
         self.agents.dataset_scope = AgentDatasetScope::All;
@@ -2012,14 +2349,6 @@ impl TuiApp {
         self.agents.paging.reset();
         self.agents.agents.clear();
         self.agents.last_error = None;
-    }
-
-    fn resize_agent_details(&mut self, delta: i16) {
-        let Some(area) = self.agent_details_layout_area() else {
-            return;
-        };
-        let requested = (self.layout.ops_details_ratio as i16 + delta).clamp(0, 100) as u16;
-        self.layout.ops_details_ratio = layout::clamp_ops_details_ratio(area, requested);
     }
 
     fn toggle_agent_details(&mut self) {
@@ -2149,7 +2478,7 @@ impl TuiApp {
                     let result = async {
                         let environment = context
                             .environment_handler()
-                            .resolve_opt_environment_reference(
+                            .resolve_opt_environment_reference_read_only(
                                 EnvironmentResolveMode::Any,
                                 environment_reference.as_ref(),
                             )
@@ -2257,6 +2586,75 @@ impl TuiApp {
         }
     }
 
+    fn refresh_ops_environment(&mut self, event_tx: Option<&TuiEventSender>) {
+        if self.context_switch_pending() || self.ops_environment.loading {
+            return;
+        }
+        let Some(event_tx) = event_tx.cloned() else {
+            return;
+        };
+        let Some(context_executor) = self.context_executor.clone() else {
+            self.ops_environment.error = Some("TUI context executor is not available".to_string());
+            return;
+        };
+
+        self.ops_environment.generation = self.ops_environment.generation.saturating_add(1);
+        let generation = self.ops_environment.generation;
+        self.ops_environment.context_id = Some(context_executor.current_context_id());
+        self.ops_environment.loading = true;
+        self.ops_environment.error = None;
+        let environment_reference = self.selected_environment_reference.clone();
+        let auth_presenter = Some(tui_auth_presenter(&event_tx));
+        context_executor.spawn(
+            event_tx,
+            auth_presenter,
+            move |launch_context| async move {
+                let environment = launch_context
+                    .context()
+                    .environment_handler()
+                    .resolve_opt_environment_reference_read_only(
+                        EnvironmentResolveMode::Any,
+                        environment_reference.as_ref(),
+                    )
+                    .await?;
+                Ok(ops_environment_snapshot(environment))
+            },
+            move |result| TuiEvent::OpsEnvironmentRefreshFinished { generation, result },
+        );
+    }
+
+    fn finish_ops_environment_refresh(
+        &mut self,
+        generation: u64,
+        result: TuiContextTaskResult<OpsEnvironmentSnapshot>,
+    ) {
+        if generation != self.ops_environment.generation {
+            return;
+        }
+        let (context_id, result, logs) = result.into_parts();
+        if Some(context_id) != self.ops_environment.context_id {
+            return;
+        }
+        self.ops_environment.loading = false;
+        match result {
+            Ok(snapshot) => {
+                self.ops_environment.snapshot = Some(snapshot);
+                self.ops_environment.error = None;
+            }
+            Err(error) => {
+                self.ops_environment.error = Some(agent_refresh_error(error, logs));
+            }
+        }
+    }
+
+    fn invalidate_ops_environment(&mut self) {
+        self.ops_environment.generation = self.ops_environment.generation.saturating_add(1);
+        self.ops_environment.context_id = None;
+        self.ops_environment.loading = false;
+        self.ops_environment.snapshot = None;
+        self.ops_environment.error = None;
+    }
+
     fn toggle_agent_auto_refresh(&mut self, event_tx: Option<&TuiEventSender>) {
         self.agents.auto_refresh = !self.agents.auto_refresh;
         if self.agents.auto_refresh {
@@ -2279,166 +2677,21 @@ impl TuiApp {
         self.refresh_agents(event_tx);
     }
 
-    fn handle_agent_inspect_key(&mut self, key: KeyEvent) {
-        match key.code {
-            KeyCode::Esc => self.close_agent_inspect(),
-            KeyCode::Left => self.agents.inspect.focus = AgentInspectPane::Oplog,
-            KeyCode::Right => self.agents.inspect.focus = AgentInspectPane::Stream,
-            KeyCode::Up => self.scroll_agent_inspect_up_by(1),
-            KeyCode::Down => self.scroll_agent_inspect_down_by(1),
-            KeyCode::PageUp => self.scroll_agent_inspect_up_by(10),
-            KeyCode::PageDown => self.scroll_agent_inspect_down_by(10),
-            KeyCode::Home => self.focused_agent_inspect_job_mut().output.scroll_top(),
-            KeyCode::End => self.focused_agent_inspect_job_mut().output.scroll_bottom(),
-            _ => {}
-        }
-    }
-
-    fn open_agent_inspect(&mut self, event_tx: Option<&TuiEventSender>) {
-        let Some(agent_name) = self
-            .filtered_agents()
-            .get(self.agents.selected)
-            .map(|agent| agent.agent_id.clone())
-        else {
-            return;
-        };
-
-        self.close_agent_inspect_jobs();
-        self.agents.view_mode = AgentsViewMode::Inspect;
-        self.agents.inspect = AgentInspectState {
-            agent_name: Some(agent_name.clone()),
-            focus: AgentInspectPane::Oplog,
-            oplog: InspectJob::start(
-                vec!["agent".to_string(), "oplog".to_string(), agent_name.clone()],
-                self.context.short_label(),
-            ),
-            stream: InspectJob::start(
-                vec!["agent".to_string(), "stream".to_string(), agent_name],
-                self.context.short_label(),
-            ),
-        };
-
-        self.agents.inspect.oplog.output.append_local_line(format!(
-            "$ {}",
-            command_display(&self.agents.inspect.oplog.args)
-        ));
-        self.agents.inspect.stream.output.append_local_line(format!(
-            "$ {}",
-            command_display(&self.agents.inspect.stream.args)
-        ));
-
-        let Some(event_tx) = event_tx else {
-            return;
-        };
-
-        self.start_agent_inspect_job(AgentInspectPane::Oplog, event_tx);
-        self.start_agent_inspect_job(AgentInspectPane::Stream, event_tx);
-    }
-
-    fn start_agent_inspect_job(&mut self, pane: AgentInspectPane, event_tx: &TuiEventSender) {
-        let args = self.agent_inspect_job(pane).args.clone();
-        let spec = match self.command_spec(args) {
-            Ok(spec) => spec,
-            Err(error) => {
-                let job = self.agent_inspect_job_mut(pane);
-                job.status = InspectJobStatus::Failed;
-                job.output
-                    .append_local_line(format!("failed to prepare command: {error:#}"));
-                return;
-            }
-        };
-
-        let target = match pane {
-            AgentInspectPane::Oplog => NestedCliTarget::AgentOplog,
-            AgentInspectPane::Stream => NestedCliTarget::AgentStream,
-        };
-
-        match spawn_nested_cli(spec, event_tx.clone(), target) {
-            Ok(runtime) => {
-                let job = self.agent_inspect_job_mut(pane);
-                job.status = InspectJobStatus::Running;
-                job.runtime = Some(runtime);
-            }
-            Err(error) => {
-                let job = self.agent_inspect_job_mut(pane);
-                job.status = InspectJobStatus::Failed;
-                job.output
-                    .append_local_line(format!("failed to start command: {error:#}"));
-            }
-        }
-    }
-
-    fn close_agent_inspect(&mut self) {
-        self.close_agent_inspect_jobs();
-        self.agents.view_mode = AgentsViewMode::List;
-    }
-
-    fn close_agent_inspect_jobs(&mut self) {
-        for pane in [AgentInspectPane::Oplog, AgentInspectPane::Stream] {
-            let job = self.agent_inspect_job_mut(pane);
-            if let Some(runtime) = job.runtime.as_mut() {
-                let _ = runtime.kill();
-            }
-            job.runtime = None;
-            if job.is_running() {
-                job.status = InspectJobStatus::Stopped;
-            }
-        }
-    }
-
-    fn finish_agent_inspect_job(&mut self, pane: AgentInspectPane, exit: CommandExit) {
-        let job = self.agent_inspect_job_mut(pane);
-        job.runtime = None;
-        job.exit_code = exit.code;
-        job.status = if exit.success || job.status == InspectJobStatus::Stopping {
-            InspectJobStatus::Stopped
-        } else {
-            InspectJobStatus::Failed
-        };
-    }
-
-    fn scroll_agent_inspect_up_by(&mut self, amount: usize) {
-        self.focused_agent_inspect_job_mut()
-            .output
-            .scroll_up(amount);
-    }
-
-    fn scroll_agent_inspect_down_by(&mut self, amount: usize) {
-        self.focused_agent_inspect_job_mut()
-            .output
-            .scroll_down(amount);
-    }
-
-    fn focused_agent_inspect_job_mut(&mut self) -> &mut InspectJob {
-        self.agent_inspect_job_mut(self.agents.inspect.focus)
-    }
-
-    fn agent_inspect_job(&self, pane: AgentInspectPane) -> &InspectJob {
-        match pane {
-            AgentInspectPane::Oplog => &self.agents.inspect.oplog,
-            AgentInspectPane::Stream => &self.agents.inspect.stream,
-        }
-    }
-
-    fn agent_inspect_job_mut(&mut self, pane: AgentInspectPane) -> &mut InspectJob {
-        match pane {
-            AgentInspectPane::Oplog => &mut self.agents.inspect.oplog,
-            AgentInspectPane::Stream => &mut self.agents.inspect.stream,
-        }
-    }
-
     fn handle_command_interaction_key(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Esc => self.cancel_or_force_kill_command(),
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.cancel_or_force_kill_command();
             }
-            KeyCode::PageUp => self.scroll_output_up(),
+            KeyCode::PageUp => {
+                self.scroll_output_up();
+                self.mode = TuiMode::TerminalScrollback;
+            }
             KeyCode::PageDown => self.scroll_output_down(),
             KeyCode::Home => self.scroll_output_top(),
             KeyCode::End => self.scroll_output_bottom(),
             KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.open_palette();
+                self.open_palette(PaletteScope::All);
             }
             KeyCode::Char('h') if key.modifiers.contains(KeyModifiers::CONTROL) => self.open_help(),
             _ => {
@@ -2447,20 +2700,131 @@ impl TuiApp {
                     && let Some(runtime) = run.runtime.as_mut()
                     && let Err(error) = runtime.write_all(&bytes)
                 {
-                    run.output
-                        .append_local_line(format!("failed to send input: {error:#}"));
+                    run.terminal
+                        .feed_local_line(format!("failed to send input: {error:#}"));
                 }
             }
         }
     }
 
+    fn open_command_form(&mut self, kind: CommandKind) {
+        self.open_dev_workspace(DevView::BuildDeploy);
+        let key = self.context.short_label();
+        let values = self
+            .command_form_memory
+            .get(&key)
+            .cloned()
+            .unwrap_or_default();
+        self.command_form = Some(CommandReviewForm::new(kind, values));
+        self.mode = TuiMode::CommandForm;
+    }
+
+    fn handle_command_form_key(&mut self, key: KeyEvent, event_tx: Option<&TuiEventSender>) {
+        if key.code == KeyCode::Char('x') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            self.open_leader();
+            return;
+        }
+        if key.code == KeyCode::Char('p') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            self.open_palette(PaletteScope::All);
+            return;
+        }
+        if key.code == KeyCode::Char('q') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            self.request_quit();
+            return;
+        }
+        if key.code == KeyCode::Char('h') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            self.open_help();
+            return;
+        }
+
+        let Some(form) = self.command_form.as_mut() else {
+            self.mode = self.default_mode();
+            return;
+        };
+        if form.editing {
+            match key.code {
+                KeyCode::Esc | KeyCode::Enter => form.editing = false,
+                KeyCode::Backspace => {
+                    command_form_text_value_mut(form).pop();
+                }
+                KeyCode::Char(character)
+                    if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
+                {
+                    command_form_text_value_mut(form).push(character);
+                }
+                _ => {}
+            }
+            return;
+        }
+
+        match key.code {
+            KeyCode::Esc => {
+                self.command_form = None;
+                self.mode = self.default_mode();
+            }
+            KeyCode::Up => form.selected = form.selected.saturating_sub(1),
+            KeyCode::Down | KeyCode::Tab => {
+                form.selected = (form.selected + 1) % form.field_count()
+            }
+            KeyCode::BackTab => {
+                form.selected = (form.selected + form.field_count() - 1) % form.field_count()
+            }
+            KeyCode::Char(' ') | KeyCode::Enter => {
+                if command_form_is_launch(form) {
+                    self.launch_command_form(event_tx);
+                } else {
+                    update_command_form_field(form);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn launch_command_form(&mut self, event_tx: Option<&TuiEventSender>) {
+        let Some(form) = self.command_form.take() else {
+            return;
+        };
+        let kind = form.kind;
+        let values = form.values;
+        let mut remembered = values.clone();
+        remembered.yes = false;
+        self.command_form_memory
+            .insert(self.context.short_label(), remembered);
+        self.mode = TuiMode::Normal;
+        self.start_command_with_values(kind, values, event_tx);
+    }
+
+    #[cfg(test)]
     fn start_command(&mut self, kind: CommandKind, event_tx: Option<&TuiEventSender>) {
+        let mut values = CommandFormValues::default();
+        values.yes = self.command_options.yes;
+        values.post_deploy = if self.command_options.reset {
+            PostDeployPolicy::Reset
+        } else {
+            PostDeployPolicy::None
+        };
+        self.start_command_with_values(kind, values, event_tx);
+    }
+
+    fn start_command_with_values(
+        &mut self,
+        kind: CommandKind,
+        values: CommandFormValues,
+        event_tx: Option<&TuiEventSender>,
+    ) {
+        self.command_options = values.command_options();
+        if self.command_is_running() {
+            self.append_local_command_line("command already running");
+            self.open_dev_workspace(DevView::BuildDeploy);
+            return;
+        }
+        self.archive_current_command();
         if self.dev_context_unavailable() {
-            self.open_dev_workspace(DevPanel::Output);
+            self.open_dev_workspace(DevView::BuildDeploy);
             self.command_run = Some(CommandRun::new(
                 self.next_command_id,
                 kind,
-                self.command_args(kind),
+                self.command_args(kind, &values),
                 self.command_options,
                 self.context.short_label(),
             ));
@@ -2469,16 +2833,10 @@ impl TuiApp {
             self.set_command_status(CommandStatus::Failed);
             return;
         }
-        if self.command_is_running() {
-            self.append_local_command_line("command already running");
-            self.open_dev_workspace(DevPanel::Output);
-            return;
-        }
-
-        let args = self.command_args(kind);
+        let args = self.command_args(kind, &values);
         let command_id = self.next_command_id;
         self.next_command_id += 1;
-        self.open_dev_workspace(DevPanel::Output);
+        self.open_dev_workspace(DevView::BuildDeploy);
         self.mode = TuiMode::CommandInteraction;
         self.command_run = Some(CommandRun::new(
             command_id,
@@ -2487,6 +2845,11 @@ impl TuiApp {
             self.command_options,
             self.context.short_label(),
         ));
+        if let Some((cols, rows)) = self.dev_pty_size(DevView::BuildDeploy)
+            && let Some(run) = self.command_run.as_mut()
+        {
+            run.terminal.resize(rows, cols);
+        }
         self.append_local_command_line(format!("$ {}", command_display(&args)));
 
         let Some(event_tx) = event_tx else {
@@ -2504,7 +2867,10 @@ impl TuiApp {
         };
 
         match spawn_nested_cli(spec, event_tx.clone(), NestedCliTarget::Command) {
-            Ok(runtime) => {
+            Ok(mut runtime) => {
+                if let Some((cols, rows)) = self.dev_pty_size(DevView::BuildDeploy) {
+                    let _ = runtime.resize(cols, rows);
+                }
                 if let Some(run) = self.command_run.as_mut() {
                     run.runtime = Some(runtime);
                     let stop = Arc::new(AtomicBool::new(false));
@@ -2532,17 +2898,60 @@ impl TuiApp {
         }
     }
 
-    fn command_args(&self, kind: CommandKind) -> Vec<String> {
+    fn command_args(&self, kind: CommandKind, values: &CommandFormValues) -> Vec<String> {
         let mut args = match kind {
+            CommandKind::Plan => vec!["deploy".to_string(), "--plan".to_string()],
             CommandKind::Build => vec!["build".to_string()],
             CommandKind::Deploy => vec!["deploy".to_string()],
             CommandKind::Clean => vec!["clean".to_string()],
         };
-        if self.command_options.yes {
-            args.push("--yes".to_string());
+        if kind == CommandKind::Build {
+            const STEPS: [&str; 4] = ["check", "build", "add-metadata", "gen-bridge"];
+            for (enabled, step) in values.build_steps.into_iter().zip(STEPS) {
+                if enabled {
+                    args.extend(["--step".to_string(), step.to_string()]);
+                }
+            }
+            if values.skip_check && !values.build_steps.into_iter().any(|enabled| enabled) {
+                args.push("--skip-check".to_string());
+            }
         }
-        if kind == CommandKind::Deploy && self.command_options.reset {
-            args.push("--reset".to_string());
+        if matches!(
+            kind,
+            CommandKind::Build | CommandKind::Plan | CommandKind::Deploy
+        ) && values.force_build
+        {
+            args.push("--force-build".to_string());
+        }
+        if matches!(kind, CommandKind::Plan | CommandKind::Deploy) {
+            if values.full_diff {
+                args.push("--full-diff".to_string());
+            }
+            if !values.rollback_version.trim().is_empty() {
+                args.extend([
+                    "--version".to_string(),
+                    values.rollback_version.trim().to_string(),
+                ]);
+            } else if !values.rollback_revision.trim().is_empty() {
+                args.extend([
+                    "--revision".to_string(),
+                    values.rollback_revision.trim().to_string(),
+                ]);
+            }
+            match values.post_deploy {
+                PostDeployPolicy::None => {}
+                PostDeployPolicy::UpdateAuto => {
+                    args.extend(["--update-agents".to_string(), "auto".to_string()])
+                }
+                PostDeployPolicy::UpdateManual => {
+                    args.extend(["--update-agents".to_string(), "manual".to_string()])
+                }
+                PostDeployPolicy::Redeploy => args.push("--redeploy-agents".to_string()),
+                PostDeployPolicy::Reset => args.push("--reset".to_string()),
+            }
+        }
+        if values.yes {
+            args.push("--yes".to_string());
         }
         args
     }
@@ -2553,13 +2962,13 @@ impl TuiApp {
 
     fn append_command_output(&mut self, bytes: &[u8]) {
         if let Some(run) = self.command_run.as_mut() {
-            run.output.append(bytes);
+            run.terminal.feed(bytes);
         }
     }
 
     fn append_local_command_line(&mut self, line: impl AsRef<str>) {
         if let Some(run) = self.command_run.as_mut() {
-            run.output.append_local_line(line);
+            run.terminal.feed_local_line(line);
         }
     }
 
@@ -2573,9 +2982,10 @@ impl TuiApp {
                 };
             }
             run.exit_code = exit.code;
+            run.finished_at = Some(Instant::now());
             run.runtime = None;
             run.stop_spinner();
-            run.output.append_local_line(match run.status {
+            run.terminal.feed_local_line(match run.status {
                 CommandStatus::Succeeded => "command succeeded".to_string(),
                 CommandStatus::Failed => {
                     format!("command failed with exit code {}", exit.code.unwrap_or(1))
@@ -2584,7 +2994,10 @@ impl TuiApp {
                 CommandStatus::Running | CommandStatus::Cancelling => "command exited".to_string(),
             });
         }
-        if self.mode == TuiMode::CommandInteraction {
+        self.trim_completed_job_capacity();
+        if self.mode == TuiMode::CommandInteraction
+            || (self.mode == TuiMode::TerminalScrollback && self.dev_focus == DevView::BuildDeploy)
+        {
             self.mode = TuiMode::Normal;
         }
         self.resume_pending_context_switch_if_ready(Some(event_tx));
@@ -2599,24 +3012,34 @@ impl TuiApp {
             CommandStatus::Running => {
                 if let Some(runtime) = run.runtime.as_mut() {
                     if let Err(error) = runtime.send_ctrl_c() {
-                        run.output
-                            .append_local_line(format!("failed to send cancel: {error:#}"));
+                        run.terminal
+                            .feed_local_line(format!("failed to send cancel: {error:#}"));
                     }
                 }
                 run.status = CommandStatus::Cancelling;
-                run.output.append_local_line("cancel requested");
+                run.stop_requested_at = Some(Instant::now());
+                run.terminal.feed_local_line("cancel requested");
             }
             CommandStatus::Cancelling => {
+                if !run.force_stop_available() {
+                    let remaining = FORCE_STOP_DELAY
+                        .saturating_sub(run.stop_requested_at.expect("cancelling job").elapsed())
+                        .as_secs_f32();
+                    run.terminal
+                        .feed_local_line(format!("force stop is available in {remaining:.1}s"));
+                    return;
+                }
                 if let Some(runtime) = run.runtime.as_mut()
                     && let Err(error) = runtime.kill()
                 {
-                    run.output
-                        .append_local_line(format!("failed to force kill: {error:#}"));
+                    run.terminal
+                        .feed_local_line(format!("failed to force kill: {error:#}"));
                 }
                 run.runtime = None;
                 run.status = CommandStatus::Killed;
+                run.finished_at = Some(Instant::now());
                 run.stop_spinner();
-                run.output.append_local_line("force killed");
+                run.terminal.feed_local_line("force killed");
                 self.mode = TuiMode::Normal;
             }
             CommandStatus::Succeeded | CommandStatus::Failed | CommandStatus::Killed => {}
@@ -2632,10 +3055,18 @@ impl TuiApp {
         }
         self.cleanup_server();
         self.cleanup_repl();
-        self.close_agent_inspect_jobs();
         self.agents.stop_refresh_spinner();
         if let Some(stop) = self.agents.auto_refresh_stop.take() {
             stop.store(true, Ordering::Relaxed);
+        }
+    }
+
+    fn save_preferences(&mut self) {
+        if let Err(error) = write_tui_preferences(
+            &self.preferences_path,
+            &TuiPreferences::from_state(&self.layout, &self.agents.table),
+        ) {
+            self.preferences_error = Some(format!("failed to save TUI preferences: {error:#}"));
         }
     }
 
@@ -2648,6 +3079,31 @@ impl TuiApp {
         })
     }
 
+    fn archive_current_command(&mut self) {
+        let Some(run) = self.command_run.take() else {
+            return;
+        };
+        debug_assert!(!matches!(
+            run.status,
+            CommandStatus::Running | CommandStatus::Cancelling
+        ));
+        self.completed_jobs.push_front(run);
+        self.trim_completed_job_capacity();
+    }
+
+    fn trim_completed_job_capacity(&mut self) {
+        let current_completed = usize::from(self.command_run.as_ref().is_some_and(|run| {
+            !matches!(
+                run.status,
+                CommandStatus::Running | CommandStatus::Cancelling
+            )
+        }));
+        let history_limit = COMPLETED_JOB_LIMIT.saturating_sub(current_completed);
+        while self.completed_jobs.len() > history_limit {
+            self.completed_jobs.pop_back();
+        }
+    }
+
     fn set_command_status(&mut self, status: CommandStatus) {
         if let Some(run) = self.command_run.as_mut() {
             run.status = status;
@@ -2658,13 +3114,43 @@ impl TuiApp {
         }
     }
 
-    fn resize_running_command(&mut self, cols: u16, rows: u16) {
+    fn resize_nested_sessions(&mut self, cols: u16, rows: u16) {
+        let snapshot = layout::compute(LayoutInput {
+            area: Rect::new(0, 0, cols, rows),
+            active_workspace: self.active_workspace,
+            dev_primary: self.dev_primary,
+            focused_dev_view: self.dev_focus,
+            mode: self.mode,
+            context_picker_rows: context_picker_layout_rows(&self.context_switcher),
+            context_picker_selected: self.context_switcher.selected,
+            context_picker_prefix_height: context_picker_prefix_height(&self.context_switcher),
+            agent_details_visible: self.ops_agents_focused() && self.agents.detail_visible,
+            layout: self.layout.clone(),
+        });
+        self.layout_snapshot.replace(Some(snapshot.clone()));
         if let Some(run) = self.command_run.as_mut()
-            && let Some(runtime) = run.runtime.as_mut()
+            && let Some(area) = snapshot.region(RegionKind::DevViewBody(DevView::BuildDeploy))
         {
-            let _ = runtime.resize(cols, rows);
+            let (pty_cols, pty_rows) = pty_size_for_region(area);
+            run.terminal.resize(pty_rows, pty_cols);
+            if let Some(runtime) = run.runtime.as_mut() {
+                let _ = runtime.resize(pty_cols, pty_rows);
+            }
         }
-        self.resize_repl_for_terminal(cols, rows);
+        if let Some(area) = snapshot.region(RegionKind::DevViewBody(DevView::Server)) {
+            let (pty_cols, pty_rows) = pty_size_for_region(area);
+            self.server.run.terminal.resize(pty_rows, pty_cols);
+            if let Some(runtime) = self.server.run.runtime.as_mut() {
+                let _ = runtime.resize(pty_cols, pty_rows);
+            }
+        }
+        if let Some(area) = snapshot.region(RegionKind::DevViewBody(DevView::Repl)) {
+            let (pty_cols, pty_rows) = pty_size_for_region(area);
+            self.repl.run.screen.resize(pty_rows, pty_cols);
+            if let Some(runtime) = self.repl.run.runtime.as_mut() {
+                let _ = runtime.resize(pty_cols, pty_rows);
+            }
+        }
     }
 
     fn scroll_output_up(&mut self) {
@@ -2673,7 +3159,7 @@ impl TuiApp {
 
     fn scroll_output_up_by(&mut self, amount: usize) {
         if let Some(run) = self.command_run.as_mut() {
-            run.output.scroll_up(amount);
+            run.terminal.scroll_up(amount);
         }
     }
 
@@ -2683,78 +3169,226 @@ impl TuiApp {
 
     fn scroll_output_down_by(&mut self, amount: usize) {
         if let Some(run) = self.command_run.as_mut() {
-            run.output.scroll_down(amount);
+            run.terminal.scroll_down(amount);
         }
     }
 
     fn scroll_output_top(&mut self) {
         if let Some(run) = self.command_run.as_mut() {
-            run.output.scroll_top();
+            run.terminal.scroll_top();
         }
     }
 
     fn scroll_output_bottom(&mut self) {
         if let Some(run) = self.command_run.as_mut() {
-            run.output.scroll_bottom();
+            run.terminal.scroll_bottom();
         }
     }
 
-    fn toggle_server(&mut self, event_tx: Option<&TuiEventSender>) {
-        if self.local_server_unavailable() {
-            self.server
-                .run
-                .output
-                .append_local_line("local server is unavailable");
-            self.open_dev_workspace(DevPanel::Server);
-            return;
-        }
+    fn request_server_toggle(&mut self) {
+        self.open_dev_workspace(DevView::Server);
         if self.server.run.is_running() {
             self.stop_server();
         } else {
-            self.start_server(ServerStartMode::Current, event_tx);
+            self.open_server_form(false, false);
         }
     }
 
-    fn open_and_toggle_server(&mut self, event_tx: Option<&TuiEventSender>) {
-        self.open_dev_workspace(DevPanel::Server);
-        self.toggle_server(event_tx);
+    fn open_server_form(&mut self, restart: bool, clean: bool) {
+        self.open_dev_workspace(DevView::Server);
+        let key = self.context.short_label();
+        let mut values = self
+            .server_form_memory
+            .get(&key)
+            .cloned()
+            .unwrap_or_else(|| ServerFormValues::new(&self.context.config_dir));
+        values.clean |= clean;
+        values.yes = false;
+        self.session_form = Some(SessionReviewForm::Server {
+            values,
+            selected: 0,
+            editing: false,
+            restart,
+            error: None,
+        });
+        self.mode = TuiMode::SessionForm;
     }
 
-    fn start_server(&mut self, mode: ServerStartMode, event_tx: Option<&TuiEventSender>) {
+    fn open_repl_form(&mut self, restart: bool) {
+        self.open_dev_workspace(DevView::Repl);
+        let key = self.context.short_label();
+        let mut values = self.repl_form_memory.get(&key).cloned().unwrap_or_default();
+        values.yes = false;
+        self.session_form = Some(SessionReviewForm::Repl {
+            values,
+            selected: 0,
+            restart,
+        });
+        self.mode = TuiMode::SessionForm;
+    }
+
+    fn handle_session_form_key(&mut self, key: KeyEvent, event_tx: Option<&TuiEventSender>) {
+        if key.code == KeyCode::Char('x') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            self.open_leader();
+            return;
+        }
+        if key.code == KeyCode::Char('p') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            self.open_palette(PaletteScope::All);
+            return;
+        }
+        if key.code == KeyCode::Char('q') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            self.request_quit();
+            return;
+        }
+        if key.code == KeyCode::Char('h') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            self.open_help();
+            return;
+        }
+        let Some(form) = self.session_form.as_mut() else {
+            self.mode = self.default_mode();
+            return;
+        };
+
+        if let SessionReviewForm::Server {
+            values,
+            selected,
+            editing,
+            error,
+            ..
+        } = form
+            && *editing
+        {
+            match key.code {
+                KeyCode::Esc | KeyCode::Enter => *editing = false,
+                KeyCode::Backspace => {
+                    server_form_text_mut(values, *selected).pop();
+                    *error = None;
+                }
+                KeyCode::Char(character)
+                    if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
+                {
+                    server_form_text_mut(values, *selected).push(character);
+                    *error = None;
+                }
+                _ => {}
+            }
+            return;
+        }
+
+        let count = form.field_count();
+        match key.code {
+            KeyCode::Esc => {
+                self.session_form = None;
+                self.mode = self.default_mode();
+            }
+            KeyCode::Up => form.set_selected(form.selected().saturating_sub(1)),
+            KeyCode::Down | KeyCode::Tab => form.set_selected((form.selected() + 1) % count),
+            KeyCode::BackTab => form.set_selected((form.selected() + count - 1) % count),
+            KeyCode::Char(' ') | KeyCode::Enter => {
+                if form.selected() + 1 == count {
+                    self.launch_session_form(event_tx);
+                } else {
+                    update_session_form_field(form);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn launch_session_form(&mut self, event_tx: Option<&TuiEventSender>) {
+        let Some(mut form) = self.session_form.take() else {
+            return;
+        };
+        match &mut form {
+            SessionReviewForm::Server {
+                values,
+                restart,
+                error,
+                ..
+            } => {
+                if let Err(message) = validate_server_form(values) {
+                    *error = Some(message);
+                    self.session_form = Some(form);
+                    return;
+                }
+                let values = values.clone();
+                let mut remembered = values.clone();
+                remembered.yes = false;
+                self.server_form_memory
+                    .insert(self.context.short_label(), remembered);
+                self.mode = TuiMode::Normal;
+                if *restart && self.server.run.is_running() {
+                    self.pending_server_restart = Some(values);
+                    self.stop_server();
+                } else {
+                    self.start_server_with_values(values, event_tx);
+                }
+            }
+            SessionReviewForm::Repl {
+                values, restart, ..
+            } => {
+                let values = values.clone();
+                let mut remembered = values.clone();
+                remembered.yes = false;
+                self.repl_form_memory
+                    .insert(self.context.short_label(), remembered);
+                self.mode = TuiMode::Normal;
+                if *restart && self.repl.is_running() {
+                    self.pending_repl_restart = Some(values);
+                    self.stop_repl();
+                } else {
+                    self.start_repl_with_values(values, event_tx);
+                }
+            }
+        }
+    }
+
+    fn start_server_with_values(
+        &mut self,
+        values: ServerFormValues,
+        event_tx: Option<&TuiEventSender>,
+    ) {
         if self.local_server_unavailable() {
             self.server
                 .run
-                .output
-                .append_local_line("local server is unavailable");
-            self.open_dev_workspace(DevPanel::Server);
+                .terminal
+                .feed_local_line("local server is unavailable");
+            self.open_dev_workspace(DevView::Server);
             return;
         }
         if self.server.run.is_running() {
             self.server
                 .run
-                .output
-                .append_local_line("server already running");
-            self.open_dev_workspace(DevPanel::Server);
+                .terminal
+                .feed_local_line("server already running");
+            self.open_dev_workspace(DevView::Server);
             return;
         }
 
-        let clean = match mode {
-            ServerStartMode::Current => self.server.clean,
-            ServerStartMode::Clean => true,
-        };
-        let args = server_args(clean);
-        self.open_dev_workspace(DevPanel::Server);
+        let clean = values.clean;
+        let args = server_args_from_values(&values);
+        let ports_file = Some(PathBuf::from(values.ports_file.trim()));
+        let ports_file_before_modified = ports_file
+            .as_ref()
+            .and_then(|path| std::fs::metadata(path).ok())
+            .and_then(|metadata| metadata.modified().ok());
+        self.open_dev_workspace(DevView::Server);
         self.server.run = ServerRun::new(
             self.server.next_id,
             clean,
             args.clone(),
             self.server.launch_label.clone(),
+            ports_file,
+            ports_file_before_modified,
         );
+        if let Some((cols, rows)) = self.dev_pty_size(DevView::Server) {
+            self.server.run.terminal.resize(rows, cols);
+        }
         self.server.next_id += 1;
         self.server
             .run
-            .output
-            .append_local_line(format!("$ {}", command_display(&args)));
+            .terminal
+            .feed_local_line(format!("$ {}", command_display(&args)));
 
         let Some(event_tx) = event_tx else {
             return;
@@ -2765,15 +3399,18 @@ impl TuiApp {
             Err(error) => {
                 self.server
                     .run
-                    .output
-                    .append_local_line(format!("failed to prepare server: {error:#}"));
+                    .terminal
+                    .feed_local_line(format!("failed to prepare server: {error:#}"));
                 self.server.run.status = ServerStatus::Failed;
                 return;
             }
         };
 
         match spawn_nested_cli(spec, event_tx.clone(), NestedCliTarget::Server) {
-            Ok(runtime) => {
+            Ok(mut runtime) => {
+                if let Some((cols, rows)) = self.dev_pty_size(DevView::Server) {
+                    let _ = runtime.resize(cols, rows);
+                }
                 self.server.run.runtime = Some(runtime);
                 let stop = Arc::new(AtomicBool::new(false));
                 spawn_server_spinner(self.server.run.id, event_tx.clone(), stop.clone());
@@ -2782,8 +3419,8 @@ impl TuiApp {
             Err(error) => {
                 self.server
                     .run
-                    .output
-                    .append_local_line(format!("failed to start server: {error:#}"));
+                    .terminal
+                    .feed_local_line(format!("failed to start server: {error:#}"));
                 self.server.run.status = ServerStatus::Failed;
             }
         }
@@ -2800,56 +3437,52 @@ impl TuiApp {
                     if let Err(error) = runtime.send_ctrl_c() {
                         self.server
                             .run
-                            .output
-                            .append_local_line(format!("failed to stop server: {error:#}"));
+                            .terminal
+                            .feed_local_line(format!("failed to stop server: {error:#}"));
                     }
                 }
                 self.server.run.status = ServerStatus::Stopping;
+                self.server.run.stop_requested_at = Some(Instant::now());
                 self.server
                     .run
-                    .output
-                    .append_local_line("server stop requested");
+                    .terminal
+                    .feed_local_line("server stop requested");
             }
             ServerStatus::Stopping => {
+                if !self
+                    .server
+                    .run
+                    .stop_requested_at
+                    .is_some_and(|requested| requested.elapsed() >= FORCE_STOP_DELAY)
+                {
+                    self.server.run.terminal.feed_local_line(
+                        "force stop becomes available five seconds after the first stop",
+                    );
+                    return;
+                }
                 if let Some(runtime) = self.server.run.runtime.as_mut()
                     && let Err(error) = runtime.kill()
                 {
                     self.server
                         .run
-                        .output
-                        .append_local_line(format!("failed to force kill server: {error:#}"));
+                        .terminal
+                        .feed_local_line(format!("failed to force kill server: {error:#}"));
                 }
                 self.server.run.runtime = None;
                 self.server.run.status = ServerStatus::Stopped;
+                self.server.run.stop_requested_at = None;
                 self.server.run.stop_spinner();
                 self.server
                     .run
-                    .output
-                    .append_local_line("server force killed");
+                    .terminal
+                    .feed_local_line("server force killed");
             }
             ServerStatus::Stopped | ServerStatus::Failed => {}
         }
     }
 
-    fn restart_server(&mut self, mode: ServerStartMode, event_tx: Option<&TuiEventSender>) {
-        if self.local_server_unavailable() {
-            self.server
-                .run
-                .output
-                .append_local_line("local server is unavailable");
-            self.open_dev_workspace(DevPanel::Server);
-            return;
-        }
-        if self.server.run.is_running() {
-            self.server.run.restart_after_stop = Some(mode);
-            self.stop_server();
-        } else {
-            self.start_server(mode, event_tx);
-        }
-    }
-
     fn finish_server(&mut self, exit: CommandExit, event_tx: &TuiEventSender) {
-        let pending_restart = self.server.run.restart_after_stop.take();
+        let pending_restart = self.pending_server_restart.take();
         self.server.run.runtime = None;
         self.server.run.stop_spinner();
         self.server.run.exit_code = exit.code;
@@ -2862,8 +3495,8 @@ impl TuiApp {
         };
         self.server
             .run
-            .output
-            .append_local_line(match self.server.run.status {
+            .terminal
+            .feed_local_line(match self.server.run.status {
                 ServerStatus::Stopped => "server stopped".to_string(),
                 ServerStatus::Failed => {
                     format!("server exited with code {}", exit.code.unwrap_or(1))
@@ -2873,8 +3506,8 @@ impl TuiApp {
                 }
             });
 
-        if let Some(mode) = pending_restart {
-            self.start_server(mode, Some(event_tx));
+        if let Some(values) = pending_restart {
+            self.start_server_with_values(values, Some(event_tx));
         }
         self.resume_pending_context_switch_if_ready(Some(event_tx));
     }
@@ -2883,7 +3516,10 @@ impl TuiApp {
         if self.server.run.id == server_id && self.server.run.is_running() {
             self.server.run.spinner_frame = self.server.run.spinner_frame.wrapping_add(1);
             if self.server.run.status == ServerStatus::Starting {
-                self.server.run.status = ServerStatus::Running;
+                if let Some(ports) = fresh_bound_server_ports(&self.server.run) {
+                    self.server.run.bound_ports = Some(ports);
+                    self.server.run.status = ServerStatus::Running;
+                }
             }
         }
     }
@@ -2896,15 +3532,15 @@ impl TuiApp {
     }
 
     fn scroll_server_up_by(&mut self, amount: usize) {
-        self.server.run.output.scroll_up(amount);
+        self.server.run.terminal.scroll_up(amount);
     }
 
     fn scroll_server_down_by(&mut self, amount: usize) {
-        self.server.run.output.scroll_down(amount);
+        self.server.run.terminal.scroll_down(amount);
     }
 
-    fn start_or_focus_repl(&mut self, event_tx: Option<&TuiEventSender>) {
-        self.open_dev_workspace(DevPanel::Repl);
+    fn start_or_focus_repl(&mut self, _event_tx: Option<&TuiEventSender>) {
+        self.open_dev_workspace(DevView::Repl);
         if self.dev_context_unavailable() {
             self.repl.run.last_error = Some("selected context is ops-only".to_string());
             self.mode = TuiMode::Normal;
@@ -2915,13 +3551,20 @@ impl TuiApp {
             return;
         }
 
-        self.start_repl(event_tx);
+        self.open_repl_form(false);
     }
 
-    fn start_repl(&mut self, event_tx: Option<&TuiEventSender>) {
-        let args = vec!["repl".to_string()];
-        let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
-        let (screen_rows, screen_cols) = repl_screen_size_for_terminal(cols, rows);
+    fn start_repl_with_values(
+        &mut self,
+        values: ReplFormValues,
+        event_tx: Option<&TuiEventSender>,
+    ) {
+        let args = repl_args_from_values(&values);
+        let (screen_cols, screen_rows) = self.dev_pty_size(DevView::Repl).unwrap_or_else(|| {
+            let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
+            let (rows, cols) = repl_screen_size_for_terminal(cols, rows);
+            (cols, rows)
+        });
         self.repl.run = ReplRun::new(
             args.clone(),
             screen_rows,
@@ -2995,7 +3638,7 @@ impl TuiApp {
     }
 
     fn focus_repl(&mut self) {
-        self.open_dev_workspace(DevPanel::Repl);
+        self.open_dev_workspace(DevView::Repl);
         if self.repl.is_running() {
             self.mode = TuiMode::Repl;
         }
@@ -3003,7 +3646,13 @@ impl TuiApp {
 
     fn handle_repl_key(&mut self, key: KeyEvent) {
         if key.code == KeyCode::Char('x') && key.modifiers.contains(KeyModifiers::CONTROL) {
-            self.mode = TuiMode::LeaderRepl;
+            self.open_leader();
+            return;
+        }
+
+        if key.code == KeyCode::PageUp {
+            self.repl.run.screen.scroll_up(10);
+            self.mode = TuiMode::TerminalScrollback;
             return;
         }
 
@@ -3012,6 +3661,62 @@ impl TuiApp {
             && let Err(error) = runtime.write_all(&bytes)
         {
             self.repl.run.last_error = Some(format!("failed to send REPL input: {error:#}"));
+        }
+    }
+
+    fn handle_terminal_scrollback_key(&mut self, key: KeyEvent) {
+        if key.code == KeyCode::Char('x') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            self.open_leader();
+            return;
+        }
+        if key.code == KeyCode::Char('q') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            self.request_quit();
+            return;
+        }
+        match key.code {
+            KeyCode::Esc => {
+                self.scroll_terminal_bottom();
+                self.mode = self.default_mode();
+            }
+            KeyCode::Up => self.scroll_terminal_up(1),
+            KeyCode::Down => self.scroll_terminal_down(1),
+            KeyCode::PageUp => self.scroll_terminal_up(10),
+            KeyCode::PageDown => self.scroll_terminal_down(10),
+            KeyCode::Home => self.scroll_terminal_top(),
+            KeyCode::End => self.scroll_terminal_bottom(),
+            _ => {}
+        }
+    }
+
+    fn scroll_terminal_up(&mut self, amount: usize) {
+        match self.dev_focus {
+            DevView::BuildDeploy => self.scroll_output_up_by(amount),
+            DevView::Server => self.scroll_server_up_by(amount),
+            DevView::Repl => self.repl.run.screen.scroll_up(amount),
+        }
+    }
+
+    fn scroll_terminal_down(&mut self, amount: usize) {
+        match self.dev_focus {
+            DevView::BuildDeploy => self.scroll_output_down_by(amount),
+            DevView::Server => self.scroll_server_down_by(amount),
+            DevView::Repl => self.repl.run.screen.scroll_down(amount),
+        }
+    }
+
+    fn scroll_terminal_top(&mut self) {
+        match self.dev_focus {
+            DevView::BuildDeploy => self.scroll_output_top(),
+            DevView::Server => self.server.run.terminal.scroll_top(),
+            DevView::Repl => self.repl.run.screen.scroll_top(),
+        }
+    }
+
+    fn scroll_terminal_bottom(&mut self) {
+        match self.dev_focus {
+            DevView::BuildDeploy => self.scroll_output_bottom(),
+            DevView::Server => self.server.run.terminal.scroll_bottom(),
+            DevView::Repl => self.repl.run.screen.scroll_bottom(),
         }
     }
 
@@ -3047,8 +3752,15 @@ impl TuiApp {
             )
             .as_bytes(),
         );
-        if matches!(self.mode, TuiMode::Repl | TuiMode::LeaderRepl) {
+        let pending_restart = self.pending_repl_restart.take();
+        if self.mode == TuiMode::Repl
+            || (self.mode == TuiMode::TerminalScrollback && self.dev_focus == DevView::Repl)
+            || (self.mode == TuiMode::Leader && self.leader.return_mode == LeaderReturnMode::Repl)
+        {
             self.mode = TuiMode::Normal;
+        }
+        if let Some(values) = pending_restart {
+            self.start_repl_with_values(values, Some(event_tx));
         }
         self.resume_pending_context_switch_if_ready(Some(event_tx));
     }
@@ -3062,8 +3774,21 @@ impl TuiApp {
                     self.repl.run.last_error = Some(format!("failed to stop REPL: {error:#}"));
                 }
                 self.repl.run.status = ReplStatus::Stopping;
+                self.repl.run.stop_requested_at = Some(Instant::now());
             }
             ReplStatus::Stopping => {
+                if !self
+                    .repl
+                    .run
+                    .stop_requested_at
+                    .is_some_and(|requested| requested.elapsed() >= FORCE_STOP_DELAY)
+                {
+                    self.repl.run.last_error = Some(
+                        "force stop becomes available five seconds after the first stop"
+                            .to_string(),
+                    );
+                    return;
+                }
                 if let Some(runtime) = self.repl.run.runtime.as_mut()
                     && let Err(error) = runtime.kill()
                 {
@@ -3072,6 +3797,7 @@ impl TuiApp {
                 }
                 self.repl.run.runtime = None;
                 self.repl.run.status = ReplStatus::Stopped;
+                self.repl.run.stop_requested_at = None;
             }
             ReplStatus::Stopped | ReplStatus::Failed => {}
         }
@@ -3083,27 +3809,22 @@ impl TuiApp {
         }
     }
 
-    fn restart_repl(&mut self, event_tx: Option<&TuiEventSender>) {
-        if let Some(runtime) = self.repl.run.runtime.as_mut() {
-            let _ = runtime.kill();
-        }
-        self.start_repl(event_tx);
-    }
-
-    fn resize_repl_for_terminal(&mut self, cols: u16, rows: u16) {
-        let (screen_rows, screen_cols) = repl_screen_size_for_terminal(cols, rows);
-        self.repl.run.screen.resize(screen_rows, screen_cols);
-        if let Some(runtime) = self.repl.run.runtime.as_mut() {
-            let _ = runtime.resize(screen_cols, screen_rows);
-        }
+    fn dev_pty_size(&self, view: DevView) -> Option<(u16, u16)> {
+        self.layout_snapshot
+            .borrow()
+            .as_ref()
+            .and_then(|snapshot| snapshot.region(RegionKind::DevViewBody(view)))
+            .map(pty_size_for_region)
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum TuiMode {
     Normal,
-    LeaderNormal,
-    LeaderAgentFilter,
+    Leader,
+    Layout,
+    Jobs,
+    QuitBlocked,
     Palette,
     ContextPicker,
     ContextSwitchConfirm,
@@ -3111,13 +3832,41 @@ pub(super) enum TuiMode {
     AgentFilter,
     AgentDatasetFilter,
     AgentColumns,
+    CommandForm,
+    SessionForm,
     CommandInteraction,
     Repl,
-    LeaderRepl,
+    TerminalScrollback,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum LeaderGroup {
+    #[default]
+    Workspaces,
+    Views,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum LeaderReturnMode {
+    #[default]
+    Normal,
+    AgentFilter,
+    Palette,
+    CommandForm,
+    SessionForm,
+    Repl,
+    TerminalScrollback,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct LeaderState {
+    group: Option<LeaderGroup>,
+    return_mode: LeaderReturnMode,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CommandKind {
+    Plan,
     Build,
     Deploy,
     Clean,
@@ -3126,6 +3875,7 @@ enum CommandKind {
 impl CommandKind {
     fn title(self) -> &'static str {
         match self {
+            Self::Plan => "plan",
             Self::Build => "build",
             Self::Deploy => "deploy",
             Self::Clean => "clean",
@@ -3160,6 +3910,141 @@ struct CommandOptions {
     reset: bool,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum PostDeployPolicy {
+    #[default]
+    None,
+    UpdateAuto,
+    UpdateManual,
+    Redeploy,
+    Reset,
+}
+
+impl PostDeployPolicy {
+    fn next(self) -> Self {
+        match self {
+            Self::None => Self::UpdateAuto,
+            Self::UpdateAuto => Self::UpdateManual,
+            Self::UpdateManual => Self::Redeploy,
+            Self::Redeploy => Self::Reset,
+            Self::Reset => Self::None,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::UpdateAuto => "update auto",
+            Self::UpdateManual => "update manual",
+            Self::Redeploy => "redeploy (state loss)",
+            Self::Reset => "reset environment (destructive)",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+struct CommandFormValues {
+    build_steps: [bool; 4],
+    skip_check: bool,
+    force_build: bool,
+    full_diff: bool,
+    rollback_version: String,
+    rollback_revision: String,
+    post_deploy: PostDeployPolicy,
+    yes: bool,
+}
+
+impl CommandFormValues {
+    fn command_options(&self) -> CommandOptions {
+        CommandOptions {
+            yes: self.yes,
+            reset: self.post_deploy == PostDeployPolicy::Reset,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct CommandReviewForm {
+    kind: CommandKind,
+    values: CommandFormValues,
+    selected: usize,
+    editing: bool,
+}
+
+impl CommandReviewForm {
+    fn new(kind: CommandKind, mut values: CommandFormValues) -> Self {
+        values.yes = false;
+        Self {
+            kind,
+            values,
+            selected: 0,
+            editing: false,
+        }
+    }
+
+    fn field_count(&self) -> usize {
+        match self.kind {
+            CommandKind::Build => 8,
+            CommandKind::Plan | CommandKind::Deploy => 7,
+            CommandKind::Clean => 2,
+        }
+    }
+}
+
+fn command_form_is_launch(form: &CommandReviewForm) -> bool {
+    form.selected + 1 == form.field_count()
+}
+
+fn command_form_text_value_mut(form: &mut CommandReviewForm) -> &mut String {
+    if form.selected == 3 {
+        &mut form.values.rollback_revision
+    } else {
+        &mut form.values.rollback_version
+    }
+}
+
+fn update_command_form_field(form: &mut CommandReviewForm) {
+    match form.kind {
+        CommandKind::Build => match form.selected {
+            0..=3 => {
+                form.values.build_steps[form.selected] = !form.values.build_steps[form.selected];
+                if form.values.build_steps[form.selected] {
+                    form.values.skip_check = false;
+                }
+            }
+            4 => {
+                form.values.skip_check = !form.values.skip_check;
+                if form.values.skip_check {
+                    form.values.build_steps = [false; 4];
+                }
+            }
+            5 => form.values.force_build = !form.values.force_build,
+            6 => form.values.yes = !form.values.yes,
+            _ => {}
+        },
+        CommandKind::Plan | CommandKind::Deploy => match form.selected {
+            0 => form.values.full_diff = !form.values.full_diff,
+            1 => form.values.force_build = !form.values.force_build,
+            2 => {
+                form.values.rollback_revision.clear();
+                form.editing = true;
+            }
+            3 => {
+                form.values.rollback_version.clear();
+                form.editing = true;
+            }
+            4 => form.values.post_deploy = form.values.post_deploy.next(),
+            5 => form.values.yes = !form.values.yes,
+            _ => {}
+        },
+        CommandKind::Clean => {
+            if form.selected == 0 {
+                form.values.yes = !form.values.yes;
+            }
+        }
+    }
+}
+
 struct CommandRun {
     id: u64,
     kind: CommandKind,
@@ -3167,11 +4052,14 @@ struct CommandRun {
     options: CommandOptions,
     args: Vec<String>,
     launch_context: String,
-    output: OutputBuffer,
+    terminal: TerminalScreen,
     runtime: Option<NestedCliRuntime>,
     spinner_frame: usize,
     spinner_stop: Option<Arc<AtomicBool>>,
     exit_code: Option<i32>,
+    started_at: Instant,
+    finished_at: Option<Instant>,
+    stop_requested_at: Option<Instant>,
 }
 
 impl CommandRun {
@@ -3189,11 +4077,14 @@ impl CommandRun {
             options,
             args,
             launch_context,
-            output: OutputBuffer::default(),
+            terminal: TerminalScreen::new(20, 80),
             runtime: None,
             spinner_frame: 0,
             spinner_stop: None,
             exit_code: None,
+            started_at: Instant::now(),
+            finished_at: None,
+            stop_requested_at: None,
         }
     }
 
@@ -3202,13 +4093,23 @@ impl CommandRun {
             stop.store(true, Ordering::Relaxed);
         }
     }
+
+    fn elapsed(&self) -> Duration {
+        self.finished_at
+            .unwrap_or_else(Instant::now)
+            .saturating_duration_since(self.started_at)
+    }
+
+    fn force_stop_available(&self) -> bool {
+        self.stop_requested_at
+            .is_some_and(|requested| requested.elapsed() >= FORCE_STOP_DELAY)
+    }
 }
 
 struct LocalServerService {
     available: bool,
     cli_args: Vec<String>,
     launch_label: String,
-    clean: bool,
     next_id: u64,
     run: ServerRun,
 }
@@ -3218,7 +4119,6 @@ struct ReplState {
 }
 
 struct AgentsState {
-    view_mode: AgentsViewMode,
     mode: AgentModeFilter,
     query: String,
     query_scope: AgentQueryScope,
@@ -3251,13 +4151,11 @@ struct AgentsState {
     refresh_append: bool,
     agents: Vec<AgentListItem>,
     agent_types: BTreeMap<(String, String), Value>,
-    inspect: AgentInspectState,
 }
 
 impl Default for AgentsState {
     fn default() -> Self {
         Self {
-            view_mode: AgentsViewMode::List,
             mode: AgentModeFilter::Durable,
             query: String::new(),
             query_scope: AgentQueryScope::AgentId,
@@ -3290,7 +4188,6 @@ impl Default for AgentsState {
             refresh_append: false,
             agents: Vec::new(),
             agent_types: BTreeMap::new(),
-            inspect: AgentInspectState::default(),
         }
     }
 }
@@ -3412,14 +4309,6 @@ impl AgentQueryScope {
             Self::AgentId => Self::Component,
             Self::Component => Self::AgentType,
             Self::AgentType => Self::AgentId,
-        }
-    }
-
-    fn previous(self) -> Self {
-        match self {
-            Self::AgentId => Self::AgentType,
-            Self::Component => Self::AgentId,
-            Self::AgentType => Self::Component,
         }
     }
 
@@ -3555,15 +4444,58 @@ impl AgentDatasetFilterState {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OpsRootSubject {
+    Agents,
+    Deployment,
+    Environment,
+    Server,
+}
+
+impl OpsRootSubject {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Agents => "Agents",
+            Self::Deployment => "Deployment",
+            Self::Environment => "Environment",
+            Self::Server => "Server",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum OpsSubject {
+    Root(OpsRootSubject),
+    Agent(AgentIdentity),
+}
+
+impl OpsSubject {
+    fn root(&self) -> OpsRootSubject {
+        match self {
+            Self::Root(root) => *root,
+            Self::Agent(_) => OpsRootSubject::Agents,
+        }
+    }
+
+    fn label(&self) -> String {
+        match self {
+            Self::Root(root) => root.label().to_string(),
+            Self::Agent(agent) => agent.agent_id.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OpsView {
     Overview,
+    Activity,
     Metrics,
 }
 
 impl OpsView {
     fn next(self) -> Self {
         match self {
-            Self::Overview => Self::Metrics,
+            Self::Overview => Self::Activity,
+            Self::Activity => Self::Metrics,
             Self::Metrics => Self::Overview,
         }
     }
@@ -3571,72 +4503,13 @@ impl OpsView {
     fn label(self) -> &'static str {
         match self {
             Self::Overview => "Overview",
+            Self::Activity => "Activity",
             Self::Metrics => "Metrics",
         }
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
-enum FakeOtlpFocus {
-    #[default]
-    Series,
-    Details,
-}
-
-#[derive(Debug, Default)]
-struct FakeOtlpExplorerState {
-    selected: usize,
-    focus: FakeOtlpFocus,
-    details_scroll: usize,
-    details_content_height: Cell<usize>,
-    details_viewport_height: Cell<usize>,
-}
-
-impl FakeOtlpExplorerState {
-    fn previous(&mut self) {
-        self.selected = self.selected.saturating_sub(1);
-        self.details_scroll = 0;
-    }
-
-    fn next(&mut self) {
-        self.selected = self
-            .selected
-            .saturating_add(1)
-            .min(FAKE_OTLP_SERIES.len().saturating_sub(1));
-        self.details_scroll = 0;
-    }
-
-    fn first(&mut self) {
-        self.selected = 0;
-        self.details_scroll = 0;
-    }
-
-    fn last(&mut self) {
-        self.selected = FAKE_OTLP_SERIES.len().saturating_sub(1);
-        self.details_scroll = 0;
-    }
-
-    fn toggle_focus(&mut self) {
-        self.focus = match self.focus {
-            FakeOtlpFocus::Series => FakeOtlpFocus::Details,
-            FakeOtlpFocus::Details => FakeOtlpFocus::Series,
-        };
-    }
-
-    fn scroll_details(&mut self, amount: usize, up: bool) {
-        self.details_scroll = if up {
-            self.details_scroll.saturating_sub(amount)
-        } else {
-            self.details_scroll.saturating_add(amount)
-        };
-        self.details_scroll = self.details_scroll.min(
-            self.details_content_height
-                .get()
-                .saturating_sub(self.details_viewport_height.get()),
-        );
-    }
-}
-
+#[cfg(feature = "tui-preview")]
 #[derive(Clone, Copy)]
 struct FakeOtlpSeries {
     name: &'static str,
@@ -3650,6 +4523,7 @@ struct FakeOtlpSeries {
     samples: &'static [u64],
 }
 
+#[cfg(feature = "tui-preview")]
 const FAKE_OTLP_COLUMNS: [PaneTableColumn<'static>; 3] = [
     PaneTableColumn {
         id: "metric",
@@ -3677,6 +4551,7 @@ const FAKE_OTLP_COLUMNS: [PaneTableColumn<'static>; 3] = [
     },
 ];
 
+#[cfg(feature = "tui-preview")]
 const FAKE_OTLP_SERIES: [FakeOtlpSeries; 7] = [
     FakeOtlpSeries {
         name: "golem.agent.invocations",
@@ -3831,110 +4706,6 @@ const AGENT_COLUMNS: [PaneTableColumn<'static>; 7] = [
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum AgentsViewMode {
-    List,
-    Inspect,
-}
-
-struct AgentInspectState {
-    agent_name: Option<String>,
-    focus: AgentInspectPane,
-    oplog: InspectJob,
-    stream: InspectJob,
-}
-
-impl Default for AgentInspectState {
-    fn default() -> Self {
-        Self {
-            agent_name: None,
-            focus: AgentInspectPane::Oplog,
-            oplog: InspectJob::default(),
-            stream: InspectJob::default(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum AgentInspectPane {
-    Oplog,
-    Stream,
-}
-
-impl AgentInspectPane {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Oplog => "oplog",
-            Self::Stream => "stream",
-        }
-    }
-}
-
-struct InspectJob {
-    args: Vec<String>,
-    launch_context: String,
-    status: InspectJobStatus,
-    output: OutputBuffer,
-    runtime: Option<NestedCliRuntime>,
-    exit_code: Option<i32>,
-}
-
-impl Default for InspectJob {
-    fn default() -> Self {
-        Self {
-            args: Vec::new(),
-            launch_context: String::new(),
-            status: InspectJobStatus::Idle,
-            output: OutputBuffer::default(),
-            runtime: None,
-            exit_code: None,
-        }
-    }
-}
-
-impl InspectJob {
-    fn start(args: Vec<String>, launch_context: String) -> Self {
-        Self {
-            args,
-            launch_context,
-            status: InspectJobStatus::Starting,
-            output: OutputBuffer::default(),
-            runtime: None,
-            exit_code: None,
-        }
-    }
-
-    fn is_running(&self) -> bool {
-        matches!(
-            self.status,
-            InspectJobStatus::Starting | InspectJobStatus::Running | InspectJobStatus::Stopping
-        )
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum InspectJobStatus {
-    Idle,
-    Starting,
-    Running,
-    Stopping,
-    Stopped,
-    Failed,
-}
-
-impl InspectJobStatus {
-    fn title(self) -> &'static str {
-        match self {
-            Self::Idle => "idle",
-            Self::Starting => "starting",
-            Self::Running => "running",
-            Self::Stopping => "stopping",
-            Self::Stopped => "stopped",
-            Self::Failed => "failed",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AgentModeFilter {
     Durable,
     Ephemeral,
@@ -3950,24 +4721,12 @@ impl AgentModeFilter {
         }
     }
 
-    fn as_cli_value(self) -> &'static str {
-        match self {
-            Self::Durable => "durable",
-            Self::Ephemeral => "ephemeral",
-            Self::All => "all",
-        }
-    }
-
     fn agent_list_mode(self) -> AgentListMode {
         match self {
             Self::Durable => AgentListMode::Durable,
             Self::Ephemeral => AgentListMode::Ephemeral,
             Self::All => AgentListMode::All,
         }
-    }
-
-    fn label(self) -> &'static str {
-        self.as_cli_value()
     }
 }
 
@@ -4070,6 +4829,68 @@ pub(super) struct AgentRefreshPayload {
     agent_types: Option<Result<Vec<DeployedRegisteredAgentType>, String>>,
 }
 
+#[derive(Clone, Debug)]
+pub(super) struct OpsEnvironmentSnapshot {
+    account_id: String,
+    application_id: String,
+    application_name: String,
+    environment_id: String,
+    environment_name: String,
+    environment_revision: String,
+    diff_model_version: u32,
+    compatibility_check: bool,
+    tool_compatibility_mode: String,
+    version_check: bool,
+    security_overrides: bool,
+    deployment: Option<OpsDeploymentSnapshot>,
+}
+
+#[derive(Clone, Debug)]
+struct OpsDeploymentSnapshot {
+    current_revision: String,
+    deployment_revision: String,
+    version: String,
+    hash: String,
+}
+
+#[derive(Default)]
+struct OpsEnvironmentState {
+    generation: u64,
+    context_id: Option<TuiContextId>,
+    loading: bool,
+    snapshot: Option<OpsEnvironmentSnapshot>,
+    error: Option<String>,
+}
+
+fn ops_environment_snapshot(
+    environment: crate::model::environment::ResolvedEnvironmentIdentity,
+) -> OpsEnvironmentSnapshot {
+    let server_environment = environment.server_environment;
+    let deployment =
+        server_environment
+            .current_deployment
+            .map(|deployment| OpsDeploymentSnapshot {
+                current_revision: deployment.revision.to_string(),
+                deployment_revision: deployment.deployment_revision.to_string(),
+                version: deployment.deployment_version.0,
+                hash: deployment.deployment_hash.to_string(),
+            });
+    OpsEnvironmentSnapshot {
+        account_id: environment.account_id.to_string(),
+        application_id: environment.application_id.to_string(),
+        application_name: environment.application_name.0,
+        environment_id: environment.environment_id.to_string(),
+        environment_name: environment.environment_name.0,
+        environment_revision: server_environment.revision.to_string(),
+        diff_model_version: server_environment.diff_model_version,
+        compatibility_check: server_environment.compatibility_check,
+        tool_compatibility_mode: format!("{:?}", server_environment.tool_compatibility_mode),
+        version_check: server_environment.version_check,
+        security_overrides: server_environment.security_overrides,
+        deployment,
+    }
+}
+
 impl LocalServerService {
     fn from_launch(launch: &TuiLaunchConfig) -> Self {
         Self {
@@ -4086,7 +4907,6 @@ impl Default for LocalServerService {
             available: true,
             cli_args: Vec::new(),
             launch_label: "local server".to_string(),
-            clean: false,
             next_id: 1,
             run: ServerRun::default(),
         }
@@ -4107,12 +4927,15 @@ struct ServerRun {
     clean: bool,
     args: Vec<String>,
     launch_context: String,
-    output: OutputBuffer,
+    terminal: TerminalScreen,
     runtime: Option<NestedCliRuntime>,
     spinner_frame: usize,
     spinner_stop: Option<Arc<AtomicBool>>,
-    restart_after_stop: Option<ServerStartMode>,
     exit_code: Option<i32>,
+    ports_file: Option<PathBuf>,
+    ports_file_before_modified: Option<SystemTime>,
+    bound_ports: Option<BoundServerPorts>,
+    stop_requested_at: Option<Instant>,
 }
 
 impl Default for ServerRun {
@@ -4123,30 +4946,43 @@ impl Default for ServerRun {
             clean: false,
             args: server_args(false),
             launch_context: String::new(),
-            output: OutputBuffer::default(),
+            terminal: TerminalScreen::new(20, 80),
             runtime: None,
             spinner_frame: 0,
             spinner_stop: None,
-            restart_after_stop: None,
             exit_code: None,
+            ports_file: None,
+            ports_file_before_modified: None,
+            bound_ports: None,
+            stop_requested_at: None,
         }
     }
 }
 
 impl ServerRun {
-    fn new(id: u64, clean: bool, args: Vec<String>, launch_context: String) -> Self {
+    fn new(
+        id: u64,
+        clean: bool,
+        args: Vec<String>,
+        launch_context: String,
+        ports_file: Option<PathBuf>,
+        ports_file_before_modified: Option<SystemTime>,
+    ) -> Self {
         Self {
             id,
             status: ServerStatus::Starting,
             clean,
             args,
             launch_context,
-            output: OutputBuffer::default(),
+            terminal: TerminalScreen::new(20, 80),
             runtime: None,
             spinner_frame: 0,
             spinner_stop: None,
-            restart_after_stop: None,
             exit_code: None,
+            ports_file,
+            ports_file_before_modified,
+            bound_ports: None,
+            stop_requested_at: None,
         }
     }
 
@@ -4185,10 +5021,222 @@ impl ServerStatus {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ServerStartMode {
-    Current,
-    Clean,
+#[derive(Debug, Clone)]
+struct ServerFormValues {
+    system_memory_override: String,
+    router_address: String,
+    router_port: String,
+    custom_request_port: String,
+    mcp_port: String,
+    ports_file: String,
+    data_dir: String,
+    agent_filesystem_root: String,
+    clean: bool,
+    yes: bool,
+}
+
+impl ServerFormValues {
+    fn new(config_dir: &str) -> Self {
+        Self {
+            system_memory_override: String::new(),
+            router_address: String::new(),
+            router_port: String::new(),
+            custom_request_port: String::new(),
+            mcp_port: String::new(),
+            ports_file: PathBuf::from(config_dir)
+                .join("tui-server-ports.json")
+                .display()
+                .to_string(),
+            data_dir: String::new(),
+            agent_filesystem_root: String::new(),
+            clean: false,
+            yes: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ReplFormValues {
+    language: String,
+    stream_logs: bool,
+    auto_imports: bool,
+    post_deploy: PostDeployPolicy,
+    yes: bool,
+}
+
+impl Default for ReplFormValues {
+    fn default() -> Self {
+        Self {
+            language: "typescript".to_string(),
+            stream_logs: true,
+            auto_imports: true,
+            post_deploy: PostDeployPolicy::None,
+            yes: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+enum SessionReviewForm {
+    Server {
+        values: ServerFormValues,
+        selected: usize,
+        editing: bool,
+        restart: bool,
+        error: Option<String>,
+    },
+    Repl {
+        values: ReplFormValues,
+        selected: usize,
+        restart: bool,
+    },
+}
+
+impl SessionReviewForm {
+    fn selected(&self) -> usize {
+        match self {
+            Self::Server { selected, .. } | Self::Repl { selected, .. } => *selected,
+        }
+    }
+
+    fn field_count(&self) -> usize {
+        match self {
+            Self::Server { .. } => 11,
+            Self::Repl { .. } => 6,
+        }
+    }
+
+    fn set_selected(&mut self, value: usize) {
+        match self {
+            Self::Server { selected, .. } | Self::Repl { selected, .. } => *selected = value,
+        }
+    }
+}
+
+fn server_form_text_mut(values: &mut ServerFormValues, selected: usize) -> &mut String {
+    match selected {
+        0 => &mut values.system_memory_override,
+        1 => &mut values.router_address,
+        2 => &mut values.router_port,
+        3 => &mut values.custom_request_port,
+        4 => &mut values.mcp_port,
+        5 => &mut values.ports_file,
+        6 => &mut values.data_dir,
+        _ => &mut values.agent_filesystem_root,
+    }
+}
+
+fn update_session_form_field(form: &mut SessionReviewForm) {
+    match form {
+        SessionReviewForm::Server {
+            values,
+            selected,
+            editing,
+            ..
+        } => match *selected {
+            0..=7 => *editing = true,
+            8 => values.clean = !values.clean,
+            9 => values.yes = !values.yes,
+            _ => {}
+        },
+        SessionReviewForm::Repl {
+            values, selected, ..
+        } => match *selected {
+            0 => {}
+            1 => values.stream_logs = !values.stream_logs,
+            2 => values.auto_imports = !values.auto_imports,
+            3 => values.post_deploy = values.post_deploy.next(),
+            4 => values.yes = !values.yes,
+            _ => {}
+        },
+    }
+}
+
+fn validate_server_form(values: &ServerFormValues) -> Result<(), String> {
+    for (label, value) in [
+        ("router port", &values.router_port),
+        ("custom request port", &values.custom_request_port),
+        ("MCP port", &values.mcp_port),
+    ] {
+        if !value.trim().is_empty() && value.trim().parse::<u16>().is_err() {
+            return Err(format!("{label} must be a number from 0 to 65535"));
+        }
+    }
+    if values.ports_file.trim().is_empty() {
+        return Err("ports file is required so bound ports can be observed".to_string());
+    }
+    Ok(())
+}
+
+fn push_option(args: &mut Vec<String>, name: &str, value: &str) {
+    if !value.trim().is_empty() {
+        args.extend([name.to_string(), value.trim().to_string()]);
+    }
+}
+
+fn server_args_from_values(values: &ServerFormValues) -> Vec<String> {
+    let mut args = vec!["server".to_string(), "run".to_string()];
+    push_option(
+        &mut args,
+        "--system-memory-override",
+        &values.system_memory_override,
+    );
+    push_option(&mut args, "--router-addr", &values.router_address);
+    push_option(&mut args, "--router-port", &values.router_port);
+    push_option(
+        &mut args,
+        "--custom-request-port",
+        &values.custom_request_port,
+    );
+    push_option(&mut args, "--mcp-port", &values.mcp_port);
+    push_option(&mut args, "--ports-file", &values.ports_file);
+    push_option(&mut args, "--data-dir", &values.data_dir);
+    push_option(
+        &mut args,
+        "--agent-filesystem-root",
+        &values.agent_filesystem_root,
+    );
+    if values.clean {
+        args.push("--clean".to_string());
+    }
+    if values.yes {
+        args.push("--yes".to_string());
+    }
+    args
+}
+
+fn repl_args_from_values(values: &ReplFormValues) -> Vec<String> {
+    let mut args = vec!["repl".to_string()];
+    push_option(&mut args, "--language", &values.language);
+    if !values.stream_logs {
+        args.push("--disable-stream".to_string());
+    }
+    if !values.auto_imports {
+        args.push("--disable-auto-imports".to_string());
+    }
+    match values.post_deploy {
+        PostDeployPolicy::None => {}
+        PostDeployPolicy::UpdateAuto => {
+            args.extend(["--update-agents".to_string(), "auto".to_string()])
+        }
+        PostDeployPolicy::UpdateManual => {
+            args.extend(["--update-agents".to_string(), "manual".to_string()])
+        }
+        PostDeployPolicy::Redeploy => args.push("--redeploy-agents".to_string()),
+        PostDeployPolicy::Reset => args.push("--reset".to_string()),
+    }
+    if values.yes {
+        args.push("--yes".to_string());
+    }
+    args
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct BoundServerPorts {
+    router_port: u16,
+    custom_request_port: u16,
+    mcp_port: u16,
 }
 
 struct ReplRun {
@@ -4199,6 +5247,7 @@ struct ReplRun {
     runtime: Option<NestedCliRuntime>,
     exit_code: Option<i32>,
     last_error: Option<String>,
+    stop_requested_at: Option<Instant>,
 }
 
 impl Default for ReplRun {
@@ -4211,6 +5260,7 @@ impl Default for ReplRun {
             runtime: None,
             exit_code: None,
             last_error: None,
+            stop_requested_at: None,
         }
     }
 }
@@ -4225,6 +5275,7 @@ impl ReplRun {
             runtime: None,
             exit_code: None,
             last_error: None,
+            stop_requested_at: None,
         }
     }
 
@@ -4263,95 +5314,6 @@ impl ReplStatus {
     }
 }
 
-struct OutputBuffer {
-    lines: Vec<Vec<u8>>,
-    pending: Vec<u8>,
-    max_lines: usize,
-    follow: bool,
-    scroll_offset: usize,
-}
-
-impl Default for OutputBuffer {
-    fn default() -> Self {
-        Self {
-            lines: Vec::new(),
-            pending: Vec::new(),
-            max_lines: 2000,
-            follow: true,
-            scroll_offset: 0,
-        }
-    }
-}
-
-impl OutputBuffer {
-    fn append(&mut self, bytes: &[u8]) {
-        self.pending.extend_from_slice(bytes);
-
-        while let Some(index) = self.pending.iter().position(|byte| *byte == b'\n') {
-            let mut line = self.pending.drain(..=index).collect::<Vec<_>>();
-            while matches!(line.last(), Some(b'\n' | b'\r')) {
-                line.pop();
-            }
-            self.push_line(line);
-        }
-
-        if self.follow {
-            self.scroll_offset = 0;
-        }
-    }
-
-    fn append_local_line(&mut self, line: impl AsRef<str>) {
-        self.push_line(format!("\x1b[2m{}\x1b[0m", line.as_ref()).into_bytes());
-    }
-
-    fn visible_lines(&self, height: usize) -> Vec<Vec<u8>> {
-        let mut lines = self.lines.clone();
-        if !self.pending.is_empty() {
-            lines.push(self.pending.clone());
-        }
-        let total = lines.len();
-        let offset = self.scroll_offset.min(total.saturating_sub(height));
-        let end = total.saturating_sub(offset);
-        let start = end.saturating_sub(height);
-        lines[start..end].to_vec()
-    }
-
-    fn scroll_up(&mut self, amount: usize) {
-        self.follow = false;
-        self.scroll_offset =
-            (self.scroll_offset + amount).min(self.total_lines().saturating_sub(1));
-    }
-
-    fn scroll_down(&mut self, amount: usize) {
-        self.scroll_offset = self.scroll_offset.saturating_sub(amount);
-        if self.scroll_offset == 0 {
-            self.follow = true;
-        }
-    }
-
-    fn scroll_top(&mut self) {
-        self.follow = false;
-        self.scroll_offset = self.total_lines().saturating_sub(1);
-    }
-
-    fn scroll_bottom(&mut self) {
-        self.follow = true;
-        self.scroll_offset = 0;
-    }
-
-    fn total_lines(&self) -> usize {
-        self.lines.len() + usize::from(!self.pending.is_empty())
-    }
-
-    fn push_line(&mut self, line: Vec<u8>) {
-        self.lines.push(line);
-        if self.lines.len() > self.max_lines {
-            let drain_count = self.lines.len() - self.max_lines;
-            self.lines.drain(0..drain_count);
-        }
-    }
-}
-
 fn command_display(args: &[String]) -> String {
     let mut parts = vec!["golem".to_string()];
     parts.extend(args.iter().cloned());
@@ -4364,6 +5326,20 @@ fn server_args(clean: bool) -> Vec<String> {
         args.push("--clean".to_string());
     }
     args
+}
+
+fn fresh_bound_server_ports(run: &ServerRun) -> Option<BoundServerPorts> {
+    let path = run.ports_file.as_ref()?;
+    let metadata = std::fs::metadata(path).ok()?;
+    let modified = metadata.modified().ok()?;
+    if run
+        .ports_file_before_modified
+        .is_some_and(|before| modified <= before)
+    {
+        return None;
+    }
+    let content = std::fs::read_to_string(path).ok()?;
+    serde_json::from_str(&content).ok()
 }
 
 fn agent_items_from_metadata_response(response: AgentsMetadataResponseView) -> Vec<AgentListItem> {
@@ -4423,19 +5399,138 @@ fn plain_tui_text(text: &str) -> String {
     strip_ansi_escapes::strip_str(text)
 }
 
+fn physical_ratio_delta(
+    area: Rect,
+    placement: layout::PanePlacement,
+    direction: KeyCode,
+    cells: u16,
+) -> i16 {
+    let total = match placement {
+        layout::PanePlacement::Right => area.width,
+        layout::PanePlacement::Bottom => area.height,
+    }
+    .max(1);
+    let magnitude = cells.saturating_mul(100).div_ceil(total).max(1) as i16;
+    match (placement, direction) {
+        (layout::PanePlacement::Right, KeyCode::Left)
+        | (layout::PanePlacement::Bottom, KeyCode::Up) => -magnitude,
+        (layout::PanePlacement::Right, KeyCode::Right)
+        | (layout::PanePlacement::Bottom, KeyCode::Down) => magnitude,
+        _ => 0,
+    }
+}
+
+fn apply_ratio_delta(ratio: u16, delta: i16) -> u16 {
+    (ratio as i16 + delta).clamp(0, 100) as u16
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct TuiPreferences {
+    version: u32,
+    dev_placement: String,
+    dev_primary_ratio: u16,
+    dev_secondary_ratio: u16,
+    ops_details_placement: String,
+    ops_details_ratio: u16,
+    agent_columns: Vec<String>,
+}
+
+impl TuiPreferences {
+    const VERSION: u32 = 1;
+
+    fn from_state(layout: &TuiLayoutState, table: &PaneTableState) -> Self {
+        Self {
+            version: Self::VERSION,
+            dev_placement: layout.dev_placement.label().to_string(),
+            dev_primary_ratio: layout.dev_primary_ratio,
+            dev_secondary_ratio: layout.dev_secondary_ratio,
+            ops_details_placement: layout.ops_details_placement.label().to_string(),
+            ops_details_ratio: layout.ops_details_ratio,
+            agent_columns: table.visible_columns().to_vec(),
+        }
+    }
+
+    fn apply(&self, layout: &mut TuiLayoutState, table: &mut PaneTableState) {
+        if self.version != Self::VERSION {
+            return;
+        }
+        layout.dev_placement =
+            placement_from_preference(&self.dev_placement).unwrap_or(layout::PanePlacement::Right);
+        layout.dev_primary_ratio = self.dev_primary_ratio.min(100);
+        layout.dev_secondary_ratio = self.dev_secondary_ratio.min(100);
+        layout.ops_details_placement = placement_from_preference(&self.ops_details_placement)
+            .unwrap_or(layout::PanePlacement::Right);
+        layout.ops_details_ratio = self.ops_details_ratio.min(100);
+        table.restore_visible_columns(&AGENT_COLUMNS, &self.agent_columns);
+    }
+}
+
+fn placement_from_preference(value: &str) -> Option<layout::PanePlacement> {
+    match value {
+        "right" => Some(layout::PanePlacement::Right),
+        "bottom" => Some(layout::PanePlacement::Bottom),
+        _ => None,
+    }
+}
+
+fn tui_preferences_path(config_dir: &str) -> PathBuf {
+    PathBuf::from(config_dir)
+        .join("tui")
+        .join("preferences.json")
+}
+
+fn load_tui_preferences(path: &std::path::Path) -> (Option<TuiPreferences>, Option<String>) {
+    let content = match std::fs::read(path) {
+        Ok(content) => content,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return (None, None),
+        Err(error) => {
+            return (
+                None,
+                Some(format!("failed to read TUI preferences: {error}")),
+            );
+        }
+    };
+    match serde_json::from_slice::<TuiPreferences>(&content) {
+        Ok(preferences) if preferences.version == TuiPreferences::VERSION => {
+            (Some(preferences), None)
+        }
+        Ok(preferences) => (
+            None,
+            Some(format!(
+                "unsupported TUI preference version {}",
+                preferences.version
+            )),
+        ),
+        Err(error) => (None, Some(format!("invalid TUI preferences: {error}"))),
+    }
+}
+
+fn write_tui_preferences(
+    path: &std::path::Path,
+    preferences: &TuiPreferences,
+) -> anyhow::Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("TUI preference path has no parent"))?;
+    std::fs::create_dir_all(parent)?;
+    let temporary = path.with_extension("tmp");
+    std::fs::write(&temporary, serde_json::to_vec_pretty(preferences)?)?;
+    std::fs::rename(temporary, path)?;
+    Ok(())
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum TuiWorkspace {
-    Home,
     Dev,
     Ops,
 }
 
 impl TuiWorkspace {
-    pub(super) const ALL: [Self; 1] = [Self::Ops];
+    pub(super) const ALL: [Self; 2] = [Self::Dev, Self::Ops];
 
     pub(super) fn title(self) -> &'static str {
         match self {
-            Self::Home => "Home",
             Self::Dev => "Dev",
             Self::Ops => "Ops",
         }
@@ -4451,34 +5546,24 @@ impl TuiWorkspace {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum DevPanel {
-    Repl,
-    Output,
+pub(super) enum DevView {
+    BuildDeploy,
     Server,
-    Agents,
+    Repl,
 }
 
-impl DevPanel {
-    const ALL: [Self; 4] = [Self::Repl, Self::Output, Self::Server, Self::Agents];
+impl DevView {
+    pub(super) const ALL: [Self; 3] = [Self::BuildDeploy, Self::Server, Self::Repl];
 
-    fn title(self) -> &'static str {
+    pub(super) fn title(self) -> &'static str {
         match self {
+            Self::BuildDeploy => "Build & Deploy",
             Self::Repl => "REPL",
-            Self::Output => "Output",
             Self::Server => "Server",
-            Self::Agents => "Agents",
         }
     }
 
-    fn next(self) -> Self {
-        Self::ALL[(self.index() + 1) % Self::ALL.len()]
-    }
-
-    fn previous(self) -> Self {
-        Self::ALL[(self.index() + Self::ALL.len() - 1) % Self::ALL.len()]
-    }
-
-    fn index(self) -> usize {
+    pub(super) fn index(self) -> usize {
         Self::ALL
             .iter()
             .position(|panel| *panel == self)
@@ -4486,10 +5571,28 @@ impl DevPanel {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum PaletteScope {
+    #[default]
+    All,
+    Context,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum PaletteReturnMode {
+    #[default]
+    Default,
+    AgentFilter,
+    CommandForm,
+    SessionForm,
+}
+
 #[derive(Debug, Clone, Default)]
 struct CommandPalette {
     query: String,
     selected: usize,
+    scope: PaletteScope,
+    return_mode: PaletteReturnMode,
 }
 
 impl CommandPalette {
@@ -4808,6 +5911,36 @@ impl TuiContextInfo {
             format!("profile:{}", self.environment)
         } else {
             format!("{}:{}", self.application, self.environment)
+        }
+    }
+
+    fn stable_id(&self) -> String {
+        format!("{}/{}/{}", self.application, self.environment, self.server)
+    }
+
+    fn provenance(&self) -> &'static str {
+        if self.application != "no application manifest" && self.dev_eligible {
+            "manifest application environment"
+        } else if self.uses_local_server {
+            "built-in local target"
+        } else {
+            "selected remote or profile target"
+        }
+    }
+
+    fn capability(&self, view: DevView) -> Result<(), &'static str> {
+        match view {
+            DevView::BuildDeploy if !self.dev_eligible => {
+                Err("requires a manifest-backed application")
+            }
+            DevView::BuildDeploy if !self.uses_local_server => {
+                Err("remote Dev mutations are not enabled in this slice")
+            }
+            DevView::Server if !self.uses_local_server => Err("requires a local server target"),
+            DevView::Repl if !self.dev_eligible => {
+                Err("requires a selected application environment")
+            }
+            _ => Ok(()),
         }
     }
 }
@@ -5272,53 +6405,44 @@ impl DesignLabScene {
 
 fn render_tree(frame: &mut Frame<'_>, app: &TuiApp) {
     let context_picker_rows = context_picker_layout_rows(&app.context_switcher);
-    let snapshot = layout::compute_ops_shell(LayoutInput {
+    let snapshot = layout::compute(LayoutInput {
         area: frame.area(),
-        active_workspace: TuiWorkspace::Ops,
-        focused_dev_panel: app.dev_focus,
+        active_workspace: app.active_workspace,
+        dev_primary: app.dev_primary,
+        focused_dev_view: app.dev_focus,
         mode: app.mode,
         context_picker_rows,
         context_picker_selected: app.context_switcher.selected,
         context_picker_prefix_height: context_picker_prefix_height(&app.context_switcher),
-        agents_view_mode: AgentsViewMode::List,
-        agent_details_visible: app.ops_view == OpsView::Overview && app.agents.detail_visible,
+        agent_details_visible: app.ops_agents_focused() && app.agents.detail_visible,
         layout: app.layout.clone(),
     });
     app.layout_snapshot.replace(Some(snapshot.clone()));
 
-    ContextHeader {
-        pairs: &[
-            ContextPair {
-                label: "app",
-                value: &app.context.application,
-            },
-            ContextPair {
-                label: "env",
-                value: &app.context.environment,
-            },
-            ContextPair {
-                label: "server",
-                value: &app.context.server,
-            },
-        ],
-    }
-    .render(frame, snapshot.header, &theme());
+    render_shell_header(frame, snapshot.header, app);
 
-    render_ops_workspace(frame, snapshot.workspace_body, app);
-    render_ops_footer(frame, snapshot.footer, app);
+    match app.active_workspace {
+        TuiWorkspace::Dev => render_dev_workspace(frame, snapshot.workspace_body, app),
+        TuiWorkspace::Ops => render_ops_workspace(frame, snapshot.workspace_body, app),
+    }
+    render_shell_footer(frame, snapshot.footer, app);
 
     match app.mode {
         TuiMode::Normal => {}
-        TuiMode::LeaderNormal => render_leader_hint(frame, app, TuiMode::Normal),
-        TuiMode::LeaderAgentFilter => render_leader_hint(frame, app, TuiMode::AgentFilter),
+        TuiMode::Leader => render_leader_hint(frame, app),
+        TuiMode::Layout => {}
+        TuiMode::Jobs => render_jobs(frame, app),
+        TuiMode::QuitBlocked => render_quit_blocked(frame, app),
         TuiMode::ContextPicker => render_context_picker(frame, app),
         TuiMode::ContextSwitchConfirm => render_context_switch_confirm(frame, app),
         TuiMode::AgentFilter => {}
         TuiMode::AgentDatasetFilter => render_agent_dataset_filter(frame, app),
         TuiMode::AgentColumns => render_agent_columns(frame, app),
+        TuiMode::CommandForm => render_command_form(frame, app),
+        TuiMode::SessionForm => render_session_form(frame, app),
         TuiMode::CommandInteraction => {}
         TuiMode::Repl => {}
-        TuiMode::LeaderRepl => render_leader_hint(frame, app, TuiMode::Repl),
+        TuiMode::TerminalScrollback => {}
         TuiMode::Palette => render_palette(frame, app),
         TuiMode::Help => render_help(frame, app),
     }
@@ -5326,51 +6450,324 @@ fn render_tree(frame: &mut Frame<'_>, app: &TuiApp) {
 
 fn render_ops_workspace(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
     frame.render_widget(Paragraph::new("").style(surface_style()), area);
-    match app.ops_view {
-        OpsView::Overview => render_ops_agents_overview(frame, area, app),
-        OpsView::Metrics => render_ops_fake_otlp_explorer(frame, area, app),
+    match (&app.ops_subject, app.ops_view) {
+        (OpsSubject::Root(OpsRootSubject::Agents), OpsView::Overview) => {
+            render_ops_agents_overview(frame, area, app)
+        }
+        (OpsSubject::Agent(identity), OpsView::Overview) => {
+            render_ops_agent_overview(frame, area, app, identity)
+        }
+        (OpsSubject::Root(OpsRootSubject::Deployment), OpsView::Overview) => {
+            render_ops_deployment_overview(frame, area, app)
+        }
+        (OpsSubject::Root(OpsRootSubject::Environment), OpsView::Overview) => {
+            render_ops_environment_overview(frame, area, app)
+        }
+        (OpsSubject::Root(OpsRootSubject::Server), OpsView::Overview) => {
+            render_ops_server_overview(frame, area, app)
+        }
+        (_, OpsView::Activity) => render_ops_unavailable(
+            frame,
+            area,
+            &format!("{} · Activity", app.ops_subject.label()),
+            "Activity scope and oplog providers are not implemented yet.",
+        ),
+        (_, OpsView::Metrics) => render_ops_unavailable(
+            frame,
+            area,
+            &format!("{} · Metrics", app.ops_subject.label()),
+            "No production Metrics provider is configured. Fake OTLP data is preview-only.",
+        ),
     }
 }
 
-fn render_ops_agents_overview(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
-    let show_details = layout::ops_details_visible(area, app.agents.detail_visible);
-    let details_ratio = layout::clamp_ops_details_ratio(area, app.layout.ops_details_ratio);
-    let weights = if show_details {
-        vec![details_ratio as u32, (100 - details_ratio) as u32]
-    } else {
-        vec![1]
-    };
-    let [headers, body] = Layout::default()
+fn render_ops_unavailable(frame: &mut Frame<'_>, area: Rect, title: &str, message: &str) {
+    let [header, body] = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(1), Constraint::Min(1)])
         .areas(area);
-    let header_layout = PaneLayout::horizontal(headers, &weights);
-    let specs = if show_details {
-        vec![
-            PaneSpec {
-                title: "Agents · Overview",
-                focus: if app.agents.focus == AgentOverviewFocus::List {
-                    PaneFocus::Active
-                } else {
-                    PaneFocus::Idle
-                },
-            },
-            PaneSpec {
-                title: "Details",
-                focus: if app.agents.focus == AgentOverviewFocus::Details {
-                    PaneFocus::Active
-                } else {
-                    PaneFocus::Idle
-                },
-            },
-        ]
-    } else {
-        vec![PaneSpec {
-            title: "Agents · Overview",
-            focus: PaneFocus::Active,
-        }]
+    PaneHeader {
+        title,
+        focus: PaneFocus::Active,
+        left_connector: Some("├"),
+        ending: PaneEnding::Top,
+    }
+    .render(frame, header, &theme());
+    frame.render_widget(
+        Paragraph::new(
+            Notice {
+                kind: NoticeKind::Info,
+                message,
+            }
+            .line(&theme()),
+        )
+        .style(surface_style()),
+        body,
+    );
+}
+
+fn render_ops_agent_overview(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    app: &TuiApp,
+    identity: &AgentIdentity,
+) {
+    let agent = app
+        .agents
+        .agents
+        .iter()
+        .find(|agent| agent.identity() == *identity);
+    let title = format!("Agents / {} · Overview", identity.agent_id);
+    let lines = build_ops_agent_details_lines(
+        agent,
+        app.agents.included.len(),
+        &app.agents.agent_types,
+        app.agents.metadata_error.as_deref(),
+        area.width,
+    );
+    render_ops_document(frame, area, app, &title, lines);
+}
+
+fn render_ops_deployment_overview(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
+    let mut lines = ops_environment_status_lines(app);
+    if let Some(snapshot) = &app.ops_environment.snapshot {
+        lines.push(
+            SectionHeading {
+                title: "Current deployment",
+                detail: None,
+            }
+            .line(&theme()),
+        );
+        match &snapshot.deployment {
+            Some(deployment) => {
+                for (label, value) in [
+                    ("Application", snapshot.application_name.as_str()),
+                    ("Environment", snapshot.environment_name.as_str()),
+                    ("Revision", deployment.deployment_revision.as_str()),
+                    ("Version", deployment.version.as_str()),
+                    ("Hash", deployment.hash.as_str()),
+                    ("Environment rev", deployment.current_revision.as_str()),
+                ] {
+                    lines.push(
+                        FieldRow {
+                            label,
+                            value,
+                            label_width: 16,
+                        }
+                        .line(&theme()),
+                    );
+                }
+            }
+            None => lines.push(
+                Notice {
+                    kind: NoticeKind::Empty,
+                    message: "The selected environment has no current deployment",
+                }
+                .line(&theme()),
+            ),
+        }
+    }
+    render_ops_document(frame, area, app, "Deployment · Overview", lines);
+}
+
+fn render_ops_environment_overview(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
+    let mut lines = ops_environment_status_lines(app);
+    if let Some(snapshot) = &app.ops_environment.snapshot {
+        lines.push(
+            SectionHeading {
+                title: "Selected environment",
+                detail: None,
+            }
+            .line(&theme()),
+        );
+        let diff_model_version = snapshot.diff_model_version.to_string();
+        let compatibility_check = snapshot.compatibility_check.to_string();
+        let version_check = snapshot.version_check.to_string();
+        let security_overrides = snapshot.security_overrides.to_string();
+        for (label, value) in [
+            ("Application", snapshot.application_name.as_str()),
+            ("Environment", snapshot.environment_name.as_str()),
+            ("Account ID", snapshot.account_id.as_str()),
+            ("Application ID", snapshot.application_id.as_str()),
+            ("Environment ID", snapshot.environment_id.as_str()),
+            ("Revision", snapshot.environment_revision.as_str()),
+            ("Diff model", diff_model_version.as_str()),
+            ("Compatibility", compatibility_check.as_str()),
+            ("Tool mode", snapshot.tool_compatibility_mode.as_str()),
+            ("Version check", version_check.as_str()),
+            ("Security", security_overrides.as_str()),
+        ] {
+            lines.push(
+                FieldRow {
+                    label,
+                    value,
+                    label_width: 16,
+                }
+                .line(&theme()),
+            );
+        }
+    }
+    render_ops_document(frame, area, app, "Environment · Overview", lines);
+}
+
+fn render_ops_server_overview(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
+    let stable_id = app.context.stable_id();
+    let provenance = app.context.provenance();
+    let process = app.server.run.status.title();
+    let bound_ports = app.server.run.bound_ports.as_ref().map_or_else(
+        || "not observed".to_string(),
+        |ports| {
+            format!(
+                "router {} · custom {} · MCP {}",
+                ports.router_port, ports.custom_request_port, ports.mcp_port
+            )
+        },
+    );
+    let mut lines = vec![
+        SectionHeading {
+            title: "Selected server target",
+            detail: None,
+        }
+        .line(&theme()),
+    ];
+    for (label, value) in [
+        ("Target ID", stable_id.as_str()),
+        ("Endpoint", app.context.server.as_str()),
+        ("Provenance", provenance),
+        ("Local process", process),
+        ("Bound ports", bound_ports.as_str()),
+    ] {
+        lines.push(
+            FieldRow {
+                label,
+                value,
+                label_width: 14,
+            }
+            .line(&theme()),
+        );
+    }
+    lines.push(Line::default());
+    lines.push(
+        Notice {
+            kind: NoticeKind::Info,
+            message: "Process and ports-file evidence is shown without claiming HTTP readiness",
+        }
+        .line(&theme()),
+    );
+    render_ops_document(frame, area, app, "Server · Overview", lines);
+}
+
+fn ops_environment_status_lines(app: &TuiApp) -> Vec<Line<'static>> {
+    if app.ops_environment.loading && app.ops_environment.snapshot.is_none() {
+        return vec![
+            Notice {
+                kind: NoticeKind::Info,
+                message: "Loading selected environment through the typed read-only provider",
+            }
+            .line(&theme()),
+        ];
+    }
+    if let Some(error) = &app.ops_environment.error {
+        let message = if app.ops_environment.snapshot.is_some() {
+            format!("Refresh failed; showing the last successful result: {error}")
+        } else {
+            format!("Environment lookup failed: {error}")
+        };
+        return vec![
+            Notice {
+                kind: NoticeKind::Error,
+                message: &message,
+            }
+            .line(&theme()),
+        ];
+    }
+    Vec::new()
+}
+
+fn render_ops_document(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    app: &TuiApp,
+    title: &str,
+    lines: Vec<Line<'static>>,
+) {
+    let [header, body] = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Min(1)])
+        .areas(area);
+    PaneHeader {
+        title,
+        focus: PaneFocus::Active,
+        left_connector: Some("├"),
+        ending: PaneEnding::Top,
+    }
+    .render(frame, header, &theme());
+    let pane_layout = PaneLayout::horizontal(body, &[1]);
+    let Some(region) = pane_layout.regions(&[lines.len()]).into_iter().next() else {
+        return;
     };
-    header_layout.render_headers(frame, &specs, &theme());
+    app.agents.details_content_height.set(lines.len());
+    app.agents
+        .details_viewport_height
+        .set(region.content_area.height as usize);
+    ScrollableDocument {
+        lines: &lines,
+        offset: app.agents.details_scroll,
+    }
+    .render(frame, region, &theme());
+    pane_layout.render_body_boundaries(frame, &[region], &theme());
+}
+
+fn render_ops_agents_overview(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
+    let snapshot = app.layout_snapshot.borrow();
+    let list_pane = snapshot
+        .as_ref()
+        .and_then(|snapshot| snapshot.region(RegionKind::OpsList))
+        .unwrap_or(area);
+    let details_pane = snapshot
+        .as_ref()
+        .and_then(|snapshot| snapshot.region(RegionKind::OpsDetails));
+    let divider = snapshot
+        .as_ref()
+        .and_then(|snapshot| snapshot.region(RegionKind::OpsDetailsSplit));
+    drop(snapshot);
+    let [list_header, list_body] = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Min(1)])
+        .areas(list_pane);
+    PaneHeader {
+        title: "Agents · Overview",
+        focus: if app.agents.focus == AgentOverviewFocus::List || details_pane.is_none() {
+            PaneFocus::Active
+        } else {
+            PaneFocus::Idle
+        },
+        left_connector: Some("├"),
+        ending: PaneEnding::Top,
+    }
+    .render(frame, list_header, &theme());
+    let details_parts = details_pane.map(|pane| {
+        Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(1), Constraint::Min(1)])
+            .areas::<2>(pane)
+    });
+    if let Some([details_header, _]) = details_parts {
+        PaneHeader {
+            title: "Details",
+            focus: if app.agents.focus == AgentOverviewFocus::Details {
+                PaneFocus::Active
+            } else {
+                PaneFocus::Idle
+            },
+            left_connector: Some("├"),
+            ending: PaneEnding::Top,
+        }
+        .render(frame, details_header, &theme());
+    }
+    if let Some(divider) = divider {
+        render_split_handle(frame, divider);
+    }
     let (refresh_label, refresh_tone) = if app.agents.refresh_running {
         (
             if app.agents.refresh_append {
@@ -5391,13 +6788,11 @@ fn render_ops_agents_overview(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
     } else {
         ("auto off".to_string(), PaneStatusTone::Idle)
     };
-    if let Some(header) = header_layout.panes.first() {
-        PaneHeaderStatus {
-            label: &refresh_label,
-            tone: refresh_tone,
-        }
-        .render(frame, *header, &theme());
+    PaneHeaderStatus {
+        label: &refresh_label,
+        tone: refresh_tone,
     }
+    .render(frame, list_header, &theme());
 
     let filtered = app.filtered_agents();
     let owned_rows = filtered
@@ -5479,12 +6874,9 @@ fn render_ops_agents_overview(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
     let table_height = table_content_height
         .saturating_add(stale_result_notice)
         .saturating_add(query_height);
-    let body_layout = PaneLayout::horizontal(body, &weights);
-    let details_width = body_layout
-        .panes
-        .get(1)
-        .map(|area| area.width)
-        .unwrap_or_default();
+    let list_layout = PaneLayout::horizontal(list_body, &[1]);
+    let details_body = details_parts.map(|[_, body]| body);
+    let details_width = details_body.map_or(0, |area| area.width);
     let selected_agent = app.agents.selected_agent(&filtered);
     let mut details_lines = build_ops_agent_details_lines(
         selected_agent,
@@ -5493,28 +6885,27 @@ fn render_ops_agents_overview(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
         app.agents.metadata_error.as_deref(),
         details_width,
     );
-    let content_heights = if show_details {
-        vec![table_height, details_lines.len()]
-    } else {
-        vec![table_height]
+    let Some(table_region) = list_layout.regions(&[table_height]).into_iter().next() else {
+        return;
     };
-    let mut regions = body_layout.regions(&content_heights);
-    if show_details
-        && let Some(details_region) = regions.get(1)
-        && details_region.scrollbar.is_some()
+    let details_layout = details_body.map(|body| PaneLayout::horizontal(body, &[1]));
+    let mut details_region = details_layout
+        .as_ref()
+        .and_then(|layout| layout.regions(&[details_lines.len()]).into_iter().next());
+    if let Some(region) = details_region
+        && region.scrollbar.is_some()
     {
         details_lines = build_ops_agent_details_lines(
             selected_agent,
             app.agents.included.len(),
             &app.agents.agent_types,
             app.agents.metadata_error.as_deref(),
-            details_region.content_area.width,
+            region.content_area.width,
         );
-        regions = body_layout.regions(&[table_height, details_lines.len()]);
+        details_region = details_layout
+            .as_ref()
+            .and_then(|layout| layout.regions(&[details_lines.len()]).into_iter().next());
     }
-    let Some(table_region) = regions.first() else {
-        return;
-    };
 
     let mut table_area = table_region.content_area;
     let query_area = Rect {
@@ -5620,7 +7011,7 @@ fn render_ops_agents_overview(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
         .render(frame, table_area, &theme());
     }
 
-    body_layout.render_body_boundaries(frame, &regions, &theme());
+    list_layout.render_body_boundaries(frame, &[table_region], &theme());
     if let Some(slot) = table_region.scrollbar {
         let mut state = ScrollbarState::new(table_height)
             .position(
@@ -5631,7 +7022,7 @@ fn render_ops_agents_overview(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
             .viewport_content_length(table_region.content_area.height as usize);
         render_scrollbar(frame, slot, &mut state, &theme());
     }
-    if show_details && let Some(details_region) = regions.get(1) {
+    if let (Some(details_layout), Some(details_region)) = (details_layout, details_region) {
         app.agents.details_content_height.set(details_lines.len());
         app.agents
             .details_viewport_height
@@ -5640,7 +7031,8 @@ fn render_ops_agents_overview(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
             lines: &details_lines,
             offset: app.agents.details_scroll,
         }
-        .render(frame, *details_region, &theme());
+        .render(frame, details_region, &theme());
+        details_layout.render_body_boundaries(frame, &[details_region], &theme());
     }
 }
 
@@ -5759,63 +7151,22 @@ fn build_ops_agent_details_lines(
     lines
 }
 
-fn render_ops_fake_otlp_explorer(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
-    let [header, body] = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(1)])
-        .areas(area);
-    let show_details = fake_otlp_details_visible(area);
-    let weights = fake_otlp_weights(show_details);
-    let header_layout = PaneLayout::horizontal(header, &weights);
-    let specs = if show_details {
-        vec![
-            PaneSpec {
-                title: "Agents · Metrics · FAKE OTLP",
-                focus: if app.fake_otlp.focus == FakeOtlpFocus::Series {
-                    PaneFocus::Active
-                } else {
-                    PaneFocus::Idle
-                },
-            },
-            PaneSpec {
-                title: "Series detail · FAKE",
-                focus: if app.fake_otlp.focus == FakeOtlpFocus::Details {
-                    PaneFocus::Active
-                } else {
-                    PaneFocus::Idle
-                },
-            },
-        ]
-    } else {
-        vec![PaneSpec {
-            title: "Agents · Metrics · FAKE OTLP",
-            focus: PaneFocus::Active,
-        }]
-    };
-    header_layout.render_headers(frame, &specs, &theme());
-    render_fake_otlp_explorer_body(
-        frame,
-        body,
-        app.fake_otlp.selected,
-        app.agents.included.len(),
-        Some(&app.fake_otlp),
-    );
-}
-
+#[cfg(feature = "tui-preview")]
 fn fake_otlp_details_visible(area: Rect) -> bool {
     area.width >= 72
 }
 
+#[cfg(feature = "tui-preview")]
 fn fake_otlp_weights(show_details: bool) -> Vec<u32> {
     if show_details { vec![56, 44] } else { vec![1] }
 }
 
+#[cfg(feature = "tui-preview")]
 fn render_fake_otlp_explorer_body(
     frame: &mut Frame<'_>,
     area: Rect,
     selected: usize,
     included_agents: usize,
-    state: Option<&FakeOtlpExplorerState>,
 ) {
     let selected = selected.min(FAKE_OTLP_SERIES.len().saturating_sub(1));
     let series = &FAKE_OTLP_SERIES[selected];
@@ -5911,20 +7262,15 @@ fn render_fake_otlp_explorer_body(
         render_scrollbar(frame, slot, &mut state, &theme());
     }
     if show_details && let Some(details_region) = regions.get(1) {
-        if let Some(state) = state {
-            state.details_content_height.set(details_lines.len());
-            state
-                .details_viewport_height
-                .set(details_region.content_area.height as usize);
-        }
         ScrollableDocument {
             lines: &details_lines,
-            offset: state.map_or(0, |state| state.details_scroll),
+            offset: 0,
         }
         .render(frame, *details_region, &theme());
     }
 }
 
+#[cfg(feature = "tui-preview")]
 fn fake_otlp_details_lines(
     series: &FakeOtlpSeries,
     included_agents: usize,
@@ -6004,6 +7350,7 @@ fn fake_otlp_details_lines(
     lines
 }
 
+#[cfg(feature = "tui-preview")]
 fn fake_otlp_sparkline(samples: &[u64], width: usize) -> String {
     const BARS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
     if samples.is_empty() || width == 0 {
@@ -6030,27 +7377,88 @@ fn fake_otlp_sparkline(samples: &[u64], width: usize) -> String {
         .collect()
 }
 
-fn render_ops_footer(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
+fn render_shell_header(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    let current = match app.active_workspace {
+        TuiWorkspace::Dev => app.dev_focus.title().to_string(),
+        TuiWorkspace::Ops => format!("{} · {}", app.ops_subject.label(), app.ops_view.label()),
+    };
+    let context = format!(
+        "{}/{}/{}",
+        app.context.application, app.context.environment, app.context.server
+    );
+    let jobs = if app.command_is_running() {
+        " · job ●"
+    } else {
+        ""
+    };
+    let server = if app.server.run.is_running() {
+        " · server ●"
+    } else {
+        ""
+    };
+    let repl = if app.repl.is_running() {
+        " · repl ●"
+    } else {
+        ""
+    };
+    let text = format!(
+        "┌ GOLEM  [{}] {}  ·  {}{}{}{}",
+        app.active_workspace.title(),
+        current,
+        context,
+        jobs,
+        server,
+        repl
+    );
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![Span::styled(
+            fit(&text, area.width as usize),
+            Style::default()
+                .fg(theme().text)
+                .bg(theme().surface)
+                .add_modifier(Modifier::BOLD),
+        )]))
+        .style(surface_style()),
+        area,
+    );
+}
+
+fn render_shell_footer(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
     if area.height == 0 {
         return;
     }
     let rows = (area.y..area.bottom())
         .map(|y| Rect::new(area.x, y, area.width, 1))
         .collect::<Vec<_>>();
-    WorkspaceSelector {
-        items: &[WorkspaceItem {
+    let workspace_items = [
+        WorkspaceItem {
+            key: "",
+            label: "Dev",
+            active: app.active_workspace == TuiWorkspace::Dev,
+        },
+        WorkspaceItem {
             key: "",
             label: "Ops",
-            active: true,
-        }],
+            active: app.active_workspace == TuiWorkspace::Ops,
+        },
+    ];
+    WorkspaceSelector {
+        items: &workspace_items,
         junctions: &[],
     }
     .render(frame, rows[0], &theme());
 
     let global = [
         KeyHint {
+            key: "ctrl+x",
+            label: "Menu",
+        },
+        KeyHint {
             key: "ctrl+p",
-            label: "Commands",
+            label: "All actions",
         },
         KeyHint {
             key: "ctrl+h",
@@ -6071,105 +7479,78 @@ fn render_ops_footer(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
         .render(frame, *row, &theme());
     }
     if let Some(row) = rows.get(2) {
-        let overview = if app.agent_details_focused() {
-            vec![
-                KeyHint {
-                    key: "ctrl+x v",
-                    label: "Metrics",
-                },
-                KeyHint {
-                    key: "tab / shift+tab",
-                    label: "Focus pane",
-                },
-                KeyHint {
-                    key: "ctrl+x ←/→",
-                    label: "Resize",
-                },
-                KeyHint {
-                    key: "↑/↓",
-                    label: "Scroll details",
-                },
-                KeyHint {
-                    key: "esc",
-                    label: "Focus list",
-                },
-            ]
-        } else {
-            let mut hints = vec![
-                KeyHint {
-                    key: "ctrl+x v",
-                    label: "Metrics",
-                },
-                KeyHint {
-                    key: "type",
-                    label: "Find loaded",
-                },
-                KeyHint {
-                    key: "enter",
-                    label: "Details",
-                },
-            ];
-            if app.agent_details_open() {
-                hints.extend([
-                    KeyHint {
-                        key: "tab / shift+tab",
-                        label: "Focus pane",
-                    },
-                    KeyHint {
-                        key: "ctrl+x ←/→",
-                        label: "Resize",
-                    },
-                ]);
-            }
-            hints.extend([
-                KeyHint {
-                    key: "ctrl+f",
-                    label: "Dataset",
-                },
-                KeyHint {
-                    key: "ctrl+space",
-                    label: "Include",
-                },
-                KeyHint {
-                    key: "ctrl+a",
-                    label: "All matches",
-                },
-                KeyHint {
-                    key: "ctrl+n",
-                    label: "No matches",
-                },
-                KeyHint {
-                    key: "ctrl+l",
-                    label: "Load next 200",
-                },
-                KeyHint {
-                    key: "ctrl+r",
-                    label: "Refresh",
-                },
-            ]);
-            hints
-        };
-        let metrics = [
+        let dev = [
             KeyHint {
-                key: "ctrl+x v",
-                label: "Overview",
+                key: "tab / shift+tab",
+                label: "Focus pane",
+            },
+            KeyHint {
+                key: "ctrl+x l",
+                label: "Layout",
+            },
+            KeyHint {
+                key: "ctrl+x a",
+                label: "Actions",
+            },
+        ];
+        let ops = [
+            KeyHint {
+                key: "type",
+                label: "Find loaded",
+            },
+            KeyHint {
+                key: "enter",
+                label: "Open subject",
             },
             KeyHint {
                 key: "tab / shift+tab",
                 label: "Focus pane",
             },
             KeyHint {
-                key: "↑/↓",
-                label: if app.fake_otlp.focus == FakeOtlpFocus::Details {
-                    "Scroll details"
-                } else {
-                    "Select fake series"
-                },
+                key: "ctrl+x l",
+                label: "Layout",
+            },
+            KeyHint {
+                key: "ctrl+x a",
+                label: "Actions",
             },
         ];
-        let items = match app.ops_view {
-            OpsView::Overview => overview.as_slice(),
-            OpsView::Metrics => metrics.as_slice(),
+        let layout_mode = [
+            KeyHint {
+                key: "arrows / shift+arrows",
+                label: "Resize 1 / 5",
+            },
+            KeyHint {
+                key: "f",
+                label: "Flip",
+            },
+            KeyHint {
+                key: "enter / esc",
+                label: "Done",
+            },
+        ];
+        let scrollback_mode = [
+            KeyHint {
+                key: "↑/↓ / pgup/pgdn",
+                label: "Scroll",
+            },
+            KeyHint {
+                key: "home / end",
+                label: "Oldest / latest",
+            },
+            KeyHint {
+                key: "esc",
+                label: "Return to live input",
+            },
+        ];
+        let items = if app.mode == TuiMode::Layout {
+            layout_mode.as_slice()
+        } else if app.mode == TuiMode::TerminalScrollback {
+            scrollback_mode.as_slice()
+        } else if app.active_workspace == TuiWorkspace::Dev {
+            dev.as_slice()
+        } else {
+            ops.as_slice()
         };
         ShortcutRow {
             items,
@@ -7233,7 +8614,7 @@ fn render_design_lab_table_details(frame: &mut Frame<'_>, area: Rect) {
 #[cfg(feature = "tui-preview")]
 fn render_design_lab_metrics_demo(frame: &mut Frame<'_>, area: Rect) {
     frame.render_widget(Paragraph::new("").style(surface_style()), area);
-    render_fake_otlp_explorer_body(frame, area, 1, 4, None);
+    render_fake_otlp_explorer_body(frame, area, 1, 4);
 }
 
 #[cfg(feature = "tui-preview")]
@@ -8449,40 +9830,30 @@ fn design_lab_overlay_shortcuts(items: &[(&'static str, &'static str)]) -> Line<
     shortcut_line(&hints, &theme(), Alignment::Center)
 }
 
-fn render_home_workspace(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
-    render_surface(frame, area);
-    let home = Paragraph::new(home_lines(app, area.width as usize))
-        .style(surface_style())
-        .wrap(Wrap { trim: false });
-    frame.render_widget(home, area);
-    render_left_rail(frame, area, surface_rail_style());
-}
-
 fn render_dev_workspace(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
     render_surface(frame, area);
     let input = LayoutInput {
         area,
         active_workspace: app.active_workspace,
-        focused_dev_panel: app.dev_focus,
+        dev_primary: app.dev_primary,
+        focused_dev_view: app.dev_focus,
         mode: app.mode,
         context_picker_rows: context_picker_layout_rows(&app.context_switcher),
         context_picker_selected: app.context_switcher.selected,
         context_picker_prefix_height: context_picker_prefix_height(&app.context_switcher),
-        agents_view_mode: app.agents.view_mode,
         agent_details_visible: app.agents.detail_visible,
         layout: app.layout.clone(),
     };
 
-    for (panel, panel_area) in layout::dev_panel_areas(area, &input) {
+    for (panel, panel_area) in layout::dev_view_areas(area, &input) {
         if panel_area.width == 0 || panel_area.height == 0 {
             continue;
         }
         render_panel_title(frame, panel_area, panel, app.dev_focus);
         match panel {
-            DevPanel::Repl => render_repl_view(frame, inset_top(panel_area), app),
-            DevPanel::Output => render_output_view(frame, inset_top(panel_area), app),
-            DevPanel::Server => render_server_view(frame, inset_top(panel_area), app),
-            DevPanel::Agents => render_agents_view(frame, inset_top(panel_area), app),
+            DevView::Repl => render_repl_view(frame, inset_top(panel_area), app),
+            DevView::BuildDeploy => render_output_view(frame, inset_top(panel_area), app),
+            DevView::Server => render_server_view(frame, inset_top(panel_area), app),
         }
     }
     if let Some((primary, secondary)) = layout::dev_split_regions(area, &input) {
@@ -8497,7 +9868,7 @@ fn render_split_handle(frame: &mut Frame<'_>, area: Rect) {
     frame.render_widget(Paragraph::new("").style(separator_style()), area);
 }
 
-fn render_panel_title(frame: &mut Frame<'_>, area: Rect, panel: DevPanel, focused: DevPanel) {
+fn render_panel_title(frame: &mut Frame<'_>, area: Rect, panel: DevView, focused: DevView) {
     let style = if panel == focused {
         command_status_bg_style()
     } else {
@@ -8598,7 +9969,7 @@ fn render_server_view(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
     );
     render_left_rail(frame, summary_area, command_rail_style());
 
-    let output_lines = if app.server.run.output.total_lines() == 0 {
+    let output_lines = if app.server.run.terminal.is_empty() {
         if app.server.available {
             vec![prefixed_line(
                 "Server logs will appear here. Press s to start.",
@@ -8607,7 +9978,7 @@ fn render_server_view(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
             vec![prefixed_line("Local server is unavailable.")]
         }
     } else {
-        render_output_lines(&app.server.run.output, output_area.height as usize)
+        render_output_lines(&app.server.run.terminal, output_area.height as usize)
     };
     frame.render_widget(
         Paragraph::new(output_lines)
@@ -8616,392 +9987,7 @@ fn render_server_view(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
         output_area,
     );
     render_left_rail(frame, output_area, surface_rail_style());
-    render_output_scrollbar(frame, output_area, &app.server.run.output);
-}
-
-fn render_agents_view(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
-    render_surface(frame, area);
-    let [summary_area, content_area] = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(1)])
-        .areas(area);
-
-    frame.render_widget(
-        Paragraph::new(agent_status_line(&app.agents)).style(command_status_bg_style()),
-        summary_area,
-    );
-    render_left_rail(frame, summary_area, command_rail_style());
-
-    if app.agents.view_mode == AgentsViewMode::Inspect {
-        render_agent_inspect_view(frame, content_area, app);
-        return;
-    }
-
-    let show_details = layout::ops_details_visible(content_area, app.agents.detail_visible);
-    let areas = if show_details {
-        let ratio = layout::clamp_ops_details_ratio(content_area, app.layout.ops_details_ratio);
-        PaneLayout::horizontal(content_area, &[ratio as u32, (100 - ratio) as u32])
-    } else {
-        PaneLayout::horizontal(content_area, &[1])
-    };
-
-    let filtered = app.filtered_agents();
-    render_agent_list(frame, areas.panes[0], &app.agents, &filtered);
-    if show_details {
-        render_agent_details(frame, areas.panes[1], app.agents.selected_agent(&filtered));
-        if let Some(divider) = areas.dividers.first() {
-            render_split_handle(frame, *divider);
-        }
-    }
-}
-
-fn render_agent_inspect_view(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
-    render_surface(frame, area);
-    let [oplog_area, stream_area] = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-        .areas(area);
-
-    render_agent_inspect_pane(
-        frame,
-        oplog_area,
-        "Oplog",
-        AgentInspectPane::Oplog,
-        &app.agents.inspect,
-    );
-    render_agent_inspect_pane(
-        frame,
-        stream_area,
-        "Stream",
-        AgentInspectPane::Stream,
-        &app.agents.inspect,
-    );
-}
-
-fn render_agent_inspect_pane(
-    frame: &mut Frame<'_>,
-    area: Rect,
-    title: &'static str,
-    pane: AgentInspectPane,
-    inspect: &AgentInspectState,
-) {
-    render_surface(frame, area);
-    let [title_area, output_area] = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(1)])
-        .areas(area);
-    let job = match pane {
-        AgentInspectPane::Oplog => &inspect.oplog,
-        AgentInspectPane::Stream => &inspect.stream,
-    };
-    let focused = inspect.focus == pane;
-    frame.render_widget(
-        Paragraph::new(agent_inspect_title_line(title, job, focused)).style(if focused {
-            command_status_bg_style()
-        } else {
-            surface_style()
-        }),
-        title_area,
-    );
-    render_left_rail(
-        frame,
-        title_area,
-        if focused {
-            command_rail_style()
-        } else {
-            surface_rail_style()
-        },
-    );
-
-    let output_lines = if job.output.total_lines() == 0 {
-        vec![prefixed_line(match pane {
-            AgentInspectPane::Oplog => "Oplog entries will appear here.",
-            AgentInspectPane::Stream => "Waiting for agent stream...",
-        })]
-    } else {
-        render_output_lines(&job.output, output_area.height as usize)
-    };
-    frame.render_widget(
-        Paragraph::new(output_lines)
-            .style(surface_style())
-            .wrap(Wrap { trim: false }),
-        output_area,
-    );
-    render_left_rail(frame, output_area, surface_rail_style());
-    render_output_scrollbar(frame, output_area, &job.output);
-}
-
-fn agent_inspect_title_line(title: &'static str, job: &InspectJob, focused: bool) -> Line<'static> {
-    let title_style = if focused {
-        Style::default()
-            .fg(theme().accent)
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(theme().text_muted)
-    };
-    Line::from(vec![
-        Span::styled(
-            "┃ ",
-            if focused {
-                command_rail_style()
-            } else {
-                surface_rail_style()
-            },
-        ),
-        fixed_span(title, 8, title_style),
-        Span::raw(" "),
-        fixed_span(job.status.title(), 10, inspect_job_status_style(job.status)),
-        Span::raw(" | "),
-        fixed_span(
-            "left/right focus  esc back",
-            30,
-            Style::default().fg(theme().text_muted),
-        ),
-        Span::raw(" | "),
-        fixed_span(
-            format!("ctx:{}", job.launch_context),
-            24,
-            Style::default().fg(theme().text_muted),
-        ),
-    ])
-}
-
-fn inspect_job_status_style(status: InspectJobStatus) -> Style {
-    match status {
-        InspectJobStatus::Idle | InspectJobStatus::Stopped => {
-            Style::default().fg(theme().text_muted)
-        }
-        InspectJobStatus::Starting | InspectJobStatus::Running | InspectJobStatus::Stopping => {
-            Style::default().fg(theme().success)
-        }
-        InspectJobStatus::Failed => Style::default().fg(theme().error),
-    }
-    .add_modifier(Modifier::BOLD)
-}
-
-fn render_agent_list(
-    frame: &mut Frame<'_>,
-    area: Rect,
-    agents: &AgentsState,
-    filtered: &[&AgentListItem],
-) {
-    render_surface(frame, area);
-    let height = area.height as usize;
-    let mut lines = Vec::new();
-
-    if let Some(error) = &agents.last_error {
-        lines.push(prefixed_line(format!("Refresh failed: {error}")));
-    } else if agents.refresh_running && agents.agents.is_empty() {
-        lines.push(prefixed_line("Refreshing agents..."));
-    } else if filtered.is_empty() {
-        lines.push(prefixed_line("No agents match the current filter."));
-    } else {
-        let selected = agents.selected.min(filtered.len().saturating_sub(1));
-        let start = selected.saturating_sub(height.saturating_sub(1));
-        for (index, agent) in filtered.iter().enumerate().skip(start).take(height) {
-            let selected = index == selected;
-            let marker = if selected { ">" } else { " " };
-            let style = if selected {
-                Style::default().add_modifier(Modifier::REVERSED)
-            } else {
-                Style::default()
-            };
-            lines.push(Line::from(vec![
-                content_prefix(),
-                Span::styled(marker, style),
-                Span::raw(" "),
-                fixed_span(&agent.agent_id, 28, style),
-                Span::raw(" "),
-                fixed_span(
-                    agent.status_label(),
-                    12,
-                    style.fg(agent.status_tone().color(&theme())),
-                ),
-                Span::raw(" "),
-                fixed_span(agent.agent_type.as_deref().unwrap_or("-"), 20, style),
-            ]));
-        }
-    }
-
-    frame.render_widget(Paragraph::new(lines).style(surface_style()), area);
-    render_left_rail(frame, area, surface_rail_style());
-}
-
-fn render_agent_details(frame: &mut Frame<'_>, area: Rect, agent: Option<&AgentListItem>) {
-    render_surface(frame, area);
-    let lines = match agent {
-        Some(agent) => {
-            let mut lines = vec![
-                Line::from(vec![
-                    Span::styled("  ", surface_style()),
-                    Span::styled("Details", Style::default().add_modifier(Modifier::BOLD)),
-                ]),
-                prefixed_line(format!("AgentID   : {}", agent.agent_id)),
-                prefixed_line(format!("Status    : {}", agent.status_label())),
-                prefixed_line(format!(
-                    "Type      : {}",
-                    agent.agent_type.as_deref().unwrap_or("-")
-                )),
-                prefixed_line(format!(
-                    "Component : {}",
-                    agent.component.as_deref().unwrap_or("-")
-                )),
-                Line::default(),
-            ];
-            let raw =
-                serde_json::to_string_pretty(&agent.raw).unwrap_or_else(|_| agent.raw.to_string());
-            lines.extend(
-                raw.lines()
-                    .take(area.height.saturating_sub(7) as usize)
-                    .map(prefixed_line),
-            );
-            lines
-        }
-        None => vec![prefixed_line("Select an agent to see details.")],
-    };
-    frame.render_widget(Paragraph::new(lines).style(surface_style()), area);
-    render_left_rail(frame, area, surface_rail_style());
-}
-
-fn agent_status_line(agents: &AgentsState) -> Line<'static> {
-    if agents.view_mode == AgentsViewMode::Inspect {
-        return Line::from(vec![
-            Span::styled("┃ ", command_rail_style()),
-            fixed_span(
-                "inspect",
-                8,
-                Style::default()
-                    .fg(theme().accent)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(" "),
-            fixed_span(
-                format!(
-                    "agent:{}",
-                    agents.inspect.agent_name.as_deref().unwrap_or("-")
-                ),
-                32,
-                Style::default(),
-            ),
-            Span::raw(" | "),
-            fixed_span(
-                format!("focus:{}", agents.inspect.focus.label()),
-                14,
-                Style::default().fg(theme().accent),
-            ),
-            Span::raw(" | "),
-            fixed_span(
-                "left/right switch  esc back",
-                30,
-                Style::default().fg(theme().text_muted),
-            ),
-        ]);
-    }
-
-    let count = agents.filtered_agents().len();
-    let selected = if count == 0 {
-        0
-    } else {
-        agents.selected.min(count - 1) + 1
-    };
-    Line::from(vec![
-        Span::styled("┃ ", command_rail_style()),
-        fixed_span(
-            "agents",
-            7,
-            Style::default()
-                .fg(theme().accent)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw(" "),
-        fixed_span(
-            format!("mode:{}", agents.mode.label()),
-            14,
-            Style::default().fg(theme().accent),
-        ),
-        Span::raw(" | "),
-        fixed_span(
-            format!(
-                "filter:{}",
-                if agents.query.is_empty() {
-                    "-"
-                } else {
-                    &agents.query
-                }
-            ),
-            24,
-            Style::default(),
-        ),
-        Span::raw(" | "),
-        fixed_span(
-            format!("{selected}/{count}"),
-            8,
-            Style::default().fg(theme().text_muted),
-        ),
-        Span::raw(" | "),
-        flag_span("auto", agents.auto_refresh, false),
-        Span::raw(" | "),
-        fixed_span(
-            if agents.refresh_running {
-                agents
-                    .refresh_context_label
-                    .as_deref()
-                    .unwrap_or("refreshing")
-            } else {
-                "enter inspect"
-            },
-            24,
-            if agents.refresh_running {
-                Style::default().fg(theme().accent)
-            } else {
-                Style::default().fg(theme().text_muted)
-            },
-        ),
-    ])
-}
-
-fn render_header(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
-    let line = Line::from(vec![
-        Span::styled(
-            "┃ ",
-            Style::default()
-                .fg(theme().accent)
-                .bg(theme().background)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            " Golem ",
-            Style::default()
-                .fg(theme().background)
-                .bg(theme().accent)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(" app: ", header_segment_label_style(0)),
-        Span::styled(
-            app.context.application.clone(),
-            header_segment_value_style(0),
-        ),
-        Span::styled("  env: ", header_segment_label_style(1)),
-        Span::styled(
-            app.context.environment.clone(),
-            header_segment_value_style(1).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled("  server: ", header_segment_label_style(2)),
-        Span::styled(app.context.server.clone(), header_segment_value_style(2)),
-    ]);
-    frame.render_widget(Paragraph::new(line).style(header_style()), area);
-}
-
-fn render_separator(frame: &mut Frame<'_>, area: Rect) {
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled("┃", separator_rail_style()),
-            Span::raw(" ".repeat(area.width.saturating_sub(1) as usize)),
-        ]))
-        .style(separator_style()),
-        area,
-    );
-    render_left_rail(frame, area, separator_rail_style());
+    render_output_scrollbar(frame, output_area, &app.server.run.terminal);
 }
 
 fn render_surface(frame: &mut Frame<'_>, area: Rect) {
@@ -9053,12 +10039,6 @@ fn tabs_rail_style() -> Style {
 
 fn separator_style() -> Style {
     Style::default().bg(theme().border_subtle)
-}
-
-fn separator_rail_style() -> Style {
-    Style::default()
-        .fg(theme().accent)
-        .bg(theme().border_subtle)
 }
 
 fn surface_style() -> Style {
@@ -9189,8 +10169,13 @@ fn help_lines(app: &TuiApp, width: usize) -> Vec<Line<'static>> {
             TuiActionId::Quit,
         ],
     );
-    push_raw_help(&mut lines, width, "ctrl+c", "Quit");
-    push_raw_help(&mut lines, width, "ctrl+x v", "Switch Overview / Metrics");
+    push_section_break(&mut lines, width, "Leader");
+    push_raw_help(&mut lines, width, "ctrl+x w", "Workspaces");
+    push_raw_help(&mut lines, width, "ctrl+x v", "Views");
+    push_raw_help(&mut lines, width, "ctrl+x l", "Layout mode");
+    push_raw_help(&mut lines, width, "ctrl+x a", "Context actions");
+    push_raw_help(&mut lines, width, "ctrl+x j", "Jobs");
+    push_raw_help(&mut lines, width, "ctrl+x e", "Context");
 
     push_section_break(&mut lines, width, "Palette");
     push_raw_help(&mut lines, width, "type", "Filter commands");
@@ -9198,37 +10183,37 @@ fn help_lines(app: &TuiApp, width: usize) -> Vec<Line<'static>> {
     push_raw_help(&mut lines, width, "enter", "Execute selected action");
     push_raw_help(&mut lines, width, "esc / ctrl+c", "Close palette");
 
-    if app.ops_view == OpsView::Metrics {
-        push_section_break(&mut lines, width, "Fake OTLP Metrics Demo");
+    if app.active_workspace == TuiWorkspace::Dev {
+        push_section_break(&mut lines, width, "Dev panes");
+        push_raw_help(&mut lines, width, "tab / shift+tab", "Focus visible pane");
         push_raw_help(
             &mut lines,
             width,
-            "tab / shift+tab",
-            "Focus series or details",
+            "ctrl+x l",
+            "Resize, flip, show, or hide panes",
         );
+        push_raw_help(&mut lines, width, "pageup", "Enter terminal scrollback");
+        push_raw_help(&mut lines, width, "mouse wheel", "Scroll terminal history");
         push_raw_help(
             &mut lines,
             width,
-            "up / down",
-            "Select or scroll focused pane",
+            "esc",
+            "Return from scrollback to live input",
         );
-        push_raw_help(
-            &mut lines,
-            width,
-            "home / end",
-            "Move to first / last fake series",
-        );
+    } else if app.ops_view == OpsView::Metrics {
+        push_section_break(&mut lines, width, "Metrics");
+        push_raw_help(&mut lines, width, "ctrl+x v o", "Return to Overview");
         lines.push(
             Line::from(Span::styled(
                 fit(
-                    "  !  FAKE DATA — no OTLP receiver or query store is read",
+                    "  Metrics provider is not configured; preview samples never appear here.",
                     width,
                 ),
-                Style::default().fg(theme().marker),
+                Style::default().fg(theme().text_muted),
             ))
             .alignment(Alignment::Left),
         );
-    } else {
+    } else if app.ops_agents_focused() {
         push_action_section_for_app(
             &mut lines,
             app,
@@ -9268,9 +10253,21 @@ fn help_lines(app: &TuiApp, width: usize) -> Vec<Line<'static>> {
             "ctrl+space",
             "Include or exclude focused agent",
         );
-        push_raw_help(&mut lines, width, "enter", "Show or hide details");
-        push_raw_help(&mut lines, width, "ctrl+x c", "Choose visible columns");
-        push_raw_help(&mut lines, width, "ctrl+x ←/→", "Resize details split");
+        push_raw_help(&mut lines, width, "enter", "Open selected Agent");
+        push_raw_help(
+            &mut lines,
+            width,
+            "ctrl+x a",
+            "Columns and collection actions",
+        );
+        push_raw_help(&mut lines, width, "ctrl+x l", "Resize or hide details");
+    } else {
+        push_section_break(&mut lines, width, "Ops subject");
+        push_raw_help(&mut lines, width, "up / down", "Scroll Overview");
+        push_raw_help(&mut lines, width, "pageup / pagedown", "Scroll by page");
+        push_raw_help(&mut lines, width, "home / end", "First / last line");
+        push_raw_help(&mut lines, width, "esc", "Return to parent subject");
+        push_raw_help(&mut lines, width, "ctrl+r", "Refresh typed provider data");
     }
 
     lines.push(Line::default());
@@ -9342,202 +10339,40 @@ fn push_raw_help(
     );
 }
 
-fn render_tabs(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
-    let mut spans = vec![Span::styled("┃ ", tabs_rail_style())];
-
-    for (index, view) in TuiWorkspace::ALL.iter().copied().enumerate() {
-        if spans.len() > 1 {
-            spans.push(Span::raw("  "));
-        }
-
-        let tab_style = if view == app.active_workspace {
-            Style::default()
-                .fg(theme().accent_hover)
-                .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
-        } else {
-            Style::default().fg(theme().text_muted)
-        };
-        spans.push(shortcut_text_span(format!("[{}]", index + 1)));
-        spans.push(Span::raw(" "));
-        spans.push(Span::styled(view.title(), tab_style));
-        if let Some(status) = tab_status(view, app) {
-            spans.push(Span::raw(" "));
-            spans.push(status);
-        }
-    }
-
-    frame.render_widget(Paragraph::new(Line::from(spans)).style(tabs_style()), area);
-    render_left_rail(frame, area, tabs_rail_style());
-}
-
-fn tab_status(view: TuiWorkspace, app: &TuiApp) -> Option<Span<'static>> {
-    let running = match view {
-        TuiWorkspace::Dev => {
-            app.command_is_running() || app.server.run.is_running() || app.repl.is_running()
-        }
-        TuiWorkspace::Ops => app.agents.refresh_running,
-        _ => return None,
-    };
-    let (label, style) = if running {
-        (
-            "●",
-            Style::default()
-                .fg(theme().success)
-                .add_modifier(Modifier::BOLD),
-        )
-    } else {
-        ("○", Style::default().fg(theme().text_faint))
-    };
-    Some(Span::styled(label, style))
-}
-
-fn render_leader_hint(frame: &mut Frame<'_>, app: &TuiApp, _return_mode: TuiMode) {
+fn render_leader_hint(frame: &mut Frame<'_>, app: &TuiApp) {
     let area = Rect {
         x: frame.area().x,
         y: frame.area().y + frame.area().height.saturating_sub(2),
         width: frame.area().width,
         height: 1,
     };
-    let mut spans = vec![
-        Span::styled("│ ", command_rail_style()),
-        shortcut_span("e"),
-        Span::raw(" Context   "),
-        shortcut_span("a"),
-        Span::raw(" Auto refresh   "),
-        shortcut_span("m"),
-        Span::raw(" Agent mode   "),
-        shortcut_span("d"),
-        Span::raw(" Details   "),
-        shortcut_span("c"),
-        Span::raw(" Columns   "),
-        shortcut_span("p"),
-        Span::raw(" Commands   "),
-        shortcut_span("h"),
-        Span::raw(" Help"),
-    ];
-    if app.agent_details_open() {
-        spans.push(Span::raw("   "));
-        spans.push(shortcut_span("←/→"));
-        spans.push(Span::raw(" Resize"));
+    let entries: &[(&str, &str)] = match app.leader.group {
+        None => &[
+            ("w", "Workspaces"),
+            ("v", "Views"),
+            ("l", "Layout"),
+            ("a", "Actions"),
+            ("j", "Jobs"),
+            ("e", "Context"),
+        ],
+        Some(LeaderGroup::Workspaces) => {
+            &[("n", "Next"), ("p", "Previous"), ("d", "Dev"), ("o", "Ops")]
+        }
+        Some(LeaderGroup::Views) if app.active_workspace == TuiWorkspace::Dev => {
+            &[("b", "Build & Deploy"), ("s", "Server"), ("r", "REPL")]
+        }
+        Some(LeaderGroup::Views) => &[("o", "Overview"), ("a", "Activity"), ("m", "Metrics")],
+    };
+    let mut spans = vec![Span::styled("│ ", command_rail_style())];
+    for (index, (key, label)) in entries.iter().enumerate() {
+        if index > 0 {
+            spans.push(Span::raw("   "));
+        }
+        spans.push(shortcut_span(*key));
+        spans.push(Span::raw(format!(" {label}")));
     }
     let line = Line::from(spans);
     frame.render_widget(Paragraph::new(line).style(command_status_bg_style()), area);
-}
-
-fn leader_line(items: &[(TuiActionId, &'static str)]) -> Line<'static> {
-    let mut spans = vec![Span::styled("┃ ", command_rail_style())];
-    for (id, label) in items {
-        push_leader_item(&mut spans, *id, *label);
-    }
-    Line::from(spans)
-}
-
-fn push_leader_item(spans: &mut Vec<Span<'static>>, id: TuiActionId, label: impl Into<String>) {
-    if spans.len() > 1 {
-        spans.push(Span::raw("  "));
-    }
-    spans.push(shortcut_span(action_shortcut(id)));
-    spans.push(Span::raw(" "));
-    spans.push(Span::raw(label.into()));
-}
-
-fn home_lines(app: &TuiApp, width: usize) -> Vec<Line<'static>> {
-    vec![
-        dashboard_line(
-            vec![Span::styled(
-                "Home",
-                Style::default().add_modifier(Modifier::BOLD),
-            )],
-            width,
-        ),
-        Line::default(),
-        dashboard_line(vec![Span::raw("Selected context and current work.")], width),
-        Line::default(),
-        dashboard_line(
-            vec![Span::raw(format!(
-                "Application : {}",
-                app.context.application
-            ))],
-            width,
-        ),
-        dashboard_line(
-            vec![Span::raw(format!(
-                "Environment : {}",
-                app.context.environment
-            ))],
-            width,
-        ),
-        dashboard_line(
-            vec![Span::raw(format!("Server      : {}", app.context.server))],
-            width,
-        ),
-        dashboard_line(
-            vec![Span::raw(format!(
-                "Config dir  : {}",
-                app.context.config_dir
-            ))],
-            width,
-        ),
-        Line::default(),
-        dashboard_line(
-            vec![Span::raw(format!(
-                "Command     : {}",
-                app.command_run
-                    .as_ref()
-                    .map(command_status_summary)
-                    .unwrap_or_else(|| "idle".to_string())
-            ))],
-            width,
-        ),
-        dashboard_line(
-            vec![Span::raw(format!(
-                "Local server: {}",
-                server_status_display(&app.server.run)
-            ))],
-            width,
-        ),
-        dashboard_line(
-            vec![Span::raw(format!(
-                "REPL        : {}",
-                app.repl.run.status.title()
-            ))],
-            width,
-        ),
-        dashboard_line(
-            vec![Span::raw(format!(
-                "Agents      : {} loaded{}",
-                app.agents.agents.len(),
-                if app.agents.refresh_running {
-                    " (refreshing)"
-                } else {
-                    ""
-                }
-            ))],
-            width,
-        ),
-        Line::default(),
-        dashboard_line(
-            vec![Span::raw("2 Dev workbench   3 Ops agents explorer")],
-            width,
-        ),
-    ]
-}
-
-fn dashboard_line(mut spans: Vec<Span<'static>>, width: usize) -> Line<'static> {
-    let content_width = spans
-        .iter()
-        .map(|span| span.content.chars().count())
-        .sum::<usize>();
-    let mut line_spans = vec![content_prefix()];
-    line_spans.append(&mut spans);
-    let used_width = 2 + content_width;
-    if width > used_width {
-        line_spans.push(Span::styled(
-            " ".repeat(width - used_width),
-            surface_style(),
-        ));
-    }
-    Line::from(line_spans)
 }
 
 fn render_output_view(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
@@ -9577,7 +10412,7 @@ fn render_output_view(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
     render_left_rail(frame, summary_area, command_rail_style());
 
     let output_lines = run
-        .map(|run| render_output_lines(&run.output, output_area.height as usize))
+        .map(|run| render_output_lines(&run.terminal, output_area.height as usize))
         .unwrap_or_else(|| vec![prefixed_line("Output will appear here.")]);
     frame.render_widget(
         Paragraph::new(output_lines)
@@ -9587,7 +10422,7 @@ fn render_output_view(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
     );
     render_left_rail(frame, output_area, surface_rail_style());
     if let Some(run) = run {
-        render_output_scrollbar(frame, output_area, &run.output);
+        render_output_scrollbar(frame, output_area, &run.terminal);
     }
 
     if has_input {
@@ -9615,14 +10450,14 @@ fn show_command_input(app: &TuiApp) -> bool {
         })
 }
 
-fn render_output_scrollbar(frame: &mut Frame<'_>, area: Rect, output: &OutputBuffer) {
+fn render_output_scrollbar(frame: &mut Frame<'_>, area: Rect, output: &TerminalScreen) {
     let visible_height = area.height as usize;
     let total = output.total_lines();
-    if total <= visible_height || visible_height == 0 {
+    if output.max_scrollback() == 0 || visible_height == 0 {
         return;
     }
 
-    let position = output_scrollbar_position(total, visible_height, output.scroll_offset);
+    let position = output_scrollbar_position(total, visible_height, output.scrollback());
     let mut state = ScrollbarState::new(total)
         .position(position)
         .viewport_content_length(visible_height);
@@ -9645,44 +10480,6 @@ fn output_scrollbar_position(total: usize, visible_height: usize, scroll_offset:
     let top_line = end.saturating_sub(visible_height);
 
     top_line.saturating_mul(total.saturating_sub(1)) / max_top_line
-}
-
-fn footer_line(app: &TuiApp) -> Line<'static> {
-    let mut spans = Vec::new();
-    push_footer_action(&mut spans, TuiActionId::Build, 7);
-    push_footer_action(&mut spans, TuiActionId::Deploy, 7);
-    push_footer_action(&mut spans, TuiActionId::Clean, 7);
-    push_footer_action(&mut spans, TuiActionId::StartOrFocusRepl, 4);
-    push_footer_shortcut(&mut spans, TuiActionId::ToggleYes);
-    spans.push(Span::raw(" "));
-    spans.push(flag_span("yes", app.command_options.yes, false));
-    spans.push(Span::raw(" "));
-    push_footer_shortcut(&mut spans, TuiActionId::ToggleReset);
-    spans.push(Span::raw(" "));
-    spans.push(flag_span("reset", app.command_options.reset, true));
-    spans.push(Span::raw("  "));
-    push_footer_shortcut(&mut spans, TuiActionId::OpenPalette);
-    spans.push(Span::raw(" Palette  "));
-    push_footer_shortcut(&mut spans, TuiActionId::ShowHelp);
-    spans.push(Span::raw(" Help"));
-    Line::from(spans)
-}
-
-fn push_footer_action(spans: &mut Vec<Span<'static>>, id: TuiActionId, width: usize) {
-    if !spans.is_empty() {
-        spans.push(Span::raw(" "));
-    }
-    push_footer_shortcut(spans, id);
-    spans.push(Span::raw(" "));
-    spans.push(fixed_span(
-        action_short_label(id),
-        width,
-        Style::default().fg(theme().text_muted),
-    ));
-}
-
-fn push_footer_shortcut(spans: &mut Vec<Span<'static>>, id: TuiActionId) {
-    spans.push(shortcut_span(action_shortcut(id)));
 }
 
 fn command_status_line(run: &CommandRun) -> Line<'static> {
@@ -9731,11 +10528,16 @@ fn command_status_line(run: &CommandRun) -> Line<'static> {
 
 fn server_status_line(server: &LocalServerService, local_server_available: bool) -> Line<'static> {
     let run = &server.run;
-    let clean = if run.is_running() {
-        run.clean
-    } else {
-        server.clean
-    };
+    let clean = run.clean;
+    let ports = run.bound_ports.as_ref().map_or_else(
+        || "ports: pending".to_string(),
+        |ports| {
+            format!(
+                "ports: {}/{}/{}",
+                ports.router_port, ports.custom_request_port, ports.mcp_port
+            )
+        },
+    );
     Line::from(vec![
         Span::styled("┃ ", command_rail_style()),
         fixed_span(
@@ -9753,6 +10555,8 @@ fn server_status_line(server: &LocalServerService, local_server_available: bool)
         ),
         Span::raw(" | "),
         flag_span("clean", clean, true),
+        Span::raw(" | "),
+        fixed_span(ports, 24, Style::default().fg(theme().text_secondary)),
         Span::raw(" | "),
         fixed_span(command_display(&run.args), 34, Style::default()),
         Span::raw(" | "),
@@ -9818,7 +10622,7 @@ fn repl_status_style(status: ReplStatus) -> Style {
 fn repl_mode_hint(run: &ReplRun, mode: TuiMode) -> &'static str {
     match mode {
         TuiMode::Repl => "ctrl+x q leave  ctrl+x k stop",
-        TuiMode::LeaderRepl => "q leave  k stop  shift+r restart",
+        TuiMode::Leader => "ctrl+x ctrl+x send literal ctrl+x",
         _ if run.is_running() => "r focus  ctrl+x k stop",
         _ => "r/enter start",
     }
@@ -9882,10 +10686,6 @@ fn command_status_display(run: &CommandRun) -> String {
     }
 }
 
-fn command_status_summary(run: &CommandRun) -> String {
-    format!("{} {}", run.kind.title(), command_status_display(run))
-}
-
 fn spinner_symbol(frame: usize) -> &'static str {
     const FRAMES: [&str; 4] = ["-", "\\", "|", "/"];
     FRAMES[frame % FRAMES.len()]
@@ -9943,11 +10743,11 @@ fn flag_state(enabled: bool) -> &'static str {
     if enabled { "on" } else { "off" }
 }
 
-fn render_output_lines(buffer: &OutputBuffer, height: usize) -> Vec<Line<'static>> {
+fn render_output_lines(buffer: &TerminalScreen, height: usize) -> Vec<Line<'static>> {
     buffer
-        .visible_lines(height)
+        .lines()
         .into_iter()
-        .flat_map(output_bytes_to_lines)
+        .take(height)
         .map(output_line_with_rail)
         .collect()
 }
@@ -9979,6 +10779,13 @@ fn repl_screen_size_for_terminal(cols: u16, rows: u16) -> (u16, u16) {
     (screen_rows, screen_cols)
 }
 
+fn pty_size_for_region(area: Rect) -> (u16, u16) {
+    (
+        area.width.saturating_sub(2).max(1),
+        area.height.saturating_sub(1).max(1),
+    )
+}
+
 fn output_line_with_rail(line: Line<'static>) -> Line<'static> {
     let mut spans = vec![content_prefix()];
     spans.extend(line.spans.into_iter().map(span_with_surface_bg));
@@ -9988,16 +10795,6 @@ fn output_line_with_rail(line: Line<'static>) -> Line<'static> {
 fn span_with_surface_bg(mut span: Span<'static>) -> Span<'static> {
     span.style = span.style.bg(theme().surface);
     span
-}
-
-fn output_bytes_to_lines(bytes: Vec<u8>) -> Vec<Line<'static>> {
-    match bytes.clone().into_text() {
-        Ok(text) if !text.lines.is_empty() => text.lines,
-        _ => {
-            let stripped = strip_ansi_escapes::strip(bytes);
-            vec![Line::from(String::from_utf8_lossy(&stripped).to_string())]
-        }
-    }
 }
 
 fn render_context_picker(frame: &mut Frame<'_>, app: &TuiApp) {
@@ -10410,11 +11207,408 @@ fn pad_or_ellipsis(text: &str, width: usize) -> String {
     }
 }
 
+fn render_command_form(frame: &mut Frame<'_>, app: &TuiApp) {
+    let Some(form) = app.command_form.as_ref() else {
+        return;
+    };
+    let area = adaptive_data_popup_rect(frame.area(), 58, 16);
+    let content = OverlayFrame::content_area(area);
+    let mut fields = command_form_rows(form);
+    let mut lines = vec![
+        Notice {
+            kind: if form.kind == CommandKind::Clean
+                || form.values.post_deploy == PostDeployPolicy::Reset
+                || form.values.post_deploy == PostDeployPolicy::Redeploy
+            {
+                NoticeKind::Warning
+            } else {
+                NoticeKind::Info
+            },
+            message: match form.kind {
+                CommandKind::Plan => {
+                    "Runs the real nested CLI with deploy --plan; no changes are applied."
+                }
+                CommandKind::Build => "Runs the real nested CLI for the full application build.",
+                CommandKind::Deploy => {
+                    "Runs the real nested CLI for the selected application environment."
+                }
+                CommandKind::Clean => {
+                    "Removes all application build artifacts; source files are retained."
+                }
+            },
+        }
+        .line(&theme()),
+        Line::default(),
+    ];
+    for (index, (label, value)) in fields.drain(..).enumerate() {
+        let text = format!("{label:<18} {value}");
+        lines.push(
+            SelectableRow {
+                label: &text,
+                selected: index == form.selected,
+                unavailable: false,
+            }
+            .line(content.width as usize, &theme()),
+        );
+    }
+    lines.push(Line::default());
+    let footer = shortcut_line(
+        &[
+            KeyHint {
+                key: "↑/↓",
+                label: "Field",
+            },
+            KeyHint {
+                key: "space / enter",
+                label: "Change",
+            },
+            KeyHint {
+                key: "esc",
+                label: "Cancel",
+            },
+        ],
+        &theme(),
+        Alignment::Center,
+    );
+    let title = format!("Review {}", form.kind.title());
+    OverlayFrame {
+        title: Some(&title),
+    }
+    .render(
+        frame,
+        area,
+        overlay_lines_with_footer(lines, footer, content.height),
+        &theme(),
+    );
+}
+
+fn command_form_rows(form: &CommandReviewForm) -> Vec<(String, String)> {
+    let toggle = |enabled: bool| {
+        if enabled {
+            "[x]".to_string()
+        } else {
+            "[ ]".to_string()
+        }
+    };
+    match form.kind {
+        CommandKind::Build => ["check", "build", "add-metadata", "gen-bridge"]
+            .into_iter()
+            .enumerate()
+            .map(|(index, step)| {
+                (
+                    format!("step {step}"),
+                    toggle(form.values.build_steps[index]),
+                )
+            })
+            .chain([
+                ("skip check".to_string(), toggle(form.values.skip_check)),
+                ("force build".to_string(), toggle(form.values.force_build)),
+                ("--yes".to_string(), toggle(form.values.yes)),
+                ("Run".to_string(), "nested CLI PTY".to_string()),
+            ])
+            .collect(),
+        CommandKind::Plan | CommandKind::Deploy => vec![
+            ("full diff".to_string(), toggle(form.values.full_diff)),
+            ("force build".to_string(), toggle(form.values.force_build)),
+            (
+                "rollback version".to_string(),
+                if form.values.rollback_version.is_empty() {
+                    "-".to_string()
+                } else {
+                    form.values.rollback_version.clone()
+                },
+            ),
+            (
+                "rollback revision".to_string(),
+                if form.values.rollback_revision.is_empty() {
+                    "-".to_string()
+                } else {
+                    form.values.rollback_revision.clone()
+                },
+            ),
+            (
+                "post deploy".to_string(),
+                form.values.post_deploy.label().to_string(),
+            ),
+            ("--yes".to_string(), toggle(form.values.yes)),
+            ("Run".to_string(), "nested CLI PTY".to_string()),
+        ],
+        CommandKind::Clean => vec![
+            ("--yes".to_string(), toggle(form.values.yes)),
+            ("Run".to_string(), "nested CLI PTY".to_string()),
+        ],
+    }
+}
+
+fn render_session_form(frame: &mut Frame<'_>, app: &TuiApp) {
+    let Some(form) = app.session_form.as_ref() else {
+        return;
+    };
+    let area = adaptive_data_popup_rect(frame.area(), 64, 18);
+    let content = OverlayFrame::content_area(area);
+    let (title, notice, error, fields) = match form {
+        SessionReviewForm::Server {
+            values,
+            restart,
+            error,
+            ..
+        } => (
+            if *restart {
+                "Review Server restart"
+            } else {
+                "Review Server start"
+            },
+            "Running is established only after the process stays alive and rewrites a parseable ports file.",
+            error.as_deref(),
+            server_form_rows(values),
+        ),
+        SessionReviewForm::Repl {
+            values, restart, ..
+        } => (
+            if *restart {
+                "Review REPL restart"
+            } else {
+                "Review REPL start"
+            },
+            "Starts the real interactive nested CLI in a persistent PTY.",
+            None,
+            repl_form_rows(values),
+        ),
+    };
+    let mut lines = vec![
+        Notice {
+            kind: NoticeKind::Info,
+            message: notice,
+        }
+        .line(&theme()),
+        Line::default(),
+    ];
+    if let Some(error) = error {
+        lines.push(
+            Notice {
+                kind: NoticeKind::Error,
+                message: error,
+            }
+            .line(&theme()),
+        );
+        lines.push(Line::default());
+    }
+    for (index, (label, value)) in fields.into_iter().enumerate() {
+        let text = format!("{label:<22} {value}");
+        lines.push(
+            SelectableRow {
+                label: &text,
+                selected: index == form.selected(),
+                unavailable: false,
+            }
+            .line(content.width as usize, &theme()),
+        );
+    }
+    lines.push(Line::default());
+    let footer = shortcut_line(
+        &[
+            KeyHint {
+                key: "↑/↓",
+                label: "Field",
+            },
+            KeyHint {
+                key: "space / enter",
+                label: "Change",
+            },
+            KeyHint {
+                key: "esc",
+                label: "Cancel",
+            },
+        ],
+        &theme(),
+        Alignment::Center,
+    );
+    OverlayFrame { title: Some(title) }.render(
+        frame,
+        area,
+        overlay_lines_with_footer(lines, footer, content.height),
+        &theme(),
+    );
+}
+
+fn server_form_rows(values: &ServerFormValues) -> Vec<(String, String)> {
+    let shown = |value: &str| {
+        if value.is_empty() {
+            "<default>".to_string()
+        } else {
+            value.to_string()
+        }
+    };
+    vec![
+        (
+            "system memory".to_string(),
+            shown(&values.system_memory_override),
+        ),
+        ("router address".to_string(), shown(&values.router_address)),
+        ("router port".to_string(), shown(&values.router_port)),
+        (
+            "custom request port".to_string(),
+            shown(&values.custom_request_port),
+        ),
+        ("MCP port".to_string(), shown(&values.mcp_port)),
+        ("ports file".to_string(), shown(&values.ports_file)),
+        ("data directory".to_string(), shown(&values.data_dir)),
+        (
+            "agent filesystem root".to_string(),
+            shown(&values.agent_filesystem_root),
+        ),
+        (
+            "clean".to_string(),
+            if values.clean { "[x]" } else { "[ ]" }.to_string(),
+        ),
+        (
+            "--yes".to_string(),
+            if values.yes { "[x]" } else { "[ ]" }.to_string(),
+        ),
+        ("Run".to_string(), "nested CLI PTY".to_string()),
+    ]
+}
+
+fn repl_form_rows(values: &ReplFormValues) -> Vec<(String, String)> {
+    vec![
+        ("language".to_string(), values.language.clone()),
+        (
+            "stream logs".to_string(),
+            if values.stream_logs { "[x]" } else { "[ ]" }.to_string(),
+        ),
+        (
+            "automatic imports".to_string(),
+            if values.auto_imports { "[x]" } else { "[ ]" }.to_string(),
+        ),
+        (
+            "post deploy".to_string(),
+            values.post_deploy.label().to_string(),
+        ),
+        (
+            "--yes".to_string(),
+            if values.yes { "[x]" } else { "[ ]" }.to_string(),
+        ),
+        ("Run".to_string(), "nested CLI PTY".to_string()),
+    ]
+}
+
+fn render_jobs(frame: &mut Frame<'_>, app: &TuiApp) {
+    let area = adaptive_data_popup_rect(frame.area(), 52, 12);
+    let content = OverlayFrame::content_area(area);
+    let capacity = content.height.saturating_sub(3).max(1) as usize;
+    let mut jobs = app.command_run.iter().collect::<Vec<_>>();
+    jobs.extend(app.completed_jobs.iter());
+    let selected = app.selected_job.min(jobs.len().saturating_sub(1));
+    let start = selected.saturating_sub(capacity.saturating_sub(1));
+    let mut lines = Vec::new();
+    if jobs.is_empty() {
+        lines.push(
+            Notice {
+                kind: NoticeKind::Empty,
+                message: "No finite Jobs have run in this session",
+            }
+            .line(&theme()),
+        );
+    } else {
+        for (offset, run) in jobs.iter().skip(start).take(capacity).enumerate() {
+            let elapsed = run.elapsed().as_secs_f32();
+            let label = format!(
+                "#{:<3} {:<8} {:<11} {:>6.1}s  {}",
+                run.id,
+                run.kind.title(),
+                run.status.title(),
+                elapsed,
+                run.launch_context
+            );
+            lines.push(
+                SelectableRow {
+                    label: &label,
+                    selected: start + offset == selected,
+                    unavailable: false,
+                }
+                .line(content.width as usize, &theme()),
+            );
+        }
+    }
+    lines.push(Line::default());
+    let footer = shortcut_line(
+        &[
+            KeyHint {
+                key: "↑/↓",
+                label: "Navigate",
+            },
+            KeyHint {
+                key: "enter",
+                label: "Open output",
+            },
+            KeyHint {
+                key: "esc",
+                label: "Close",
+            },
+        ],
+        &theme(),
+        Alignment::Center,
+    );
+    OverlayFrame {
+        title: Some("Jobs · latest 20 completed"),
+    }
+    .render(
+        frame,
+        area,
+        overlay_lines_with_footer(lines, footer, content.height),
+        &theme(),
+    );
+}
+
+fn render_quit_blocked(frame: &mut Frame<'_>, app: &TuiApp) {
+    let area = centered_rect_fixed(64, 9, frame.area());
+    let mut active = Vec::new();
+    if app.command_is_running() {
+        active.push("finite Job");
+    }
+    if app.server.run.is_running() {
+        active.push("Server");
+    }
+    if app.repl.is_running() {
+        active.push("REPL");
+    }
+    let message = format!(
+        "Quit is blocked while TUI-owned work is active: {}.",
+        active.join(", ")
+    );
+    let lines = vec![
+        Notice {
+            kind: NoticeKind::Warning,
+            message: &message,
+        }
+        .line(&theme()),
+        Line::default(),
+        Notice {
+            kind: NoticeKind::Info,
+            message: "Stop the active work from its view, then quit again.",
+        }
+        .line(&theme()),
+        Line::default(),
+        shortcut_line(
+            &[KeyHint {
+                key: "enter / esc",
+                label: "Return",
+            }],
+            &theme(),
+            Alignment::Center,
+        ),
+    ];
+    OverlayFrame {
+        title: Some("Active work prevents quit"),
+    }
+    .render(frame, area, lines, &theme());
+}
+
 fn render_palette(frame: &mut Frame<'_>, app: &TuiApp) {
-    let actions = filtered_actions(&app.palette.query);
+    let actions = app.filtered_actions();
     let area = adaptive_data_popup_rect(frame.area(), 36, 10);
     let content = OverlayFrame::content_area(area);
-    let action_capacity = content.height.saturating_sub(4).max(1) as usize;
+    let action_capacity = content.height.saturating_sub(5).max(1) as usize;
     let overflow = actions.len() > action_capacity;
     let content_width = content.width.saturating_sub(u16::from(overflow)) as usize;
     let selected = app.palette.selected.min(actions.len().saturating_sub(1));
@@ -10426,7 +11620,40 @@ fn render_palette(frame: &mut Frame<'_>, app: &TuiApp) {
         .take(visible_count)
         .copied()
         .collect::<Vec<_>>();
+    let scope_line = Line::from(vec![
+        Span::styled("Scope  ", Style::default().fg(theme().text_muted)),
+        Span::styled(
+            if app.palette.scope == PaletteScope::All {
+                "[All]"
+            } else {
+                " All "
+            },
+            if app.palette.scope == PaletteScope::All {
+                Style::default()
+                    .fg(theme().accent_hover)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(theme().text_muted)
+            },
+        ),
+        Span::raw("  "),
+        Span::styled(
+            if app.palette.scope == PaletteScope::Context {
+                "[Context]"
+            } else {
+                " Context "
+            },
+            if app.palette.scope == PaletteScope::Context {
+                Style::default()
+                    .fg(theme().accent_hover)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(theme().text_muted)
+            },
+        ),
+    ]);
     let mut lines = vec![
+        scope_line,
         SearchInput {
             query: &app.palette.query,
         }
@@ -10451,7 +11678,17 @@ fn render_palette(frame: &mut Frame<'_>, app: &TuiApp) {
                     format!(" — unavailable: {reason}")
                 }
             };
-            let description = format!("{}{reason}", action.description);
+            let review = if action.review() == TuiActionReview::ReviewForm {
+                " · review"
+            } else {
+                ""
+            };
+            let description = format!(
+                "{}{reason} · {} · target: {}{review}",
+                action.description,
+                action.risk().label(),
+                app.action_target_summary(action)
+            );
             lines.push(
                 CommandRow {
                     label: action.label,
@@ -10476,6 +11713,10 @@ fn render_palette(frame: &mut Frame<'_>, app: &TuiApp) {
                 label: "Run",
             },
             KeyHint {
+                key: "ctrl+p / ctrl+x a",
+                label: "Scope",
+            },
+            KeyHint {
                 key: "esc",
                 label: "Close",
             },
@@ -10492,8 +11733,8 @@ fn render_palette(frame: &mut Frame<'_>, app: &TuiApp) {
         render_overlay_scrollbar(
             frame,
             Rect {
-                y: content.y.saturating_add(2),
-                height: content.height.saturating_sub(4),
+                y: content.y.saturating_add(3),
+                height: content.height.saturating_sub(5),
                 ..content
             },
             actions.len(),
@@ -10560,19 +11801,18 @@ fn centered_rect_fixed(width: u16, height: u16, area: Rect) -> Rect {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum TuiActionId {
+    Plan,
     Build,
     Deploy,
     Clean,
-    ToggleYes,
-    ToggleReset,
     ToggleServer,
     RestartServer,
     CleanRestartServer,
-    ToggleServerClean,
-    CycleDevLayoutPreset,
-    ToggleServerDrawer,
+    FlipPanePlacement,
+    ToggleServerSubview,
     RefreshAgents,
     OpenAgentDatasetFilter,
+    OpenAgentColumns,
     IncludeAgentMatches,
     ExcludeAgentMatches,
     LoadMoreAgents,
@@ -10581,9 +11821,12 @@ enum TuiActionId {
     ToggleAgentDetails,
     CycleOpsView,
     CycleAgentFindScope,
-    SelectHome,
     SelectDev,
     SelectOps,
+    SelectOpsAgents,
+    SelectOpsDeployment,
+    SelectOpsEnvironment,
+    SelectOpsServer,
     StartOrFocusRepl,
     FocusRepl,
     LeaveRepl,
@@ -10649,6 +11892,59 @@ enum TuiActionExecutionKind {
     ViewNavigation,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TuiActionRisk {
+    ReadOnly,
+    RoutineWrite,
+    Disruptive,
+    Destructive,
+}
+
+impl TuiActionRisk {
+    fn label(self) -> &'static str {
+        match self {
+            Self::ReadOnly => "read-only",
+            Self::RoutineWrite => "routine-write",
+            Self::Disruptive => "disruptive",
+            Self::Destructive => "destructive",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TuiActionReview {
+    None,
+    ReviewForm,
+}
+
+impl TuiActionReview {
+    fn label(self) -> &'static str {
+        match self {
+            Self::None => "no-review",
+            Self::ReviewForm => "review-form",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TuiActionTarget {
+    Interface,
+    ApplicationEnvironment,
+    LocalServer,
+    LoadedAgents,
+}
+
+impl TuiActionTarget {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Interface => "interface",
+            Self::ApplicationEnvironment => "application-environment",
+            Self::LocalServer => "local-server",
+            Self::LoadedAgents => "loaded-agents",
+        }
+    }
+}
+
 impl TuiActionExecutionKind {
     fn label(self) -> &'static str {
         match self {
@@ -10673,6 +11969,73 @@ struct TuiAction {
     kind: TuiActionKind,
 }
 
+impl TuiAction {
+    fn leader_path(self) -> Option<&'static str> {
+        match self.id {
+            TuiActionId::SelectDev | TuiActionId::SelectOps => Some("ctrl+x w"),
+            TuiActionId::CycleOpsView => Some("ctrl+x v"),
+            TuiActionId::FlipPanePlacement | TuiActionId::ToggleServerSubview => Some("ctrl+x l"),
+            TuiActionId::OpenContextPicker => Some("ctrl+x e"),
+            TuiActionId::OpenPalette | TuiActionId::ShowHelp | TuiActionId::Quit => None,
+            _ => Some("ctrl+x a"),
+        }
+    }
+
+    fn risk(self) -> TuiActionRisk {
+        match self.id {
+            TuiActionId::Clean | TuiActionId::CleanRestartServer => TuiActionRisk::Destructive,
+            TuiActionId::Deploy | TuiActionId::RestartServer | TuiActionId::StopRepl => {
+                TuiActionRisk::Disruptive
+            }
+            TuiActionId::Build
+            | TuiActionId::ToggleServer
+            | TuiActionId::StartOrFocusRepl
+            | TuiActionId::RestartRepl => TuiActionRisk::RoutineWrite,
+            _ => TuiActionRisk::ReadOnly,
+        }
+    }
+
+    fn review(self) -> TuiActionReview {
+        match self.id {
+            TuiActionId::Plan
+            | TuiActionId::Build
+            | TuiActionId::Deploy
+            | TuiActionId::Clean
+            | TuiActionId::ToggleServer
+            | TuiActionId::RestartServer
+            | TuiActionId::CleanRestartServer
+            | TuiActionId::StartOrFocusRepl
+            | TuiActionId::RestartRepl => TuiActionReview::ReviewForm,
+            _ => TuiActionReview::None,
+        }
+    }
+
+    fn target(self) -> TuiActionTarget {
+        match self.id {
+            TuiActionId::Plan
+            | TuiActionId::Build
+            | TuiActionId::Deploy
+            | TuiActionId::Clean
+            | TuiActionId::StartOrFocusRepl
+            | TuiActionId::RestartRepl => TuiActionTarget::ApplicationEnvironment,
+            TuiActionId::ToggleServer
+            | TuiActionId::RestartServer
+            | TuiActionId::CleanRestartServer => TuiActionTarget::LocalServer,
+            TuiActionId::RefreshAgents
+            | TuiActionId::OpenAgentDatasetFilter
+            | TuiActionId::OpenAgentColumns
+            | TuiActionId::IncludeAgentMatches
+            | TuiActionId::ExcludeAgentMatches
+            | TuiActionId::LoadMoreAgents
+            | TuiActionId::ToggleAgentAutoRefresh
+            | TuiActionId::CycleAgentMode
+            | TuiActionId::ToggleAgentDetails
+            | TuiActionId::CycleAgentFindScope => TuiActionTarget::LoadedAgents,
+            _ => TuiActionTarget::Interface,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TuiActionAvailability {
     Available,
@@ -10688,19 +12051,18 @@ impl TuiActionAvailability {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TuiActionKind {
     SelectView(TuiWorkspace),
+    Plan,
     Build,
     Deploy,
     Clean,
-    ToggleYes,
-    ToggleReset,
     ToggleServer,
     RestartServer,
     CleanRestartServer,
-    ToggleServerClean,
-    CycleDevLayoutPreset,
-    ToggleServerDrawer,
+    FlipPanePlacement,
+    ToggleServerSubview,
     RefreshAgents,
     OpenAgentDatasetFilter,
+    OpenAgentColumns,
     IncludeAgentMatches,
     ExcludeAgentMatches,
     LoadMoreAgents,
@@ -10709,6 +12071,7 @@ enum TuiActionKind {
     ToggleAgentDetails,
     CycleOpsView,
     CycleAgentFindScope,
+    SelectOpsRoot(OpsRootSubject),
     StartOrFocusRepl,
     FocusRepl,
     LeaveRepl,
@@ -10720,12 +12083,23 @@ enum TuiActionKind {
     Quit,
 }
 
-const ACTIONS: [TuiAction; 33] = [
+const ACTIONS: [TuiAction; 35] = [
+    TuiAction {
+        id: TuiActionId::Plan,
+        label: "Plan",
+        description: "Review a golem deploy --plan command",
+        shortcut: None,
+        category: TuiActionCategory::Dev,
+        scope: TuiActionScope::Global,
+        execution_kind: TuiActionExecutionKind::NestedCli,
+        palette_visible: true,
+        kind: TuiActionKind::Plan,
+    },
     TuiAction {
         id: TuiActionId::Build,
         label: "Build",
         description: "Run golem build",
-        shortcut: Some("ctrl+x b"),
+        shortcut: None,
         category: TuiActionCategory::Dev,
         scope: TuiActionScope::Global,
         execution_kind: TuiActionExecutionKind::NestedCli,
@@ -10736,7 +12110,7 @@ const ACTIONS: [TuiAction; 33] = [
         id: TuiActionId::Deploy,
         label: "Deploy",
         description: "Run golem deploy",
-        shortcut: Some("ctrl+x d"),
+        shortcut: None,
         category: TuiActionCategory::Dev,
         scope: TuiActionScope::Global,
         execution_kind: TuiActionExecutionKind::NestedCli,
@@ -10747,7 +12121,7 @@ const ACTIONS: [TuiAction; 33] = [
         id: TuiActionId::Clean,
         label: "Clean",
         description: "Run golem clean",
-        shortcut: Some("ctrl+x c"),
+        shortcut: None,
         category: TuiActionCategory::Dev,
         scope: TuiActionScope::Global,
         execution_kind: TuiActionExecutionKind::NestedCli,
@@ -10755,32 +12129,10 @@ const ACTIONS: [TuiAction; 33] = [
         kind: TuiActionKind::Clean,
     },
     TuiAction {
-        id: TuiActionId::ToggleYes,
-        label: "Toggle Yes",
-        description: "Toggle --yes for build/deploy",
-        shortcut: Some("ctrl+x y"),
-        category: TuiActionCategory::Settings,
-        scope: TuiActionScope::Leader,
-        execution_kind: TuiActionExecutionKind::Internal,
-        palette_visible: true,
-        kind: TuiActionKind::ToggleYes,
-    },
-    TuiAction {
-        id: TuiActionId::ToggleReset,
-        label: "Toggle Reset",
-        description: "Toggle --reset for deploy",
-        shortcut: Some("ctrl+x r"),
-        category: TuiActionCategory::Settings,
-        scope: TuiActionScope::Leader,
-        execution_kind: TuiActionExecutionKind::Internal,
-        palette_visible: true,
-        kind: TuiActionKind::ToggleReset,
-    },
-    TuiAction {
         id: TuiActionId::ToggleServer,
         label: "Start/Stop Server",
         description: "Focus Dev Server and toggle it",
-        shortcut: Some("ctrl+x s"),
+        shortcut: None,
         category: TuiActionCategory::Dev,
         scope: TuiActionScope::Global,
         execution_kind: TuiActionExecutionKind::NestedCli,
@@ -10791,7 +12143,7 @@ const ACTIONS: [TuiAction; 33] = [
         id: TuiActionId::RestartServer,
         label: "Restart Server",
         description: "Restart the local server",
-        shortcut: Some("ctrl+x shift+r"),
+        shortcut: None,
         category: TuiActionCategory::Dev,
         scope: TuiActionScope::Leader,
         execution_kind: TuiActionExecutionKind::NestedCli,
@@ -10802,7 +12154,7 @@ const ACTIONS: [TuiAction; 33] = [
         id: TuiActionId::CleanRestartServer,
         label: "Clean Restart Server",
         description: "Restart local server with --clean",
-        shortcut: Some("ctrl+x shift+c"),
+        shortcut: None,
         category: TuiActionCategory::Dev,
         scope: TuiActionScope::Leader,
         execution_kind: TuiActionExecutionKind::NestedCli,
@@ -10810,37 +12162,26 @@ const ACTIONS: [TuiAction; 33] = [
         kind: TuiActionKind::CleanRestartServer,
     },
     TuiAction {
-        id: TuiActionId::ToggleServerClean,
-        label: "Toggle Server Clean",
-        description: "Toggle --clean for next server start",
-        shortcut: Some("ctrl+x s"),
+        id: TuiActionId::FlipPanePlacement,
+        label: "Flip Pane Placement",
+        description: "Place secondary panes on the right or bottom",
+        shortcut: None,
         category: TuiActionCategory::Settings,
         scope: TuiActionScope::Leader,
         execution_kind: TuiActionExecutionKind::Internal,
         palette_visible: true,
-        kind: TuiActionKind::ToggleServerClean,
+        kind: TuiActionKind::FlipPanePlacement,
     },
     TuiAction {
-        id: TuiActionId::CycleDevLayoutPreset,
-        label: "Cycle Dev Layout",
-        description: "Cycle Dev panel layout preset",
-        shortcut: Some("ctrl+x l"),
-        category: TuiActionCategory::Settings,
-        scope: TuiActionScope::Leader,
-        execution_kind: TuiActionExecutionKind::Internal,
-        palette_visible: true,
-        kind: TuiActionKind::CycleDevLayoutPreset,
-    },
-    TuiAction {
-        id: TuiActionId::ToggleServerDrawer,
-        label: "Toggle Server Drawer",
-        description: "Open or close the global local-server drawer",
+        id: TuiActionId::ToggleServerSubview,
+        label: "Toggle Server Subview",
+        description: "Show or hide Server beside the primary Dev view",
         shortcut: None,
         category: TuiActionCategory::Dev,
         scope: TuiActionScope::Leader,
         execution_kind: TuiActionExecutionKind::Internal,
         palette_visible: true,
-        kind: TuiActionKind::ToggleServerDrawer,
+        kind: TuiActionKind::ToggleServerSubview,
     },
     TuiAction {
         id: TuiActionId::RefreshAgents,
@@ -10863,6 +12204,17 @@ const ACTIONS: [TuiAction; 33] = [
         execution_kind: TuiActionExecutionKind::Internal,
         palette_visible: true,
         kind: TuiActionKind::OpenAgentDatasetFilter,
+    },
+    TuiAction {
+        id: TuiActionId::OpenAgentColumns,
+        label: "Configure Agent Columns",
+        description: "Choose visible Agent collection columns",
+        shortcut: None,
+        category: TuiActionCategory::Ops,
+        scope: TuiActionScope::Agents,
+        execution_kind: TuiActionExecutionKind::Internal,
+        palette_visible: true,
+        kind: TuiActionKind::OpenAgentColumns,
     },
     TuiAction {
         id: TuiActionId::IncludeAgentMatches,
@@ -10901,7 +12253,7 @@ const ACTIONS: [TuiAction; 33] = [
         id: TuiActionId::ToggleAgentAutoRefresh,
         label: "Toggle Agent Auto Refresh",
         description: "Toggle automatic agent refresh",
-        shortcut: Some("ctrl+x a"),
+        shortcut: None,
         category: TuiActionCategory::Ops,
         scope: TuiActionScope::Agents,
         execution_kind: TuiActionExecutionKind::Internal,
@@ -10912,7 +12264,7 @@ const ACTIONS: [TuiAction; 33] = [
         id: TuiActionId::CycleAgentMode,
         label: "Cycle Agent Mode",
         description: "Cycle durable, ephemeral, all",
-        shortcut: Some("ctrl+x m"),
+        shortcut: None,
         category: TuiActionCategory::Ops,
         scope: TuiActionScope::Agents,
         execution_kind: TuiActionExecutionKind::Internal,
@@ -10923,7 +12275,7 @@ const ACTIONS: [TuiAction; 33] = [
         id: TuiActionId::ToggleAgentDetails,
         label: "Toggle Agent Details",
         description: "Show or hide selected agent details",
-        shortcut: Some("ctrl+x d"),
+        shortcut: None,
         category: TuiActionCategory::Ops,
         scope: TuiActionScope::Agents,
         execution_kind: TuiActionExecutionKind::Internal,
@@ -10932,9 +12284,9 @@ const ACTIONS: [TuiAction; 33] = [
     },
     TuiAction {
         id: TuiActionId::CycleOpsView,
-        label: "Switch Overview / Metrics",
-        description: "Switch the Ops explorer between agents and metrics",
-        shortcut: Some("ctrl+x v"),
+        label: "Cycle Ops View",
+        description: "Cycle Overview, Activity, and Metrics for the current subject",
+        shortcut: None,
         category: TuiActionCategory::Navigation,
         scope: TuiActionScope::Leader,
         execution_kind: TuiActionExecutionKind::ViewNavigation,
@@ -10945,23 +12297,12 @@ const ACTIONS: [TuiAction; 33] = [
         id: TuiActionId::CycleAgentFindScope,
         label: "Cycle Agent Find Field",
         description: "Search loaded agents by AgentID, component, or agent type",
-        shortcut: Some("ctrl+x f"),
+        shortcut: None,
         category: TuiActionCategory::Ops,
         scope: TuiActionScope::Agents,
         execution_kind: TuiActionExecutionKind::Internal,
         palette_visible: true,
         kind: TuiActionKind::CycleAgentFindScope,
-    },
-    TuiAction {
-        id: TuiActionId::SelectHome,
-        label: "Go to Home",
-        description: "Switch to Home workspace",
-        shortcut: None,
-        category: TuiActionCategory::Navigation,
-        scope: TuiActionScope::Global,
-        execution_kind: TuiActionExecutionKind::ViewNavigation,
-        palette_visible: true,
-        kind: TuiActionKind::SelectView(TuiWorkspace::Home),
     },
     TuiAction {
         id: TuiActionId::SelectDev,
@@ -10986,10 +12327,54 @@ const ACTIONS: [TuiAction; 33] = [
         kind: TuiActionKind::SelectView(TuiWorkspace::Ops),
     },
     TuiAction {
+        id: TuiActionId::SelectOpsAgents,
+        label: "Open Agents",
+        description: "Open the Ops Agents collection",
+        shortcut: None,
+        category: TuiActionCategory::Ops,
+        scope: TuiActionScope::Global,
+        execution_kind: TuiActionExecutionKind::ViewNavigation,
+        palette_visible: true,
+        kind: TuiActionKind::SelectOpsRoot(OpsRootSubject::Agents),
+    },
+    TuiAction {
+        id: TuiActionId::SelectOpsDeployment,
+        label: "Open Deployment",
+        description: "Open the current Deployment overview",
+        shortcut: None,
+        category: TuiActionCategory::Ops,
+        scope: TuiActionScope::Global,
+        execution_kind: TuiActionExecutionKind::ViewNavigation,
+        palette_visible: true,
+        kind: TuiActionKind::SelectOpsRoot(OpsRootSubject::Deployment),
+    },
+    TuiAction {
+        id: TuiActionId::SelectOpsEnvironment,
+        label: "Open Environment",
+        description: "Open the selected Environment overview",
+        shortcut: None,
+        category: TuiActionCategory::Ops,
+        scope: TuiActionScope::Global,
+        execution_kind: TuiActionExecutionKind::ViewNavigation,
+        palette_visible: true,
+        kind: TuiActionKind::SelectOpsRoot(OpsRootSubject::Environment),
+    },
+    TuiAction {
+        id: TuiActionId::SelectOpsServer,
+        label: "Open Server",
+        description: "Open the selected Server overview",
+        shortcut: None,
+        category: TuiActionCategory::Ops,
+        scope: TuiActionScope::Global,
+        execution_kind: TuiActionExecutionKind::ViewNavigation,
+        palette_visible: true,
+        kind: TuiActionKind::SelectOpsRoot(OpsRootSubject::Server),
+    },
+    TuiAction {
         id: TuiActionId::StartOrFocusRepl,
         label: "Start or Focus REPL",
         description: "Run golem repl and send input there",
-        shortcut: Some("ctrl+x r"),
+        shortcut: None,
         category: TuiActionCategory::Repl,
         scope: TuiActionScope::Global,
         execution_kind: TuiActionExecutionKind::NestedCli,
@@ -11000,7 +12385,7 @@ const ACTIONS: [TuiAction; 33] = [
         id: TuiActionId::FocusRepl,
         label: "Focus REPL",
         description: "Send keyboard input to the running REPL",
-        shortcut: Some("ctrl+x r"),
+        shortcut: None,
         category: TuiActionCategory::Repl,
         scope: TuiActionScope::Repl,
         execution_kind: TuiActionExecutionKind::Internal,
@@ -11011,7 +12396,7 @@ const ACTIONS: [TuiAction; 33] = [
         id: TuiActionId::LeaveRepl,
         label: "Leave REPL Mode",
         description: "Return keyboard input to the TUI",
-        shortcut: Some("ctrl+x q"),
+        shortcut: None,
         category: TuiActionCategory::Repl,
         scope: TuiActionScope::ReplLeader,
         execution_kind: TuiActionExecutionKind::Internal,
@@ -11022,7 +12407,7 @@ const ACTIONS: [TuiAction; 33] = [
         id: TuiActionId::StopRepl,
         label: "Stop REPL",
         description: "Send ctrl+c to the embedded REPL",
-        shortcut: Some("ctrl+x k"),
+        shortcut: None,
         category: TuiActionCategory::Repl,
         scope: TuiActionScope::ReplLeader,
         execution_kind: TuiActionExecutionKind::Internal,
@@ -11033,7 +12418,7 @@ const ACTIONS: [TuiAction; 33] = [
         id: TuiActionId::RestartRepl,
         label: "Restart REPL",
         description: "Restart the embedded REPL",
-        shortcut: Some("ctrl+x shift+r"),
+        shortcut: None,
         category: TuiActionCategory::Repl,
         scope: TuiActionScope::ReplLeader,
         execution_kind: TuiActionExecutionKind::NestedCli,
@@ -11097,35 +12482,36 @@ fn action_by_kind(kind: TuiActionKind) -> Option<&'static TuiAction> {
     ACTIONS.iter().find(|action| action.kind == kind)
 }
 
-fn action_shortcut(id: TuiActionId) -> &'static str {
-    action(id).shortcut.expect("action shortcut")
-}
-
-fn action_short_label(id: TuiActionId) -> &'static str {
-    match id {
-        TuiActionId::StartOrFocusRepl => "REPL",
-        _ => action(id).label,
-    }
-}
-
 #[cfg(all(feature = "tui-preview", test))]
 fn preview_production_app() -> TuiApp {
     let mut app = TuiApp {
         should_quit: false,
         active_workspace: TuiWorkspace::Ops,
+        ops_subject: OpsSubject::Root(OpsRootSubject::Agents),
         ops_view: OpsView::Overview,
-        fake_otlp: FakeOtlpExplorerState::default(),
-        dev_focus: DevPanel::Repl,
+        dev_primary: DevView::Repl,
+        dev_focus: DevView::Repl,
         mode: TuiMode::Normal,
+        leader: LeaderState::default(),
         help_scroll: 0,
         help_content_height: Cell::new(0),
         help_viewport_height: Cell::new(0),
         palette: CommandPalette::default(),
         command_options: CommandOptions::default(),
+        command_form: None,
+        command_form_memory: HashMap::new(),
+        session_form: None,
+        server_form_memory: HashMap::new(),
+        repl_form_memory: HashMap::new(),
         command_run: None,
+        completed_jobs: VecDeque::new(),
+        selected_job: 0,
         server: LocalServerService::default(),
+        pending_server_restart: None,
         repl: ReplState::default(),
+        pending_repl_restart: None,
         agents: AgentsState::default(),
+        ops_environment: OpsEnvironmentState::default(),
         next_command_id: 1,
         context: TuiContextInfo {
             application: "preview-app".into(),
@@ -11153,6 +12539,8 @@ fn preview_production_app() -> TuiApp {
         auth_prompt: None,
         layout: TuiLayoutState::default(),
         layout_snapshot: RefCell::new(None),
+        preferences_path: PathBuf::from("/tmp/golem-tui-preview-preferences.json"),
+        preferences_error: None,
     };
     app.agents.agents = vec![
         AgentListItem {
@@ -11182,55 +12570,53 @@ fn preview_production_app() -> TuiApp {
     app
 }
 
-fn palette_actions() -> Vec<TuiAction> {
+fn palette_actions(scope: PaletteScope, app: &TuiApp) -> Vec<TuiAction> {
     ACTIONS
         .iter()
         .copied()
-        .filter(|action| action.palette_visible && action_visible_in_ops_rebuild(action.id))
+        .filter(|action| action.palette_visible)
+        .filter(|action| scope == PaletteScope::All || action_relevant_to_context(action, app))
         .collect()
 }
 
-fn action_visible_in_ops_rebuild(id: TuiActionId) -> bool {
-    matches!(
-        id,
-        TuiActionId::RefreshAgents
-            | TuiActionId::OpenAgentDatasetFilter
-            | TuiActionId::IncludeAgentMatches
-            | TuiActionId::ExcludeAgentMatches
-            | TuiActionId::LoadMoreAgents
-            | TuiActionId::ToggleAgentAutoRefresh
-            | TuiActionId::CycleAgentMode
-            | TuiActionId::ToggleAgentDetails
-            | TuiActionId::CycleOpsView
-            | TuiActionId::CycleAgentFindScope
-            | TuiActionId::OpenContextPicker
-            | TuiActionId::ShowHelp
-            | TuiActionId::Quit
-    )
+fn action_relevant_to_context(action: &TuiAction, app: &TuiApp) -> bool {
+    match app.active_workspace {
+        TuiWorkspace::Dev => matches!(
+            action.category,
+            TuiActionCategory::Dev | TuiActionCategory::Repl | TuiActionCategory::Settings
+        ),
+        TuiWorkspace::Ops => {
+            action.category == TuiActionCategory::Ops
+                || matches!(action.id, TuiActionId::CycleOpsView)
+        }
+    }
 }
 
-fn filtered_actions(query: &str) -> Vec<TuiAction> {
+fn filtered_actions(query: &str, scope: PaletteScope, app: &TuiApp) -> Vec<TuiAction> {
     let query = query.trim();
     if query.is_empty() {
-        return palette_actions();
+        return palette_actions(scope, app);
     }
 
     let matcher = SkimMatcherV2::default();
-    let mut matches = ACTIONS
-        .iter()
-        .filter(|action| action.palette_visible && action_visible_in_ops_rebuild(action.id))
+    let mut matches = palette_actions(scope, app)
+        .into_iter()
         .filter_map(|action| {
             let haystack = format!(
-                "{} {} {} {} {}",
+                "{} {} {} {} {} {} {} {} {}",
                 action.label,
                 action.description,
                 action.category.label(),
                 action.scope.label(),
-                action.execution_kind.label()
+                action.execution_kind.label(),
+                action.risk().label(),
+                action.review().label(),
+                action.target().label(),
+                action.leader_path().unwrap_or("")
             );
             matcher
                 .fuzzy_match(&haystack, query)
-                .map(|score| (score, *action))
+                .map(|score| (score, action))
         })
         .collect::<Vec<_>>();
 
@@ -11268,7 +12654,7 @@ mod tests {
             "{frame}"
         );
         assert!(frame.contains("GOLEM"), "{frame}");
-        assert!(frame.contains("app sample-app"), "{frame}");
+        assert!(frame.contains("sample-app/local/local"), "{frame}");
         assert!(frame.contains("Agents · Overview"), "{frame}");
         assert!(!frame.contains(" Build "), "{frame}");
         assert!(!frame.contains(" Deploy "), "{frame}");
@@ -11281,7 +12667,7 @@ mod tests {
 
         assert!(frame.contains("[ Ops ]"), "{frame}");
         assert!(!frame.contains("Home"), "{frame}");
-        assert!(!frame.contains("Dev"), "{frame}");
+        assert!(frame.contains("( Dev )"), "{frame}");
     }
 
     #[test]
@@ -11341,16 +12727,19 @@ mod tests {
     }
 
     #[test]
-    fn leader_hint_renders_settings_shortcuts() {
+    fn leader_hint_renders_navigation_groups() {
         let mut app = test_app();
 
         app.handle_key(modified_key(KeyCode::Char('x'), KeyModifiers::CONTROL));
         let frame = render_app_text(&app);
 
-        assert_eq!(app.mode, TuiMode::LeaderNormal);
+        assert_eq!(app.mode, TuiMode::Leader);
+        assert!(frame.contains("Workspaces"), "{frame}");
+        assert!(frame.contains("Views"), "{frame}");
+        assert!(frame.contains("Layout"), "{frame}");
         assert!(frame.contains("Context"), "{frame}");
-        assert!(frame.contains("Columns"), "{frame}");
-        assert!(frame.contains("Commands"), "{frame}");
+        assert!(frame.contains("Actions"), "{frame}");
+        assert!(frame.contains("Jobs"), "{frame}");
     }
 
     #[test]
@@ -11359,12 +12748,14 @@ mod tests {
 
         app.handle_key(modified_key(KeyCode::Char('x'), KeyModifiers::CONTROL));
         app.handle_key(key(KeyCode::Char('v')));
+        app.handle_key(key(KeyCode::Char('m')));
         let frame = render_app_text(&app);
         assert_eq!(app.ops_view, OpsView::Metrics);
         assert!(frame.contains("Agents · Metrics"), "{frame}");
 
         app.handle_key(modified_key(KeyCode::Char('x'), KeyModifiers::CONTROL));
         app.handle_key(key(KeyCode::Char('v')));
+        app.handle_key(key(KeyCode::Char('o')));
         let frame = render_app_text(&app);
         assert_eq!(app.ops_view, OpsView::Overview);
         assert!(frame.contains("Agents · Overview"), "{frame}");
@@ -11386,7 +12777,7 @@ mod tests {
         app.handle_key(key(KeyCode::Char('2')));
 
         assert_eq!(app.active_workspace, TuiWorkspace::Ops);
-        assert_eq!(app.dev_focus, DevPanel::Repl);
+        assert_eq!(app.dev_focus, DevView::Repl);
         assert_eq!(app.mode, TuiMode::AgentFilter);
         assert_eq!(app.agents.query, "2");
     }
@@ -11424,6 +12815,44 @@ mod tests {
     }
 
     #[test]
+    fn visual_preferences_round_trip_without_operational_state() {
+        let directory = TempDir::new().unwrap();
+        let path = directory.path().join("tui/preferences.json");
+        let mut app = test_app();
+        app.layout.dev_placement = layout::PanePlacement::Bottom;
+        app.layout.dev_primary_ratio = 63;
+        app.layout.dev_secondary_ratio = 41;
+        app.layout.ops_details_placement = layout::PanePlacement::Bottom;
+        app.layout.ops_details_ratio = 57;
+        app.agents
+            .table
+            .set_column_visible(&AGENT_COLUMNS, "pending", true);
+        let expected = TuiPreferences::from_state(&app.layout, &app.agents.table);
+
+        write_tui_preferences(&path, &expected).unwrap();
+        let (loaded, error) = load_tui_preferences(&path);
+
+        assert_eq!(loaded, Some(expected));
+        assert!(error.is_none());
+    }
+
+    #[test]
+    fn unsupported_preferences_version_is_not_applied() {
+        let directory = TempDir::new().unwrap();
+        let path = directory.path().join("preferences.json");
+        fs::write(
+            &path,
+            br#"{"version":999,"devPlacement":"right","devPrimaryRatio":50,"devSecondaryRatio":50,"opsDetailsPlacement":"right","opsDetailsRatio":50,"agentColumns":[]}"#,
+        )
+        .unwrap();
+
+        let (loaded, error) = load_tui_preferences(&path);
+
+        assert!(loaded.is_none());
+        assert!(error.is_some_and(|error| error.contains("unsupported")));
+    }
+
+    #[test]
     fn action_registry_has_unique_ids() {
         let mut ids = HashSet::new();
 
@@ -11434,6 +12863,38 @@ mod tests {
                 action.id
             );
         }
+    }
+
+    #[test]
+    fn action_metadata_captures_path_risk_review_and_target() {
+        let clean = *action(TuiActionId::Clean);
+        assert_eq!(clean.leader_path(), Some("ctrl+x a"));
+        assert_eq!(clean.risk(), TuiActionRisk::Destructive);
+        assert_eq!(clean.review(), TuiActionReview::ReviewForm);
+        assert_eq!(clean.target(), TuiActionTarget::ApplicationEnvironment);
+
+        let refresh = *action(TuiActionId::RefreshAgents);
+        assert_eq!(refresh.risk(), TuiActionRisk::ReadOnly);
+        assert_eq!(refresh.review(), TuiActionReview::None);
+        assert_eq!(refresh.target(), TuiActionTarget::LoadedAgents);
+    }
+
+    #[test]
+    fn remote_dev_mutations_are_discoverable_but_unavailable() {
+        let mut app = test_app();
+        app.context.uses_local_server = false;
+
+        assert_eq!(
+            app.action_availability(action(TuiActionId::Build)),
+            TuiActionAvailability::Unavailable(
+                "remote Dev mutations are not enabled in this slice"
+            )
+        );
+        assert!(
+            filtered_actions("build", PaletteScope::All, &app)
+                .iter()
+                .any(|action| action.id == TuiActionId::Build)
+        );
     }
 
     #[test]
@@ -11463,17 +12924,18 @@ mod tests {
 
     #[test]
     fn refresh_agents_action_metadata_is_direct() {
+        let app = test_app();
         assert_eq!(
             action(TuiActionId::RefreshAgents).execution_kind,
             TuiActionExecutionKind::Direct
         );
         assert!(
-            filtered_actions("nested-cli")
+            filtered_actions("nested-cli", PaletteScope::All, &app)
                 .iter()
                 .all(|action| action.id != TuiActionId::RefreshAgents)
         );
         assert!(
-            filtered_actions("direct")
+            filtered_actions("direct", PaletteScope::All, &app)
                 .iter()
                 .any(|action| action.id == TuiActionId::RefreshAgents)
         );
@@ -11481,18 +12943,19 @@ mod tests {
 
     #[test]
     fn palette_uses_visible_actions_and_category_search() {
+        let app = test_app();
         assert!(
-            filtered_actions("")
+            filtered_actions("", PaletteScope::All, &app)
                 .iter()
                 .all(|action| action.palette_visible)
         );
         assert!(
-            filtered_actions("")
+            filtered_actions("", PaletteScope::All, &app)
                 .iter()
                 .all(|action| action.id != TuiActionId::OpenPalette)
         );
 
-        let ops_actions = filtered_actions("ops");
+        let ops_actions = filtered_actions("ops", PaletteScope::All, &app);
         assert!(
             ops_actions
                 .iter()
@@ -11502,22 +12965,14 @@ mod tests {
     }
 
     #[test]
-    fn footer_uses_registered_shortcuts() {
+    fn footer_exposes_only_the_shared_shell_shortcuts() {
         let app = test_app();
-        let footer = footer_line(&app)
-            .spans
-            .iter()
-            .fold(String::new(), |mut text, span| {
-                text.push_str(&span.content);
-                text
-            });
+        let footer = render_app_text_at(&app, 120, 30);
 
-        assert!(footer.contains(action_shortcut(TuiActionId::Build)));
-        assert!(footer.contains(action(TuiActionId::Build).label));
-        assert!(footer.contains(action_shortcut(TuiActionId::Deploy)));
-        assert!(footer.contains(action_shortcut(TuiActionId::Clean)));
-        assert!(footer.contains(action_shortcut(TuiActionId::StartOrFocusRepl)));
-        assert!(footer.contains(action_shortcut(TuiActionId::ShowHelp)));
+        assert!(footer.contains("ctrl+x Menu"), "{footer}");
+        assert!(footer.contains("ctrl+p All actions"), "{footer}");
+        assert!(footer.contains("ctrl+h Help"), "{footer}");
+        assert!(!footer.contains("ctrl+x b"), "{footer}");
     }
 
     #[test]
@@ -11541,10 +12996,12 @@ mod tests {
 
         app.handle_key(modified_key(KeyCode::Char('x'), KeyModifiers::CONTROL));
         driver.assert_visible(&app, "Context");
-        driver.assert_visible(&app, "Auto refresh");
-        driver.assert_visible(&app, "Agent mode");
-        driver.assert_visible(&app, "Columns");
-        driver.assert_visible(&app, "Commands");
+        driver.assert_visible(&app, "Actions");
+
+        app.handle_key(key(KeyCode::Char('a')));
+        driver.assert_visible(&app, "Toggle Agent Auto Refresh");
+        driver.assert_visible(&app, "Cycle Agent Mode");
+        driver.assert_visible(&app, "Configure Agent Columns");
     }
 
     #[test]
@@ -11975,7 +13432,7 @@ mod tests {
 
         assert_eq!(
             app.action_availability(action(TuiActionId::ToggleServer)),
-            TuiActionAvailability::Available
+            TuiActionAvailability::Unavailable("requires an available local server target")
         );
 
         app.handle_key(key(KeyCode::Char('s')));
@@ -12039,7 +13496,7 @@ mod tests {
 
         assert_eq!(
             app.action_availability(action(TuiActionId::Build)),
-            TuiActionAvailability::Unavailable("selected context is ops-only")
+            TuiActionAvailability::Unavailable("requires a manifest-backed application")
         );
 
         app.handle_key(key(KeyCode::Char('b')));
@@ -12287,8 +13744,7 @@ mod tests {
         let mut app = test_app();
         app.agents.agents = sample_agents();
 
-        app.handle_key(modified_key(KeyCode::Char('x'), KeyModifiers::CONTROL));
-        app.handle_key(key(KeyCode::Char('c')));
+        app.execute_action(TuiActionKind::OpenAgentColumns, None);
         let frame = render_app_text_at(&app, 100, 30);
 
         assert_eq!(app.mode, TuiMode::AgentColumns);
@@ -12363,6 +13819,7 @@ mod tests {
 
         let old_ratio = app.layout.ops_details_ratio;
         app.handle_key(modified_key(KeyCode::Char('x'), KeyModifiers::CONTROL));
+        app.handle_key(key(KeyCode::Char('l')));
         app.handle_key(key(KeyCode::Right));
         assert!(app.layout.ops_details_ratio > old_ratio);
     }
@@ -12378,7 +13835,9 @@ mod tests {
 
         let old_ratio = app.layout.ops_details_ratio;
         app.handle_key(modified_key(KeyCode::Char('x'), KeyModifiers::CONTROL));
+        app.handle_key(key(KeyCode::Char('l')));
         app.handle_key(key(KeyCode::Right));
+        app.handle_key(key(KeyCode::Enter));
         assert_eq!(app.mode, TuiMode::AgentFilter);
         assert!(app.layout.ops_details_ratio > old_ratio);
 
@@ -12389,7 +13848,7 @@ mod tests {
 
         let frame = render_app_text_at(&app, 120, 30);
         assert!(frame.contains("tab / shift+tab Focus pane"), "{frame}");
-        assert!(frame.contains("ctrl+x ←/→ Resize"), "{frame}");
+        assert!(frame.contains("ctrl+x l Layout"), "{frame}");
 
         app.handle_key(key(KeyCode::BackTab));
         assert_eq!(app.agents.focus, AgentOverviewFocus::List);
@@ -12415,11 +13874,11 @@ mod tests {
         assert_eq!(app.mode, TuiMode::AgentFilter);
 
         app.handle_key(modified_key(KeyCode::Char('x'), KeyModifiers::CONTROL));
-        app.handle_key(key(KeyCode::Char('f')));
+        app.handle_key(key(KeyCode::Char('a')));
 
-        assert_eq!(app.mode, TuiMode::AgentFilter);
+        assert_eq!(app.mode, TuiMode::Palette);
+        assert_eq!(app.palette.scope, PaletteScope::Context);
         assert_eq!(app.agents.query, "c");
-        assert_eq!(app.agents.query_scope, AgentQueryScope::Component);
     }
 
     #[test]
@@ -12538,7 +13997,7 @@ mod tests {
     }
 
     #[test]
-    fn ops_shell_is_the_only_production_workspace() {
+    fn production_shell_exposes_dev_and_ops_workspaces() {
         let mut app = test_app();
         app.agents.agents = sample_agents();
 
@@ -12546,54 +14005,37 @@ mod tests {
 
         assert!(frame.contains("[ Ops ]"), "{frame}");
         assert!(frame.contains("Agents · Overview"), "{frame}");
-        assert!(frame.contains("app sample-app"), "{frame}");
-        assert!(frame.contains("env local"), "{frame}");
-        assert!(frame.contains("server local"), "{frame}");
-        assert!(!frame.contains("[ 2 Dev ]"), "{frame}");
-        assert!(!frame.contains("[ 3 Home ]"), "{frame}");
+        assert!(frame.contains("sample-app/local/local"), "{frame}");
+        assert!(frame.contains("( Dev )"), "{frame}");
+        assert!(!frame.contains("Home"), "{frame}");
     }
 
     #[test]
-    fn leader_shortcut_switches_to_clearly_labelled_fake_otlp_explorer() {
+    fn production_metrics_view_is_truthfully_unavailable() {
         let mut app = test_app();
 
         app.handle_key(modified_key(KeyCode::Char('x'), KeyModifiers::CONTROL));
         app.handle_key(key(KeyCode::Char('v')));
+        app.handle_key(key(KeyCode::Char('m')));
         let frame = render_app_text_at(&app, 120, 28);
 
         assert_eq!(app.ops_view, OpsView::Metrics);
-        assert!(frame.contains("Agents · Metrics · FAKE OTLP"), "{frame}");
-        assert!(frame.contains("FAKE DATA"), "{frame}");
-        assert!(frame.contains("No OTLP receiver or query store"), "{frame}");
-        assert!(frame.contains("golem.agent.invocations"), "{frame}");
-
-        app.handle_key(key(KeyCode::Down));
-
-        assert_eq!(app.fake_otlp.selected, 1);
-        let frame = render_app_text_at(&app, 120, 28);
-        assert!(frame.contains("golem.agent.invocation.duration"), "{frame}");
-        assert!(frame.contains("42 ms p95"), "{frame}");
-
-        app.handle_key(modified_key(KeyCode::Char('h'), KeyModifiers::CONTROL));
-        render_app_text_at(&app, 120, 28);
-        app.handle_key(key(KeyCode::PageDown));
-        let frame = render_app_text_at(&app, 120, 28);
-        assert!(frame.contains("Fake OTLP Metrics Demo"), "{frame}");
-        assert!(frame.contains("Select or scroll focused pane"), "{frame}");
+        assert!(frame.contains("Agents · Metrics"), "{frame}");
+        assert!(frame.contains("No production Metrics provider"), "{frame}");
+        assert!(!frame.contains("golem.agent.invocations"), "{frame}");
     }
 
     #[test]
-    fn tab_focuses_and_scrolls_fake_otlp_details_without_switching_views() {
+    fn unavailable_metrics_view_does_not_invent_focusable_series() {
         let mut app = test_app();
         app.ops_view = OpsView::Metrics;
         render_app_text_at(&app, 120, 16);
 
-        app.handle_key(key(KeyCode::Tab));
-        app.handle_key(key(KeyCode::PageDown));
+        app.handle_key(key(KeyCode::Down));
 
         assert_eq!(app.ops_view, OpsView::Metrics);
-        assert_eq!(app.fake_otlp.focus, FakeOtlpFocus::Details);
-        assert!(app.fake_otlp.details_scroll > 0);
+        let frame = render_app_text_at(&app, 120, 16);
+        assert!(!frame.contains("golem.agent.invocations"), "{frame}");
     }
 
     #[test]
@@ -12625,16 +14067,14 @@ mod tests {
     fn column_chooser_applies_only_on_confirmation() {
         let mut app = test_app();
 
-        app.handle_key(modified_key(KeyCode::Char('x'), KeyModifiers::CONTROL));
-        app.handle_key(key(KeyCode::Char('c')));
+        app.execute_action(TuiActionKind::OpenAgentColumns, None);
         app.handle_key(key(KeyCode::Down));
         app.handle_key(key(KeyCode::Down));
         app.handle_key(key(KeyCode::Char(' ')));
         app.handle_key(key(KeyCode::Esc));
         assert!(app.agents.table.column_visible("type"));
 
-        app.handle_key(modified_key(KeyCode::Char('x'), KeyModifiers::CONTROL));
-        app.handle_key(key(KeyCode::Char('c')));
+        app.execute_action(TuiActionKind::OpenAgentColumns, None);
         app.handle_key(key(KeyCode::Down));
         app.handle_key(key(KeyCode::Down));
         app.handle_key(key(KeyCode::Char(' ')));
@@ -12676,8 +14116,7 @@ mod tests {
         app.agents.query = "cart".to_string();
         app.agents.selected = 3;
 
-        app.handle_key(modified_key(KeyCode::Char('x'), KeyModifiers::CONTROL));
-        app.handle_key(key(KeyCode::Char('m')));
+        app.execute_action(TuiActionKind::CycleAgentMode, None);
 
         assert_eq!(app.agents.mode, AgentModeFilter::Ephemeral);
         assert_eq!(app.agents.query, "cart");
@@ -12707,21 +14146,24 @@ mod tests {
         assert!(frame.contains("Details"), "{frame}");
 
         app.handle_key(modified_key(KeyCode::Char('x'), KeyModifiers::CONTROL));
+        app.handle_key(key(KeyCode::Char('l')));
         app.handle_key(key(KeyCode::Char('d')));
+        app.handle_key(key(KeyCode::Enter));
         let frame = render_app_text(&app);
         assert!(!frame.contains("( Details )"), "{frame}");
     }
 
     #[test]
-    fn enter_toggles_agent_details() {
+    fn enter_opens_agent_subject_and_escape_unwinds() {
         let mut app = test_app();
+        app.active_workspace = TuiWorkspace::Ops;
         app.agents.agents = sample_agents();
 
-        assert!(app.agents.detail_visible);
         app.handle_key(key(KeyCode::Enter));
-        assert!(!app.agents.detail_visible);
-        app.handle_key(key(KeyCode::Enter));
-        assert!(app.agents.detail_visible);
+        assert!(matches!(app.ops_subject, OpsSubject::Agent(_)));
+
+        app.handle_key(key(KeyCode::Esc));
+        assert_eq!(app.ops_subject, OpsSubject::Root(OpsRootSubject::Agents));
     }
 
     #[test]
@@ -12731,88 +14173,10 @@ mod tests {
         app.agents.agents = sample_agents();
         app.agents.focus = AgentOverviewFocus::Details;
 
-        render_app_text_at(&app, layout::OPS_DETAILS_BREAKPOINT.saturating_sub(1), 24);
+        render_app_text_at(&app, 60, 24);
 
         assert!(!app.agent_details_open());
         assert!(app.agent_list_focused());
-    }
-
-    #[test]
-    fn inspect_left_right_switches_focus() {
-        let mut app = inspect_app();
-
-        app.handle_agent_inspect_key(key(KeyCode::Right));
-        assert_eq!(app.agents.inspect.focus, AgentInspectPane::Stream);
-
-        app.handle_agent_inspect_key(key(KeyCode::Left));
-        assert_eq!(app.agents.inspect.focus, AgentInspectPane::Oplog);
-    }
-
-    #[test]
-    fn inspect_scrolls_focused_pane() {
-        let mut app = inspect_app();
-        for index in 0..20 {
-            app.agents
-                .inspect
-                .oplog
-                .output
-                .append(format!("oplog {index}\n").as_bytes());
-            app.agents
-                .inspect
-                .stream
-                .output
-                .append(format!("stream {index}\n").as_bytes());
-        }
-
-        app.handle_agent_inspect_key(key(KeyCode::PageUp));
-        assert_eq!(app.agents.inspect.oplog.output.scroll_offset, 10);
-        assert_eq!(app.agents.inspect.stream.output.scroll_offset, 0);
-
-        app.handle_agent_inspect_key(key(KeyCode::Right));
-        app.handle_agent_inspect_key(key(KeyCode::PageUp));
-        assert_eq!(app.agents.inspect.stream.output.scroll_offset, 10);
-    }
-
-    #[test]
-    fn esc_returns_from_inspect_to_agent_list() {
-        let mut app = inspect_app();
-
-        app.handle_agent_inspect_key(key(KeyCode::Esc));
-
-        assert_eq!(app.agents.view_mode, AgentsViewMode::List);
-    }
-
-    #[test]
-    fn inactive_inspect_state_does_not_replace_ops_overview() {
-        let mut app = inspect_app();
-        app.agents.inspect.oplog.output.append(b"oplog entry\n");
-        app.agents.inspect.stream.output.append(b"stream entry\n");
-
-        let frame = render_app_text(&app);
-
-        assert!(frame.contains("Agents · Overview"), "{frame}");
-        assert!(!frame.contains("oplog entry"), "{frame}");
-        assert!(!frame.contains("stream entry"), "{frame}");
-    }
-
-    #[test]
-    fn inspect_events_route_to_separate_buffers() {
-        let mut app = inspect_app();
-        let (tx, _rx) = test_event_channel();
-
-        app.handle_event(TuiEvent::AgentOplogOutput(b"oplog event\n".to_vec()), &tx);
-        app.handle_event(TuiEvent::AgentStreamOutput(b"stream event\n".to_vec()), &tx);
-
-        let oplog =
-            String::from_utf8_lossy(&app.agents.inspect.oplog.output.visible_lines(10).concat())
-                .to_string();
-        let stream =
-            String::from_utf8_lossy(&app.agents.inspect.stream.output.visible_lines(10).concat())
-                .to_string();
-        assert!(oplog.contains("oplog event"));
-        assert!(!oplog.contains("stream event"));
-        assert!(stream.contains("stream event"));
-        assert!(!stream.contains("oplog event"));
     }
 
     #[test]
@@ -12926,6 +14290,66 @@ mod tests {
     }
 
     #[test]
+    fn stale_ops_environment_refresh_is_ignored() {
+        let mut app = test_app();
+        app.ops_environment.generation = 2;
+        app.ops_environment.context_id = Some(TuiContextId::new(7));
+        app.ops_environment.loading = true;
+        app.ops_environment.snapshot = Some(sample_ops_environment_snapshot("current"));
+
+        app.finish_ops_environment_refresh(
+            1,
+            TuiContextTaskResult::new(
+                TuiContextId::new(7),
+                Ok(sample_ops_environment_snapshot("stale")),
+                Vec::new(),
+            ),
+        );
+
+        assert!(app.ops_environment.loading);
+        assert_eq!(
+            app.ops_environment
+                .snapshot
+                .as_ref()
+                .expect("retained snapshot")
+                .environment_revision,
+            "current"
+        );
+    }
+
+    #[test]
+    fn failed_ops_environment_refresh_keeps_last_successful_snapshot() {
+        let mut app = test_app();
+        app.ops_environment.generation = 3;
+        app.ops_environment.context_id = Some(TuiContextId::new(7));
+        app.ops_environment.loading = true;
+        app.ops_environment.snapshot = Some(sample_ops_environment_snapshot("current"));
+
+        app.finish_ops_environment_refresh(
+            3,
+            TuiContextTaskResult::new(
+                TuiContextId::new(7),
+                Err("\u{1b}[31mserver unavailable\u{1b}[0m".to_string()),
+                vec!["\u{1b}[33mcaptured detail\u{1b}[0m".to_string()],
+            ),
+        );
+
+        assert!(!app.ops_environment.loading);
+        assert_eq!(
+            app.ops_environment
+                .snapshot
+                .as_ref()
+                .expect("retained snapshot")
+                .environment_revision,
+            "current"
+        );
+        let error = app.ops_environment.error.as_deref().expect("refresh error");
+        assert!(error.contains("server unavailable"), "{error}");
+        assert!(error.contains("captured detail"), "{error}");
+        assert!(!error.contains('\u{1b}'), "{error:?}");
+    }
+
+    #[test]
     fn agent_refresh_error_sets_error_state_with_logs() {
         let mut app = test_app();
         let (tx, _rx) = test_event_channel();
@@ -12968,18 +14392,45 @@ mod tests {
     }
 
     #[test]
-    fn executes_palette_action() {
+    fn palette_scope_switch_preserves_query() {
+        let mut app = test_app();
+        app.open_palette(PaletteScope::All);
+        for character in "agent".chars() {
+            app.handle_palette_key(key(KeyCode::Char(character)), None);
+        }
+
+        app.handle_palette_key(
+            modified_key(KeyCode::Char('x'), KeyModifiers::CONTROL),
+            None,
+        );
+        app.handle_leader_key(key(KeyCode::Char('a')), None);
+
+        assert_eq!(app.mode, TuiMode::Palette);
+        assert_eq!(app.palette.scope, PaletteScope::Context);
+        assert_eq!(app.palette.query, "agent");
+
+        app.handle_palette_key(
+            modified_key(KeyCode::Char('p'), KeyModifiers::CONTROL),
+            None,
+        );
+        assert_eq!(app.palette.scope, PaletteScope::All);
+        assert_eq!(app.palette.query, "agent");
+    }
+
+    #[test]
+    fn executes_palette_view_action() {
         let mut app = test_app();
 
         app.handle_key(modified_key(KeyCode::Char('p'), KeyModifiers::CONTROL));
-        for character in "switch overview metrics".chars() {
+        for character in "cycle ops view".chars() {
             app.handle_key(key(KeyCode::Char(character)));
         }
         app.handle_key(key(KeyCode::Enter));
 
         let frame = render_app_text(&app);
-        assert_eq!(app.ops_view, OpsView::Metrics);
-        assert!(frame.contains("FAKE OTLP"), "{frame}");
+        assert_eq!(app.ops_view, OpsView::Activity);
+        assert!(frame.contains("Agents · Activity"), "{frame}");
+        assert!(frame.contains("not implemented yet"), "{frame}");
         assert!(!frame.contains("[ Commands ]"), "{frame}");
     }
 
@@ -13013,7 +14464,7 @@ mod tests {
     }
 
     #[test]
-    fn global_help_contains_only_ops_first_actions() {
+    fn global_help_explains_the_shell_and_current_ops_actions() {
         let mut app = test_app();
         let mut driver = TuiTestDriver::new(120, 48);
 
@@ -13023,10 +14474,10 @@ mod tests {
         );
 
         driver.assert_visible(&app, action(TuiActionId::RefreshAgents).label);
-        driver.assert_visible(&app, "Switch Overview / Metrics");
+        driver.assert_visible(&app, "Workspaces");
         driver.assert_visible(&app, action(TuiActionId::ShowHelp).label);
         driver.key(&mut app, key(KeyCode::End));
-        driver.assert_visible(&app, "Choose visible columns");
+        driver.assert_visible(&app, "Columns and collection actions");
     }
 
     #[test]
@@ -13041,6 +14492,7 @@ mod tests {
 
         assert_eq!(app.mode, TuiMode::Help);
         driver.assert_visible(&app, "Agents Overview");
+        driver.key(&mut app, key(KeyCode::End));
         driver.assert_visible(&app, "left / right");
         driver.assert_visible(&app, "Include or exclude focused agent");
     }
@@ -13176,7 +14628,7 @@ mod tests {
     }
 
     #[test]
-    fn clean_palette_action_is_not_exposed() {
+    fn clean_palette_action_opens_a_review_form() {
         let mut app = test_app();
 
         app.handle_key(modified_key(KeyCode::Char('p'), KeyModifiers::CONTROL));
@@ -13186,7 +14638,14 @@ mod tests {
         app.handle_key(key(KeyCode::Enter));
 
         assert!(app.command_run.is_none());
-        assert_eq!(app.mode, TuiMode::Normal);
+        assert_eq!(app.mode, TuiMode::CommandForm);
+        assert!(matches!(
+            app.command_form,
+            Some(CommandReviewForm {
+                kind: CommandKind::Clean,
+                ..
+            })
+        ));
     }
 
     #[test]
@@ -13264,36 +14723,33 @@ mod tests {
     }
 
     #[test]
-    fn output_buffer_autofollows_and_scrolls() {
-        let mut output = OutputBuffer::default();
+    fn nested_terminal_autofollows_and_scrolls() {
+        let mut output = TerminalScreen::new(3, 40);
 
         for index in 0..20 {
-            output.append(format!("line {index}\n").as_bytes());
+            output.feed(format!("line {index}\r\n").as_bytes());
         }
-        assert!(output.follow);
-        assert_eq!(output.scroll_offset, 0);
-        assert!(String::from_utf8_lossy(&output.visible_lines(3).concat()).contains("line 19"));
+        assert_eq!(output.scrollback(), 0);
+        assert!(output.plain_text().contains("line 19"));
 
         output.scroll_up(5);
-        assert!(!output.follow);
-        assert_eq!(output.scroll_offset, 5);
+        assert_eq!(output.scrollback(), 5);
 
         output.scroll_bottom();
-        assert!(output.follow);
-        assert_eq!(output.scroll_offset, 0);
+        assert_eq!(output.scrollback(), 0);
     }
 
     #[test]
-    fn output_buffer_top_scroll_fills_viewport() {
-        let mut output = OutputBuffer::default();
+    fn nested_terminal_top_scroll_fills_viewport() {
+        let mut output = TerminalScreen::new(5, 40);
 
         for index in 0..20 {
-            output.append(format!("line {index}\n").as_bytes());
+            output.feed(format!("line {index}\r\n").as_bytes());
         }
         output.scroll_top();
 
-        let lines = output.visible_lines(5);
-        let text = String::from_utf8_lossy(&lines.concat()).to_string();
+        let lines = output.lines();
+        let text = lines.iter().map(ToString::to_string).collect::<String>();
         assert_eq!(lines.len(), 5);
         assert!(text.contains("line 0"), "{text}");
         assert!(text.contains("line 4"), "{text}");
@@ -13309,7 +14765,7 @@ mod tests {
     fn output_scroll_helpers_remain_available_for_future_dev_views() {
         let mut app = test_app();
         app.active_workspace = TuiWorkspace::Dev;
-        app.dev_focus = DevPanel::Output;
+        app.dev_focus = DevView::BuildDeploy;
         app.command_run = Some(CommandRun::new(
             1,
             CommandKind::Build,
@@ -13318,27 +14774,60 @@ mod tests {
             "sample-app:local".to_string(),
         ));
         app.set_command_status(CommandStatus::Succeeded);
-        for index in 0..20 {
-            app.append_command_output(format!("line {index}\n").as_bytes());
+        for index in 0..40 {
+            app.append_command_output(format!("line {index}\r\n").as_bytes());
         }
 
         app.scroll_output_up();
         assert_eq!(
-            app.command_run.as_ref().map(|run| run.output.scroll_offset),
+            app.command_run
+                .as_ref()
+                .map(|run| run.terminal.scrollback()),
             Some(10)
         );
 
         app.scroll_output_up_by(3);
         assert_eq!(
-            app.command_run.as_ref().map(|run| run.output.scroll_offset),
+            app.command_run
+                .as_ref()
+                .map(|run| run.terminal.scrollback()),
             Some(13)
         );
 
         app.scroll_output_down_by(3);
         assert_eq!(
-            app.command_run.as_ref().map(|run| run.output.scroll_offset),
+            app.command_run
+                .as_ref()
+                .map(|run| run.terminal.scrollback()),
             Some(10)
         );
+    }
+
+    #[test]
+    fn command_page_up_enters_explicit_scrollback_and_escape_returns_live() {
+        let mut app = test_app();
+        app.active_workspace = TuiWorkspace::Dev;
+        app.dev_primary = DevView::BuildDeploy;
+        app.dev_focus = DevView::BuildDeploy;
+        app.command_run = Some(CommandRun::new(
+            1,
+            CommandKind::Build,
+            vec!["build".to_string()],
+            CommandOptions::default(),
+            "sample-app:local".to_string(),
+        ));
+        for index in 0..30 {
+            app.append_command_output(format!("line {index}\r\n").as_bytes());
+        }
+        app.mode = TuiMode::CommandInteraction;
+
+        app.handle_command_interaction_key(key(KeyCode::PageUp));
+        assert_eq!(app.mode, TuiMode::TerminalScrollback);
+        assert!(app.command_run.as_ref().unwrap().terminal.scrollback() > 0);
+
+        app.handle_key(key(KeyCode::Esc));
+        assert_eq!(app.mode, TuiMode::CommandInteraction);
+        assert_eq!(app.command_run.as_ref().unwrap().terminal.scrollback(), 0);
     }
 
     #[test]
@@ -13347,6 +14836,8 @@ mod tests {
 
         app.start_command(CommandKind::Build, None);
         app.handle_command_interaction_key(key(KeyCode::Esc));
+        app.command_run.as_mut().unwrap().stop_requested_at =
+            Some(Instant::now() - FORCE_STOP_DELAY);
         assert_eq!(
             app.command_run.as_ref().map(|run| run.status),
             Some(CommandStatus::Cancelling)
@@ -13405,52 +14896,276 @@ mod tests {
     }
 
     #[test]
-    fn production_shell_does_not_render_legacy_server_panel() {
+    fn dev_server_is_a_normal_view_not_a_global_drawer() {
         let mut app = test_app();
 
-        app.open_dev_workspace(DevPanel::Server);
+        app.open_dev_workspace(DevView::Server);
         let frame = render_app_text(&app);
 
         assert_eq!(app.active_workspace, TuiWorkspace::Dev);
-        assert!(frame.contains("[ Ops ]"), "{frame}");
-        assert!(!frame.contains("clean:off"), "{frame}");
+        assert!(frame.contains("( Ops )"), "{frame}");
+        assert!(frame.contains("Server"), "{frame}");
+        assert_eq!(frame.matches("server  stopped").count(), 1, "{frame}");
     }
 
     #[test]
-    fn server_clean_toggle_affects_next_start() {
-        let mut app = test_app();
-        app.server.clean = true;
-        app.start_server(ServerStartMode::Current, None);
+    fn server_form_clean_is_applied_to_the_reviewed_command() {
+        let app = test_app();
+        let mut values = ServerFormValues::new(&app.context.config_dir);
+        values.clean = true;
+        let args = server_args_from_values(&values);
 
-        assert!(app.server.clean);
-        assert!(app.server.run.clean);
-        assert_eq!(app.server.run.args, vec!["server", "run", "--clean"]);
+        assert_eq!(
+            args,
+            vec![
+                "server",
+                "run",
+                "--ports-file",
+                "/tmp/golem-config/tui-server-ports.json",
+                "--clean"
+            ]
+        );
     }
 
     #[test]
-    fn server_start_stop_and_restart_state() {
+    fn reviewed_dev_commands_build_exact_nested_cli_arguments() {
+        let app = test_app();
+        let build = CommandFormValues {
+            build_steps: [true, false, true, false],
+            skip_check: true,
+            force_build: true,
+            yes: true,
+            ..CommandFormValues::default()
+        };
+        assert_eq!(
+            app.command_args(CommandKind::Build, &build),
+            vec![
+                "build",
+                "--step",
+                "check",
+                "--step",
+                "add-metadata",
+                "--force-build",
+                "--yes",
+            ]
+        );
+
+        let plan = CommandFormValues {
+            force_build: true,
+            full_diff: true,
+            rollback_version: " 7 ".to_string(),
+            rollback_revision: "ignored".to_string(),
+            post_deploy: PostDeployPolicy::Reset,
+            yes: true,
+            ..CommandFormValues::default()
+        };
+        assert_eq!(
+            app.command_args(CommandKind::Plan, &plan),
+            vec![
+                "deploy",
+                "--plan",
+                "--force-build",
+                "--full-diff",
+                "--version",
+                "7",
+                "--reset",
+                "--yes",
+            ]
+        );
+
+        let deploy = CommandFormValues {
+            rollback_revision: " 11 ".to_string(),
+            post_deploy: PostDeployPolicy::UpdateManual,
+            ..CommandFormValues::default()
+        };
+        assert_eq!(
+            app.command_args(CommandKind::Deploy, &deploy),
+            vec!["deploy", "--revision", "11", "--update-agents", "manual",]
+        );
+        assert_eq!(
+            app.command_args(
+                CommandKind::Clean,
+                &CommandFormValues {
+                    yes: true,
+                    ..CommandFormValues::default()
+                }
+            ),
+            vec!["clean", "--yes"]
+        );
+    }
+
+    #[test]
+    fn reviewed_server_and_repl_build_exact_nested_cli_arguments() {
+        let server = ServerFormValues {
+            system_memory_override: " 2GiB ".to_string(),
+            router_address: " 127.0.0.2 ".to_string(),
+            router_port: "9010".to_string(),
+            custom_request_port: "9011".to_string(),
+            mcp_port: "9012".to_string(),
+            ports_file: " ./ports.json ".to_string(),
+            data_dir: " ./data ".to_string(),
+            agent_filesystem_root: " ./agents ".to_string(),
+            clean: true,
+            yes: true,
+        };
+        assert_eq!(
+            server_args_from_values(&server),
+            vec![
+                "server",
+                "run",
+                "--system-memory-override",
+                "2GiB",
+                "--router-addr",
+                "127.0.0.2",
+                "--router-port",
+                "9010",
+                "--custom-request-port",
+                "9011",
+                "--mcp-port",
+                "9012",
+                "--ports-file",
+                "./ports.json",
+                "--data-dir",
+                "./data",
+                "--agent-filesystem-root",
+                "./agents",
+                "--clean",
+                "--yes",
+            ]
+        );
+
+        let repl = ReplFormValues {
+            language: " javascript ".to_string(),
+            stream_logs: false,
+            auto_imports: false,
+            post_deploy: PostDeployPolicy::Redeploy,
+            yes: true,
+        };
+        assert_eq!(
+            repl_args_from_values(&repl),
+            vec![
+                "repl",
+                "--language",
+                "javascript",
+                "--disable-stream",
+                "--disable-auto-imports",
+                "--redeploy-agents",
+                "--yes",
+            ]
+        );
+    }
+
+    #[test]
+    fn reviewed_form_memory_is_context_scoped_and_yes_is_one_shot() {
         let mut app = test_app();
-        app.toggle_server(None);
-        assert_eq!(app.server.run.status, ServerStatus::Starting);
-        assert_eq!(app.server.run.args, vec!["server", "run"]);
+        app.command_form = Some(CommandReviewForm::new(
+            CommandKind::Deploy,
+            CommandFormValues {
+                full_diff: true,
+                post_deploy: PostDeployPolicy::Reset,
+                yes: true,
+                ..CommandFormValues::default()
+            },
+        ));
+        if let Some(form) = app.command_form.as_mut() {
+            form.values.yes = true;
+        }
+        app.launch_command_form(None);
+        app.open_command_form(CommandKind::Deploy);
+        let remembered = &app.command_form.as_ref().expect("command form").values;
+        assert!(remembered.full_diff);
+        assert_eq!(remembered.post_deploy, PostDeployPolicy::Reset);
+        assert!(!remembered.yes);
 
-        app.toggle_server(None);
-        assert_eq!(app.server.run.status, ServerStatus::Stopping);
+        app.context.environment = "other".to_string();
+        app.open_command_form(CommandKind::Deploy);
+        let other_context = &app
+            .command_form
+            .as_ref()
+            .expect("other context form")
+            .values;
+        assert!(!other_context.full_diff);
+        assert_eq!(other_context.post_deploy, PostDeployPolicy::None);
+        assert!(!other_context.yes);
+    }
+
+    #[test]
+    fn reviewed_session_forms_remember_values_but_not_yes() {
+        let mut server_app = test_app();
+        let mut server_values = ServerFormValues::new(&server_app.context.config_dir);
+        server_values.data_dir = "./data".to_string();
+        server_values.clean = true;
+        server_values.yes = true;
+        server_app.session_form = Some(SessionReviewForm::Server {
+            values: server_values,
+            selected: 10,
+            editing: false,
+            restart: false,
+            error: None,
+        });
+        server_app.launch_session_form(None);
+        server_app.open_server_form(false, false);
+        let SessionReviewForm::Server { values, .. } = server_app
+            .session_form
+            .as_ref()
+            .expect("remembered server form")
+        else {
+            panic!("expected server form");
+        };
+        assert_eq!(values.data_dir, "./data");
+        assert!(values.clean);
+        assert!(!values.yes);
+
+        let mut repl_app = test_app();
+        repl_app.session_form = Some(SessionReviewForm::Repl {
+            values: ReplFormValues {
+                language: "javascript".to_string(),
+                stream_logs: false,
+                auto_imports: false,
+                post_deploy: PostDeployPolicy::Reset,
+                yes: true,
+            },
+            selected: 5,
+            restart: false,
+        });
+        repl_app.launch_session_form(None);
+        repl_app.open_repl_form(false);
+        let SessionReviewForm::Repl { values, .. } = repl_app
+            .session_form
+            .as_ref()
+            .expect("remembered repl form")
+        else {
+            panic!("expected repl form");
+        };
+        assert_eq!(values.language, "javascript");
+        assert!(!values.stream_logs);
+        assert!(!values.auto_imports);
+        assert_eq!(values.post_deploy, PostDeployPolicy::Reset);
+        assert!(!values.yes);
+    }
+
+    #[test]
+    fn server_start_and_restart_always_open_review_forms() {
+        let mut app = test_app();
+        app.request_server_toggle();
+        assert_eq!(app.server.run.status, ServerStatus::Stopped);
+        assert_eq!(app.mode, TuiMode::SessionForm);
+        assert!(matches!(
+            app.session_form,
+            Some(SessionReviewForm::Server { restart: false, .. })
+        ));
 
         app.server.run.status = ServerStatus::Running;
-        app.restart_server(ServerStartMode::Current, None);
-        assert_eq!(app.server.run.status, ServerStatus::Stopping);
-        assert_eq!(
-            app.server.run.restart_after_stop,
-            Some(ServerStartMode::Current)
-        );
-
-        app.server.run.status = ServerStatus::Running;
-        app.restart_server(ServerStartMode::Clean, None);
-        assert_eq!(
-            app.server.run.restart_after_stop,
-            Some(ServerStartMode::Clean)
-        );
+        app.open_server_form(true, true);
+        assert_eq!(app.server.run.status, ServerStatus::Running);
+        assert!(matches!(
+            app.session_form,
+            Some(SessionReviewForm::Server {
+                restart: true,
+                values: ServerFormValues { clean: true, .. },
+                ..
+            })
+        ));
     }
 
     #[test]
@@ -13467,14 +15182,15 @@ mod tests {
     }
 
     #[test]
-    fn server_palette_action_switches_to_server_and_toggles() {
+    fn server_palette_action_switches_to_server_and_opens_review() {
         let mut app = test_app();
 
         app.execute_action(TuiActionKind::ToggleServer, None);
 
         assert_eq!(app.active_workspace, TuiWorkspace::Dev);
-        assert_eq!(app.dev_focus, DevPanel::Server);
-        assert_eq!(app.server.run.status, ServerStatus::Starting);
+        assert_eq!(app.dev_focus, DevView::Server);
+        assert_eq!(app.server.run.status, ServerStatus::Stopped);
+        assert_eq!(app.mode, TuiMode::SessionForm);
     }
 
     #[test]
@@ -13483,19 +15199,10 @@ mod tests {
 
         app.start_command(CommandKind::Build, None);
         app.append_command_output(b"command log\n");
-        app.server.run.output.append(b"server log\n");
+        app.server.run.terminal.feed(b"server log\n");
 
-        let command = String::from_utf8_lossy(
-            &app.command_run
-                .as_ref()
-                .unwrap()
-                .output
-                .visible_lines(10)
-                .concat(),
-        )
-        .to_string();
-        let server =
-            String::from_utf8_lossy(&app.server.run.output.visible_lines(10).concat()).to_string();
+        let command = app.command_run.as_ref().unwrap().terminal.plain_text();
+        let server = app.server.run.terminal.plain_text();
         assert!(command.contains("command log"));
         assert!(!command.contains("server log"));
         assert!(server.contains("server log"));
@@ -13505,14 +15212,14 @@ mod tests {
     #[test]
     fn server_mouse_scrolls_logs() {
         let mut app = test_app();
-        app.active_workspace = TuiWorkspace::Dev;
-        app.dev_focus = DevPanel::Server;
-        for index in 0..20 {
+        app.open_dev_workspace(DevView::Server);
+        for index in 0..40 {
             app.server
                 .run
-                .output
-                .append(format!("server line {index}\n").as_bytes());
+                .terminal
+                .feed(format!("server line {index}\r\n").as_bytes());
         }
+        render_app_text(&app);
 
         app.handle_mouse(
             MouseEvent {
@@ -13524,7 +15231,8 @@ mod tests {
             None,
         );
 
-        assert_eq!(app.server.run.output.scroll_offset, 3);
+        assert_eq!(app.server.run.terminal.scrollback(), 3);
+        assert_eq!(app.mode, TuiMode::TerminalScrollback);
     }
 
     #[test]
@@ -13536,41 +15244,26 @@ mod tests {
                 .borrow()
                 .as_ref()
                 .unwrap()
-                .region(RegionKind::DevPanelBody(DevPanel::Output))
+                .region(RegionKind::DevViewBody(DevView::BuildDeploy))
                 .is_none()
         );
     }
 
     #[test]
-    fn production_layout_omits_server_drawer_region() {
-        let mut app = test_app();
-        app.layout.server_drawer_open = true;
-        render_app_text_at(&app, 120, 32);
-        assert!(
-            app.layout_snapshot
-                .borrow()
-                .as_ref()
-                .unwrap()
-                .region(RegionKind::ServerDrawer)
-                .is_none()
-        );
-    }
-
-    #[test]
-    fn production_layout_exposes_only_ops_workspace_tab() {
+    fn production_layout_exposes_both_workspace_selectors() {
         let app = test_app();
         render_app_text_at(&app, 120, 32);
         let snapshot = app.layout_snapshot.borrow();
         let snapshot = snapshot.as_ref().unwrap();
         assert!(
             snapshot
-                .region(RegionKind::HeaderTab(TuiWorkspace::Ops))
+                .region(RegionKind::Workspace(TuiWorkspace::Ops))
                 .is_some()
         );
         assert!(
             snapshot
-                .region(RegionKind::HeaderTab(TuiWorkspace::Dev))
-                .is_none()
+                .region(RegionKind::Workspace(TuiWorkspace::Dev))
+                .is_some()
         );
     }
 
@@ -13583,7 +15276,7 @@ mod tests {
                 .borrow()
                 .as_ref()
                 .unwrap()
-                .region(RegionKind::DevPanelBody(DevPanel::Output))
+                .region(RegionKind::DevViewBody(DevView::BuildDeploy))
                 .is_none()
         );
     }
@@ -13712,17 +15405,10 @@ mod tests {
     }
 
     #[test]
-    fn production_layout_does_not_expose_inactive_inspect_panes() {
-        let app = inspect_app();
+    fn production_layout_does_not_expose_legacy_nested_inspect_panes() {
+        let app = test_app();
         render_app_text_at(&app, 120, 32);
-        assert!(
-            app.layout_snapshot
-                .borrow()
-                .as_ref()
-                .unwrap()
-                .region(RegionKind::OpsInspectPane(AgentInspectPane::Stream))
-                .is_none()
-        );
+        assert!(app.ops_agents_focused());
     }
 
     #[test]
@@ -13791,17 +15477,17 @@ mod tests {
     }
 
     #[test]
-    fn production_layout_omits_drawer_resize_split() {
+    fn production_layout_exposes_ops_details_resize_split() {
         let mut app = test_app();
-        app.layout.server_drawer_open = true;
+        app.agents.detail_visible = true;
         render_app_text_at(&app, 120, 32);
         assert!(
             app.layout_snapshot
                 .borrow()
                 .as_ref()
                 .unwrap()
-                .region(RegionKind::ServerDrawerSplit)
-                .is_none()
+                .region(RegionKind::OpsDetailsSplit)
+                .is_some()
         );
     }
 
@@ -13812,7 +15498,7 @@ mod tests {
         app.handle_key(key(KeyCode::Char('r')));
 
         assert_eq!(app.active_workspace, TuiWorkspace::Ops);
-        assert_eq!(app.dev_focus, DevPanel::Repl);
+        assert_eq!(app.dev_focus, DevView::Repl);
         assert_eq!(app.mode, TuiMode::AgentFilter);
         assert_eq!(app.agents.query, "r");
         assert_eq!(app.repl.run.status, ReplStatus::Stopped);
@@ -13850,7 +15536,7 @@ mod tests {
         let mut app = test_app();
 
         app.handle_key(modified_key(KeyCode::Char('x'), KeyModifiers::CONTROL));
-        assert_eq!(app.mode, TuiMode::LeaderNormal);
+        assert_eq!(app.mode, TuiMode::Leader);
 
         app.handle_key(key(KeyCode::Char('q')));
         assert_eq!(app.mode, TuiMode::Normal);
@@ -13866,19 +15552,31 @@ mod tests {
         TuiApp {
             should_quit: false,
             active_workspace: TuiWorkspace::Ops,
+            ops_subject: OpsSubject::Root(OpsRootSubject::Agents),
             ops_view: OpsView::Overview,
-            fake_otlp: FakeOtlpExplorerState::default(),
-            dev_focus: DevPanel::Repl,
+            dev_primary: DevView::Repl,
+            dev_focus: DevView::Repl,
             mode: TuiMode::Normal,
+            leader: LeaderState::default(),
             help_scroll: 0,
             help_content_height: Cell::new(0),
             help_viewport_height: Cell::new(0),
             palette: CommandPalette::default(),
             command_options: CommandOptions::default(),
+            command_form: None,
+            command_form_memory: HashMap::new(),
+            session_form: None,
+            server_form_memory: HashMap::new(),
+            repl_form_memory: HashMap::new(),
             command_run: None,
+            completed_jobs: VecDeque::new(),
+            selected_job: 0,
             server: LocalServerService::default(),
+            pending_server_restart: None,
             repl: ReplState::default(),
+            pending_repl_restart: None,
             agents: AgentsState::default(),
+            ops_environment: OpsEnvironmentState::default(),
             next_command_id: 1,
             context: TuiContextInfo {
                 application: "sample-app".to_string(),
@@ -13906,6 +15604,8 @@ mod tests {
             auth_prompt: None,
             layout: TuiLayoutState::default(),
             layout_snapshot: RefCell::new(None),
+            preferences_path: PathBuf::from("/tmp/golem-tui-test-preferences.json"),
+            preferences_error: None,
         }
     }
 
@@ -14053,6 +15753,23 @@ environments:
         )
     }
 
+    fn sample_ops_environment_snapshot(environment_revision: &str) -> OpsEnvironmentSnapshot {
+        OpsEnvironmentSnapshot {
+            account_id: "account-1".to_string(),
+            application_id: "application-1".to_string(),
+            application_name: "sample-app".to_string(),
+            environment_id: "environment-1".to_string(),
+            environment_name: "local".to_string(),
+            environment_revision: environment_revision.to_string(),
+            diff_model_version: 1,
+            compatibility_check: true,
+            tool_compatibility_mode: "None".to_string(),
+            version_check: true,
+            security_overrides: false,
+            deployment: None,
+        }
+    }
+
     fn sample_agents_metadata_response(
         agents: Vec<AgentMetadataView>,
     ) -> AgentsMetadataResponseView {
@@ -14164,14 +15881,6 @@ environments:
                 raw: serde_json::json!({"name":"order-1"}),
             },
         ]
-    }
-
-    fn inspect_app() -> TuiApp {
-        let mut app = test_app();
-        app.active_workspace = TuiWorkspace::Ops;
-        app.agents.agents = sample_agents();
-        app.open_agent_inspect(None);
-        app
     }
 
     struct TuiTestDriver {

@@ -26,7 +26,7 @@ mod widgets;
 
 use crate::context::Context;
 use crate::model::environment::EnvironmentReference;
-use app::AgentRefreshPayload;
+use app::{AgentRefreshPayload, OpsEnvironmentSnapshot};
 use context_executor::TuiContextTaskResult;
 use crossterm::event::Event;
 use golem_client::model::EnvironmentWithDetails;
@@ -53,12 +53,6 @@ enum TuiEvent {
     ReplOutput(Vec<u8>),
     ReplOutputClosed(Option<String>),
     ReplExited(CommandExit),
-    AgentOplogOutput(Vec<u8>),
-    AgentOplogOutputClosed(Option<String>),
-    AgentOplogExited(CommandExit),
-    AgentStreamOutput(Vec<u8>),
-    AgentStreamOutputClosed(Option<String>),
-    AgentStreamExited(CommandExit),
     AgentRefreshTick,
     AgentRefreshSpinnerTick {
         generation: u64,
@@ -67,6 +61,10 @@ enum TuiEvent {
         generation: u64,
         append: bool,
         result: TuiContextTaskResult<AgentRefreshPayload>,
+    },
+    OpsEnvironmentRefreshFinished {
+        generation: u64,
+        result: TuiContextTaskResult<OpsEnvironmentSnapshot>,
     },
     ContextSwitchFinished {
         generation: u64,

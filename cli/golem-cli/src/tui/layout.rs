@@ -12,36 +12,31 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::app::{AgentInspectPane, AgentsViewMode, DevPanel, TuiMode, TuiWorkspace};
-use super::widgets::PaneLayout;
+use super::app::{DevView, TuiMode, TuiWorkspace};
 use ratatui::layout::Rect;
 
-pub(super) const DEV_MIN_PRIMARY_SIZE: u16 = 28;
-pub(super) const DEV_MIN_SECONDARY_SIZE: u16 = 16;
-pub(super) const DEV_MIN_STACKED_SIZE: u16 = 3;
-pub(super) const DRAWER_MIN_WIDTH: u16 = 24;
-pub(super) const DRAWER_MAX_WIDTH: u16 = 72;
-pub(super) const DRAWER_DEFAULT_RATIO: u16 = 38;
-pub(super) const OPS_DETAILS_DEFAULT_RATIO: u16 = 60;
-pub(super) const OPS_LIST_MIN_WIDTH: u16 = 36;
-pub(super) const OPS_DETAILS_MIN_WIDTH: u16 = 24;
-pub(super) const OPS_DETAILS_BREAKPOINT: u16 = 72;
+pub(super) const SHELL_COMPACT_WIDTH: u16 = 72;
+pub(super) const SHELL_COMPACT_HEIGHT: u16 = 20;
+const DEV_MIN_PRIMARY_WIDTH: u16 = 28;
+const DEV_MIN_SUBVIEW_WIDTH: u16 = 20;
+const DEV_MIN_PRIMARY_HEIGHT: u16 = 7;
+const DEV_MIN_SUBVIEW_HEIGHT: u16 = 5;
+const OPS_LIST_MIN_WIDTH: u16 = 36;
+const OPS_DETAILS_MIN_WIDTH: u16 = 24;
+const OPS_LIST_MIN_HEIGHT: u16 = 7;
+const OPS_DETAILS_MIN_HEIGHT: u16 = 5;
 const SPLIT_SIZE: u16 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum DevLayoutPreset {
+pub(super) enum PanePlacement {
     Right,
-    Left,
-    Top,
     Bottom,
 }
 
-impl DevLayoutPreset {
-    pub(super) fn next(self) -> Self {
+impl PanePlacement {
+    pub(super) fn flipped(self) -> Self {
         match self {
-            Self::Right => Self::Left,
-            Self::Left => Self::Top,
-            Self::Top => Self::Bottom,
+            Self::Right => Self::Bottom,
             Self::Bottom => Self::Right,
         }
     }
@@ -49,18 +44,8 @@ impl DevLayoutPreset {
     pub(super) fn label(self) -> &'static str {
         match self {
             Self::Right => "right",
-            Self::Left => "left",
-            Self::Top => "top",
             Self::Bottom => "bottom",
         }
-    }
-
-    fn primary_is_horizontal(self) -> bool {
-        matches!(self, Self::Right | Self::Left)
-    }
-
-    fn primary_first(self) -> bool {
-        matches!(self, Self::Right | Self::Bottom)
     }
 }
 
@@ -68,17 +53,16 @@ impl DevLayoutPreset {
 pub(super) enum DragTarget {
     DevPrimary,
     DevSecondary,
-    ServerDrawer,
     OpsDetails,
 }
 
 #[derive(Debug, Clone)]
 pub(super) struct TuiLayoutState {
-    pub(super) dev_preset: DevLayoutPreset,
+    pub(super) dev_visible: [bool; 3],
+    pub(super) dev_placement: PanePlacement,
     pub(super) dev_primary_ratio: u16,
     pub(super) dev_secondary_ratio: u16,
-    pub(super) server_drawer_open: bool,
-    pub(super) server_drawer_ratio: u16,
+    pub(super) ops_details_placement: PanePlacement,
     pub(super) ops_details_ratio: u16,
     pub(super) dragging: Option<DragTarget>,
 }
@@ -86,35 +70,52 @@ pub(super) struct TuiLayoutState {
 impl Default for TuiLayoutState {
     fn default() -> Self {
         Self {
-            dev_preset: DevLayoutPreset::Right,
+            dev_visible: [true, false, false],
+            dev_placement: PanePlacement::Right,
             dev_primary_ratio: 62,
-            dev_secondary_ratio: 34,
-            server_drawer_open: false,
-            server_drawer_ratio: DRAWER_DEFAULT_RATIO,
-            ops_details_ratio: OPS_DETAILS_DEFAULT_RATIO,
+            dev_secondary_ratio: 50,
+            ops_details_placement: PanePlacement::Right,
+            ops_details_ratio: 60,
             dragging: None,
         }
     }
 }
 
+impl TuiLayoutState {
+    pub(super) fn dev_is_visible(&self, view: DevView) -> bool {
+        self.dev_visible[view.index()]
+    }
+
+    pub(super) fn set_dev_visible(&mut self, view: DevView, visible: bool) {
+        self.dev_visible[view.index()] = visible;
+    }
+
+    pub(super) fn visible_dev_views(&self, primary: DevView) -> Vec<DevView> {
+        let mut views = vec![primary];
+        views.extend(
+            DevView::ALL
+                .into_iter()
+                .filter(|view| *view != primary && self.dev_is_visible(*view)),
+        );
+        views
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum RegionKind {
-    HeaderTab(TuiWorkspace),
+    Workspace(TuiWorkspace),
     Footer,
     WorkspaceBody,
-    DevPanelTitle(DevPanel),
-    DevPanelBody(DevPanel),
+    DevViewTitle(DevView),
+    DevViewBody(DevView),
     DevPrimarySplit,
     DevSecondarySplit,
     OpsList,
     OpsDetails,
     OpsDetailsSplit,
-    OpsInspectPane(AgentInspectPane),
     ContextPickerRow(usize),
     ContextConfirm,
     ContextCancel,
-    ServerDrawer,
-    ServerDrawerSplit,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -126,12 +127,9 @@ pub(super) struct Region {
 #[derive(Debug, Clone)]
 pub(super) struct LayoutSnapshot {
     pub(super) header: Rect,
-    pub(super) tabs: Rect,
-    pub(super) separator: Rect,
     pub(super) body: Rect,
     pub(super) workspace_body: Rect,
     pub(super) footer: Rect,
-    pub(super) server_drawer: Option<Rect>,
     pub(super) regions: Vec<Region>,
 }
 
@@ -156,349 +154,382 @@ impl LayoutSnapshot {
 pub(super) struct LayoutInput {
     pub(super) area: Rect,
     pub(super) active_workspace: TuiWorkspace,
-    pub(super) focused_dev_panel: DevPanel,
+    pub(super) dev_primary: DevView,
+    pub(super) focused_dev_view: DevView,
     pub(super) mode: TuiMode,
     pub(super) context_picker_rows: Vec<Option<usize>>,
     pub(super) context_picker_selected: usize,
     pub(super) context_picker_prefix_height: usize,
-    pub(super) agents_view_mode: AgentsViewMode,
     pub(super) agent_details_visible: bool,
     pub(super) layout: TuiLayoutState,
 }
 
 pub(super) fn compute(input: LayoutInput) -> LayoutSnapshot {
-    let [header, tabs, separator, body, footer] = vertical_split(
-        input.area,
-        &[
-            SplitSpec::Length(1),
-            SplitSpec::Length(1),
-            SplitSpec::Length(1),
-            SplitSpec::Min(1),
-            SplitSpec::Length(1),
-        ],
-    );
-    let mut regions = Vec::new();
-    add_tab_regions(tabs, &mut regions);
-    regions.push(Region {
-        kind: RegionKind::Footer,
-        area: footer,
-    });
-
-    let (workspace_body, drawer_handle, server_drawer) = split_server_drawer(
-        body,
-        input.layout.server_drawer_open,
-        input.layout.server_drawer_ratio,
-    );
-    if let Some(handle) = drawer_handle {
-        regions.push(Region {
-            kind: RegionKind::ServerDrawerSplit,
-            area: handle,
-        });
-    }
-    if let Some(drawer) = server_drawer {
-        regions.push(Region {
-            kind: RegionKind::ServerDrawer,
-            area: drawer,
-        });
-    }
-    regions.push(Region {
-        kind: RegionKind::WorkspaceBody,
-        area: workspace_body,
-    });
-
-    match input.active_workspace {
-        TuiWorkspace::Home => {}
-        TuiWorkspace::Dev => add_dev_regions(workspace_body, &input, &mut regions),
-        TuiWorkspace::Ops => add_ops_regions(workspace_body, &input, &mut regions),
-    }
-    add_modal_regions(&input, &mut regions);
-
-    LayoutSnapshot {
-        header,
-        tabs,
-        separator,
-        body,
-        workspace_body,
-        footer,
-        server_drawer,
-        regions,
-    }
-}
-
-pub(super) fn compute_ops_shell(input: LayoutInput) -> LayoutSnapshot {
-    let compact = input.area.width < 72 || input.area.height < 20;
-    let footer_height = if compact { 2 } else { 3 };
-    let [header, body, footer] = vertical_split(
-        input.area,
-        &[
-            SplitSpec::Length(1),
-            SplitSpec::Min(1),
-            SplitSpec::Length(footer_height),
-        ],
-    );
+    let (header, body, footer) = shell_regions(input.area);
     let workspace_selector = Rect {
-        height: footer.height.min(1),
-        ..footer
-    };
-    let global_footer = Rect {
-        y: footer.bottom().saturating_sub(1),
         height: footer.height.min(1),
         ..footer
     };
     let mut regions = vec![
         Region {
-            kind: RegionKind::HeaderTab(TuiWorkspace::Ops),
-            area: workspace_selector,
-        },
-        Region {
-            kind: RegionKind::Footer,
-            area: global_footer,
-        },
-        Region {
             kind: RegionKind::WorkspaceBody,
             area: body,
         },
+        Region {
+            kind: RegionKind::Footer,
+            area: footer,
+        },
     ];
-    add_ops_regions(body, &input, &mut regions);
+    add_workspace_regions(workspace_selector, &mut regions);
+    match input.active_workspace {
+        TuiWorkspace::Dev => add_dev_regions(body, &input, &mut regions),
+        TuiWorkspace::Ops => add_ops_regions(body, &input, &mut regions),
+    }
     add_modal_regions(&input, &mut regions);
 
     LayoutSnapshot {
         header,
-        tabs: workspace_selector,
-        separator: Rect::default(),
         body,
         workspace_body: body,
         footer,
-        server_drawer: None,
         regions,
     }
 }
 
-pub(super) fn clamp_dev_primary_ratio(area: Rect, preset: DevLayoutPreset, ratio: u16) -> u16 {
-    let total = if preset.primary_is_horizontal() {
-        area.width
-    } else {
-        area.height
+fn shell_regions(area: Rect) -> (Rect, Rect, Rect) {
+    if area.height == 0 {
+        return (Rect::default(), Rect::default(), Rect::default());
     }
-    .saturating_sub(SPLIT_SIZE);
-    clamp_ratio_for_min(total, ratio, DEV_MIN_PRIMARY_SIZE, DEV_MIN_SECONDARY_SIZE)
-}
-
-pub(super) fn clamp_dev_secondary_ratio(area: Rect, preset: DevLayoutPreset, ratio: u16) -> u16 {
-    let panels = secondary_panel_count(false) as u16;
-    let total = if preset.primary_is_horizontal() {
-        area.height
-    } else {
-        area.width
+    if area.height == 1 {
+        return (Rect::default(), area, Rect::default());
     }
-    .saturating_sub(panels.saturating_sub(1) * SPLIT_SIZE);
-    clamp_ratio_for_min(total, ratio, DEV_MIN_STACKED_SIZE, DEV_MIN_STACKED_SIZE)
+
+    let header_height = 1;
+    let compact = area.width < SHELL_COMPACT_WIDTH || area.height < SHELL_COMPACT_HEIGHT;
+    let wanted_footer = if compact { 2 } else { 3 };
+    let footer_height = wanted_footer.min(area.height.saturating_sub(header_height + 1));
+    let body_height = area
+        .height
+        .saturating_sub(header_height)
+        .saturating_sub(footer_height);
+    let header = Rect::new(area.x, area.y, area.width, header_height);
+    let body = Rect::new(area.x, header.bottom(), area.width, body_height);
+    let footer = Rect::new(area.x, body.bottom(), area.width, footer_height);
+    (header, body, footer)
 }
 
-pub(super) fn clamp_drawer_ratio(area: Rect, ratio: u16) -> u16 {
-    let max_width = DRAWER_MAX_WIDTH.min(area.width.saturating_sub(DEV_MIN_PRIMARY_SIZE));
-    let min_width = DRAWER_MIN_WIDTH.min(max_width);
-    clamp_ratio_for_min_max(area.width, ratio, min_width, max_width)
-}
-
-pub(super) fn ratio_from_pointer(area: Rect, preset: DevLayoutPreset, x: u16, y: u16) -> u16 {
-    let offset = if preset.primary_is_horizontal() {
-        x.saturating_sub(area.x)
-    } else {
-        y.saturating_sub(area.y)
-    };
-    ratio(offset, primary_extent(area, preset))
-}
-
-pub(super) fn secondary_ratio_from_pointer(
-    area: Rect,
-    preset: DevLayoutPreset,
-    x: u16,
-    y: u16,
-) -> u16 {
-    let offset = if preset.primary_is_horizontal() {
-        y.saturating_sub(area.y)
-    } else {
-        x.saturating_sub(area.x)
-    };
-    let total = if preset.primary_is_horizontal() {
-        area.height
-    } else {
-        area.width
-    };
-    ratio(offset, total)
-}
-
-pub(super) fn drawer_ratio_from_pointer(body: Rect, x: u16) -> u16 {
-    let drawer_width = body.x.saturating_add(body.width).saturating_sub(x);
-    ratio(drawer_width, body.width)
-}
-
-pub(super) fn clamp_ops_details_ratio(area: Rect, ratio: u16) -> u16 {
-    clamp_ratio_for_min(
-        area.width.saturating_sub(SPLIT_SIZE),
-        ratio,
-        OPS_LIST_MIN_WIDTH,
-        OPS_DETAILS_MIN_WIDTH,
-    )
-}
-
-pub(super) fn ops_details_ratio_from_pointer(area: Rect, x: u16) -> u16 {
-    ratio(
-        x.saturating_sub(area.x),
-        area.width.saturating_sub(SPLIT_SIZE),
-    )
-}
-
-pub(super) fn ops_details_visible(area: Rect, requested: bool) -> bool {
-    requested && area.width >= OPS_DETAILS_BREAKPOINT
+fn add_workspace_regions(area: Rect, regions: &mut Vec<Region>) {
+    let mut x = area.x.saturating_add(2);
+    for workspace in TuiWorkspace::ALL {
+        let width = workspace.title().chars().count() as u16 + 4;
+        regions.push(Region {
+            kind: RegionKind::Workspace(workspace),
+            area: Rect::new(
+                x,
+                area.y,
+                width.min(area.right().saturating_sub(x)),
+                area.height,
+            ),
+        });
+        x = x.saturating_add(width + 1);
+    }
 }
 
 fn add_dev_regions(area: Rect, input: &LayoutInput, regions: &mut Vec<Region>) {
-    if let Some((primary_handle, secondary_handle)) = dev_split_regions(area, input) {
-        regions.push(Region {
-            kind: RegionKind::DevPrimarySplit,
-            area: primary_handle,
-        });
-        if let Some(secondary_handle) = secondary_handle {
-            regions.push(Region {
-                kind: RegionKind::DevSecondarySplit,
-                area: secondary_handle,
-            });
-        }
-    }
-    let panels = dev_panel_areas(area, input);
-    for (panel, panel_area) in panels {
-        if panel_area.width == 0 || panel_area.height == 0 {
-            continue;
-        }
+    for (view, pane) in dev_view_areas(area, input) {
         let title = Rect {
-            height: panel_area.height.min(1),
-            ..panel_area
+            height: pane.height.min(1),
+            ..pane
         };
         let body = Rect {
-            y: panel_area.y.saturating_add(1),
-            height: panel_area.height.saturating_sub(1),
-            ..panel_area
+            y: title.bottom(),
+            height: pane.height.saturating_sub(title.height),
+            ..pane
         };
         regions.push(Region {
-            kind: RegionKind::DevPanelTitle(panel),
+            kind: RegionKind::DevViewTitle(view),
             area: title,
         });
         regions.push(Region {
-            kind: RegionKind::DevPanelBody(panel),
+            kind: RegionKind::DevViewBody(view),
             area: body,
         });
-        if panel == DevPanel::Agents {
-            add_ops_regions(body, input, regions);
+    }
+    if let Some((primary, secondary)) = dev_split_regions(area, input) {
+        regions.push(Region {
+            kind: RegionKind::DevPrimarySplit,
+            area: primary,
+        });
+        if let Some(secondary) = secondary {
+            regions.push(Region {
+                kind: RegionKind::DevSecondarySplit,
+                area: secondary,
+            });
         }
     }
 }
 
-pub(super) fn dev_panel_areas(area: Rect, input: &LayoutInput) -> Vec<(DevPanel, Rect)> {
-    if area.width < 90 || area.height < 18 {
-        return vec![(input.focused_dev_panel, area)];
+pub(super) fn dev_view_areas(area: Rect, input: &LayoutInput) -> Vec<(DevView, Rect)> {
+    let visible = input.layout.visible_dev_views(input.dev_primary);
+    if visible.len() == 1 || compact_body(area) {
+        let view = if visible.contains(&input.focused_dev_view) {
+            input.focused_dev_view
+        } else {
+            input.dev_primary
+        };
+        return vec![(view, area)];
     }
 
-    let primary_ratio = clamp_dev_primary_ratio(
+    let ratio = clamp_dev_primary_ratio(
         area,
-        input.layout.dev_preset,
+        input.layout.dev_placement,
         input.layout.dev_primary_ratio,
     );
-    let (primary, handle, secondary) = split_primary(area, input.layout.dev_preset, primary_ratio);
-    let mut result = Vec::new();
-    let repl_area = if input.layout.dev_preset.primary_first() {
-        primary
-    } else {
-        secondary
-    };
-    let side_area = if input.layout.dev_preset.primary_first() {
-        secondary
-    } else {
-        primary
-    };
-    result.push((DevPanel::Repl, repl_area));
-    if handle.width > 0 && handle.height > 0 {
-        result.push((DevPanel::Repl, Rect::default()));
-    }
-
-    let panels = secondary_panels(input.layout.server_drawer_open);
-    let side_regions = split_secondary(
-        side_area,
-        input.layout.dev_preset,
+    let (primary, _, subviews) = split_area(area, input.layout.dev_placement, ratio);
+    let mut result = vec![(input.dev_primary, primary)];
+    let secondary_views = visible
+        .into_iter()
+        .filter(|view| *view != input.dev_primary)
+        .collect::<Vec<_>>();
+    let secondary_areas = split_subviews(
+        subviews,
+        input.layout.dev_placement,
         input.layout.dev_secondary_ratio,
-        panels.len(),
+        secondary_views.len(),
     );
-    result.extend(panels.into_iter().zip(side_regions));
+    result.extend(secondary_views.into_iter().zip(secondary_areas));
     result
 }
 
 pub(super) fn dev_split_regions(area: Rect, input: &LayoutInput) -> Option<(Rect, Option<Rect>)> {
-    if area.width < 90 || area.height < 18 {
+    let visible = input.layout.visible_dev_views(input.dev_primary);
+    if visible.len() < 2 || compact_body(area) {
         return None;
     }
-    let primary_ratio = clamp_dev_primary_ratio(
+    let ratio = clamp_dev_primary_ratio(
         area,
-        input.layout.dev_preset,
+        input.layout.dev_placement,
         input.layout.dev_primary_ratio,
     );
-    let (_, primary_handle, secondary) =
-        split_primary(area, input.layout.dev_preset, primary_ratio);
-    let panels = secondary_panels(input.layout.server_drawer_open);
-    let secondary_handle = split_secondary_handle(
-        secondary,
-        input.layout.dev_preset,
+    let (_, primary, subviews) = split_area(area, input.layout.dev_placement, ratio);
+    let secondary = split_subview_handle(
+        subviews,
+        input.layout.dev_placement,
         input.layout.dev_secondary_ratio,
-        panels.len(),
+        visible.len() - 1,
     );
-    Some((primary_handle, secondary_handle))
+    Some((primary, secondary))
 }
 
 fn add_ops_regions(area: Rect, input: &LayoutInput, regions: &mut Vec<Region>) {
-    let content = Rect {
-        y: area.y.saturating_add(1),
-        height: area.height.saturating_sub(1),
-        ..area
-    };
-    if input.agents_view_mode == AgentsViewMode::Inspect {
-        let [left, right] = horizontal_split(
-            content,
-            &[SplitSpec::Percentage(50), SplitSpec::Percentage(50)],
-        );
+    let (list, divider, details) = ops_pane_regions(
+        area,
+        input.agent_details_visible,
+        input.layout.ops_details_placement,
+        input.layout.ops_details_ratio,
+    );
+    regions.push(Region {
+        kind: RegionKind::OpsList,
+        area: list,
+    });
+    if let Some(divider) = divider {
         regions.push(Region {
-            kind: RegionKind::OpsInspectPane(AgentInspectPane::Oplog),
-            area: left,
-        });
-        regions.push(Region {
-            kind: RegionKind::OpsInspectPane(AgentInspectPane::Stream),
-            area: right,
-        });
-    } else if ops_details_visible(content, input.agent_details_visible) {
-        let ratio = clamp_ops_details_ratio(content, input.layout.ops_details_ratio);
-        let layout = PaneLayout::horizontal(content, &[ratio as u32, (100 - ratio) as u32]);
-        let [list, details] = layout.panes.as_slice() else {
-            return;
-        };
-        regions.push(Region {
-            kind: RegionKind::OpsList,
-            area: *list,
-        });
-        regions.push(Region {
-            kind: RegionKind::OpsDetails,
-            area: *details,
-        });
-        if let Some(divider) = layout.dividers.first() {
-            regions.push(Region {
-                kind: RegionKind::OpsDetailsSplit,
-                area: *divider,
-            });
-        }
-    } else {
-        regions.push(Region {
-            kind: RegionKind::OpsList,
-            area: content,
+            kind: RegionKind::OpsDetailsSplit,
+            area: divider,
         });
     }
+    if let Some(details) = details {
+        regions.push(Region {
+            kind: RegionKind::OpsDetails,
+            area: details,
+        });
+    }
+}
+
+pub(super) fn ops_pane_regions(
+    area: Rect,
+    requested: bool,
+    placement: PanePlacement,
+    ratio: u16,
+) -> (Rect, Option<Rect>, Option<Rect>) {
+    if !ops_details_visible(area, requested, placement) {
+        return (area, None, None);
+    }
+    let ratio = clamp_ops_details_ratio(area, placement, ratio);
+    let (list, divider, details) = split_area(area, placement, ratio);
+    (list, Some(divider), Some(details))
+}
+
+pub(super) fn ops_details_visible(area: Rect, requested: bool, placement: PanePlacement) -> bool {
+    if !requested {
+        return false;
+    }
+    match placement {
+        PanePlacement::Right => {
+            area.width >= OPS_LIST_MIN_WIDTH + OPS_DETAILS_MIN_WIDTH + SPLIT_SIZE
+        }
+        PanePlacement::Bottom => {
+            area.height >= OPS_LIST_MIN_HEIGHT + OPS_DETAILS_MIN_HEIGHT + SPLIT_SIZE
+        }
+    }
+}
+
+pub(super) fn clamp_dev_primary_ratio(area: Rect, placement: PanePlacement, ratio: u16) -> u16 {
+    let (total, first, second) = match placement {
+        PanePlacement::Right => (area.width, DEV_MIN_PRIMARY_WIDTH, DEV_MIN_SUBVIEW_WIDTH),
+        PanePlacement::Bottom => (area.height, DEV_MIN_PRIMARY_HEIGHT, DEV_MIN_SUBVIEW_HEIGHT),
+    };
+    clamp_ratio_for_min(total.saturating_sub(SPLIT_SIZE), ratio, first, second)
+}
+
+pub(super) fn clamp_dev_secondary_ratio(area: Rect, placement: PanePlacement, ratio: u16) -> u16 {
+    let (total, minimum) = match placement {
+        PanePlacement::Right => (area.height, DEV_MIN_SUBVIEW_HEIGHT),
+        PanePlacement::Bottom => (area.width, DEV_MIN_SUBVIEW_WIDTH),
+    };
+    clamp_ratio_for_min(total.saturating_sub(SPLIT_SIZE), ratio, minimum, minimum)
+}
+
+pub(super) fn clamp_ops_details_ratio(area: Rect, placement: PanePlacement, ratio: u16) -> u16 {
+    let (total, first, second) = match placement {
+        PanePlacement::Right => (area.width, OPS_LIST_MIN_WIDTH, OPS_DETAILS_MIN_WIDTH),
+        PanePlacement::Bottom => (area.height, OPS_LIST_MIN_HEIGHT, OPS_DETAILS_MIN_HEIGHT),
+    };
+    clamp_ratio_for_min(total.saturating_sub(SPLIT_SIZE), ratio, first, second)
+}
+
+pub(super) fn dev_primary_ratio_from_pointer(
+    area: Rect,
+    placement: PanePlacement,
+    x: u16,
+    y: u16,
+) -> u16 {
+    pointer_ratio(area, placement, x, y)
+}
+
+pub(super) fn dev_secondary_ratio_from_pointer(
+    area: Rect,
+    placement: PanePlacement,
+    x: u16,
+    y: u16,
+) -> u16 {
+    let cross = match placement {
+        PanePlacement::Right => PanePlacement::Bottom,
+        PanePlacement::Bottom => PanePlacement::Right,
+    };
+    pointer_ratio(area, cross, x, y)
+}
+
+pub(super) fn ops_details_ratio_from_pointer(
+    area: Rect,
+    placement: PanePlacement,
+    x: u16,
+    y: u16,
+) -> u16 {
+    pointer_ratio(area, placement, x, y)
+}
+
+fn pointer_ratio(area: Rect, placement: PanePlacement, x: u16, y: u16) -> u16 {
+    match placement {
+        PanePlacement::Right => ratio(
+            x.saturating_sub(area.x),
+            area.width.saturating_sub(SPLIT_SIZE),
+        ),
+        PanePlacement::Bottom => ratio(
+            y.saturating_sub(area.y),
+            area.height.saturating_sub(SPLIT_SIZE),
+        ),
+    }
+}
+
+fn split_area(area: Rect, placement: PanePlacement, ratio_value: u16) -> (Rect, Rect, Rect) {
+    match placement {
+        PanePlacement::Right => {
+            let total = area.width.saturating_sub(SPLIT_SIZE);
+            let first_width = (u32::from(total) * u32::from(ratio_value) / 100) as u16;
+            let first = Rect {
+                width: first_width,
+                ..area
+            };
+            let divider = Rect::new(
+                first.right(),
+                area.y,
+                SPLIT_SIZE.min(area.width.saturating_sub(first_width)),
+                area.height,
+            );
+            let second = Rect::new(
+                divider.right(),
+                area.y,
+                area.right().saturating_sub(divider.right()),
+                area.height,
+            );
+            (first, divider, second)
+        }
+        PanePlacement::Bottom => {
+            let total = area.height.saturating_sub(SPLIT_SIZE);
+            let first_height = (u32::from(total) * u32::from(ratio_value) / 100) as u16;
+            let first = Rect {
+                height: first_height,
+                ..area
+            };
+            let divider = Rect::new(
+                area.x,
+                first.bottom(),
+                area.width,
+                SPLIT_SIZE.min(area.height.saturating_sub(first_height)),
+            );
+            let second = Rect::new(
+                area.x,
+                divider.bottom(),
+                area.width,
+                area.bottom().saturating_sub(divider.bottom()),
+            );
+            (first, divider, second)
+        }
+    }
+}
+
+fn split_subviews(
+    area: Rect,
+    placement: PanePlacement,
+    ratio_value: u16,
+    count: usize,
+) -> Vec<Rect> {
+    match count {
+        0 => Vec::new(),
+        1 => vec![area],
+        _ => {
+            let cross = match placement {
+                PanePlacement::Right => PanePlacement::Bottom,
+                PanePlacement::Bottom => PanePlacement::Right,
+            };
+            let ratio_value = clamp_dev_secondary_ratio(area, placement, ratio_value);
+            let (first, _, second) = split_area(area, cross, ratio_value);
+            vec![first, second]
+        }
+    }
+}
+
+fn split_subview_handle(
+    area: Rect,
+    placement: PanePlacement,
+    ratio_value: u16,
+    count: usize,
+) -> Option<Rect> {
+    if count < 2 {
+        return None;
+    }
+    let cross = match placement {
+        PanePlacement::Right => PanePlacement::Bottom,
+        PanePlacement::Bottom => PanePlacement::Right,
+    };
+    let ratio_value = clamp_dev_secondary_ratio(area, placement, ratio_value);
+    let (_, divider, _) = split_area(area, cross, ratio_value);
+    Some(divider)
+}
+
+fn compact_body(area: Rect) -> bool {
+    area.width < SHELL_COMPACT_WIDTH || area.height < 12
 }
 
 fn add_modal_regions(input: &LayoutInput, regions: &mut Vec<Region>) {
@@ -511,7 +542,7 @@ fn add_modal_regions(input: &LayoutInput, regions: &mut Vec<Region>) {
                 width: area.width.saturating_sub(4),
                 height: area.height.saturating_sub(4),
             };
-            let row_capacity = (content.height as usize)
+            let capacity = (content.height as usize)
                 .saturating_sub(input.context_picker_prefix_height)
                 .saturating_sub(2)
                 .max(1);
@@ -520,32 +551,26 @@ fn add_modal_regions(input: &LayoutInput, regions: &mut Vec<Region>) {
                 .iter()
                 .position(|index| *index == Some(input.context_picker_selected))
                 .unwrap_or_default();
-            let mut start = selected_line.saturating_sub(row_capacity.saturating_sub(1));
-            if start > 0
-                && input.context_picker_rows.get(start.saturating_sub(1)) == Some(&None)
-                && selected_line.saturating_sub(start).saturating_add(2) <= row_capacity
-            {
-                start = start.saturating_sub(1);
-            }
+            let start = selected_line.saturating_sub(capacity.saturating_sub(1));
             for (offset, index) in input
                 .context_picker_rows
                 .iter()
                 .skip(start)
-                .take(row_capacity)
+                .take(capacity)
                 .enumerate()
                 .filter_map(|(offset, index)| index.map(|index| (offset, index)))
             {
                 regions.push(Region {
                     kind: RegionKind::ContextPickerRow(index),
-                    area: Rect {
-                        x: content.x,
-                        y: content
+                    area: Rect::new(
+                        content.x,
+                        content
                             .y
                             .saturating_add(input.context_picker_prefix_height as u16)
                             .saturating_add(offset as u16),
-                        width: content.width,
-                        height: content.height.min(1),
-                    },
+                        content.width,
+                        content.height.min(1),
+                    ),
                 });
             }
         }
@@ -555,272 +580,25 @@ fn add_modal_regions(input: &LayoutInput, regions: &mut Vec<Region>) {
                 input.area.width.min(72),
                 input.area.height.min(11),
             );
+            let y = area
+                .y
+                .saturating_add(6)
+                .min(area.bottom().saturating_sub(2));
             regions.push(Region {
                 kind: RegionKind::ContextConfirm,
-                area: Rect {
-                    x: area.x.saturating_add(2),
-                    y: area
-                        .y
-                        .saturating_add(6)
-                        .min(area.bottom().saturating_sub(2)),
-                    width: 24,
-                    height: 1,
-                },
+                area: Rect::new(area.x.saturating_add(2), y, 24.min(area.width), 1),
             });
             regions.push(Region {
                 kind: RegionKind::ContextCancel,
-                area: Rect {
-                    x: area.x.saturating_add(28),
-                    y: area
-                        .y
-                        .saturating_add(6)
-                        .min(area.bottom().saturating_sub(2)),
-                    width: 24,
-                    height: 1,
-                },
+                area: Rect::new(
+                    area.x.saturating_add(28),
+                    y,
+                    24.min(area.width.saturating_sub(28)),
+                    1,
+                ),
             });
         }
         _ => {}
-    }
-}
-
-fn add_tab_regions(tabs: Rect, regions: &mut Vec<Region>) {
-    let mut x = tabs.x.saturating_add(2);
-    for (index, workspace) in TuiWorkspace::ALL.iter().copied().enumerate() {
-        if index > 0 {
-            x = x.saturating_add(2);
-        }
-        let width = (format!("[{}] {}", index + 1, workspace.title())
-            .chars()
-            .count() as u16)
-            .saturating_add(2);
-        regions.push(Region {
-            kind: RegionKind::HeaderTab(workspace),
-            area: Rect {
-                x,
-                y: tabs.y,
-                width,
-                height: tabs.height,
-            },
-        });
-        x = x.saturating_add(width);
-    }
-}
-
-fn split_server_drawer(body: Rect, open: bool, ratio: u16) -> (Rect, Option<Rect>, Option<Rect>) {
-    if !open || body.width <= DRAWER_MIN_WIDTH.saturating_add(DEV_MIN_PRIMARY_SIZE) {
-        return (body, None, None);
-    }
-    let clamped = clamp_drawer_ratio(body, ratio);
-    let drawer_width = ((body.width as u32 * clamped as u32) / 100)
-        .max(DRAWER_MIN_WIDTH as u32)
-        .min(DRAWER_MAX_WIDTH as u32)
-        .min(body.width.saturating_sub(DEV_MIN_PRIMARY_SIZE) as u32) as u16;
-    let handle = Rect {
-        x: body.x + body.width - drawer_width - SPLIT_SIZE,
-        y: body.y,
-        width: SPLIT_SIZE,
-        height: body.height,
-    };
-    let workspace = Rect {
-        width: body
-            .width
-            .saturating_sub(drawer_width)
-            .saturating_sub(SPLIT_SIZE),
-        ..body
-    };
-    let drawer = Rect {
-        x: handle.x.saturating_add(SPLIT_SIZE),
-        y: body.y,
-        width: drawer_width,
-        height: body.height,
-    };
-    (workspace, Some(handle), Some(drawer))
-}
-
-fn split_primary(area: Rect, preset: DevLayoutPreset, ratio: u16) -> (Rect, Rect, Rect) {
-    let horizontal = preset.primary_is_horizontal();
-    let total = primary_extent(area, preset).saturating_sub(SPLIT_SIZE);
-    let first_size = ((total as u32 * ratio as u32) / 100) as u16;
-    if horizontal {
-        let first = Rect {
-            width: first_size,
-            ..area
-        };
-        let handle = Rect {
-            x: first.x.saturating_add(first.width),
-            y: area.y,
-            width: SPLIT_SIZE,
-            height: area.height,
-        };
-        let second = Rect {
-            x: handle.x.saturating_add(SPLIT_SIZE),
-            y: area.y,
-            width: area
-                .width
-                .saturating_sub(first.width)
-                .saturating_sub(SPLIT_SIZE),
-            height: area.height,
-        };
-        (first, handle, second)
-    } else {
-        let first = Rect {
-            height: first_size,
-            ..area
-        };
-        let handle = Rect {
-            x: area.x,
-            y: first.y.saturating_add(first.height),
-            width: area.width,
-            height: SPLIT_SIZE,
-        };
-        let second = Rect {
-            x: area.x,
-            y: handle.y.saturating_add(SPLIT_SIZE),
-            width: area.width,
-            height: area
-                .height
-                .saturating_sub(first.height)
-                .saturating_sub(SPLIT_SIZE),
-        };
-        (first, handle, second)
-    }
-}
-
-fn split_secondary(area: Rect, preset: DevLayoutPreset, ratio: u16, count: usize) -> Vec<Rect> {
-    if count == 0 {
-        return Vec::new();
-    }
-    if count == 1 {
-        return vec![area];
-    }
-    let handle = split_secondary_handle(area, preset, ratio, count).unwrap_or_default();
-    if preset.primary_is_horizontal() {
-        let first_height = handle.y.saturating_sub(area.y);
-        let first = Rect {
-            height: first_height,
-            ..area
-        };
-        let remaining = Rect {
-            x: area.x,
-            y: handle.y.saturating_add(SPLIT_SIZE),
-            width: area.width,
-            height: area
-                .height
-                .saturating_sub(first_height)
-                .saturating_sub(SPLIT_SIZE),
-        };
-        if count == 2 {
-            vec![first, remaining]
-        } else {
-            let [second, third] = vertical_split(
-                remaining,
-                &[SplitSpec::Percentage(50), SplitSpec::Percentage(50)],
-            );
-            vec![first, second, third]
-        }
-    } else {
-        let first_width = handle.x.saturating_sub(area.x);
-        let first = Rect {
-            width: first_width,
-            ..area
-        };
-        let remaining = Rect {
-            x: handle.x.saturating_add(SPLIT_SIZE),
-            y: area.y,
-            width: area
-                .width
-                .saturating_sub(first_width)
-                .saturating_sub(SPLIT_SIZE),
-            height: area.height,
-        };
-        if count == 2 {
-            vec![first, remaining]
-        } else {
-            let [second, third] = horizontal_split(
-                remaining,
-                &[SplitSpec::Percentage(50), SplitSpec::Percentage(50)],
-            );
-            vec![first, second, third]
-        }
-    }
-}
-
-fn split_secondary_handle(
-    area: Rect,
-    preset: DevLayoutPreset,
-    ratio_value: u16,
-    count: usize,
-) -> Option<Rect> {
-    if count < 2 {
-        return None;
-    }
-    let ratio_value = clamp_dev_secondary_ratio(area, preset, ratio_value);
-    if preset.primary_is_horizontal() {
-        let total = area.height.saturating_sub(SPLIT_SIZE);
-        let first_height = ((total as u32 * ratio_value as u32) / 100) as u16;
-        Some(Rect {
-            x: area.x,
-            y: area.y.saturating_add(first_height),
-            width: area.width,
-            height: SPLIT_SIZE,
-        })
-    } else {
-        let total = area.width.saturating_sub(SPLIT_SIZE);
-        let first_width = ((total as u32 * ratio_value as u32) / 100) as u16;
-        Some(Rect {
-            x: area.x.saturating_add(first_width),
-            y: area.y,
-            width: SPLIT_SIZE,
-            height: area.height,
-        })
-    }
-}
-
-fn secondary_panels(drawer_open: bool) -> Vec<DevPanel> {
-    if drawer_open {
-        vec![DevPanel::Output, DevPanel::Agents]
-    } else {
-        vec![DevPanel::Output, DevPanel::Server, DevPanel::Agents]
-    }
-}
-
-fn secondary_panel_count(drawer_open: bool) -> usize {
-    secondary_panels(drawer_open).len()
-}
-
-fn primary_extent(area: Rect, preset: DevLayoutPreset) -> u16 {
-    if preset.primary_is_horizontal() {
-        area.width
-    } else {
-        area.height
-    }
-}
-
-fn clamp_ratio_for_min(total: u16, ratio: u16, min_first: u16, min_second: u16) -> u16 {
-    if min_first.saturating_add(min_second) > total {
-        let min_first = total / 2;
-        let min_second = total.saturating_sub(min_first);
-        return clamp_ratio_for_min(total, ratio, min_first, min_second);
-    }
-    let max_first = total.saturating_sub(min_second).max(min_first);
-    clamp_ratio_for_min_max(total, ratio, min_first, max_first)
-}
-
-fn clamp_ratio_for_min_max(total: u16, ratio_value: u16, min: u16, max: u16) -> u16 {
-    if total == 0 || min > max {
-        return ratio_value.min(100);
-    }
-    let min_ratio = ((min as u32 * 100).div_ceil(total as u32)).min(100) as u16;
-    let max_ratio = ((max as u32 * 100) / total as u32).min(100) as u16;
-    ratio_value.clamp(min_ratio, max_ratio.max(min_ratio))
-}
-
-fn ratio(value: u16, total: u16) -> u16 {
-    if total == 0 {
-        0
-    } else {
-        ((value as u32 * 100) / total as u32).min(100) as u16
     }
 }
 
@@ -834,7 +612,7 @@ pub(super) fn adaptive_data_popup_rect(
             return available;
         }
         let maximum = available.saturating_sub(2);
-        let target = ((available as u32 * 85) / 100) as u16;
+        let target = ((u32::from(available) * 85) / 100) as u16;
         target.max(minimum.min(maximum)).min(maximum)
     }
 
@@ -845,7 +623,7 @@ pub(super) fn adaptive_data_popup_rect(
     )
 }
 
-fn centered(area: Rect, width: u16, height: u16) -> Rect {
+pub(super) fn centered(area: Rect, width: u16, height: u16) -> Rect {
     let width = width.min(area.width);
     let height = height.min(area.height);
     Rect {
@@ -856,81 +634,29 @@ fn centered(area: Rect, width: u16, height: u16) -> Rect {
     }
 }
 
+fn clamp_ratio_for_min(total: u16, ratio_value: u16, min_first: u16, min_second: u16) -> u16 {
+    if total == 0 {
+        return ratio_value.min(100);
+    }
+    if min_first.saturating_add(min_second) > total {
+        return 50;
+    }
+    let min_ratio = ((u32::from(min_first) * 100).div_ceil(u32::from(total))).min(100) as u16;
+    let max_ratio =
+        ((u32::from(total.saturating_sub(min_second)) * 100) / u32::from(total)).min(100) as u16;
+    ratio_value.clamp(min_ratio, max_ratio.max(min_ratio))
+}
+
+fn ratio(value: u16, total: u16) -> u16 {
+    if total == 0 {
+        0
+    } else {
+        ((u32::from(value) * 100) / u32::from(total)).min(100) as u16
+    }
+}
+
 fn contains(area: Rect, x: u16, y: u16) -> bool {
-    x >= area.x
-        && x < area.x.saturating_add(area.width)
-        && y >= area.y
-        && y < area.y.saturating_add(area.height)
-}
-
-#[derive(Clone, Copy)]
-enum SplitSpec {
-    Length(u16),
-    Percentage(u16),
-    Min(u16),
-}
-
-fn vertical_split<const N: usize>(area: Rect, specs: &[SplitSpec; N]) -> [Rect; N] {
-    split(area, specs, false)
-}
-
-fn horizontal_split<const N: usize>(area: Rect, specs: &[SplitSpec; N]) -> [Rect; N] {
-    split(area, specs, true)
-}
-
-fn split<const N: usize>(area: Rect, specs: &[SplitSpec; N], horizontal: bool) -> [Rect; N] {
-    let total = if horizontal { area.width } else { area.height };
-    let fixed: u16 = specs
-        .iter()
-        .map(|spec| match *spec {
-            SplitSpec::Length(value) => value,
-            _ => 0,
-        })
-        .sum();
-    let percentage_total = total.saturating_sub(fixed);
-    let mut sizes = [0u16; N];
-    let mut used = 0u16;
-    let mut min_index = None;
-    for (index, spec) in specs.iter().copied().enumerate() {
-        sizes[index] = match spec {
-            SplitSpec::Length(value) => value.min(total.saturating_sub(used)),
-            SplitSpec::Percentage(value) => ((percentage_total as u32 * value as u32) / 100) as u16,
-            SplitSpec::Min(value) => {
-                min_index = Some(index);
-                value
-            }
-        };
-        used = used.saturating_add(sizes[index]);
-    }
-    if let Some(index) = min_index {
-        sizes[index] = sizes[index].saturating_add(total.saturating_sub(used));
-    }
-
-    let mut cursor_x = area.x;
-    let mut cursor_y = area.y;
-    std::array::from_fn(|index| {
-        let rect = if horizontal {
-            let rect = Rect {
-                x: cursor_x,
-                y: area.y,
-                width: sizes[index].min(area.x.saturating_add(area.width).saturating_sub(cursor_x)),
-                height: area.height,
-            };
-            cursor_x = cursor_x.saturating_add(rect.width);
-            rect
-        } else {
-            let rect = Rect {
-                x: area.x,
-                y: cursor_y,
-                width: area.width,
-                height: sizes[index]
-                    .min(area.y.saturating_add(area.height).saturating_sub(cursor_y)),
-            };
-            cursor_y = cursor_y.saturating_add(rect.height);
-            rect
-        };
-        rect
-    })
+    x >= area.x && x < area.right() && y >= area.y && y < area.bottom()
 }
 
 #[cfg(test)]
@@ -938,134 +664,127 @@ mod tests {
     use super::*;
     use test_r::test;
 
-    fn input(preset: DevLayoutPreset) -> LayoutInput {
+    fn input() -> LayoutInput {
         LayoutInput {
             area: Rect::new(0, 0, 120, 32),
             active_workspace: TuiWorkspace::Dev,
-            focused_dev_panel: DevPanel::Repl,
+            dev_primary: DevView::BuildDeploy,
+            focused_dev_view: DevView::BuildDeploy,
             mode: TuiMode::Normal,
             context_picker_rows: Vec::new(),
             context_picker_selected: 0,
             context_picker_prefix_height: 2,
-            agents_view_mode: AgentsViewMode::List,
             agent_details_visible: true,
-            layout: TuiLayoutState {
-                dev_preset: preset,
-                ..TuiLayoutState::default()
-            },
+            layout: TuiLayoutState::default(),
         }
     }
 
     #[test]
-    fn context_picker_hit_rows_follow_adaptive_popup_and_visual_sections() {
-        let mut input = input(DevLayoutPreset::Right);
-        input.area = Rect::new(0, 0, 100, 40);
-        input.mode = TuiMode::ContextPicker;
-        input.context_picker_rows = vec![None, Some(0), Some(1), None, Some(2)];
-        input.context_picker_selected = 2;
-
-        let snapshot = compute_ops_shell(input);
-
+    fn one_dev_view_fills_the_body() {
+        let input = input();
+        let snapshot = compute(input);
         assert_eq!(
-            snapshot.region(RegionKind::ContextPickerRow(0)),
-            Some(Rect::new(9, 8, 81, 1))
+            snapshot
+                .region(RegionKind::DevViewTitle(DevView::BuildDeploy))
+                .unwrap()
+                .width,
+            snapshot.body.width
         );
-        assert_eq!(
-            snapshot.region(RegionKind::ContextPickerRow(2)),
-            Some(Rect::new(9, 11, 81, 1))
-        );
+        assert!(snapshot.region(RegionKind::DevPrimarySplit).is_none());
     }
 
     #[test]
-    fn dev_presets_place_repl_on_expected_side() {
-        for preset in [
-            DevLayoutPreset::Right,
-            DevLayoutPreset::Left,
-            DevLayoutPreset::Top,
-            DevLayoutPreset::Bottom,
-        ] {
-            let snapshot = compute(input(preset));
-            let repl = snapshot
-                .region(RegionKind::DevPanelBody(DevPanel::Repl))
-                .unwrap_or_else(|| panic!("missing repl for {preset:?}: {:?}", snapshot.regions));
-            let output = snapshot
-                .region(RegionKind::DevPanelBody(DevPanel::Output))
-                .unwrap_or_else(|| panic!("missing output for {preset:?}: {:?}", snapshot.regions));
-            match preset {
-                DevLayoutPreset::Right => assert!(repl.x < output.x),
-                DevLayoutPreset::Left => assert!(repl.x > output.x),
-                DevLayoutPreset::Top => assert!(repl.y > output.y),
-                DevLayoutPreset::Bottom => assert!(repl.y < output.y),
+    fn right_and_bottom_subviews_use_physical_placement() {
+        for placement in [PanePlacement::Right, PanePlacement::Bottom] {
+            let mut input = input();
+            input.layout.dev_placement = placement;
+            input.layout.set_dev_visible(DevView::Server, true);
+            let areas = dev_view_areas(input.area, &input);
+            let primary = areas
+                .iter()
+                .find(|(view, _)| *view == DevView::BuildDeploy)
+                .unwrap()
+                .1;
+            let server = areas
+                .iter()
+                .find(|(view, _)| *view == DevView::Server)
+                .unwrap()
+                .1;
+            match placement {
+                PanePlacement::Right => assert!(primary.x < server.x),
+                PanePlacement::Bottom => assert!(primary.y < server.y),
             }
         }
     }
 
     #[test]
-    fn drawer_splits_body_and_exposes_handle() {
-        let mut input = input(DevLayoutPreset::Right);
-        input.layout.server_drawer_open = true;
+    fn three_views_expose_both_dividers() {
+        let mut input = input();
+        input.layout.set_dev_visible(DevView::Server, true);
+        input.layout.set_dev_visible(DevView::Repl, true);
         let snapshot = compute(input);
-
-        assert!(snapshot.server_drawer.is_some());
-        assert!(snapshot.region(RegionKind::ServerDrawerSplit).is_some());
-        assert!(snapshot.workspace_body.width < snapshot.body.width);
+        assert!(snapshot.region(RegionKind::DevPrimarySplit).is_some());
+        assert!(snapshot.region(RegionKind::DevSecondarySplit).is_some());
     }
 
     #[test]
-    fn hit_testing_returns_topmost_region() {
-        let snapshot = compute(input(DevLayoutPreset::Right));
-        let output = snapshot
-            .region(RegionKind::DevPanelBody(DevPanel::Output))
-            .unwrap();
+    fn ops_details_support_right_and_bottom() {
+        for placement in [PanePlacement::Right, PanePlacement::Bottom] {
+            let mut input = input();
+            input.active_workspace = TuiWorkspace::Ops;
+            input.layout.ops_details_placement = placement;
+            let snapshot = compute(input);
+            let list = snapshot.region(RegionKind::OpsList).unwrap();
+            let details = snapshot.region(RegionKind::OpsDetails).unwrap();
+            match placement {
+                PanePlacement::Right => assert!(list.x < details.x),
+                PanePlacement::Bottom => assert!(list.y < details.y),
+            }
+        }
+    }
 
-        assert_eq!(
-            snapshot.hit_test(output.x + 1, output.y + 1),
-            Some(RegionKind::DevPanelBody(DevPanel::Output))
+    #[test]
+    fn compact_layout_retains_state_but_renders_one_pane() {
+        let mut input = input();
+        input.area.width = SHELL_COMPACT_WIDTH - 1;
+        input.layout.set_dev_visible(DevView::Server, true);
+        input.focused_dev_view = DevView::Server;
+        let snapshot = compute(input);
+        assert!(
+            snapshot
+                .region(RegionKind::DevViewBody(DevView::Server))
+                .is_some()
+        );
+        assert!(
+            snapshot
+                .region(RegionKind::DevViewBody(DevView::BuildDeploy))
+                .is_none()
         );
     }
 
     #[test]
-    fn ratio_clamps_preserve_minimum_panel_sizes() {
-        let area = Rect::new(0, 0, 100, 30);
-
-        assert!(clamp_dev_primary_ratio(area, DevLayoutPreset::Right, 1) > 1);
-        assert!(clamp_dev_primary_ratio(area, DevLayoutPreset::Right, 99) < 99);
-        assert!(clamp_drawer_ratio(area, 99) < 99);
+    fn extreme_shell_sizes_never_overflow() {
+        for area in [
+            Rect::new(0, 0, 1, 1),
+            Rect::new(0, 0, 8, 2),
+            Rect::new(0, 0, 40, 8),
+        ] {
+            let mut input = input();
+            input.area = area;
+            let snapshot = compute(input);
+            assert!(snapshot.header.bottom() <= area.bottom());
+            assert!(snapshot.body.bottom() <= area.bottom());
+            assert!(snapshot.footer.bottom() <= area.bottom());
+        }
     }
 
     #[test]
-    fn ops_details_split_is_hit_testable_and_preserves_minimum_panes() {
-        let mut input = input(DevLayoutPreset::Right);
-        input.active_workspace = TuiWorkspace::Ops;
-        input.layout.ops_details_ratio = 99;
+    fn context_picker_rows_follow_adaptive_popup() {
+        let mut input = input();
+        input.mode = TuiMode::ContextPicker;
+        input.context_picker_rows = vec![None, Some(0), Some(1), None, Some(2)];
+        input.context_picker_selected = 2;
         let snapshot = compute(input);
-        let list = snapshot.region(RegionKind::OpsList).expect("agent list");
-        let details = snapshot
-            .region(RegionKind::OpsDetails)
-            .expect("agent details");
-        let divider = snapshot
-            .region(RegionKind::OpsDetailsSplit)
-            .expect("details divider");
-
-        assert!(list.width >= OPS_LIST_MIN_WIDTH);
-        assert!(details.width >= OPS_DETAILS_MIN_WIDTH);
-        assert_eq!(list.right(), divider.x);
-        assert_eq!(divider.right(), details.x);
-        assert_eq!(
-            snapshot.hit_test(divider.x, divider.y),
-            Some(RegionKind::OpsDetailsSplit)
-        );
-    }
-
-    #[test]
-    fn narrow_ops_layout_hides_details_and_its_split() {
-        let mut input = input(DevLayoutPreset::Right);
-        input.area.width = OPS_DETAILS_BREAKPOINT.saturating_sub(1);
-        input.active_workspace = TuiWorkspace::Ops;
-        let snapshot = compute(input);
-
-        assert!(snapshot.region(RegionKind::OpsList).is_some());
-        assert!(snapshot.region(RegionKind::OpsDetails).is_none());
-        assert!(snapshot.region(RegionKind::OpsDetailsSplit).is_none());
+        assert!(snapshot.region(RegionKind::ContextPickerRow(2)).is_some());
     }
 }
