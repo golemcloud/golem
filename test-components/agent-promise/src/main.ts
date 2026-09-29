@@ -15,7 +15,7 @@ import type { PromiseId } from 'golem:api/host@1.5.0';
 const PromiseIdSchema = z.object({
     agentId: z.object({
         componentId: z.object({
-            uuid: z.object({ highBits: s.u64(), lowBits: s.u64() }),
+            uuid: s.uuid(),
         }),
         agentId: z.string(),
     }),
