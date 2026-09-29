@@ -1,13 +1,13 @@
 use bytes::Bytes;
-use golem_rust::agentic::{AgentStream, spawn_local};
+use golem_rust::agentic::{AgentStream, Config, spawn_local};
 use golem_rust::bindings::golem::agent::host::{Datetime, RpcError, WasmRpc};
 use golem_rust::bindings::golem::api::context::start_span;
 use golem_rust::bindings::wasi::config::store as wasi_config;
 use golem_rust::bindings::wasi::keyvalue::eventual::{Bucket, get};
 use golem_rust::retry::{NamedPolicy, Policy, set_named_policy};
 use golem_rust::{
-    FromSchema, FromWire, IntoSchema, IntoWire, PromiseId, SchemaValue, Uuid, WireSchema,
-    agent_definition, agent_implementation, encode_schema_value, mark_atomic_operation,
+    ConfigSchema, FromSchema, FromWire, IntoSchema, IntoWire, PromiseId, SchemaValue, Uuid,
+    WireSchema, agent_definition, agent_implementation, encode_schema_value, mark_atomic_operation,
     oplog_commit,
 };
 use std::future::Future;
@@ -299,6 +299,36 @@ pub struct StreamingRpcReport {
     pub first_sibling: Vec<String>,
     pub second_sibling: Vec<u32>,
     pub after_consumer_drop: u64,
+}
+
+#[derive(ConfigSchema)]
+pub struct ConfiguredRpcTargetConfig {
+    pub label: String,
+    pub count: u32,
+}
+
+#[agent_definition]
+pub trait ConfiguredRpcTarget {
+    fn new(name: String, #[agent_config] config: Config<ConfiguredRpcTargetConfig>) -> Self;
+
+    fn describe(&self) -> (String, String, u32);
+}
+
+struct ConfiguredRpcTargetImpl {
+    name: String,
+    config: Config<ConfiguredRpcTargetConfig>,
+}
+
+#[agent_implementation]
+impl ConfiguredRpcTarget for ConfiguredRpcTargetImpl {
+    fn new(name: String, #[agent_config] config: Config<ConfiguredRpcTargetConfig>) -> Self {
+        Self { name, config }
+    }
+
+    fn describe(&self) -> (String, String, u32) {
+        let config = self.config.get().expect("config access should be allowed");
+        (self.name.clone(), config.label.clone(), config.count)
+    }
 }
 
 #[agent_definition]

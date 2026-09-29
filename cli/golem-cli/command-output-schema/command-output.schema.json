@@ -7077,9 +7077,9 @@
     },
     "PublicTypedValue": {
       "type": "object",
-      "required": ["schema", "value"],
+      "required": ["graph", "value"],
       "properties": {
-        "schema": { "$ref": "#/definitions/SchemaGraph" },
+        "graph": { "$ref": "#/definitions/SchemaGraph" },
         "value": {}
       },
       "additionalProperties": false

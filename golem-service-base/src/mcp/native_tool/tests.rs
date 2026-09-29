@@ -136,8 +136,14 @@ fn omission_respects_author_types_defaults_and_collection_bounds() {
         |_, _| unreachable!(),
     )
     .unwrap();
-    assert_eq!(public["maybe"], json!({"$option": "none"}));
-    assert_eq!(public["defaulted"], "kept");
+    assert_eq!(
+        public["value"]["fields"][2],
+        json!({"kind": "option", "value": {"inner": null}})
+    );
+    assert_eq!(
+        public["value"]["fields"][4],
+        json!({"kind": "string", "value": "kept"})
+    );
 
     let mut excessive = Map::new();
     excessive.insert("plain".to_string(), json!("x"));

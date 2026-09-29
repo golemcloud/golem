@@ -410,7 +410,7 @@ fn stream_runtime_state_semantics_execute() {
         pkg.package_dir().join("binary-messages.json"),
     )
     .unwrap();
-    for fixture in ["json-messages.json", "malformed.json"] {
+    for fixture in ["json-messages.json", "malformed.json", "schema-values.json"] {
         std::fs::copy(
             workspace_root()
                 .unwrap()
@@ -420,13 +420,6 @@ fn stream_runtime_state_semantics_execute() {
         )
         .unwrap();
     }
-    std::fs::copy(
-        workspace_root()
-            .unwrap()
-            .join("test-data/reflection-conformance/v1.json"),
-        pkg.package_dir().join("reflection-conformance.json"),
-    )
-    .unwrap();
     run_sbt_test(
         pkg.package_dir().as_path(),
         r#"package golem.bridge.runtime
@@ -439,14 +432,106 @@ import golem.bridge.runtime.StreamSessionState.*
 import golem.bridge.runtime.json.Json
 
 class StreamRuntimeTest extends munit.FunSuite {
-  private val reflectionCorpus = Json.parse(
-    java.nio.file.Files.readString(java.nio.file.Path.of("reflection-conformance.json"))
-  ).toOption.get
+  private def fixtureField(value: Json, name: String): Json =
+    Json.asObject(value).toOption.get.find(_._1 == name).map(_._2).get
 
-  private def corpusCase(id: String): Json =
-    Json.asArray(Json.requireField(reflectionCorpus, "cases").toOption.get).toOption.get
-      .find(value => Json.field(value, "id").flatMap(Json.asString(_).toOption).contains(id))
-      .getOrElse(fail(s"missing reflection conformance case $id"))
+  private def fixtureOptionalField(value: Json, name: String): Option[Json] =
+    Json.asObject(value).toOption.get.find(_._1 == name).map(_._2)
+
+  private def fixtureType(input: Json): Json = {
+    val kind = Json.asString(fixtureField(input, "kind")).toOption.get
+    val empty = Json.obj(Vector.empty)
+    val value = kind match {
+      case "ref" => Json.obj("id" -> fixtureField(input, "name"))
+      case "text" => Json.obj("restrictions" -> empty)
+      case "binary" =>
+        val restrictions = Vector("mimeTypes", "minBytes", "maxBytes").flatMap(name => fixtureOptionalField(input, name).map(name -> _))
+        Json.obj("restrictions" -> Json.obj(restrictions))
+      case "path" => Json.obj("spec" -> empty)
+      case "url" => Json.obj("restrictions" -> empty)
+      case "quantity" => Json.obj("spec" -> Json.obj("baseUnit" -> Json.string("kg"), "allowedSuffixes" -> Json.arr(Vector.empty)))
+      case "record" =>
+        val fields = Json.asArray(fixtureField(input, "fields")).toOption.get.map { field =>
+          Json.obj("name" -> fixtureField(field, "name"), "body" -> fixtureType(fixtureField(field, "type")))
+        }
+        Json.obj("fields" -> Json.arr(fields))
+      case "tuple" => Json.obj("elements" -> Json.arr(Json.asArray(fixtureField(input, "elements")).toOption.get.map(fixtureType)))
+      case "list" => Json.obj("element" -> fixtureType(fixtureField(input, "element")))
+      case "fixed-list" => Json.obj("element" -> fixtureType(fixtureField(input, "element")), "length" -> fixtureField(input, "length"))
+      case "map" => Json.obj("key" -> fixtureType(fixtureField(input, "key")), "value" -> fixtureType(fixtureField(input, "value")))
+      case "enum" => Json.obj("cases" -> fixtureField(input, "cases"))
+      case "flags" => Json.obj("flags" -> fixtureField(input, "flags"))
+      case "variant" =>
+        val cases = Json.asArray(fixtureField(input, "cases")).toOption.get.map { item =>
+          Json.obj(Vector("name" -> fixtureField(item, "name")) ++ fixtureOptionalField(item, "type").map(value => "payload" -> fixtureType(value)))
+        }
+        Json.obj("cases" -> Json.arr(cases))
+      case "option" => Json.obj("inner" -> fixtureType(fixtureField(input, "inner")))
+      case "result" =>
+        val spec = Vector("ok", "err").flatMap(name => fixtureOptionalField(input, name).filter(_.render != "null").map(name -> fixtureType(_)))
+        Json.obj("spec" -> Json.obj(spec))
+      case "union" =>
+        val branches = Json.asArray(fixtureField(input, "branches")).toOption.get.map { branch =>
+          val discriminator = fixtureField(branch, "discriminator")
+          Json.obj(
+            "tag" -> fixtureField(branch, "name"),
+            "body" -> fixtureType(fixtureField(branch, "type")),
+            "discriminator" -> Json.obj("rule" -> Json.string("prefix"), "value" -> Json.obj("prefix" -> fixtureField(discriminator, "prefix")))
+          )
+        }
+        Json.obj("spec" -> Json.obj("branches" -> Json.arr(branches)))
+      case "stream" => Json.obj(Vector.empty ++ fixtureOptionalField(input, "inner").filter(_.render != "null").map(value => "inner" -> fixtureType(value)))
+      case _ => empty
+    }
+    Json.obj("kind" -> Json.string(kind), "value" -> value)
+  }
+
+  private def fixtureGraph(vector: Json): Json = {
+    val defs = fixtureOptionalField(vector, "definitions").toVector.flatMap(value => Json.asObject(value).toOption.get).map { case (id, body) =>
+      Json.obj("id" -> Json.string(id), "name" -> Json.string(id), "body" -> fixtureType(body))
+    }
+    Json.obj("defs" -> Json.arr(defs), "root" -> fixtureType(fixtureField(vector, "schema")))
+  }
+
+  test("native value codec directly consumes the frozen schema-value fixtures") {
+    val negativeZero = Json.parse("""{"kind":"f64","value":-0}""").toOption.get
+    assertEquals(Json.asNumberLiteral(fixtureField(negativeZero, "value")).toOption.get, "-0")
+    val negativeZeroValue = SchemaValueCodec.fromJson(negativeZero).toOption.get.asInstanceOf[SchemaValue.F64Value]
+    assertEquals(java.lang.Double.doubleToRawLongBits(negativeZeroValue.value), java.lang.Double.doubleToRawLongBits(-0.0d))
+    assertEquals(SchemaValueCodec.toJson(negativeZeroValue).render, """{"kind":"f64","value":-0}""")
+    val exponent = Json.parse("""{"value":1e-0}""").toOption.get
+    assertEquals(Json.asNumberLiteral(fixtureField(exponent, "value")).toOption.get, "1")
+    val nestedNegativeZero = Json.parse("""{"text":"-0","nested":[{"value":-0.0}]}""").toOption.get
+    assertEquals(Json.asString(fixtureField(nestedNegativeZero, "text")).toOption.get, "-0")
+    val nested = Json.asArray(fixtureField(nestedNegativeZero, "nested")).toOption.get.head
+    assertEquals(Json.asNumberLiteral(fixtureField(nested, "value")).toOption.get, "-0")
+    val fixture = Json.parse(java.nio.file.Files.readString(java.nio.file.Path.of("schema-values.json"))).toOption.get
+    Json.asArray(fixtureField(fixture, "vectors")).toOption.get.foreach { vector =>
+      val name = Json.asString(fixtureField(vector, "name")).toOption.get
+      val canonical = Json.asString(fixtureField(vector, "canonical")).toOption.get
+      val codec = PublicValueCodec.fromSchemaGraphJson(fixtureGraph(vector).render)
+      assertEquals(codec.encode(codec.decode(Json.parse(canonical).toOption.get)).render, canonical, name)
+    }
+  }
+
+  test("native value codec directly rejects the frozen malformed schema-value fixtures") {
+    val fixture = Json.parse(java.nio.file.Files.readString(java.nio.file.Path.of("malformed.json"))).toOption.get
+    Json.asArray(fixtureField(fixture, "vectors")).toOption.get.foreach { vector =>
+      if (Json.asString(fixtureField(vector, "lane")).toOption.get == "schema-value") {
+        val name = Json.asString(fixtureField(vector, "name")).toOption.get
+        val expectedCode = Json.asString(fixtureField(vector, "expectedCode")).toOption.get
+        assert(Set("malformed-message", "validation-error", "stream-already-consumed").contains(expectedCode), name)
+        val codec = PublicValueCodec.fromSchemaGraphJson(fixtureGraph(vector).render)
+        val rejected = try {
+          codec.decode(Json.parse(Json.asString(fixtureField(vector, "input")).toOption.get).toOption.get)
+          false
+        } catch {
+          case _: BridgeException => true
+        }
+        assert(rejected, name)
+      }
+    }
+  }
 
   test("text codec directly consumes frozen canonical and malformed fixtures") {
     val messages = Json.parse(java.nio.file.Files.readString(java.nio.file.Path.of("json-messages.json"))).toOption.get
@@ -522,148 +607,74 @@ class StreamRuntimeTest extends munit.FunSuite {
       SchemaValue.BinaryValue(Vector[Byte](0, -1), Some("application/octet-stream"))
     ))
     val encoded = codec.encode(value)
-    assertEquals(encoded.render, """{"count":"-9223372036854775808","data":{"bytes":"AP8","mimeType":"application/octet-stream"}}""")
+    assertEquals(encoded.render, """{"kind":"record","value":{"fields":[{"kind":"s64","value":"-9223372036854775808"},{"kind":"binary","value":{"bytes":[0,255],"mimeType":"application/octet-stream"}}]}}""")
     assertEquals(codec.decode(encoded), value)
-    intercept[BridgeException](codec.decode(Json.parse("""{"count":"1","data":{"bytes":"AA==","mimeType":"application/octet-stream"}}""").toOption.get))
+    intercept[BridgeException](codec.decode(Json.parse("""{"kind":"record","value":{"fields":[{"kind":"s64","value":"1"},{"kind":"binary","value":{"bytes":[0],"mimeType":"application/octet-stream"}}]}}""").toOption.get))
   }
 
-  test("reflection corpus drives tagged binary public binary and config request wires") {
-    val binaryCase = corpusCase("canonical/binary-mime")
-    val binaryExpected = Json.requireField(binaryCase, "expected").toOption.get
-    val mimeType = Json.asString(Json.requireField(binaryExpected, "mimeType").toOption.get).toOption.get
-    val binaryValue = SchemaValue.BinaryValue(Vector[Byte](-5, -1), Some(mimeType))
-    assertEquals(
-      SchemaValueCodec.toJson(binaryValue).render,
-      """{"kind":"binary","value":{"bytes":[251,255],"mimeType":"application/octet-stream"}}"""
-    )
+  test("config application JSON preserves reserved-looking fields and nested sums") {
+    val graph = """{"root":{"kind":"record","value":{"fields":[{"name":"kind","body":{"kind":"string","value":{}}},{"name":"value","body":{"kind":"option","value":{"inner":{"kind":"result","value":{"spec":{"ok":{"kind":"string","value":{}}}}}}}},{"name":"$option","body":{"kind":"string","value":{}}},{"name":"$result","body":{"kind":"string","value":{}}}]}}}"""
+    val codec = PublicValueCodec.fromSchemaGraphJson(graph)
+    val value = SchemaValue.RecordValue(List(
+      SchemaValue.StringValue("application-field"),
+      SchemaValue.OptionValue(Some(SchemaValue.ResultValue(SchemaResult.Ok(Some(SchemaValue.StringValue("nested")))))),
+      SchemaValue.StringValue("ordinary-option-field"),
+      SchemaValue.StringValue("ordinary-result-field")
+    ))
+    assertEquals(codec.encodeApplication(value).render, """{"kind":"application-field","value":{"ok":"nested"},"$option":"ordinary-option-field","$result":"ordinary-result-field"}""")
+  }
 
-    val binaryCodec = PublicValueCodec.fromSchemaGraphJson(
-      """{"root":{"kind":"binary","value":{"restrictions":{}}}}"""
-    )
-    assertEquals(binaryCodec.encode(binaryValue), binaryExpected)
-    val rejected = Json.asArray(
-      Json.requireField(corpusCase("errors/binary-noncanonical-base64"), "inputs").toOption.get
-    ).toOption.get
-    rejected.foreach(input => intercept[BridgeException](binaryCodec.decode(input)))
+  test("config application JSON canonicalizes scalars and rejects nested protocol-only values") {
+    val f32 = PublicValueCodec.fromSchemaGraphJson("""{"root":{"kind":"f32","value":{}}}""")
+    assertEquals(f32.encodeApplication(SchemaValue.F32Value(0.1f)).render, "0.10000000149011612")
+    val datetime = PublicValueCodec.fromSchemaGraphJson("""{"root":{"kind":"datetime","value":{}}}""")
+    assertEquals(datetime.encodeApplication(SchemaValue.DatetimeValue("2026-01-01T00:00:00.12Z")).render, "\"2026-01-01T00:00:00.120000000Z\"")
+    val exceptional = PublicValueCodec.fromSchemaGraphJson("""{"root":{"kind":"option","value":{"inner":{"kind":"f64","value":{}}}}}""")
+    val value = SchemaValue.OptionValue(Some(SchemaValue.F64Value(Double.NaN)))
+    exceptional.decode(exceptional.encode(value))
+    intercept[BridgeException](exceptional.encodeApplication(value))
+  }
 
-    val configCase = corpusCase("config/canonical-entry")
-    val configExpected = Json.requireField(configCase, "expected").toOption.get
-    val path = Json.asArray(Json.requireField(configExpected, "path").toOption.get).toOption.get
-      .map(value => Json.asString(value).toOption.get).toList
-    val s64Codec = PublicValueCodec.fromSchemaGraphJson(
-      """{"root":{"kind":"s64","value":{}}}"""
-    )
-    val optionCodec = PublicValueCodec.fromSchemaGraphJson(
-      """{"root":{"kind":"option","value":{"inner":{"kind":"string","value":{}}}}}"""
-    )
-    val optionValue = SchemaValue.OptionValue(Some(SchemaValue.StringValue("west")))
-    assertEquals(optionCodec.encode(optionValue).render, """{"$option":"some","value":"west"}""")
-    assertEquals(optionCodec.encodeCanonical(optionValue).render, """"west"""")
-    val variantCodec = PublicValueCodec.fromSchemaGraphJson(
-      """{"root":{"kind":"variant","value":{"cases":[{"name":"payload","payload":{"kind":"string","value":{}}}]}}}"""
-    )
+  test("native float codec rejects finite overflow but accepts exceptional tags") {
+    assert(SchemaValueCodec.fromJson(Json.parse("""{"kind":"f32","value":1e39}""").toOption.get).isLeft)
+    assert(SchemaValueCodec.fromJson(Json.parse("""{"kind":"f64","value":1e400}""").toOption.get).isLeft)
     assertEquals(
-      variantCodec.encodeCanonical(SchemaValue.VariantValue(0, Some(SchemaValue.StringValue("value")))).render,
-      """{"payload":"value"}"""
+      SchemaValueCodec.fromJson(Json.parse("""{"kind":"f64","value":{"$float":"positive-infinity"}}""").toOption.get),
+      Right(SchemaValue.F64Value(Double.PositiveInfinity))
     )
-    val resultCodec = PublicValueCodec.fromSchemaGraphJson(
-      """{"root":{"kind":"result","value":{"spec":{"ok":{"kind":"string","value":{}}}}}}"""
-    )
-    assertEquals(
-      resultCodec.encodeCanonical(SchemaValue.ResultValue(SchemaResult.Ok(Some(SchemaValue.StringValue("ready"))))).render,
-      """{"ok":"ready"}"""
-    )
-    val unionCodec = PublicValueCodec.fromSchemaGraphJson(
-      """{"root":{"kind":"union","value":{"spec":{"branches":[{"tag":"command","body":{"kind":"string","value":{}},"discriminator":{"rule":"prefix","value":{"prefix":"cmd:"}}}]}}}}"""
-    )
-    assertEquals(
-      unionCodec.encodeCanonical(SchemaValue.UnionValue("command", SchemaValue.StringValue("cmd:run"))).render,
-      """"cmd:run""""
-    )
-    val request = CreateAgentRequest(
-      "app",
-      "env",
-      "ConfigAgent",
-      SchemaValue.TupleValue(List.empty),
-      None,
-      List(
-        AgentConfigEntry(path, SchemaValue.S64Value(Long.MaxValue), s64Codec),
-        AgentConfigEntry(List("optional"), optionValue, optionCodec)
-      )
-    )
-    val envelope = BridgeProtocol.encodeCreateAgentRequest(request)
-    val config = Json.asArray(Json.requireField(envelope, "config").toOption.get).toOption.get
-    assertEquals(
-      config,
-      Vector(configExpected, Json.parse("""{"path":["optional"],"value":"west"}""").toOption.get)
-    )
-    assertEquals(Json.requireField(config.head, "value").toOption.get, Json.string(Long.MaxValue.toString))
+  }
 
-    val floatCodec = PublicValueCodec.fromSchemaGraphJson(
-      """{"root":{"kind":"f64","value":{}}}"""
-    )
-    val call = scala.util.Try(
-      Bridge.createAgent(
-        Configuration(GolemServer.Custom("http://127.0.0.1:1", "token"), "app", "env", global),
-        "ConfigAgent",
-        SchemaValue.TupleValue(List.empty),
-        None,
-        List(AgentConfigEntry(List("float"), SchemaValue.F64Value(Double.NaN), floatCodec))
-      )
-    )
-    assert(call.isSuccess)
-    intercept[BridgeException](Await.result(call.get, 1.second))
-
-    val tupleCodec = PublicValueCodec.fromSchemaGraphJson(
-      """{"root":{"kind":"tuple","value":{"elements":[]}}}"""
-    )
-    val boundedCodec = PublicValueCodec.fromSchemaGraphJson(
-      """{"root":{"kind":"u32","value":{"restrictions":{"min":{"kind":"unsigned","value":10}}}}}"""
-    )
-    val streamingCall = scala.util.Try(
-      Bridge.invokeStreamingAgent(
-        ResolvedAgent(
-          Configuration(GolemServer.Custom("http://127.0.0.1:1", "token"), "app", "env", global),
-          "ConfigAgent",
-          SchemaValue.U32Value(1),
-          None,
-          List.empty,
-          None
-        ),
-        "stream",
-        () => SchemaValue.TupleValue(List.empty),
-        boundedCodec,
-        tupleCodec,
-        None
-      )
-    )
-    assert(streamingCall.isSuccess)
-    intercept[BridgeException](Await.result(streamingCall.get, 1.second))
+  test("REST results validate the returned graph before the local expected schema") {
+    val response = Json.parse("""{"agentId":{"componentId":"component","agentId":"agent"},"idempotencyKey":"key","result":{"graph":{"root":{"kind":"u32","value":{}}},"value":{"kind":"u32","value":5}}}""").toOption.get
+    val decoded = BridgeProtocol.decodeAgentInvocationResult(response).toOption.get.result.get
+    assertEquals(decoded, SchemaValue.U32Value(5))
+    val expected = PublicValueCodec.fromSchemaGraphJson("""{"root":{"kind":"u32","value":{"restrictions":{"min":{"kind":"unsigned","value":10}}}}}""")
+    intercept[BridgeException](expected.encode(decoded))
   }
 
   test("public codec enforces quantity bounds restrictions unions and integer boundaries") {
     val quantity = PublicValueCodec.fromSchemaGraphJson("""{"root":{"kind":"quantity","value":{"spec":{"baseUnit":"m","allowedSuffixes":["cm"],"min":{"mantissa":1,"scale":0,"unit":"m"},"max":{"mantissa":200,"scale":0,"unit":"m"}}}}}""")
     val q = SchemaValue.QuantityValue(150, 0, "cm")
     assertEquals(quantity.decode(quantity.encode(q)), q)
-    intercept[BridgeException](quantity.decode(Json.parse("""{"mantissa":"201","scale":0,"unit":"cm"}""").toOption.get))
-    intercept[BridgeException](quantity.decode(Json.parse("""{"mantissa":"1","scale":0,"unit":"km"}""").toOption.get))
+    intercept[BridgeException](quantity.decode(Json.parse("""{"kind":"quantity","value":{"mantissa":"201","scale":0,"unit":"cm"}}""").toOption.get))
+    intercept[BridgeException](quantity.decode(Json.parse("""{"kind":"quantity","value":{"mantissa":"1","scale":0,"unit":"km"}}""").toOption.get))
 
     val overflowing = PublicValueCodec.fromSchemaGraphJson("""{"root":{"kind":"quantity","value":{"spec":{"baseUnit":"m","allowedSuffixes":[],"min":{"mantissa":1,"scale":-2147483648,"unit":"m"}}}}}""")
-    intercept[BridgeException](overflowing.decode(Json.parse("""{"mantissa":"1","scale":2147483647,"unit":"m"}""").toOption.get))
+    intercept[BridgeException](overflowing.decode(Json.parse("""{"kind":"quantity","value":{"mantissa":"1","scale":2147483647,"unit":"m"}}""").toOption.get))
 
     val bounded = PublicValueCodec.fromSchemaGraphJson("""{"root":{"kind":"u32","value":{"restrictions":{"min":{"kind":"unsigned","value":10},"max":{"kind":"unsigned","value":20}}}}}""")
-    assertEquals(bounded.decode(Json.parse("15").toOption.get), SchemaValue.U32Value(15))
-    intercept[BridgeException](bounded.decode(Json.parse("9").toOption.get))
+    assertEquals(bounded.decode(Json.parse("""{"kind":"u32","value":15}""").toOption.get), SchemaValue.U32Value(15))
+    intercept[BridgeException](bounded.decode(Json.parse("""{"kind":"u32","value":9}""").toOption.get))
 
     val union = PublicValueCodec.fromSchemaGraphJson("""{"root":{"kind":"union","value":{"spec":{"branches":[{"tag":"command","body":{"kind":"string","value":{}},"discriminator":{"rule":"prefix","value":{"prefix":"cmd:"}}}]}}}}""")
     val unionValue = SchemaValue.UnionValue("command", SchemaValue.StringValue("cmd:run"))
     assertEquals(union.decode(union.encode(unionValue)), unionValue)
-    intercept[BridgeException](union.decode(Json.parse("""{"$union":"command","value":"run"}""").toOption.get))
+    intercept[BridgeException](union.decode(Json.parse("""{"kind":"union","value":{"tag":"command","body":{"kind":"string","value":"run"}}}""").toOption.get))
 
     val u64 = PublicValueCodec.fromSchemaGraphJson("""{"root":{"kind":"u64","value":{}}}""")
-    assertEquals(u64.decode(Json.parse("\"18446744073709551615\"").toOption.get), SchemaValue.U64Value(-1L))
+    assertEquals(u64.decode(Json.parse("""{"kind":"u64","value":"18446744073709551615"}""").toOption.get), SchemaValue.U64Value(-1L))
     val url = PublicValueCodec.fromSchemaGraphJson("""{"root":{"kind":"url","value":{"restrictions":{"allowedSchemes":["mailto"]}}}}""")
-    assertEquals(url.decode(Json.parse("\"mailto:user@example.com\"").toOption.get), SchemaValue.UrlValue("mailto:user@example.com"))
+    assertEquals(url.decode(Json.parse("""{"kind":"url","value":{"url":"mailto:user@example.com"}}""").toOption.get), SchemaValue.UrlValue("mailto:user@example.com"))
   }
 
   test("channels preserve the complete public u32 range") {
@@ -752,6 +763,7 @@ class StreamRuntimeTest extends munit.FunSuite {
       codec,
       codec,
       None,
+      List.empty,
     )
 
     intercept[Throwable](Await.result(stream.consume(), 1.second))
@@ -810,6 +822,10 @@ fn generated_project_layout_is_correct() {
     assert!(client_source.contains("package golem.bridge.client.counter_agent"));
     assert!(client_source.contains("object CounterAgentClient"));
     assert!(client_source.contains("\"CounterAgent\""));
+    assert!(
+        client_source.contains(".encode(__value)"),
+        "generated REST result must be validated against its local expected schema: {client_source}"
+    );
 
     let build_sbt = std::fs::read_to_string(dir.join("build.sbt")).unwrap();
     assert!(build_sbt.contains("scalaVersion := \"3.8.2\""));
@@ -1909,10 +1925,10 @@ fn local_config_overrides_compile() {
 
     // Supplied overrides build `AgentConfigEntry` values keyed by the path.
     assert!(client.contains(
-        "_root_.golem.bridge.runtime.AgentConfigEntry(_root_.scala.collection.immutable.List(\"db\", \"host\"), configValue, _root_.golem.bridge.runtime.PublicValueCodec.fromSchemaGraphJson("
+        "_root_.golem.bridge.runtime.AgentConfigEntry(_root_.scala.collection.immutable.List(\"db\", \"host\"), _root_.golem.bridge.runtime.PublicValueCodec"
     ));
     assert!(client.contains(
-        "_root_.golem.bridge.runtime.AgentConfigEntry(_root_.scala.collection.immutable.List(\"max-retries\"), configValue, _root_.golem.bridge.runtime.PublicValueCodec.fromSchemaGraphJson("
+        "_root_.golem.bridge.runtime.AgentConfigEntry(_root_.scala.collection.immutable.List(\"max-retries\"), _root_.golem.bridge.runtime.PublicValueCodec"
     ));
 
     // The plain constructors pass an empty config list.

@@ -3172,17 +3172,40 @@ fn arb_tool_invoke_result() -> OutputDocumentStrategy {
 fn arb_tool_invoke_session_result() -> OutputDocumentStrategy {
     use golem_common::model::IdempotencyKey;
     use golem_common::model::invocation_session_public::{
-        PublicInvocationResult, PublicNativeToolTarget,
+        PublicInvocationResult, PublicNativeToolTarget, PublicTypedValue,
     };
+    use golem_common::schema::{SchemaGraph, SchemaType};
 
-    arb_small_string()
-        .prop_map(|key| {
+    (arb_small_string(), any::<bool>())
+        .prop_map(|(key, success)| {
+            let typed = PublicTypedValue {
+                graph: SchemaGraph::anonymous(if success {
+                    SchemaType::string()
+                } else {
+                    SchemaType::u8()
+                }),
+                value: if success {
+                    serde_json::json!({"kind": "string", "value": "done"})
+                } else {
+                    serde_json::json!({"kind": "u8", "value": 7})
+                },
+            };
             to_structured_output_value(crate::model::tool_invoke::ToolInvocationSessionView {
                 target: PublicNativeToolTarget::Component {
                     component_id: uuid::Uuid::nil(),
                 },
                 idempotency_key: IdempotencyKey::new(key),
-                result: PublicInvocationResult::ToolSuccess { result: None },
+                result: if success {
+                    PublicInvocationResult::ToolSuccess {
+                        result: Some(typed),
+                    }
+                } else {
+                    PublicInvocationResult::ToolFailure {
+                        code: "custom-error".to_string(),
+                        message: Some("tool failed".to_string()),
+                        custom_error: Some(typed),
+                    }
+                },
             })
             .expect("generated tool invocation session result should serialize")
         })
