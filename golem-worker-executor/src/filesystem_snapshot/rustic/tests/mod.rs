@@ -27,7 +27,7 @@ use self::scripted::{Script, ScriptedBlobStorage};
 use super::backend::{BlobBackend, KEPT_PACKS_LIMIT};
 use super::files::SnapshotFiles;
 use super::prune::Percent;
-use super::store::{RusticSnapshotStore, StorePolicy};
+use super::store::{RusticSnapshotStore, StorePolicy, named};
 use super::{
     PruneReport, PruneSettings, RepositoryKey, backup_options, open_existing, prune_options,
     repository_options, restore_snapshot, run_blocking,
@@ -260,8 +260,8 @@ async fn prune_with(
     run_blocking(move || super::prune(backend, &key(), &settings)).await
 }
 
-/// Restores the oldest snapshot with the name in the scope into the empty directory `into` with
-/// the options, through the restore of the store, on a blocking thread.
+/// Finds the snapshot with the name in the scope with the lookup rule of the store, and restores it
+/// into the empty directory `into` with the options, on a blocking thread.
 async fn restore_named(
     storage: Arc<dyn BlobStorage>,
     scope: &SnapshotScope,
@@ -282,13 +282,9 @@ async fn restore_named(
     let (name, into) = (name.clone(), into.to_path_buf());
     run_blocking(move || {
         let repository = open_existing(backend, &key())?.context("the scope has no repository")?;
-        let snapshot = repository
-            .get_all_snapshots()?
-            .into_iter()
-            .filter(|snapshot| snapshot.label == name.as_str())
-            .min_by_key(|snapshot| (snapshot.time.timestamp(), snapshot.id))
-            .context("no snapshot has the name")?;
-        restore_snapshot(repository, &snapshot, &into, &options)
+        let snapshots = repository.get_all_snapshots()?;
+        let snapshot = named(&snapshots, &name).context("no snapshot has the name")?;
+        restore_snapshot(repository, snapshot, &into, &options)
     })
     .await
 }

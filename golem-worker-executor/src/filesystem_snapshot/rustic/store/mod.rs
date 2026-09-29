@@ -1217,7 +1217,10 @@ fn lookup(found: ScopeSnapshots, name: &SnapshotName) -> Lookup {
 }
 
 /// Of the snapshot files with the name, gives the one with the least time and id.
-fn named<'a>(snapshots: &'a [SnapshotFile], name: &SnapshotName) -> Option<&'a SnapshotFile> {
+pub(super) fn named<'a>(
+    snapshots: &'a [SnapshotFile],
+    name: &SnapshotName,
+) -> Option<&'a SnapshotFile> {
     snapshots
         .iter()
         .filter(|snapshot| snapshot.label == name.as_str())
