@@ -895,6 +895,113 @@ fn retention_never_deletes_the_kept_snapshot() {
 }
 
 #[test]
+fn retention_neither_counts_nor_deletes_a_snapshot_within_the_clock_skew_margin() {
+    let before_own = |seconds: u64| SnapshotInfo {
+        created_at: golem_common::model::Timestamp::from(
+            FIRST_SAVE_MILLIS + 100 * 60 * 1000 - seconds * 1000,
+        ),
+        files: 0,
+        bytes: 0,
+    };
+    let listing = [
+        ("p-own", 0),
+        ("p-inside", 90),
+        ("p-at-the-margin", 120),
+        ("p-old", 600),
+    ]
+    .map(|(name, seconds)| (SnapshotName::new(name).unwrap(), before_own(seconds)));
+    let own = SnapshotName::new("p-own").unwrap();
+
+    let victims = names(&retention::victims(&listing, &own, &before_own(0), 1, None));
+
+    assert_eq!(victims, vec!["p-old"]);
+}
+
+#[test]
+fn the_labels_and_the_messages_of_the_service_name_what_they_count_and_report() {
+    let labels = [
+        SnapshotKind::Periodic.label(),
+        SnapshotKind::Update.label(),
+        ConfirmOutcome::Confirmed.label(),
+        ConfirmOutcome::Superseded.label(),
+        ConfirmOutcome::Deferred.label(),
+    ];
+    let messages = [
+        SnapshotSkip::Disabled.to_string(),
+        SnapshotSkip::UploadInFlight.to_string(),
+        SnapshotSkip::VolumeUnderPressure.to_string(),
+        SnapshotSkip::ScopeDeleting.to_string(),
+        SnapshotsDisabled.to_string(),
+    ];
+
+    assert_eq!(
+        labels,
+        ["periodic", "update", "confirmed", "superseded", "deferred"]
+    );
+    assert_eq!(
+        messages,
+        [
+            "filesystem snapshots are disabled on this executor",
+            "an upload of a filesystem snapshot of the agent runs now",
+            "the volume of the agent filesystems is under pressure",
+            "the filesystem snapshots of the agent are being deleted",
+            "the record names a filesystem snapshot, and filesystem snapshots are disabled on \
+             this executor",
+        ]
+        .map(String::from)
+    );
+}
+
+#[test]
+fn an_admission_waits_for_the_open_file_calls_as_long_as_the_settings_say() {
+    paused(async {
+        let store = Arc::new(ScriptedStore::default());
+        let settings = settings(4, 4, 1);
+        let snapshots = service(&store, settings.clone());
+        let scope = scope("capture-wait");
+
+        let admission = snapshots
+            .admit(&scope, SnapshotKind::Periodic)
+            .await
+            .unwrap();
+
+        assert_eq!(admission.capture_wait(), settings.capture_wait());
+        assert_ne!(admission.capture_wait(), Duration::ZERO);
+    })
+}
+
+#[test]
+fn a_duplicate_of_a_scope_holds_each_snapshot_of_the_scope() {
+    paused(async {
+        let store = Arc::new(ScriptedStore::default());
+        let snapshots = service(&store, settings(4, 4, 1));
+        let from = scope("duplicated");
+        let to = scope("duplicate");
+        let discarded = Arc::new(AtomicUsize::new(0));
+        let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
+        let admission = snapshots
+            .admit(&from, SnapshotKind::Periodic)
+            .await
+            .unwrap();
+        let name = admission.name().clone();
+        admission.submit(capture(b"tree", &discarded), None, confirmer(&confirm));
+        ended(&snapshots, &from).await;
+
+        snapshots.duplicate_scope(&from, &to).await.unwrap();
+        let listed = store
+            .memory
+            .list(&to)
+            .await
+            .unwrap()
+            .iter()
+            .map(|(name, _)| name.as_str().to_string())
+            .collect::<Vec<_>>();
+
+        assert_eq!(listed, vec![name.as_str().to_string()]);
+    })
+}
+
+#[test]
 fn an_admission_during_a_scope_delete_gets_scope_deleting_until_the_delete_ends() {
     paused(async {
         let store = Arc::new(ScriptedStore::default());

@@ -219,3 +219,47 @@ impl Drop for WaitTicket {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::services::agent_filesystem_snapshots::ConfirmOutcome;
+    use golem_common::model::component::ComponentId;
+    use golem_common::model::environment::EnvironmentId;
+    use golem_common::model::{AgentId, OwnedAgentId};
+    use test_r::test;
+
+    #[test]
+    fn a_dropped_wait_releases_the_decision_of_the_ended_job() {
+        let registry = Arc::new(Registry::default());
+        let scope = SnapshotScope::agent(&OwnedAgentId::new(
+            EnvironmentId::new(),
+            &AgentId {
+                component_id: ComponentId::new(),
+                agent_id: "waiting".to_string(),
+            },
+        ));
+        let name = FilesystemSnapshotName::periodic();
+        let job = JobTicket::admit(&registry, &scope, &name, CancellationToken::new(), true)
+            .expect("admitted");
+        job.saving();
+        let wait = WaitTicket::start_wait(&registry, &scope, &name).expect("waits");
+        let id = wait.id;
+        job.decide(JobDecision::Confirmed(ConfirmOutcome::Confirmed));
+        drop(job);
+        let decision =
+            |registry: &Registry| registry.read(|scopes| rules::decision_of(scopes, &scope, id));
+
+        let while_waiting = decision(&registry);
+        drop(wait);
+        let after_the_wait = decision(&registry);
+
+        assert_eq!(
+            (while_waiting, after_the_wait),
+            (
+                Some(JobDecision::Confirmed(ConfirmOutcome::Confirmed)),
+                Some(JobDecision::Stopped)
+            )
+        );
+    }
+}
