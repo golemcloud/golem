@@ -135,7 +135,8 @@ fn restore_snapshot(
 
 /// Prunes the repository: deletes the packs that an earlier prune marked and whose time to stay
 /// is over, marks the packs that no snapshot uses, and repacks the packs that hold both used and
-/// unused blobs. The result is `None` when the scope has no repository.
+/// unused blobs, within [`MAX_UNUSED`] and [`MAX_REPACK`]. The result is `None` when the scope has
+/// no repository.
 fn prune(
     backend: Arc<BlobBackend>,
     key: &RepositoryKey,
