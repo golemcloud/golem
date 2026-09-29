@@ -77,6 +77,13 @@ pub struct StoredQuotaResource {
     pub revision: ExternalRevision,
 }
 
+/// Everything the store holds: every resource with its revision, and every lease.
+#[derive(Debug, Clone, Default)]
+pub struct StoredQuotaState {
+    pub resources: Vec<StoredQuotaResource>,
+    pub leases: Vec<QuotaLeaseRecord>,
+}
+
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct QuotaLeaseRecord {
     pub resource_definition_id: Uuid,
@@ -132,8 +139,15 @@ pub trait QuotaRepo: Send + Sync {
         resource_definition_id: ResourceDefinitionId,
     ) -> Result<(), QuotaRepoError>;
 
-    async fn get_all_resources(&self) -> Result<Vec<StoredQuotaResource>, QuotaRepoError>;
-    async fn get_all_leases(&self) -> Result<Vec<QuotaLeaseRecord>, QuotaRepoError>;
+    /// Everything stored, read once at startup to rebuild the in-memory state.
+    async fn get_all(&self) -> Result<StoredQuotaState, QuotaRepoError>;
+
+    /// One resource as stored, with its leases, or `None` if the resource is not stored. Used to
+    /// catch up with the store after a write whose outcome is unknown.
+    async fn get_resource(
+        &self,
+        resource_definition_id: ResourceDefinitionId,
+    ) -> Result<Option<(StoredQuotaResource, Vec<QuotaLeaseRecord>)>, QuotaRepoError>;
 
     async fn delete_leases_for_resource(
         &self,
@@ -216,12 +230,18 @@ impl<Repo: QuotaRepo> QuotaRepo for LoggedQuotaRepo<Repo> {
             .await
     }
 
-    async fn get_all_resources(&self) -> Result<Vec<StoredQuotaResource>, QuotaRepoError> {
-        self.repo.get_all_resources().instrument(Self::span()).await
+    async fn get_all(&self) -> Result<StoredQuotaState, QuotaRepoError> {
+        self.repo.get_all().instrument(Self::span()).await
     }
 
-    async fn get_all_leases(&self) -> Result<Vec<QuotaLeaseRecord>, QuotaRepoError> {
-        self.repo.get_all_leases().instrument(Self::span()).await
+    async fn get_resource(
+        &self,
+        resource_definition_id: ResourceDefinitionId,
+    ) -> Result<Option<(StoredQuotaResource, Vec<QuotaLeaseRecord>)>, QuotaRepoError> {
+        self.repo
+            .get_resource(resource_definition_id)
+            .instrument(Self::span_resource(resource_definition_id))
+            .await
     }
 
     async fn delete_leases_for_resource(
@@ -421,8 +441,8 @@ impl QuotaRepo for DbQuotaRepo<PostgresPool> {
             .await
     }
 
-    async fn get_all_resources(&self) -> Result<Vec<StoredQuotaResource>, QuotaRepoError> {
-        let result = self
+    async fn get_all(&self) -> Result<StoredQuotaState, QuotaRepoError> {
+        let resources = self
             .pool
             .with_ro(SVC_NAME, "get_all_resources")
             .fetch_all_as(sqlx::query_as(indoc! { r#"
@@ -431,12 +451,7 @@ impl QuotaRepo for DbQuotaRepo<PostgresPool> {
                 FROM quota_resources
             "#}))
             .await?;
-
-        Ok(result)
-    }
-
-    async fn get_all_leases(&self) -> Result<Vec<QuotaLeaseRecord>, QuotaRepoError> {
-        let result = self
+        let leases = self
             .pool
             .with_ro(SVC_NAME, "get_all_leases")
             .fetch_all_as(sqlx::query_as(indoc! { r#"
@@ -446,7 +461,47 @@ impl QuotaRepo for DbQuotaRepo<PostgresPool> {
                 FROM quota_leases
             "#}))
             .await?;
-        Ok(result)
+
+        Ok(StoredQuotaState { resources, leases })
+    }
+
+    async fn get_resource(
+        &self,
+        resource_definition_id: ResourceDefinitionId,
+    ) -> Result<Option<(StoredQuotaResource, Vec<QuotaLeaseRecord>)>, QuotaRepoError> {
+        let resource: Option<StoredQuotaResource> = self
+            .pool
+            .with_ro(SVC_NAME, "get_resource")
+            .fetch_optional_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT resource_definition_id, revision, definition, remaining,
+                           last_refilled_at, last_refreshed_at
+                    FROM quota_resources
+                    WHERE resource_definition_id = $1
+                "#})
+                .bind(resource_definition_id.0),
+            )
+            .await?;
+        let Some(resource) = resource else {
+            return Ok(None);
+        };
+
+        let leases = self
+            .pool
+            .with_ro(SVC_NAME, "get_resource_leases")
+            .fetch_all_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT resource_definition_id, pod_ip, pod_port,
+                           epoch, allocated, granted_at, expires_at,
+                           pending_reservations
+                    FROM quota_leases
+                    WHERE resource_definition_id = $1
+                "#})
+                .bind(resource_definition_id.0),
+            )
+            .await?;
+
+        Ok(Some((resource, leases)))
     }
 
     async fn delete_leases_for_resource(
@@ -795,11 +850,59 @@ impl EtcdQuotaRepo {
             .revision())
     }
 
-    /// Every key under [`QUOTA_KEY_PREFIX`], a page at a time. Unfenced, like the shard state
-    /// read: only the leader writes, and it reads the quota state once, before serving.
-    async fn read_all(&self) -> Result<Vec<KeyValue>, QuotaRepoError> {
-        let end = prefix_range_end(QUOTA_KEY_PREFIX);
-        let mut next_key = QUOTA_KEY_PREFIX.as_bytes().to_vec();
+    /// Sorts the keys of a read into resources and leases, decoding each. Anything under the
+    /// prefix that is not in the layout, or does not decode, is an error rather than skipped:
+    /// quota state that cannot be read is never silently dropped.
+    fn decode_state(kvs: Vec<KeyValue>) -> Result<StoredQuotaState, QuotaRepoError> {
+        let mut state = StoredQuotaState::default();
+        for kv in kvs {
+            match parse_key(kv.key())? {
+                QuotaKey::Resource(id) => {
+                    // etcd's revisions start at 1, so a live key cannot carry mod_revision 0,
+                    // which the contract reserves for "not stored".
+                    let revision = kv.mod_revision();
+                    if revision < 1 {
+                        return Err(QuotaRepoError::InternalError(anyhow::anyhow!(
+                            "etcd returned quota resource {id} with mod_revision {revision}, \
+                             which is reserved for absent keys"
+                        )));
+                    }
+
+                    let resource: QuotaResourceState = decode(&kv)?;
+                    state.resources.push(StoredQuotaResource {
+                        record: QuotaResourceRecord {
+                            resource_definition_id: id,
+                            definition: Blob::new(resource.definition),
+                            remaining: resource.remaining.into(),
+                            last_refilled_at: resource.last_refilled_at.into(),
+                            last_refreshed_at: resource.last_refreshed_at.into(),
+                        },
+                        revision,
+                    });
+                }
+                QuotaKey::Lease(id, pod) => {
+                    let lease: QuotaLeaseState = decode(&kv)?;
+                    state.leases.push(QuotaLeaseRecord {
+                        resource_definition_id: id,
+                        pod_ip: Blob::new(pod.ip()),
+                        pod_port: pod.port().into(),
+                        epoch: lease.epoch.into(),
+                        allocated: lease.allocated.into(),
+                        granted_at: lease.granted_at.into(),
+                        expires_at: lease.expires_at.into(),
+                        pending_reservations: Blob::new(lease.pending_reservations),
+                    });
+                }
+            }
+        }
+        Ok(state)
+    }
+
+    /// Every key under `prefix`, a page at a time. Unfenced, like the shard state read: only the
+    /// leader writes, and it holds the lock of whatever it is reading.
+    async fn read_prefix(&self, prefix: &str) -> Result<Vec<KeyValue>, QuotaRepoError> {
+        let end = prefix_range_end(prefix);
+        let mut next_key = prefix.as_bytes().to_vec();
         let mut kvs = Vec::new();
 
         loop {
@@ -905,58 +1008,23 @@ impl QuotaRepo for EtcdQuotaRepo {
         .await
     }
 
-    async fn get_all_resources(&self) -> Result<Vec<StoredQuotaResource>, QuotaRepoError> {
-        let mut resources = Vec::new();
-        for kv in self.read_all().await? {
-            let QuotaKey::Resource(id) = parse_key(kv.key())? else {
-                continue;
-            };
-
-            // etcd's revisions start at 1, so a live key cannot carry mod_revision 0, which the
-            // contract reserves for "not stored".
-            let revision = kv.mod_revision();
-            if revision < 1 {
-                return Err(QuotaRepoError::InternalError(anyhow::anyhow!(
-                    "etcd returned quota resource {id} with mod_revision {revision}, which is \
-                     reserved for absent keys"
-                )));
-            }
-
-            let state: QuotaResourceState = decode(&kv)?;
-            resources.push(StoredQuotaResource {
-                record: QuotaResourceRecord {
-                    resource_definition_id: id,
-                    definition: Blob::new(state.definition),
-                    remaining: state.remaining.into(),
-                    last_refilled_at: state.last_refilled_at.into(),
-                    last_refreshed_at: state.last_refreshed_at.into(),
-                },
-                revision,
-            });
-        }
-        Ok(resources)
+    async fn get_all(&self) -> Result<StoredQuotaState, QuotaRepoError> {
+        Self::decode_state(self.read_prefix(QUOTA_KEY_PREFIX).await?)
     }
 
-    async fn get_all_leases(&self) -> Result<Vec<QuotaLeaseRecord>, QuotaRepoError> {
-        let mut leases = Vec::new();
-        for kv in self.read_all().await? {
-            let QuotaKey::Lease(id, pod) = parse_key(kv.key())? else {
-                continue;
-            };
-
-            let lease: QuotaLeaseState = decode(&kv)?;
-            leases.push(QuotaLeaseRecord {
-                resource_definition_id: id,
-                pod_ip: Blob::new(pod.ip()),
-                pod_port: pod.port().into(),
-                epoch: lease.epoch.into(),
-                allocated: lease.allocated.into(),
-                granted_at: lease.granted_at.into(),
-                expires_at: lease.expires_at.into(),
-                pending_reservations: Blob::new(lease.pending_reservations),
-            });
-        }
-        Ok(leases)
+    async fn get_resource(
+        &self,
+        resource_definition_id: ResourceDefinitionId,
+    ) -> Result<Option<(StoredQuotaResource, Vec<QuotaLeaseRecord>)>, QuotaRepoError> {
+        let mut state = Self::decode_state(
+            self.read_prefix(&resource_prefix(resource_definition_id.0))
+                .await?,
+        )?;
+        // Leases without their resource are orphans: the resource is not stored.
+        Ok(state
+            .resources
+            .pop()
+            .map(|resource| (resource, state.leases)))
     }
 
     async fn delete_leases_for_resource(

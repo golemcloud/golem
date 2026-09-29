@@ -39,7 +39,7 @@ use golem_common::model::quota::{
 use golem_service_base::repo::{Blob, NumericU64, SqlDateTime};
 use golem_shard_manager::config::QuotaServiceConfig;
 use golem_shard_manager::quota::quota_repo::{
-    QuotaLeaseRecord, QuotaRepoError, QuotaResourceRecord, StoredQuotaResource,
+    QuotaLeaseRecord, QuotaRepoError, QuotaResourceRecord, StoredQuotaResource, StoredQuotaState,
 };
 use golem_shard_manager::quota::resource_definition_fetcher::FetchError;
 use golem_shard_manager::quota::{
@@ -126,9 +126,10 @@ fn expired(pod: Pod) -> (Blob<IpAddr>, i32) {
 }
 
 async fn stored_resources(repo: &Arc<dyn QuotaRepo>) -> Vec<StoredQuotaResource> {
-    repo.get_all_resources()
+    repo.get_all()
         .await
-        .expect("reading the stored quota resources should succeed")
+        .expect("reading the stored quota state should succeed")
+        .resources
 }
 
 /// The stored resource `definition` names, or `None` if it is not stored.
@@ -146,9 +147,10 @@ async fn stored_leases(
     repo: &Arc<dyn QuotaRepo>,
     definition: &ResourceDefinition,
 ) -> Vec<QuotaLeaseRecord> {
-    repo.get_all_leases()
+    repo.get_all()
         .await
-        .expect("reading the stored quota leases should succeed")
+        .expect("reading the stored quota state should succeed")
+        .leases
         .into_iter()
         .filter(|lease| lease.resource_definition_id == definition.id.0)
         .collect()
@@ -671,8 +673,9 @@ async fn a_stale_epoch_is_refused_and_stores_nothing(
 #[test]
 #[tracing::instrument]
 // The service holds the revision its last write was stored at. If anything else stores the
-// resource in between, the service's next write must be refused rather than overwrite it.
-async fn a_change_stored_by_another_writer_is_not_overwritten(
+// resource in between, the service's next write must be refused rather than overwrite it - and the
+// one after that must build on what the store now holds, not stay refused.
+async fn a_change_stored_by_another_writer_is_not_overwritten_and_is_built_on(
     #[dimension(persistence)] persistence: &Arc<dyn GetRoutingTablePersistence>,
 ) {
     let store = persistence.new_store().await;
@@ -707,6 +710,214 @@ async fn a_change_stored_by_another_writer_is_not_overwritten(
         .expect("the resource should still be stored");
     assert_eq!(stored.revision, theirs);
     assert_eq!(stored.record.remaining.get(), 3);
+
+    quota
+        .renew_lease(definition.id, pod(1), acquired, 0, vec![])
+        .await
+        .expect("the retried renewal should succeed on the state reloaded from the store");
+    let stored = stored_resource(&other, &definition)
+        .await
+        .expect("the resource should still be stored");
+    assert!(stored.revision > theirs);
+    assert!(
+        stored.record.remaining.get() <= 3,
+        "the renewal was built on the service's old state, not on the other writer's"
+    );
+}
+
+/// What [`Unreliable`] does to the next write it forwards.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Fault {
+    None,
+    /// The write is stored, and then reported as failed - a reply lost to a timeout.
+    FailAfterStoring,
+    /// The write is stored, and then nothing is reported - the caller gives up and drops it.
+    HangAfterStoring,
+}
+
+/// A real repository whose next write can land and still look, to the service, as if it had not.
+struct Unreliable {
+    inner: Arc<dyn QuotaRepo>,
+    fault: std::sync::Mutex<Fault>,
+}
+
+impl Unreliable {
+    fn new(inner: Arc<dyn QuotaRepo>) -> Arc<Self> {
+        Arc::new(Self {
+            inner,
+            fault: std::sync::Mutex::new(Fault::None),
+        })
+    }
+
+    fn arm(&self, fault: Fault) {
+        *self.fault.lock().unwrap() = fault;
+    }
+
+    async fn after_storing(
+        &self,
+        stored: Result<ExternalRevision, QuotaRepoError>,
+    ) -> Result<ExternalRevision, QuotaRepoError> {
+        let fault = std::mem::replace(&mut *self.fault.lock().unwrap(), Fault::None);
+        match fault {
+            Fault::None => stored,
+            Fault::FailAfterStoring => {
+                stored?;
+                Err(QuotaRepoError::InternalError(anyhow::anyhow!(
+                    "timed out waiting for the store"
+                )))
+            }
+            Fault::HangAfterStoring => {
+                stored?;
+                std::future::pending().await
+            }
+        }
+    }
+}
+
+#[async_trait]
+impl QuotaRepo for Unreliable {
+    async fn save_lease_change(
+        &self,
+        resource: &QuotaResourceRecord,
+        previous_revision: ExternalRevision,
+        lease: &QuotaLeaseRecord,
+        expired_pods: &[(Blob<IpAddr>, i32)],
+    ) -> Result<ExternalRevision, QuotaRepoError> {
+        let stored = self
+            .inner
+            .save_lease_change(resource, previous_revision, lease, expired_pods)
+            .await;
+        self.after_storing(stored).await
+    }
+
+    async fn save_lease_release(
+        &self,
+        resource: &QuotaResourceRecord,
+        previous_revision: ExternalRevision,
+        pod_ip: Blob<IpAddr>,
+        pod_port: i32,
+    ) -> Result<ExternalRevision, QuotaRepoError> {
+        let stored = self
+            .inner
+            .save_lease_release(resource, previous_revision, pod_ip, pod_port)
+            .await;
+        self.after_storing(stored).await
+    }
+
+    async fn save_resource(
+        &self,
+        record: &QuotaResourceRecord,
+        previous_revision: ExternalRevision,
+    ) -> Result<ExternalRevision, QuotaRepoError> {
+        let stored = self.inner.save_resource(record, previous_revision).await;
+        self.after_storing(stored).await
+    }
+
+    async fn delete_resource_and_leases(
+        &self,
+        resource_definition_id: ResourceDefinitionId,
+    ) -> Result<(), QuotaRepoError> {
+        self.inner
+            .delete_resource_and_leases(resource_definition_id)
+            .await
+    }
+
+    async fn get_all(&self) -> Result<StoredQuotaState, QuotaRepoError> {
+        self.inner.get_all().await
+    }
+
+    async fn get_resource(
+        &self,
+        resource_definition_id: ResourceDefinitionId,
+    ) -> Result<Option<(StoredQuotaResource, Vec<QuotaLeaseRecord>)>, QuotaRepoError> {
+        self.inner.get_resource(resource_definition_id).await
+    }
+
+    async fn delete_leases_for_resource(
+        &self,
+        resource_definition_id: ResourceDefinitionId,
+    ) -> Result<(), QuotaRepoError> {
+        self.inner
+            .delete_leases_for_resource(resource_definition_id)
+            .await
+    }
+}
+
+#[test]
+#[tracing::instrument]
+// A write can land in the store and still come back as a failure: etcd committed it, but the
+// reply was lost to a timeout. The service cannot tell which happened, so the next operation on
+// the resource must reload it rather than guard its write with a revision the store has passed.
+async fn a_write_that_landed_but_reported_failure_does_not_block_the_next_one(
+    #[dimension(persistence)] persistence: &Arc<dyn GetRoutingTablePersistence>,
+) {
+    let store = persistence.new_store().await;
+    let reader = store.quota_repo().await;
+    let definition = definition();
+    let unreliable = Unreliable::new(store.quota_repo().await);
+    let quota = quota_service(unreliable.clone(), &definition, Duration::from_secs(60));
+
+    let (acquired, allocated) = acquire(&quota, &definition, pod(1)).await;
+    unreliable.arm(Fault::FailAfterStoring);
+    let failed = quota
+        .renew_lease(definition.id, pod(1), acquired, allocated, vec![])
+        .await;
+    assert!(
+        matches!(failed, Err(QuotaError::InternalError(_))),
+        "the renewal should have been reported as failed, got {failed:?}"
+    );
+    assert_eq!(
+        stored_epoch(&reader, &definition, pod(1)).await,
+        acquired.0 + 2,
+        "the renewal should have landed in the store despite the reported failure"
+    );
+
+    // Guarded by the revision from before the failure, this would be refused as a conflict.
+    acquire(&quota, &definition, pod(2)).await;
+    assert_eq!(
+        stored_pods(&reader, &definition).await,
+        BTreeSet::from([pod(1), pod(2)])
+    );
+    assert_eq!(stored_total(&reader, &definition).await, SLOTS);
+}
+
+#[test]
+#[tracing::instrument]
+// A request dropped while its write is in flight - its caller gave up, or the RPC deadline passed -
+// stops the service between the store committing and the service recording the new revision.
+// Nothing reports the outcome, so the next operation must not trust the old revision either.
+async fn a_write_cancelled_after_it_landed_does_not_block_the_next_one(
+    #[dimension(persistence)] persistence: &Arc<dyn GetRoutingTablePersistence>,
+) {
+    let store = persistence.new_store().await;
+    let reader = store.quota_repo().await;
+    let definition = definition();
+    let unreliable = Unreliable::new(store.quota_repo().await);
+    let quota = quota_service(unreliable.clone(), &definition, Duration::from_secs(60));
+
+    let (acquired, allocated) = acquire(&quota, &definition, pod(1)).await;
+    unreliable.arm(Fault::HangAfterStoring);
+    let cancelled = tokio::time::timeout(
+        Duration::from_millis(500),
+        quota.renew_lease(definition.id, pod(1), acquired, allocated, vec![]),
+    )
+    .await;
+    assert!(
+        cancelled.is_err(),
+        "the renewal should still have been waiting when it was dropped"
+    );
+    assert_eq!(
+        stored_epoch(&reader, &definition, pod(1)).await,
+        acquired.0 + 2,
+        "the renewal should have landed in the store before it was dropped"
+    );
+
+    acquire(&quota, &definition, pod(2)).await;
+    assert_eq!(
+        stored_pods(&reader, &definition).await,
+        BTreeSet::from([pod(1), pod(2)])
+    );
+    assert_eq!(stored_total(&reader, &definition).await, SLOTS);
 }
 
 #[test]
@@ -988,9 +1199,10 @@ async fn reads_page_through_more_keys_than_fit_in_one_response(etcd: &Arc<Docker
     }
 
     let leases = repo
-        .get_all_leases()
+        .get_all()
         .await
-        .expect("reading the leases back should succeed");
+        .expect("reading the leases back should succeed")
+        .leases;
     let pods: BTreeSet<Pod> = leases
         .iter()
         .map(|lease| Pod {

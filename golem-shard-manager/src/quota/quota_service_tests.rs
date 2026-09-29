@@ -15,6 +15,7 @@
 use super::quota_lease::QuotaLease;
 use super::quota_repo::{
     QuotaLeaseRecord, QuotaRepo, QuotaRepoError, QuotaResourceRecord, StoredQuotaResource,
+    StoredQuotaState,
 };
 use super::quota_service::{QuotaError, QuotaService};
 use super::quota_state::{MAX_RECLAIMED_PER_WRITE, PodLease, QuotaState};
@@ -82,12 +83,15 @@ impl QuotaRepo for InMemoryQuotaRepo {
         Ok(())
     }
 
-    async fn get_all_resources(&self) -> Result<Vec<StoredQuotaResource>, QuotaRepoError> {
-        Ok(Vec::new())
+    async fn get_all(&self) -> Result<StoredQuotaState, QuotaRepoError> {
+        Ok(StoredQuotaState::default())
     }
 
-    async fn get_all_leases(&self) -> Result<Vec<QuotaLeaseRecord>, QuotaRepoError> {
-        Ok(Vec::new())
+    async fn get_resource(
+        &self,
+        _resource_definition_id: ResourceDefinitionId,
+    ) -> Result<Option<(StoredQuotaResource, Vec<QuotaLeaseRecord>)>, QuotaRepoError> {
+        Ok(None)
     }
 
     async fn delete_leases_for_resource(
@@ -1309,4 +1313,25 @@ fn reclaim_is_capped_per_write_and_takes_the_earliest_expiries_first() {
     assert!(state.leases.is_empty());
     assert_eq!(state.remaining, 200, "a slot was lost or counted twice");
     assert!(state.reclaim_expired().is_empty());
+}
+
+#[test]
+// `ensure_entry` keeps an existing entry, so an acquisition racing the removal of its resource can
+// find the removal's tombstone still in place. That must fail the one request, not panic.
+async fn acquiring_a_resource_that_is_being_removed_fails_without_panicking() {
+    let fetcher = Arc::new(InMemoryFetcher::new());
+    let env = env_id();
+    let definition = make_definition(env, "being-removed");
+    fetcher.put(definition.clone()).await;
+    let svc = QuotaService::new(test_config(), fetcher, test_repo());
+
+    svc.insert_tombstone(definition.id).await;
+
+    let result = svc
+        .acquire_lease(env, definition.name.clone(), test_pod())
+        .await;
+    assert!(
+        matches!(result, Err(QuotaError::InternalError(_))),
+        "expected the acquisition to fail cleanly, got {result:?}"
+    );
 }

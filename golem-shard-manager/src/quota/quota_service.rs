@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::quota_lease::QuotaLease;
-use super::quota_repo::{QuotaLeaseRecord, QuotaRepo, QuotaRepoError};
+use super::quota_repo::{QuotaLeaseRecord, QuotaRepo, QuotaRepoError, QuotaResourceRecord};
 use super::quota_state::{PodLease, QuotaState};
 use super::resource_definition_fetcher::{FetchError, ResourceDefinitionFetcher};
 use crate::config::QuotaServiceConfig;
@@ -103,18 +103,28 @@ struct Entry {
     /// map. `get_entry_handle` treats such an entry as absent.
     state: RwLock<Option<QuotaState>>,
     /// The revision the store last reported for this resource; the next write is guarded by it.
-    /// Locked only while `state` is write-locked, so the lock order is `state`, then this. Only a
-    /// write the store accepted advances it.
-    stored_revision: Mutex<ExternalRevision>,
+    /// Locked only while `state` is write-locked, so the lock order is `state`, then this.
+    ///
+    /// `None` means the store may have moved on without this process knowing where to: a write
+    /// was cancelled, failed in a way that may still have landed, or was refused as a conflict.
+    /// The next operation on the resource then reloads it from the store before writing.
+    stored_revision: Mutex<Option<ExternalRevision>>,
 }
 
 impl Entry {
     fn new(state: QuotaState, stored_revision: ExternalRevision) -> EntryHandle {
         Arc::new(Self {
             state: RwLock::new(Some(state)),
-            stored_revision: Mutex::new(stored_revision),
+            stored_revision: Mutex::new(Some(stored_revision)),
         })
     }
+}
+
+/// What a mutation of a resource's state needs stored.
+enum Write {
+    LeaseChange { pod: Pod, expired: Vec<Pod> },
+    LeaseRelease { pod: Pod },
+    Resource,
 }
 
 type EntryHandle = Arc<Entry>;
@@ -148,66 +158,24 @@ impl QuotaService {
     /// Restores quota state from the store on startup.
     /// Must be called before serving any requests.
     pub async fn restore_state(&self) -> Result<(), QuotaError> {
-        let resources = self
-            .repo
-            .get_all_resources()
-            .await
-            .map_err(|e| QuotaError::InternalError(e.into()))?;
-        let all_leases = self
-            .repo
-            .get_all_leases()
-            .await
-            .map_err(|e| QuotaError::InternalError(e.into()))?;
+        let stored = self.repo.get_all().await?;
 
         let mut leases_by_resource: HashMap<uuid::Uuid, Vec<QuotaLeaseRecord>> = HashMap::new();
-        for lease in all_leases {
+        for lease in stored.leases {
             leases_by_resource
                 .entry(lease.resource_definition_id)
                 .or_default()
                 .push(lease);
         }
 
-        for stored in resources {
-            let resource_record = stored.record;
-            let id = ResourceDefinitionId(resource_record.resource_definition_id);
-            let definition = resource_record.definition.into_value();
-
-            let mut pod_leases = HashMap::new();
-            if let Some(lease_records) =
-                leases_by_resource.remove(&resource_record.resource_definition_id)
-            {
-                for lr in lease_records {
-                    let pod = Pod {
-                        ip: lr.pod_ip.into_value(),
-                        port: lr
-                            .pod_port
-                            .try_into()
-                            .map_err(|_| anyhow!("Failed deserializing port"))?,
-                    };
-                    pod_leases.insert(
-                        pod,
-                        PodLease {
-                            epoch: LeaseEpoch(lr.epoch.into()),
-                            allocated: lr.allocated.into(),
-                            granted_at: lr.granted_at.into(),
-                            expires_at: lr.expires_at.into(),
-                            pending_reservations: lr.pending_reservations.into_value(),
-                        },
-                    );
-                }
-            }
-
-            let state = QuotaState::from_persisted(
-                definition,
-                resource_record.remaining.into(),
-                resource_record.last_refilled_at.into(),
-                resource_record.last_refreshed_at.into(),
-                pod_leases,
-            );
+        for resource in stored.resources {
+            let id = ResourceDefinitionId(resource.record.resource_definition_id);
+            let leases = leases_by_resource.remove(&id.0).unwrap_or_default();
+            let state = state_from_store(resource.record, leases)?;
 
             let _ = self
                 .entries
-                .insert_async(id, Entry::new(state, stored.revision))
+                .insert_async(id, Entry::new(state, resource.revision))
                 .await;
 
             info!(%id, "restored quota resource from the store");
@@ -244,43 +212,36 @@ impl QuotaService {
                 self.ensure_entry(&definition).await;
                 self.refresh_if_stale(id).await;
 
-                let handle = self
-                    .get_entry_handle(id)
-                    .await
-                    .expect("entry was just ensured");
-
-                let mut guard = handle.state.write().await;
-                let state = guard.as_mut().ok_or(QuotaError::LeaseNotFound {
-                    resource_definition_id: id,
+                // The entry can still be a tombstone left by a concurrent removal of the
+                // resource, which `ensure_entry` does not replace.
+                let handle = self.get_entry_handle(id).await.ok_or_else(|| {
+                    QuotaError::InternalError(anyhow!(
+                        "quota resource {id} is being removed; retry the acquisition"
+                    ))
                 })?;
-                let snapshot = state.clone();
-                let result = state.acquire_lease(pod, self.lease_duration, self.min_executors)?;
 
-                let lease = QuotaLease::Bounded {
-                    resource_definition_id: id,
-                    pod,
-                    epoch: result.epoch,
-                    allocated_amount: result.allocated_amount,
-                    expires_at: result.expires_at,
-                    resource_limit: state.definition.limit.clone(),
-                    enforcement_action: state.definition.enforcement_action,
-                    total_available_amount: result.total_available_amount,
-                };
-
-                let mut stored_revision = handle.stored_revision.lock().await;
-                match self
-                    .persist_after_lease_change(state, *stored_revision, &pod, &result.expired)
-                    .await
-                {
-                    Ok(revision) => *stored_revision = revision,
-                    Err(e) => {
-                        log_on_failed_persistence(&e);
-                        *state = snapshot;
-                        return Err(e.into());
-                    }
-                }
-
-                Ok(lease)
+                self.mutate_and_persist(id, &handle, |state| {
+                    let result =
+                        state.acquire_lease(pod, self.lease_duration, self.min_executors)?;
+                    let lease = QuotaLease::Bounded {
+                        resource_definition_id: id,
+                        pod,
+                        epoch: result.epoch,
+                        allocated_amount: result.allocated_amount,
+                        expires_at: result.expires_at,
+                        resource_limit: state.definition.limit.clone(),
+                        enforcement_action: state.definition.enforcement_action,
+                        total_available_amount: result.total_available_amount,
+                    };
+                    Ok((
+                        lease,
+                        Write::LeaseChange {
+                            pod,
+                            expired: result.expired,
+                        },
+                    ))
+                })
+                .await
             }
             None => Ok(self.unlimited_lease(pod)),
         }
@@ -305,45 +266,34 @@ impl QuotaService {
             }
         };
 
-        let mut guard = handle.state.write().await;
-        let state = guard.as_mut().ok_or(QuotaError::LeaseNotFound {
-            resource_definition_id,
-        })?;
-        let snapshot = state.clone();
-        let result = state.renew_lease(
-            &pod,
-            epoch,
-            unused,
-            self.lease_duration,
-            self.min_executors,
-            pending_reservations,
-        )?;
-
-        let mut stored_revision = handle.stored_revision.lock().await;
-        match self
-            .persist_after_lease_change(state, *stored_revision, &pod, &result.expired)
-            .await
-        {
-            Ok(revision) => *stored_revision = revision,
-            Err(e) => {
-                log_on_failed_persistence(&e);
-                *state = snapshot;
-                return Err(e.into());
-            }
-        }
-
-        let lease = QuotaLease::Bounded {
-            resource_definition_id,
-            pod,
-            epoch: result.new_epoch,
-            allocated_amount: result.allocated_amount,
-            expires_at: result.expires_at,
-            resource_limit: state.definition.limit.clone(),
-            enforcement_action: state.definition.enforcement_action,
-            total_available_amount: result.total_available_amount,
-        };
-
-        Ok(lease)
+        self.mutate_and_persist(resource_definition_id, &handle, |state| {
+            let result = state.renew_lease(
+                &pod,
+                epoch,
+                unused,
+                self.lease_duration,
+                self.min_executors,
+                pending_reservations,
+            )?;
+            let lease = QuotaLease::Bounded {
+                resource_definition_id,
+                pod,
+                epoch: result.new_epoch,
+                allocated_amount: result.allocated_amount,
+                expires_at: result.expires_at,
+                resource_limit: state.definition.limit.clone(),
+                enforcement_action: state.definition.enforcement_action,
+                total_available_amount: result.total_available_amount,
+            };
+            Ok((
+                lease,
+                Write::LeaseChange {
+                    pod,
+                    expired: result.expired,
+                },
+            ))
+        })
+        .await
     }
 
     /// Renew multiple leases in one call.  Results are in the same order as
@@ -382,26 +332,11 @@ impl QuotaService {
             }
         };
 
-        let mut guard = handle.state.write().await;
-        let state = guard.as_mut().ok_or(QuotaError::LeaseNotFound {
-            resource_definition_id,
-        })?;
-        let snapshot = state.clone();
-        state.release_lease(&pod, epoch, unused)?;
-
-        let mut stored_revision = handle.stored_revision.lock().await;
-        match self
-            .persist_after_lease_release(state, *stored_revision, &pod)
-            .await
-        {
-            Ok(revision) => *stored_revision = revision,
-            Err(e) => {
-                log_on_failed_persistence(&e);
-                *state = snapshot;
-                return Err(e.into());
-            }
-        }
-        Ok(())
+        self.mutate_and_persist(resource_definition_id, &handle, |state| {
+            state.release_lease(&pod, epoch, unused)?;
+            Ok(((), Write::LeaseRelease { pod }))
+        })
+        .await
     }
 
     pub async fn on_resource_definition_changed(
@@ -436,6 +371,103 @@ impl QuotaService {
             pod,
             expires_at: Utc::now() + self.lease_duration,
         }
+    }
+
+    /// Applies `mutate` to the resource's state and stores the result, holding the entry's locks
+    /// throughout.
+    ///
+    /// The stored revision is cleared for the duration of the write and set again only once the
+    /// outcome is known, so a write that is cancelled, fails in a way that may still have landed,
+    /// or conflicts leaves the entry to be reloaded from the store instead of guarded by a
+    /// revision the store has moved past. An entry left that way is reloaded here before it is
+    /// mutated. On any failure the in-memory state is rolled back.
+    async fn mutate_and_persist<T>(
+        &self,
+        id: ResourceDefinitionId,
+        entry: &Entry,
+        mutate: impl FnOnce(&mut QuotaState) -> Result<(T, Write), QuotaError>,
+    ) -> Result<T, QuotaError> {
+        let mut guard = entry.state.write().await;
+        let mut stored_revision = entry.stored_revision.lock().await;
+        if guard.is_none() {
+            return Err(QuotaError::LeaseNotFound {
+                resource_definition_id: id,
+            });
+        }
+
+        let previous = match *stored_revision {
+            Some(revision) => revision,
+            None => self.reload(id, &mut guard, &mut stored_revision).await?,
+        };
+        let state = guard.as_mut().ok_or(QuotaError::LeaseNotFound {
+            resource_definition_id: id,
+        })?;
+
+        let snapshot = state.clone();
+        let (value, write) = match mutate(state) {
+            Ok(mutated) => mutated,
+            Err(err) => {
+                *state = snapshot;
+                return Err(err);
+            }
+        };
+
+        *stored_revision = None;
+        let outcome = match &write {
+            Write::LeaseChange { pod, expired } => {
+                self.persist_after_lease_change(state, previous, pod, expired)
+                    .await
+            }
+            Write::LeaseRelease { pod } => {
+                self.persist_after_lease_release(state, previous, pod).await
+            }
+            Write::Resource => self.persist_resource(state, previous).await,
+        };
+        *stored_revision = match &outcome {
+            Ok(revision) => Some(*revision),
+            // Refused before anything was stored, so the store is still where it was. This
+            // replica is no longer the leader and stops serving shortly anyway.
+            Err(QuotaRepoError::LeadershipLost { .. }) => Some(previous),
+            // A conflict, or a failure that may have landed: only the store knows the revision.
+            Err(_) => None,
+        };
+
+        match outcome {
+            Ok(_) => Ok(value),
+            Err(err) => {
+                log_on_failed_persistence(&err);
+                *state = snapshot;
+                Err(err.into())
+            }
+        }
+    }
+
+    /// Replaces the entry's state with what the store holds for the resource, and returns the
+    /// revision it is stored at.
+    async fn reload(
+        &self,
+        id: ResourceDefinitionId,
+        state: &mut Option<QuotaState>,
+        stored_revision: &mut Option<ExternalRevision>,
+    ) -> Result<ExternalRevision, QuotaError> {
+        let revision = match self.repo.get_resource(id).await? {
+            Some((resource, leases)) => {
+                let revision = resource.revision;
+                *state = Some(state_from_store(resource.record, leases)?);
+                revision
+            }
+            None => {
+                // Nothing reached the store: whatever this process granted since was never
+                // recorded, so the resource starts over from its definition.
+                if let Some(current) = state.as_ref() {
+                    *state = Some(QuotaState::new(current.definition.clone()));
+                }
+                NO_REVISION
+            }
+        };
+        *stored_revision = Some(revision);
+        info!(%id, revision, "reloaded quota resource from the store");
+        Ok(revision)
     }
 
     async fn persist_after_lease_change(
@@ -492,6 +524,16 @@ impl QuotaService {
         self.repo.save_resource(&record, previous_revision).await
     }
 
+    /// Leaves a tombstone for `id`, as a removal that has not yet dropped the entry does.
+    #[cfg(test)]
+    pub(super) async fn insert_tombstone(&self, id: ResourceDefinitionId) {
+        let tombstone = Arc::new(Entry {
+            state: RwLock::new(None),
+            stored_revision: Mutex::new(Some(NO_REVISION)),
+        });
+        let _ = self.entries.insert_async(id, tombstone).await;
+    }
+
     async fn refresh_if_stale(&self, id: ResourceDefinitionId) {
         let is_stale = self
             .entries
@@ -540,19 +582,16 @@ impl QuotaService {
         match self.fetcher.fetch_by_id(id).await {
             Ok(definition) => {
                 debug_assert_eq!(definition.id, id);
-                let mut guard = handle.state.write().await;
-                let state = match guard.as_mut() {
-                    Some(s) => s,
-                    None => return,
-                };
-                let snapshot = state.clone();
-                state.update_definition(definition);
-                let mut stored_revision = handle.stored_revision.lock().await;
-                match self.persist_resource(state, *stored_revision).await {
-                    Ok(revision) => *stored_revision = revision,
-                    Err(e) => {
-                        log_on_failed_persistence(&e);
-                        *state = snapshot;
+                let result = self
+                    .mutate_and_persist(id, &handle, |state| {
+                        state.update_definition(definition);
+                        Ok(((), Write::Resource))
+                    })
+                    .await;
+                match result {
+                    Ok(()) | Err(QuotaError::LeaseNotFound { .. }) => {}
+                    Err(err) => {
+                        warn!(%id, error = %err, "failed to store the refreshed resource definition")
                     }
                 }
             }
@@ -578,6 +617,41 @@ impl QuotaService {
             }
         }
     }
+}
+
+/// Rebuilds a resource's in-memory state from what the store holds for it.
+fn state_from_store(
+    record: QuotaResourceRecord,
+    leases: Vec<QuotaLeaseRecord>,
+) -> Result<QuotaState, QuotaError> {
+    let mut pod_leases = HashMap::new();
+    for lease in leases {
+        let pod = Pod {
+            ip: lease.pod_ip.into_value(),
+            port: lease
+                .pod_port
+                .try_into()
+                .map_err(|_| anyhow!("Failed deserializing port"))?,
+        };
+        pod_leases.insert(
+            pod,
+            PodLease {
+                epoch: LeaseEpoch(lease.epoch.into()),
+                allocated: lease.allocated.into(),
+                granted_at: lease.granted_at.into(),
+                expires_at: lease.expires_at.into(),
+                pending_reservations: lease.pending_reservations.into_value(),
+            },
+        );
+    }
+
+    Ok(QuotaState::from_persisted(
+        record.definition.into_value(),
+        record.remaining.into(),
+        record.last_refilled_at.into(),
+        record.last_refreshed_at.into(),
+        pod_leases,
+    ))
 }
 
 fn log_on_failed_persistence(e: &QuotaRepoError) {
