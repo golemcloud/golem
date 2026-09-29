@@ -27,12 +27,11 @@ use crate::services::golem_config::DEFAULT_FILESYSTEM_SNAPSHOT_STORAGE_CALL_DEAD
 use anyhow::anyhow;
 use async_trait::async_trait;
 use bytes::Bytes;
-use futures::stream::BoxStream;
 use golem_common::model::environment::EnvironmentId;
-use golem_service_base::replayable_stream::ErasedReplayableStream;
 use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
 use golem_service_base::storage::blob::{
-    BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult, ListedBlob, PutIfAbsent,
+    BlobMetadata, BlobStorage, BlobStorageBackend, BlobStorageNamespace, ExistsResult, ListedBlob,
+    NormalizedBlobPath, PutIfAbsent,
 };
 use pretty_assertions::assert_eq;
 use rustic_core::{BytesList, FileType, Id, ReadBackend, RusticError, RusticResult, WriteBackend};
@@ -1088,138 +1087,117 @@ fn broken() -> anyhow::Error {
 }
 
 #[async_trait]
-impl BlobStorage for FailingBlobStorage {
-    async fn get_raw(
+impl BlobStorageBackend for FailingBlobStorage {
+    async fn get_raw_at(
         &self,
         _target_label: &'static str,
         _op_label: &'static str,
         _namespace: BlobStorageNamespace,
-        _path: &Path,
+        _path: &NormalizedBlobPath<'_>,
     ) -> anyhow::Result<Option<Vec<u8>>> {
         Err(broken())
     }
 
-    async fn get_stream(
+    async fn get_range_stream_at(
         &self,
         _target_label: &'static str,
         _op_label: &'static str,
         _namespace: BlobStorageNamespace,
-        _path: &Path,
-    ) -> anyhow::Result<Option<BoxStream<'static, anyhow::Result<Bytes>>>> {
-        Err(broken())
-    }
-
-    async fn get_range_stream(
-        &self,
-        _target_label: &'static str,
-        _op_label: &'static str,
-        _namespace: BlobStorageNamespace,
-        _path: &Path,
+        _path: &NormalizedBlobPath<'_>,
         _offset: u64,
         _length: u64,
     ) -> anyhow::Result<Option<golem_service_base::storage::blob::BlobRangeStream>> {
         Err(broken())
     }
 
-    async fn get_metadata(
+    async fn get_metadata_at(
         &self,
         _target_label: &'static str,
         _op_label: &'static str,
         _namespace: BlobStorageNamespace,
-        _path: &Path,
+        _path: &NormalizedBlobPath<'_>,
     ) -> anyhow::Result<Option<BlobMetadata>> {
         Err(broken())
     }
 
-    async fn put_raw(
+    async fn put_raw_at(
         &self,
         _target_label: &'static str,
         _op_label: &'static str,
         _namespace: BlobStorageNamespace,
-        _path: &Path,
+        _path: &NormalizedBlobPath<'_>,
         _data: &[u8],
     ) -> anyhow::Result<()> {
         Err(broken())
     }
 
-    async fn put_raw_if_absent(
+    async fn put_raw_if_absent_at(
         &self,
         _target_label: &'static str,
         _op_label: &'static str,
         _namespace: BlobStorageNamespace,
-        _path: &Path,
+        _path: &NormalizedBlobPath<'_>,
         _data: &[u8],
     ) -> anyhow::Result<PutIfAbsent> {
         Err(broken())
     }
 
-    async fn put_stream(
+    async fn delete_at(
         &self,
         _target_label: &'static str,
         _op_label: &'static str,
         _namespace: BlobStorageNamespace,
-        _path: &Path,
-        _stream: &dyn ErasedReplayableStream<Item = anyhow::Result<Vec<u8>>, Error = anyhow::Error>,
+        _path: &NormalizedBlobPath<'_>,
     ) -> anyhow::Result<()> {
         Err(broken())
     }
 
-    async fn delete(
+    async fn create_dir_at(
         &self,
         _target_label: &'static str,
         _op_label: &'static str,
         _namespace: BlobStorageNamespace,
-        _path: &Path,
+        _path: &NormalizedBlobPath<'_>,
     ) -> anyhow::Result<()> {
         Err(broken())
     }
 
-    async fn create_dir(
+    async fn list_dir_at(
         &self,
         _target_label: &'static str,
         _op_label: &'static str,
         _namespace: BlobStorageNamespace,
-        _path: &Path,
-    ) -> anyhow::Result<()> {
-        Err(broken())
-    }
-
-    async fn list_dir(
-        &self,
-        _target_label: &'static str,
-        _op_label: &'static str,
-        _namespace: BlobStorageNamespace,
-        _path: &Path,
+        _path: &NormalizedBlobPath<'_>,
     ) -> anyhow::Result<Vec<PathBuf>> {
         Err(broken())
     }
 
-    async fn list_blobs_below(
+    async fn list_blobs_below_at(
         &self,
         _target_label: &'static str,
         _op_label: &'static str,
         _namespace: BlobStorageNamespace,
-        _path: &Path,
+        _path: &NormalizedBlobPath<'_>,
     ) -> anyhow::Result<Box<[ListedBlob]>> {
         Err(broken())
     }
 
-    async fn delete_dir(
+    async fn delete_dir_at(
         &self,
         _target_label: &'static str,
         _op_label: &'static str,
         _namespace: BlobStorageNamespace,
-        _path: &Path,
+        _path: &NormalizedBlobPath<'_>,
     ) -> anyhow::Result<bool> {
         Err(broken())
     }
 
-    async fn exists(
+    async fn exists_at(
         &self,
         _target_label: &'static str,
         _op_label: &'static str,
         _namespace: BlobStorageNamespace,
-        _path: &Path,
+        _path: &NormalizedBlobPath<'_>,
     ) -> anyhow::Result<ExistsResult> {
         Err(broken())
     }

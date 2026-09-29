@@ -19,7 +19,6 @@ use aws_config::meta::region::RegionProviderChain;
 use aws_sdk_s3::Client;
 use aws_sdk_s3::config::Credentials;
 use bytes::{BufMut, Bytes, BytesMut};
-use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use golem_common::model::AgentId;
 use golem_common::model::agent::AgentMode;
@@ -28,7 +27,6 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::widen_infallible;
 use golem_service_base::config::{S3BlobStorageConfig, S3BlobStorageCredentialsConfig};
 use golem_service_base::db::sqlite::SqlitePool;
-use golem_service_base::replayable_stream::ErasedReplayableStream;
 use golem_service_base::replayable_stream::ReplayableStream;
 use golem_service_base::storage::blob::sqlite::SqliteBlobStorage;
 use golem_service_base::storage::blob::*;
@@ -36,6 +34,7 @@ use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace, fs, m
 use pretty_assertions::assert_eq;
 use sqlx::sqlite::SqlitePoolOptions;
 use std::fmt::Debug;
+use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
@@ -50,7 +49,36 @@ use uuid::Uuid;
 
 #[async_trait]
 trait GetBlobStorage: Debug {
-    async fn get_blob_storage(&self) -> Arc<dyn BlobStorage + Send + Sync>;
+    async fn get_blob_storage(&self) -> TestStorage;
+
+    /// Tells if `copy` from a path with no blob gives [`BlobMissingError`] on this backend.
+    fn copy_of_a_missing_source_gives_blob_missing_error(&self) -> bool {
+        true
+    }
+}
+
+/// The storage of one test, and the MinIO container that the S3 storage uses while the test
+/// runs.
+struct TestStorage {
+    storage: Arc<dyn BlobStorage + Send + Sync>,
+    _container: Option<ContainerAsync<GenericImage>>,
+}
+
+impl TestStorage {
+    fn new(storage: Arc<dyn BlobStorage + Send + Sync>) -> Self {
+        Self {
+            storage,
+            _container: None,
+        }
+    }
+}
+
+impl Deref for TestStorage {
+    type Target = Arc<dyn BlobStorage + Send + Sync>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.storage
+    }
 }
 
 struct InMemoryTest;
@@ -63,8 +91,8 @@ impl Debug for InMemoryTest {
 
 #[async_trait]
 impl GetBlobStorage for InMemoryTest {
-    async fn get_blob_storage(&self) -> Arc<dyn BlobStorage + Send + Sync> {
-        Arc::new(memory::InMemoryBlobStorage::new())
+    async fn get_blob_storage(&self) -> TestStorage {
+        TestStorage::new(Arc::new(memory::InMemoryBlobStorage::new()))
     }
 }
 
@@ -86,12 +114,19 @@ impl Debug for FsTest {
 
 #[async_trait]
 impl GetBlobStorage for FsTest {
-    async fn get_blob_storage(&self) -> Arc<dyn BlobStorage + Send + Sync> {
+    async fn get_blob_storage(&self) -> TestStorage {
         let counter = self
             .counter
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let path = self.dir.path().join(format!("test-{counter}"));
-        Arc::new(fs::FileSystemBlobStorage::new(&path).await.unwrap())
+        TestStorage::new(Arc::new(
+            fs::FileSystemBlobStorage::new(&path).await.unwrap(),
+        ))
+    }
+
+    /// The filesystem backend gives the error of the filesystem for a source with no blob.
+    fn copy_of_a_missing_source_gives_blob_missing_error(&self) -> bool {
+        false
     }
 }
 
@@ -114,7 +149,7 @@ impl Debug for S3Test {
 
 #[async_trait]
 impl GetBlobStorage for S3Test {
-    async fn get_blob_storage(&self) -> Arc<dyn BlobStorage + Send + Sync> {
+    async fn get_blob_storage(&self) -> TestStorage {
         let container = tryhard::retry_fn(|| {
             GenericImage::new("minio/minio", "RELEASE.2025-01-20T14-49-07Z")
                 .with_exposed_port(9000.tcp())
@@ -146,11 +181,10 @@ impl GetBlobStorage for S3Test {
             ..std::default::Default::default()
         };
         create_buckets(host_port, &config).await;
-        let storage = s3::S3BlobStorage::new(config).await;
-        Arc::new(S3BlobStorageWithContainer {
-            storage,
-            _container: container,
-        })
+        TestStorage {
+            storage: Arc::new(s3::S3BlobStorage::new(config).await),
+            _container: Some(container),
+        }
     }
 }
 
@@ -201,233 +235,6 @@ async fn create_buckets(host_port: u16, config: &S3BlobStorageConfig) {
     }
 }
 
-struct S3BlobStorageWithContainer {
-    storage: s3::S3BlobStorage,
-    _container: ContainerAsync<GenericImage>,
-}
-
-impl Debug for S3BlobStorageWithContainer {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "S3BlobStorageWithContainer")
-    }
-}
-
-#[async_trait]
-impl BlobStorage for S3BlobStorageWithContainer {
-    async fn get_raw(
-        &self,
-        target_label: &'static str,
-        op_label: &'static str,
-        namespace: BlobStorageNamespace,
-        path: &Path,
-    ) -> Result<Option<Vec<u8>>, Error> {
-        self.storage
-            .get_raw(target_label, op_label, namespace, path)
-            .await
-    }
-
-    async fn get_stream(
-        &self,
-        target_label: &'static str,
-        op_label: &'static str,
-        namespace: BlobStorageNamespace,
-        path: &Path,
-    ) -> Result<Option<BoxStream<'static, Result<Bytes, Error>>>, Error> {
-        self.storage
-            .get_stream(target_label, op_label, namespace, path)
-            .await
-    }
-
-    async fn get_range_stream(
-        &self,
-        target_label: &'static str,
-        op_label: &'static str,
-        namespace: BlobStorageNamespace,
-        path: &Path,
-        offset: u64,
-        length: u64,
-    ) -> Result<Option<BlobRangeStream>, Error> {
-        self.storage
-            .get_range_stream(target_label, op_label, namespace, path, offset, length)
-            .await
-    }
-
-    async fn get_raw_slice(
-        &self,
-        target_label: &'static str,
-        op_label: &'static str,
-        namespace: BlobStorageNamespace,
-        path: &Path,
-        start: u64,
-        end: u64,
-    ) -> Result<Option<Vec<u8>>, Error> {
-        self.storage
-            .get_raw_slice(target_label, op_label, namespace, path, start, end)
-            .await
-    }
-
-    async fn get_metadata(
-        &self,
-        target_label: &'static str,
-        op_label: &'static str,
-        namespace: BlobStorageNamespace,
-        path: &Path,
-    ) -> Result<Option<BlobMetadata>, Error> {
-        self.storage
-            .get_metadata(target_label, op_label, namespace, path)
-            .await
-    }
-
-    async fn put_raw(
-        &self,
-        target_label: &'static str,
-        op_label: &'static str,
-        namespace: BlobStorageNamespace,
-        path: &Path,
-        data: &[u8],
-    ) -> Result<(), Error> {
-        self.storage
-            .put_raw(target_label, op_label, namespace, path, data)
-            .await
-    }
-
-    async fn put_raw_if_absent(
-        &self,
-        target_label: &'static str,
-        op_label: &'static str,
-        namespace: BlobStorageNamespace,
-        path: &Path,
-        data: &[u8],
-    ) -> Result<PutIfAbsent, Error> {
-        self.storage
-            .put_raw_if_absent(target_label, op_label, namespace, path, data)
-            .await
-    }
-
-    async fn put_stream(
-        &self,
-        target_label: &'static str,
-        op_label: &'static str,
-        namespace: BlobStorageNamespace,
-        path: &Path,
-        stream: &dyn ErasedReplayableStream<Item = Result<Vec<u8>, Error>, Error = Error>,
-    ) -> Result<(), Error> {
-        self.storage
-            .put_stream(target_label, op_label, namespace, path, stream)
-            .await
-    }
-
-    async fn delete(
-        &self,
-        target_label: &'static str,
-        op_label: &'static str,
-        namespace: BlobStorageNamespace,
-        path: &Path,
-    ) -> Result<(), Error> {
-        self.storage
-            .delete(target_label, op_label, namespace, path)
-            .await
-    }
-
-    async fn delete_many(
-        &self,
-        target_label: &'static str,
-        op_label: &'static str,
-        namespace: BlobStorageNamespace,
-        paths: &[PathBuf],
-    ) -> Result<(), Error> {
-        self.storage
-            .delete_many(target_label, op_label, namespace, paths)
-            .await
-    }
-
-    async fn create_dir(
-        &self,
-        target_label: &'static str,
-        op_label: &'static str,
-        namespace: BlobStorageNamespace,
-        path: &Path,
-    ) -> Result<(), Error> {
-        self.storage
-            .create_dir(target_label, op_label, namespace, path)
-            .await
-    }
-
-    async fn list_dir(
-        &self,
-        target_label: &'static str,
-        op_label: &'static str,
-        namespace: BlobStorageNamespace,
-        path: &Path,
-    ) -> Result<Vec<PathBuf>, Error> {
-        self.storage
-            .list_dir(target_label, op_label, namespace, path)
-            .await
-    }
-
-    async fn list_blobs_below(
-        &self,
-        target_label: &'static str,
-        op_label: &'static str,
-        namespace: BlobStorageNamespace,
-        path: &Path,
-    ) -> Result<Box<[ListedBlob]>, Error> {
-        self.storage
-            .list_blobs_below(target_label, op_label, namespace, path)
-            .await
-    }
-
-    async fn delete_dir(
-        &self,
-        target_label: &'static str,
-        op_label: &'static str,
-        namespace: BlobStorageNamespace,
-        path: &Path,
-    ) -> Result<bool, Error> {
-        self.storage
-            .delete_dir(target_label, op_label, namespace, path)
-            .await
-    }
-
-    async fn exists(
-        &self,
-        target_label: &'static str,
-        op_label: &'static str,
-        namespace: BlobStorageNamespace,
-        path: &Path,
-    ) -> Result<ExistsResult, Error> {
-        self.storage
-            .exists(target_label, op_label, namespace, path)
-            .await
-    }
-
-    async fn copy(
-        &self,
-        target_label: &'static str,
-        op_label: &'static str,
-        namespace: BlobStorageNamespace,
-        from: &Path,
-        to: &Path,
-    ) -> Result<(), Error> {
-        self.storage
-            .copy(target_label, op_label, namespace, from, to)
-            .await
-    }
-
-    async fn r#move(
-        &self,
-        target_label: &'static str,
-        op_label: &'static str,
-        namespace: BlobStorageNamespace,
-        from: &Path,
-        to: &Path,
-    ) -> Result<(), Error> {
-        self.storage
-            .r#move(target_label, op_label, namespace, from, to)
-            .await
-    }
-}
-
 #[test_dep(scope = PerWorker, tagged_as = "s3")]
 async fn s3() -> Arc<dyn GetBlobStorage + Send + Sync> {
     Arc::new(S3Test { prefixed: None })
@@ -450,7 +257,7 @@ impl Debug for SqliteTest {
 
 #[async_trait]
 impl GetBlobStorage for SqliteTest {
-    async fn get_blob_storage(&self) -> Arc<dyn BlobStorage + Send + Sync> {
+    async fn get_blob_storage(&self) -> TestStorage {
         let sqlx_pool_sqlite = SqlitePoolOptions::new()
             .min_connections(10)
             .max_connections(10)
@@ -459,8 +266,7 @@ impl GetBlobStorage for SqliteTest {
             .expect("Cannot create db options");
 
         let pool = SqlitePool::new(sqlx_pool_sqlite.clone(), sqlx_pool_sqlite.clone());
-        let sbs = SqliteBlobStorage::new(pool).await.unwrap();
-        Arc::new(sbs)
+        TestStorage::new(Arc::new(SqliteBlobStorage::new(pool).await.unwrap()))
     }
 }
 
@@ -3355,7 +3161,7 @@ async fn exists_on_a_blob_that_also_has_blobs_below_gives_a_file(
 #[test]
 #[tracing::instrument]
 async fn a_read_at_a_root_path_finds_no_blob(
-    #[dimension(mem_and_s3)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
     #[dimension(ns)] namespace: &BlobStorageNamespace,
 ) {
     let storage = test.get_blob_storage().await;
@@ -3411,13 +3217,35 @@ async fn a_read_at_a_root_path_finds_no_blob(
             None,
             "get_raw_slice({root_path:?})"
         );
+
+        // A length of zero and a length of one byte, because the S3 backend reads the head of
+        // the object for the first and the object for the second.
+        let range_streams = futures::stream::iter([0, 1])
+            .then(|length| {
+                storage.get_range_stream(
+                    label,
+                    "get-range-stream",
+                    namespace.clone(),
+                    path,
+                    0,
+                    length,
+                )
+            })
+            .map(|stream| stream.unwrap().is_none())
+            .collect::<Vec<_>>()
+            .await;
+        assert_eq!(
+            range_streams,
+            vec![true, true],
+            "get_range_stream({root_path:?}, 0, 0 and 1)"
+        );
     }
 }
 
 #[test]
 #[tracing::instrument]
 async fn a_write_at_a_root_path_is_an_error(
-    #[dimension(mem_and_s3)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
     #[dimension(ns)] namespace: &BlobStorageNamespace,
 ) {
     let storage = test.get_blob_storage().await;
@@ -3427,12 +3255,16 @@ async fn a_write_at_a_root_path_is_an_error(
     for root_path in ROOT_PATHS {
         let path = Path::new(root_path);
 
-        assert!(
+        assert_eq!(
             storage
                 .put_raw(label, "put-raw", namespace.clone(), path, &data)
                 .await
-                .is_err(),
-            "put_raw({root_path:?}) wrote a blob"
+                .err()
+                .and_then(name_error),
+            Some(BlobNameError::NoName {
+                path: PathBuf::new()
+            }),
+            "put_raw({root_path:?})"
         );
 
         let stream = (&data)
@@ -3440,12 +3272,16 @@ async fn a_write_at_a_root_path_is_an_error(
             .map_error(widen_infallible)
             .erased();
 
-        assert!(
+        assert_eq!(
             storage
                 .put_stream(label, "put-stream", namespace.clone(), path, &stream)
                 .await
-                .is_err(),
-            "put_stream({root_path:?}) wrote a blob"
+                .err()
+                .and_then(name_error),
+            Some(BlobNameError::NoName {
+                path: PathBuf::new()
+            }),
+            "put_stream({root_path:?})"
         );
 
         assert_eq!(
@@ -3470,7 +3306,7 @@ async fn a_write_at_a_root_path_is_an_error(
 #[test]
 #[tracing::instrument]
 async fn a_delete_at_a_root_path_deletes_no_blob(
-    #[dimension(mem_and_s3)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
     #[dimension(ns)] namespace: &BlobStorageNamespace,
 ) {
     let storage = test.get_blob_storage().await;
@@ -3517,7 +3353,7 @@ async fn a_delete_at_a_root_path_deletes_no_blob(
 #[test]
 #[tracing::instrument]
 async fn a_copy_or_a_move_at_a_root_path_is_an_error(
-    #[dimension(mem_and_s3)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
     #[dimension(ns)] namespace: &BlobStorageNamespace,
 ) {
     let storage = test.get_blob_storage().await;
@@ -3536,7 +3372,7 @@ async fn a_copy_or_a_move_at_a_root_path_is_an_error(
 
     for root_path in ROOT_PATHS {
         for (from, to) in [(root_path, "blob"), ("blob", root_path)] {
-            assert!(
+            assert_eq!(
                 storage
                     .copy(
                         label,
@@ -3546,11 +3382,15 @@ async fn a_copy_or_a_move_at_a_root_path_is_an_error(
                         Path::new(to)
                     )
                     .await
-                    .is_err(),
+                    .err()
+                    .and_then(name_error),
+                Some(BlobNameError::NoName {
+                    path: PathBuf::new()
+                }),
                 "copy({from:?}, {to:?})"
             );
 
-            assert!(
+            assert_eq!(
                 storage
                     .r#move(
                         label,
@@ -3560,7 +3400,11 @@ async fn a_copy_or_a_move_at_a_root_path_is_an_error(
                         Path::new(to)
                     )
                     .await
-                    .is_err(),
+                    .err()
+                    .and_then(name_error),
+                Some(BlobNameError::NoName {
+                    path: PathBuf::new()
+                }),
                 "move({from:?}, {to:?})"
             );
         }
@@ -3931,6 +3775,85 @@ async fn a_copy_or_a_move_onto_itself_needs_a_blob(
             "move({from:?}, {to:?})"
         );
     }
+}
+
+#[test]
+#[tracing::instrument]
+async fn a_copy_or_a_move_to_another_path_writes_the_blob_there(
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(ns)] namespace: &BlobStorageNamespace,
+) {
+    let storage = test.get_blob_storage().await;
+    let label = "a_copy_or_a_move_to_another_path_writes_the_blob_there";
+    let read = |path: &'static str| {
+        let storage = &storage;
+        let namespace = namespace.clone();
+        async move {
+            storage
+                .get_raw(label, "get-raw", namespace, Path::new(path))
+                .await
+                .unwrap()
+        }
+    };
+
+    storage
+        .put_raw(
+            label,
+            "put-blob",
+            namespace.clone(),
+            Path::new("a/x"),
+            &Bytes::from("payload"),
+        )
+        .await
+        .unwrap();
+
+    storage
+        .copy(
+            label,
+            "copy",
+            namespace.clone(),
+            Path::new("a/x"),
+            Path::new("b/y"),
+        )
+        .await
+        .unwrap();
+    let after_copy = (read("a/x").await, read("b/y").await);
+
+    storage
+        .r#move(
+            label,
+            "move",
+            namespace.clone(),
+            Path::new("b/y"),
+            Path::new("c/z"),
+        )
+        .await
+        .unwrap();
+    let after_move = (read("b/y").await, read("c/z").await);
+
+    // The answer is true when the error downcasts to `BlobMissingError`.
+    let missing_source = storage
+        .copy(
+            label,
+            "copy-missing",
+            namespace.clone(),
+            Path::new("missing/blob"),
+            Path::new("d/w"),
+        )
+        .await
+        .map_err(|error| error.downcast_ref::<BlobMissingError>().is_some());
+    let expected_missing_source = Err(test.copy_of_a_missing_source_gives_blob_missing_error());
+
+    let payload = Some(Bytes::from("payload").to_vec());
+    assert_eq!(
+        (after_copy, after_move, missing_source, read("d/w").await),
+        (
+            (payload.clone(), payload.clone()),
+            (None, payload),
+            expected_missing_source,
+            None
+        )
+    );
 }
 
 #[test]

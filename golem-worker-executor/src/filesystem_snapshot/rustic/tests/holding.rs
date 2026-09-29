@@ -17,12 +17,10 @@
 //! This module is test code, and it compiles only for tests.
 
 use async_trait::async_trait;
-use bytes::Bytes;
-use futures::stream::BoxStream;
-use golem_service_base::replayable_stream::ErasedReplayableStream;
 use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
 use golem_service_base::storage::blob::{
-    BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult, ListedBlob, PutIfAbsent,
+    BlobMetadata, BlobStorageBackend, BlobStorageNamespace, ExistsResult, ListedBlob,
+    NormalizedBlobPath, PutIfAbsent,
 };
 use std::fmt::{Debug, Formatter};
 use std::future::Future;
@@ -109,44 +107,29 @@ impl Debug for HoldingBlobStorage {
 }
 
 #[async_trait]
-impl BlobStorage for HoldingBlobStorage {
-    async fn get_raw(
+impl BlobStorageBackend for HoldingBlobStorage {
+    async fn get_raw_at(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
+        path: &NormalizedBlobPath<'_>,
     ) -> anyhow::Result<Option<Vec<u8>>> {
         self.answer(
             op_label,
             path,
-            self.inner.get_raw(target_label, op_label, namespace, path),
-        )
-        .await
-    }
-
-    async fn get_stream(
-        &self,
-        target_label: &'static str,
-        op_label: &'static str,
-        namespace: BlobStorageNamespace,
-        path: &Path,
-    ) -> anyhow::Result<Option<BoxStream<'static, anyhow::Result<Bytes>>>> {
-        self.answer(
-            op_label,
-            path,
             self.inner
-                .get_stream(target_label, op_label, namespace, path),
+                .get_raw_at(target_label, op_label, namespace, path),
         )
         .await
     }
 
-    async fn get_range_stream(
+    async fn get_range_stream_at(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
+        path: &NormalizedBlobPath<'_>,
         offset: u64,
         length: u64,
     ) -> anyhow::Result<Option<golem_service_base::storage::blob::BlobRangeStream>> {
@@ -154,17 +137,17 @@ impl BlobStorage for HoldingBlobStorage {
             op_label,
             path,
             self.inner
-                .get_range_stream(target_label, op_label, namespace, path, offset, length),
+                .get_range_stream_at(target_label, op_label, namespace, path, offset, length),
         )
         .await
     }
 
-    async fn get_raw_slice(
+    async fn get_raw_slice_at(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
+        path: &NormalizedBlobPath<'_>,
         start: u64,
         end: u64,
     ) -> anyhow::Result<Option<Vec<u8>>> {
@@ -172,167 +155,153 @@ impl BlobStorage for HoldingBlobStorage {
             op_label,
             path,
             self.inner
-                .get_raw_slice(target_label, op_label, namespace, path, start, end),
+                .get_raw_slice_at(target_label, op_label, namespace, path, start, end),
         )
         .await
     }
 
-    async fn get_metadata(
+    async fn get_metadata_at(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
+        path: &NormalizedBlobPath<'_>,
     ) -> anyhow::Result<Option<BlobMetadata>> {
         self.answer(
             op_label,
             path,
             self.inner
-                .get_metadata(target_label, op_label, namespace, path),
+                .get_metadata_at(target_label, op_label, namespace, path),
         )
         .await
     }
 
-    async fn put_raw(
+    async fn put_raw_at(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
+        path: &NormalizedBlobPath<'_>,
         data: &[u8],
     ) -> anyhow::Result<()> {
         self.answer(
             op_label,
             path,
             self.inner
-                .put_raw(target_label, op_label, namespace, path, data),
+                .put_raw_at(target_label, op_label, namespace, path, data),
         )
         .await
     }
 
-    async fn put_raw_if_absent(
+    async fn put_raw_if_absent_at(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
+        path: &NormalizedBlobPath<'_>,
         data: &[u8],
     ) -> anyhow::Result<PutIfAbsent> {
         self.answer(
             op_label,
             path,
             self.inner
-                .put_raw_if_absent(target_label, op_label, namespace, path, data),
+                .put_raw_if_absent_at(target_label, op_label, namespace, path, data),
         )
         .await
     }
 
-    async fn put_stream(
+    async fn delete_at(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
-        stream: &dyn ErasedReplayableStream<Item = anyhow::Result<Vec<u8>>, Error = anyhow::Error>,
+        path: &NormalizedBlobPath<'_>,
     ) -> anyhow::Result<()> {
         self.answer(
             op_label,
             path,
             self.inner
-                .put_stream(target_label, op_label, namespace, path, stream),
+                .delete_at(target_label, op_label, namespace, path),
         )
         .await
     }
 
-    async fn delete(
+    async fn create_dir_at(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
-    ) -> anyhow::Result<()> {
-        self.answer(
-            op_label,
-            path,
-            self.inner.delete(target_label, op_label, namespace, path),
-        )
-        .await
-    }
-
-    async fn create_dir(
-        &self,
-        target_label: &'static str,
-        op_label: &'static str,
-        namespace: BlobStorageNamespace,
-        path: &Path,
+        path: &NormalizedBlobPath<'_>,
     ) -> anyhow::Result<()> {
         self.answer(
             op_label,
             path,
             self.inner
-                .create_dir(target_label, op_label, namespace, path),
+                .create_dir_at(target_label, op_label, namespace, path),
         )
         .await
     }
 
-    async fn list_dir(
+    async fn list_dir_at(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
+        path: &NormalizedBlobPath<'_>,
     ) -> anyhow::Result<Vec<PathBuf>> {
         self.answer(
             op_label,
             path,
-            self.inner.list_dir(target_label, op_label, namespace, path),
+            self.inner
+                .list_dir_at(target_label, op_label, namespace, path),
         )
         .await
     }
 
-    async fn list_blobs_below(
+    async fn list_blobs_below_at(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
+        path: &NormalizedBlobPath<'_>,
     ) -> anyhow::Result<Box<[ListedBlob]>> {
         self.answer(
             op_label,
             path,
             self.inner
-                .list_blobs_below(target_label, op_label, namespace, path),
+                .list_blobs_below_at(target_label, op_label, namespace, path),
         )
         .await
     }
 
-    async fn delete_dir(
+    async fn delete_dir_at(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
+        path: &NormalizedBlobPath<'_>,
     ) -> anyhow::Result<bool> {
         self.answer(
             op_label,
             path,
             self.inner
-                .delete_dir(target_label, op_label, namespace, path),
+                .delete_dir_at(target_label, op_label, namespace, path),
         )
         .await
     }
 
-    async fn exists(
+    async fn exists_at(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
+        path: &NormalizedBlobPath<'_>,
     ) -> anyhow::Result<ExistsResult> {
         self.answer(
             op_label,
             path,
-            self.inner.exists(target_label, op_label, namespace, path),
+            self.inner
+                .exists_at(target_label, op_label, namespace, path),
         )
         .await
     }
