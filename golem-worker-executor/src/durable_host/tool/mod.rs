@@ -3227,26 +3227,45 @@ where
             .expect("failed accepted tool operation must select an owner winner");
         let preserve_exact_trap = matches!(&winner, operation::OwnerFailureWinner::Trap(_));
         let owner_failure_cleanup = cleanup_operation.claim_owner_failure_cleanup();
-        if owner_failure_cleanup.is_some() {
-            if let Some(active_agent) = active_agent {
-                active_agent.fence_entity_bodies(winner).await;
-            } else {
-                owner_operations.close_failed_attachments();
-                owner_operations.drain_owner_failure_lanes().await;
-            }
-        }
-        if let Some(failed_resources) = failed_resources
-            && let Err(settlement_error) =
-                failed_resources.resources.settle_after_parent_end().await
-            && !preserve_exact_trap
-        {
-            *error = settlement_error.into();
-        }
-        cleanup_operation.settle().await;
         if let Some(owner_failure_cleanup) = owner_failure_cleanup {
-            owner_operations.wait_owner_settled().await;
-            owner_operations.complete_owner_failure_cleanup(owner_failure_cleanup);
-            primary.interrupt_current_execution();
+            let interrupt_signal = primary.current_execution_interrupt_signal();
+            let operations = owner_operations.clone();
+            let cleanup = owner_operations.start_owner_failure_cleanup(
+                owner_failure_cleanup,
+                async move {
+                    if let Some(active_agent) = active_agent {
+                        active_agent.fence_entity_bodies(winner).await;
+                    } else {
+                        operations.close_failed_attachments();
+                        operations.drain_owner_failure_lanes().await;
+                    }
+                    let settlement = match failed_resources {
+                        Some(resources) => resources.resources.settle_after_parent_end().await,
+                        None => Ok(()),
+                    };
+                    cleanup_operation.settle().await;
+                    settlement
+                },
+                move || {
+                    if let Some(signal) = interrupt_signal {
+                        let _ = signal.send(InterruptKind::Interrupt(
+                            golem_common::model::Timestamp::now_utc(),
+                        ));
+                    }
+                },
+            );
+            if let Err(cleanup_error) = cleanup.await {
+                *error = cleanup_error.into();
+            }
+        } else {
+            if let Some(failed_resources) = failed_resources
+                && let Err(settlement_error) =
+                    failed_resources.resources.settle_after_parent_end().await
+                && !preserve_exact_trap
+            {
+                *error = settlement_error.into();
+            }
+            cleanup_operation.settle().await;
         }
     }
     drop(reconstruction_hold);

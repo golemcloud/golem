@@ -834,6 +834,101 @@ async fn owner_failure_becomes_interruptible_only_after_operation_cleanup() {
 
 #[test]
 #[timeout("30s")]
+async fn owner_failure_cleanup_outlives_observer_and_joins_before_generation_reset() {
+    let owner = OwnerToolOperations::new();
+    let operation = accept_provisional(owner.create(context()), 2);
+    let ancestor = accept_provisional(owner.create(context()), 3);
+    assert!(operation.select_trap(TrapType::Exit).await);
+    let token = operation.claim_owner_failure_cleanup().unwrap();
+    let (settled, settled_rx) = tokio::sync::oneshot::channel();
+    let (wake, mut wake_rx) = tokio::sync::oneshot::channel();
+    let observer = owner.start_owner_failure_cleanup(
+        token,
+        async move {
+            operation.settle().await;
+            settled.send(()).unwrap();
+            Ok(())
+        },
+        move || {
+            let _ = wake.send(());
+        },
+    );
+    settled_rx.await.unwrap();
+    drop(observer);
+    assert!(owner.begin_generation().is_err());
+    assert!(owner.interruptible_owner_failure().is_none());
+    assert!(matches!(
+        wake_rx.try_recv(),
+        Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+    ));
+    ancestor.settle().await;
+    owner.join_owner_failure_cleanup().await.unwrap();
+    wake_rx.await.unwrap();
+    assert!(matches!(
+        owner.interruptible_owner_failure(),
+        Some(OwnerFailureWinner::Trap(TrapType::Exit))
+    ));
+    owner.begin_generation().unwrap();
+    assert!(owner.selected_owner_failure().is_none());
+}
+
+#[test]
+#[timeout("30s")]
+async fn owner_failure_cleanup_retains_errors_and_panics_without_replacing_trap() {
+    for panic in [false, true] {
+        let owner = OwnerToolOperations::new();
+        let operation = accept_provisional(owner.create(context()), 2);
+        let ancestor = accept_provisional(owner.create(context()), 3);
+        assert!(operation.select_trap(TrapType::Exit).await);
+        let token = operation.claim_owner_failure_cleanup().unwrap();
+        let (wake, mut wake_rx) = tokio::sync::oneshot::channel();
+        let (settled, settled_rx) = tokio::sync::oneshot::channel();
+        drop(owner.start_owner_failure_cleanup(
+            token,
+            async move {
+                operation.settle().await;
+                settled.send(()).unwrap();
+                assert!(!panic, "injected cleanup panic");
+                Err(WorkerExecutorError::runtime("injected settlement failure"))
+            },
+            move || {
+                let _ = wake.send(());
+            },
+        ));
+        settled_rx.await.unwrap();
+        assert!(owner.interruptible_owner_failure().is_none());
+        if !panic {
+            assert!(owner.join_owner_failure_cleanup().now_or_never().is_none());
+            assert!(matches!(
+                wake_rx.try_recv(),
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+            ));
+        }
+        ancestor.settle().await;
+        for _ in 0..2 {
+            assert!(owner.join_owner_failure_cleanup().await.is_err());
+        }
+        if panic {
+            assert!(
+                wake_rx.await.is_err(),
+                "panicked cleanup must not authorize completion"
+            );
+            assert!(owner.interruptible_owner_failure().is_none());
+        } else {
+            wake_rx.await.unwrap();
+            assert!(owner.interruptible_owner_failure().is_some());
+        }
+        assert!(!owner.state.lock().unwrap().owner_failure_cleanup_complete);
+        assert!(owner.begin_generation().is_err());
+        assert!(matches!(
+            owner.selected_owner_failure(),
+            Some(OwnerFailureWinner::Trap(TrapType::Exit))
+        ));
+    }
+}
+
+#[test]
+#[timeout("30s")]
 async fn owner_failure_seals_operation_creation_through_cleanup_completion() {
     let owner = OwnerToolOperations::new();
     let operation = accept_provisional(owner.create(context()), 2);

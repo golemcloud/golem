@@ -1511,6 +1511,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         if let WorkerInstance::CleanupFailed(error) = &*self.instance.lock().await {
             return Err(error.clone());
         }
+        self.owner_execution
+            .tool_operations()
+            .join_owner_failure_cleanup()
+            .await?;
         // A lost shard: the oplog is the new owner's. No terminal is claimed, written or cached,
         // and the waiters are sent to the owner (`fail_pending_invocations` maps the error).
         if self.retired_for_lost_shard() {
@@ -3478,15 +3482,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         )
     }
 
-    pub(crate) fn interrupt_current_execution(&self) {
-        let interrupt_signal = match &*self.execution_status.read().unwrap() {
+    pub(crate) fn current_execution_interrupt_signal(
+        &self,
+    ) -> Option<Arc<tokio::sync::broadcast::Sender<InterruptKind>>> {
+        match &*self.execution_status.read().unwrap() {
             ExecutionStatus::Running {
                 interrupt_signal, ..
             } => Some(interrupt_signal.clone()),
             _ => None,
-        };
-        if let Some(interrupt_signal) = interrupt_signal {
-            let _ = interrupt_signal.send(InterruptKind::Interrupt(Timestamp::now_utc()));
         }
     }
 

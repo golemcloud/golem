@@ -263,6 +263,7 @@ impl OwnerExecution {
         if let Some(replay) = self.replay.read().await.as_ref() {
             replay.ensure_reconstruction_claims_empty()?;
         }
+        self.tool_operations.join_owner_failure_cleanup().await?;
         self.tool_operations.begin_generation()?;
         self.deferred_tool_admission.begin_generation()?;
         self.reached_oplog_marker
