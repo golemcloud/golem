@@ -3332,71 +3332,6 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         .await;
     }
 
-    /// Makes the periodic snapshot record of `snapshot` with the filesystem snapshot `name`: it
-    /// uploads the payload and gives the entry. Gives the details when the payload is not made.
-    async fn periodic_entry(
-        &self,
-        snapshot: golem_common::model::oplog::RawSnapshotData,
-        name: Option<FilesystemSnapshotName>,
-    ) -> Result<OplogEntry, String> {
-        let serialized = golem_common::serialization::serialize(&snapshot.data)
-            .map_err(|err| format!("Failed to serialize snapshot data: {err}"))?;
-        let payload = self
-            .parent
-            .oplog
-            .upload_raw_payload(serialized)
-            .await
-            .map_err(|err| format!("Failed to upload periodic snapshot payload: {err}"))?
-            .into_payload::<Vec<u8>>()
-            .map_err(|err| format!("Failed to convert snapshot payload: {err}"))?;
-        Ok(OplogEntry::snapshot(
-            payload,
-            snapshot.mime_type,
-            self.store
-                .data()
-                .durable_ctx()
-                .agent_wallet_cards_snapshot(),
-            self.store.data().durable_ctx().wallet_generation(),
-            name,
-        ))
-    }
-
-    /// Appends the periodic snapshot record `entry`, with the confirmation record of
-    /// `confirmed_at_once` in the same append when it is set, commits, and checkpoints the
-    /// status.
-    async fn write_periodic_record(
-        &self,
-        confirmed_at_once: Option<FilesystemSnapshotName>,
-        entry: OplogEntry,
-    ) -> Result<(), OplogError> {
-        match confirmed_at_once {
-            Some(name) => match self
-                .parent
-                .oplog
-                .add_pair(
-                    entry,
-                    Box::new(move |_| OplogEntry::snapshot_confirmed(name)),
-                )
-                .await
-            {
-                Ok(_) => Ok(()),
-                Err(OplogError::Fenced(fence)) => Err(self.parent.retired_by(fence)),
-                Err(error) => Err(error),
-            },
-            None => self.parent.add_to_oplog(entry).await.map(drop),
-        }?;
-        self.parent
-            .commit_oplog_and_update_state(CommitLevel::Always)
-            .await?;
-        debug!("Periodic snapshot saved successfully");
-        // A snapshot is committed between invocations, so no jumpable region is open: a clean
-        // boundary to checkpoint the status, aligning the checkpoint with the snapshot index.
-        self.parent
-            .checkpoint_status(status_checkpointer::CheckpointReason::Snapshot)
-            .await;
-        Ok(())
-    }
-
     /// Records an attempted worker update as failed
     async fn fail_update(
         &self,
@@ -3755,7 +3690,28 @@ impl<Ctx: WorkerCtx> PeriodicSnapshotHost for PeriodicHost<'_, '_, Ctx> {
         snapshot: golem_common::model::oplog::RawSnapshotData,
         name: Option<FilesystemSnapshotName>,
     ) -> Result<OplogEntry, String> {
-        self.0.periodic_entry(snapshot, name).await
+        let serialized = golem_common::serialization::serialize(&snapshot.data)
+            .map_err(|err| format!("Failed to serialize snapshot data: {err}"))?;
+        let payload = self
+            .0
+            .parent
+            .oplog
+            .upload_raw_payload(serialized)
+            .await
+            .map_err(|err| format!("Failed to upload periodic snapshot payload: {err}"))?
+            .into_payload::<Vec<u8>>()
+            .map_err(|err| format!("Failed to convert snapshot payload: {err}"))?;
+        Ok(OplogEntry::snapshot(
+            payload,
+            snapshot.mime_type,
+            self.0
+                .store
+                .data()
+                .durable_ctx()
+                .agent_wallet_cards_snapshot(),
+            self.0.store.data().durable_ctx().wallet_generation(),
+            name,
+        ))
     }
 
     async fn write(
@@ -3763,7 +3719,35 @@ impl<Ctx: WorkerCtx> PeriodicSnapshotHost for PeriodicHost<'_, '_, Ctx> {
         confirmed_at_once: Option<FilesystemSnapshotName>,
         entry: OplogEntry,
     ) -> Result<(), OplogError> {
-        self.0.write_periodic_record(confirmed_at_once, entry).await
+        match confirmed_at_once {
+            Some(name) => match self
+                .0
+                .parent
+                .oplog
+                .add_pair(
+                    entry,
+                    Box::new(move |_| OplogEntry::snapshot_confirmed(name)),
+                )
+                .await
+            {
+                Ok(_) => Ok(()),
+                Err(OplogError::Fenced(fence)) => Err(self.0.parent.retired_by(fence)),
+                Err(error) => Err(error),
+            },
+            None => self.0.parent.add_to_oplog(entry).await.map(drop),
+        }?;
+        self.0
+            .parent
+            .commit_oplog_and_update_state(CommitLevel::Always)
+            .await?;
+        debug!("Periodic snapshot saved successfully");
+        // A snapshot is committed between invocations, so no jumpable region is open: a clean
+        // boundary to checkpoint the status, aligning the checkpoint with the snapshot index.
+        self.0
+            .parent
+            .checkpoint_status(status_checkpointer::CheckpointReason::Snapshot)
+            .await;
+        Ok(())
     }
 
     fn confirm(&self, mark: TreeMark) -> Confirm {

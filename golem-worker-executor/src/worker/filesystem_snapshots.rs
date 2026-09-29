@@ -66,10 +66,10 @@ pub(crate) struct ConfirmedFilesystemSnapshot {
 pub(crate) type SnapshotSlot = std::sync::Arc<std::sync::Mutex<Option<FilesystemSnapshotSlot>>>;
 
 /// What a worker knows about the filesystem snapshots of its current generation.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub(crate) struct FilesystemSnapshotSlot {
-    /// The mark of the baseline of the current generation, or `None` before the first start.
-    generation: Option<TreeMark>,
+    /// The mark of the baseline of the current generation.
+    generation: TreeMark,
     /// The last confirmed filesystem snapshot of the current generation.
     confirmed: Option<ConfirmedFilesystemSnapshot>,
 }
@@ -82,7 +82,7 @@ impl FilesystemSnapshotSlot {
         restored: Option<(FilesystemSnapshotName, ConfirmedBaseline)>,
     ) -> Self {
         Self {
-            generation: Some(mark),
+            generation: mark,
             confirmed: restored.map(|(name, baseline)| ConfirmedFilesystemSnapshot {
                 name,
                 mark,
@@ -92,12 +92,10 @@ impl FilesystemSnapshotSlot {
     }
 
     /// Records the confirmation of `name`, whose capture has `mark`. A confirmation of another
-    /// generation changes nothing.
+    /// generation changes nothing: the loop starts a new generation without the instance lock,
+    /// so the generation can change after the owner gate checked it.
     pub(crate) fn confirm(&mut self, name: FilesystemSnapshotName, mark: TreeMark) {
-        if self
-            .generation
-            .is_some_and(|generation| generation.same_generation(&mark))
-        {
+        if self.is_generation(&mark) {
             self.confirmed = Some(ConfirmedFilesystemSnapshot {
                 name,
                 mark,
@@ -112,8 +110,7 @@ impl FilesystemSnapshotSlot {
 
     /// Whether `mark` is a mark of the current generation.
     pub(crate) fn is_generation(&self, mark: &TreeMark) -> bool {
-        self.generation
-            .is_some_and(|generation| generation.same_generation(mark))
+        self.generation.same_generation(mark)
     }
 }
 
@@ -207,7 +204,7 @@ fn plan_periodic_record<Copy>(
 
 /// What a periodic snapshot writes: the name of its record, the name whose confirmation record
 /// follows the record at once, and the upload that starts after the record commits.
-pub(crate) struct PeriodicPlan {
+struct PeriodicPlan {
     name: Option<FilesystemSnapshotName>,
     confirmed_at_once: Option<FilesystemSnapshotName>,
     upload: Option<PendingUpload>,
@@ -227,7 +224,7 @@ impl PeriodicPlan {
     /// the capture compared with, and the outcome of the capture, as [`plan_periodic_record`]
     /// decides. Without an admission the record has no name. Gives `None` when no record is
     /// written. The admission is dropped unless the record uploads the capture.
-    pub(crate) fn new(
+    fn new(
         capture: Option<(
             Admission,
             Option<ConfirmedFilesystemSnapshot>,
@@ -267,18 +264,18 @@ impl PeriodicPlan {
     }
 
     /// The filesystem snapshot name of the record.
-    pub(crate) fn name(&self) -> Option<FilesystemSnapshotName> {
+    fn name(&self) -> Option<FilesystemSnapshotName> {
         self.name.clone()
     }
 
     /// The name whose confirmation record follows the record at once, in one append.
-    pub(crate) fn confirmed_at_once(&self) -> Option<FilesystemSnapshotName> {
+    fn confirmed_at_once(&self) -> Option<FilesystemSnapshotName> {
         self.confirmed_at_once.clone()
     }
 
     /// Starts the upload of a written record. `confirm` gives the confirmation of the capture
     /// with the mark.
-    pub(crate) fn submit(self, confirm: impl FnOnce(TreeMark) -> Confirm) {
+    fn submit(self, confirm: impl FnOnce(TreeMark) -> Confirm) {
         if let Some(PendingUpload {
             admission,
             tree,
@@ -291,7 +288,7 @@ impl PeriodicPlan {
     }
 
     /// Drops the admission and discards the capture of a record that was not written.
-    pub(crate) async fn abandon(self) {
+    async fn abandon(self) {
         if let Some(PendingUpload {
             admission, tree, ..
         }) = self.upload
@@ -357,7 +354,7 @@ pub(crate) enum PeriodicResult<Stop> {
     NotWritten(PeriodicFailure),
 }
 
-/// Takes a periodic snapshot of the agent of `scope`, in the order of the design: admission, the
+/// Takes a periodic snapshot of the agent of `scope`, in this order: admission, the
 /// save hook of the guest, the capture, the record with the name, its commit and the checkpoint
 /// of the status, then the upload. An admission that the service refuses skips the snapshot,
 /// and a disabled service gives a record without a name. A capture that fails writes no
@@ -491,17 +488,17 @@ pub(crate) async fn update_snapshot<Host: UpdateSnapshotHost>(
     snapshots: &AgentFilesystemSnapshots,
     scope: &SnapshotScope,
 ) -> UpdateSnapshot<Host::Stop> {
-    let stopped = |host: &Host, details: String| match update_stop(host.lost_shard()) {
-        UpdateStop::WriteNothing => UpdateSnapshot::WriteNothing,
-        UpdateStop::FailUpdate => UpdateSnapshot::Fail(details),
-    };
     let admission = match snapshots.admit_update(scope, host.terminal()).await {
         Ok(admission) => Some(admission),
         Err(UpdateRefusal::Skip(SnapshotSkip::Disabled)) => None,
         Err(UpdateRefusal::Interrupted) => {
-            return stopped(host, UPDATE_WAIT_INTERRUPTED.to_string());
+            return interrupted_update(UpdateInterruption::Wait, host.lost_shard());
         }
-        Err(UpdateRefusal::Skip(skip)) => return UpdateSnapshot::Fail(update_refused(skip)),
+        Err(UpdateRefusal::Skip(skip)) => {
+            return UpdateSnapshot::Fail(format!(
+                "cannot take a filesystem snapshot for the update: {skip}"
+            ));
+        }
     };
     let snapshot = match host.save_guest().await {
         Ok(snapshot) => snapshot,
@@ -543,77 +540,55 @@ pub(crate) async fn update_snapshot<Host: UpdateSnapshotHost>(
                 kept: host.kept_baseline().await,
             }),
         },
-        Err(error) => match update_upload_failure(&error, *terminal.borrow()) {
-            UpdateUploadFailure::Interrupted => {
-                stopped(host, UpdateUploadFailure::Interrupted.details())
-            }
-            UpdateUploadFailure::Failed(details) => UpdateSnapshot::Fail(details),
-        },
+        Err(error) => failed_update_upload(&error, *terminal.borrow(), host.lost_shard()),
     }
 }
 
-/// What a manual update does when a terminal interrupt stopped it.
+/// Where a terminal interrupt stopped a manual update.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum UpdateStop {
-    /// The shard is lost. Nothing is written, and the update stays pending for the new owner.
-    WriteNothing,
-    /// The update fails.
-    FailUpdate,
+enum UpdateInterruption {
+    /// In the wait for a running upload of the agent.
+    Wait,
+    /// In the upload of the update snapshot.
+    Upload,
 }
 
-/// What a manual update does when a terminal interrupt stopped it, with `lost_shard` telling
-/// whether the shard of the agent is lost.
-pub(crate) fn update_stop(lost_shard: bool) -> UpdateStop {
+/// How a manual update that a terminal interrupt stopped ends: on a lost shard nothing is
+/// written, and the update stays pending for the new owner; otherwise the update fails.
+fn interrupted_update<Stop>(
+    interruption: UpdateInterruption,
+    lost_shard: bool,
+) -> UpdateSnapshot<Stop> {
     if lost_shard {
-        UpdateStop::WriteNothing
-    } else {
-        UpdateStop::FailUpdate
+        return UpdateSnapshot::WriteNothing;
     }
-}
-
-/// Why the filesystem snapshot of a manual update was not uploaded.
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) enum UpdateUploadFailure {
-    /// A terminal interrupt stopped the upload.
-    Interrupted,
-    /// The upload failed, with the details of the failed update.
-    Failed(String),
-}
-
-impl UpdateUploadFailure {
-    /// The details of the failed update.
-    pub(crate) fn details(self) -> String {
-        match self {
-            Self::Interrupted => {
-                "the update was interrupted while it uploaded the filesystem snapshot".to_string()
+    UpdateSnapshot::Fail(
+        match interruption {
+            UpdateInterruption::Wait => {
+                "the update was interrupted while it waited for an upload of a filesystem \
+                 snapshot of the agent"
             }
-            Self::Failed(details) => details,
+            UpdateInterruption::Upload => {
+                "the update was interrupted while it uploaded the filesystem snapshot"
+            }
         }
-    }
+        .to_string(),
+    )
 }
 
-/// Classifies a failed upload of a manual update. A failure while a terminal interrupt waits
-/// counts as interrupted, because the interrupt stops the save.
-pub(crate) fn update_upload_failure(
+/// How a manual update whose upload failed with `error` ends. A failure while a terminal
+/// interrupt waits counts as interrupted, because the interrupt stops the save.
+fn failed_update_upload<Stop>(
     error: &UploadNowError,
     terminal_pending: bool,
-) -> UpdateUploadFailure {
+    lost_shard: bool,
+) -> UpdateSnapshot<Stop> {
     if terminal_pending {
-        UpdateUploadFailure::Interrupted
-    } else {
-        UpdateUploadFailure::Failed(format!(
-            "failed to upload the filesystem snapshot for the update: {error}"
-        ))
+        return interrupted_update(UpdateInterruption::Upload, lost_shard);
     }
-}
-
-/// The details of a manual update that fails because a terminal interrupt stopped the wait for a
-/// running upload.
-pub(crate) const UPDATE_WAIT_INTERRUPTED: &str = "the update was interrupted while it waited for an upload of a filesystem snapshot of the agent";
-
-/// The details of a manual update that fails because its admission gave `skip`.
-pub(crate) fn update_refused(skip: SnapshotSkip) -> String {
-    format!("cannot take a filesystem snapshot for the update: {skip}")
+    UpdateSnapshot::Fail(format!(
+        "failed to upload the filesystem snapshot for the update: {error}"
+    ))
 }
 
 /// The baseline that a start selected, with its restore.
@@ -912,8 +887,8 @@ mod tests {
     use test_r::test;
 
     /// Gives a mark of a new generation and a later mark of the same generation.
-    async fn marks() -> (TreeMark, TreeMark) {
-        crate::services::agent_filesystem::test_tree_marks().await
+    fn marks() -> (TreeMark, TreeMark) {
+        crate::services::agent_filesystem::test_tree_marks()
     }
 
     fn confirmed(name: &FilesystemSnapshotName, mark: TreeMark) -> ConfirmedFilesystemSnapshot {
@@ -934,7 +909,7 @@ mod tests {
 
     #[test]
     async fn the_capture_compares_with_the_confirmed_snapshot_only_while_a_start_selects_it() {
-        let (mark, _) = marks().await;
+        let (mark, _) = marks();
         let name = FilesystemSnapshotName::periodic();
         let other = FilesystemSnapshotName::periodic();
         let periodic = confirmed(&name, mark);
@@ -971,7 +946,7 @@ mod tests {
 
     #[test]
     async fn the_record_of_a_periodic_snapshot_follows_the_finding_of_the_capture() {
-        let (mark, _) = marks().await;
+        let (mark, _) = marks();
         let name = FilesystemSnapshotName::periodic();
         let since = confirmed(&name, mark);
 
@@ -1010,7 +985,7 @@ mod tests {
 
     #[test]
     async fn only_the_owner_of_the_agent_passes_the_gate_and_the_admission_is_asked_last() {
-        let (mark, _) = marks().await;
+        let (mark, _) = marks();
         let attempt = Uuid::new_v4();
         let running = Confirmer::Running(mark);
         let start = Confirmer::Start(attempt);
@@ -1558,7 +1533,7 @@ mod tests {
 
     #[test]
     async fn a_periodic_snapshot_admits_before_the_guest_saves_and_captures_after() {
-        let (mark, _) = marks().await;
+        let (mark, _) = marks();
         let (snapshots, _shutdown) = enabled_service();
         let scope = agent_scope("periodic-enabled");
         let since = confirmed(&FilesystemSnapshotName::periodic(), mark);
@@ -1712,7 +1687,9 @@ mod tests {
         assert_eq!(
             failed,
             (
-                format!("Fail({UPDATE_WAIT_INTERRUPTED})"),
+                "Fail(the update was interrupted while it waited for an upload of a filesystem \
+                 snapshot of the agent)"
+                    .to_string(),
                 Vec::<String>::new()
             )
         );
@@ -1720,44 +1697,36 @@ mod tests {
     }
 
     #[test]
-    async fn a_stopped_manual_update_writes_nothing_only_on_a_lost_shard() {
-        assert_eq!(
-            [update_stop(true), update_stop(false)],
-            [UpdateStop::WriteNothing, UpdateStop::FailUpdate]
-        );
-    }
-
-    #[test]
     async fn a_failed_update_upload_is_interrupted_while_a_terminal_interrupt_waits() {
         let store = UploadNowError::Store(crate::filesystem_snapshot::SnapshotStoreError::NotFound);
+        let uploaded = |error: &UploadNowError, terminal: bool, lost_shard: bool| {
+            update_outcome(&failed_update_upload(error, terminal, lost_shard))
+        };
         assert_eq!(
             [
-                update_upload_failure(&UploadNowError::Stopped, true),
-                update_upload_failure(&store, true),
-                update_upload_failure(&UploadNowError::Stopped, false),
-                update_upload_failure(&store, false),
+                uploaded(&UploadNowError::Stopped, true, false),
+                uploaded(&store, true, false),
+                uploaded(&store, true, true),
+                uploaded(&UploadNowError::Stopped, false, false),
+                uploaded(&store, false, true),
             ],
             [
-                UpdateUploadFailure::Interrupted,
-                UpdateUploadFailure::Interrupted,
-                UpdateUploadFailure::Failed(
-                    "failed to upload the filesystem snapshot for the update: the upload of the \
-                     filesystem snapshot was stopped"
-                        .to_string()
-                ),
-                UpdateUploadFailure::Failed(
-                    "failed to upload the filesystem snapshot for the update: no complete \
-                     filesystem snapshot has the name"
-                        .to_string()
-                ),
+                "Fail(the update was interrupted while it uploaded the filesystem snapshot)",
+                "Fail(the update was interrupted while it uploaded the filesystem snapshot)",
+                "WriteNothing",
+                "Fail(failed to upload the filesystem snapshot for the update: the upload of the \
+                 filesystem snapshot was stopped)",
+                "Fail(failed to upload the filesystem snapshot for the update: no complete \
+                 filesystem snapshot has the name)",
             ]
+            .map(String::from)
         );
     }
 
     #[test]
     async fn a_confirmation_of_another_generation_leaves_the_slot_unchanged() {
-        let (first, later) = marks().await;
-        let (other_generation, _) = marks().await;
+        let (first, later) = marks();
+        let (other_generation, _) = marks();
         let restored = FilesystemSnapshotName::periodic();
         let confirmed_now = FilesystemSnapshotName::periodic();
         let mut slot = FilesystemSnapshotSlot::at_start(

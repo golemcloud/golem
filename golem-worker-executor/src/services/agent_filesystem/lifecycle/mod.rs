@@ -1442,7 +1442,7 @@ impl TreeMark {
 /// Gives a mark of a new generation and a later mark of the same generation, for tests of the
 /// callers of the lifecycle.
 #[cfg(test)]
-pub(crate) async fn test_tree_marks() -> (TreeMark, TreeMark) {
+pub(crate) fn test_tree_marks() -> (TreeMark, TreeMark) {
     let generation = NEXT_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let mark = |changes| TreeMark {
         generation,

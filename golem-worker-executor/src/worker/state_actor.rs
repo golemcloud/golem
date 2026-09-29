@@ -811,7 +811,8 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
     /// Writes the confirmation record of the filesystem snapshot `name`, as
     /// [`StatusJob::ConfirmFilesystemSnapshot`] says. The job holds `instance_guard` until it ends.
     /// A status task that has ended, or that drops the job, gives [`ConfirmOutcome::Deferred`].
-    pub async fn confirm_filesystem_snapshot(
+    /// Only `Worker::confirm_as` calls it, after the owner gate lets the confirmation through.
+    pub(super) async fn append_confirmation(
         &self,
         name: FilesystemSnapshotName,
         instance_guard: OwnedMutexGuard<WorkerInstance>,
@@ -1633,11 +1634,7 @@ mod tests {
             .await;
 
         let reply = actor
-            .confirm_filesystem_snapshot(
-                FilesystemSnapshotName::periodic(),
-                guard,
-                Box::new(|_| {}),
-            )
+            .append_confirmation(FilesystemSnapshotName::periodic(), guard, Box::new(|_| {}))
             .await;
 
         assert_eq!(reply, ConfirmOutcome::Deferred);

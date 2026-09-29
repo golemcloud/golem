@@ -5308,7 +5308,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         if !filesystem_snapshots::owner_gate(
             instance,
             &who,
-            self.terminal_interrupt_pending(),
+            self.interrupts.terminal_pending(),
             self.last_known_status_detached.load(Ordering::Acquire),
             self.owner_retirement_requested.is_cancelled(),
             || {
@@ -5337,7 +5337,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             filesystem_snapshots::Confirmer::Start(_) => Box::new(|_| {}),
         };
         self.state_actor
-            .confirm_filesystem_snapshot(name, instance_guard, on_confirmed)
+            .append_confirmation(name, instance_guard, on_confirmed)
             .await
     }
 
@@ -5359,11 +5359,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             } => filesystem_snapshot,
             _ => None,
         }
-    }
-
-    /// Whether a terminal interrupt request waits for this worker.
-    pub(crate) fn terminal_interrupt_pending(&self) -> bool {
-        self.interrupts.terminal_pending()
     }
 
     /// A receiver of whether a terminal interrupt request waits for this worker.

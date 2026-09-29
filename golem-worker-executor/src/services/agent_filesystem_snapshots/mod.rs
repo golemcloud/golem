@@ -436,7 +436,7 @@ impl AgentFilesystemSnapshots {
             () = core.registry.until_job_gone(scope, id) => {}
             () = tokio::time::sleep(core.settings.confirmation_wait()) => {}
             () = core.shutdown.cancelled() => {}
-            () = job::raised(interrupt) => return Err(UpdateRefusal::Interrupted),
+            () = job::interrupt_raised(interrupt) => return Err(UpdateRefusal::Interrupted),
         }
         Core::admit(core, scope, SnapshotKind::Update)
             .await
@@ -468,7 +468,7 @@ impl AgentFilesystemSnapshots {
                 let decision = tokio::select! {
                     decision = ticket.decided() => Some(decision),
                     () = tokio::time::sleep(limit) => None,
-                    () = job::raised(interrupt.clone()) => return StartCheck::NotStored,
+                    () = job::interrupt_raised(interrupt.clone()) => return StartCheck::NotStored,
                 };
                 (Some(started.elapsed()), decision)
             }
@@ -491,7 +491,7 @@ impl AgentFilesystemSnapshots {
         };
         tokio::select! {
             biased;
-            () = job::raised(interrupt) => StartCheck::NotStored,
+            () = job::interrupt_raised(interrupt) => StartCheck::NotStored,
             stat = tokio::time::timeout(limit, core.store.stat(scope, &store_name)) => match stat {
                 Ok(Ok(Some(_))) => StartCheck::Stored,
                 Ok(Ok(None)) | Err(_) => StartCheck::NotStored,
@@ -637,19 +637,6 @@ impl Admission {
     ) {
         let jobs = self.core.jobs.clone();
         jobs.spawn(job::run_job(self, tree, parent, confirm));
-    }
-
-    /// Uploads `tree` and waits until the store holds it. A manual update calls this before it
-    /// writes its record. The scope stays reserved until the [`SavedUpdate`] is retained or
-    /// dropped. When `stop` reports a terminal interrupt, or a shutdown or a call of
-    /// `forget_scope` for the scope stops the upload, the save stops, the tree is discarded, and the call gives
-    /// [`UploadNowError::Stopped`].
-    pub(crate) async fn upload_now(
-        self,
-        tree: CapturedTree,
-        stop: watch::Receiver<bool>,
-    ) -> Result<SavedUpdate, UploadNowError> {
-        job::upload_now(self, tree, stop).await
     }
 }
 

@@ -110,55 +110,72 @@ pub(super) async fn run_job(
     }
 }
 
-/// Saves the tree of `admission` and discards it, as [`Admission::upload_now`] says.
-pub(super) async fn upload_now(
-    admission: Admission,
-    tree: CapturedTree,
-    stop: watch::Receiver<bool>,
-) -> Result<SavedUpdate, UploadNowError> {
-    let Admission {
-        core,
-        ticket,
-        name,
-        kind,
-    } = admission;
-    let started = Instant::now();
-    let saved = save_phase(&core, &ticket, &name, None, &tree.directory, raised(stop)).await;
-    tree.discard.await;
-    let result = match saved {
-        SaveOutcome::Saved(info, _slot) => Ok(info),
-        SaveOutcome::Failed(error) => Err(UploadNowError::Store(error)),
-        SaveOutcome::Stopped => Err(UploadNowError::Stopped),
-    };
-    match &result {
-        Ok(info) => {
-            crate::metrics::filesystem_snapshots::record_upload(
-                kind.label(),
-                "saved",
-                started.elapsed(),
-            );
-            crate::metrics::filesystem_snapshots::record_uploaded_bytes(kind.label(), info.bytes);
+impl Admission {
+    /// Uploads `tree` and waits until the store holds it. A manual update calls this before it
+    /// writes its record. The scope stays reserved until the [`SavedUpdate`] is retained or
+    /// dropped. When `stop` reports a terminal interrupt, or a shutdown or a call of
+    /// `forget_scope` for the scope stops the upload, the save stops, the tree is discarded, and
+    /// the call gives [`UploadNowError::Stopped`].
+    pub(crate) async fn upload_now(
+        self,
+        tree: CapturedTree,
+        stop: watch::Receiver<bool>,
+    ) -> Result<SavedUpdate, UploadNowError> {
+        let Admission {
+            core,
+            ticket,
+            name,
+            kind,
+        } = self;
+        let started = Instant::now();
+        let saved = save_phase(
+            &core,
+            &ticket,
+            &name,
+            None,
+            &tree.directory,
+            interrupt_raised(stop),
+        )
+        .await;
+        tree.discard.await;
+        let result = match saved {
+            SaveOutcome::Saved(info, _slot) => Ok(info),
+            SaveOutcome::Failed(error) => Err(UploadNowError::Store(error)),
+            SaveOutcome::Stopped => Err(UploadNowError::Stopped),
+        };
+        match &result {
+            Ok(info) => {
+                crate::metrics::filesystem_snapshots::record_upload(
+                    kind.label(),
+                    "saved",
+                    started.elapsed(),
+                );
+                crate::metrics::filesystem_snapshots::record_uploaded_bytes(
+                    kind.label(),
+                    info.bytes,
+                );
+            }
+            Err(UploadNowError::Store(_)) => {
+                crate::metrics::filesystem_snapshots::record_upload(
+                    kind.label(),
+                    "failed",
+                    started.elapsed(),
+                );
+            }
+            Err(UploadNowError::Stopped) => {}
         }
-        Err(UploadNowError::Store(_)) => {
-            crate::metrics::filesystem_snapshots::record_upload(
-                kind.label(),
-                "failed",
-                started.elapsed(),
-            );
-        }
-        Err(UploadNowError::Stopped) => {}
+        result.map(|info| SavedUpdate {
+            core,
+            ticket,
+            name,
+            info,
+        })
     }
-    result.map(|info| SavedUpdate {
-        core,
-        ticket,
-        name,
-        info,
-    })
 }
 
 /// Completes when `stop` reports a terminal interrupt. It never completes when the sender is
 /// gone.
-pub(super) async fn raised(mut stop: watch::Receiver<bool>) {
+pub(super) async fn interrupt_raised(mut stop: watch::Receiver<bool>) {
     if stop.wait_for(|raised| *raised).await.is_err() {
         std::future::pending::<()>().await;
     }

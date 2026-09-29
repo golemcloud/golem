@@ -1175,10 +1175,10 @@ async fn tree_without_snapshots(
     let executor = start_replaying(deps, &context, root.path()).await?;
     let agent = Agent::start(&executor, &context, component, "no-snapshots", &[]).await?;
     agent.apply_all(&executor, operations).await?;
-    Ok((
-        agent.describe(&executor).await?,
-        agent.applied(&executor).await?,
-    ))
+    let tree = agent.describe(&executor).await?;
+    let applied = agent.applied(&executor).await?;
+    executor.release().await?;
+    Ok((tree, applied))
 }
 
 #[test]
@@ -1431,6 +1431,7 @@ async fn run_history(
     let root = tempfile::tempdir()?;
     let replaying = start_replaying_with(deps, &context, root.path(), Some(&store)).await?;
     let replayed = agent.outcome(&replaying).await?;
+    replaying.release().await?;
     Ok((live, restored, replayed, restores))
 }
 
