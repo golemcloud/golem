@@ -7,11 +7,17 @@ belongs in architecture.md; executable work belongs in tasks.md.
 
 ## Status
 
-The visual foundation and the live Agents explorer are implemented. The next
-implementation slice rebuilds the shared shell and the complete local Dev loop,
-then adds read-only Deployment, Environment, Server, and individual Agent
-overviews to Ops. Activity, real Metrics providers, resource catalogs, and Ops
+The visual foundation, rebuilt Dev/Ops shell, complete local Dev loop, and
+accepted read-only Ops subset are implemented. Ops includes the live Agents
+collection, individual Agent Overview, and current Deployment, Environment, and
+Server overviews. Activity, real Metrics providers, resource catalogs, and Ops
 mutations remain later work.
+
+Two implementation follow-ups remain visible rather than being treated as
+compatibility paths: selected-target launch material still needs to converge
+into one descriptor, and a context switch to a different Server target must
+require stopping the supervised Server or cancelling the switch. Final manual
+terminal acceptance also remains outstanding.
 
 The metrics acquisition backend and any companion Docker or web UI are
 deliberately undecided. They will be planned only after the provider-independent
@@ -54,7 +60,7 @@ TUI interactions have passed visual and terminal review.
 - Results carry context identity and generation so stale results can be ignored.
 - Dev capabilities are evaluated per view:
   - Build & Deploy requires a manifest-backed application project.
-- Server requires a local server target.
+  - Server requires a local server target.
   - REPL requires a selected application environment and reachable server.
 - Ops is available whenever the selected target contains enough information for
   the requested subject or action.

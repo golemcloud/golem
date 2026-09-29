@@ -1,5 +1,62 @@
 # Progress
 
+## 2026-09-29: Rebuilt Dev Shell And Read-Only Ops Slice
+
+- Replaced the previous product topology with Dev and Ops workspaces, recursive
+  right/bottom Dev subviews, reusable Ops collection/details layout, responsive
+  shell geometry, hierarchical `ctrl+x` navigation, and switchable All/Context
+  command-palette scopes.
+- Added reviewed nested-CLI PTYs for Plan, Build, Deploy, Clean, Server, and
+  interactive REPL. Each active or completed command/session owns a
+  pane-sized `TerminalScreen` with 2,000 lines of scrollback; explicit
+  scrollback mode, mouse scrolling, ANSI rendering, five-second force-stop
+  gating, and exact argument construction are covered by focused tests.
+- Added bounded finite Dev Jobs with the latest 20 completed records, separate
+  persistent Server and REPL state, per-context form memory with one-shot
+  `--yes`, and conservative quit blocking while TUI-owned work is active.
+- Kept Dev execution local and manifest-backed for this slice. Remote and
+  ops-only actions remain discoverable with concrete unavailability reasons.
+- Migrated the Agents collection into the Ops subject shell without losing its
+  Dataset/Find, explicit inclusion, bounded continuation, column, details,
+  pointer, keyboard, refresh, and stale-data behavior. Enter now opens a
+  read-only individual Agent subject instead of the removed nested Inspect
+  path.
+- Added current Deployment, Environment, and Server Ops overviews. Environment
+  resolution uses a neutral read-only handler that lists/gets existing data and
+  never invokes get-or-create behavior; request generations and context IDs
+  reject stale completions, and failed refreshes retain the last successful
+  snapshot.
+- Restricted deterministic fake OTLP data to preview/test builds and made the
+  production Metrics surface truthfully report that no provider is configured.
+- Recorded action leader path, execution kind, risk, review, target, and
+  availability metadata, and persisted visual-only columns, placement, and
+  split ratios in the CLI user configuration area.
+
+Checkpoint commit:
+
+- `721390b80 feat(tui): rebuild dev shell and read-only ops views`
+
+Remaining before the next planning session:
+
+- converge the displayed selected-target identity, launch flags, and
+  environment reference into one target descriptor;
+- enforce stop-or-cancel before switching to a different Server target while a
+  supervised Server is active;
+- perform final manual terminal acceptance and the dev-release playground
+  smoke test;
+- keep remote unlock, generalized Ops Jobs/mutations, Activity/Live, and real
+  Metrics controls/providers behind their still-open planning gates.
+
+Validation:
+
+- `cargo fmt --package golem-cli -- --check`
+- `cargo test -p golem-cli --lib --features tui-preview tui::app::tests -- --report-time`
+  (142 passed)
+- `cargo test -p golem-cli --lib --features tui-preview tui:: -- --report-time`
+  (222 passed)
+- `cargo check -p golem-cli --features tui-preview`
+- `git diff --check`
+
 ## 2026-09-29: Local Dev And Read-Only Ops Contract
 
 - Locked terminal-first nested CLI execution for Plan, Build, Deploy, Clean,

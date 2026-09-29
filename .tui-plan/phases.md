@@ -5,6 +5,11 @@ A checkpoint starts only after its named planning prerequisites are checked and
 ends only after behavior, rendering, focused tests, and its recommended commit
 boundary are complete.
 
+Implementation checkpoint `721390b80` completes the accepted local Dev and
+read-only Ops subset across checkpoints 1-5 and the truthful-unavailable first
+item of checkpoint 7. `tasks.md` is authoritative for partial items and open
+gates; `UX-024` owns the remaining real-terminal acceptance pass.
+
 ## 0. Contract And Readiness
 
 Deliverables:

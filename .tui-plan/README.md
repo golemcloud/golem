@@ -6,14 +6,18 @@ golem tui and golem-cli tui.
 
 ## Current State
 
-- The accepted visual foundation and the live typed Agents Overview are in
-  production.
-- Production currently exposes only Ops, Agents Overview, and a visibly fake
-  Metrics interaction fixture.
-- Dormant Dev, Server, REPL, Output, and older workspace code is implementation
-  history, not the current product contract.
-- The next rebuild restores Dev and expands Ops using the locked model in
-  product-contract.md.
+- The accepted visual foundation and rebuilt Dev/Ops shell are in production.
+- Dev provides reviewed nested-CLI Plan, Build, Deploy, Clean, Server, and REPL
+  workflows with bounded Jobs and persistent terminal sessions.
+- Ops preserves the live typed Agents collection and adds individual Agent plus
+  current Deployment, Environment, and Server read-only overviews.
+- Production Metrics truthfully reports that no provider is configured;
+  deterministic fake OTLP data exists only in preview/test builds.
+- Replaced Home, Output, Agents Dev panel, named layout presets, global Server
+  drawer, and nested Agent Inspect paths are implementation history rather than
+  compatibility behavior.
+- The current `UX-024` focus is real-terminal acceptance of this slice. Exact
+  remaining implementation gaps are marked `[~]` in tasks.md.
 - Metrics acquisition, persistence, Docker integration, and a possible web UI
   are intentionally deferred until the provider-independent TUI feels right.
 

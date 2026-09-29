@@ -72,20 +72,20 @@ while later mutation, Activity, Metrics, and final shell/quit gates remain open.
 
 ## Accepted Implementation Slice
 
-- [ ] Replace the legacy product topology with Dev and Ops plus the shared
+- [x] Replace the legacy product topology with Dev and Ops plus the shared
   navigation/action/layout foundation.
-- [ ] Implement typed review forms and nested-CLI PTYs for Plan, Build, Deploy,
+- [x] Implement typed review forms and nested-CLI PTYs for Plan, Build, Deploy,
   Clean, Server, and interactive REPL.
-- [ ] Add bounded Jobs with 20 completed records, persistent Server/REPL
+- [x] Add bounded Jobs with 20 completed records, persistent Server/REPL
   sessions, pane-sized resize, and 2,000-line terminal scrollback.
-- [ ] Enable Dev execution only for manifest-backed local contexts; keep remote
+- [x] Enable Dev execution only for manifest-backed local contexts; keep remote
   Dev mutations unavailable with reasons.
-- [ ] Migrate Agents into the subject shell and add individual Agent Overview.
-- [ ] Add real read-only Deployment, Environment, and Server overviews through
+- [x] Migrate Agents into the subject shell and add individual Agent Overview.
+- [x] Add real read-only Deployment, Environment, and Server overviews through
   typed operations that never create missing resources.
-- [ ] Move fake Metrics to preview/test data and render truthful production
+- [x] Move fake Metrics to preview/test data and render truthful production
   unavailability.
-- [ ] Use conservative quit blocking while active work exists until the final
+- [x] Use conservative quit blocking while active work exists until the final
   quit-policy session.
 
 ## Checkpoint 0: Synchronize The Planning Sources
@@ -96,7 +96,7 @@ while later mutation, Activity, Metrics, and final shell/quit gates remain open.
 - [x] Reconcile ui-system.md, testing.md, dx-ux-review.md, and progress.md.
 - [x] Run markdown/reference searches, stale-contract searches, and
   git diff --check.
-- [~] Review the resulting readiness ledger with the user.
+- [x] Review the resulting readiness ledger with the user.
 
 Recommended commit checkpoint: product contract and rebuild plan only.
 
@@ -106,21 +106,23 @@ Planning prerequisites for the accepted slice are satisfied by the nested-CLI
 Dev boundary and read-only Ops provider boundary. Mutation inventory remains a
 gate for later Ops actions.
 
-- [ ] Replace the one-entry workspace constant with ordered Dev/Ops workspace
+- [x] Replace the one-entry workspace constant with ordered Dev/Ops workspace
   state that can accept future workspaces.
-- [ ] Add explicit Dev view, Ops subject/view, breadcrumb, primary/subview,
+- [x] Add explicit Dev view, Ops subject/view, breadcrumb, primary/subview,
   placement, focused-pane, and palette-scope state.
-- [ ] Introduce a selected target descriptor with stable identity, provenance,
-  local/remote classification, and per-view capability reasons.
-- [ ] Extend action metadata with hierarchical leader path, palette relevance,
+- [~] Introduce a selected target descriptor with stable identity, provenance,
+  local/remote classification, and per-view capability reasons. Identity and
+  capability behavior are live; launch flags and environment references still
+  need to converge into that single descriptor.
+- [x] Extend action metadata with hierarchical leader path, palette relevance,
   risk class, target resolution, review requirement, and availability reason.
-- [ ] Make global and contextual palettes filters over the same action registry;
+- [x] Make global and contextual palettes filters over the same action registry;
   preserve query while switching scope.
-- [ ] Keep modified shortcuts active inside every text-editing mode except REPL
+- [x] Keep modified shortcuts active inside every text-editing mode except REPL
   PTY input.
-- [ ] Add reducer/state tests for workspace, view, subject, breadcrumb, palette,
+- [x] Add reducer/state tests for workspace, view, subject, breadcrumb, palette,
   capability, and stale-context transitions.
-- [ ] Remove replaced flat shortcut and workspace compatibility paths in the
+- [x] Remove replaced flat shortcut and workspace compatibility paths in the
   same change.
 
 Recommended commit checkpoint: state/action model with behavior-preserving Ops
@@ -132,21 +134,23 @@ Planning prerequisite for full acceptance: shell priority gate. The accepted
 slice implements normal/compact geometry and a safe, explicitly provisional
 extreme fallback.
 
-- [ ] Render Dev/Ops selectors, current view or subject, app/env/server, Jobs,
-  Live, and remote-lock status through one responsive header model.
-- [ ] Keep one compact footer; transient leader/Layout hints replace rather than
+- [~] Render Dev/Ops selectors, current view or subject, app/env/server, Jobs,
+  Live, and remote-lock status through one responsive header model. The
+  accepted slice renders every state it owns; Live and the remote lock remain
+  deferred with their owning features.
+- [x] Keep one compact footer; transient leader/Layout hints replace rather than
   append duplicate rows.
-- [ ] Implement ctrl+x w/v/l/a/j/e groups with visible nested hints, workspace
+- [x] Implement ctrl+x w/v/l/a/j/e groups with visible nested hints, workspace
   next/previous/list, and direct Dev/Ops destinations.
-- [ ] Replace named Dev presets with recursive primary/subview layout state and
+- [x] Replace named Dev presets with recursive primary/subview layout state and
   right/bottom placement.
-- [ ] Reuse the recursive split model for Ops collection/details layouts.
-- [ ] Implement temporary Layout mode, mouse dragging, one-cell and five-cell
+- [x] Reuse the recursive split model for Ops collection/details layouts.
+- [x] Implement temporary Layout mode, mouse dragging, one-cell and five-cell
   keyboard movement, placement flip, focus-only, show/hide, clamping, and
   compact retention.
-- [ ] Persist columns, placement, and ratios in the CLI user configuration area;
+- [x] Persist columns, placement, and ratios in the CLI user configuration area;
   do not write project files.
-- [ ] Render all shell/layout states at wide, short, narrow, compact, and 1x1
+- [x] Render all shell/layout states at wide, short, narrow, compact, and 1x1
   sizes and test hit rectangles, dividers, spines, and scrollbars.
 
 Recommended commit checkpoint: shell, navigation, layout, and preferences.
@@ -157,23 +161,32 @@ Planning prerequisites for the full checkpoint: quit policy and exact Ops
 action-risk inventory. The accepted slice implements finite local Dev Jobs and
 conservative quit blocking only.
 
-- [ ] Introduce the global bounded Jobs registry for finite Dev commands and Ops
-  mutations.
-- [ ] Model structured result/output, cancellation, terminal states, duration,
-  immutable target, and masked inputs.
-- [ ] Add the Jobs overlay, header status, global/context palette entries, and
+- [~] Introduce the global bounded Jobs registry for finite Dev commands and Ops
+  mutations. Finite Dev commands are live; later Ops mutations must join the
+  same registry.
+- [~] Model structured result/output, cancellation, terminal states, duration,
+  immutable target, and masked inputs. The Dev command terminal/lifecycle is
+  complete; typed Ops results and generalized masked inputs remain later work.
+- [x] Add the Jobs overlay, header status, global/context palette entries, and
   Build & Deploy filtered projection.
-- [ ] Enforce one active mutating Job per environment by disabling later
-  mutations with the active Job named.
-- [ ] Separate Server, REPL, and Live persistent-session state from Jobs.
-- [ ] Add read-only, routine-write, disruptive, and destructive risk policies.
+- [~] Enforce one active mutating Job per environment by disabling later
+  mutations with the active Job named. The single active Dev command is
+  enforced; the generalized per-environment guard awaits Ops mutations.
+- [~] Separate Server, REPL, and Live persistent-session state from Jobs.
+  Server and REPL are separate; Live belongs to the later Activity slice.
+- [x] Add read-only, routine-write, disruptive, and destructive risk policies
+  to the implemented action registry.
 - [ ] Add session-only remote unlock by exact app/env, revoke it on context
   change/exit, and keep destructive confirmations cancel-focused.
 - [ ] Resolve and display bulk target counts, consequences, and available plans
   or diffs before execution.
-- [ ] Implement context-switch and quit handling for every Job/session state.
-- [ ] Test local/remote availability, unlock expiry, typed confirmation,
+- [~] Implement context-switch and quit handling for every Job/session state.
+  Dev Job and REPL handling plus conservative quit blocking are live; Server
+  target changes and the later Live session still need their final policy.
+- [~] Test local/remote availability, unlock expiry, typed confirmation,
   concurrent-mutation rejection, cancellation, masking, and stale completions.
+  Accepted-slice availability, forms, cancellation, and stale results are
+  covered; remote unlock and Ops mutation cases remain gated.
 
 Recommended commit checkpoint: Jobs and mutation safety before broad actions are
 made reachable.
@@ -184,38 +197,42 @@ Planning prerequisite: Dev view-content gate. Complete.
 
 ### Build & Deploy
 
-- [ ] Make Build & Deploy the first available Dev view and preserve the no-
+- [x] Make Build & Deploy the first available Dev view and preserve the no-
   subview first-run default.
-- [ ] Expose Plan, Build, Deploy, and Clean through contextual actions and
+- [x] Expose Plan, Build, Deploy, and Clean through contextual actions and
   visible controls without bare global run keys.
-- [ ] Render the current or selected Job, exact nested-CLI terminal, status,
+- [x] Render the current or selected Job, exact nested-CLI terminal, status,
   error, exit metadata, and bounded history projection without parsing the
   human diff into a second representation.
-- [ ] Apply remote write unlock and risk policy to Deploy modes; never retain a
-  global yes/reset toggle.
+- [~] Apply remote write unlock and risk policy to Deploy modes; never retain a
+  global yes/reset toggle. Per-launch review and local-only availability are
+  live; remote unlock is deliberately still gated.
 
 ### Server
 
-- [ ] Show local availability, process state, resolved ports, data
+- [x] Show local availability, process state, resolved ports, data
   directory, launch mode, and bounded logs.
-- [ ] Support start, stop, restart, and clean-start through reviewed actions.
-- [ ] Preserve the same server across workspace/context changes only when the
-  server target identity remains the same.
+- [x] Support start, stop, restart, and clean-start through reviewed actions.
+- [~] Preserve the same server across workspace/context changes only when the
+  server target identity remains the same. Same-target preservation works;
+  cross-target switching still needs pre-switch stop/cancel enforcement.
 
 ### REPL
 
-- [ ] Show stopped/starting/running/failed states and an explicit Start action.
-- [ ] Preserve PTY screen, resize, scrollback, and process state while hidden.
-- [ ] Make raw input focus explicit and retain a reliable leader escape back to
+- [x] Show stopped/starting/running/failed states and an explicit Start action.
+- [x] Preserve PTY screen, resize, scrollback, and process state while hidden.
+- [x] Make raw input focus explicit and retain a reliable leader escape back to
   TUI input.
 
 ### Dev acceptance
 
-- [ ] Test every primary view with zero, one, and two subviews in right/bottom
+- [x] Test every primary view with zero, one, and two subviews in right/bottom
   and compact layouts.
-- [ ] Test direct navigation to hidden and visible views, focus restoration,
+- [~] Test direct navigation to hidden and visible views, focus restoration,
   hidden-process continuity, context capability reasons, and resize behavior.
-- [ ] Remove the obsolete Output panel, Agents Dev panel, named presets, and
+  Deterministic state/layout coverage is live; final terminal smoke testing is
+  still required.
+- [x] Remove the obsolete Output panel, Agents Dev panel, named presets, and
   global server drawer once replacements are live.
 
 Recommended commit checkpoint: complete minimal Dev loop.
@@ -225,38 +242,40 @@ Recommended commit checkpoint: complete minimal Dev loop.
 Planning prerequisite for mutations: exact resource-action inventory. The
 read-only root subset below may proceed first.
 
-- [ ] Add root-subject navigation for Agents, Deployment, Environment, and
+- [x] Add root-subject navigation for Agents, Deployment, Environment, and
   Server with subject-specific views and breadcrumbs.
-- [ ] Migrate live Agents Overview into the shared subject shell without
+- [x] Migrate live Agents Overview into the shared subject shell without
   regressing Dataset/Find, explicit inclusion, paging, columns, details,
   selection, scrolling, or refresh behavior.
-- [ ] Change Enter from Details toggle to subject drill-down and move Details
+- [x] Change Enter from Details toggle to subject drill-down and move Details
   visibility into Layout/actions.
-- [ ] Add Agent, Component, Agent Type, and Deployment Revision drill-down
-  subjects with direct palette navigation.
+- [~] Add Agent, Component, Agent Type, and Deployment Revision drill-down
+  subjects with direct palette navigation. Individual Agent is live; the other
+  drill-down subjects remain later work.
 - [ ] Add Deployment Overview/History and revision Overview/Diff.
 - [ ] Add Environment Overview/Resources, resource-kind catalogs, homogeneous
   collections, masked secret handling, and contextual CRUD where planned.
-- [ ] Add Server Overview/capability data without duplicating Dev server
+- [x] Add Server Overview/capability data without duplicating Dev server
   lifecycle controls.
 - [ ] Implement relevant Invoke, Interrupt, Resume, Update, Redeploy, Delete,
   and resource CRUD actions through typed helpers and Jobs.
-- [ ] Test breadcrumb unwind, palette direct jumps, unavailable providers,
+- [~] Test breadcrumb unwind, palette direct jumps, unavailable providers,
   stale refresh retention, compact details, and local/remote action policy.
+  The accepted read-only subset is covered; later subjects and writes are not.
 
 Recommended commit checkpoints: Agents migration; Deployment; Environment;
 Server and action coverage.
 
 ### Accepted Read-Only Subset
 
-- [ ] Preserve the complete Agents collection interaction model.
-- [ ] Open a read-only individual Agent Overview from Enter and remove the old
+- [x] Preserve the complete Agents collection interaction model.
+- [x] Open a read-only individual Agent Overview from Enter and remove the old
   nested oplog/stream Inspect path.
-- [ ] Show current Deployment identity without implementing History or Diff.
-- [ ] Show selected Environment identity/configuration without Resources.
-- [ ] Show Server provenance/endpoints and matching local process/port state,
+- [x] Show current Deployment identity without implementing History or Diff.
+- [x] Show selected Environment identity/configuration without Resources.
+- [x] Show Server provenance/endpoints and matching local process/port state,
   without an HTTP readiness claim or lifecycle duplication.
-- [ ] Keep all Ops writes unavailable until their inventory and risk review.
+- [x] Keep all Ops writes unavailable until their inventory and risk review.
 
 ## Checkpoint 6: Activity
 
@@ -285,7 +304,7 @@ Recommended commit checkpoints: Journal provider; Timeline mapping; Live.
 
 Planning prerequisite: Metrics control gate. Acquisition remains deferred.
 
-- [ ] Replace the production fake explorer with truthful source availability;
+- [x] Replace the production fake explorer with truthful source availability;
   retain deterministic samples only in preview/test providers.
 - [ ] Define typed metric-family, concrete-series, sample, attributes, scope,
   time-coverage, and availability models.
@@ -317,15 +336,16 @@ unavailable production state.
 
 ## Checkpoint 9: Cleanup And Final Acceptance
 
-- [ ] Remove dormant renderers, actions, state, fixtures, and compatibility code
-  replaced by the rebuilt workspaces.
+- [~] Remove dormant renderers, actions, state, fixtures, and compatibility code
+  replaced by the rebuilt workspaces. Replaced production paths are gone; a
+  final post-review audit remains.
 - [ ] Split stable actions, context, Jobs/sessions, layout, Dev views, Ops
   subjects, Activity, and Metrics modules out of app.rs.
-- [ ] Keep every user-facing shortcut/help/footer entry derived or drift-tested
+- [~] Keep every user-facing shortcut/help/footer entry derived or drift-tested
   against the action registry.
-- [ ] Run focused TUI tests after each checkpoint and the complete TUI library
+- [~] Run focused TUI tests after each checkpoint and the complete TUI library
   suite at final acceptance.
-- [ ] Run cargo check for golem-cli with tui-preview/tests as appropriate,
+- [~] Run cargo check for golem-cli with tui-preview/tests as appropriate,
   non-mutating formatting checks, every deterministic story size, and
   git diff --check.
 - [ ] Install the matching dev-release binary and manually smoke test Dev/Ops,

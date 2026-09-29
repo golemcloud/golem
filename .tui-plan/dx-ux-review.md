@@ -22,23 +22,23 @@ a separate explicit decision and never creates a user-selectable theme.
 
 ## Current Focus
 
-- Focus: lock the Dev/Ops rebuild contract and readiness (`UX-023`)
-- Cases: no new workflow preview until its owning planning gate closes.
-- Decision: Dev owns Build & Deploy, Server, and REPL; Ops owns resource
-  subjects, Activity, Metrics, and their contextual actions. Dev starts with
-  one primary view and optional right/bottom subviews. Ops navigates subject,
-  then view, then pane. Jobs are finite operations, while Server, REPL, and Live
-  are persistent sessions.
-- Options: Metrics acquisition and any Docker or web companion remain deferred
-  until the provider-independent TUI passes visual and terminal acceptance.
-- Scratch observations: the accepted Agents explorer and visual system are the
-  implementation baseline, not the complete product. Exact Dev content, shell
-  priorities, quit behavior, action/risk inventory, Activity bounds, Metrics
-  controls, and provider ordering remain explicit planning gates.
-- Queued next: discuss and check the remaining gates in tasks.md, beginning
-  with the three Dev views.
-- Exit: every non-deferred planning gate is checked and the first eligible
-  implementation checkpoint has decision-complete stories and acceptance.
+- Focus: accept the rebuilt local Dev and read-only Ops slice (`UX-024`)
+- Cases: Production Dev Build & Deploy, Server, and REPL; Production Ops
+  Agents, Agent, Deployment, Environment, and Server; compact and extreme
+  shell fallbacks.
+- Decision: the planned slice is implemented and deterministic coverage is
+  green. Review now checks the real terminal workflow and visual continuity,
+  not another product-topology alternative.
+- Options: only fixes within the accepted slice are in scope. Remote writes,
+  Activity/Live, real Metrics providers, and companion tooling remain behind
+  their planning gates.
+- Scratch observations: verify reviewed command forms and PTY focus/scrollback,
+  right/bottom subviews and four-direction resize, context switching, Jobs,
+  current read-only Ops documents, and truthful Metrics unavailability.
+- Queued next: after acceptance, plan the unresolved target-descriptor and
+  cross-Server context-switch follow-ups, then choose the next product gate.
+- Exit: terminal review is accepted, required fixes are implemented, and the
+  dev-release playground smoke test passes.
 
 The `shell-compact` case reuses the default shell content at 50×16 so compact
 behavior can be evaluated without introducing another workflow or visual
@@ -609,6 +609,30 @@ explicit review.
   navigation, right/bottom subviews, finite Jobs versus persistent sessions,
   Ops subjects, bounded Activity, provider-independent Metrics, action safety,
   deferred acquisition, readiness gates, and implementation order.
-- Outcome: documentation implemented and awaiting user review of the readiness
-  ledger. No product implementation checkpoint is authorized by this note
-  until its named planning prerequisites are checked.
+- Outcome: documentation reviewed and the accepted local Dev/read-only Ops
+  implementation slice authorized. Implemented in checkpoint `721390b80`;
+  later gated work remains out of scope.
+
+### UX-024 — Accept rebuilt local Dev and read-only Ops
+
+- Status: awaiting terminal review
+- Preview: Production runtime and deterministic production stories
+- Area: Dev workflows, nested terminals, recursive layout, Ops subjects,
+  action availability, and context safety
+- Theme: workflow | navigation | safety | terminal
+- Problem: deterministic tests establish behavior and geometry but cannot
+  establish whether the complete interactive flow feels coherent in the real
+  terminal.
+- Desired outcome: accept or correct the smallest implemented product slice
+  before reopening planning for mutations, Activity, or Metrics providers.
+- Scope: Plan/Build/Deploy/Clean forms and Jobs; Server and REPL sessions;
+  Dev/Ops navigation and layout; Agents and individual Agent; read-only current
+  Deployment, Environment, and Server; unavailable production Metrics.
+- Dependencies: `UX-023` and implementation checkpoint `721390b80`.
+- Acceptance: real terminal review confirms focus, input ownership, pane
+  resizing, scrollback, context identity, state continuity, errors, compact
+  behavior, and the read-only resource content. The matching dev-release
+  playground smoke test is green.
+- Outcome: pending user review. Selected-target consolidation and cross-Server
+  context-switch enforcement remain named implementation follow-ups rather
+  than hidden acceptance assumptions.

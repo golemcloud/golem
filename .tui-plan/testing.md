@@ -15,6 +15,20 @@ Do not use `cargo make test`. Avoid `--report-time` on broad `cargo test` comman
 
 In this environment, `test-r` may need local socket listener permissions. If the sandboxed run fails with `Failed to create local socket listener`, rerun the same targeted command outside the sandbox.
 
+The rebuilt local Dev/read-only Ops checkpoint currently establishes this
+automated baseline:
+
+- 142 focused `tui::app::tests`, including exact nested-CLI arguments,
+  one-shot `--yes`, stale typed results, responsive layouts, and interaction
+  routing;
+- 222 complete `tui::` tests with `tui-preview`, including every deterministic
+  story at wide, short, narrow, and extreme sizes;
+- `cargo check -p golem-cli --features tui-preview`, package formatting, and
+  `git diff --check`.
+
+This does not replace the `UX-024` real-terminal and dev-release playground
+acceptance pass.
+
 ## Test Layers
 
 - Pure state tests for reducers, action selection, filtering, context selection, and job lifecycle.
