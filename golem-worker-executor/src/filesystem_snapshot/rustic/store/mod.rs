@@ -499,11 +499,6 @@ impl RusticSnapshotStore {
         self.tracker.len()
     }
 
-    /// Gives the time now, for a comparison with a time from storage.
-    fn now(&self) -> Timestamp {
-        self.clock.now()
-    }
-
     /// Starts an operation. The token of the operation is cancelled when the guard drops.
     fn start(&self) -> Result<(CancellationToken, DropGuard), SnapshotStoreError> {
         if self.root.is_cancelled() {
@@ -581,7 +576,7 @@ impl RusticSnapshotStore {
         // reading can put a marker that another host wrote within the margin beyond the margin.
         // Each step below runs only when a prune can still be due, so a delete within the hold
         // reads no record, and a delete whose records are too small reads no record content.
-        if !hold_passed(&ledger, self.now(), grace, deadline) {
+        if !hold_passed(&ledger, self.clock.now(), grace, deadline) {
             return Ok(());
         }
         let listed = list_freed_names(&files).await.map_err(storage_failure)?;
@@ -589,7 +584,7 @@ impl RusticSnapshotStore {
         if upper == 0 && !ledger.awaiting_removal {
             return Ok(());
         }
-        let size = if needs_repository_size(&ledger, upper, self.now(), grace, deadline) {
+        let size = if needs_repository_size(&ledger, upper, self.clock.now(), grace, deadline) {
             repository_bytes(&files).await.map_err(storage_failure)?
         } else {
             0
@@ -603,7 +598,7 @@ impl RusticSnapshotStore {
         if !prune_due(
             &ledger,
             records.bytes,
-            self.now(),
+            self.clock.now(),
             size,
             threshold,
             grace,
@@ -616,7 +611,7 @@ impl RusticSnapshotStore {
             .await
             .map_err(storage_failure)?;
         let ClaimChoice::Claim(number) =
-            next_claim(&listed, self.now(), claim_hold(grace, deadline))
+            next_claim(&listed, self.clock.now(), claim_hold(grace, deadline))
         else {
             return Ok(());
         };
@@ -676,7 +671,7 @@ impl RusticSnapshotStore {
         // ends, so a prune that a shut down stopped also gets it.
         claim.guard.finish().await;
         let marked_packs = pruned?;
-        let ended = self.now();
+        let ended = self.clock.now();
         // The lease fences the ledger write as it fences the calls of rustic. A write that would
         // start after the lease ran out is not sent, and a write that starts before is bounded by
         // the time left, so the entry never lands after another delete can take the claim over.
@@ -700,7 +695,7 @@ impl RusticSnapshotStore {
         scope: &SnapshotScope,
         staged: StagedSnapshot,
     ) -> impl Future<Output = Result<(), SnapshotStoreError>> + Send + 'static {
-        let files = self.files(scope, &CancellationToken::new());
+        let files = self.files(scope, &self.root).detached();
         let (root, tracker) = (self.root.clone(), self.tracker.clone());
         self.tracker.track_future(async move {
             if root.is_cancelled() {
