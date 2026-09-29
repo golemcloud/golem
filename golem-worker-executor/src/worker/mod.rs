@@ -11251,7 +11251,9 @@ impl RunningWorker {
             },
             filesystem_snapshots::BaselineFailure::RecordFailedUpdate { target, message } => {
                 warn!(
-                    "Manual update to revision {target} failed with a conflict of the initial files: {message}"
+                    target_revision = %target,
+                    error = %message,
+                    "Manual update failed with a conflict of the initial files"
                 );
                 // A write that fails ends the start with its error. A fenced write has already
                 // retired the agent, and the update stays pending for the shard's new owner.

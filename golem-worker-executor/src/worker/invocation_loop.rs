@@ -3700,7 +3700,7 @@ where
     );
     result
         .inspect_err(|error| {
-            warn!("Skipping the snapshot: the agent filesystem was not captured: {error}")
+            warn!(error = %error, "Skipping the snapshot: the agent filesystem was not captured")
         })
         .ok()
 }

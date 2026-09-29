@@ -298,7 +298,7 @@ impl PeriodicPlan {
         {
             drop(admission);
             if let Err(error) = tree.discard().await {
-                tracing::warn!("Failed to discard a filesystem capture: {error}");
+                tracing::warn!(error = %error, "Failed to discard a filesystem capture");
             }
         }
     }
@@ -311,20 +311,6 @@ pub(crate) enum PeriodicFailure {
     Entry(String),
     /// The append or the commit of the record failed.
     Write(OplogError),
-}
-
-impl std::fmt::Display for PeriodicFailure {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Entry(details) => formatter.write_str(details),
-            Self::Write(error) => {
-                write!(
-                    formatter,
-                    "Failed to append the periodic snapshot record: {error}"
-                )
-            }
-        }
-    }
 }
 
 /// What a periodic snapshot needs from the invocation loop of the agent.
@@ -386,7 +372,7 @@ pub(crate) async fn periodic_snapshot<Host: PeriodicSnapshotHost>(
         Ok(admission) => Some(admission),
         Err(SnapshotSkip::Disabled) => None,
         Err(skip) => {
-            tracing::debug!("Skipping periodic snapshot: {skip}");
+            tracing::debug!(reason = %skip, "Skipping periodic snapshot");
             return PeriodicResult::Continue;
         }
     };
@@ -426,7 +412,19 @@ pub(crate) async fn periodic_snapshot<Host: PeriodicSnapshotHost>(
             PeriodicResult::Continue
         }
         Err(failure) => {
-            tracing::warn!("{failure}");
+            match &failure {
+                PeriodicFailure::Entry(details) => {
+                    tracing::warn!(error = %details, "Failed to make the periodic snapshot record")
+                }
+                // A refused write is a move of the shard of the agent to a new owner.
+                PeriodicFailure::Write(error @ OplogError::Fenced(_)) => tracing::debug!(
+                    error = %error,
+                    "The periodic snapshot record was not written: the shard of the agent moved"
+                ),
+                PeriodicFailure::Write(error @ OplogError::Payload(_)) => {
+                    tracing::warn!(error = %error, "Failed to append the periodic snapshot record")
+                }
+            }
             plan.abandon().await;
             PeriodicResult::NotWritten(failure)
         }
