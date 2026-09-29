@@ -33,8 +33,8 @@ pub(crate) struct SnapshotExclusions {
     /// never selects them. The start that rejects one persists it for the incarnation after its
     /// fallback succeeds.
     rejected: HashSet<OplogIndex>,
-    /// The entries whose payload or filesystem snapshot the current start attempt could not get.
-    /// A start skips them, and a new start attempt clears them.
+    /// The entries whose payload or filesystem snapshot a start could not get. The starts skip
+    /// them until a start prepares the agent with success, which clears them.
     unavailable: HashSet<OplogIndex>,
 }
 
@@ -54,7 +54,7 @@ impl SnapshotExclusions {
         self.unavailable.insert(index);
     }
 
-    /// Clears the unavailable entries, for a new start attempt.
+    /// Clears the unavailable entries.
     pub(crate) fn clear_unavailable(&mut self) {
         self.unavailable.clear();
     }
@@ -64,37 +64,66 @@ impl SnapshotExclusions {
         (!self.rejected.is_empty()).then(|| self.rejected.clone())
     }
 
-    /// The filter of a start: it excludes the rejected and the unavailable entries.
-    pub(crate) fn filter(
+    /// The filter of a start of `status`. It excludes the rejected entries, and the unavailable
+    /// entries when `unavailable` is true.
+    fn filter(
         &self,
-        has_pending_update: bool,
-        filesystem_snapshots_enabled: bool,
+        status: &AgentStatusRecord,
+        enabled: bool,
+        unavailable: bool,
     ) -> AutomaticSnapshotFilter<'_> {
         AutomaticSnapshotFilter {
-            has_pending_update,
+            has_pending_update: !status.pending_updates.is_empty(),
             rejected: &self.rejected,
-            unavailable: Some(&self.unavailable),
-            filesystem_snapshots_enabled,
+            unavailable: unavailable.then_some(&self.unavailable),
+            filesystem_snapshots_enabled: enabled,
         }
     }
+}
 
-    /// The filter that finds the component revision of a replay before a start attempt: it
-    /// excludes only the rejected entries.
-    pub(crate) fn replay_filter(
-        &self,
-        has_pending_update: bool,
-        filesystem_snapshots_enabled: bool,
-    ) -> AutomaticSnapshotFilter<'_> {
-        AutomaticSnapshotFilter {
-            unavailable: None,
-            ..self.filter(has_pending_update, filesystem_snapshots_enabled)
+/// What a start selects from the status of an agent, under the exclusions of the agent.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct StartSelection {
+    /// The automatic snapshot entry that the start uses as its baseline, or `None` when it uses
+    /// the manual-update baseline or a full replay.
+    pub(crate) automatic: Option<UsableAutomaticSnapshot>,
+    /// The component revision at the start of the replay.
+    pub(crate) replay_revision: ComponentRevision,
+    /// The component revision at the start of the replay when no entry is unavailable. A check
+    /// before a start uses it, because the unavailable entries belong to the starts that could
+    /// not get them.
+    pub(crate) replay_revision_without_unavailable: ComponentRevision,
+    /// The filesystem snapshot name of the last automatic snapshot entry when the entry is not
+    /// confirmed and the start would select it if a confirmation record confirmed it. The start
+    /// can confirm that name itself when the snapshot is whole in the store.
+    pub(crate) candidate: Option<FilesystemSnapshotName>,
+}
+
+impl StartSelection {
+    /// The selection of a start of `status` under `exclusions`. `enabled` tells whether this
+    /// executor keeps filesystem snapshots; without them an entry with a name is not usable. A
+    /// pending update ignores the automatic snapshot entries.
+    pub(crate) fn of(
+        status: &AgentStatusRecord,
+        exclusions: &SnapshotExclusions,
+        enabled: bool,
+    ) -> Self {
+        let filter = exclusions.filter(status, enabled, true);
+        Self {
+            automatic: select_automatic_snapshot(status, filter),
+            replay_revision: component_revision_for_replay(status, filter),
+            replay_revision_without_unavailable: component_revision_for_replay(
+                status,
+                exclusions.filter(status, enabled, false),
+            ),
+            candidate: start_candidate(status, filter),
         }
     }
 }
 
 /// What a start excludes when it selects an automatic snapshot entry.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct AutomaticSnapshotFilter<'a> {
+struct AutomaticSnapshotFilter<'a> {
     /// Whether an update is pending. A pending update ignores the automatic snapshot entries.
     has_pending_update: bool,
     /// The entries whose application snapshot did not load or whose replay diverged.
@@ -118,7 +147,7 @@ pub(crate) fn usable(
 
 /// Gives the automatic snapshot entry that a start uses as its baseline, or `None` when the start
 /// uses the manual-update baseline or a full replay.
-pub(crate) fn select_automatic_snapshot(
+fn select_automatic_snapshot(
     status: &AgentStatusRecord,
     filter: AutomaticSnapshotFilter<'_>,
 ) -> Option<UsableAutomaticSnapshot> {
@@ -152,7 +181,7 @@ pub(crate) fn select_automatic_snapshot(
 /// Gives the filesystem snapshot name of the last automatic snapshot record when the record is
 /// not confirmed and a start would select it if a confirmation record confirmed it. A start can
 /// confirm that name itself when the snapshot is whole in the store.
-pub(crate) fn start_candidate(
+fn start_candidate(
     status: &AgentStatusRecord,
     filter: AutomaticSnapshotFilter<'_>,
 ) -> Option<FilesystemSnapshotName> {
@@ -205,7 +234,7 @@ fn passes(
 /// Gives the component revision at the start of the replay: the revision of the selected
 /// automatic snapshot entry, else the target of a pending snapshot-based update, else the revision
 /// of the manual-update baseline.
-pub(crate) fn component_revision_for_replay(
+fn component_revision_for_replay(
     status: &AgentStatusRecord,
     filter: AutomaticSnapshotFilter<'_>,
 ) -> ComponentRevision {
@@ -502,33 +531,55 @@ mod tests {
         );
     }
 
+    fn selection_index(selection: &StartSelection) -> Option<u64> {
+        selection
+            .automatic
+            .as_ref()
+            .map(|snapshot| u64::from(snapshot.index))
+    }
+
     #[test]
-    fn the_exclusions_filter_a_start_and_a_replay_revision_apart() {
-        let status = status(
+    fn a_start_selection_skips_unavailable_entries_only_for_the_start() {
+        let mut status = status(
             Some(FilesystemSnapshotName::periodic()),
             true,
             Some(Some(FilesystemSnapshotName::periodic())),
         );
+        status.last_automatic_snapshot_component_revision = Some(revision(2));
+        status.previous_usable_automatic_snapshot = Some(UsableAutomaticSnapshot {
+            index: OplogIndex::from_u64(5),
+            component_revision: revision(2),
+            filesystem_snapshot: Some(FilesystemSnapshotName::periodic()),
+        });
         let mut exclusions = SnapshotExclusions::default();
         assert_eq!(exclusions.persisted_rejections(), None);
 
         exclusions.mark_unavailable(OplogIndex::from_u64(10));
-        let unavailable = (
-            selected_index(&status, exclusions.filter(false, true)),
-            selected_index(&status, exclusions.replay_filter(false, true)),
-        );
+        exclusions.mark_unavailable(OplogIndex::from_u64(5));
+        let unavailable = StartSelection::of(&status, &exclusions, true);
         exclusions.clear_unavailable();
-        let cleared = selected_index(&status, exclusions.filter(false, true));
+        let cleared = selection_index(&StartSelection::of(&status, &exclusions, true));
         exclusions.reject(OplogIndex::from_u64(10));
         exclusions.add_persisted([OplogIndex::from_u64(5)]);
-        let rejected = (
-            selected_index(&status, exclusions.filter(false, true)),
-            selected_index(&status, exclusions.replay_filter(false, true)),
-        );
+        let rejected = StartSelection::of(&status, &exclusions, true);
 
-        assert_eq!(unavailable, (Some(5), Some(10)));
+        assert_eq!(
+            (
+                selection_index(&unavailable),
+                unavailable.replay_revision,
+                unavailable.replay_revision_without_unavailable
+            ),
+            (None, revision(1), revision(2))
+        );
         assert_eq!(cleared, Some(10));
-        assert_eq!(rejected, (None, None));
+        assert_eq!(
+            (
+                selection_index(&rejected),
+                rejected.replay_revision,
+                rejected.replay_revision_without_unavailable
+            ),
+            (None, revision(1), revision(1))
+        );
         assert_eq!(
             exclusions.persisted_rejections(),
             Some(HashSet::from([
@@ -536,13 +587,37 @@ mod tests {
                 OplogIndex::from_u64(5)
             ]))
         );
+    }
+
+    #[test]
+    fn a_start_selection_follows_a_pending_update_and_the_enabled_flag() {
+        let name = FilesystemSnapshotName::periodic();
+        let confirmed = status(Some(name.clone()), true, None);
+        let unconfirmed = status(Some(name.clone()), false, None);
+        let mut pending = confirmed.clone();
+        pending.pending_updates.push_back(PendingUpdateRef {
+            timestamp: Timestamp::now_utc(),
+            oplog_index: OplogIndex::from_u64(11),
+            target_revision: revision(4),
+            kind: PendingUpdateKind::Automatic,
+        });
+        let none = SnapshotExclusions::default();
+
         assert_eq!(
-            selected_index(&status, SnapshotExclusions::default().filter(true, true)),
-            None
+            [
+                selection_index(&StartSelection::of(&confirmed, &none, true)),
+                selection_index(&StartSelection::of(&confirmed, &none, false)),
+                selection_index(&StartSelection::of(&pending, &none, true)),
+            ],
+            [Some(10), None, None]
         );
         assert_eq!(
-            selected_index(&status, SnapshotExclusions::default().filter(false, false)),
-            None
+            [
+                StartSelection::of(&unconfirmed, &none, true).candidate,
+                StartSelection::of(&unconfirmed, &none, false).candidate,
+                StartSelection::of(&confirmed, &none, true).candidate,
+            ],
+            [Some(name), None, None]
         );
     }
 }

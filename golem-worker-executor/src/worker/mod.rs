@@ -107,9 +107,7 @@ use crate::worker::interrupt::Interrupts;
 use crate::worker::invocation_loop::{
     ConcurrentAgentPermitState, InvocationLoop, UnloadCleanupFailure, run_invocation_loop_task,
 };
-use crate::worker::snapshot_selection::{
-    SnapshotExclusions, component_revision_for_replay, select_automatic_snapshot, start_candidate,
-};
+use crate::worker::snapshot_selection::{SnapshotExclusions, StartSelection};
 use crate::worker::status::{
     calculate_last_known_status_with_checkpoint, calculate_revert_validation_regions,
     fold_invocation_result_entries, update_status_with_new_entries,
@@ -1200,6 +1198,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Whether this executor restores filesystem snapshots.
     fn filesystem_snapshots_enabled(&self) -> bool {
         self.agent_filesystem_snapshots().is_enabled()
+    }
+
+    /// The selection of a start of `status` under the exclusions of the agent now.
+    fn start_selection(&self, status: &AgentStatusRecord) -> StartSelection {
+        let enabled = self.filesystem_snapshots_enabled();
+        self.with_exclusions(|exclusions| StartSelection::of(status, exclusions, enabled))
     }
 
     /// Runs `f` on the automatic snapshot entries that the starts of the agent exclude, under
@@ -5378,12 +5382,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// shard admits the agent. This start holds no slot, no memory and no lock while it waits.
     async fn confirm_filesystem_snapshot_before_start(self: &Arc<Self>, start_attempt: Uuid) {
         let status = self.last_known_status.load_full();
-        let Some(name) = self.with_exclusions(|exclusions| {
-            start_candidate(
-                &status,
-                exclusions.filter(!status.pending_updates.is_empty(), true),
-            )
-        }) else {
+        let Some(name) = self.start_selection(&status).candidate else {
             return;
         };
         let scope = crate::filesystem_snapshot::SnapshotScope::agent(&self.owned_agent_id);
@@ -5408,13 +5407,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         slot: &filesystem_snapshots::SnapshotSlot,
     ) -> Option<filesystem_snapshots::ConfirmedFilesystemSnapshot> {
         let status = self.last_known_status.load();
-        let enabled = self.filesystem_snapshots_enabled();
-        let selected = self.with_exclusions(|exclusions| {
-            select_automatic_snapshot(
-                &status,
-                exclusions.filter(!status.pending_updates.is_empty(), enabled),
-            )
-        });
+        let selected = self.start_selection(&status).automatic;
         let slot = slot
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -9025,13 +9018,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             )
             .await?;
         let enabled = self.filesystem_snapshots_enabled();
-        let replay_revision = self.with_exclusions(|exclusions| {
-            exclusions.add_persisted(rejected);
-            component_revision_for_replay(
-                status,
-                exclusions.replay_filter(pending_update.is_some(), enabled),
-            )
-        });
+        let replay_revision = self
+            .with_exclusions(|exclusions| {
+                exclusions.add_persisted(rejected);
+                StartSelection::of(status, exclusions, enabled)
+            })
+            .replay_revision_without_unavailable;
         let replay_component = if active_component.revision == replay_revision {
             active_component.clone()
         } else {
@@ -10854,6 +10846,89 @@ struct RunningAgentRuntime<Ctx: WorkerCtx> {
 
 type WorkerRunningAgent<Ctx> = RunningAgent<RunningAgentRuntime<Ctx>>;
 
+/// The filesystem of a start: the selection of its baseline, planned before the agent filesystem
+/// exists, and the restore that [`StartFilesystem::materialize`] applies to the new filesystem.
+///
+/// The two steps are apart because the start builds the filesystem between them, with the
+/// initial files of the replay revision that the selection gives.
+struct StartFilesystem {
+    selection: StartSelection,
+    baseline: filesystem_snapshots::StartBaseline,
+}
+
+/// A materialization of a start baseline that failed, with the filesystem to clean up and the
+/// error of the start.
+struct StartFilesystemFailure {
+    filesystem: SealedFilesystem,
+    error: WorkerExecutorError,
+}
+
+impl StartFilesystem {
+    /// Selects the baseline of a start of `status` with the pending update `pending_update`: it
+    /// adds the rejected entries that storage keeps for the incarnation to the exclusions,
+    /// selects under them, and plans the restore of the selected record.
+    async fn plan<Ctx: WorkerCtx>(
+        parent: &Arc<Worker<Ctx>>,
+        status: &AgentStatusRecord,
+        pending_update: Option<&TimestampedUpdateDescription>,
+    ) -> Result<Self, WorkerExecutorError> {
+        let rejected = parent
+            .worker_service()
+            .get_rejected_periodic_snapshots(
+                &parent.owned_agent_id,
+                parent.initial_worker_metadata.fingerprint,
+            )
+            .await?;
+        let enabled = parent.filesystem_snapshots_enabled();
+        let selection = parent.with_exclusions(|exclusions| {
+            exclusions.add_persisted(rejected);
+            StartSelection::of(status, exclusions, enabled)
+        });
+        let baseline = RunningWorker::start_baseline(
+            parent,
+            status,
+            selection.automatic.as_ref(),
+            pending_update,
+        )
+        .await?;
+        Ok(Self {
+            selection,
+            baseline,
+        })
+    }
+
+    /// Materializes the baseline into `reconstructing` with the initial files `prepared`. On
+    /// success it starts the filesystem snapshots of the generation in `slot`, with the mark of
+    /// the tree before any call runs and the named snapshot that it restored. On failure it
+    /// gives the error of the start, as [`filesystem_snapshots::classify_baseline_failure`]
+    /// decides.
+    async fn materialize<Ctx: WorkerCtx>(
+        self,
+        parent: &Arc<Worker<Ctx>>,
+        reconstructing: ReconstructingFilesystem,
+        prepared: crate::services::agent_filesystem::PreparedInitialFiles,
+        slot: &filesystem_snapshots::SnapshotSlot,
+    ) -> Result<ReconstructingFilesystem, StartFilesystemFailure> {
+        let filesystem_snapshots::StartBaseline { restore, kind } = self.baseline;
+        match materialize_baseline(reconstructing, prepared, restore).await {
+            Ok(reconstructing) => {
+                *slot
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                    Some(filesystem_snapshots::FilesystemSnapshotSlot::at_start(
+                        tree_mark(&reconstructing),
+                        kind.restored(),
+                    ));
+                Ok(reconstructing)
+            }
+            Err(failure) => Err(StartFilesystemFailure {
+                error: RunningWorker::baseline_failure(parent, kind, failure.source).await,
+                filesystem: failure.filesystem,
+            }),
+        }
+    }
+}
+
 pub(crate) struct CreateWorkerInstanceError {
     pub(crate) error: WorkerExecutorError,
     pub(crate) filesystem_cleanup_failure: Option<UnloadCleanupFailure>,
@@ -11313,23 +11388,13 @@ impl RunningWorker {
             .current_component
             .store(Arc::new(component_metadata.clone()));
 
-        let rejected = parent
-            .worker_service()
-            .get_rejected_periodic_snapshots(
-                &parent.owned_agent_id,
-                parent.initial_worker_metadata.fingerprint,
-            )
-            .await?;
-        let enabled = parent.filesystem_snapshots_enabled();
-        let (automatic_snapshot, component_version_for_replay) =
-            parent.with_exclusions(|exclusions| {
-                exclusions.add_persisted(rejected);
-                let filter = exclusions.filter(pending_update.is_some(), enabled);
-                (
-                    select_automatic_snapshot(&worker_metadata.last_known_status, filter),
-                    component_revision_for_replay(&worker_metadata.last_known_status, filter),
-                )
-            });
+        let start_filesystem = StartFilesystem::plan(
+            &parent,
+            &worker_metadata.last_known_status,
+            pending_update.as_ref(),
+        )
+        .await?;
+        let component_version_for_replay = start_filesystem.selection.replay_revision;
 
         let component_metadata_for_replay =
             if component_metadata.revision == component_version_for_replay {
@@ -11348,14 +11413,6 @@ impl RunningWorker {
                 &parent.owner_context,
             )?;
 
-        let start_baseline = Self::start_baseline(
-            &parent,
-            &worker_metadata.last_known_status,
-            automatic_snapshot.as_ref(),
-            pending_update.as_ref(),
-        )
-        .await?;
-
         let mut skipped_regions = worker_metadata.last_known_status.skipped_regions;
         let mut last_snapshot_index = worker_metadata
             .last_known_status
@@ -11365,7 +11422,12 @@ impl RunningWorker {
         // Only snapshots newer than the rejection watermark and matching the active revision
         // are eligible. Pending updates temporarily ignore them so compatibility
         // is established by replaying from the authoritative manual-update baseline.
-        if let Some(snapshot_idx) = automatic_snapshot.as_ref().map(|snapshot| snapshot.index) {
+        if let Some(snapshot_idx) = start_filesystem
+            .selection
+            .automatic
+            .as_ref()
+            .map(|snapshot| snapshot.index)
+        {
             let snapshot_skip =
                 DeletedRegionsBuilder::from_regions(vec![OplogRegion::from_index_range(
                     OplogIndex::INITIAL.next()..=snapshot_idx,
@@ -11505,30 +11567,20 @@ impl RunningWorker {
                 .await);
             }
         };
-        let filesystem_snapshots::StartBaseline {
-            restore,
-            kind: baseline_kind,
-        } = start_baseline;
-        let reconstructing = match materialize_baseline(reconstructing, prepared, restore).await {
+        let reconstructing = match start_filesystem
+            .materialize(&parent, reconstructing, prepared, filesystem_snapshot_slot)
+            .await
+        {
             Ok(filesystem) => filesystem,
             Err(failure) => {
-                let startup_error =
-                    Self::baseline_failure(&parent, baseline_kind, failure.source).await;
                 return Err(cleanup_open_agent_filesystem(
                     failure.filesystem,
                     window,
-                    startup_error,
+                    failure.error,
                 )
                 .await);
             }
         };
-        *filesystem_snapshot_slot
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) =
-            Some(filesystem_snapshots::FilesystemSnapshotSlot::at_start(
-                tree_mark(&reconstructing),
-                baseline_kind.restored(),
-            ));
         let reconstruction_generation_handle =
             match reconstruction_generation_handle(&reconstructing) {
                 Ok(generation_handle) => generation_handle,
@@ -12633,11 +12685,11 @@ mod tests {
         let rejected = rejecting(snapshot_index);
         let other = rejecting(OplogIndex::from_u64(9));
         assert_eq!(
-            component_revision_for_replay(&status, rejected.filter(false, false)),
+            StartSelection::of(&status, &rejected, false).replay_revision,
             replay_revision
         );
         assert_eq!(
-            component_revision_for_replay(&status, other.filter(false, false)),
+            StartSelection::of(&status, &other, false).replay_revision,
             active_revision
         );
     }
