@@ -24,8 +24,8 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 fn main() -> Result<(), anyhow::Error> {
-    // Before the configuration is loaded at all, so that `--dump-config` cannot print a config
-    // that silently ignores a deployment's legacy settings.
+    // Before the configuration is loaded at all, so config loading cannot silently ignore a
+    // deployment's legacy settings.
     reject_legacy_db_env_vars().map_err(|err| anyhow::anyhow!(err))?;
 
     match make_config_loader().load_or_dump_config() {
