@@ -636,7 +636,7 @@ fn two_threads_that_miss_one_pack_make_one_storage_read() {
     // pack, and the test then waits 200 ms with the gate closed. At the end of that time, no second
     // read reached the storage and the second thread has not returned. A thread that waits for the
     // first read fits both. So does a thread that the OS holds off for more than 200 ms between its
-    // signal and its call, and then the checks of the hold pass without a wait. The value tests of
+    // signal and its call. Then the checks of the hold pass without a wait. The value tests of
     // `want` hold the rule that the second thread waits.
     let fixture = PackFixture::new(1024, |op_label, _| {
         if op_label == "read" {

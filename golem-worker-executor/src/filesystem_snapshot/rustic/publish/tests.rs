@@ -43,9 +43,9 @@ fn staged() -> StagedSnapshot {
     }
 }
 
-/// Gives the snapshot files of a new namespace over a storage whose script for the publish is
-/// `publish` and for the delete is `retract`, and the snapshot files of the same namespace over the
-/// in-memory storage below it.
+/// Gives the snapshot files of a new namespace over a scripted storage. Its script for the publish
+/// is `publish`, and its script for the delete is `retract`. It also gives the snapshot files of
+/// the same namespace over the in-memory storage below it.
 fn files(
     publish: Script,
     retract: Script,

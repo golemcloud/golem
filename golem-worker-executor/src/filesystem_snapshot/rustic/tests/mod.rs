@@ -72,8 +72,8 @@ const SHORT_DEADLINE: Duration = Duration::from_millis(200);
 /// stop.
 const LIMIT: Duration = Duration::from_secs(10);
 
-/// Gives the blobs of the namespace of the storage, whose calls wait for at most the deadline and
-/// stop when the token is cancelled, with a tracker of their own.
+/// Gives the blobs of the namespace of the storage, with a tracker of their own. Their calls wait
+/// for at most the deadline, and they stop when the token is cancelled.
 pub(super) fn files_of(
     storage: Arc<dyn BlobStorage>,
     namespace: BlobStorageNamespace,
@@ -267,8 +267,8 @@ async fn prune_with(
     run_blocking(move || super::prune(backend, &key(), &settings)).await
 }
 
-/// Finds the snapshot with the name in the scope with the lookup rule of the store, and restores it
-/// into the empty directory `into` with the options, on a blocking thread.
+/// Finds the snapshot with the name in the scope with the lookup rule of the store. Then it
+/// restores that snapshot into the empty directory `into` with the options, on a blocking thread.
 async fn restore_named(
     storage: Arc<dyn BlobStorage>,
     scope: &SnapshotScope,
@@ -1152,7 +1152,7 @@ async fn two_prunes_without_a_grace_period_under_the_limits_of_rustic_give_back_
  {
     // The first save puts both files in one pack. The second save rewrites one of them. After the
     // delete, that pack holds a used and an unused blob. The used blob is far below 10% of the
-    // repository and the unused blob is above 5% of the used data, so a prune under the limits of
+    // repository, and the unused blob is above 5% of the used data. So a prune under the limits of
     // rustic repacks it.
     let prune_twice = async |fast_repack| {
         let storage = Arc::new(InMemoryBlobStorage::new());

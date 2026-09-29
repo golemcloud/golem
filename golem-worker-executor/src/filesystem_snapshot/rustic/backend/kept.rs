@@ -40,9 +40,10 @@ pub(super) struct KeptPacks {
 struct State {
     packs: HashMap<Id, Bytes>,
     bytes: usize,
-    /// The set keeps no more packs. A whole read that ends and keeps nothing sets it: the set was
-    /// closed already, its kept bytes reached the limit, or the pack did not fit. A set whose kept
-    /// bytes reached the limit also keeps no more packs before this is set.
+    /// The set keeps no more packs. A whole read that ends and keeps nothing sets it. That read
+    /// keeps nothing when the set was closed already, when its kept bytes reached the limit, or
+    /// when the pack did not fit. A set whose kept bytes reached the limit also keeps no more packs
+    /// before this is set.
     closed: bool,
     reading: HashSet<Id>,
 }
@@ -78,14 +79,14 @@ fn want<'a>(state: &'a State, id: &Id, limit: usize) -> Want<'a> {
 enum Admit {
     /// Keeps the pack, and then keeps `bytes` in total.
     Keep { bytes: usize },
-    /// Keeps nothing, and the set is closed after it: the set was closed already, its kept bytes
-    /// reached the limit, or the pack does not fit.
+    /// Keeps nothing, and the set is closed after it. This occurs when the set was closed already,
+    /// when its kept bytes reached the limit, or when the pack does not fit.
     Close,
 }
 
-/// Gives what the set that keeps `kept_bytes` and is closed when `closed` is true does with a pack
-/// of `len` bytes, with the limit of the kept bytes. A set that is closed, or whose kept bytes
-/// reached the limit, keeps nothing.
+/// Gives what the set does with a pack of `len` bytes. The set keeps `kept_bytes`, and `closed` is
+/// true when it is closed. `limit` is the limit of the kept bytes. A set that is closed, or whose
+/// kept bytes reached the limit, keeps nothing.
 fn admit(closed: bool, kept_bytes: usize, len: usize, limit: usize) -> Admit {
     if closed || kept_bytes >= limit {
         return Admit::Close;
@@ -107,7 +108,7 @@ impl KeptPacks {
     }
 
     /// Gives the kept pack, or reads it with `read`. While one thread reads a pack, the other
-    /// threads that want it wait for that read, and then take the kept pack or read it again. A
+    /// threads that want it wait for that read. Then they take the kept pack or read it again. A
     /// pack is kept only when its read succeeds, the set is still open when the read ends, and the
     /// pack fits in the limit. When the set is closed and the pack is not kept, it gives `None` and
     /// does not read, so the caller reads only its range.

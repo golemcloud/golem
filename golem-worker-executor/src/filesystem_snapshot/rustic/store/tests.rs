@@ -205,10 +205,10 @@ async fn freed<S: BlobStorage + 'static>(storage: &Arc<S>, scope: &SnapshotScope
 }
 
 /// The longest time that a test waits for an operation to reach the call that a gate holds for
-/// it, when another operation of the same storage runs next. A save, a forget or a prune runs on a
-/// blocking thread, and a save or a prune runs at nice 19, so on a busy host the first operation
-/// can take longer than [`LIMIT`] to reach its gate. Each test that waits this long has a timeout
-/// of 120 s, so the timeout covers its setup, this wait and its later steps.
+/// it. The test uses it when another operation of the same storage runs next. A save, a forget or
+/// a prune runs on a blocking thread. A save or a prune also runs at nice 19. So on a busy host
+/// the first operation can take longer than [`LIMIT`] to reach its gate. Each test that waits this
+/// long has a timeout of 120 s, so the timeout covers its setup, this wait and its later steps.
 const REACH_LIMIT: Duration = Duration::from_secs(45);
 
 /// Waits until the condition holds, or until [`LIMIT`] ends. Gives whether the condition holds.
@@ -626,8 +626,8 @@ async fn two_stores_that_create_one_repository_at_the_same_time_both_save() {
 async fn a_prune_during_a_save_keeps_the_packs_of_the_save() {
     // The first index write after the arm waits at the gate. That is the index write of the
     // second save, so its packs are in no index while the delete prunes. The test stops when the
-    // save does not reach that write before the delete runs, because the prune of the delete
-    // writes an index file too, and the gate would then hold the prune until the test times out.
+    // save does not reach that write before the delete runs. The prune of the delete writes an
+    // index file too, so the gate would then hold the prune until the test times out.
     let hold_next_index = Arc::new(AtomicBool::new(false));
     let storage = ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), {
         let hold_next_index = hold_next_index.clone();
@@ -1122,7 +1122,7 @@ async fn a_delete_that_paused_after_its_ledger_read_does_not_put_back_the_old_le
         let scope = scope.clone();
         async move { store.delete(&scope, &name("p-1")).await }
     });
-    // The second delete lists the freed records too, so the gate would hold it for ever when the
+    // The second delete lists the freed records too. So the gate would hold it for ever when the
     // first delete did not reach its listing first.
     let paused_held = polled_until(REACH_LIMIT, || held.load(Ordering::SeqCst)).await;
     assert!(
@@ -1542,7 +1542,7 @@ async fn a_prune_slower_than_the_grace_period_keeps_its_claim_fresh() {
         let scope = scope.clone();
         async move { store.delete(&scope, &name("p-1")).await }
     });
-    // The second delete claims and lists the packs too, so the gate would hold its prune for ever
+    // The second delete claims and lists the packs too. So the gate would hold its prune for ever
     // when the first delete did not reach its listing first.
     let prune_held = polled_until(REACH_LIMIT, || held.load(Ordering::SeqCst)).await;
     assert!(
@@ -1916,9 +1916,9 @@ async fn the_refresh_markers_of_a_prune_take_their_times_from_the_injected_clock
 #[timeout("60s")]
 async fn the_second_ledger_read_of_a_delete_compares_with_the_injected_clock() {
     // The gate holds the claim write while the test adds a ledger entry 130 s ahead of the clock of
-    // the host. That is beyond the margin of 120 s of the clock of the host, and within the margin
-    // of the clock of the store, which is 20 s ahead. So only the clock of the store makes the
-    // second read of the ledger see a new ledger, and then the delete does not prune.
+    // the host. That is beyond the margin of 120 s of the clock of the host. It is within the
+    // margin of the clock of the store, which is 20 s ahead. So only the clock of the store makes
+    // the second read of the ledger see a new ledger, and then the delete does not prune.
     let storage = ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |op_label, _| {
         if op_label == "write_claim" {
             Script::WaitForGate
@@ -1959,7 +1959,7 @@ async fn the_second_ledger_read_of_a_delete_compares_with_the_injected_clock() {
 #[test]
 #[timeout("60s")]
 async fn the_final_marker_of_a_dropped_delete_takes_its_time_from_the_injected_clock() {
-    // The gate holds the first call of the prune, and the test drops the delete there, so the
+    // The gate holds the first call of the prune, and the test drops the delete there. So the
     // claim guard writes the final marker in its own task.
     let storage = holding_the_prune();
     let (store, ahead) = store_an_hour_ahead(
@@ -4123,8 +4123,8 @@ async fn a_publish_held_at_its_storage_call_keeps_shut_down_waiting_until_it_end
 #[timeout("60s")]
 async fn a_shut_down_between_the_claim_listing_and_the_claim_guard_makes_no_storage_call_after_it_returns()
  {
-    // The scripted storage holds the claim listing, and the test clock holds its next read: the
-    // read of the claim choice, after the listing and before the claim guard. So the tracker is
+    // The scripted storage holds the claim listing, and the test clock holds its next read. That is
+    // the read of the claim choice, after the listing and before the claim guard. So the tracker is
     // empty and `shut_down` returns while the delete waits. The claim listing is the last storage
     // call at the hold, and no claim is written, so the hold is at that point.
     let storage = ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |op_label, _| {

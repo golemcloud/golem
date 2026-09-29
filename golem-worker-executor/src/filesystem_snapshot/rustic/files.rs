@@ -64,10 +64,10 @@ impl Lease {
 
 /// Gives the end of a lease that ends at `current` after a marker write that started at `started`
 /// and succeeded: `span` after `started`, when that is later. A write that started at or after the
-/// end of the lease does not move it, so a lease that ran out stays out: another delete can have
+/// end of the lease does not move it, so a lease that ran out stays out. Another delete can have
 /// taken the claim over before the marker of that write was visible. A write that started before
-/// the end and ends late can still move it, because no other delete can take the claim over before
-/// that marker is visible.
+/// the end and ends late can still move the lease. That is safe, because no other delete can take
+/// the claim over before that marker is visible.
 fn extended(current: Instant, started: Instant, span: Duration) -> Instant {
     if started < current {
         current.max(started + span)
@@ -77,8 +77,8 @@ fn extended(current: Instant, started: Instant, span: Duration) -> Instant {
 }
 
 /// The blobs of one scope: the storage, the namespace of the scope, and the policy of each call on
-/// them: the deadline, the token of the operation, the lease of a prune, and the tracker of the
-/// store.
+/// them. The policy is the deadline, the token of the operation, the lease of a prune, and the
+/// tracker of the store.
 #[derive(Clone, Debug)]
 pub(super) struct SnapshotFiles {
     storage: Arc<dyn BlobStorage>,
@@ -110,7 +110,7 @@ impl SnapshotFiles {
     }
 
     /// Gives the same blobs, whose calls the lease also fences. A call does not start when the
-    /// lease has run out, and a call that runs ends at the expiry that the lease had when the call
+    /// lease has run out. A call that runs ends at the expiry that the lease had when the call
     /// started.
     pub(super) fn leased(&self, lease: Arc<Lease>) -> Self {
         Self {
@@ -119,8 +119,8 @@ impl SnapshotFiles {
         }
     }
 
-    /// Gives the same blobs with a token that nothing cancels and no lease, for the calls that run
-    /// after a cancel or a drop by design. The tracker still counts each call.
+    /// Gives the same blobs with a token that nothing cancels and no lease. They are for the calls
+    /// that run after a cancel or a drop by design. The tracker still counts each call.
     pub(super) fn detached(&self) -> Self {
         Self {
             cancel: CancellationToken::new(),

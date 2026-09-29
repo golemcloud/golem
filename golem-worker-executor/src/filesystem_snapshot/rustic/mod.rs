@@ -133,8 +133,8 @@ fn restore_snapshot(
     Ok(())
 }
 
-/// Prunes the repository: deletes the packs that an earlier prune marked and whose time to stay
-/// is over, marks the packs that no snapshot uses, and repacks the packs that hold both used and
+/// Prunes the repository. It deletes the packs that an earlier prune marked and whose time to stay
+/// is over. It marks the packs that no snapshot uses. It repacks the packs that hold both used and
 /// unused blobs, within [`MAX_UNUSED`] and [`MAX_REPACK`]. The result is `None` when the scope has
 /// no repository.
 fn prune(
@@ -206,17 +206,17 @@ const CHUNKER: Chunker = Chunker::Rabin;
 /// The zstd level of a new repository, which compresses each blob.
 const ZSTD_LEVEL: i32 = 3;
 
-/// Whether each write into a repository made with these options decrypts and decompresses each blob
-/// and each file again after it encrypts them, so data that does not read back gives an error
-/// before it is written.
+/// Whether each write into a repository made with these options checks its data. The write
+/// decrypts and decompresses each blob and each file again after it encrypts them. So data that
+/// does not read back gives an error before it is written.
 const EXTRA_VERIFY: bool = true;
 
-/// The target of unused data after a prune: while the unused data that would stay is 5% or more of
-/// the size of the repository after the prune, the prune repacks the data packs that hold both used
-/// and unused blobs, within [`MAX_REPACK`].
+/// The target of unused data after a prune. The prune repacks the data packs that hold both used
+/// and unused blobs, within [`MAX_REPACK`]. It does this while the unused data that would stay is
+/// 5% or more of the size of the repository after the prune.
 const MAX_UNUSED: LimitOption = LimitOption::Percentage(5);
 
-/// The limit of the repack of one prune: the prune repacks a pack only while the used data that it
+/// The limit of the repack of one prune. The prune repacks a pack only while the used data that it
 /// copies stays below 10% of the size of the repository before the prune.
 const MAX_REPACK: LimitOption = LimitOption::Percentage(10);
 
@@ -229,9 +229,9 @@ fn config_options() -> ConfigOptions {
         .set_extra_verify(EXTRA_VERIFY)
 }
 
-/// The options that each save shares: the snapshot keeps the paths relative to the saved tree, the
-/// group of the parent has no criterion, and each parallel stage of the save has `threads`
-/// threads. `None` is the number of CPUs that the process can use.
+/// The options that each save shares. The snapshot keeps the paths relative to the saved tree. The
+/// group of the parent has no criterion. Each parallel stage of the save has `threads` threads.
+/// `None` is the number of CPUs that the process can use.
 fn backup_options(threads: Option<NonZeroUsize>) -> BackupOptions {
     BackupOptions::default()
         .as_path(PathBuf::from("/"))

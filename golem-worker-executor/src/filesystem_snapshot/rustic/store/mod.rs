@@ -120,9 +120,9 @@ impl StorePolicy {
 }
 
 /// The options of a save of the store: a failed read of an entry fails the save, and no device id
-/// is kept. `SizeMtime` compares each file with the parent that the id names by its type, size and
-/// modification time, and not by its change time or its inode. `Full`, and a save without a
-/// parent, use no parent, so they read every file.
+/// is kept. `SizeMtime` compares each file with the parent that the id names. It compares the type,
+/// the size and the modification time, and not the change time or the inode. `Full`, and a save
+/// without a parent, use no parent, so they read every file.
 fn store_backup_options(
     policy: &StorePolicy,
     parent: Option<(SnapshotId, ChangeDetection)>,
@@ -688,7 +688,7 @@ impl RusticSnapshotStore {
     /// Publishes the staged snapshot file of a save. The publish is the commit point, so no cancel
     /// ends it. The tracker counts it from the call, so a `shut_down` that has not cancelled yet
     /// waits for it, and the deadline limits that wait. The check of the cancel and the start of the
-    /// write are in the first poll of the returned future, so a publish never starts after the
+    /// write are in the first poll of the returned future. So a publish never starts after the
     /// cancel.
     fn publish_staged(
         &self,
