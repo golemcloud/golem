@@ -142,6 +142,7 @@ mod tests {
     fn tool(name: &str) -> ExtendedToolType {
         ExtendedToolType {
             version: "0.1.0".into(),
+            requires_filesystem: false,
             commands: vec![ExtendedCommandNode {
                 name: name.into(),
                 aliases: vec![],
