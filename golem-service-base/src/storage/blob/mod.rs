@@ -18,6 +18,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use desert_rust::{BinaryDeserializer, BinarySerializer};
 use futures::stream::BoxStream;
+use futures::{StreamExt, TryStreamExt};
 use golem_common::model::agent::AgentMode;
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
@@ -32,7 +33,8 @@ pub mod memory;
 pub mod s3;
 pub mod sqlite;
 
-pub(crate) use normalized_path::{NormalizedBlobPath, normalized_blob_path};
+pub use normalized_path::NormalizedBlobPath;
+pub(crate) use normalized_path::normalized_blob_path;
 
 pub const BLOB_STREAM_CHUNK_SIZE: usize = 64 * 1024;
 
@@ -60,7 +62,7 @@ fn validate_range(offset: u64, length: u64, total_size: u64) -> Result<(), Error
 /// any depth, and a directory that `create_dir` made is there until `delete_dir` removes it. A
 /// directory that `create_dir` made keeps a size of zero and a time, which `get_metadata` gives.
 #[async_trait]
-pub trait BlobStorage: Debug + Send + Sync {
+pub trait BlobStorage: sealed::Sealed + Debug + Send + Sync {
     /// Gives the bytes of the blob at the path, or nothing if the path has no blob.
     ///
     /// A directory has no blob at its path, and a root path is a directory.
@@ -112,20 +114,7 @@ pub trait BlobStorage: Debug + Send + Sync {
         path: &Path,
         start: u64,
         end: u64,
-    ) -> Result<Option<Vec<u8>>, Error> {
-        if start > end {
-            return Err(BlobRangeError { start, end }.into());
-        }
-        let data = self
-            .get_raw(target_label, op_label, namespace, path)
-            .await?;
-        data.map(|data| {
-            blob_range(&data, start, end)
-                .map(<[u8]>::to_vec)
-                .map_err(Error::from)
-        })
-        .transpose()
-    }
+    ) -> Result<Option<Vec<u8>>, Error>;
 
     /// Tells the size and the time of the blob at the path, or nothing if the path has no blob.
     ///
@@ -202,7 +191,7 @@ pub trait BlobStorage: Debug + Send + Sync {
     /// A path that has no blob changes nothing. A directory has no blob at its path, and a root
     /// path is a directory.
     ///
-    /// The backend reads every path before it removes the first blob, so a path that breaks a
+    /// The storage reads every path before it removes the first blob, so a path that breaks a
     /// rule of a name gives a [`BlobNameError`] and the call removes no blob at all. The rule
     /// holds for the names and for nothing else: an error of the backend part way through the
     /// paths leaves the blobs that the backend removed before that error removed, and the S3
@@ -214,17 +203,7 @@ pub trait BlobStorage: Debug + Send + Sync {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         paths: &[PathBuf],
-    ) -> Result<(), Error> {
-        for path in paths {
-            normalized_blob_path(path)?;
-        }
-
-        for path in paths {
-            self.delete(target_label, op_label, namespace.clone(), path)
-                .await?;
-        }
-        Ok(())
-    }
+    ) -> Result<(), Error>;
 
     /// Makes a directory at the path.
     ///
@@ -319,41 +298,561 @@ pub trait BlobStorage: Debug + Send + Sync {
         namespace: BlobStorageNamespace,
         from: &Path,
         to: &Path,
-    ) -> Result<(), Error> {
-        // A copy onto the same path writes nothing, and it still needs the blob that it reads.
-        if blob_copy_changes_nothing(&normalized_blob_path(from)?, &normalized_blob_path(to)?)? {
-            return match self.exists(target_label, op_label, namespace, from).await? {
-                ExistsResult::File => Ok(()),
-                _ => Err(BlobMissingError {
-                    path: from.to_path_buf(),
-                }
-                .into()),
-            };
-        }
-
-        match self
-            .get_raw(target_label, op_label, namespace.clone(), from)
-            .await?
-        {
-            Some(data) => {
-                self.put_raw(target_label, op_label, namespace, to, &data)
-                    .await
-            }
-            None => Err(BlobMissingError {
-                path: from.to_path_buf(),
-            }
-            .into()),
-        }
-    }
+    ) -> Result<(), Error>;
 
     /// Writes the blob at the `from` path as the blob at the `to` path, and then deletes the
     /// blob at `from`.
     ///
-    /// A move onto the same path keeps the blob where it is, and two forms of one path are the
-    /// same path. A blob cannot be where a directory is, so a root path at either end gives
-    /// [`BlobNameError::NoName`]. The copy comes before the delete, so each error of `copy` is
-    /// an error of `move` and the blob at `from` stays: a `from` path with no blob at it gives
-    /// [`BlobMissingError`] from the default `copy`, the move onto the same path as well.
+    /// A move onto the same path keeps the blob where it is, and two forms of one path are the same
+    /// path. A blob cannot be where a directory is, so a root path at either end gives
+    /// [`BlobNameError::NoName`]. The copy comes before the delete, so each error of `copy` is an
+    /// error of `move` and the blob at `from` stays: a `from` path with no blob at it gives the
+    /// error of the copy, which is [`BlobMissingError`] where `copy` gives it, the move onto the
+    /// same path as well.
+    async fn r#move(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        from: &Path,
+        to: &Path,
+    ) -> Result<(), Error>;
+}
+
+/// Keeps [`BlobStorage`] to the one implementation that each backend gets from
+/// [`BlobStorageBackend`].
+mod sealed {
+    pub trait Sealed {}
+
+    impl<B: super::BlobStorageBackend> Sealed for B {}
+}
+
+/// Keeps the blobs of the namespaces of one backend.
+///
+/// Each backend gets [`BlobStorage`] from this trait, and that implementation applies the rules of
+/// a path before a method of this trait runs. It makes the one form of each path
+/// (`normalized_blob_path`), so a path that breaks a rule that `normalized_blob_path` applies gets
+/// that error and no method of this trait gets the path. It gives the answer of [`BlobStorage`] at
+/// a root path, so only `list_dir_at` and `list_blobs_below_at` get a root path. It gives the
+/// [`BlobRangeError`] of a `start` after `end`, and the [`BlobMissingError`] of `copy` and `move`.
+/// It reads every path of `delete_many` before `delete_many_at` runs.
+///
+/// Each method has the rules of the method of [`BlobStorage`] with the same name without `_at`,
+/// except where its own doc says otherwise.
+#[async_trait]
+pub trait BlobStorageBackend: Debug + Send + Sync {
+    /// Gives the bytes of the blob at the path, or nothing if the path has no blob.
+    async fn get_raw_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+    ) -> Result<Option<Vec<u8>>, Error>;
+
+    /// Gives the bytes of the blob at the path as a stream, or nothing if the path has no blob.
+    ///
+    /// The default reads the blob with `get_raw_at` and gives it as one chunk.
+    async fn get_stream_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+    ) -> Result<Option<BoxStream<'static, Result<Bytes, Error>>>, Error> {
+        Ok(self
+            .get_raw_at(target_label, op_label, namespace, path)
+            .await?
+            .map(|data| futures::stream::iter([Ok(Bytes::from(data))]).boxed()))
+    }
+
+    /// Opens a bounded selection of the blob at the path, or gives nothing if the path has no
+    /// blob.
+    async fn get_range_stream_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+        offset: u64,
+        length: u64,
+    ) -> Result<Option<BlobRangeStream>, Error>;
+
+    /// Reads the bytes from `start` to `end` of the blob at the path. Both offsets are inclusive,
+    /// and `start` is not after `end`.
+    ///
+    /// The default reads the full blob with `get_raw_at` and gives the range of it
+    /// (`blob_range`).
+    async fn get_raw_slice_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+        start: u64,
+        end: u64,
+    ) -> Result<Option<Vec<u8>>, Error> {
+        self.get_raw_at(target_label, op_label, namespace, path)
+            .await?
+            .map(|data| {
+                blob_range(&data, start, end)
+                    .map(<[u8]>::to_vec)
+                    .map_err(Error::from)
+            })
+            .transpose()
+    }
+
+    /// Tells the size and the time of the blob at the path, or of the directory that
+    /// `create_dir` made at the path, or nothing.
+    async fn get_metadata_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+    ) -> Result<Option<BlobMetadata>, Error>;
+
+    /// Writes the bytes as the blob at the path, over the blob that was there.
+    async fn put_raw_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+        data: &[u8],
+    ) -> Result<(), Error>;
+
+    /// Writes the bytes as the blob at the path when the path has no blob. The check and the
+    /// write are one step.
+    async fn put_raw_if_absent_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+        data: &[u8],
+    ) -> Result<PutIfAbsent, Error>;
+
+    /// Writes the bytes of the stream as the blob at the path, over the blob that was there.
+    ///
+    /// The default reads the full stream and writes it with `put_raw_at`.
+    async fn put_stream_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+        stream: &dyn ErasedReplayableStream<Item = Result<Vec<u8>, Error>, Error = Error>,
+    ) -> Result<(), Error> {
+        let data = stream
+            .make_stream_erased()
+            .await?
+            .try_collect::<Vec<_>>()
+            .await?
+            .concat();
+        self.put_raw_at(target_label, op_label, namespace, path, &data)
+            .await
+    }
+
+    /// Removes the blob at the path. A path that has no blob changes nothing.
+    async fn delete_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+    ) -> Result<(), Error>;
+
+    /// Removes the blob at every one of the paths.
+    ///
+    /// The default removes them with `delete_at`, one path after the other, and stops at the
+    /// first error.
+    async fn delete_many_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        paths: &[NormalizedBlobPath<'_>],
+    ) -> Result<(), Error> {
+        futures::stream::iter(paths.iter().map(Ok))
+            .try_for_each(|path| self.delete_at(target_label, op_label, namespace.clone(), path))
+            .await
+    }
+
+    /// Makes a directory at the path.
+    async fn create_dir_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+    ) -> Result<(), Error>;
+
+    /// Lists the blobs that are directly below the path, and each directory that `create_dir`
+    /// made below the path, at any depth. The path can be a root path.
+    async fn list_dir_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+    ) -> Result<Vec<PathBuf>, Error>;
+
+    /// Lists each blob below the path, at all depths, with its size. The path can be a root
+    /// path.
+    async fn list_blobs_below_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+    ) -> Result<Box<[ListedBlob]>, Error>;
+
+    /// Deletes the directory at the path and all the entries below it, at any depth. Returns
+    /// true if the path had a directory.
+    async fn delete_dir_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+    ) -> Result<bool, Error>;
+
+    /// Tells what the path has.
+    async fn exists_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+    ) -> Result<ExistsResult, Error>;
+
+    /// Tells if the path has a blob. A directory at the path is not a blob. The default reads
+    /// `exists_at`.
+    async fn has_blob_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+    ) -> Result<bool, Error> {
+        Ok(self
+            .exists_at(target_label, op_label, namespace, path)
+            .await?
+            == ExistsResult::File)
+    }
+
+    /// Writes the blob at the `from` path as the blob at the `to` path, and keeps the blob at
+    /// `from`. The two paths are not the same path.
+    ///
+    /// Gives true when the copy wrote the blob, and false when `from` has no blob. False writes
+    /// nothing to `to`. A backend can give an error of its own for a `from` with no blob in
+    /// place of false, and then [`BlobStorage`] gives that error in place of
+    /// [`BlobMissingError`]. The default reads the blob with `get_raw_at`, gives false when it
+    /// finds none, and writes it with `put_raw_at`.
+    async fn copy_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        from: &NormalizedBlobPath<'_>,
+        to: &NormalizedBlobPath<'_>,
+    ) -> Result<bool, Error> {
+        match self
+            .get_raw_at(target_label, op_label, namespace.clone(), from)
+            .await?
+        {
+            Some(data) => self
+                .put_raw_at(target_label, op_label, namespace, to, &data)
+                .await
+                .map(|()| true),
+            None => Ok(false),
+        }
+    }
+}
+
+/// Gives the one form of a path that names a blob, or `None` for a root path, which is a
+/// directory and names no blob.
+fn blob_path(path: &Path) -> Result<Option<NormalizedBlobPath<'_>>, BlobNameError> {
+    normalized_blob_path(path).map(|path| (!path.is_root()).then_some(path))
+}
+
+/// Gives the one form of a path at which an operation writes a blob. A root path gives
+/// [`BlobNameError::NoName`], because a blob cannot be where a directory is.
+fn written_blob_path(path: &Path) -> Result<NormalizedBlobPath<'_>, BlobNameError> {
+    let path = normalized_blob_path(path)?;
+    path.reject_root()?;
+    Ok(path)
+}
+
+/// Gives `Ok(())` when the copy found the blob at its source, and otherwise a
+/// [`BlobMissingError`] that names the source path as the guest wrote it.
+fn blob_found(found: bool, guest_from: &Path) -> Result<(), Error> {
+    if found {
+        Ok(())
+    } else {
+        Err(BlobMissingError {
+            path: guest_from.to_path_buf(),
+        }
+        .into())
+    }
+}
+
+/// The one implementation of [`BlobStorage`]. It applies the rules of a path and of a range, and
+/// the answers at a root path, and then gives the operation to the backend.
+#[async_trait]
+impl<B: BlobStorageBackend> BlobStorage for B {
+    async fn get_raw(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> Result<Option<Vec<u8>>, Error> {
+        match blob_path(path)? {
+            Some(path) => {
+                self.get_raw_at(target_label, op_label, namespace, &path)
+                    .await
+            }
+            None => Ok(None),
+        }
+    }
+
+    async fn get_stream(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> Result<Option<BoxStream<'static, Result<Bytes, Error>>>, Error> {
+        match blob_path(path)? {
+            Some(path) => {
+                self.get_stream_at(target_label, op_label, namespace, &path)
+                    .await
+            }
+            None => Ok(None),
+        }
+    }
+
+    async fn get_range_stream(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+        offset: u64,
+        length: u64,
+    ) -> Result<Option<BlobRangeStream>, Error> {
+        match blob_path(path)? {
+            Some(path) => {
+                self.get_range_stream_at(target_label, op_label, namespace, &path, offset, length)
+                    .await
+            }
+            None => Ok(None),
+        }
+    }
+
+    async fn get_raw_slice(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+        start: u64,
+        end: u64,
+    ) -> Result<Option<Vec<u8>>, Error> {
+        ordered_range(start, end)?;
+        match blob_path(path)? {
+            Some(path) => {
+                self.get_raw_slice_at(target_label, op_label, namespace, &path, start, end)
+                    .await
+            }
+            None => Ok(None),
+        }
+    }
+
+    async fn get_metadata(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> Result<Option<BlobMetadata>, Error> {
+        match blob_path(path)? {
+            Some(path) => {
+                self.get_metadata_at(target_label, op_label, namespace, &path)
+                    .await
+            }
+            None => Ok(None),
+        }
+    }
+
+    async fn put_raw(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+        data: &[u8],
+    ) -> Result<(), Error> {
+        let path = written_blob_path(path)?;
+        self.put_raw_at(target_label, op_label, namespace, &path, data)
+            .await
+    }
+
+    async fn put_raw_if_absent(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+        data: &[u8],
+    ) -> Result<PutIfAbsent, Error> {
+        let path = written_blob_path(path)?;
+        self.put_raw_if_absent_at(target_label, op_label, namespace, &path, data)
+            .await
+    }
+
+    async fn put_stream(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+        stream: &dyn ErasedReplayableStream<Item = Result<Vec<u8>, Error>, Error = Error>,
+    ) -> Result<(), Error> {
+        let path = written_blob_path(path)?;
+        self.put_stream_at(target_label, op_label, namespace, &path, stream)
+            .await
+    }
+
+    async fn delete(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> Result<(), Error> {
+        match blob_path(path)? {
+            Some(path) => {
+                self.delete_at(target_label, op_label, namespace, &path)
+                    .await
+            }
+            None => Ok(()),
+        }
+    }
+
+    async fn delete_many(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        paths: &[PathBuf],
+    ) -> Result<(), Error> {
+        // Every path is read before the first blob goes. A root path names no blob, so it is
+        // not in the list. The list is a `Vec` and not a boxed slice: it lives only for this
+        // call, and `filter_map` does not know its length, so a boxed slice can copy the list a
+        // second time to remove the spare capacity.
+        let paths = paths
+            .iter()
+            .filter_map(|path| blob_path(path).transpose())
+            .collect::<Result<Vec<_>, _>>()?;
+        self.delete_many_at(target_label, op_label, namespace, &paths)
+            .await
+    }
+
+    async fn create_dir(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> Result<(), Error> {
+        match blob_path(path)? {
+            Some(path) => {
+                self.create_dir_at(target_label, op_label, namespace, &path)
+                    .await
+            }
+            None => Ok(()),
+        }
+    }
+
+    async fn list_dir(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> Result<Vec<PathBuf>, Error> {
+        let path = normalized_blob_path(path)?;
+        self.list_dir_at(target_label, op_label, namespace, &path)
+            .await
+    }
+
+    async fn list_blobs_below(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> Result<Box<[ListedBlob]>, Error> {
+        let path = normalized_blob_path(path)?;
+        self.list_blobs_below_at(target_label, op_label, namespace, &path)
+            .await
+    }
+
+    async fn delete_dir(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> Result<bool, Error> {
+        match blob_path(path)? {
+            Some(path) => {
+                self.delete_dir_at(target_label, op_label, namespace, &path)
+                    .await
+            }
+            None => Ok(false),
+        }
+    }
+
+    async fn exists(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> Result<ExistsResult, Error> {
+        match blob_path(path)? {
+            Some(path) => {
+                self.exists_at(target_label, op_label, namespace, &path)
+                    .await
+            }
+            None => Ok(ExistsResult::Directory),
+        }
+    }
+
+    async fn copy(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        from: &Path,
+        to: &Path,
+    ) -> Result<(), Error> {
+        let (source, target) = (normalized_blob_path(from)?, normalized_blob_path(to)?);
+        // A copy onto the same path writes nothing, and it still needs the blob that it reads.
+        let found = if blob_copy_changes_nothing(&source, &target)? {
+            self.has_blob_at(target_label, op_label, namespace, &source)
+                .await?
+        } else {
+            self.copy_at(target_label, op_label, namespace, &source, &target)
+                .await?
+        };
+        blob_found(found, from)
+    }
+
     async fn r#move(
         &self,
         target_label: &'static str,
@@ -362,14 +861,21 @@ pub trait BlobStorage: Debug + Send + Sync {
         from: &Path,
         to: &Path,
     ) -> Result<(), Error> {
+        let (source, target) = (normalized_blob_path(from)?, normalized_blob_path(to)?);
         // A move onto the same path keeps the blob, so it is the copy and no delete.
-        if blob_copy_changes_nothing(&normalized_blob_path(from)?, &normalized_blob_path(to)?)? {
-            return self.copy(target_label, op_label, namespace, from, to).await;
+        if blob_copy_changes_nothing(&source, &target)? {
+            let found = self
+                .has_blob_at(target_label, op_label, namespace, &source)
+                .await?;
+            return blob_found(found, from);
         }
 
-        self.copy(target_label, op_label, namespace.clone(), from, to)
+        let found = self
+            .copy_at(target_label, op_label, namespace.clone(), &source, &target)
             .await?;
-        self.delete(target_label, op_label, namespace, from).await
+        blob_found(found, from)?;
+        self.delete_at(target_label, op_label, namespace, &source)
+            .await
     }
 }
 
@@ -739,17 +1245,20 @@ pub struct BlobRangeError {
 /// The name is good: the rules of [`BlobNameError`] accept it, and the backend can use it. The
 /// storage holds no blob at it.
 ///
-/// The default `copy` of [`BlobStorage`] reads the blob at its source path and gives this error
-/// when the storage holds none there. The S3 backend has a `copy` of its own, which sends one
-/// `CopyObject` request and gives this error for the code `NoSuchKey` of the source key. The
-/// default `move` is a copy and then a delete of the source, so it gives the error too, and it
-/// deletes nothing. A guest picks the source container name and the source object name of
-/// `copy_object` and of `move_object`, so the path is of the guest. Each backend names the
-/// path as the guest wrote it, and not in the normalized form that the storage uses. Each
-/// [`BlobNameError`] does the same, because the guest reads the message, except
-/// [`BlobNameError::NoName`], which names the one form of the path. The one form of a path
-/// with no name in it is the empty path, and each spelling of such a path says the same thing
-/// to the guest.
+/// `copy` of [`BlobStorage`] gives this error when the storage holds no blob at its source path and
+/// the backend tells it so. A copy onto the same path gives it on each backend. For a copy to
+/// another path, the in-memory and the SQLite backends use the default `copy_at` of
+/// [`BlobStorageBackend`], which reads the blob at the source path, and the S3 backend has a
+/// `copy_at` of its own, which sends one `CopyObject` request and reads the code `NoSuchKey` of the
+/// source key. The filesystem backend has a `copy_at` of its own too, which gives the error of the
+/// filesystem for a source with no blob, and not this error. `move` is a copy and then a delete of
+/// the source, so it gives the error of the copy too, and it deletes nothing. A guest picks the
+/// source container name and the source object name of `copy_object` and of `move_object`, so the
+/// path is of the guest. The storage names the path as the guest wrote it, and not in the
+/// normalized form that the storage uses. Each [`BlobNameError`] does the same, because the guest
+/// reads the message, except [`BlobNameError::NoName`], which names the one form of the path. The
+/// one form of a path with no name in it is the empty path, and each spelling of such a path says
+/// the same thing to the guest.
 ///
 /// The error is permanent. `blob_store_error` in
 /// `golem_worker_executor::services::blob_store` maps it to `BlobStoreError::NotFound`, and
@@ -779,18 +1288,17 @@ pub(crate) const DIR_MARKER: &str = "__dir_marker";
 /// costs no request and no retry.
 ///
 /// The first group of rules is of the blob path, and `normalized_blob_path` applies each of
-/// them. Every backend calls that function for every path that it gets, so every backend gives
-/// the same answer for a name: `NotRelative` and `ParentDir` for a path that leaves the
-/// namespace, `NotUtf8` for a path that the one form cannot hold as text, and then `NulByte`,
-/// `DotSegment` and `Reserved` for the text of that form (`check_blob_name`). The three rules
-/// of the text are rules of S3 or of MinIO, and one is the name that the S3 backend keeps for
-/// its own object.
+/// them. [`BlobStorage`] applies that function to each path of each operation before a backend
+/// gets the path, so every backend gives the same answer for a name: `NotRelative` and
+/// `ParentDir` for a path that leaves the namespace, `NotUtf8` for a path that the one form
+/// cannot hold as text, and then `NulByte`, `DotSegment` and `Reserved` for the text of that
+/// form (`check_blob_name`). The three rules of the text are rules of S3 or of MinIO, and one
+/// is the name that the S3 backend keeps for its own object.
 ///
-/// Each operation that writes a blob applies `NoName` as well: the write operations of the
-/// in-memory and the S3 backends apply it to the path of the blob
-/// (`NormalizedBlobPath::reject_root`), `copy` and `move` apply it to both of their paths
-/// (`blob_copy_changes_nothing`), and the in-memory and the SQLite backends apply it to each
-/// path whose last name they read (`NormalizedBlobPath::file_name_text`).
+/// Each operation that writes a blob applies `NoName` as well, before a backend gets the path:
+/// `put_raw`, `put_raw_if_absent` and `put_stream` apply it to the path of the blob
+/// (`NormalizedBlobPath::reject_root`), and `copy` and `move` apply it to both of their paths
+/// (`blob_copy_changes_nothing`).
 ///
 /// The second group is of the object key of the S3 backend, which applies it to the full key:
 /// the namespace prefix, the separators and the name (`S3BlobStorage::key_of`). `TooLong` is
@@ -835,16 +1343,14 @@ pub enum BlobNameError {
     /// an empty object name makes such a path.
     ///
     /// A root path is a directory, and a blob cannot be where a directory is, so an operation
-    /// that writes a blob at such a path gives this error: `put_raw` and `put_stream` of the
-    /// in-memory and the S3 backends (`NormalizedBlobPath::reject_root`), and `copy` and `move`
-    /// of each backend, at either of their two paths (`blob_copy_changes_nothing`). An
-    /// operation that reads a blob gives `Ok(None)` for a root path, and `exists` gives
-    /// `Directory`.
+    /// that writes a blob at such a path gives this error on each backend: `put_raw`,
+    /// `put_raw_if_absent` and `put_stream` (`NormalizedBlobPath::reject_root`), and `copy`
+    /// and `move`, at either of their two paths (`blob_copy_changes_nothing`). An operation
+    /// that reads a blob gives `Ok(None)` for a root path, and `exists` gives `Directory`.
     ///
     /// The in-memory and the SQLite backends hold a blob by the name of its directory and the
-    /// name of the blob itself (`NormalizedBlobPath::file_name_text`), and a root path gives no
-    /// such name, so each of them gives this error for a root path that reaches that
-    /// function.
+    /// name of the blob itself (`NormalizedBlobPath::file_name_text`). A root path gives no such
+    /// name, so that function gives this error for it.
     #[error("the blob path has no name in it: {path:?}")]
     NoName { path: PathBuf },
     /// The object key has `length` bytes of UTF-8, which is more than `max`, the largest
@@ -891,6 +1397,18 @@ pub(crate) fn blob_range(blob: &[u8], start: u64, end: u64) -> Result<&[u8], Blo
     blob_positions(blob.len(), start, end).map(|positions| &blob[positions])
 }
 
+/// Gives a [`BlobRangeError`] when `start` is after `end`, because no byte is in such a range.
+///
+/// Both offsets are inclusive. This is the one rule of a range that needs no length of a blob,
+/// so `get_raw_slice` of [`BlobStorage`] reads it before a backend reads the blob.
+fn ordered_range(start: u64, end: u64) -> Result<(), BlobRangeError> {
+    if start <= end {
+        Ok(())
+    } else {
+        Err(BlobRangeError { start, end })
+    }
+}
+
 /// Gives the positions of the bytes from `start` to `end` in a blob of `length` bytes. Both
 /// offsets are inclusive, and the rules of [`blob_range`] apply.
 pub(crate) fn blob_positions(
@@ -898,9 +1416,9 @@ pub(crate) fn blob_positions(
     start: u64,
     end: u64,
 ) -> Result<RangeInclusive<usize>, BlobRangeError> {
-    (start <= end)
-        .then(|| usize::try_from(start).ok().zip(usize::try_from(end).ok()))
-        .flatten()
+    ordered_range(start, end)
+        .ok()
+        .and_then(|()| usize::try_from(start).ok().zip(usize::try_from(end).ok()))
         .filter(|&(_, last)| last < length)
         .map(|(first, last)| first..=last)
         .ok_or(BlobRangeError { start, end })
@@ -967,10 +1485,11 @@ mod normalized_path {
 
     /// The one form of a relative blob path (`normalized_blob_path`).
     ///
-    /// Every backend gets the path of a caller, makes this form of it, and stores that form.
-    /// The functions that make a key of a path take this type and nothing else, so a path
-    /// that has not been through `normalized_blob_path` cannot reach them and no comment has
-    /// to say that it must not.
+    /// [`BlobStorage`](super::BlobStorage) makes this form of the path of each operation, and each
+    /// method of [`BlobStorageBackend`](super::BlobStorageBackend) gets this form. The functions
+    /// that make a key of a path take this type and nothing else, so a path that has not been
+    /// through `normalized_blob_path` cannot reach them and no comment has to say that it must not.
+    /// Code outside this crate can read the path of this type, and it cannot make one.
     ///
     /// The form borrows the path of the caller when that path is already in its one form, so
     /// this form of such a path allocates nothing. The operation that follows still builds the
@@ -982,7 +1501,7 @@ mod normalized_path {
     /// `InMemoryBlobStorage::blob_key`, and the parts of the key that the in-memory and the
     /// SQLite backends bind.
     #[derive(Debug, Clone, PartialEq, Eq)]
-    pub(crate) struct NormalizedBlobPath<'a>(Cow<'a, Path>);
+    pub struct NormalizedBlobPath<'a>(Cow<'a, Path>);
 
     impl NormalizedBlobPath<'static> {
         /// Gives the path at the root of a namespace, which has no name in it.
@@ -1083,9 +1602,9 @@ mod normalized_path {
     /// [`BlobNameError::NotRelative`] for a path that Windows holds outside the namespace,
     /// and `check_blob_name` gives the rule that the text breaks. The text is what a backend
     /// stores, and the rules read `\` as a separator, which the names of the path do not
-    /// (`Path::components` reads `\` as a name on unix). Every backend calls this function
-    /// for every path that it gets, so every backend gives the same error for the same name,
-    /// on every host.
+    /// (`Path::components` reads `\` as a name on unix). [`BlobStorage`](super::BlobStorage)
+    /// calls this function for every path of every operation before a backend gets the path,
+    /// so every backend gives the same error for the same name, on every host.
     pub(crate) fn normalized_blob_path(
         path: &Path,
     ) -> Result<NormalizedBlobPath<'_>, BlobNameError> {
@@ -1167,9 +1686,8 @@ pub(crate) fn blob_copy_changes_nothing(
 /// in it, because a `.` is not a name (`NormalizedBlobPath::is_root`). The root is a directory,
 /// so it names no blob.
 ///
-/// A path that breaks a rule of a name does not name the root, whatever else it holds: a `..`
-/// path and an absolute path give `false` here, and the backend that reads such a path gives the
-/// rule that it breaks.
+/// A path that breaks a rule of a name does not name the root, whatever else it holds: a `..` path
+/// and an absolute path give `false` here, and the storage gives the rule that it breaks.
 ///
 /// `golem_worker_executor::services::blob_store` reads this for the container name that a guest
 /// gives, because a name that names the root names the namespace and not a container.

@@ -13,10 +13,11 @@
 // limitations under the License.
 
 use super::{
-    BodyLengthError, RETRIABLE_SERVICE_ERROR_CODES, S3BlobStorage, cut_range, ranged_object_size,
-    read_body,
+    BodyLengthError, ContentRange, RETRIABLE_SERVICE_ERROR_CODES, S3BlobStorage, cut_range,
+    parse_content_range, ranged_object_size, read_body,
 };
 use crate::config::{S3BlobStorageConfig, S3BlobStorageCredentialsConfig};
+use crate::replayable_stream::ReplayableStream;
 use crate::storage::blob::{
     BlobMissingError, BlobNameError, BlobRangeError, BlobStorage, BlobStorageNamespace,
     ExistsResult, ListedBlob, PutIfAbsent, agent_path_segment,
@@ -45,6 +46,7 @@ use golem_common::model::AgentId;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
+use golem_common::widen_infallible;
 use http_body::Frame;
 use http_body_util::StreamBody;
 use pretty_assertions::assert_eq;
@@ -1059,6 +1061,9 @@ async fn get_raw_slice_checks_the_range_that_s3_returns() {
         Some("bytes=0-2") => Answer::partial(Some("bytes 0-2/6"), "a"),
         Some("bytes=3-4") => Answer::partial(Some("bytes 3-4/6"), "def"),
         Some("bytes=3-5") => Answer::partial(Some("bytes 1-5/6"), "def"),
+        Some("bytes=0-18446744073709551615") => {
+            Answer::partial(Some("bytes 0-18446744073709551615/*"), "a")
+        }
         _ => Answer {
             content_length: Some(6),
             ..Answer::partial(None, "abcdef")
@@ -1093,6 +1098,10 @@ async fn get_raw_slice_checks_the_range_that_s3_returns() {
     // object, so its content length does not tell the backend whether the range is in the
     // object.
     let partial_without_content_range = read_error(0, 9).await;
+    // The range from 0 to `u64::MAX` has more bytes than a `u64` counts. The content range gives
+    // the same range, so no byte of the range is missing from it, and the error is not a
+    // `BlobRangeError`.
+    let every_offset = read_error(0, u64::MAX).await;
 
     assert_eq!(
         (
@@ -1106,12 +1115,14 @@ async fn get_raw_slice_checks_the_range_that_s3_returns() {
             short_body,
             long_body,
             without_content_range,
-            partial_without_content_range
+            partial_without_content_range,
+            every_offset
         ),
         (
             Some(b"bcd".to_vec()),
             Some(b"f".to_vec()),
             Err(Some(BlobRangeError { start: 4, end: 9 })),
+            Err(None),
             Err(None),
             Err(None),
             Err(None),
@@ -2089,39 +2100,233 @@ async fn get_metadata_gives_none_for_a_missing_name_whose_marker_does_not_fit_th
     );
 }
 
-#[test]
-async fn the_marker_key_of_a_root_path_has_one_separator() {
-    // The key of a root path is the prefix of the namespace and a `/` after it, so a marker
-    // key that always puts a separator of its own before the marker would have `//` in it.
-    // MinIO rejects such a key with `XMinioInvalidObjectName`, and no rule of `BlobNameError`
-    // reads the marker key, so nothing else would catch it. `get_metadata` is the one method
-    // that reads the marker of a root path: `exists` gives `Directory` for such a path and
-    // sends no request, and `create_dir` leaves no directory at the root.
-    let prefix = namespace_prefix();
-    let (storage, requests) = scripted_storage("", |_, _| Answer::new(404, ""));
+/// The value that one operation at a root path gives when it gives no error.
+#[derive(Debug, PartialEq)]
+enum RootValue {
+    /// The bytes of a read, or nothing.
+    Bytes(Option<Vec<u8>>),
+    /// Tells if a read of a stream or of metadata found something.
+    Found(bool),
+    /// A write, a delete, `create_dir`, a copy or a move ended with no error.
+    Done,
+    /// Tells if `delete_dir` deleted a directory.
+    Deleted(bool),
+    /// The answer of `exists`.
+    Exists(ExistsResult),
+    /// The answer of `put_raw_if_absent`.
+    Put(PutIfAbsent),
+}
 
-    let root = storage
-        .get_metadata("test", "get-metadata", namespace(), Path::new(""))
-        .await
-        .map(|metadata| metadata.is_some())
-        .map_err(name_error);
+/// The answer of one operation at a root path, and the number of requests that it sent. An
+/// answer is the value, or the `BlobNameError` of the error.
+type RootAnswer = (
+    &'static str,
+    Result<RootValue, Option<BlobNameError>>,
+    usize,
+);
 
-    assert_eq!(
-        (
-            root,
-            sent(&requests)
-                .iter()
-                .map(|request| request.uri.clone())
-                .collect::<Vec<_>>()
-        ),
-        (
-            Ok(false),
-            vec![
-                format!("http://s3.test/custom-data/{prefix}/"),
-                format!("http://s3.test/custom-data/{prefix}/__dir_marker"),
-            ]
+/// Runs the call, and gives its answer and the number of requests that it sent. `value` makes
+/// the value of the answer from the result of the call.
+async fn root_answer<T>(
+    requests: &SentRequests,
+    operation: &'static str,
+    call: impl Future<Output = anyhow::Result<T>>,
+    value: impl FnOnce(T) -> RootValue,
+) -> RootAnswer {
+    let before = sent(requests).len();
+    let answer = call.await.map(value).map_err(name_error);
+    (operation, answer, sent(requests).len() - before)
+}
+
+/// Gives the answer of each operation that reads, writes or deletes a blob at `root`, and of
+/// `create_dir`, `delete_dir` and `exists` at `root`.
+async fn root_answers(
+    storage: &S3BlobStorage,
+    requests: &SentRequests,
+    root: &'static str,
+) -> Vec<RootAnswer> {
+    let path = Path::new(root);
+    let data = b"payload".to_vec();
+    let stream = (&data)
+        .map_item(|item| item.map_err(widen_infallible))
+        .map_error(widen_infallible)
+        .erased();
+    let label = "test";
+    let done = |()| RootValue::Done;
+    vec![
+        root_answer(
+            requests,
+            "get_raw",
+            storage.get_raw(label, "get-raw", namespace(), path),
+            RootValue::Bytes,
         )
-    );
+        .await,
+        root_answer(
+            requests,
+            "get_stream",
+            storage.get_stream(label, "get-stream", namespace(), path),
+            |stream| RootValue::Found(stream.is_some()),
+        )
+        .await,
+        root_answer(
+            requests,
+            "get_range_stream(0, 0)",
+            storage.get_range_stream(label, "get-range-stream", namespace(), path, 0, 0),
+            |stream| RootValue::Found(stream.is_some()),
+        )
+        .await,
+        root_answer(
+            requests,
+            "get_range_stream(0, 1)",
+            storage.get_range_stream(label, "get-range-stream", namespace(), path, 0, 1),
+            |stream| RootValue::Found(stream.is_some()),
+        )
+        .await,
+        root_answer(
+            requests,
+            "get_raw_slice",
+            storage.get_raw_slice(label, "get-raw-slice", namespace(), path, 0, 0),
+            RootValue::Bytes,
+        )
+        .await,
+        root_answer(
+            requests,
+            "get_metadata",
+            storage.get_metadata(label, "get-metadata", namespace(), path),
+            |metadata| RootValue::Found(metadata.is_some()),
+        )
+        .await,
+        root_answer(
+            requests,
+            "put_raw",
+            storage.put_raw(label, "put-raw", namespace(), path, &data),
+            done,
+        )
+        .await,
+        root_answer(
+            requests,
+            "put_raw_if_absent",
+            storage.put_raw_if_absent(label, "put-raw-if-absent", namespace(), path, &data),
+            RootValue::Put,
+        )
+        .await,
+        root_answer(
+            requests,
+            "put_stream",
+            storage.put_stream(label, "put-stream", namespace(), path, &stream),
+            done,
+        )
+        .await,
+        root_answer(
+            requests,
+            "delete",
+            storage.delete(label, "delete", namespace(), path),
+            done,
+        )
+        .await,
+        root_answer(
+            requests,
+            "delete_many",
+            storage.delete_many(label, "delete-many", namespace(), &[path.to_path_buf()]),
+            done,
+        )
+        .await,
+        root_answer(
+            requests,
+            "create_dir",
+            storage.create_dir(label, "create-dir", namespace(), path),
+            done,
+        )
+        .await,
+        root_answer(
+            requests,
+            "delete_dir",
+            storage.delete_dir(label, "delete-dir", namespace(), path),
+            RootValue::Deleted,
+        )
+        .await,
+        root_answer(
+            requests,
+            "exists",
+            storage.exists(label, "exists", namespace(), path),
+            RootValue::Exists,
+        )
+        .await,
+        root_answer(
+            requests,
+            "copy from the root",
+            storage.copy(label, "copy", namespace(), path, Path::new("blob")),
+            done,
+        )
+        .await,
+        root_answer(
+            requests,
+            "copy to the root",
+            storage.copy(label, "copy", namespace(), Path::new("blob"), path),
+            done,
+        )
+        .await,
+        root_answer(
+            requests,
+            "move from the root",
+            storage.r#move(label, "move", namespace(), path, Path::new("blob")),
+            done,
+        )
+        .await,
+        root_answer(
+            requests,
+            "move to the root",
+            storage.r#move(label, "move", namespace(), Path::new("blob"), path),
+            done,
+        )
+        .await,
+    ]
+}
+
+#[test]
+async fn a_root_path_sends_no_request() {
+    // A root path is a directory, so the trait documents each answer at it without a look at
+    // the bucket. The script answers each request with an object, so an operation that sends a
+    // request at a root path finds something there and gives another answer.
+    let (storage, requests) = scripted_storage("", |_, _| Answer {
+        last_modified: Some("Wed, 21 Oct 2015 07:28:00 GMT"),
+        ..Answer::new(200, "x")
+    });
+    let roots = ["", ".", "./", "././"];
+
+    let answers = futures::stream::iter(roots)
+        .then(|root| root_answers(&storage, &requests, root))
+        .collect::<Vec<_>>()
+        .await;
+
+    let no_name = || {
+        Err(Some(BlobNameError::NoName {
+            path: PathBuf::new(),
+        }))
+    };
+    let expected = roots.map(|_| {
+        vec![
+            ("get_raw", Ok(RootValue::Bytes(None)), 0),
+            ("get_stream", Ok(RootValue::Found(false)), 0),
+            ("get_range_stream(0, 0)", Ok(RootValue::Found(false)), 0),
+            ("get_range_stream(0, 1)", Ok(RootValue::Found(false)), 0),
+            ("get_raw_slice", Ok(RootValue::Bytes(None)), 0),
+            ("get_metadata", Ok(RootValue::Found(false)), 0),
+            ("put_raw", no_name(), 0),
+            ("put_raw_if_absent", no_name(), 0),
+            ("put_stream", no_name(), 0),
+            ("delete", Ok(RootValue::Done), 0),
+            ("delete_many", Ok(RootValue::Done), 0),
+            ("create_dir", Ok(RootValue::Done), 0),
+            ("delete_dir", Ok(RootValue::Deleted(false)), 0),
+            ("exists", Ok(RootValue::Exists(ExistsResult::Directory)), 0),
+            ("copy from the root", no_name(), 0),
+            ("copy to the root", no_name(), 0),
+            ("move from the root", no_name(), 0),
+            ("move to the root", no_name(), 0),
+        ]
+    });
+    assert_eq!(answers, Vec::from(expected));
 }
 
 #[test]
@@ -2281,12 +2486,13 @@ fn one_copy_request(from: &str, to: &str) -> Vec<(String, String, Option<String>
 
 #[test]
 async fn copy_gives_a_missing_error_for_a_source_that_is_not_there_and_sends_one_request() {
-    // The S3 model names one error of `CopyObject`, `ObjectNotInActiveTierError`, so a source
-    // key that is not there comes as the code `NoSuchKey` in the body of the response, which
-    // the SDK keeps in the metadata of a `CopyObjectError::Unhandled`. The backend reads that
-    // code, gives the `BlobMissingError` that the default `copy` gives, and sends the request
-    // one time: a retry cannot make the bucket hold the source key. The storage sends 3
-    // requests for a retriable error, which `copy_retries_a_server_error` holds.
+    // The S3 model names one error of `CopyObject`, `ObjectNotInActiveTierError`, so a source key
+    // that is not there comes as the code `NoSuchKey` in the body of the response, which the SDK
+    // keeps in the metadata of a `CopyObjectError::Unhandled`. The backend reads that code as a
+    // source with no blob, as the default `copy_at` reads a missing blob, so `copy` gives
+    // `BlobMissingError`. The backend sends the request one time: a retry cannot make the bucket
+    // hold the source key. The storage sends 3 requests for a retriable error, which
+    // `copy_retries_a_server_error` holds.
     let (storage, requests) = scripted_storage("", |_, _| Answer::new(404, NO_SUCH_KEY));
 
     let result = storage
@@ -3081,6 +3287,45 @@ async fn an_oplog_payload_goes_to_the_key_of_its_agent_path_segment() {
                 Uuid::nil()
             )]
         )
+    );
+}
+
+#[test]
+fn a_content_range_gives_the_range_and_a_size_that_is_a_number() {
+    let range = |first, last, total| Some(ContentRange { first, last, total });
+    let values = [
+        "bytes 7-10/123",
+        "bytes 0-0/1",
+        "bytes 7-10/*",
+        "bytes 7-10/18446744073709551616",
+        "bytes 10-7/123",
+        "items 7-10/123",
+        "bytes 7-10",
+        "bytes 7/123",
+        "bytes x-10/123",
+        "bytes 7-/123",
+        "bytes */123",
+        "bytes  7-10/123",
+        "",
+    ];
+
+    assert_eq!(
+        values.map(parse_content_range),
+        [
+            range(7, 10, Some(123)),
+            range(0, 0, Some(1)),
+            range(7, 10, None),
+            range(7, 10, None),
+            range(10, 7, Some(123)),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        ]
     );
 }
 

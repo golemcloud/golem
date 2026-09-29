@@ -196,13 +196,14 @@ pub struct DefaultBlobStoreService {
 /// backend gives it. The path rules are in it too, so a `..` name and an absolute name are
 /// permanent like a name that S3 does not accept as an object key.
 ///
-/// [`BlobMissingError`] is not a name error: the storage accepts the name, and holds no blob at
-/// it. The default `copy` of the blob storage gives it for a source path with no blob at it, the
-/// S3 backend gives it for a `CopyObject` whose source key is not there, and the default `move`
-/// is a copy and then a delete, so [`BlobStoreService::copy_object`] and
-/// [`BlobStoreService::move_object`] give [`BlobStoreError::NotFound`] for a source object that
-/// the guest names and that is not there. A retry cannot make the storage hold that object, so
-/// the error is permanent.
+/// [`BlobMissingError`] is not a name error: the storage accepts the name, and holds no blob at it.
+/// `copy` of the blob storage gives it for a source path with no blob at it on the in-memory, the
+/// SQLite and the S3 backends, and on each backend for a copy onto the same path. The filesystem
+/// backend gives the error of the filesystem for a copy to another path. `move` is a copy and then
+/// a delete, so [`BlobStoreService::copy_object`] and [`BlobStoreService::move_object`] give
+/// [`BlobStoreError::NotFound`] for a source object that the guest names and that is not there,
+/// where the storage gives [`BlobMissingError`]. A retry cannot make the storage hold that object,
+/// so the error is permanent.
 fn blob_store_error(err: anyhow::Error) -> BlobStoreError {
     if let Some(range) = err.downcast_ref::<BlobRangeError>() {
         BlobStoreError::InvalidInput(range.to_string())
@@ -544,174 +545,16 @@ mod tests {
     use crate::services::blob_store::{
         BlobStoreError, BlobStoreService, DefaultBlobStoreService, blob_store_error,
     };
-    use async_trait::async_trait;
-    use bytes::Bytes;
-    use futures::stream::BoxStream;
     use golem_common::model::environment::EnvironmentId;
-    use golem_service_base::replayable_stream::ErasedReplayableStream;
     use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
     use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
     use golem_service_base::storage::blob::{
-        BlobMetadata, BlobMissingError, BlobNameError, BlobRangeError, BlobStorage,
-        BlobStorageNamespace, ExistsResult, ListedBlob, PutIfAbsent,
+        BlobMissingError, BlobNameError, BlobRangeError, BlobStorage, BlobStorageNamespace,
     };
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
     use tempfile::TempDir;
     use test_r::test;
-
-    /// A blob storage that gives a `BlobNameError` for each operation.
-    #[derive(Debug)]
-    struct NameErrorBlobStorage;
-
-    impl NameErrorBlobStorage {
-        fn error<T>() -> Result<T, anyhow::Error> {
-            Err(BlobNameError::NulByte.into())
-        }
-    }
-
-    #[async_trait]
-    impl BlobStorage for NameErrorBlobStorage {
-        async fn get_raw(
-            &self,
-            _target_label: &'static str,
-            _op_label: &'static str,
-            _namespace: BlobStorageNamespace,
-            _path: &Path,
-        ) -> Result<Option<Vec<u8>>, anyhow::Error> {
-            Self::error()
-        }
-
-        async fn get_stream(
-            &self,
-            _target_label: &'static str,
-            _op_label: &'static str,
-            _namespace: BlobStorageNamespace,
-            _path: &Path,
-        ) -> Result<Option<BoxStream<'static, Result<Bytes, anyhow::Error>>>, anyhow::Error>
-        {
-            Self::error()
-        }
-
-        async fn get_range_stream(
-            &self,
-            _target_label: &'static str,
-            _op_label: &'static str,
-            _namespace: BlobStorageNamespace,
-            _path: &Path,
-            _offset: u64,
-            _length: u64,
-        ) -> Result<Option<golem_service_base::storage::blob::BlobRangeStream>, anyhow::Error>
-        {
-            Self::error()
-        }
-
-        async fn get_metadata(
-            &self,
-            _target_label: &'static str,
-            _op_label: &'static str,
-            _namespace: BlobStorageNamespace,
-            _path: &Path,
-        ) -> Result<Option<BlobMetadata>, anyhow::Error> {
-            Self::error()
-        }
-
-        async fn put_raw(
-            &self,
-            _target_label: &'static str,
-            _op_label: &'static str,
-            _namespace: BlobStorageNamespace,
-            _path: &Path,
-            _data: &[u8],
-        ) -> Result<(), anyhow::Error> {
-            Self::error()
-        }
-
-        async fn put_raw_if_absent(
-            &self,
-            _target_label: &'static str,
-            _op_label: &'static str,
-            _namespace: BlobStorageNamespace,
-            _path: &Path,
-            _data: &[u8],
-        ) -> Result<PutIfAbsent, anyhow::Error> {
-            Self::error()
-        }
-
-        async fn put_stream(
-            &self,
-            _target_label: &'static str,
-            _op_label: &'static str,
-            _namespace: BlobStorageNamespace,
-            _path: &Path,
-            _stream: &dyn ErasedReplayableStream<
-                Item = Result<Vec<u8>, anyhow::Error>,
-                Error = anyhow::Error,
-            >,
-        ) -> Result<(), anyhow::Error> {
-            Self::error()
-        }
-
-        async fn delete(
-            &self,
-            _target_label: &'static str,
-            _op_label: &'static str,
-            _namespace: BlobStorageNamespace,
-            _path: &Path,
-        ) -> Result<(), anyhow::Error> {
-            Self::error()
-        }
-
-        async fn create_dir(
-            &self,
-            _target_label: &'static str,
-            _op_label: &'static str,
-            _namespace: BlobStorageNamespace,
-            _path: &Path,
-        ) -> Result<(), anyhow::Error> {
-            Self::error()
-        }
-
-        async fn list_dir(
-            &self,
-            _target_label: &'static str,
-            _op_label: &'static str,
-            _namespace: BlobStorageNamespace,
-            _path: &Path,
-        ) -> Result<Vec<PathBuf>, anyhow::Error> {
-            Self::error()
-        }
-
-        async fn list_blobs_below(
-            &self,
-            _target_label: &'static str,
-            _op_label: &'static str,
-            _namespace: BlobStorageNamespace,
-            _path: &Path,
-        ) -> Result<Box<[ListedBlob]>, anyhow::Error> {
-            Self::error()
-        }
-
-        async fn delete_dir(
-            &self,
-            _target_label: &'static str,
-            _op_label: &'static str,
-            _namespace: BlobStorageNamespace,
-            _path: &Path,
-        ) -> Result<bool, anyhow::Error> {
-            Self::error()
-        }
-
-        async fn exists(
-            &self,
-            _target_label: &'static str,
-            _op_label: &'static str,
-            _namespace: BlobStorageNamespace,
-            _path: &Path,
-        ) -> Result<ExistsResult, anyhow::Error> {
-            Self::error()
-        }
-    }
 
     /// `blob_store_error` has one downcast for `BlobNameError`, so each rule of a name is
     /// permanent, and the rules of the path are in it with the rules of the object key of S3.
@@ -794,11 +637,15 @@ mod tests {
         );
     }
 
+    /// The container name has a NUL byte, which breaks a rule of a name
+    /// (`BlobNameError::NulByte`), and each operation puts the container name in the path that
+    /// it gives to the storage. The storage applies the rules of a name to every path before a
+    /// backend gets it, so each operation gets the error of the name.
     #[test]
     async fn every_operation_gives_invalid_input_for_a_name_error() {
-        let blob_store = DefaultBlobStoreService::new(Arc::new(NameErrorBlobStorage));
+        let blob_store = DefaultBlobStoreService::new(Arc::new(InMemoryBlobStorage::new()));
         let environment_id = EnvironmentId::new();
-        let container = || "container".to_string();
+        let container = || "cont\0ainer".to_string();
         let object = || "object".to_string();
 
         let errors: Vec<Result<(), BlobStoreError>> = vec![
@@ -820,7 +667,7 @@ mod tests {
                 .delete_object(environment_id, container(), object())
                 .await,
             blob_store
-                .delete_objects(environment_id, "container", &[object()])
+                .delete_objects(environment_id, &container(), &[object()])
                 .await,
             blob_store
                 .get_container(environment_id, container())
@@ -846,7 +693,7 @@ mod tests {
                 .await
                 .map(drop),
             blob_store
-                .write_data(environment_id, "container", "object", &[1])
+                .write_data(environment_id, &container(), "object", &[1])
                 .await,
         ];
 
@@ -1280,14 +1127,14 @@ mod tests {
     }
 
     /// A guest picks the source container name and the source object name, so the guest writes
-    /// the path of the source. `./missing` and `missing` are two forms of one path, and each
-    /// backend normalizes the path before it reads the storage. The error names the path as the
+    /// the path of the source. `./missing` and `missing` are two forms of one path, and the
+    /// storage normalizes the path before a backend reads it. The error names the path as the
     /// guest wrote it, as a `BlobNameError` does, because the guest reads the message and the
     /// normalized form is of the storage.
     ///
-    /// The copy is onto the same path, which each backend reads before it writes: the in-memory
-    /// backend uses the default `copy` of `BlobStorage` there, and the filesystem backend has
-    /// a `copy` of its own. The S3 backend has one too, which
+    /// The copy is onto the same path, so the storage reads the source and writes nothing. The
+    /// in-memory and the filesystem backends read it with the default `has_blob_at` of
+    /// `BlobStorageBackend`. The S3 backend reads it with one `HeadObject`, which
     /// `copy_names_the_source_path_as_the_guest_wrote_it` in
     /// `golem_service_base::storage::blob::s3::tests` holds.
     async fn test_a_missing_source_names_the_path_that_the_guest_wrote(

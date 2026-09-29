@@ -27,7 +27,6 @@ use crate::storage::indexed::{
 use assert2::check;
 use bytes::Bytes;
 use futures::FutureExt;
-use futures::stream::BoxStream;
 use golem_common::config::RedisConfig;
 use golem_common::model::ShardEpoch;
 use golem_common::model::account::{AccountEmail, AccountId};
@@ -44,17 +43,17 @@ use golem_common::model::{AgentInvocationPayload, RetryConfig};
 use golem_common::redis::RedisPool;
 use golem_common::schema::{BinaryValuePayload, FromSchema, IntoTypedSchemaValue, SchemaValue};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_service_base::replayable_stream::ErasedReplayableStream;
 use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
 use golem_service_base::storage::blob::{
-    BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult, ListedBlob, PutIfAbsent,
+    BlobMetadata, BlobStorageBackend, BlobStorageNamespace, ExistsResult, ListedBlob,
+    NormalizedBlobPath, PutIfAbsent,
 };
 use nonempty_collections::nev;
 use std::collections::{HashSet, VecDeque};
 use std::fmt::{Debug, Formatter};
 use std::future::Future;
 use std::panic::AssertUnwindSafe;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Mutex as StdMutex, RwLock};
 use std::time::{Duration, Instant};
@@ -1056,13 +1055,13 @@ impl ReadCountingBlobStorage {
 }
 
 #[async_trait]
-impl BlobStorage for ReadCountingBlobStorage {
-    async fn get_raw(
+impl BlobStorageBackend for ReadCountingBlobStorage {
+    async fn get_raw_at(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
+        path: &NormalizedBlobPath<'_>,
     ) -> Result<Option<Vec<u8>>, anyhow::Error> {
         self.count_read();
         let pause = self.pause_read.lock().unwrap().take();
@@ -1071,57 +1070,44 @@ impl BlobStorage for ReadCountingBlobStorage {
             let _ = release.await;
         }
         self.inner
-            .get_raw(target_label, op_label, namespace, path)
+            .get_raw_at(target_label, op_label, namespace, path)
             .await
     }
 
-    async fn get_stream(
+    async fn get_range_stream_at(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
-    ) -> Result<Option<BoxStream<'static, Result<Bytes, anyhow::Error>>>, anyhow::Error> {
-        self.count_read();
-        self.inner
-            .get_stream(target_label, op_label, namespace, path)
-            .await
-    }
-
-    async fn get_range_stream(
-        &self,
-        target_label: &'static str,
-        op_label: &'static str,
-        namespace: BlobStorageNamespace,
-        path: &Path,
+        path: &NormalizedBlobPath<'_>,
         offset: u64,
         length: u64,
     ) -> Result<Option<golem_service_base::storage::blob::BlobRangeStream>, anyhow::Error> {
         self.count_read();
         self.inner
-            .get_range_stream(target_label, op_label, namespace, path, offset, length)
+            .get_range_stream_at(target_label, op_label, namespace, path, offset, length)
             .await
     }
 
-    async fn get_metadata(
+    async fn get_metadata_at(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
+        path: &NormalizedBlobPath<'_>,
     ) -> Result<Option<BlobMetadata>, anyhow::Error> {
         self.count_read();
         self.inner
-            .get_metadata(target_label, op_label, namespace, path)
+            .get_metadata_at(target_label, op_label, namespace, path)
             .await
     }
 
-    async fn put_raw(
+    async fn put_raw_at(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
+        path: &NormalizedBlobPath<'_>,
         data: &[u8],
     ) -> Result<(), anyhow::Error> {
         let put = self.puts.fetch_add(1, Ordering::Relaxed) + 1;
@@ -1134,108 +1120,95 @@ impl BlobStorage for ReadCountingBlobStorage {
             return Err(anyhow::anyhow!("injected blob write failure {put}"));
         }
         self.inner
-            .put_raw(target_label, op_label, namespace, path, data)
+            .put_raw_at(target_label, op_label, namespace, path, data)
             .await
     }
 
-    async fn put_raw_if_absent(
+    async fn put_raw_if_absent_at(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
+        path: &NormalizedBlobPath<'_>,
         data: &[u8],
     ) -> Result<PutIfAbsent, anyhow::Error> {
         self.inner
-            .put_raw_if_absent(target_label, op_label, namespace, path, data)
+            .put_raw_if_absent_at(target_label, op_label, namespace, path, data)
             .await
     }
 
-    async fn put_stream(
+    async fn delete_at(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
-        stream: &dyn ErasedReplayableStream<Item = Result<Vec<u8>, anyhow::Error>, Error = anyhow::Error>,
+        path: &NormalizedBlobPath<'_>,
     ) -> Result<(), anyhow::Error> {
         self.inner
-            .put_stream(target_label, op_label, namespace, path, stream)
+            .delete_at(target_label, op_label, namespace, path)
             .await
     }
 
-    async fn delete(
+    async fn create_dir_at(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
+        path: &NormalizedBlobPath<'_>,
     ) -> Result<(), anyhow::Error> {
         self.inner
-            .delete(target_label, op_label, namespace, path)
+            .create_dir_at(target_label, op_label, namespace, path)
             .await
     }
 
-    async fn create_dir(
+    async fn list_dir_at(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
-    ) -> Result<(), anyhow::Error> {
-        self.inner
-            .create_dir(target_label, op_label, namespace, path)
-            .await
-    }
-
-    async fn list_dir(
-        &self,
-        target_label: &'static str,
-        op_label: &'static str,
-        namespace: BlobStorageNamespace,
-        path: &Path,
+        path: &NormalizedBlobPath<'_>,
     ) -> Result<Vec<PathBuf>, anyhow::Error> {
         self.count_read();
         self.inner
-            .list_dir(target_label, op_label, namespace, path)
+            .list_dir_at(target_label, op_label, namespace, path)
             .await
     }
 
-    async fn list_blobs_below(
+    async fn list_blobs_below_at(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
+        path: &NormalizedBlobPath<'_>,
     ) -> Result<Box<[ListedBlob]>, anyhow::Error> {
         self.count_read();
         self.inner
-            .list_blobs_below(target_label, op_label, namespace, path)
+            .list_blobs_below_at(target_label, op_label, namespace, path)
             .await
     }
 
-    async fn delete_dir(
+    async fn delete_dir_at(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
+        path: &NormalizedBlobPath<'_>,
     ) -> Result<bool, anyhow::Error> {
         self.inner
-            .delete_dir(target_label, op_label, namespace, path)
+            .delete_dir_at(target_label, op_label, namespace, path)
             .await
     }
 
-    async fn exists(
+    async fn exists_at(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
+        path: &NormalizedBlobPath<'_>,
     ) -> Result<ExistsResult, anyhow::Error> {
         self.count_read();
         self.inner
-            .exists(target_label, op_label, namespace, path)
+            .exists_at(target_label, op_label, namespace, path)
             .await
     }
 }
