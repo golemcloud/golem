@@ -28,6 +28,7 @@ pub mod entity_invocation;
 pub mod entity_slot;
 pub(crate) mod filesystem_snapshots;
 pub mod instance;
+mod interrupt;
 pub mod invocation;
 mod invocation_loop;
 mod lifecycle;
@@ -102,6 +103,7 @@ use crate::services::{
     HasWorkerService, UsesAllDeps,
 };
 use crate::worker::instance::{OwnerExecution, OwnerRuntimeResources};
+use crate::worker::interrupt::Interrupts;
 use crate::worker::invocation_loop::{
     ConcurrentAgentPermitState, InvocationLoop, UnloadCleanupFailure, run_invocation_loop_task,
 };
@@ -684,9 +686,7 @@ pub struct ResolvedWorkerData<Ctx: WorkerCtx> {
     linear_memory_grant: StdMutex<Option<Arc<StdMutex<MemoryGrant>>>>,
     /// Lifecycle request shared across resident worker generations. A terminal request is retained
     /// until the worker stops so permit reacquisition cannot lose it between `RunningWorker`s.
-    interrupt_signal: Arc<async_lock::Mutex<WorkerInterruptState>>,
-    /// Notified after an interrupt request is queued.
-    interrupt_queued: Arc<tokio::sync::Notify>,
+    interrupts: Arc<Interrupts>,
     oom_retry_config: RetryConfig,
     snapshot_policy: SnapshotPolicy,
 
@@ -1544,7 +1544,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ))
             .await;
         } else if interrupt.is_some() {
-            let pending = self.interrupt_signal.lock().await.claim_pending_terminal();
+            let pending = self.interrupts.claim_pending_terminal().await;
             if let Some(pending) = pending {
                 let status = self.get_attached_last_known_status().await;
                 if matches!(
@@ -2441,8 +2441,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             filesystem_snapshot_slot: StdMutex::default(),
             startup_attempt: StartupAttemptTracker::default(),
             linear_memory_grant: StdMutex::new(None),
-            interrupt_signal: Arc::new(async_lock::Mutex::new(WorkerInterruptState::default())),
-            interrupt_queued: Arc::new(tokio::sync::Notify::new()),
+            interrupts: Arc::default(),
             execution_status,
             initial_worker_metadata,
             resource_entry,
@@ -3899,16 +3898,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             if !allow_deleting && lifecycle.ensure_not_deleting().is_err() {
                 return false;
             }
-            if let Some(mut state) = self.interrupt_signal.try_lock() {
-                let queued = state.queue(PendingWorkerInterrupt {
-                    kind: interrupt_kind,
-                    reacquire_permits,
-                    unload_request: UnloadRequest::ordinary(unload_reason),
-                });
-                drop(state);
-                if queued {
-                    self.interrupt_queued.notify_waiters();
-                }
+            if let Some(queued) = self.interrupts.try_queue(PendingWorkerInterrupt {
+                kind: interrupt_kind,
+                reacquire_permits,
+                unload_request: UnloadRequest::ordinary(unload_reason),
+            }) {
                 return queued;
             }
             drop(lifecycle);
@@ -5187,7 +5181,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             !queue.is_empty()
         };
         let has_resume_replay = running.resume_replay_pending.load(Ordering::Acquire);
-        let has_interrupt = running.interrupt_signal.lock().await.has_interrupt();
+        let has_interrupt = running.interrupts.has_interrupt().await;
         let has_filesystem_effects = self.has_active_filesystem_effects(running);
         let has_concurrent_agent_permit =
             running.concurrent_agent_permit_held.load(Ordering::Acquire);
@@ -5332,28 +5326,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     /// Whether a terminal interrupt request waits for this worker.
-    async fn terminal_interrupt_pending(&self) -> bool {
-        matches!(
-            &*self.interrupt_signal.lock().await,
-            WorkerInterruptState::Pending(interrupt) if interrupt.is_terminal()
-        )
+    pub(crate) fn terminal_interrupt_pending(&self) -> bool {
+        self.interrupts.terminal_pending()
     }
 
-    /// Completes when a terminal interrupt request waits for this worker. It does not take the
-    /// request.
-    async fn terminal_interrupt_queued(self: Arc<Self>) {
-        let rounds = futures::stream::unfold(self, |worker| async move {
-            let queued = Arc::clone(&worker.interrupt_queued);
-            let notified = queued.notified();
-            let mut notified = std::pin::pin!(notified);
-            notified.as_mut().enable();
-            if worker.terminal_interrupt_pending().await {
-                return None;
-            }
-            notified.await;
-            Some(((), worker))
-        });
-        futures::StreamExt::for_each(rounds, |()| std::future::ready(())).await;
+    /// A receiver of whether a terminal interrupt request waits for this worker.
+    pub(crate) fn terminal_interrupt(&self) -> tokio::sync::watch::Receiver<bool> {
+        self.interrupts.terminal()
     }
 
     /// Confirms the filesystem snapshot of the last automatic snapshot record before a start, when
@@ -5387,7 +5366,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         };
         let scope = crate::filesystem_snapshot::SnapshotScope::agent(&self.owned_agent_id);
         let started = std::time::Instant::now();
-        let interrupted = Arc::clone(self).terminal_interrupt_queued();
+        let interrupted = interrupt::terminal_queued(self.terminal_interrupt());
         let mut interrupted = std::pin::pin!(interrupted);
         let upload = snapshots
             .upload_of(&scope, &name)
@@ -5410,7 +5389,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             == Some(agent_filesystem_snapshots::JobDecision::Confirmed(
                 agent_filesystem_snapshots::ConfirmOutcome::Superseded,
             ))
-            || self.terminal_interrupt_pending().await
+            || self.terminal_interrupt_pending()
         {
             return;
         }
@@ -5436,7 +5415,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         if !matches!(
             &*instance_guard,
             WorkerInstance::WaitingForPermit(waiting) if waiting.start_attempt == start_attempt
-        ) || self.terminal_interrupt_pending().await
+        ) || self.terminal_interrupt_pending()
             || self.last_known_status_detached.load(Ordering::Acquire)
             || self.owner_retirement_requested.is_cancelled()
             || self
@@ -5539,7 +5518,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     !queue.is_empty()
                 };
                 let has_resume_replay = running.resume_replay_pending.load(Ordering::Acquire);
-                let has_interrupt = running.interrupt_signal.lock().await.has_interrupt();
+                let has_interrupt = running.interrupts.has_interrupt().await;
                 let has_filesystem_effects = self.has_active_filesystem_effects(running);
                 let has_concurrent_agent_permit =
                     running.concurrent_agent_permit_held.load(Ordering::Acquire);
@@ -5611,7 +5590,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     !queue.is_empty()
                 };
                 let has_resume_replay = running.resume_replay_pending.load(Ordering::Acquire);
-                let has_interrupt = running.interrupt_signal.lock().await.has_interrupt();
+                let has_interrupt = running.interrupts.has_interrupt().await;
                 let has_filesystem_effects = self.has_active_filesystem_effects(running);
                 let has_concurrent_agent_permit =
                     running.concurrent_agent_permit_held.load(Ordering::Acquire);
@@ -10354,10 +10333,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             WorkerInstance::WaitingForPermit(waiting_worker)
                 if waiting_worker.start_attempt == start_attempt =>
             {
-                this.interrupt_signal
-                    .lock()
-                    .await
-                    .reset_terminal_for_new_generation();
+                this.interrupts.reset_terminal_for_new_generation().await;
                 let running = RunningWorker::new(
                     this.owned_agent_id.clone(),
                     this.queue.clone(),
@@ -10853,6 +10829,11 @@ impl WorkerInterruptState {
         !matches!(self, Self::Idle)
     }
 
+    /// Whether a terminal request waits and nobody has taken it.
+    fn terminal_pending(&self) -> bool {
+        matches!(self, Self::Pending(interrupt) if interrupt.is_terminal())
+    }
+
     fn queue(&mut self, mut interrupt: PendingWorkerInterrupt) -> bool {
         match self {
             Self::TerminalClaimed if interrupt.is_terminal() => {
@@ -10913,7 +10894,7 @@ struct RunningWorker {
     filesystem_activity: Arc<StdMutex<Option<ResidentFilesystemActivity>>>,
     unload_request: Arc<StdMutex<Option<UnloadRequest>>>,
     idle_since_millis: Arc<AtomicU64>,
-    interrupt_signal: Arc<async_lock::Mutex<WorkerInterruptState>>,
+    interrupts: Arc<Interrupts>,
     /// `ResumeReplay` is signalled directly through the command channel rather
     /// than the internal queue, so eviction must treat it as pending work.
     resume_replay_pending: Arc<AtomicBool>,
@@ -11057,8 +11038,8 @@ impl RunningWorker {
         let unload_request_clone = Arc::clone(&unload_request);
         let idle_since_millis = Arc::new(AtomicU64::new(0));
         let idle_since_millis_clone = Arc::clone(&idle_since_millis);
-        let interrupt_signal = parent.interrupt_signal.clone();
-        let interrupt_signal_clone = interrupt_signal.clone();
+        let interrupts = Arc::clone(&parent.interrupts);
+        let interrupts_clone = Arc::clone(&interrupts);
         let resume_replay_pending = Arc::new(AtomicBool::new(false));
         let resume_replay_pending_clone = resume_replay_pending.clone();
         let memory_grant = Arc::new(StdMutex::new(memory_grant));
@@ -11075,7 +11056,7 @@ impl RunningWorker {
                 owned_agent_id_clone,
                 parent,
                 waiting_for_command_clone,
-                interrupt_signal_clone,
+                interrupts_clone,
                 oom_retry_count,
                 concurrent_agent_permit,
                 concurrent_agent_permit_held_clone,
@@ -11128,7 +11109,7 @@ impl RunningWorker {
             filesystem_activity,
             unload_request,
             idle_since_millis,
-            interrupt_signal,
+            interrupts,
             resume_replay_pending,
             start_attempt,
         })
@@ -11813,10 +11794,10 @@ impl RunningWorker {
             store.data_mut().end_call_snapshotting_function();
         }
         if let Some((active_agent, generation)) = entity_generation {
-            let interrupt_state = parent.interrupt_signal.lock().await;
-            if !interrupt_state.has_interrupt() {
-                active_agent.reopen_entity_admission_if_generation(generation);
-            }
+            parent
+                .interrupts
+                .when_idle(|| active_agent.reopen_entity_admission_if_generation(generation))
+                .await;
         }
         let prepare_result =
             Ctx::prepare_instance(&parent.owned_agent_id.agent_id, &instance, &mut store).await;
@@ -11880,7 +11861,7 @@ impl RunningWorker {
         owned_agent_id: OwnedAgentId,
         parent: Arc<Worker<Ctx>>, // parent must not be dropped until the invocation_loop is running
         waiting_for_command: Arc<AtomicBool>,
-        interrupt_signal: Arc<async_lock::Mutex<WorkerInterruptState>>,
+        interrupts: Arc<Interrupts>,
         oom_retry_count: u32,
         concurrent_agent_permit: crate::services::active_agents::ConcurrentAgentPermit,
         concurrent_agent_permit_held: Arc<AtomicBool>,
@@ -11897,7 +11878,7 @@ impl RunningWorker {
             owned_agent_id,
             parent,
             waiting_for_command,
-            interrupt_signal,
+            interrupts,
             oom_retry_count,
             permit_state: ConcurrentAgentPermitState::new(
                 Some(concurrent_agent_permit.track_held(Arc::clone(&concurrent_agent_permit_held))),

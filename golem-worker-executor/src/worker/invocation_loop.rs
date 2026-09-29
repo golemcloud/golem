@@ -36,6 +36,7 @@ use crate::worker::filesystem_snapshots::{
     CaptureFinding, ConfirmedFilesystemSnapshot, PeriodicRecord, WorkerConfirmer,
     plan_periodic_record,
 };
+use crate::worker::interrupt::{Interrupts, terminal_queued};
 use crate::worker::invocation::{
     InvocationMode, InvokeResult, invocation_uses_streams, invoke_observed_and_traced,
     lower_invocation, materialize_streaming_result,
@@ -45,7 +46,7 @@ use crate::worker::{
     CreateWorkerInstanceError, FinalWorkerState, PendingLiveInvocationDisposition,
     PendingWorkerInterrupt, QueuedWorkerInvocation, RetryDecision, RunningAgent,
     RunningAgentRuntime, RunningWorker, UnloadReason, UnloadRequest, Worker, WorkerCommand,
-    WorkerInterruptState, WorkerRunningAgent, WorkerTrace,
+    WorkerRunningAgent, WorkerTrace,
 };
 use crate::workerctx::{PublicWorkerIo, UpdateManagement, WorkerCtx};
 use async_lock::Mutex;
@@ -114,7 +115,7 @@ pub struct InvocationLoop<Ctx: WorkerCtx> {
     pub owned_agent_id: OwnedAgentId,
     pub parent: Arc<Worker<Ctx>>, // parent must not be dropped until the invocation_loop is running
     pub waiting_for_command: Arc<AtomicBool>,
-    pub interrupt_signal: Arc<Mutex<WorkerInterruptState>>,
+    pub interrupts: Arc<Interrupts>,
     pub oom_retry_count: u32,
     /// Concurrent-agent permit owned by this invocation loop task. Released
     /// (set to `None`) when the agent goes idle, re-acquired when it wakes up.
@@ -226,7 +227,7 @@ fn coalesce_filesystem_limit_update(
 
 impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
     async fn pending_interrupt(&self) -> Option<PendingWorkerInterrupt> {
-        take_pending_interrupt(&self.interrupt_signal).await
+        self.interrupts.take().await
     }
 
     /// Runs the invocation loop of a running worker, responsible for processing incoming
@@ -370,7 +371,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 } => (*agent, window, recovery_decision),
                 CreateInstanceResult::Interrupted(kind) => {
                     self.release_concurrent_agent_permit();
-                    let pending_interrupt = take_pending_interrupt(&self.interrupt_signal).await;
+                    let pending_interrupt = self.interrupts.take().await;
                     let kind = pending_interrupt
                         .map(|interrupt| interrupt.kind)
                         .unwrap_or(kind);
@@ -514,7 +515,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                         owned_agent_id: self.owned_agent_id.clone(),
                         parent: self.parent.clone(),
                         waiting_for_command: self.waiting_for_command.clone(),
-                        interrupt_signal: self.interrupt_signal.clone(),
+                        interrupts: Arc::clone(&self.interrupts),
                         instance: &agent.runtime.instance,
                         store: &agent.runtime.store,
                         filesystem: &agent.filesystem,
@@ -970,10 +971,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
     }
 
     async fn release_terminal_interrupt(&self) {
-        self.interrupt_signal
-            .lock()
-            .await
-            .reset_terminal_for_new_generation();
+        self.interrupts.reset_terminal_for_new_generation().await;
     }
 
     fn release_concurrent_agent_permit(&mut self) {
@@ -1552,7 +1550,7 @@ struct InnerInvocationLoop<'a, Ctx: WorkerCtx> {
     owned_agent_id: OwnedAgentId,
     parent: Arc<Worker<Ctx>>, // parent must not be dropped until the invocation_loop is running
     waiting_for_command: Arc<AtomicBool>,
-    interrupt_signal: Arc<Mutex<WorkerInterruptState>>,
+    interrupts: Arc<Interrupts>,
     instance: &'a Instance,
     store: &'a Mutex<Store<Ctx>>,
     filesystem: &'a ResidentFilesystem,
@@ -1711,9 +1709,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
             let outcome = match cmd {
                 WorkerCommand::WorkAvailable | WorkerCommand::InternalStatusChanged => {
                     loop {
-                        if let Some(interrupt) =
-                            take_pending_interrupt(&self.interrupt_signal).await
-                        {
+                        if let Some(interrupt) = self.interrupts.take().await {
                             if interrupt.is_terminal() {
                                 final_interrupt = Some(interrupt.kind);
                             }
@@ -1799,9 +1795,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
     }
 
     async fn internal_status_change_requires_permit(&self) -> bool {
-        if !self.active.read().await.is_empty()
-            || self.interrupt_signal.lock().await.has_interrupt()
-        {
+        if !self.active.read().await.is_empty() || self.interrupts.has_interrupt().await {
             return true;
         }
 
@@ -2473,12 +2467,6 @@ fn mark_idle(idle_since_millis: &AtomicU64) {
     });
 }
 
-async fn take_pending_interrupt(
-    signal: &Mutex<WorkerInterruptState>,
-) -> Option<PendingWorkerInterrupt> {
-    signal.lock().await.take()
-}
-
 fn resident_work_disposition(reason: UnloadReason) -> PendingLiveInvocationDisposition {
     if reason == UnloadReason::Suspend {
         PendingLiveInvocationDisposition::Preserve
@@ -2656,9 +2644,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 result: invocation_result,
                 consumed_fuel,
             }) => {
-                let mut interrupt_state = self.parent.interrupt_signal.lock().await;
-                if let Some(interrupt) = interrupt_state.claim_pending_terminal() {
-                    drop(interrupt_state);
+                if let Some(interrupt) = self.parent.interrupts.claim_pending_terminal().await {
                     self.agent_invocation_failed(
                         &display_name,
                         &invocation_idempotency_key,
@@ -2669,7 +2655,6 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     )
                     .await
                 } else {
-                    drop(interrupt_state);
                     self.agent_invocation_finished(
                         display_name,
                         &invocation_idempotency_key,
@@ -2682,11 +2667,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             }
             result @ Ok(InvokeResult::Interrupted { interrupt_kind, .. }) => {
                 if !matches!(interrupt_kind, InterruptKind::Restart | InterruptKind::Jump) {
-                    self.parent
-                        .interrupt_signal
-                        .lock()
-                        .await
-                        .claim_pending_terminal();
+                    self.parent.interrupts.claim_pending_terminal().await;
                 }
                 self.agent_invocation_failed(&display_name, &invocation_idempotency_key, result)
                     .await
@@ -3049,7 +3030,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             Err(SnapshotSkip::UploadInFlight) => {
                 let waited = tokio::select! {
                     () = snapshots.wait_for_upload_of_scope(&scope) => true,
-                    () = self.parent.clone().terminal_interrupt_queued() => false,
+                    () = terminal_queued(self.parent.terminal_interrupt()) => false,
                 };
                 if !waited {
                     if self.parent.retired_for_lost_shard() {
@@ -3372,11 +3353,11 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 // interrupted save writes no record: a snapshot that its publish still leaves
                 // has no record, and nothing selects it.
                 match admission
-                    .upload_now(capture, self.parent.clone().terminal_interrupt_queued())
+                    .upload_now(capture, terminal_queued(self.parent.terminal_interrupt()))
                     .await
                 {
                     Ok(retention) => Ok(Some((name, retention))),
-                    Err(_) if self.parent.terminal_interrupt_pending().await => {
+                    Err(_) if self.parent.terminal_interrupt_pending() => {
                         Err(UpdateUploadError::Interrupted)
                     }
                     Err(error) => Err(UpdateUploadError::Failed(format!(
