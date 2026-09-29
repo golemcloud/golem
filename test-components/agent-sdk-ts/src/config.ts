@@ -5,6 +5,7 @@ import {
   s,
   awaitPromise,
   createPromise,
+  Uuid,
 } from '@golemcloud/golem-ts-sdk';
 import type { PromiseId } from 'golem:api/host@1.5.0';
 
@@ -131,12 +132,31 @@ export const SharedConfigAgentImpl = SharedConfigAgent.implement({
       });
     },
     createReplayGate() {
-      return createPromise();
+      const promiseId = createPromise();
+      return {
+        ...promiseId,
+        agentId: {
+          ...promiseId.agentId,
+          componentId: {
+            ...promiseId.agentId.componentId,
+            uuid: Uuid.from(promiseId.agentId.componentId.uuid),
+          },
+        },
+      };
     },
     async revealSecretThenAwaitReplayGate({ promiseId }) {
       const config = this.config;
       const secret = config.secret.get();
-      await awaitPromise(promiseId as unknown as PromiseId);
+      await awaitPromise({
+        ...promiseId,
+        agentId: {
+          ...promiseId.agentId,
+          componentId: {
+            ...promiseId.agentId.componentId,
+            uuid: promiseId.agentId.componentId.uuid,
+          },
+        },
+      } as PromiseId);
       return secret;
     },
   },
