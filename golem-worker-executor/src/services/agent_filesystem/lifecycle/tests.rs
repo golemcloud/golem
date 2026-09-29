@@ -4961,6 +4961,23 @@ async fn unmanaged_reconstruction_materializes_initial_files_with_declared_permi
         path_permissions(&generation_handle, std::path::Path::new("read-write")).unwrap(),
         AgentFilePermissions::ReadWrite
     );
+    assert!(
+        is_immutable_initial_file(
+            &generation_handle,
+            std::path::Path::new("replacement-read-only")
+        )
+        .unwrap()
+    );
+    assert!(
+        !is_immutable_initial_file(&generation_handle, std::path::Path::new("read-write")).unwrap()
+    );
+    assert!(
+        is_immutable_initial_file(
+            &generation_handle,
+            std::path::Path::new("entity-provisioned")
+        )
+        .unwrap()
+    );
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();

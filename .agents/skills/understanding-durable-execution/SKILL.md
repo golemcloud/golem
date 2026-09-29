@@ -759,6 +759,16 @@ that the restored component, retained manual snapshot payload, replay metadata a
 are available. This is input preflight, not speculative replay; a later replay failure does not
 undo the committed `Revert`.
 
+Filesystem metadata has one deliberately deterministic exception to ordinary durable host-call
+recording. P2/P3 `stat` and `stat-at` on the exact path of a **read-only** component or pinned
+entity-activation initial file still execute the sandbox stat, but clear access and modification
+timestamps and return without an oplog `Start`/`End`. Type, size, and link count therefore come from
+the reconstructed filesystem, while the only volatile fields are removed. Mutable paths, aliases,
+and failed local stats retain the ordinary `ReadLocal` durable path. The host-call observation counter is
+still incremented on the fast path. The predicate lives in
+`services/agent_filesystem/lifecycle/mod.rs::is_immutable_initial_file`; the P2/P3 adapters live in
+`wasi_filesystem/{p2/types.rs,p3/mod.rs}`.
+
 ## Concurrency and guest completion delivery
 
 p3 `Accessor` host calls run concurrently inside one `Store`; p2 `&mut self` calls are serialized

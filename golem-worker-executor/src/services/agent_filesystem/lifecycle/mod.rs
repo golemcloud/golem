@@ -759,6 +759,31 @@ pub(crate) fn path_permissions<Adapter: SandboxFilesystemAdapter>(
         .unwrap_or(AgentFilePermissions::ReadWrite))
 }
 
+/// Returns whether an exact generation-relative path is a read-only component initial file.
+///
+/// Component and entity-activation declarations are both pinned inputs that are reapplied during
+/// Store reconstruction. Host adapters use this predicate when deciding whether volatile file
+/// timestamps can be removed and the remaining metadata derived without an oplog entry.
+pub(crate) fn is_immutable_initial_file<Adapter: SandboxFilesystemAdapter>(
+    generation_handle: &FilesystemGenerationHandle<Adapter>,
+    path: &std::path::Path,
+) -> Result<bool, AccessError> {
+    let generation = admit(generation_handle)?;
+    let component_file_is_immutable = generation
+        .initial_files
+        .lock()
+        .unwrap()
+        .get(path)
+        .is_some_and(|file| file.permissions == AgentFilePermissions::ReadOnly);
+    Ok(component_file_is_immutable
+        || generation
+            .entity_provisioned_files
+            .lock()
+            .unwrap()
+            .get(path)
+            .is_some_and(|file| file.permissions == AgentFilePermissions::ReadOnly))
+}
+
 /// Adds activation-provisioned files to an active owner filesystem.
 ///
 /// Entity Stores call this inside their owner invocation scope before guest execution. Identical
