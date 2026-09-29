@@ -491,11 +491,9 @@ impl S3BlobStorage {
     }
 
     /// Gives the key of the object that records the directory at `key`, or a
-    /// [`BlobNameError`]. `key` comes from `key_of`.
-    ///
-    /// The key of a root path ends with `/`, so this function uses a separator before
-    /// [`DIR_MARKER`] only when `key` does not end with one. A key with two separators in a
-    /// row is a key that MinIO rejects.
+    /// [`BlobNameError`]. `key` comes from `key_of`, of a path that is not at the root of its
+    /// namespace, so `key` does not end with `/` and the marker key has one separator before
+    /// [`DIR_MARKER`]. A key with two separators in a row is a key that MinIO rejects.
     ///
     /// The object has the name [`DIR_MARKER`] in the directory, so its key is longer than
     /// `key`. S3 measures the key of the object, so it is that key which has to fit
@@ -511,8 +509,13 @@ impl S3BlobStorage {
     /// (`exists`, `get_metadata`), and only the caller that writes the marker gives the error
     /// to the guest (`create_dir`).
     fn dir_marker_key_of(key: &str) -> Result<String, BlobNameError> {
-        let separator = if key.ends_with('/') { "" } else { "/" };
-        Self::checked_length(format!("{key}{separator}{DIR_MARKER}"))
+        Self::checked_length(format!("{key}/{DIR_MARKER}"))
+    }
+
+    /// Tells if the object key is the key of the marker object that `create_dir` writes for a
+    /// directory (`dir_marker_key_of`).
+    fn is_dir_marker(key: &Path) -> bool {
+        key.file_name().and_then(|name| name.to_str()) == Some(DIR_MARKER)
     }
 
     /// Applies the rules of [`BlobNameError`] to an object key. Gives the key when it
@@ -1718,7 +1721,7 @@ impl BlobStorageBackend for S3BlobStorage {
             .iter()
             .flat_map(|obj| obj.key.as_ref().map(|k| Path::new(k).to_path_buf()))
             .filter_map(|path| {
-                let is_dir_marker = path.file_name().and_then(|s| s.to_str()) == Some(DIR_MARKER);
+                let is_dir_marker = Self::is_dir_marker(&path);
                 let is_nested = path.parent() != Some(Path::new(&key));
                 if is_nested {
                     if is_dir_marker {
@@ -1758,10 +1761,7 @@ impl BlobStorageBackend for S3BlobStorage {
             .filter_map(|object| object.key().map(|key| (key, object.size())))
             // S3 has no directories, so it records one as an object: a key that ends with `/`,
             // which other S3 tools write, or the marker that `create_dir` writes.
-            .filter(|(key, _)| {
-                !key.ends_with('/')
-                    && Path::new(key).file_name().and_then(|name| name.to_str()) != Some(DIR_MARKER)
-            })
+            .filter(|(key, _)| !key.ends_with('/') && !Self::is_dir_marker(Path::new(key)))
             .map(|(key, size)| {
                 let size = size.ok_or_else(|| anyhow!("S3 gave no size for the key {key}"))?;
                 Ok::<_, Error>(ListedBlob {

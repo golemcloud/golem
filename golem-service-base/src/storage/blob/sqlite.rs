@@ -441,23 +441,22 @@ impl BlobStorageBackend for SqliteBlobStorage {
     ) -> Result<Box<[ListedBlob]>, Error> {
         let directory = path.text()?;
 
-        // Text comparisons use the BINARY collation, so the match is case-sensitive. A parent
-        // below `directory` is at least `directory/` and less than `directory0`, because `0` is
-        // the character after `/`. The OR keeps SQLite from a search on `parent`, so it searches
-        // the primary key for `namespace` and then reads the rows of that namespace.
+        // The OR keeps SQLite from a search on `parent`, so it searches the primary key for
+        // `namespace` and then reads the rows of that namespace.
         let query = if directory.is_empty() {
             sqlx::query_as::<_, (String, String, i64)>(
                 "SELECT parent, name, size FROM blob_storage WHERE namespace = ? AND is_directory = FALSE;",
             )
             .bind(Self::namespace(namespace))
         } else {
+            let (descendants_start, descendants_end) = descendant_bounds(&directory);
             sqlx::query_as::<_, (String, String, i64)>(
                 "SELECT parent, name, size FROM blob_storage WHERE namespace = ? AND is_directory = FALSE AND (parent = ? OR (parent >= ? AND parent < ?));",
             )
             .bind(Self::namespace(namespace))
-            .bind(directory.clone())
-            .bind(format!("{directory}/"))
-            .bind(format!("{directory}0"))
+            .bind(directory)
+            .bind(descendants_start)
+            .bind(descendants_end)
         };
 
         self.pool
@@ -486,19 +485,11 @@ impl BlobStorageBackend for SqliteBlobStorage {
 
         // A directory that only holds blobs has no row of its own, because put_raw writes no
         // row for the parent. One statement removes the row of the directory and every row
-        // below it, so the number of removed rows tells whether the directory existed.
-        let dir_path = if parent.is_empty() {
-            name.clone()
-        } else {
-            format!("{parent}/{name}")
-        };
-        // Text comparisons use the BINARY collation, so the match is case-sensitive, unlike LIKE,
-        // which ignores ASCII case. A parent below `dir_path` is at least `dir_path/` and less
-        // than `dir_path0`, because `0` is the character after `/`. The OR keeps SQLite from a
-        // search on `parent`, so it searches the primary key for `namespace` and then reads the
-        // rows of that namespace.
-        let descendants_start = format!("{dir_path}/");
-        let descendants_end = format!("{dir_path}0");
+        // below it, so the number of removed rows tells whether the directory existed. The OR
+        // keeps SQLite from a search on `parent`, so it searches the primary key for `namespace`
+        // and then reads the rows of that namespace.
+        let dir_path = path.text()?;
+        let (descendants_start, descendants_end) = descendant_bounds(&dir_path);
 
         let query = sqlx::query(
             r#"DELETE FROM blob_storage WHERE namespace = ? AND
@@ -537,13 +528,8 @@ impl BlobStorageBackend for SqliteBlobStorage {
         // row for the parent. The second condition is the key range that delete_dir removes,
         // so the same rows that make a directory deletable make it exist. One statement gives
         // both answers.
-        let dir_path = if parent.is_empty() {
-            name.clone()
-        } else {
-            format!("{parent}/{name}")
-        };
-        let descendants_start = format!("{dir_path}/");
-        let descendants_end = format!("{dir_path}0");
+        let dir_path = path.text()?;
+        let (descendants_start, descendants_end) = descendant_bounds(&dir_path);
 
         let query = sqlx::query_as(
             r#"SELECT
@@ -577,6 +563,16 @@ impl BlobStorageBackend for SqliteBlobStorage {
             Ok(ExistsResult::DoesNotExist)
         }
     }
+}
+
+/// Gives the bounds of the `parent` of each row below the directory `dir`, at any depth. The
+/// first bound is in the range and the second is not.
+///
+/// Text comparisons use the BINARY collation, so the match is case-sensitive, unlike LIKE, which
+/// ignores ASCII case. A parent below `dir` is at least `dir/` and less than `dir0`, because `0`
+/// is the character after `/`.
+fn descendant_bounds(dir: &str) -> (String, String) {
+    (format!("{dir}/"), format!("{dir}0"))
 }
 
 #[derive(sqlx::FromRow)]
