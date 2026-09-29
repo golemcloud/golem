@@ -330,8 +330,8 @@ mod sealed {
 ///
 /// Each backend gets [`BlobStorage`] from this trait, and that implementation applies the rules
 /// of a path before a method of this trait runs. It makes the one form of each path
-/// (`normalized_blob_path`), so a path that breaks a rule of [`BlobNameError`] gets that error
-/// and no method of this trait gets the path. It gives the answer of [`BlobStorage`] at a root
+/// (`normalized_blob_path`), so a path that breaks a rule that `normalized_blob_path` applies
+/// gets that error and no method of this trait gets the path. It gives the answer of [`BlobStorage`] at a root
 /// path, so only `list_dir_at` and `list_blobs_below_at` get a root path. It gives the
 /// [`BlobRangeError`] of a `start` after `end`, and the [`BlobMissingError`] of `copy` and
 /// `move`. It reads every path of `delete_many` before `delete_many_at` runs.
@@ -526,10 +526,8 @@ pub trait BlobStorageBackend: Debug + Send + Sync {
         path: &NormalizedBlobPath<'_>,
     ) -> Result<ExistsResult, Error>;
 
-    /// Tells if the path has a blob. A directory at the path is not a blob.
-    ///
-    /// A copy or a move onto the same path reads this, and it needs the answer for the blob
-    /// alone. The default reads `exists_at`.
+    /// Tells if the path has a blob. A directory at the path is not a blob. The default reads
+    /// `exists_at`.
     async fn has_blob_at(
         &self,
         target_label: &'static str,
@@ -547,8 +545,10 @@ pub trait BlobStorageBackend: Debug + Send + Sync {
     /// `from`. The two paths are not the same path.
     ///
     /// Gives true when the copy wrote the blob, and false when `from` has no blob. False writes
-    /// nothing to `to`. The default reads the blob with `get_raw_at` and writes it with
-    /// `put_raw_at`.
+    /// nothing to `to`. A backend can give an error of its own for a `from` with no blob in
+    /// place of false, and then [`BlobStorage`] gives that error in place of
+    /// [`BlobMissingError`]. The default reads the blob with `get_raw_at`, gives false when it
+    /// finds none, and writes it with `put_raw_at`.
     async fn copy_at(
         &self,
         target_label: &'static str,
@@ -1244,11 +1244,14 @@ pub struct BlobRangeError {
 /// The name is good: the rules of [`BlobNameError`] accept it, and the backend can use it. The
 /// storage holds no blob at it.
 ///
-/// `copy` of [`BlobStorage`] gives this error when the storage holds no blob at its source path.
-/// The default `copy_at` of [`BlobStorageBackend`] reads the blob at that path. The S3 backend
-/// has a `copy_at` of its own, which sends one `CopyObject` request and reads the code
-/// `NoSuchKey` of the source key. `move` is a copy and then a delete of the source, so it gives
-/// the error too, and it deletes nothing. A guest picks the source container name and the source
+/// `copy` of [`BlobStorage`] gives this error when the storage holds no blob at its source path
+/// and the backend tells it so. A copy onto the same path gives it on each backend. For a copy
+/// to another path, the in-memory and the SQLite backends use the default `copy_at` of
+/// [`BlobStorageBackend`], which reads the blob at the source path, and the S3 backend has a
+/// `copy_at` of its own, which sends one `CopyObject` request and reads the code `NoSuchKey` of
+/// the source key. The filesystem backend has a `copy_at` of its own too, which gives the error
+/// of the filesystem for a source with no blob, and not this error. `move` is a copy and then a
+/// delete of the source, so it gives the error of the copy too, and it deletes nothing. A guest picks the source container name and the source
 /// object name of `copy_object` and of `move_object`, so the path is of the guest. The storage
 /// names the path as the guest wrote it, and not in the normalized form that the storage uses.
 /// Each [`BlobNameError`] does the same, because the guest reads the message, except

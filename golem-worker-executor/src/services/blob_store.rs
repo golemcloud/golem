@@ -197,10 +197,12 @@ pub struct DefaultBlobStoreService {
 /// permanent like a name that S3 does not accept as an object key.
 ///
 /// [`BlobMissingError`] is not a name error: the storage accepts the name, and holds no blob at
-/// it. `copy` of the blob storage gives it for a source path with no blob at it, and `move` is a
+/// it. `copy` of the blob storage gives it for a source path with no blob at it on the in-memory,
+/// the SQLite and the S3 backends, and on each backend for a copy onto the same path. The
+/// filesystem backend gives the error of the filesystem for a copy to another path. `move` is a
 /// copy and then a delete, so [`BlobStoreService::copy_object`] and
 /// [`BlobStoreService::move_object`] give [`BlobStoreError::NotFound`] for a source object that
-/// the guest names and that is not there. A retry cannot make the storage hold that object, so
+/// the guest names and that is not there, where the storage gives [`BlobMissingError`]. A retry cannot make the storage hold that object, so
 /// the error is permanent.
 fn blob_store_error(err: anyhow::Error) -> BlobStoreError {
     if let Some(range) = err.downcast_ref::<BlobRangeError>() {
