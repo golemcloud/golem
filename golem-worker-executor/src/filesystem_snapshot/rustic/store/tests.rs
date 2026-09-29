@@ -1832,6 +1832,133 @@ async fn a_save_and_a_prune_take_their_times_from_the_injected_clock() {
     );
 }
 
+/// Gives a store over the storage with the policy, whose clock is an hour ahead of the clock of the
+/// host, the clock, and the first millisecond of that hour on the clock of the host.
+fn store_an_hour_ahead(
+    storage: Arc<dyn BlobStorage>,
+    policy: StorePolicy,
+) -> (Arc<RusticSnapshotStore>, Arc<TestClock>, u64) {
+    let clock = Arc::new(TestClock::default());
+    clock.set_ahead(Duration::from_secs(3600));
+    let ahead = golem_common::model::Timestamp::now_utc().to_millis() + 3_600_000;
+    let store = Arc::new(RusticSnapshotStore::with_policy(
+        storage,
+        key(),
+        policy,
+        clock.clone(),
+    ));
+    (store, clock, ahead)
+}
+
+#[test]
+#[timeout("60s")]
+async fn the_refresh_markers_of_a_prune_take_their_times_from_the_injected_clock() {
+    // A short grace period makes the claim get new markers while the gate holds the prune at its
+    // listing of the packs.
+    let storage = holding_the_prune();
+    let (store, _clock, ahead) = store_an_hour_ahead(
+        storage.clone(),
+        policy(LONG_DEADLINE, ALWAYS, Duration::from_millis(400)),
+    );
+    let scope = new_scope();
+    save_each(&store, &scope, &["p-1", "p-2"]).await;
+    let pruning = tokio::spawn({
+        let (store, scope) = (store.clone(), scope.clone());
+        async move { store.delete(&scope, &name("p-1")).await }
+    });
+    let refreshed =
+        eventually(|| written_times(&storage.calls(), "refresh_claim").len() >= 2).await;
+    storage.open_gate();
+    let pruned = tokio::time::timeout(LIMIT, pruning).await;
+    let refreshes = written_times(&storage.calls(), "refresh_claim");
+
+    assert!(matches!(pruned, Ok(Ok(Ok(())))), "{pruned:?}");
+    assert_eq!(
+        (refreshed, refreshes.iter().all(|time| *time >= ahead)),
+        (true, true),
+        "{refreshes:?}"
+    );
+}
+
+#[test]
+#[timeout("60s")]
+async fn the_second_ledger_read_of_a_delete_compares_with_the_injected_clock() {
+    // The gate holds the claim write while the test adds a ledger entry 130 s ahead of the clock of
+    // the host. That is beyond the margin of 120 s of the clock of the host, and within the margin
+    // of the clock of the store, which is 20 s ahead. So only the clock of the store makes the
+    // second read of the ledger see a new ledger, and then the delete does not prune.
+    let storage = ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |op_label, _| {
+        if op_label == "write_claim" {
+            Script::WaitForGate
+        } else {
+            Script::Pass
+        }
+    });
+    let clock = Arc::new(TestClock::default());
+    let store = Arc::new(RusticSnapshotStore::with_policy(
+        storage.clone(),
+        key(),
+        policy(LONG_DEADLINE, ALWAYS, Duration::ZERO),
+        clock.clone(),
+    ));
+    let scope = new_scope();
+    save_each(&store, &scope, &["p-1", "p-2"]).await;
+    clock.advance(Duration::from_secs(20));
+    let deleting = tokio::spawn({
+        let (store, scope) = (store.clone(), scope.clone());
+        async move { store.delete(&scope, &name("p-1")).await }
+    });
+    let claiming = eventually(|| {
+        storage
+            .calls()
+            .iter()
+            .any(|(op_label, _)| *op_label == "write_claim")
+    })
+    .await;
+    let ahead = golem_common::model::Timestamp::now_utc().to_millis() + 130_000;
+    put_ledger_entry(&storage, &scope, &format!("{ahead}-0-ahead")).await;
+    storage.open_gate();
+    let deleted = tokio::time::timeout(LIMIT, deleting).await;
+
+    assert!(matches!(deleted, Ok(Ok(Ok(())))), "{deleted:?}");
+    assert_eq!((claiming, prunes(&storage.calls())), (true, 0));
+}
+
+#[test]
+#[timeout("60s")]
+async fn the_final_marker_of_a_dropped_delete_takes_its_time_from_the_injected_clock() {
+    // The gate holds the first call of the prune, and the test drops the delete there, so the
+    // claim guard writes the final marker in its own task.
+    let storage = holding_the_prune();
+    let (store, _clock, ahead) = store_an_hour_ahead(
+        storage.clone(),
+        policy(LONG_DEADLINE, ALWAYS, Duration::from_secs(3600)),
+    );
+    let scope = new_scope();
+    save_each(&store, &scope, &["p-1", "p-2"]).await;
+    let deleting = tokio::spawn({
+        let (store, scope) = (store.clone(), scope.clone());
+        async move { store.delete(&scope, &name("p-1")).await }
+    });
+    let started = eventually(|| prunes(&storage.calls()) == 1).await;
+    deleting.abort();
+    let _ = deleting.await;
+    let ended = eventually(|| store.work_in_flight() == 0).await;
+    storage.open_gate();
+    let finals = written_times(&storage.calls(), "final_marker");
+
+    assert_eq!(
+        (
+            started,
+            ended,
+            finals.len(),
+            finals.iter().all(|time| *time >= ahead)
+        ),
+        (true, true, 1, true),
+        "{finals:?}"
+    );
+}
+
 #[test]
 #[timeout("60s")]
 async fn a_ledger_write_after_the_lease_ran_out_is_not_sent_and_the_claim_stays() {
