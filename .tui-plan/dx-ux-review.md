@@ -32,9 +32,13 @@ a separate explicit decision and never creates a user-selectable theme.
 - Options: only fixes within the accepted slice are in scope. Remote writes,
   Activity/Live, real Metrics providers, and companion tooling remain behind
   their planning gates.
-- Scratch observations: verify reviewed command forms and PTY focus/scrollback,
-  right/bottom subviews and four-direction resize, context switching, Jobs,
-  current read-only Ops documents, and truthful Metrics unavailability.
+- Scratch observations: the first terminal pass found that the rebuilt header,
+  Dev pane chrome, dividers, and lifecycle colors had drifted from the accepted
+  shared foundation. The correction restores the context-only header and shared
+  production primitives; terminal review must recheck both workspaces plus the
+  reviewed command forms, PTY focus/scrollback, right/bottom subviews,
+  four-direction resize, context switching, Jobs, read-only Ops documents, and
+  truthful Metrics unavailability.
 - Queued next: after acceptance, plan the unresolved target-descriptor and
   cross-Server context-switch follow-ups, then choose the next product gate.
 - Exit: terminal review is accepted, required fixes are implemented, and the
@@ -633,6 +637,10 @@ explicit review.
   resizing, scrollback, context identity, state continuity, errors, compact
   behavior, and the read-only resource content. The matching dev-release
   playground smoke test is green.
-- Outcome: pending user review. Selected-target consolidation and cross-Server
-  context-switch enforcement remain named implementation follow-ups rather
-  than hidden acceptance assumptions.
+- Outcome: initial terminal review rejected the visual drift. The corrective
+  batch keeps the rebuilt behavior but restores `ContextHeader`, `PaneHeader`,
+  neutral pane boundaries, shared scrollbars, footer shortcut rows, and
+  semantic status markers across Dev and Ops. Acceptance remains pending a new
+  terminal review. Selected-target consolidation and cross-Server context-switch
+  enforcement remain named implementation follow-ups rather than hidden
+  acceptance assumptions.

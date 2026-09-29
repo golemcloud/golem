@@ -1113,6 +1113,136 @@ pub(super) struct PaneHeader<'a> {
     pub ending: PaneEnding,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct PaneChrome {
+    pub area: Rect,
+}
+
+impl PaneChrome {
+    pub fn body_area(self, pane: Rect) -> Rect {
+        Rect {
+            y: pane.y.saturating_add(1),
+            height: pane.height.saturating_sub(1),
+            ..pane
+        }
+    }
+
+    pub fn content_area(self, body: Rect) -> Rect {
+        let left_inset = u16::from(body.x == self.area.x && body.width > 0);
+        Rect {
+            x: body.x.saturating_add(left_inset),
+            width: body.width.saturating_sub(left_inset),
+            ..body
+        }
+    }
+
+    pub fn region(self, body: Rect, content_height: usize) -> PaneRegion {
+        PaneRegion::new(
+            0,
+            if body.x == self.area.x {
+                PaneRole::Single
+            } else {
+                PaneRole::Right
+            },
+            body,
+            content_height,
+            PaneResizeDividers::default(),
+        )
+    }
+
+    pub fn render_header(
+        self,
+        frame: &mut Frame<'_>,
+        pane: Rect,
+        title: &str,
+        focus: PaneFocus,
+        visual: &TuiVisualStyle,
+    ) {
+        let ending = if pane.right() < self.area.right() {
+            PaneEnding::Continue
+        } else if pane.y > self.area.y {
+            PaneEnding::Stacked
+        } else {
+            PaneEnding::Top
+        };
+        PaneHeader {
+            title,
+            focus,
+            left_connector: (pane.x == self.area.x).then_some("├"),
+            ending,
+        }
+        .render(
+            frame,
+            Rect {
+                height: pane.height.min(1),
+                ..pane
+            },
+            visual,
+        );
+    }
+
+    pub fn render_body_boundary(self, frame: &mut Frame<'_>, body: Rect, visual: &TuiVisualStyle) {
+        if body.x != self.area.x || body.width == 0 {
+            return;
+        }
+        let style = Style::default().fg(visual.border_subtle).bg(visual.surface);
+        for y in body.y..body.bottom() {
+            frame.buffer_mut()[(body.x, y)]
+                .set_symbol("│")
+                .set_style(style);
+        }
+    }
+
+    pub fn render_dividers(
+        self,
+        frame: &mut Frame<'_>,
+        dividers: &[Rect],
+        visual: &TuiVisualStyle,
+    ) {
+        let style = Style::default().fg(visual.border_subtle).bg(visual.surface);
+        let vertical = dividers
+            .iter()
+            .copied()
+            .filter(|divider| divider.width == 1 && divider.height > 0)
+            .collect::<Vec<_>>();
+        let horizontal = dividers
+            .iter()
+            .copied()
+            .filter(|divider| divider.height == 1 && divider.width > 1)
+            .collect::<Vec<_>>();
+
+        for divider in &vertical {
+            for y in divider.y..divider.bottom() {
+                frame.buffer_mut()[(divider.x, y)]
+                    .set_symbol(if y == divider.y { "┬" } else { "│" })
+                    .set_style(style);
+            }
+        }
+
+        for vertical in vertical {
+            for horizontal in &horizontal {
+                if horizontal.y < vertical.y || horizontal.y >= vertical.bottom() {
+                    continue;
+                }
+                let symbol = if horizontal.y == vertical.y {
+                    "┬"
+                } else if horizontal.x == vertical.right() {
+                    "├"
+                } else if horizontal.right() == vertical.x {
+                    "┤"
+                } else if horizontal.x <= vertical.x && vertical.x < horizontal.right() {
+                    "┼"
+                } else {
+                    continue;
+                };
+                frame.buffer_mut()[(vertical.x, horizontal.y)]
+                    .set_symbol(symbol)
+                    .set_style(style);
+            }
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 pub(super) struct PaneSpec<'a> {
     pub title: &'a str,
@@ -1884,7 +2014,7 @@ impl PaneHeaderStatus<'_> {
         }
         let (opening, closing, color) = match self.tone {
             PaneStatusTone::Active => ("[", "]", visual.success),
-            PaneStatusTone::Loading => ("[", "]", visual.accent),
+            PaneStatusTone::Loading => ("[", "]", visual.info),
             PaneStatusTone::Idle => ("(", ")", visual.text_muted),
         };
         let text = format!("{opening}{}{closing}", self.label);
@@ -2326,6 +2456,50 @@ mod tests {
         }
         assert_eq!(buffer[(79, 0)].symbol(), "┐");
         assert!((1..5).all(|y| buffer[(79, y)].symbol() == " "));
+    }
+
+    #[test]
+    fn pane_chrome_owns_recursive_headers_spines_and_dividers() {
+        let visual = TuiVisualStyle::for_variant(crate::tui::visual::TuiVisualVariant::FrameBase);
+        let chrome = PaneChrome {
+            area: Rect::new(0, 0, 40, 8),
+        };
+        let primary = Rect::new(0, 0, 23, 8);
+        let divider = Rect::new(23, 0, 1, 8);
+        let secondary = Rect::new(24, 0, 16, 8);
+        let primary_body = chrome.body_area(primary);
+        let secondary_body = chrome.body_area(secondary);
+
+        assert_eq!(chrome.content_area(primary_body).x, 1);
+        assert_eq!(chrome.content_area(secondary_body).x, secondary.x);
+        assert_eq!(
+            chrome.region(primary_body, 99).scrollbar.unwrap().area.x,
+            22
+        );
+        assert_eq!(
+            chrome.region(secondary_body, 99).scrollbar.unwrap().area.x,
+            39
+        );
+
+        let buffer = render(40, 8, |frame| {
+            frame.render_widget(
+                Paragraph::new("").style(Style::default().bg(visual.surface)),
+                frame.area(),
+            );
+            chrome.render_header(frame, primary, "Primary", PaneFocus::Active, &visual);
+            chrome.render_header(frame, secondary, "Secondary", PaneFocus::Idle, &visual);
+            chrome.render_body_boundary(frame, primary_body, &visual);
+            chrome.render_body_boundary(frame, secondary_body, &visual);
+            chrome.render_dividers(frame, &[divider], &visual);
+        });
+
+        assert_eq!(buffer[(0, 0)].symbol(), "├");
+        assert_eq!(buffer[(23, 0)].symbol(), "┬");
+        assert!((1..8).all(|y| buffer[(0, y)].symbol() == "│"));
+        assert!((1..8).all(|y| buffer[(23, y)].symbol() == "│"));
+        assert!((1..8).all(|y| buffer[(23, y)].bg == visual.surface));
+        assert!((1..8).all(|y| buffer[(23, y)].fg == visual.border_subtle));
+        assert!((1..8).all(|y| buffer[(24, y)].symbol() != "│"));
     }
 
     #[test]
@@ -3083,6 +3257,9 @@ mod tests {
         assert!(rendered.contains("[auto 5s]"), "{rendered}");
         assert!(rendered.contains("(auto off)"), "{rendered}");
         assert!(rendered.contains("[- refreshing]"), "{rendered}");
+        assert!((0..48).any(|x| buffer[(x, 0)].fg == visual.success));
+        assert!((0..48).any(|x| buffer[(x, 2)].fg == visual.info));
+        assert!((0..48).all(|x| buffer[(x, 2)].fg != visual.accent));
     }
 
     #[test]

@@ -1,5 +1,32 @@
 # Progress
 
+## 2026-09-29: Restored The Shared Production Visual Foundation
+
+- Replaced the rebuilt shell's hand-written Dev/Ops header with the accepted
+  shared context-only header and its full/compact context grammar.
+- Kept the new recursive layouts and workflow behavior while moving Dev pane
+  titles, body spines, split junctions, transient leader hints, lifecycle
+  summaries, and terminal scrollbars back onto shared foundation primitives.
+- Made stacked pane titles own the horizontal resize row, removing adjacent
+  double rules without changing stored ratios or resize hit targets.
+- Standardized operational state: active/running/success is green, failure is
+  red, idle is gray, loading is informational, and orange remains the pane-focus
+  accent. Command, Server, and REPL metadata now use compact neutral summary
+  rows on the normal pane surface.
+- Added buffer-level regressions for identical Dev/Ops headers, compact context,
+  pane delimiters, neutral divider cells and junctions, lifecycle colors,
+  trailing scrollbars, and wide/short/narrow/extreme recursive layouts.
+
+Validation:
+
+- `cargo fmt --package golem-cli -- --check`
+- `cargo test -p golem-cli --lib --features tui-preview tui:: -- --report-time`
+  (230 passed)
+- `cargo check -p golem-cli --features tui-preview`
+- `git diff --check`
+- `cargo make install-golem-dev-release`
+- `/home/noise64/.cargo/bin/golem tui --help`
+
 ## 2026-09-29: Rebuilt Dev Shell And Read-Only Ops Slice
 
 - Replaced the previous product topology with Dev and Ops workspaces, recursive

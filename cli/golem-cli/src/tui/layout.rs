@@ -332,16 +332,16 @@ fn add_ops_regions(area: Rect, input: &LayoutInput, regions: &mut Vec<Region>) {
         kind: RegionKind::OpsList,
         area: list,
     });
-    if let Some(divider) = divider {
-        regions.push(Region {
-            kind: RegionKind::OpsDetailsSplit,
-            area: divider,
-        });
-    }
     if let Some(details) = details {
         regions.push(Region {
             kind: RegionKind::OpsDetails,
             area: details,
+        });
+    }
+    if let Some(divider) = divider {
+        regions.push(Region {
+            kind: RegionKind::OpsDetailsSplit,
+            area: divider,
         });
     }
 }
@@ -480,9 +480,9 @@ fn split_area(area: Rect, placement: PanePlacement, ratio_value: u16) -> (Rect, 
             );
             let second = Rect::new(
                 area.x,
-                divider.bottom(),
+                divider.y,
                 area.width,
-                area.bottom().saturating_sub(divider.bottom()),
+                area.bottom().saturating_sub(divider.y),
             );
             (first, divider, second)
         }
@@ -718,6 +718,17 @@ mod tests {
     }
 
     #[test]
+    fn bottom_split_reuses_the_divider_as_the_trailing_pane_title_row() {
+        let area = Rect::new(3, 4, 80, 20);
+        let (first, divider, second) = split_area(area, PanePlacement::Bottom, 60);
+
+        assert_eq!(first.bottom(), divider.y);
+        assert_eq!(second.y, divider.y);
+        assert_eq!(second.height, area.bottom() - divider.y);
+        assert_eq!(second.y + 1, divider.bottom());
+    }
+
+    #[test]
     fn three_views_expose_both_dividers() {
         let mut input = input();
         input.layout.set_dev_visible(DevView::Server, true);
@@ -738,7 +749,15 @@ mod tests {
             let details = snapshot.region(RegionKind::OpsDetails).unwrap();
             match placement {
                 PanePlacement::Right => assert!(list.x < details.x),
-                PanePlacement::Bottom => assert!(list.y < details.y),
+                PanePlacement::Bottom => {
+                    assert!(list.y < details.y);
+                    let divider = snapshot.region(RegionKind::OpsDetailsSplit).unwrap();
+                    assert_eq!(details.y, divider.y);
+                    assert_eq!(
+                        snapshot.hit_test(divider.x, divider.y),
+                        Some(RegionKind::OpsDetailsSplit)
+                    );
+                }
             }
         }
     }

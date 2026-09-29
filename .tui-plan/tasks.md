@@ -134,10 +134,11 @@ Planning prerequisite for full acceptance: shell priority gate. The accepted
 slice implements normal/compact geometry and a safe, explicitly provisional
 extreme fallback.
 
-- [~] Render Dev/Ops selectors, current view or subject, app/env/server, Jobs,
-  Live, and remote-lock status through one responsive header model. The
-  accepted slice renders every state it owns; Live and the remote lock remain
-  deferred with their owning features.
+- [x] Use one responsive context-only header in Dev and Ops: full
+  `app value · env value · server value`, compact `app/environment/server`, and
+  no workspace, view, Job, Server-session, or REPL-session badges. Workspace
+  selection stays in the footer; view and activity state stay in their owning
+  pane or overlay.
 - [x] Keep one compact footer; transient leader/Layout hints replace rather than
   append duplicate rows.
 - [x] Implement ctrl+x w/v/l/a/j/e groups with visible nested hints, workspace
@@ -145,6 +146,10 @@ extreme fallback.
 - [x] Replace named Dev presets with recursive primary/subview layout state and
   right/bottom placement.
 - [x] Reuse the recursive split model for Ops collection/details layouts.
+- [x] Render Dev and Ops through the accepted shared pane titles, neutral
+  spines/dividers, semantic status markers, and trailing-right scrollbars;
+  stacked title rows also own their resize boundary instead of adding a second
+  horizontal rule.
 - [x] Implement temporary Layout mode, mouse dragging, one-cell and five-cell
   keyboard movement, placement flip, focus-only, show/hide, clamping, and
   compact retention.
@@ -167,8 +172,9 @@ conservative quit blocking only.
 - [~] Model structured result/output, cancellation, terminal states, duration,
   immutable target, and masked inputs. The Dev command terminal/lifecycle is
   complete; typed Ops results and generalized masked inputs remain later work.
-- [x] Add the Jobs overlay, header status, global/context palette entries, and
-  Build & Deploy filtered projection.
+- [x] Add the Jobs overlay, owning-pane status, global/context palette entries,
+  and Build & Deploy filtered projection; global activity does not leak into
+  the context-only header.
 - [~] Enforce one active mutating Job per environment by disabling later
   mutations with the active Job named. The single active Dev command is
   enforced; the generalized per-environment guard awaits Ops mutations.

@@ -41,21 +41,22 @@ or tested layout invariant according to the kind of decision. Preview stories
 provide content and application state, but must not recreate accepted glyphs,
 spacing, alignment, colors, selection treatment, or boundary behavior locally.
 
-The preview component system owns context headers, pane boundaries, workspace
+The shared component system owns context headers, pane boundaries, workspace
 selectors, shortcut rows, scrollbars, popup frames and titles, search inputs,
 selectable rows, decision-table rows, section headings, label/value fields,
 status markers, notices, content tables, and output rows. `TuiVisualStyle` owns
 their semantic colors. Explicit pane and footer geometry owns junction
-placement. These components remain preview-only until Frame Base is deliberately
-promoted into Production.
+placement. The accepted foundation is promoted into Production; production
+screens and preview stories must compose the same components rather than
+recreate them locally.
 
-`PaneLayout` is the executable source for one-or-more-pane horizontal geometry.
-The same pane weights determine header widths, body divider columns, and footer
-junctions. It alone renders shared vertical dividers and top junctions; pane
-content must not add a rail beside an internal divider. The terminal-facing
-right edge remains title-only `┐` plus the workspace-row `┘`, with no body rail.
-Body boundaries render after pane content so content cannot punch blank cells
-through the outer left spine or shared dividers.
+`PaneLayout` is the executable source for weighted horizontal content geometry;
+`PaneChrome` applies the same accepted header, body-spine, divider, junction,
+content-inset, and scrollbar ownership rules to recursive right/bottom layouts.
+Pane content must not add a rail beside an internal divider. The
+terminal-facing right edge remains title-only `┐` plus the workspace-row `┘`,
+with no body rail. Body boundaries render after pane content so content cannot
+punch blank cells through the outer left spine or shared dividers.
 
 When a decision is revisited, change its existing representation and focused
 tests. Temporary alternatives may exist only for the active comparison and are
@@ -142,6 +143,11 @@ switch actions appear only when another pane is reachable.
 
 The header must show the selected context clearly. Context includes enough
 target information for the user to understand where future actions will run.
+The header is context-only: it uses the full `app value · env value · server
+value` grammar or the compact `app/environment/server` path. Workspace identity
+belongs in the footer selector, view identity belongs in pane titles, and Job or
+persistent-session activity belongs in its owning pane or overlay. The header
+must not add Dev/Ops, view, Job, Server-session, or REPL-session badges.
 
 Context switching must be a global picker or modal opened from the header,
 palette, or shortcut. Context switching must not be a top-level workspace.
@@ -720,29 +726,24 @@ They must not grow TUI-specific methods such as `for_tui`.
 
 ## Current Implementation Audit
 
-The production workspace list currently contains only Ops. Agents Overview is
-the live typed-data surface and already exercises the accepted collection,
-details, Dataset/Find, paging, refresh, focus, resize, and compact behavior.
-Metrics is a deterministic fake explorer used for layout review; it must not be
-presented as live context data and will be replaced by truthful provider
-availability during the Metrics checkpoint.
+Production has Dev and Ops workspaces. Dev owns reviewed nested-CLI Plan,
+Build, Deploy, Clean, Server, and REPL sessions. Ops has the accepted Agents
+collection/details surface plus read-only Agent, Deployment, Environment, and
+Server overviews. Recursive right/bottom pane layouts, focus, resize, terminal
+scrollback, context switching, and the bounded finite-Job history are live.
 
-Dormant Dev models and renderers remain in the tree as implementation history.
-They are not the product contract and must be removed as the Build & Deploy,
-Server, and REPL views replace them. The current one-entry workspace constant,
-flat leader/action state, and persistent-session treatment cannot represent the
-target product and are scheduled for replacement rather than compatibility.
+Production composes the accepted `ContextHeader`, `PaneHeader`, status,
+boundary, scrollbar, workspace-selector, shortcut-row, notice, table, and
+overlay primitives. Dev and Ops share one context-only header, title grammar,
+neutral structural chrome, and semantic status colors. Deterministic fake OTLP
+data remains preview/test-only; production Metrics truthfully reports that no
+provider is configured.
 
-Useful foundations already exist: scoped logging, the context executor, typed
-Agents refresh, generation checks, reusable shell/pane/table/overlay blocks,
-recursive pane geometry, and deterministic previews. Agent oplog and stream
-still use nested CLI execution; Activity replaces both with direct typed or
-streaming providers.
-
-The visual foundation and current Agents interaction baseline are accepted.
-The Dev workspace, expanded Ops subject tree, global Jobs model, persistent
-session lifecycles, Activity, and provider-independent Metrics UI remain to be
-built.
+Activity/Live, real Metrics providers, remote unlock, generalized Ops
+mutations, selected-target consolidation, and cross-Server context-switch
+enforcement remain gated follow-up work. Agent oplog and stream acquisition
+must follow the direct typed or streaming provider rules when Activity is
+implemented.
 
 ## Review Status
 

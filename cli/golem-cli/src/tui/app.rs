@@ -52,8 +52,8 @@ use crate::tui::visual::{TuiVisualStyle, with_style};
 use crate::tui::widgets::{
     CellPolicy, CellTone, CollectionQueryBar, ColumnChooserState, CommandRow, ContentTableRow,
     ContextHeader, ContextPair, CursorCollectionState, DecisionTableRow, FieldRow, HelpRow,
-    JsonDocument, KeyHint, Notice, NoticeKind, OutputLine, OverlayFrame, PaneEnding, PaneFocus,
-    PaneHeader, PaneHeaderStatus, PaneLayout, PaneRegion, PaneResizeDividers, PaneRole,
+    JsonDocument, KeyHint, Notice, NoticeKind, OutputLine, OverlayFrame, PaneChrome, PaneEnding,
+    PaneFocus, PaneHeader, PaneHeaderStatus, PaneLayout, PaneRegion, PaneResizeDividers, PaneRole,
     PaneScrollbarSlot, PaneSpec, PaneStatusTone, PaneTable, PaneTableCell, PaneTableCellSpan,
     PaneTableColumn, PaneTableState, ScrollableDocument, SearchInput, SectionHeading,
     SelectableRow, ShortcutRow, StatusKind, StatusMarker, TableDecoration, WorkspaceItem,
@@ -75,7 +75,7 @@ use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap};
+use ratatui::widgets::{Clear, Paragraph, ScrollbarState, Wrap};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::cell::{Cell, RefCell};
@@ -4499,14 +4499,6 @@ impl OpsView {
             Self::Metrics => Self::Overview,
         }
     }
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::Overview => "Overview",
-            Self::Activity => "Activity",
-            Self::Metrics => "Metrics",
-        }
-    }
 }
 
 #[cfg(feature = "tui-preview")]
@@ -6719,6 +6711,7 @@ fn render_ops_document(
 }
 
 fn render_ops_agents_overview(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
+    let chrome = PaneChrome { area };
     let snapshot = app.layout_snapshot.borrow();
     let list_pane = snapshot
         .as_ref()
@@ -6735,17 +6728,17 @@ fn render_ops_agents_overview(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(1), Constraint::Min(1)])
         .areas(list_pane);
-    PaneHeader {
-        title: "Agents · Overview",
-        focus: if app.agents.focus == AgentOverviewFocus::List || details_pane.is_none() {
+    chrome.render_header(
+        frame,
+        list_pane,
+        "Agents · Overview",
+        if app.agents.focus == AgentOverviewFocus::List || details_pane.is_none() {
             PaneFocus::Active
         } else {
             PaneFocus::Idle
         },
-        left_connector: Some("├"),
-        ending: PaneEnding::Top,
-    }
-    .render(frame, list_header, &theme());
+        &theme(),
+    );
     let details_parts = details_pane.map(|pane| {
         Layout::default()
             .direction(Direction::Vertical)
@@ -6753,20 +6746,25 @@ fn render_ops_agents_overview(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
             .areas::<2>(pane)
     });
     if let Some([details_header, _]) = details_parts {
-        PaneHeader {
-            title: "Details",
-            focus: if app.agents.focus == AgentOverviewFocus::Details {
+        let details_pane = details_pane.expect("details parts require a details pane");
+        chrome.render_header(
+            frame,
+            details_pane,
+            "Details",
+            if app.agents.focus == AgentOverviewFocus::Details {
                 PaneFocus::Active
             } else {
                 PaneFocus::Idle
             },
-            left_connector: Some("├"),
-            ending: PaneEnding::Top,
-        }
-        .render(frame, details_header, &theme());
-    }
-    if let Some(divider) = divider {
-        render_split_handle(frame, divider);
+            &theme(),
+        );
+        debug_assert_eq!(
+            details_header,
+            Rect {
+                height: details_pane.height.min(1),
+                ..details_pane
+            }
+        );
     }
     let (refresh_label, refresh_tone) = if app.agents.refresh_running {
         (
@@ -6874,9 +6872,8 @@ fn render_ops_agents_overview(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
     let table_height = table_content_height
         .saturating_add(stale_result_notice)
         .saturating_add(query_height);
-    let list_layout = PaneLayout::horizontal(list_body, &[1]);
     let details_body = details_parts.map(|[_, body]| body);
-    let details_width = details_body.map_or(0, |area| area.width);
+    let details_width = details_body.map_or(0, |body| chrome.content_area(body).width);
     let selected_agent = app.agents.selected_agent(&filtered);
     let mut details_lines = build_ops_agent_details_lines(
         selected_agent,
@@ -6885,13 +6882,8 @@ fn render_ops_agents_overview(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
         app.agents.metadata_error.as_deref(),
         details_width,
     );
-    let Some(table_region) = list_layout.regions(&[table_height]).into_iter().next() else {
-        return;
-    };
-    let details_layout = details_body.map(|body| PaneLayout::horizontal(body, &[1]));
-    let mut details_region = details_layout
-        .as_ref()
-        .and_then(|layout| layout.regions(&[details_lines.len()]).into_iter().next());
+    let table_region = chrome.region(list_body, table_height);
+    let mut details_region = details_body.map(|body| chrome.region(body, details_lines.len()));
     if let Some(region) = details_region
         && region.scrollbar.is_some()
     {
@@ -6902,9 +6894,7 @@ fn render_ops_agents_overview(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
             app.agents.metadata_error.as_deref(),
             region.content_area.width,
         );
-        details_region = details_layout
-            .as_ref()
-            .and_then(|layout| layout.regions(&[details_lines.len()]).into_iter().next());
+        details_region = details_body.map(|body| chrome.region(body, details_lines.len()));
     }
 
     let mut table_area = table_region.content_area;
@@ -7011,7 +7001,7 @@ fn render_ops_agents_overview(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
         .render(frame, table_area, &theme());
     }
 
-    list_layout.render_body_boundaries(frame, &[table_region], &theme());
+    chrome.render_body_boundary(frame, list_body, &theme());
     if let Some(slot) = table_region.scrollbar {
         let mut state = ScrollbarState::new(table_height)
             .position(
@@ -7022,7 +7012,7 @@ fn render_ops_agents_overview(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
             .viewport_content_length(table_region.content_area.height as usize);
         render_scrollbar(frame, slot, &mut state, &theme());
     }
-    if let (Some(details_layout), Some(details_region)) = (details_layout, details_region) {
+    if let (Some(details_body), Some(details_region)) = (details_body, details_region) {
         app.agents.details_content_height.set(details_lines.len());
         app.agents
             .details_viewport_height
@@ -7032,7 +7022,10 @@ fn render_ops_agents_overview(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
             offset: app.agents.details_scroll,
         }
         .render(frame, details_region, &theme());
-        details_layout.render_body_boundaries(frame, &[details_region], &theme());
+        chrome.render_body_boundary(frame, details_body, &theme());
+    }
+    if let Some(divider) = divider {
+        chrome.render_dividers(frame, &[divider], &theme());
     }
 }
 
@@ -7378,52 +7371,23 @@ fn fake_otlp_sparkline(samples: &[u64], width: usize) -> String {
 }
 
 fn render_shell_header(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
-    if area.width == 0 || area.height == 0 {
-        return;
+    ContextHeader {
+        pairs: &[
+            ContextPair {
+                label: "app",
+                value: &app.context.application,
+            },
+            ContextPair {
+                label: "env",
+                value: &app.context.environment,
+            },
+            ContextPair {
+                label: "server",
+                value: &app.context.server,
+            },
+        ],
     }
-    let current = match app.active_workspace {
-        TuiWorkspace::Dev => app.dev_focus.title().to_string(),
-        TuiWorkspace::Ops => format!("{} · {}", app.ops_subject.label(), app.ops_view.label()),
-    };
-    let context = format!(
-        "{}/{}/{}",
-        app.context.application, app.context.environment, app.context.server
-    );
-    let jobs = if app.command_is_running() {
-        " · job ●"
-    } else {
-        ""
-    };
-    let server = if app.server.run.is_running() {
-        " · server ●"
-    } else {
-        ""
-    };
-    let repl = if app.repl.is_running() {
-        " · repl ●"
-    } else {
-        ""
-    };
-    let text = format!(
-        "┌ GOLEM  [{}] {}  ·  {}{}{}{}",
-        app.active_workspace.title(),
-        current,
-        context,
-        jobs,
-        server,
-        repl
-    );
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![Span::styled(
-            fit(&text, area.width as usize),
-            Style::default()
-                .fg(theme().text)
-                .bg(theme().surface)
-                .add_modifier(Modifier::BOLD),
-        )]))
-        .style(surface_style()),
-        area,
-    );
+    .render(frame, area, &theme());
 }
 
 fn render_shell_footer(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
@@ -9831,7 +9795,8 @@ fn design_lab_overlay_shortcuts(items: &[(&'static str, &'static str)]) -> Line<
 }
 
 fn render_dev_workspace(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
-    render_surface(frame, area);
+    frame.render_widget(Paragraph::new("").style(surface_style()), area);
+    let chrome = PaneChrome { area };
     let input = LayoutInput {
         area,
         active_workspace: app.active_workspace,
@@ -9849,114 +9814,77 @@ fn render_dev_workspace(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
         if panel_area.width == 0 || panel_area.height == 0 {
             continue;
         }
-        render_panel_title(frame, panel_area, panel, app.dev_focus);
+        let body = chrome.body_area(panel_area);
+        let content = chrome.content_area(body);
         match panel {
-            DevView::Repl => render_repl_view(frame, inset_top(panel_area), app),
-            DevView::BuildDeploy => render_output_view(frame, inset_top(panel_area), app),
-            DevView::Server => render_server_view(frame, inset_top(panel_area), app),
+            DevView::Repl => render_repl_view(frame, content, app),
+            DevView::BuildDeploy => render_output_view(frame, content, app),
+            DevView::Server => render_server_view(frame, content, app),
         }
+        chrome.render_header(
+            frame,
+            panel_area,
+            panel.title(),
+            if panel == app.dev_focus {
+                PaneFocus::Active
+            } else {
+                PaneFocus::Idle
+            },
+            &theme(),
+        );
+        chrome.render_body_boundary(frame, body, &theme());
     }
     if let Some((primary, secondary)) = layout::dev_split_regions(area, &input) {
-        render_split_handle(frame, primary);
+        let mut dividers = vec![primary];
         if let Some(secondary) = secondary {
-            render_split_handle(frame, secondary);
+            dividers.push(secondary);
         }
-    }
-}
-
-fn render_split_handle(frame: &mut Frame<'_>, area: Rect) {
-    frame.render_widget(Paragraph::new("").style(separator_style()), area);
-}
-
-fn render_panel_title(frame: &mut Frame<'_>, area: Rect, panel: DevView, focused: DevView) {
-    let style = if panel == focused {
-        command_status_bg_style()
-    } else {
-        tabs_style()
-    };
-    let title_style = if panel == focused {
-        Style::default()
-            .fg(theme().accent_hover)
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(theme().text_muted)
-    };
-    let line = Line::from(vec![
-        Span::styled(
-            "┃ ",
-            if panel == focused {
-                command_rail_style()
-            } else {
-                tabs_rail_style()
-            },
-        ),
-        Span::styled(panel.title(), title_style),
-        Span::raw("  "),
-        Span::styled("tab focus", Style::default().fg(theme().text_muted)),
-    ]);
-    frame.render_widget(Paragraph::new(line).style(style), title_area(area));
-    render_left_rail(
-        frame,
-        title_area(area),
-        if panel == focused {
-            command_rail_style()
-        } else {
-            tabs_rail_style()
-        },
-    );
-}
-
-fn title_area(area: Rect) -> Rect {
-    Rect {
-        height: area.height.min(1),
-        ..area
-    }
-}
-
-fn inset_top(area: Rect) -> Rect {
-    Rect {
-        y: area.y.saturating_add(1),
-        height: area.height.saturating_sub(1),
-        ..area
+        chrome.render_dividers(frame, &dividers, &theme());
     }
 }
 
 fn render_repl_view(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
-    render_surface(frame, area);
+    frame.render_widget(Paragraph::new("").style(surface_style()), area);
     let [summary_area, terminal_area] = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(1), Constraint::Min(1)])
         .areas(area);
 
     frame.render_widget(
-        Paragraph::new(repl_status_line(&app.repl, app.mode)).style(command_status_bg_style()),
+        Paragraph::new(repl_status_line(&app.repl, app.mode)).style(surface_style()),
         summary_area,
     );
-    render_left_rail(frame, summary_area, command_rail_style());
 
+    let terminal_content = terminal_content_area(terminal_area, &app.repl.run.screen);
     let lines = if app.repl.run.status == ReplStatus::Stopped && app.repl.run.exit_code.is_none() {
-        vec![prefixed_line("Press r or enter to start `golem repl`.")]
+        vec![prefixed_line(
+            "Open Actions with ctrl+x a to start `golem repl`.",
+        )]
     } else {
-        repl_screen_lines(&app.repl.run, terminal_area.height as usize)
+        repl_screen_lines(&app.repl.run, terminal_content.height as usize)
     };
 
-    frame.render_widget(Paragraph::new(lines).style(surface_style()), terminal_area);
-    render_left_rail(frame, terminal_area, surface_rail_style());
+    frame.render_widget(
+        Paragraph::new(lines).style(surface_style()),
+        terminal_content,
+    );
+    render_output_scrollbar(frame, terminal_area, &app.repl.run.screen);
 
     if app.mode == TuiMode::Repl
-        && let Some(cursor) = app.repl.run.screen.cursor_position(Position::new(
-            terminal_area.x.saturating_add(2),
-            terminal_area.y,
-        ))
-        && cursor.x < terminal_area.x.saturating_add(terminal_area.width)
-        && cursor.y < terminal_area.y.saturating_add(terminal_area.height)
+        && let Some(cursor) = app
+            .repl
+            .run
+            .screen
+            .cursor_position(Position::new(terminal_content.x, terminal_content.y))
+        && cursor.x < terminal_content.right()
+        && cursor.y < terminal_content.bottom()
     {
         frame.set_cursor_position(cursor);
     }
 }
 
 fn render_server_view(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
-    render_surface(frame, area);
+    frame.render_widget(Paragraph::new("").style(surface_style()), area);
     let [summary_area, output_area] = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(1), Constraint::Min(1)])
@@ -9964,15 +9892,14 @@ fn render_server_view(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
 
     frame.render_widget(
         Paragraph::new(server_status_line(&app.server, app.server.available))
-            .style(command_status_bg_style()),
+            .style(surface_style()),
         summary_area,
     );
-    render_left_rail(frame, summary_area, command_rail_style());
 
     let output_lines = if app.server.run.terminal.is_empty() {
         if app.server.available {
             vec![prefixed_line(
-                "Server logs will appear here. Press s to start.",
+                "Server logs will appear here. Use ctrl+x a to start.",
             )]
         } else {
             vec![prefixed_line("Local server is unavailable.")]
@@ -9980,27 +9907,14 @@ fn render_server_view(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
     } else {
         render_output_lines(&app.server.run.terminal, output_area.height as usize)
     };
+    let output_content = terminal_content_area(output_area, &app.server.run.terminal);
     frame.render_widget(
         Paragraph::new(output_lines)
             .style(surface_style())
             .wrap(Wrap { trim: false }),
-        output_area,
+        output_content,
     );
-    render_left_rail(frame, output_area, surface_rail_style());
     render_output_scrollbar(frame, output_area, &app.server.run.terminal);
-}
-
-fn render_surface(frame: &mut Frame<'_>, area: Rect) {
-    frame.render_widget(Paragraph::new("").style(surface_style()), area);
-    render_left_rail(frame, area, surface_rail_style());
-}
-
-fn render_left_rail(frame: &mut Frame<'_>, area: Rect, style: Style) {
-    for y in area.y..area.y.saturating_add(area.height) {
-        frame.buffer_mut()[(area.x, y)]
-            .set_symbol("┃")
-            .set_style(style);
-    }
 }
 
 fn header_style() -> Style {
@@ -10075,11 +9989,7 @@ fn footer_rail_style() -> Style {
 }
 
 fn prefixed_line(text: impl Into<String>) -> Line<'static> {
-    Line::from(vec![content_prefix(), Span::raw(text.into())])
-}
-
-fn content_prefix() -> Span<'static> {
-    Span::styled("  ", surface_style())
+    Line::from(text.into())
 }
 
 fn render_help(frame: &mut Frame<'_>, app: &TuiApp) {
@@ -10363,20 +10273,21 @@ fn render_leader_hint(frame: &mut Frame<'_>, app: &TuiApp) {
         }
         Some(LeaderGroup::Views) => &[("o", "Overview"), ("a", "Activity"), ("m", "Metrics")],
     };
-    let mut spans = vec![Span::styled("│ ", command_rail_style())];
-    for (index, (key, label)) in entries.iter().enumerate() {
-        if index > 0 {
-            spans.push(Span::raw("   "));
-        }
-        spans.push(shortcut_span(*key));
-        spans.push(Span::raw(format!(" {label}")));
+    let items = entries
+        .iter()
+        .map(|(key, label)| KeyHint { key, label })
+        .collect::<Vec<_>>();
+    ShortcutRow {
+        items: &items,
+        active: true,
+        left_glyph: "│",
+        fallback: None,
     }
-    let line = Line::from(spans);
-    frame.render_widget(Paragraph::new(line).style(command_status_bg_style()), area);
+    .render(frame, area, &theme());
 }
 
 fn render_output_view(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
-    render_surface(frame, area);
+    frame.render_widget(Paragraph::new("").style(surface_style()), area);
     let has_input = show_command_input(app);
     let [summary_area, output_area, input_area] = Layout::default()
         .direction(Direction::Vertical)
@@ -10390,37 +10301,31 @@ fn render_output_view(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
     let run = app.command_run.as_ref();
     let summary = match run {
         Some(run) => command_status_line(run),
-        None => Line::from(vec![
-            Span::styled("┃ ", command_rail_style()),
-            fixed_span("none", 7, Style::default().fg(theme().text_muted)),
-            Span::raw(" "),
-            fixed_span("idle", 10, Style::default().fg(theme().text_muted)),
-            Span::raw(" | "),
-            flag_span("yes", app.command_options.yes, false),
-            Span::raw(" "),
-            flag_span("reset", app.command_options.reset, true),
-            Span::raw(" | "),
-            fixed_span("b build / d deploy / c clean", 30, Style::default()),
-            Span::raw(" | "),
-            fixed_span("ready", 17, Style::default().fg(theme().text_muted)),
-        ]),
+        None => status_summary_line(
+            StatusKind::Idle,
+            "idle".to_string(),
+            &[
+                ("job", "none".to_string()),
+                ("yes", flag_state(app.command_options.yes).to_string()),
+                ("reset", flag_state(app.command_options.reset).to_string()),
+                ("actions", "ctrl+x a".to_string()),
+            ],
+        ),
     };
-    frame.render_widget(
-        Paragraph::new(summary).style(command_status_bg_style()),
-        summary_area,
-    );
-    render_left_rail(frame, summary_area, command_rail_style());
+    frame.render_widget(Paragraph::new(summary).style(surface_style()), summary_area);
 
     let output_lines = run
         .map(|run| render_output_lines(&run.terminal, output_area.height as usize))
         .unwrap_or_else(|| vec![prefixed_line("Output will appear here.")]);
+    let output_content = run
+        .map(|run| terminal_content_area(output_area, &run.terminal))
+        .unwrap_or(output_area);
     frame.render_widget(
         Paragraph::new(output_lines)
             .style(surface_style())
             .wrap(Wrap { trim: false }),
-        output_area,
+        output_content,
     );
-    render_left_rail(frame, output_area, surface_rail_style());
     if let Some(run) = run {
         render_output_scrollbar(frame, output_area, &run.terminal);
     }
@@ -10428,15 +10333,10 @@ fn render_output_view(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
     if has_input {
         let prompt = "stdin ";
         frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                Span::styled("┃ ", command_rail_style()),
-                Span::raw(prompt),
-            ]))
-            .style(surface_style()),
+            Paragraph::new(Line::from(prompt)).style(surface_style()),
             input_area,
         );
-        render_left_rail(frame, input_area, command_rail_style());
-        frame.set_cursor_position((input_area.x + 2 + prompt.len() as u16, input_area.y));
+        frame.set_cursor_position((input_area.x + prompt.len() as u16, input_area.y));
     }
 }
 
@@ -10453,7 +10353,7 @@ fn show_command_input(app: &TuiApp) -> bool {
 fn render_output_scrollbar(frame: &mut Frame<'_>, area: Rect, output: &TerminalScreen) {
     let visible_height = area.height as usize;
     let total = output.total_lines();
-    if output.max_scrollback() == 0 || visible_height == 0 {
+    if output.max_scrollback() == 0 || area.width == 0 || visible_height == 0 {
         return;
     }
 
@@ -10462,11 +10362,23 @@ fn render_output_scrollbar(frame: &mut Frame<'_>, area: Rect, output: &TerminalS
         .position(position)
         .viewport_content_length(visible_height);
 
-    frame.render_stateful_widget(
-        Scrollbar::new(ScrollbarOrientation::VerticalRight),
-        area,
+    render_scrollbar(
+        frame,
+        PaneScrollbarSlot {
+            area: Rect::new(area.right().saturating_sub(1), area.y, 1, area.height),
+        },
         &mut state,
+        &theme(),
     );
+}
+
+fn terminal_content_area(area: Rect, output: &TerminalScreen) -> Rect {
+    Rect {
+        width: area.width.saturating_sub(u16::from(
+            output.max_scrollback() > 0 && area.width > 0 && area.height > 0,
+        )),
+        ..area
+    }
 }
 
 fn output_scrollbar_position(total: usize, visible_height: usize, scroll_offset: usize) -> usize {
@@ -10483,47 +10395,26 @@ fn output_scrollbar_position(total: usize, visible_height: usize, scroll_offset:
 }
 
 fn command_status_line(run: &CommandRun) -> Line<'static> {
-    Line::from(vec![
-        Span::styled("┃ ", command_rail_style()),
-        fixed_span(
-            run.kind.title(),
-            7,
-            Style::default()
-                .fg(theme().accent)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw(" "),
-        fixed_span(
-            command_status_display(run),
-            10,
-            command_status_style(run.status),
-        ),
-        Span::raw(" | "),
-        flag_span("yes", run.options.yes, false),
-        Span::raw(" "),
-        flag_span("reset", run.options.reset, true),
-        Span::raw(" | "),
-        fixed_span(command_display(&run.args), 30, Style::default()),
-        Span::raw(" | "),
-        fixed_span(
-            format!("ctx:{}", run.launch_context),
-            24,
-            Style::default().fg(theme().text_muted),
-        ),
-        Span::raw(" | "),
-        if matches!(
-            run.status,
-            CommandStatus::Running | CommandStatus::Cancelling
-        ) {
-            fixed_span("esc/ctrl+c cancel", 17, Style::default().fg(theme().accent))
-        } else {
-            fixed_span(
-                "b/d/c run again",
-                17,
-                Style::default().fg(theme().text_muted),
-            )
-        },
-    ])
+    let hint = if matches!(
+        run.status,
+        CommandStatus::Running | CommandStatus::Cancelling
+    ) {
+        "esc / ctrl+c cancel"
+    } else {
+        "ctrl+x a run again"
+    };
+    status_summary_line(
+        command_status_kind(run.status),
+        command_status_display(run),
+        &[
+            ("job", run.kind.title().to_string()),
+            ("yes", flag_state(run.options.yes).to_string()),
+            ("reset", flag_state(run.options.reset).to_string()),
+            ("command", command_display(&run.args)),
+            ("context", run.launch_context.clone()),
+            ("action", hint.to_string()),
+        ],
+    )
 }
 
 fn server_status_line(server: &LocalServerService, local_server_available: bool) -> Line<'static> {
@@ -10538,93 +10429,51 @@ fn server_status_line(server: &LocalServerService, local_server_available: bool)
             )
         },
     );
-    Line::from(vec![
-        Span::styled("┃ ", command_rail_style()),
-        fixed_span(
-            "server",
-            7,
-            Style::default()
-                .fg(theme().accent)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw(" "),
-        fixed_span(
-            server_status_display(run),
-            10,
-            server_status_style(run.status),
-        ),
-        Span::raw(" | "),
-        flag_span("clean", clean, true),
-        Span::raw(" | "),
-        fixed_span(ports, 24, Style::default().fg(theme().text_secondary)),
-        Span::raw(" | "),
-        fixed_span(command_display(&run.args), 34, Style::default()),
-        Span::raw(" | "),
-        fixed_span(
-            format!("ctx:{}", run.launch_context),
-            24,
-            Style::default().fg(theme().text_muted),
-        ),
-        Span::raw(" | "),
-        fixed_span(
-            server_hint(run, local_server_available),
-            21,
-            if local_server_available {
-                Style::default().fg(theme().text_muted)
-            } else {
-                Style::default().fg(theme().error)
-            },
-        ),
-    ])
+    status_summary_line(
+        server_status_kind(run.status),
+        server_status_display(run),
+        &[
+            ("session", "server".to_string()),
+            ("clean", flag_state(clean).to_string()),
+            ("ports", ports.trim_start_matches("ports: ").to_string()),
+            ("command", command_display(&run.args)),
+            ("context", run.launch_context.clone()),
+            (
+                "action",
+                server_hint(run, local_server_available).to_string(),
+            ),
+        ],
+    )
 }
 
 fn repl_status_line(repl: &ReplState, mode: TuiMode) -> Line<'static> {
     let run = &repl.run;
-    Line::from(vec![
-        Span::styled("┃ ", command_rail_style()),
-        fixed_span(
-            "repl",
-            7,
-            Style::default()
-                .fg(theme().accent)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw(" "),
-        fixed_span(run.status.title(), 10, repl_status_style(run.status)),
-        Span::raw(" | "),
-        fixed_span(command_display(&run.args), 28, Style::default()),
-        Span::raw(" | "),
-        fixed_span(
-            format!("ctx:{}", run.launch_context),
-            24,
-            Style::default().fg(theme().text_muted),
-        ),
-        Span::raw(" | "),
-        fixed_span(
-            repl_mode_hint(run, mode),
-            36,
-            Style::default().fg(theme().text_muted),
-        ),
-    ])
+    status_summary_line(
+        repl_status_kind(run.status),
+        run.status.title().to_string(),
+        &[
+            ("session", "repl".to_string()),
+            ("command", command_display(&run.args)),
+            ("context", run.launch_context.clone()),
+            ("action", repl_mode_hint(run, mode).to_string()),
+        ],
+    )
 }
 
-fn repl_status_style(status: ReplStatus) -> Style {
+fn repl_status_kind(status: ReplStatus) -> StatusKind {
     match status {
-        ReplStatus::Starting | ReplStatus::Running | ReplStatus::Stopping => {
-            Style::default().fg(theme().accent)
-        }
-        ReplStatus::Stopped => Style::default().fg(theme().text_muted),
-        ReplStatus::Failed => Style::default().fg(theme().error),
+        ReplStatus::Starting | ReplStatus::Running | ReplStatus::Stopping => StatusKind::Running,
+        ReplStatus::Stopped => StatusKind::Idle,
+        ReplStatus::Failed => StatusKind::Failed,
     }
-    .add_modifier(Modifier::BOLD)
 }
 
 fn repl_mode_hint(run: &ReplRun, mode: TuiMode) -> &'static str {
     match mode {
         TuiMode::Repl => "ctrl+x q leave  ctrl+x k stop",
         TuiMode::Leader => "ctrl+x ctrl+x send literal ctrl+x",
-        _ if run.is_running() => "r focus  ctrl+x k stop",
-        _ => "r/enter start",
+        _ if run.is_running() => "ctrl+x a focus / stop",
+        _ => "ctrl+x a start",
     }
 }
 
@@ -10640,15 +10489,14 @@ fn server_status_display(run: &ServerRun) -> String {
     }
 }
 
-fn server_status_style(status: ServerStatus) -> Style {
+fn server_status_kind(status: ServerStatus) -> StatusKind {
     match status {
         ServerStatus::Starting | ServerStatus::Running | ServerStatus::Stopping => {
-            Style::default().fg(theme().accent)
+            StatusKind::Running
         }
-        ServerStatus::Stopped => Style::default().fg(theme().text_muted),
-        ServerStatus::Failed => Style::default().fg(theme().error),
+        ServerStatus::Stopped => StatusKind::Idle,
+        ServerStatus::Failed => StatusKind::Failed,
     }
-    .add_modifier(Modifier::BOLD)
 }
 
 fn server_hint(run: &ServerRun, local_server_available: bool) -> &'static str {
@@ -10656,19 +10504,47 @@ fn server_hint(run: &ServerRun, local_server_available: bool) -> &'static str {
         return "local server unavailable";
     }
     match run.status {
-        ServerStatus::Starting | ServerStatus::Running => "s/ctrl+c stop",
-        ServerStatus::Stopping => "s/ctrl+c force kill",
-        ServerStatus::Stopped | ServerStatus::Failed => "s start  ctrl+x shift+r",
+        ServerStatus::Starting | ServerStatus::Running => "ctrl+x a stop",
+        ServerStatus::Stopping => "ctrl+x a force stop",
+        ServerStatus::Stopped | ServerStatus::Failed => "ctrl+x a start / restart",
     }
 }
 
-fn command_status_style(status: CommandStatus) -> Style {
+fn command_status_kind(status: CommandStatus) -> StatusKind {
     match status {
-        CommandStatus::Running | CommandStatus::Cancelling => Style::default().fg(theme().accent),
-        CommandStatus::Succeeded => Style::default().fg(theme().success),
-        CommandStatus::Failed | CommandStatus::Killed => Style::default().fg(theme().error),
+        CommandStatus::Running | CommandStatus::Cancelling | CommandStatus::Succeeded => {
+            StatusKind::Running
+        }
+        CommandStatus::Failed | CommandStatus::Killed => StatusKind::Failed,
     }
-    .add_modifier(Modifier::BOLD)
+}
+
+fn status_summary_line(
+    kind: StatusKind,
+    status: String,
+    fields: &[(&'static str, String)],
+) -> Line<'static> {
+    let mut spans = StatusMarker {
+        kind,
+        label: &status,
+    }
+    .spans(&theme())
+    .to_vec();
+    for (label, value) in fields {
+        spans.push(Span::styled(
+            " · ",
+            Style::default().fg(theme().border_subtle),
+        ));
+        spans.push(Span::styled(
+            format!("{label} "),
+            Style::default().fg(theme().text_muted),
+        ));
+        spans.push(Span::styled(
+            value.clone(),
+            Style::default().fg(theme().text_secondary),
+        ));
+    }
+    Line::from(spans)
 }
 
 fn command_status_display(run: &CommandRun) -> String {
@@ -10691,28 +10567,6 @@ fn spinner_symbol(frame: usize) -> &'static str {
     FRAMES[frame % FRAMES.len()]
 }
 
-fn flag_span(name: &'static str, enabled: bool, warn_when_enabled: bool) -> Span<'static> {
-    let style = if enabled {
-        Style::default()
-            .fg(if warn_when_enabled {
-                theme().marker
-            } else {
-                theme().success
-            })
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(theme().text_muted)
-    };
-
-    let width = match name {
-        "yes" => 7,
-        "reset" => 9,
-        _ => name.len() + 4,
-    };
-
-    fixed_span(format!("{name}:{}", flag_state(enabled)), width, style)
-}
-
 fn shortcut_span(key: &'static str) -> Span<'static> {
     shortcut_text_span(key.to_string())
 }
@@ -10726,19 +10580,6 @@ fn shortcut_text_span(key: String) -> Span<'static> {
     )
 }
 
-fn fixed_span(text: impl AsRef<str>, width: usize, style: Style) -> Span<'static> {
-    Span::styled(pad_text(text.as_ref(), width), style)
-}
-
-fn pad_text(text: &str, width: usize) -> String {
-    let mut truncated = text.chars().take(width).collect::<String>();
-    let len = truncated.chars().count();
-    if len < width {
-        truncated.push_str(&" ".repeat(width - len));
-    }
-    truncated
-}
-
 fn flag_state(enabled: bool) -> &'static str {
     if enabled { "on" } else { "off" }
 }
@@ -10748,7 +10589,7 @@ fn render_output_lines(buffer: &TerminalScreen, height: usize) -> Vec<Line<'stat
         .lines()
         .into_iter()
         .take(height)
-        .map(output_line_with_rail)
+        .map(output_line)
         .collect()
 }
 
@@ -10758,16 +10599,16 @@ fn repl_screen_lines(run: &ReplRun, height: usize) -> Vec<Line<'static>> {
         .lines()
         .into_iter()
         .take(height)
-        .map(output_line_with_rail)
+        .map(output_line)
         .collect::<Vec<_>>();
 
     if let Some(error) = &run.last_error
         && !lines.is_empty()
     {
-        lines[0] = Line::from(vec![
-            content_prefix(),
-            Span::styled(error.clone(), Style::default().fg(theme().error)),
-        ]);
+        lines[0] = Line::from(Span::styled(
+            error.clone(),
+            Style::default().fg(theme().error),
+        ));
     }
 
     lines
@@ -10786,10 +10627,13 @@ fn pty_size_for_region(area: Rect) -> (u16, u16) {
     )
 }
 
-fn output_line_with_rail(line: Line<'static>) -> Line<'static> {
-    let mut spans = vec![content_prefix()];
-    spans.extend(line.spans.into_iter().map(span_with_surface_bg));
-    Line::from(spans)
+fn output_line(line: Line<'static>) -> Line<'static> {
+    Line::from(
+        line.spans
+            .into_iter()
+            .map(span_with_surface_bg)
+            .collect::<Vec<_>>(),
+    )
 }
 
 fn span_with_surface_bg(mut span: Span<'static>) -> Span<'static> {
@@ -12654,7 +12498,13 @@ mod tests {
             "{frame}"
         );
         assert!(frame.contains("GOLEM"), "{frame}");
-        assert!(frame.contains("sample-app/local/local"), "{frame}");
+        assert!(
+            frame
+                .lines()
+                .next()
+                .is_some_and(|line| line.contains("app sample-app · env local · server local")),
+            "{frame}"
+        );
         assert!(frame.contains("Agents · Overview"), "{frame}");
         assert!(!frame.contains(" Build "), "{frame}");
         assert!(!frame.contains(" Deploy "), "{frame}");
@@ -12668,6 +12518,202 @@ mod tests {
         assert!(frame.contains("[ Ops ]"), "{frame}");
         assert!(!frame.contains("Home"), "{frame}");
         assert!(frame.contains("( Dev )"), "{frame}");
+    }
+
+    #[test]
+    fn dev_and_ops_use_the_same_context_only_header() {
+        let ops = test_app();
+        let ops_buffer = render_app_buffer_at(&ops, 120, 30);
+        let ops_text = render_buffer_text(&ops_buffer);
+        let ops_header = ops_text.lines().next().unwrap_or_default().to_string();
+
+        let mut dev = test_app();
+        dev.active_workspace = TuiWorkspace::Dev;
+        dev.dev_primary = DevView::BuildDeploy;
+        dev.dev_focus = DevView::BuildDeploy;
+        dev.layout.dev_visible = [false, false, false];
+        dev.command_run = Some(CommandRun::new(
+            1,
+            CommandKind::Build,
+            vec!["build".to_string()],
+            CommandOptions::default(),
+            "sample-app:local".to_string(),
+        ));
+        dev.server.run.status = ServerStatus::Running;
+        dev.repl.run.status = ReplStatus::Running;
+        let dev_buffer = render_app_buffer_at(&dev, 120, 30);
+        let dev_text = render_buffer_text(&dev_buffer);
+        let dev_header = dev_text.lines().next().unwrap_or_default().to_string();
+
+        assert_eq!(dev_header, ops_header);
+        assert!(ops_header.starts_with("┌ GOLEM · app sample-app · env local · server local"));
+        for excluded in [
+            "[Dev]",
+            "[Ops]",
+            "job",
+            "repl",
+            "Build & Deploy",
+            "Overview",
+        ] {
+            assert!(!ops_header.contains(excluded), "{ops_header}");
+        }
+        assert_eq!(ops_buffer[(2, 0)].fg, theme().accent);
+        assert_eq!(ops_buffer[(2, 0)].bg, theme().surface);
+    }
+
+    #[test]
+    fn compact_header_uses_the_locked_context_path() {
+        let app = test_app();
+        let frame = render_app_text_at(&app, 32, 12);
+        let header = frame.lines().next().unwrap_or_default();
+
+        assert!(
+            header.starts_with("┌ GOLEM · sample-app/local/local"),
+            "{frame}"
+        );
+        assert!(!header.contains("Ops"), "{frame}");
+    }
+
+    #[test]
+    fn dev_panes_use_shared_titles_boundaries_and_status_colors() {
+        let mut app = test_app();
+        app.active_workspace = TuiWorkspace::Dev;
+        app.dev_primary = DevView::BuildDeploy;
+        app.dev_focus = DevView::BuildDeploy;
+        app.layout.dev_visible = [false, true, false];
+        app.command_run = Some(CommandRun::new(
+            1,
+            CommandKind::Build,
+            vec!["build".to_string()],
+            CommandOptions::default(),
+            "sample-app:local".to_string(),
+        ));
+
+        let buffer = render_app_buffer_at(&app, 120, 30);
+        let text = render_buffer_text(&buffer);
+        let build_body = snapshot_region(&app, RegionKind::DevViewBody(DevView::BuildDeploy));
+        let divider = snapshot_region(&app, RegionKind::DevPrimarySplit);
+
+        assert!(text.contains("[ Build & Deploy ]"), "{text}");
+        assert!(text.contains("( Server )"), "{text}");
+        assert!(!text.contains("tab focus"), "{text}");
+        assert_eq!(buffer[(2, 1)].fg, theme().accent_hover);
+        assert_eq!(buffer[(build_body.x, build_body.y)].symbol(), "│");
+        assert_eq!(
+            buffer[(build_body.x, build_body.y)].fg,
+            theme().border_subtle
+        );
+        assert_eq!(buffer[(build_body.x, build_body.y)].bg, theme().surface);
+        assert_eq!(buffer[(build_body.x + 1, build_body.y)].symbol(), "●");
+        assert_eq!(buffer[(build_body.x + 1, build_body.y)].fg, theme().success);
+        assert_eq!(buffer[(build_body.x + 1, build_body.y)].bg, theme().surface);
+        assert_eq!(buffer[(divider.x, divider.y + 1)].symbol(), "│");
+        assert_eq!(buffer[(divider.x, divider.y + 1)].fg, theme().border_subtle);
+        assert_eq!(buffer[(divider.x, divider.y + 1)].bg, theme().surface);
+    }
+
+    #[test]
+    fn lifecycle_statuses_follow_shared_semantic_colors() {
+        for status in [
+            CommandStatus::Running,
+            CommandStatus::Cancelling,
+            CommandStatus::Succeeded,
+        ] {
+            assert_eq!(command_status_kind(status), StatusKind::Running);
+        }
+        for status in [
+            ServerStatus::Starting,
+            ServerStatus::Running,
+            ServerStatus::Stopping,
+        ] {
+            assert_eq!(server_status_kind(status), StatusKind::Running);
+        }
+        for status in [
+            ReplStatus::Starting,
+            ReplStatus::Running,
+            ReplStatus::Stopping,
+        ] {
+            assert_eq!(repl_status_kind(status), StatusKind::Running);
+        }
+        assert_eq!(server_status_kind(ServerStatus::Stopped), StatusKind::Idle);
+        assert_eq!(repl_status_kind(ReplStatus::Failed), StatusKind::Failed);
+        assert_eq!(
+            command_status_kind(CommandStatus::Killed),
+            StatusKind::Failed
+        );
+    }
+
+    #[test]
+    fn dev_shell_renders_all_recursive_layouts_at_supported_extremes() {
+        for placement in [layout::PanePlacement::Right, layout::PanePlacement::Bottom] {
+            for (width, height) in [(160, 40), (100, 16), (60, 24), (1, 1)] {
+                let mut app = test_app();
+                app.active_workspace = TuiWorkspace::Dev;
+                app.dev_primary = DevView::BuildDeploy;
+                app.dev_focus = DevView::BuildDeploy;
+                app.layout.dev_visible = [false, true, true];
+                app.layout.dev_placement = placement;
+
+                let _ = render_app_text_at(&app, width, height);
+            }
+        }
+    }
+
+    #[test]
+    fn recursive_pane_junctions_match_right_and_bottom_layouts() {
+        for (placement, expected) in [
+            (layout::PanePlacement::Right, "├"),
+            (layout::PanePlacement::Bottom, "┬"),
+        ] {
+            let mut app = test_app();
+            app.active_workspace = TuiWorkspace::Dev;
+            app.dev_primary = DevView::BuildDeploy;
+            app.dev_focus = DevView::BuildDeploy;
+            app.layout.dev_visible = [false, true, true];
+            app.layout.dev_placement = placement;
+
+            let buffer = render_app_buffer_at(&app, 120, 30);
+            let primary = snapshot_region(&app, RegionKind::DevPrimarySplit);
+            let secondary = snapshot_region(&app, RegionKind::DevSecondarySplit);
+            let (x, y) = match placement {
+                layout::PanePlacement::Right => (primary.x, secondary.y),
+                layout::PanePlacement::Bottom => (secondary.x, primary.y),
+            };
+
+            assert_eq!(buffer[(x, y)].symbol(), expected);
+            assert_eq!(buffer[(x, y)].fg, theme().border_subtle);
+            assert_eq!(buffer[(x, y)].bg, theme().surface);
+        }
+    }
+
+    #[test]
+    fn dev_terminal_scrollbars_use_the_shared_trailing_slot() {
+        let mut app = test_app();
+        app.active_workspace = TuiWorkspace::Dev;
+        app.dev_primary = DevView::BuildDeploy;
+        app.dev_focus = DevView::BuildDeploy;
+        app.layout.dev_visible = [false, false, false];
+        app.command_run = Some(CommandRun::new(
+            1,
+            CommandKind::Build,
+            vec!["build".to_string()],
+            CommandOptions::default(),
+            "sample-app:local".to_string(),
+        ));
+        for index in 0..60 {
+            app.append_command_output(format!("line {index}\r\n").as_bytes());
+        }
+
+        let buffer = render_app_buffer_at(&app, 80, 18);
+        let body = snapshot_region(&app, RegionKind::DevViewBody(DevView::BuildDeploy));
+        let scrollbar_x = body.right().saturating_sub(1);
+
+        assert_eq!(buffer[(scrollbar_x, body.y + 1)].bg, theme().surface);
+        assert!(
+            [theme().text_muted, theme().text_faint]
+                .contains(&buffer[(scrollbar_x, body.y + 1)].fg)
+        );
+        assert_ne!(buffer[(scrollbar_x, body.y + 1)].symbol(), "0");
     }
 
     #[test]
@@ -14005,7 +14051,10 @@ mod tests {
 
         assert!(frame.contains("[ Ops ]"), "{frame}");
         assert!(frame.contains("Agents · Overview"), "{frame}");
-        assert!(frame.contains("sample-app/local/local"), "{frame}");
+        assert!(
+            frame.contains("app sample-app · env local · server local"),
+            "{frame}"
+        );
         assert!(frame.contains("( Dev )"), "{frame}");
         assert!(!frame.contains("Home"), "{frame}");
     }
@@ -14665,19 +14714,6 @@ mod tests {
     }
 
     #[test]
-    fn fixed_width_labels_do_not_reflow() {
-        assert_eq!(pad_text("yes:on", 7).len(), pad_text("yes:off", 7).len());
-        assert_eq!(
-            pad_text("reset:on", 9).len(),
-            pad_text("reset:off", 9).len()
-        );
-        assert_eq!(
-            pad_text("running", 10).len(),
-            pad_text("succeeded", 10).len()
-        );
-    }
-
-    #[test]
     fn output_input_row_is_hidden_when_idle() {
         let mut app = test_app();
         app.active_workspace = TuiWorkspace::Dev;
@@ -14905,7 +14941,11 @@ mod tests {
         assert_eq!(app.active_workspace, TuiWorkspace::Dev);
         assert!(frame.contains("( Ops )"), "{frame}");
         assert!(frame.contains("Server"), "{frame}");
-        assert_eq!(frame.matches("server  stopped").count(), 1, "{frame}");
+        assert_eq!(
+            frame.matches("○ stopped · session server").count(),
+            1,
+            "{frame}"
+        );
     }
 
     #[test]
@@ -15924,12 +15964,16 @@ environments:
     }
 
     fn render_app_text_at(app: &TuiApp, width: u16, height: u16) -> String {
+        render_buffer_text(&render_app_buffer_at(app, width, height))
+    }
+
+    fn render_app_buffer_at(app: &TuiApp, width: u16, height: u16) -> Buffer {
         let backend = TestBackend::new(width, height);
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal.draw(|frame| render(frame, app)).unwrap();
 
-        render_buffer_text(terminal.backend().buffer())
+        terminal.backend().buffer().clone()
     }
 
     fn snapshot_region(app: &TuiApp, kind: RegionKind) -> Rect {
