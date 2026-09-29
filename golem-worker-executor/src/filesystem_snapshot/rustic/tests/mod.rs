@@ -260,7 +260,7 @@ async fn restore_named(
     options: RestoreOptions,
 ) -> anyhow::Result<()> {
     let backend = backend_of(storage, scope, STORAGE_CALL_DEADLINE);
-    let (name, into) = (name.clone(), into.to_path_buf());
+    let (name, into) = (name.clone(), Box::<Path>::from(into));
     run_blocking(move || {
         let repository = open_existing(backend, &key())?.context("the scope has no repository")?;
         let snapshots = repository.get_all_snapshots()?;
