@@ -279,7 +279,11 @@ const fixtureGraph = (vector) => ({
 });
 
 const fixtureStreamPolicy = (text) =>
-  text.includes('provisionalRef') ? 'provisional' : text.includes('streamToken') ? 'stable' : 'none';
+  text.includes('provisionalRef')
+    ? 'provisional'
+    : text.includes('streamToken')
+      ? 'stable'
+      : 'none';
 
 test('native value codec matches every frozen shared schema-value fixture', async () => {
   const fixture = JSON.parse(
@@ -303,10 +307,7 @@ test('native value codec rejects every frozen malformed schema-value fixture', a
     const value = parseStreamSessionTextFrame(vector.input);
     assert.throws(
       () =>
-        publicValueCodec(fixtureGraph(vector)).validate(
-          value,
-          fixtureStreamPolicy(vector.input),
-        ),
+        publicValueCodec(fixtureGraph(vector)).validate(value, fixtureStreamPolicy(vector.input)),
       { code: vector.expectedCode },
       vector.name,
     );
