@@ -42,6 +42,38 @@ services:
       timeout: 5s
       retries: 5
 
+  # Holds the shard manager's lease state and its leader-election key. Only the shard
+  # manager talks to it; every other service still uses Postgres.
+  #
+  # Single node, which is enough to demonstrate the mode but not to survive losing it:
+  # a real deployment runs an etcd cluster, since this container is now the shard
+  # manager's durable state.
+  etcd:
+    image: gcr.io/etcd-development/etcd:${ETCD_IMAGE_VERSION}
+    restart: on-failure
+    # The image's default entrypoint binds the client port to the container's own
+    # localhost, so other services could not reach it. Bind 0.0.0.0 and advertise the
+    # compose service name.
+    command:
+      - /usr/local/bin/etcd
+      - --name=golem-etcd
+      - --data-dir=/etcd-data
+      - --listen-client-urls=http://0.0.0.0:2379
+      - --advertise-client-urls=http://etcd:2379
+      - --listen-peer-urls=http://0.0.0.0:2380
+      - --initial-advertise-peer-urls=http://etcd:2380
+      - --initial-cluster=golem-etcd=http://etcd:2380
+      - --initial-cluster-token=golem-etcd
+      - --initial-cluster-state=new
+      - --log-level=info
+    volumes:
+      - etcd_data:/etcd-data
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/etcdctl", "--endpoints=http://127.0.0.1:2379", "endpoint", "health"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
   golem-registry-service:
     image: golemservices/registry-service:${GOLEM_IMAGES_VERSION}
     pull_policy: always
@@ -92,16 +124,17 @@ services:
       GOLEM__REGISTRY_SERVICE__HOST: golem-registry-service
       GOLEM__REGISTRY_SERVICE__PORT: ${REGISTRY_SERVICE_GRPC_PORT}
 
-      GOLEM__PERSISTENCE__TYPE: Postgres
-      GOLEM__PERSISTENCE__CONFIG__DATABASE: golem_db
-      GOLEM__PERSISTENCE__CONFIG__SCHEMA: golem_shard_manager
-      GOLEM__PERSISTENCE__CONFIG__MAX_CONNECTIONS: 10
-      GOLEM__PERSISTENCE__CONFIG__HOST: postgres
-      GOLEM__PERSISTENCE__CONFIG__PORT: 5432
-      GOLEM__PERSISTENCE__CONFIG__USERNAME: golem_user
-      GOLEM__PERSISTENCE__CONFIG__PASSWORD: golem_password
+      # Distributed mode. The shard lease state lives in etcd behind a compare-and-swap,
+      # and one replica wins an etcd lease campaign and drives all topology decisions.
+      # The endpoint list must be bracketed: unbracketed, it is read as a single string
+      # and fails to deserialize. Only http:// endpoints are accepted - the shard
+      # manager refuses to start on https://, because TLS is not configurable.
+      GOLEM__PERSISTENCE__TYPE: Etcd
+      GOLEM__PERSISTENCE__CONFIG__ENDPOINTS: '["http://etcd:2379"]'
+      # connect_timeout (10s), request_timeout (5s), leader_lease_ttl (10s) and
+      # compaction_retention_revisions (1000) keep their defaults here.
     depends_on:
-      postgres:
+      etcd:
         condition: service_healthy
       golem-registry-service:
         condition: service_started
@@ -237,6 +270,8 @@ services:
 
 volumes:
   redis_data:
+    driver: local
+  etcd_data:
     driver: local
   component_store:
     driver: local
