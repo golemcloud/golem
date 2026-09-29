@@ -1418,6 +1418,7 @@ mod tests {
                             value: direct::encode(&83u32).unwrap(),
                         }),
                         stdout: None,
+                        stderr: None,
                     })
                 })
             },
