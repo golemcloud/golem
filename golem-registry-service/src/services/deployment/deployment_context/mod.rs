@@ -302,8 +302,13 @@ impl DeploymentContext {
         published_tool_middlewares: &[ToolMiddlewareName],
         universal_tool_middlewares: &[golem_common::model::tool_middleware::ToolMiddlewareInstallation],
         tool_compatibility_mode: golem_common::schema::tool::compatibility::ToolCompatibilityMode,
-        environment_tool_bindings: &BTreeMap<ToolName, ToolBindingInput>,
-        agent_tool_bindings: &BTreeMap<AgentTypeName, BTreeMap<ToolName, ToolBindingInput>>,
+        effective_environment_tool_bindings: &BTreeMap<ToolName, ToolBindingInput>,
+        effective_agent_tool_bindings: &BTreeMap<
+            AgentTypeName,
+            BTreeMap<ToolName, ToolBindingInput>,
+        >,
+        dynamic_environment_tool_bindings: &BTreeMap<ToolName, ToolBindingInput>,
+        dynamic_agent_tool_bindings: &BTreeMap<AgentTypeName, BTreeMap<ToolName, ToolBindingInput>>,
     ) -> Result<diff::Hash, diff::DiffError> {
         let published_tools = published_tools.iter().map(ToString::to_string).collect();
         let published_tool_middlewares = published_tool_middlewares
@@ -311,7 +316,10 @@ impl DeploymentContext {
             .map(ToString::to_string)
             .collect();
         let (environment_tool_middleware_bindings, agent_tool_middleware_bindings) =
-            diff::tool_middleware_binding_inputs(environment_tool_bindings, agent_tool_bindings);
+            diff::tool_middleware_binding_inputs(
+                dynamic_environment_tool_bindings,
+                dynamic_agent_tool_bindings,
+            );
         let diffable = diff::Deployment {
             components: self
                 .components
@@ -331,6 +339,8 @@ impl DeploymentContext {
             remote_tools: diff::remote_tool_deployments(
                 compiled_tools.registered_tools.clone(),
                 compiled_tools.agent_tool_bindings.clone(),
+                effective_environment_tool_bindings,
+                effective_agent_tool_bindings,
                 &self
                     .components
                     .values()
