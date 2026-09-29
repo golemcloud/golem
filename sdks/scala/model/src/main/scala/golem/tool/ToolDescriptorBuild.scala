@@ -186,6 +186,7 @@ object ToolDescriptorBuilder {
   def build(
     identity: String,
     version: String,
+    requiresFilesystem: Boolean,
     root: CommandBuild,
     children: List[ChildBuild]
   )(ctx: ToolBuildCtx): Either[ToolBuildError, ExtendedToolType] =
@@ -255,7 +256,7 @@ object ToolDescriptorBuilder {
 
         commands = commands.updated(0, commands(0).copy(subcommands = rootSubs))
 
-        val tool = ExtendedToolType(version, commands)
+        val tool = ExtendedToolType(version, commands, requiresFilesystem)
         if (ctx.isOutermostDescriptor) ToolComposition.normalizeInheritedGlobals(tool)
         else Right(tool)
       } catch { case ToolBuildException(error) => Left(error) }

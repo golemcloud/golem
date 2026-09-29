@@ -68,7 +68,7 @@ object StreamSession {
     reference.binding.getOrElse(throw BridgeException("output stream is detached from its invocation")).output(key, decode, lane, codec)
   }
 
-  private final class Output[A](release: Int => Unit) extends AgentStream.Consumer[A] {
+  private[runtime] final class Output[A](release: Int => Unit) extends AgentStream.Consumer[A] {
     private val waiting = new java.util.ArrayDeque[Promise[AgentStreamStep[A]]]()
     private val queued = new java.util.ArrayDeque[(Int, Either[() => Throwable, () => AgentStreamStep[A]])]()
     private var queuedBytes = 0L
@@ -107,8 +107,12 @@ object StreamSession {
     private def stop(reason: String): Future[Unit] = synchronized {
       while (!queued.isEmpty) { val (bytes, _) = queued.remove(); queuedBytes -= bytes; release(bytes) }
       while (!waiting.isEmpty) waiting.remove().success(End)
-      if (consumerStopped || protocolTerminal) Future.successful(())
-      else { consumerStopped = true; pendingCancel = reason; cancelWith(reason) }
+      if (consumerStopped) Future.successful(())
+      else {
+        consumerStopped = true
+        if (protocolTerminal) { pendingCancel = null; Future.successful(()) }
+        else { pendingCancel = reason; cancelWith(reason) }
+      }
     }
     def cancel(): Future[Unit] = stop("cancelled")
     def drop(): Future[Unit] = stop("consumer-drop")
@@ -132,6 +136,18 @@ object StreamSession {
           case Left(error) => scala.util.Try(error()).fold(promise.failure, promise.failure)
           case Right(item) => scala.util.Try(item()).fold(promise.failure, promise.success)
         }
+      }
+    }
+    def continueAccepted(bytes: Int, value: Either[() => Throwable, () => AgentStreamStep[A]]): Boolean = synchronized {
+      if (consumerStopped) false
+      else if (waiting.isEmpty) { queued.addFirst((bytes, value)); queuedBytes += bytes; true }
+      else {
+        val promise = waiting.remove()
+        value match {
+          case Left(error) => scala.util.Try(error()).fold(promise.failure, promise.failure)
+          case Right(item) => scala.util.Try(item()).fold(promise.failure, promise.success)
+        }
+        true
       }
     }
     def accept(first: BigInt, count: BigInt, finish: Boolean = false): Unit = synchronized {
@@ -204,7 +220,8 @@ object StreamSession {
     parameters: () => SchemaValue,
     constructorCodec: PublicValueCodec.Codec,
     inputCodec: PublicValueCodec.Codec,
-    outputCodec: Option[PublicValueCodec.Codec]
+    outputCodec: Option[PublicValueCodec.Codec],
+    configCodecs: List[(List[String], PublicValueCodec.Codec)]
   ): Future[AgentInvocationResult] = {
     implicit val ec: ExecutionContext = resolved.configuration.executionContext
     val session = new Session(resolved)
@@ -540,8 +557,13 @@ object StreamSession {
                 if (outputCodec.nonEmpty) throw BridgeException("method result is unexpectedly absent")
                 None
               case "value" =>
-                StreamSessionProtocol.validateObject(resultValue, Set("kind", "value"), "invocation result")
-                Some(scoped(session)(outputCodec.getOrElse(throw BridgeException("unexpected invocation result value")).decode(Json.requireField(resultValue, "value").toOption.get)))
+                StreamSessionProtocol.validateObject(resultValue, Set("graph", "kind", "value"), "invocation result")
+                val expected = outputCodec.getOrElse(throw BridgeException("unexpected invocation result value"))
+                val graph = Json.requireField(resultValue, "graph").fold(e => throw BridgeException(e), identity)
+                val wireCodec = PublicValueCodec.fromSchemaGraphJson(graph.render)
+                val decoded = scoped(session)(wireCodec.decode(Json.requireField(resultValue, "value").toOption.get))
+                expected.encode(decoded)
+                Some(decoded)
               case _ => throw BridgeException("invalid invocation result kind")
             }
             if (!result.trySuccess(AgentInvocationResult(resolved.agentId.getOrElse(AgentId("", "")), idempotencyKey, value, None)))
@@ -699,7 +721,9 @@ object StreamSession {
               val raw = SchemaValue.U8Value(payload(index) & 0xff)
               val validated = mapped._2.publicCodec.decode(mapped._2.publicCodec.encode(raw))
               val decoded = scoped(session)(mapped._2.decode(validated))
-              if (index + 1 < payload.size) mapped._2.offer(payload.size, Right(delivery(index + 1)))
+              if (index + 1 < payload.size) {
+                if (!mapped._2.continueAccepted(payload.size, Right(delivery(index + 1)))) releaseBatch()
+              }
               else {
                 releaseBatch()
                 mapped._2.checkpoint(StreamSessionProtocol.checkedEnd(sequence, count))
@@ -729,8 +753,10 @@ object StreamSession {
     }
     val base = resolved.configuration.server.url.stripSuffix("/").replaceFirst("^http", "ws")
     val selector = Json.obj("agentType" -> Json.string(resolved.agentTypeName), "application" -> Json.string(resolved.configuration.appName), "constructorParameters" -> constructorCodec.encode(resolved.parameters), "environment" -> Json.string(resolved.configuration.envName), "method" -> Json.string(method))
+    val codecsByPath = configCodecs.toMap
     val config = Json.arr(resolved.config.map { e =>
-      Json.obj("path" -> Json.arr(e.path.map(Json.string).toVector), "value" -> e.codec.encode(e.value))
+      codecsByPath.getOrElse(e.path, throw BridgeException(s"missing public config codec for ${e.path.mkString(".")}"))
+      Json.obj("path" -> Json.arr(e.path.map(Json.string).toVector), "value" -> e.value)
     }.toVector)
     pendingAttempt = UUID.randomUUID.toString
     pendingDescriptor = StreamSessionProtocol.message("invocationStart", Vector("attemptId" -> Json.string(pendingAttempt), "config" -> config, "idempotencyKey" -> Json.string(idempotencyKey), "methodParameters" -> inputCodec.encode(encodedParameters), "selector" -> selector))

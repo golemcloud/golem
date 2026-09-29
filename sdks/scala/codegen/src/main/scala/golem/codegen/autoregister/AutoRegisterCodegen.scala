@@ -104,8 +104,10 @@ object AutoRegisterCodegen {
         discovered.universalToolMiddlewares.map(resolveUniversalToolMiddlewareImpl)).toList.distinct
         .sortBy(_.sortKey)
 
+    val exports = guestExports(agentImpls.nonEmpty, toolImpls.nonEmpty, toolMiddlewareImpls.nonEmpty)
+
     if (agentImpls.isEmpty && toolImpls.isEmpty && toolMiddlewareImpls.isEmpty) {
-      val baseTree = buildRegisterAgentsSource(genBasePkg, Nil)
+      val baseTree = buildRegisterAgentsSource(genBasePkg, Nil, exports)
       Result(
         generatedPackage = genBasePkg,
         files = Seq(
@@ -175,7 +177,7 @@ object AutoRegisterCodegen {
           q"$objRef.register()"
         }
 
-      val baseTree = buildRegisterAgentsSource(genBasePkg, registerCallExprs)
+      val baseTree = buildRegisterAgentsSource(genBasePkg, registerCallExprs, exports)
       val baseFile = GeneratedFile(
         relativePath = packagePath(genBasePkg, "RegisterAgents.scala"),
         content = baseTree.syntax
@@ -274,7 +276,8 @@ object AutoRegisterCodegen {
 
   private def buildRegisterAgentsSource(
     genBasePkg: String,
-    registerCalls: List[Stat]
+    registerCalls: List[Stat],
+    exports: List[Stat]
   ): Source = {
     val pkgRef = parseTermRef(genBasePkg)
 
@@ -284,6 +287,7 @@ object AutoRegisterCodegen {
 
     source"""
       package $pkgRef {
+        import scala.scalajs.js
         import ..$jsExportImport
 
         /** Generated. Do not edit. */
@@ -301,9 +305,62 @@ object AutoRegisterCodegen {
 
           $jsExportAnnot val __golemRegisterAgents: Unit =
             registerAll()
+
+          ..$exports
         }
       }
     """
+  }
+
+  // Only registered implementations provide local capabilities. Traits used by
+  // generated clients or middleware projections must not retain guest dispatch.
+  private def guestExports(agents: Boolean, tools: Boolean, middleware: Boolean): List[Stat] = {
+    val agent =
+      if (agents) "golem.runtime.guest.Guest.golemAgent200Guest"
+      else """js.Dynamic.literal(
+        discoverAgentTypes = (() => new js.Array[js.Any]()),
+        initialize = ((name: String) => js.Promise.reject(js.Dynamic.literal(tag = "invalid-type", `val` = name))),
+        invoke = (() => js.Promise.reject(js.Dynamic.literal(tag = "invalid-agent-id", `val` = "No agents registered"))),
+        getDefinition = (() => throw js.JavaScriptException(js.Dynamic.literal(tag = "invalid-agent-id", `val` = "No agents registered")))
+      )"""
+    val tool =
+      if (tools) "golem.runtime.guest.Guest.golemTool010Guest"
+      else """js.Dynamic.literal(
+        discoverTools = (() => new js.Array[js.Any]()),
+        getTool = ((name: String) => throw js.JavaScriptException(js.Dynamic.literal(tag = "invalid-tool-name", `val` = name))),
+        invoke = ((name: String) => js.Promise.reject(js.Dynamic.literal(tag = "invalid-tool-name", `val` = name)))
+      )"""
+    val toolMiddleware =
+      if (middleware) "golem.runtime.guest.ToolMiddlewareGuest.golemTool010ToolMiddlewareGuest"
+      else """js.Dynamic.literal(
+        discoverToolMiddlewares = (() => new js.Array[js.Any]()),
+        getToolMiddleware = ((name: String) => throw js.JavaScriptException(js.Dynamic.literal(tag = "invalid-tool-name", `val` = name))),
+        invokeToolMiddleware = ((name: String) => js.Promise.reject(js.Dynamic.literal(tag = "invalid-tool-name", `val` = name)))
+      )"""
+    val save =
+      if (agents) "golem.runtime.guest.Guest.SaveSnapshot.save()"
+      else
+        """js.Promise.resolve(js.Dynamic.literal(payload = new scala.scalajs.js.typedarray.Uint8Array(0), mimeType = "application/octet-stream"))"""
+    val load =
+      if (agents) "golem.runtime.guest.Guest.LoadSnapshot.load(snapshot.asInstanceOf[golem.host.js.JsSnapshot])"
+      else """js.Promise.reject("No agents registered")"""
+
+    parseMeta[Source](s"""
+      @JSExportTopLevel("golemAgent200Guest")
+      val golemAgent200Guest: js.Dynamic = $agent
+      @JSExportTopLevel("guest")
+      val guest: js.Dynamic = golemAgent200Guest
+      @JSExportTopLevel("golemTool010Guest")
+      val golemTool010Guest: js.Dynamic = $tool
+      @JSExportTopLevel("golemTool010ToolMiddlewareGuest")
+      val golemTool010ToolMiddlewareGuest: js.Dynamic = $toolMiddleware
+      @JSExportTopLevel("toolMiddlewareGuest")
+      val toolMiddlewareGuest: js.Dynamic = golemTool010ToolMiddlewareGuest
+      @JSExportTopLevel("saveSnapshot")
+      val saveSnapshot: js.Dynamic = js.Dynamic.literal(save = (() => $save))
+      @JSExportTopLevel("loadSnapshot")
+      val loadSnapshot: js.Dynamic = js.Dynamic.literal(load = ((snapshot: js.Dynamic) => $load))
+    """).stats
   }
 
   private def buildAgentRegistrationCall(ai: AgentImpl): Stat = {

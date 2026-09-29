@@ -139,7 +139,8 @@ final class ToolInvocationContext(
 final case class ToolMethodBinding(
   methodName: String,
   commandPath: List[String],
-  run: ToolInvocationContext => Future[Either[ToolInvokeError[TypedSchemaValue], ToolInvokeResult]]
+  run: ToolInvocationContext => Future[Either[ToolInvokeError[TypedSchemaValue], ToolInvokeResult]],
+  acceptedCommandPaths: List[List[String]] = Nil
 )
 
 /**
@@ -199,7 +200,15 @@ object ToolInvokerRuntime {
     tool: ExtendedToolType,
     handle: ToolImplementationHandle,
     env: ToolInvokeEnv
-  ): ToolInvokeHandler =
+  ): ToolInvokeHandler = {
+    val dispatch = handle.bindings.flatMap { binding =>
+      tool.commandIndexByPath(binding.commandPath).toList.flatMap { commandIndex =>
+        val paths =
+          if (binding.acceptedCommandPaths.nonEmpty) binding.acceptedCommandPaths else List(binding.commandPath)
+        paths.map(_ -> ((commandIndex, binding)))
+      }
+    }.toMap
+
     new ToolInvokeHandler {
       def invoke(
         commandPath: List[String],
@@ -207,7 +216,27 @@ object ToolInvokerRuntime {
         stdin: Option[ToolInputStream],
         principal: Principal
       ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolInvokeResult]] =
-        ToolInvokerRuntime.invoke(tool, handle, env, commandPath, input, stdin, principal)
+        dispatch.get(commandPath) match {
+          case Some((commandIndex, binding)) =>
+            invokeBinding(tool, env, commandIndex, binding, input, stdin, principal)
+          case None =>
+            ToolInvokerRuntime.invoke(tool, handle, env, commandPath, input, stdin, principal)
+        }
+    }
+  }
+
+  private def invokeBinding(
+    tool: ExtendedToolType,
+    env: ToolInvokeEnv,
+    commandIndex: Int,
+    binding: ToolMethodBinding,
+    input: TypedSchemaValue,
+    stdin: Option[ToolInputStream],
+    principal: Principal
+  ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolInvokeResult]] =
+    tool.decodeCanonicalInputRecord(commandIndex, input.value) match {
+      case Left(err)     => failed(ToolInvokeError.InvalidInput(err.message))
+      case Right(fields) => binding.run(new ToolInvocationContext(fields, stdin, principal, env))
     }
 
   def invoke(

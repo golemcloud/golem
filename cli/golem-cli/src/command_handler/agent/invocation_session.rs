@@ -45,6 +45,7 @@ use golem_common::schema::public_json::{
     decode_public_schema_value, encode_public_schema_value, encode_public_schema_value_with_charge,
 };
 use golem_common::schema::stream::SchemaValueStream;
+use golem_common::schema::validation::value::validate_value;
 use golem_common::schema::{
     BinaryValuePayload, NamedFieldType, ResultValuePayload, SchemaGraph, SchemaType, SchemaValue,
 };
@@ -168,6 +169,7 @@ struct InputBinding {
     stream_token: Option<String>,
     channel: Option<u32>,
     parameter_name: String,
+    parameter_index: usize,
     item_type: SchemaType,
     raw_kind: Option<RawStreamKind>,
 }
@@ -248,7 +250,7 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
         .ok_or_else(|| anyhow!("Method '{}' not found in agent type", args.method_name))?;
     let source_language = SourceLanguage::from(args.agent_type.source_language.clone());
     let input_graph = public_input_graph(&args.agent_type.schema, &method.input_schema);
-    let (method_parameters, mut input_binding) = prepare_method_parameters(
+    let (method_parameter_values, mut input_binding) = prepare_method_parameters(
         &args.agent_type.schema,
         &method,
         args.arguments,
@@ -278,7 +280,7 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
     let method_parameters = encode_public_schema_value(
         &input_graph,
         &input_graph.root,
-        &method_parameters,
+        &method_parameter_values,
         |stream, _| {
             stream
                 .with_host_endpoint::<uuid::Uuid, _>(|reference| {
@@ -357,7 +359,8 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
                         &selector,
                         &config,
                         &idempotency_key_value,
-                        &method_parameters,
+                        &input_graph,
+                        &method_parameter_values,
                         input_binding.as_mut(),
                     )?;
                     request.clone()
@@ -832,7 +835,8 @@ fn validate_pending_start(
     selector: &InvocationSelector,
     config: &[PublicConfigEntry],
     idempotency_key: &str,
-    method_parameters: &serde_json::Value,
+    input_graph: &SchemaGraph,
+    method_parameter_values: &SchemaValue,
     input_binding: Option<&mut InputBinding>,
 ) -> anyhow::Result<()> {
     let PublicClientMessage::InvocationStart {
@@ -843,19 +847,68 @@ fn validate_pending_start(
     else {
         bail!("pending operation is not an invocation start");
     };
-    let mut expected_parameters = method_parameters.clone();
-    if let Some(binding) = input_binding {
-        let saved_value = saved_parameters
-            .as_object()
-            .and_then(|parameters| parameters.get(&binding.parameter_name))
-            .cloned()
+    let saved_values = decode_public_schema_value(
+        input_graph,
+        &input_graph.root,
+        saved_parameters,
+        PublicStreamReferencePolicy::Provisional,
+        |reference, _| {
+            let PublicStreamReference::Provisional(reference) = reference else {
+                unreachable!("provisional stream policy returned a stable reference")
+            };
+            Ok(SchemaValueStream::from_host_endpoint(reference))
+        },
+    )?;
+    let mut expected_values = method_parameter_values.clone();
+    let saved_reference = if let Some(binding) = input_binding.as_ref() {
+        let SchemaValue::Record {
+            fields: saved_fields,
+        } = &saved_values
+        else {
+            bail!("pending method parameters are not a record");
+        };
+        let SchemaValue::Record {
+            fields: expected_fields,
+        } = &mut expected_values
+        else {
+            bail!("method parameters are not a record");
+        };
+        let saved_stream = saved_fields
+            .get(binding.parameter_index)
+            .and_then(|value| match value {
+                SchemaValue::Stream(stream) => Some(stream),
+                _ => None,
+            })
             .ok_or_else(|| anyhow!("pending invocation start omitted its stdin stream"))?;
-        binding.provisional_ref = provisional_ref(&saved_value)?;
-        expected_parameters
-            .as_object_mut()
-            .ok_or_else(|| anyhow!("method parameters are not a public record"))?
-            .insert(binding.parameter_name.clone(), saved_value);
-    }
+        let expected_stream = expected_fields
+            .get_mut(binding.parameter_index)
+            .filter(|value| matches!(value, SchemaValue::Stream(_)))
+            .ok_or_else(|| anyhow!("method parameters omitted the stdin stream"))?;
+        let reference = saved_stream
+            .with_host_endpoint::<uuid::Uuid, _>(|reference| *reference)
+            .map_err(anyhow::Error::msg)?;
+        expected_stream.clone_from(&SchemaValue::Stream(saved_stream.clone()));
+        Some(reference)
+    } else {
+        None
+    };
+    let expected_parameters = encode_public_schema_value(
+        input_graph,
+        &input_graph.root,
+        &expected_values,
+        |stream, _| {
+            stream
+                .with_host_endpoint::<uuid::Uuid, _>(|reference| {
+                    PublicStreamReference::Provisional(*reference)
+                })
+                .map_err(|message| {
+                    PublicSchemaValueError::new(
+                        golem_common::model::invocation_session_public::PublicErrorCode::StreamAlreadyConsumed,
+                        message,
+                    )
+                })
+        },
+    )?;
     let expected = PublicClientMessage::InvocationStart {
         attempt_id: *attempt_id,
         config: config.to_vec(),
@@ -867,19 +920,10 @@ fn validate_pending_start(
     if &expected != request {
         bail!("saved pending invocation start differs from the requested invocation");
     }
+    if let (Some(binding), Some(saved_reference)) = (input_binding, saved_reference) {
+        binding.provisional_ref = saved_reference;
+    }
     Ok(())
-}
-
-fn provisional_ref(value: &serde_json::Value) -> anyhow::Result<uuid::Uuid> {
-    value
-        .as_object()
-        .and_then(|value| value.get("$stream"))
-        .and_then(serde_json::Value::as_object)
-        .and_then(|stream| stream.get("provisionalRef"))
-        .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| anyhow!("pending stdin stream has no provisional reference"))?
-        .parse()
-        .context("pending stdin stream has an invalid provisional reference")
 }
 
 fn validate_pending_resume(
@@ -1031,7 +1075,7 @@ fn prepare_method_parameters(
 
     let mut values = Vec::with_capacity(fields.len());
     let mut input_binding = None;
-    for (field, argument) in fields.iter().zip(arguments) {
+    for (parameter_index, (field, argument)) in fields.iter().zip(arguments).enumerate() {
         let resolved = graph
             .resolve_ref(&field.schema)
             .map_err(|error| anyhow!(error.to_string()))?;
@@ -1072,6 +1116,7 @@ fn prepare_method_parameters(
                 stream_token: None,
                 channel: None,
                 parameter_name: field.name.clone(),
+                parameter_index,
                 item_type,
                 raw_kind,
             });
@@ -1547,11 +1592,20 @@ async fn handle_response(
         }
         ServerFrame::Message(PublicServerMessage::InvocationResult { result, .. }) => {
             match result.as_ref() {
-                PublicInvocationResult::Value { value } => {
+                PublicInvocationResult::Value {
+                    graph: result_graph,
+                    value,
+                } => {
                     let Some(output_type) = output_schema.schema() else {
                         bail!("session returned a value for a unit-returning method");
                     };
-                    let value = decode_output_value(graph, output_type, value, bindings)?;
+                    let value = decode_invocation_result_value(
+                        result_graph,
+                        value,
+                        graph,
+                        output_type,
+                        bindings,
+                    )?;
                     discover_streams(
                         graph,
                         output_type,
@@ -1895,6 +1949,20 @@ fn decode_output_value(
         },
     )
     .map_err(Into::into)
+}
+
+fn decode_invocation_result_value(
+    result_graph: &SchemaGraph,
+    value: &serde_json::Value,
+    expected_graph: &SchemaGraph,
+    expected_type: &SchemaType,
+    bindings: &DeliveryTracker,
+) -> anyhow::Result<SchemaValue> {
+    let value = decode_output_value(result_graph, &result_graph.root, value, bindings)?;
+    validate_value(expected_graph, expected_type, &value).map_err(|errors| {
+        anyhow!("invocation result failed expected schema validation: {errors:?}")
+    })?;
+    Ok(value)
 }
 
 fn event(
@@ -2620,16 +2688,61 @@ mod public_tests {
     }
 
     #[test]
+    fn invocation_result_uses_returned_graph_and_validates_expected_type() {
+        let type_id = golem_common::schema::metadata::TypeId::new("ReturnedText");
+        let result_graph = SchemaGraph {
+            defs: vec![golem_common::schema::SchemaTypeDef {
+                id: type_id.clone(),
+                name: Some("ReturnedText".to_string()),
+                body: SchemaType::string(),
+            }],
+            root: SchemaType::ref_to(type_id),
+        };
+        let value = serde_json::json!({"kind":"string","value":"done"});
+        let bindings = DeliveryTracker::default();
+
+        assert_eq!(
+            decode_invocation_result_value(
+                &result_graph,
+                &value,
+                &SchemaGraph::empty(),
+                &SchemaType::string(),
+                &bindings,
+            )
+            .unwrap(),
+            SchemaValue::String("done".to_string())
+        );
+        assert!(
+            decode_invocation_result_value(
+                &result_graph,
+                &value,
+                &SchemaGraph::empty(),
+                &SchemaType::u64(),
+                &bindings,
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("expected schema validation")
+        );
+    }
+
+    #[test]
     fn pending_start_reuses_its_frozen_attempt_and_provisional_reference() {
         let saved_reference = uuid::Uuid::new_v4();
         let current_reference = uuid::Uuid::new_v4();
         let selector = checkpoint().selector;
+        let input_graph = pending_start_input_graph();
         let request = PublicClientMessage::InvocationStart {
             attempt_id: uuid::Uuid::new_v4(),
             config: Vec::new(),
             idempotency_key: "invocation-key".to_string(),
             method_parameters: serde_json::json!({
-                "source":{"$stream":{"provisionalRef":saved_reference}}
+                "kind":"record",
+                "value":{"fields":[
+                    {"kind":"u32","value":17},
+                    {"kind":"stream","value":{"provisionalRef":saved_reference}},
+                    {"kind":"string","value":"tail"}
+                ]}
             }),
             selector: Box::new(selector.clone()),
             version: INVOCATION_SESSION_VERSION,
@@ -2639,6 +2752,7 @@ mod public_tests {
             stream_token: None,
             channel: None,
             parameter_name: "source".to_string(),
+            parameter_index: 1,
             item_type: SchemaType::u8(),
             raw_kind: None,
         };
@@ -2647,13 +2761,146 @@ mod public_tests {
             &selector,
             &[],
             "invocation-key",
-            &serde_json::json!({
-                "source":{"$stream":{"provisionalRef":current_reference}}
-            }),
+            &input_graph,
+            &pending_start_values(current_reference, 17),
             Some(&mut binding),
         )
         .unwrap();
         assert_eq!(binding.provisional_ref, saved_reference);
+    }
+
+    #[test]
+    fn pending_start_validates_saved_parameters_with_the_public_codec() {
+        let current_reference = uuid::Uuid::new_v4();
+        let selector = checkpoint().selector;
+        let input_graph = pending_start_input_graph();
+        let malformed_parameters = [
+            serde_json::json!({
+                "kind":"record",
+                "value":{"fields":[
+                    {"kind":"u32","value":17},
+                    {"kind":"stream","value":{"provisionalRef":uuid::Uuid::nil()}},
+                    {"kind":"string","value":"tail"}
+                ]}
+            }),
+            serde_json::json!({
+                "kind":"record",
+                "value":{"fields":[
+                    {"kind":"u32","value":17},
+                    {"kind":"stream","value":{"provisionalRef":uuid::Uuid::new_v4(),"streamToken":"stable"}},
+                    {"kind":"string","value":"tail"}
+                ]}
+            }),
+            serde_json::json!({
+                "kind":"record",
+                "value":{"fields":[
+                    {"kind":"u32","value":17},
+                    {"kind":"stream","value":{"provisionalRef":uuid::Uuid::new_v4()},"extra":true},
+                    {"kind":"string","value":"tail"}
+                ]}
+            }),
+        ];
+
+        for parameters in malformed_parameters {
+            let request = PublicClientMessage::InvocationStart {
+                attempt_id: uuid::Uuid::new_v4(),
+                config: Vec::new(),
+                idempotency_key: "invocation-key".to_string(),
+                method_parameters: parameters,
+                selector: Box::new(selector.clone()),
+                version: INVOCATION_SESSION_VERSION,
+            };
+            let mut binding = pending_start_binding(current_reference);
+            assert!(
+                validate_pending_start(
+                    &request,
+                    &selector,
+                    &[],
+                    "invocation-key",
+                    &input_graph,
+                    &pending_start_values(current_reference, 17),
+                    Some(&mut binding),
+                )
+                .is_err()
+            );
+            assert_eq!(binding.provisional_ref, current_reference);
+        }
+
+        let saved_reference = uuid::Uuid::new_v4();
+        let mismatched_request = PublicClientMessage::InvocationStart {
+            attempt_id: uuid::Uuid::new_v4(),
+            config: Vec::new(),
+            idempotency_key: "invocation-key".to_string(),
+            method_parameters: serde_json::json!({
+                "kind":"record",
+                "value":{"fields":[
+                    {"kind":"u32","value":18},
+                    {"kind":"stream","value":{"provisionalRef":saved_reference}},
+                    {"kind":"string","value":"tail"}
+                ]}
+            }),
+            selector: Box::new(selector.clone()),
+            version: INVOCATION_SESSION_VERSION,
+        };
+        let mut binding = pending_start_binding(current_reference);
+        assert!(
+            validate_pending_start(
+                &mismatched_request,
+                &selector,
+                &[],
+                "invocation-key",
+                &input_graph,
+                &pending_start_values(current_reference, 17),
+                Some(&mut binding),
+            )
+            .is_err()
+        );
+        assert_eq!(binding.provisional_ref, current_reference);
+    }
+
+    fn pending_start_input_graph() -> SchemaGraph {
+        SchemaGraph {
+            defs: Vec::new(),
+            root: SchemaType::record(vec![
+                NamedFieldType {
+                    name: "prefix".to_string(),
+                    body: SchemaType::u32(),
+                    metadata: MetadataEnvelope::default(),
+                },
+                NamedFieldType {
+                    name: "source".to_string(),
+                    body: SchemaType::stream(Some(SchemaType::u8())),
+                    metadata: MetadataEnvelope::default(),
+                },
+                NamedFieldType {
+                    name: "suffix".to_string(),
+                    body: SchemaType::string(),
+                    metadata: MetadataEnvelope::default(),
+                },
+            ]),
+        }
+    }
+
+    fn pending_start_values(reference: uuid::Uuid, prefix: u32) -> SchemaValue {
+        SchemaValue::Record {
+            fields: vec![
+                SchemaValue::U32(prefix),
+                SchemaValue::Stream(SchemaValueStream::from_host_endpoint(reference)),
+                SchemaValue::String("tail".to_string()),
+            ],
+        }
+    }
+
+    fn pending_start_binding(reference: uuid::Uuid) -> InputBinding {
+        InputBinding {
+            provisional_ref: reference,
+            stream_token: None,
+            channel: None,
+            parameter_name: "source".to_string(),
+            parameter_index: 1,
+            item_type: SchemaType::u8(),
+            raw_kind: None,
+        }
     }
 
     #[test]

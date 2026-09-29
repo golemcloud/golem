@@ -282,6 +282,7 @@ mod tests {
     fn tool(input: SchemaType, result: SchemaType, error_name: &str) -> Tool {
         Tool {
             version: "1".into(),
+            requires_filesystem: false,
             schema: SchemaGraph::empty(),
             commands: CommandTree {
                 nodes: vec![CommandNode {

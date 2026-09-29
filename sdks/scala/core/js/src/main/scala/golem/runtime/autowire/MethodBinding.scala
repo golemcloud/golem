@@ -18,8 +18,9 @@ package golem.runtime.autowire
 
 import golem.Principal
 import golem.FutureInterop
+import golem.host.SchemaWireInterop
 import golem.host.js.schema.{JsAgentError, JsSchemaValueTree}
-import golem.runtime.{InputRecordCodec, MethodMetadata, OutputCodec}
+import golem.runtime.{InputRecordCodec, MethodMetadata, OutputCodec, WireAgentMetadata, WireImplementationMethod}
 import golem.runtime.http.HttpMethod
 import golem.schema.{
   AgentStream,
@@ -30,6 +31,7 @@ import golem.schema.{
   SchemaValue
 }
 import golem.schema.SchemaValue.*
+import golem.schema.wire.{WitSchemaValueNode, WitSchemaValueTree}
 
 import scala.concurrent.Future
 import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
@@ -46,12 +48,41 @@ import scala.scalajs.js
  * encodes `Some(tree)`. The guest export bridges this to / from `js.undefined`.
  */
 trait MethodBinding[Instance] {
+  def name: String
   def metadata: MethodMetadata
 
   def invoke(instance: Instance, input: JsSchemaValueTree, principal: Principal): js.Promise[Option[JsSchemaValueTree]]
 }
 
 object MethodBinding {
+  def wire[Instance](
+    descriptor: WireAgentMetadata,
+    method: WireImplementationMethod[Instance]
+  ): MethodBinding[Instance] =
+    new MethodBinding[Instance] {
+      def name: String             = method.name
+      def metadata: MethodMetadata = descriptor.reflectedMethod(descriptor.methods.find(_.name == name).get)
+      private val rawHttp          = metadata.httpEndpoints match {
+        case List(endpoint) => endpoint.httpMethod == HttpMethod.Any && endpoint.pathSuffix.isEmpty
+        case _              => false
+      }
+      def invoke(
+        instance: Instance,
+        input: JsSchemaValueTree,
+        principal: Principal
+      ): js.Promise[Option[JsSchemaValueTree]] =
+        FutureInterop.toPromise(SchemaPayload.withWireInput(input) { value =>
+          val head = rawHttp && isHeadWireInput(value)
+          method.invoke(instance, value, principal).flatMap {
+            case None        => Future.successful(None)
+            case Some(value) =>
+              suppressWireBody(value, head)
+                .flatMap(SchemaWireInterop.ownedValueTreeToJsAsync)
+                .map(Some(_))
+          }
+        })
+    }
+
   def sync[Instance, In, Out](
     methodMetadata: MethodMetadata,
     inputCodec: InputRecordCodec[In],
@@ -67,6 +98,7 @@ object MethodBinding {
     outputCodec: OutputCodec[Out]
   )(handler: (Instance, In, Principal) => Future[Out]): MethodBinding[Instance] =
     new MethodBinding[Instance] {
+      override val name: String             = methodMetadata.name
       override val metadata: MethodMetadata = methodMetadata
       private val rawHttp                   = metadata.httpEndpoints match {
         case List(endpoint) => endpoint.httpMethod == HttpMethod.Any && endpoint.pathSuffix.isEmpty
@@ -116,4 +148,35 @@ object MethodBinding {
       endpoint.dispose().map(_ => replacement)
     case _ => Future.successful(value)
   }
+
+  private def isHeadWireInput(value: WitSchemaValueTree): Boolean =
+    value.valueNodes.lift(value.root) match {
+      case Some(WitSchemaValueNode.RecordValue(Vector(request))) =>
+        value.valueNodes.lift(request) match {
+          case Some(WitSchemaValueNode.RecordValue(fields)) =>
+            fields.headOption.flatMap(value.valueNodes.lift).contains(WitSchemaValueNode.StringValue("HEAD"))
+          case _ => false
+        }
+      case _ => false
+    }
+
+  private def suppressWireBody(value: WitSchemaValueTree, head: Boolean): Future[WitSchemaValueTree] =
+    value.valueNodes.lift(value.root) match {
+      case Some(WitSchemaValueNode.RecordValue(Vector(status, _, body))) =>
+        (value.valueNodes.lift(status), value.valueNodes.lift(body)) match {
+          case (
+                Some(WitSchemaValueNode.U16Value(code)),
+                Some(WitSchemaValueNode.StreamValue(handle))
+              ) if head || code == 204 || code == 205 || code == 304 =>
+            val endpoint = handle.take().getOrElse(throw new IllegalStateException("HTTP body was already transferred"))
+            endpoint.dispose().map { _ =>
+              val empty = GuestSchemaValueStreamHandle.nativeWire(
+                AgentStream.fromPull[WitSchemaValueTree](() => Future.successful(None))
+              )
+              value.copy(valueNodes = value.valueNodes.updated(body, WitSchemaValueNode.StreamValue(empty)))
+            }
+          case _ => Future.successful(value)
+        }
+      case _ => Future.successful(value)
+    }
 }

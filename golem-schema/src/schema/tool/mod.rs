@@ -98,6 +98,7 @@ impl CommandIndex {
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub struct Tool {
     pub version: String,
+    pub requires_filesystem: bool,
     pub commands: CommandTree,
     /// Named-type registry shared by this tool's commands. Typed positions in
     /// the command tree may reference these definitions via

@@ -16587,6 +16587,39 @@ components:
       required:
       - key
       - description
+    ExternalBinaryValuePayload:
+      type: object
+      properties:
+        bytes:
+          type: array
+          items:
+            type: integer
+            format: uint8
+        mimeType:
+          type: string
+      required:
+      - bytes
+    ExternalDurationValuePayload:
+      type: object
+      properties:
+        nanoseconds:
+          type: string
+      required:
+      - nanoseconds
+    ExternalQuantityValue:
+      type: object
+      properties:
+        mantissa:
+          type: string
+        scale:
+          type: integer
+          format: int32
+        unit:
+          type: string
+      required:
+      - mantissa
+      - scale
+      - unit
     ExternalResultValuePayload:
       type: object
       oneOf:
@@ -16597,12 +16630,15 @@ components:
             enum:
             - ok
           value:
-            nullable: true
-            allOf:
+            oneOf:
             - $ref: '#/components/schemas/ExternalSchemaValue'
             - nullable: true
+              type: object
+              enum:
+              - null
         required:
         - tag
+        - value
       - type: object
         properties:
           tag:
@@ -16610,12 +16646,15 @@ components:
             enum:
             - err
           value:
-            nullable: true
-            allOf:
+            oneOf:
             - $ref: '#/components/schemas/ExternalSchemaValue'
             - nullable: true
+              type: object
+              enum:
+              - null
         required:
         - tag
+        - value
     ExternalSchemaValue:
       type: object
       oneOf:
@@ -16673,8 +16712,7 @@ components:
             enum:
             - s64
           value:
-            type: integer
-            format: int64
+            type: string
         required:
         - kind
         - value
@@ -16721,8 +16759,7 @@ components:
             enum:
             - u64
           value:
-            type: integer
-            format: uint64
+            type: string
         required:
         - kind
         - value
@@ -16733,8 +16770,18 @@ components:
             enum:
             - f32
           value:
-            type: number
-            format: float
+            oneOf:
+            - type: number
+            - type: object
+              properties:
+                $float:
+                  type: string
+                  enum:
+                  - nan
+                  - positive-infinity
+                  - negative-infinity
+              required:
+              - $float
         required:
         - kind
         - value
@@ -16745,8 +16792,18 @@ components:
             enum:
             - f64
           value:
-            type: number
-            format: double
+            oneOf:
+            - type: number
+            - type: object
+              properties:
+                $float:
+                  type: string
+                  enum:
+                  - nan
+                  - positive-infinity
+                  - negative-infinity
+              required:
+              - $float
         required:
         - kind
         - value
@@ -16922,10 +16979,14 @@ components:
             type: object
             properties:
               inner:
-                nullable: true
-                allOf:
+                oneOf:
                 - $ref: '#/components/schemas/ExternalSchemaValue'
                 - nullable: true
+                  type: object
+                  enum:
+                  - null
+            required:
+            - inner
         required:
         - kind
         - value
@@ -16947,7 +17008,7 @@ components:
             enum:
             - text
           value:
-            $ref: '#/components/schemas/TextValuePayload'
+            $ref: '#/components/schemas/ExternalTextValuePayload'
         required:
         - kind
         - value
@@ -16958,7 +17019,7 @@ components:
             enum:
             - binary
           value:
-            $ref: '#/components/schemas/BinaryValuePayload'
+            $ref: '#/components/schemas/ExternalBinaryValuePayload'
         required:
         - kind
         - value
@@ -17018,7 +17079,7 @@ components:
             enum:
             - duration
           value:
-            $ref: '#/components/schemas/DurationValuePayload'
+            $ref: '#/components/schemas/ExternalDurationValuePayload'
         required:
         - kind
         - value
@@ -17029,7 +17090,7 @@ components:
             enum:
             - quantity
           value:
-            $ref: '#/components/schemas/QuantityValue'
+            $ref: '#/components/schemas/ExternalQuantityValue'
         required:
         - kind
         - value
@@ -17044,6 +17105,15 @@ components:
         required:
         - kind
         - value
+    ExternalTextValuePayload:
+      type: object
+      properties:
+        text:
+          type: string
+        language:
+          type: string
+      required:
+      - text
     ExternalToolInvocationParameters:
       title: ExternalToolInvocationParameters
       type: object
@@ -17113,10 +17183,7 @@ components:
           type: integer
           format: uint32
         payload:
-          nullable: true
-          allOf:
-          - $ref: '#/components/schemas/ExternalSchemaValue'
-          - nullable: true
+          $ref: '#/components/schemas/ExternalSchemaValue'
       required:
       - case
     FailedUpdate:
@@ -21676,12 +21743,15 @@ components:
       properties:
         version:
           type: string
+        requires_filesystem:
+          type: boolean
         commands:
           $ref: '#/components/schemas/CommandTree'
         schema:
           $ref: '#/components/schemas/SchemaGraph'
       required:
       - version
+      - requires_filesystem
       - commands
     ToolResultSpec:
       type: object

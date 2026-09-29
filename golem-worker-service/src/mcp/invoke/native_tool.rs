@@ -104,7 +104,7 @@ pub async fn invoke(
     let key = IdempotencyKey::fresh();
     let auth = invocation_auth(deployment, export, &key);
     let input = PublicTypedValue {
-        schema: input.graph().clone(),
+        graph: input.graph().clone(),
         value: encode_public_schema_value(
             input.graph(),
             &input.graph().root,
@@ -715,6 +715,7 @@ mod tests {
         };
         let definition = NativeTool {
             version: "1.0.0".to_string(),
+            requires_filesystem: false,
             schema: SchemaGraph::empty(),
             commands: CommandTree {
                 nodes: vec![CommandNode {

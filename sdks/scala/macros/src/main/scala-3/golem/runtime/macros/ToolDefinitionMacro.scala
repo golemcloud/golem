@@ -168,7 +168,13 @@ private[macros] class ToolDefinitionAssembler(val core: ToolMacroCore) {
       val root      = $rootBuild
       val childList = ${ Expr.ofList(children) }
       (ctx: ToolBuildCtx) =>
-        ToolDescriptorBuilder.build(${ Expr(ir.identity) }, ${ Expr(ir.version) }, root, childList)(
+        ToolDescriptorBuilder.build(
+          ${ Expr(ir.identity) },
+          ${ Expr(ir.version) },
+          ${ Expr(ir.requiresFilesystem) },
+          root,
+          childList
+        )(
           ctx
         )
     }

@@ -566,12 +566,13 @@ object JsCommandTree {
 @js.native
 sealed trait JsTool extends js.Object {
   def version: String         = js.native
+  def requiresFilesystem: Boolean = js.native
   def commands: JsCommandTree = js.native
   def schema: JsSchemaGraph   = js.native
 }
 object JsTool {
-  def apply(version: String, commands: JsCommandTree, schema: JsSchemaGraph): JsTool =
-    js.Dynamic.literal("version" -> version, "commands" -> commands, "schema" -> schema).asInstanceOf[JsTool]
+  def apply(version: String, requiresFilesystem: Boolean, commands: JsCommandTree, schema: JsSchemaGraph): JsTool =
+    js.Dynamic.literal("version" -> version, "requiresFilesystem" -> requiresFilesystem, "commands" -> commands, "schema" -> schema).asInstanceOf[JsTool]
 }
 
 // === Invocation contract ===

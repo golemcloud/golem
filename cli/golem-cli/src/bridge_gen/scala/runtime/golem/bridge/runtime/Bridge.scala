@@ -147,9 +147,10 @@ object Bridge {
     methodParameters: () => SchemaValue,
     constructorCodec: PublicValueCodec.Codec,
     inputCodec: PublicValueCodec.Codec,
-    outputCodec: Option[PublicValueCodec.Codec]
+    outputCodec: Option[PublicValueCodec.Codec],
+    configCodecs: List[(List[String], PublicValueCodec.Codec)]
   ): Future[AgentInvocationResult] =
     Try(
-      StreamSession.invoke(resolved, methodName, methodParameters, constructorCodec, inputCodec, outputCodec)
+      StreamSession.invoke(resolved, methodName, methodParameters, constructorCodec, inputCodec, outputCodec, configCodecs)
     ).fold(Future.failed, future => future)
 }

@@ -107,8 +107,11 @@ private[macros] class ToolImplementationAssembler(val core: ToolMacroCore) {
     classified: core.ClassifiedCommand,
     implE: Expr[Trait]
   ): Expr[ToolMethodBinding] = {
-    val pos  = m.sym.pos.getOrElse(Position.ofMacroExpansion)
-    val path = if (m.isRoot) Nil else List(m.commandName)
+    val pos           = m.sym.pos.getOrElse(Position.ofMacroExpansion)
+    val path          = if (m.isRoot) Nil else List(m.commandName)
+    val acceptedPaths =
+      if (m.isRoot) List(Nil)
+      else (m.commandName :: m.aliases).map(name => List(name))
 
     val decoders: Expr[List[ToolParamDecoder]] = Expr.ofList(classified.bindings.map {
       case core.ParamBindingIR.Field(name, _, true) =>
@@ -140,7 +143,8 @@ private[macros] class ToolImplementationAssembler(val core: ToolMacroCore) {
             case Left(error)              => Future.successful(Left(error))
             case Right((args, stdoutOpt)) =>
               ${ callAndEncode[Trait](m, implE, 'args, 'stdoutOpt) }
-          }
+          },
+        ${ Expr(acceptedPaths) }
       )
     }
   }

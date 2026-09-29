@@ -237,6 +237,12 @@ test_component!(
     "golem-it:tool-streaming-rust-caller"
 );
 test_component!(
+    filesystem_tools,
+    "filesystem_tools",
+    "../builtin-tools/filesystem-tools",
+    "golem:filesystem-tools"
+);
+test_component!(
     tool_streaming_ts_provider,
     "tool_streaming_ts_provider",
     "golem_it_tool_streaming_ts_provider",

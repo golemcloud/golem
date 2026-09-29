@@ -430,25 +430,14 @@ pub fn get_tool_activation_from_deployment(
         }
     }
 
-    let filesystem = match (
+    let filesystem = golem_common::model::tool::filesystem_capability(
         binding.filesystem_access,
-        registered_tool.provision.files.is_empty(),
-    ) {
-        (ToolFilesystemAccess::Allowed, _) | (ToolFilesystemAccess::Unset, false) => {
-            FilesystemCapability::Capable
-        }
-        (ToolFilesystemAccess::Denied, false) => {
-            return Err(ToolDiscoveryError::InconsistentSnapshot {
-                details: format!(
-                    "tool '{}' denies filesystem access but declares provisioned files",
-                    tool_name
-                ),
-            });
-        }
-        (ToolFilesystemAccess::Denied | ToolFilesystemAccess::Unset, true) => {
-            FilesystemCapability::Incapable
-        }
-    };
+        &registered_tool.provision,
+        registered_tool.definition.requires_filesystem,
+    )
+    .map_err(|details| ToolDiscoveryError::InconsistentSnapshot {
+        details: format!("tool '{tool_name}' cannot be activated: {details}"),
+    })?;
 
     Ok(ToolActivationOutcome::Ready(Box::new(
         ToolActivationSnapshot {

@@ -33,6 +33,7 @@ import golem.tool._
 
 final case class WitTool(
   version: String,
+  requiresFilesystem: Boolean,
   commands: WitCommandTree,
   schema: WitSchemaGraph
 )

@@ -18,8 +18,8 @@ package golem.bridge.runtime
 
 import golem.bridge.runtime.json.Json
 
-/** A single agent configuration override entry of a create-agent request. */
-final case class AgentConfigEntry(path: List[String], value: SchemaValue, codec: PublicValueCodec.Codec)
+/** A single application-JSON configuration override entry of a create-agent request. */
+final case class AgentConfigEntry(path: List[String], value: Json)
 
 /** Body of a `POST /v1/agents/create-agent` request. */
 final case class CreateAgentRequest(
@@ -118,7 +118,7 @@ object BridgeProtocol {
   private def encodeConfigEntry(entry: AgentConfigEntry): Json =
     Json.obj(
       "path"  -> Json.arr(entry.path.map(Json.string).toVector),
-      "value" -> entry.codec.encodeCanonical(entry.value)
+      "value" -> entry.value
     )
 
   def decodeCreateAgentResponse(json: Json): Either[String, CreateAgentResponse] =
@@ -138,25 +138,16 @@ object BridgeProtocol {
       revision    <- optionalBigInt(json, "componentRevision")
     } yield AgentInvocationResult(agentId, key, result, revision)
 
-  /**
-   * Extract and decode the `result.value` `SchemaValue` of a
-   * `TypedSchemaValue`. An absent or `null` `result` means the invocation
-   * produced no value (a unit method, or a fire-and-forget schedule). When
-   * `result` is present it must be a JSON object: a non-object `result` is a
-   * malformed response and is rejected rather than silently treated as "no
-   * value". A present `result` object without a `value` field still means "no
-   * value", matching the server's encoding of unit outputs.
-   */
+  /** Decode a present `TypedSchemaValue` against its returned schema graph. */
   private def decodeResultValue(json: Json): Either[String, Option[SchemaValue]] =
     Json.field(json, "result") match {
       case None => Right(None)
       case Some(typed) =>
-        Json.asObject(typed).flatMap { _ =>
-          Json.field(typed, "value") match {
-            case None        => Right(None)
-            case Some(value) => SchemaValueCodec.fromJson(value).map(Some(_))
-          }
-        }
+        for {
+          _     <- Json.asObject(typed)
+          graph <- Json.requireField(typed, "graph")
+          value <- Json.requireField(typed, "value")
+        } yield Some(PublicValueCodec.fromSchemaGraphJson(graph.render).decode(value))
     }
 
   private def optionalBigInt(json: Json, name: String): Either[String, Option[BigInt]] =

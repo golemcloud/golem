@@ -18,7 +18,7 @@ object HttpRouterMacroSpec extends ZIOSpecDefault {
     cors = Array("https://example.com")
   )
   trait Website {
-    @httpHandler def arbitraryName(request: HttpRequest): Future[HttpResponse]
+    @httpHandler def arbitraryName(request: HttpRequest, principal: golem.Principal): Future[HttpResponse]
     @openApiProvider def description(): Future[String]
   }
   @httpRouter("files", "/", staticBindings = Array(("/", "/index.html")))
@@ -42,8 +42,10 @@ object HttpRouterMacroSpec extends ZIOSpecDefault {
   def spec = suite("HttpRouterMacroSpec")(
     test("combined router uses normal named methods and ordered mappings") {
       val metadata = AgentDefinitionMacro.generate[Website]
+      val wire     = AgentDefinitionMacro.generateWire[Website]
       val mount    = metadata.httpMount.get
       assertTrue(
+        wire == golem.runtime.WireAgentMetadata.fromModel(metadata),
         metadata.name == "website",
         metadata.kind == AgentTypeKind.HttpRouter,
         metadata.mode.contains("ephemeral"),

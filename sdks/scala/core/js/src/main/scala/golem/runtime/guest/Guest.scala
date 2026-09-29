@@ -18,11 +18,19 @@ package golem.runtime.guest
 
 import golem.host.{SchemaWireInterop, ToolWireInterop}
 import golem.host.js.{JsSnapshot, PrincipalConverter}
-import golem.host.js.schema.{JsAgentError, JsSchemaValueTree, JsTypedSchemaValue}
+import golem.host.js.schema.{
+  JsAgentError,
+  JsMetadataEnvelope,
+  JsSchemaGraph,
+  JsSchemaTypeBody,
+  JsSchemaTypeNode,
+  JsSchemaValueNode,
+  JsSchemaValueTree,
+  JsTypedSchemaValue
+}
 import golem.host.js.tool.{JsInvocationResult, JsTool}
 import golem.config.ConfigHolder
 import golem.runtime.autowire.AgentRegistry
-import golem.runtime.rpc.SchemaRpcCodec
 import golem.runtime.rpc.host.AgentHostApi
 import golem.runtime.tool.{JsToolInputStream, JsToolOutputStream, ToolRegistry}
 import golem.schema.AgentStreamOwnership
@@ -35,13 +43,12 @@ import scala.concurrent.Future
 import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
 import scala.scalajs.js
 import scala.scalajs.js.JSConverters._
-import scala.scalajs.js.annotation.{JSExport, JSExportTopLevel}
 import scala.scalajs.js.typedarray.Uint8Array
 import scala.util.{Failure, Success}
 import scala.util.control.NonFatal
 
 /**
- * Scala.js implementation of the mandatory Golem JS guest exports.
+ * Full agent and tool implementations selected by generated guest exports.
  *
  * The Scala application code is responsible for registering agent definitions
  * into AgentRegistry at module initialization time (typically via
@@ -69,7 +76,21 @@ object Guest {
     JsAgentError.invalidAgentId(message)
 
   private def customError(message: String): JsAgentError =
-    JsAgentError.customError(SchemaRpcCodec.encodeTyped[String](message))
+    JsAgentError.customError(
+      JsTypedSchemaValue(
+        JsSchemaGraph(
+          js.Array(
+            JsSchemaTypeNode(
+              JsSchemaTypeBody.stringType,
+              JsMetadataEnvelope(js.undefined, js.Array(), js.Array(), js.undefined, js.undefined)
+            )
+          ),
+          js.Array(),
+          0
+        ),
+        JsSchemaValueTree(js.Array(JsSchemaValueNode.stringValue(message)), 0)
+      )
+    )
 
   private def asAgentError(err: Any, fallbackTag: String): JsAgentError =
     if (err == null) customError("null")
@@ -205,14 +226,11 @@ object Guest {
               case None          => Future.successful(Left(WitToolError.InvalidToolName(toolName)))
               case Some(invoker) =>
                 val path = commandPath.toList
-                val body = ToolRegistry.getExtendedTool(toolName).flatMap { tool =>
-                  tool.commandIndexByPath(path).flatMap(index => tool.commands(index).body)
-                }
-                body match {
-                  case None                                                          => Future.successful(Left(WitToolError.InvalidCommandPath(path)))
-                  case Some(selected) if selected.stdout.isEmpty && stdout.isDefined =>
+                ToolRegistry.getCommandStdout(toolName, path) match {
+                  case None                                                   => Future.successful(Left(WitToolError.InvalidCommandPath(path)))
+                  case Some(selected) if selected.isEmpty && stdout.isDefined =>
                     Future.successful(Left(WitToolError.InvalidInput("unexpected stdout stream")))
-                  case Some(selected) if selected.stdout.exists(_.required) && stdout.isEmpty =>
+                  case Some(selected) if selected.exists(_.required) && stdout.isEmpty =>
                     Future.successful(
                       Left(WitToolError.InvalidInput("tool invocation did not contain declared stdout stream"))
                     )
@@ -227,14 +245,26 @@ object Guest {
         case NonFatal(error) => Future.failed(error)
       }
 
-    val completed = invoked.transformWith { result =>
+    // A `Left` (declared tool error) is surfaced as a rejection carrying the
+    // wire-encoded `tool-error`; a failed Future (user code error) propagates as
+    // an unhandled rejection so it becomes a WASM trap.
+    val completed = invoked.transformWith { invocationResult =>
+      val encoded = Future.fromTry(invocationResult).flatMap {
+        case Right(res) =>
+          res.result match {
+            case Some(value) => SchemaWireInterop.typedToJsAsync(value).map(value => JsInvocationResult(value))
+            case None        => Future.successful(JsInvocationResult(js.undefined))
+          }
+        case Left(error) =>
+          ToolWireInterop.toolErrorToJsAsync(error).flatMap(error => Future.failed(js.JavaScriptException(error)))
+      }
       val cleanup = List(
         () => inputOwnership.close(),
         () => scalaStdin.map(_.close()).getOrElse(Future.successful(())),
         () =>
           scalaStdout match {
             case Some(stream) =>
-              result match {
+              invocationResult match {
                 case Success(_)     => stream.close()
                 case Failure(error) => stream.failInvocation(error)
               }
@@ -243,15 +273,11 @@ object Guest {
               Future.successful(())
           }
       )
-      Future
-        .sequence(cleanup.map(action => AgentStreamOwnership.cleanup(action())))
-        .flatMap(_ => Future.fromTry(result))
-        .map {
-          case Right(res) =>
-            JsInvocationResult(res.result.map(SchemaWireInterop.typedToJs).orUndefined)
-          case Left(error) =>
-            throw js.JavaScriptException(ToolWireInterop.toolErrorToJs(error))
-        }
+      encoded.transformWith { result =>
+        Future
+          .sequence(cleanup.map(action => AgentStreamOwnership.cleanup(action())))
+          .flatMap(_ => Future.fromTry(result))
+      }
     }
 
     FutureInterop.toPromise(completed)
@@ -299,8 +325,7 @@ object Guest {
     out
   }
 
-  @JSExportTopLevel("golemAgent200Guest")
-  val golemAgent200Guest: js.Dynamic =
+  def golemAgent200Guest: js.Dynamic =
     js.Dynamic.literal(
       "initialize" -> ((agentTypeName: String, input: js.Dynamic, principal: js.Dynamic) =>
         initialize(agentTypeName, input, principal)
@@ -312,11 +337,7 @@ object Guest {
       "discoverAgentTypes" -> (() => discoverAgentTypes())
     )
 
-  @JSExportTopLevel("guest")
-  val guest: js.Dynamic = golemAgent200Guest
-
-  @JSExportTopLevel("golemTool010Guest")
-  val golemTool010Guest: js.Dynamic =
+  def golemTool010Guest: js.Dynamic =
     js.Dynamic.literal(
       "discoverTools" -> (() => discoverTools()),
       "getTool"       -> ((name: String) => getTool(name)),
@@ -340,9 +361,7 @@ object Guest {
       )
     )
 
-  @JSExportTopLevel("saveSnapshot")
   object SaveSnapshot {
-    @JSExport
     def save(): js.Promise[JsSnapshot] =
       if (js.isUndefined(resolved)) {
         FutureInterop.toPromise(Future.successful(JsSnapshot(new Uint8Array(0), "application/octet-stream")))
@@ -433,9 +452,7 @@ object Guest {
       }
     }
 
-  @JSExportTopLevel("loadSnapshot")
   object LoadSnapshot {
-    @JSExport
     def load(snapshot: JsSnapshot): js.Promise[Unit] =
       if (!js.isUndefined(resolved)) {
         js.Promise.reject(customError("Agent is already initialized in this container"))

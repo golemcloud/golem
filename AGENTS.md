@@ -188,6 +188,8 @@ Load these skills for guided workflows on complex tasks:
 
 Validate the smallest dependency and behavior scope that fully covers the change. Use package-scoped, non-mutating format, lint, build, and test commands by default. Broaden checks when shared contracts, workspace configuration, generated artifacts, or multiple subsystems are affected.
 
+When changing SDK code generation, guest bridge generation, canonical ABI wrappers, runtime retention, or release profiles, run `cargo make component-size-report`. It builds representative fixtures and writes `tmp/component-size-report/report.md` plus machine-readable details. Compare reports only when the toolchain, lockfile, Cargo configuration, and environment are identical. This is a local analysis capability, not a CI size gate.
+
 Do not run `cargo make fix` by default. It mutates the entire root and `dev-tools` workspaces and does not validate the separately built SDKs. Use scoped auto-fix commands only when needed, and inspect their diff afterward.
 
 Load the `pre-pr-checklist` skill for the change-scope matrix and escalation rules. Repository-wide CI remains the final broad safety net; local verification must still cover the affected code and behavior before opening a PR.
