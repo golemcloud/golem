@@ -635,7 +635,7 @@ impl TestDsl for TestWorkerExecutor {
                 return Err(anyhow!("agent invocation returned an external-tool result"));
             }
         };
-        Ok(AgentResult::new(value))
+        Ok(AgentResult::new(value, worker_agent_id))
     }
 
     #[tracing::instrument(level = "info", skip_all, fields(%agent_id))]

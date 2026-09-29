@@ -608,12 +608,13 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
             )
             .await?;
 
+        let agent_id = result.agent_id;
         match result.result {
             Some(typed_output) => {
                 let (_graph, value) = typed_output.into_inner().into_parts();
-                Ok(AgentResult::new(Some(value)))
+                Ok(AgentResult::new(Some(value), agent_id))
             }
-            None => Ok(AgentResult::new(None)),
+            None => Ok(AgentResult::new(None, agent_id)),
         }
     }
 

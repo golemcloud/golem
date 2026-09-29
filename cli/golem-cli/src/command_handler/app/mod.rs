@@ -1633,48 +1633,11 @@ impl AppCommandHandler {
             })
             .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
 
-        let (mut environment_tool_middleware_bindings, mut agent_tool_middleware_bindings) =
+        let (environment_tool_middleware_bindings, agent_tool_middleware_bindings) =
             diff::tool_middleware_binding_inputs(
                 &dynamic_environment_bindings,
                 &dynamic_agent_bindings,
             );
-        for (tool_name, config) in components
-            .values()
-            .flat_map(|component| component.tool_deployment_configs.iter())
-        {
-            if let Some(binding) = &config.environment_binding {
-                environment_tool_middleware_bindings.insert(
-                    tool_name.to_string(),
-                    diff::ToolMiddlewareBindingInput::from(binding),
-                );
-            }
-            for (agent, binding) in &config.agent_bindings {
-                agent_tool_middleware_bindings
-                    .entry(agent.to_string())
-                    .or_insert_with(BTreeMap::new)
-                    .insert(
-                        tool_name.to_string(),
-                        diff::ToolMiddlewareBindingInput::from(binding),
-                    );
-            }
-        }
-        for (tool_name, deployment) in &remote_tools.deployments {
-            if let Some(binding) = &deployment.environment_binding {
-                environment_tool_middleware_bindings.insert(
-                    tool_name.to_string(),
-                    diff::ToolMiddlewareBindingInput::from(binding),
-                );
-            }
-            for (agent, binding) in &deployment.agent_bindings {
-                agent_tool_middleware_bindings
-                    .entry(agent.to_string())
-                    .or_insert_with(BTreeMap::new)
-                    .insert(
-                        tool_name.to_string(),
-                        diff::ToolMiddlewareBindingInput::from(binding),
-                    );
-            }
-        }
 
         let diffable_local_deployment = diff::Deployment {
             components: diffable_local_components,

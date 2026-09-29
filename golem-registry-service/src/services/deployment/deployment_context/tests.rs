@@ -1794,6 +1794,11 @@ fn zero_agent_remote_component_binding_hash_uses_effective_binding_and_matches_c
                 &[],
                 &[],
                 Default::default(),
+                &BTreeMap::from([(
+                    ToolName::try_from("grep").unwrap(),
+                    environment_binding.clone(),
+                )]),
+                &BTreeMap::new(),
                 &BTreeMap::new(),
                 &BTreeMap::new(),
             )
@@ -1826,6 +1831,12 @@ fn zero_agent_remote_component_binding_hash_uses_effective_binding_and_matches_c
                         effective,
                     )]),
                     bindings: BTreeMap::new(),
+                    environment_middleware_binding: Some((&environment_binding).into()),
+                    component_middleware_bindings: BTreeMap::from([(
+                        component.component_name.0.clone(),
+                        (&component_binding).into(),
+                    )]),
+                    agent_middleware_bindings: BTreeMap::new(),
                 }
                 .into(),
             )]),

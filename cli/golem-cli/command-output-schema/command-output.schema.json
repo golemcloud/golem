@@ -5974,6 +5974,46 @@
         "bindings": {
           "type": "object",
           "additionalProperties": { "$ref": "#/definitions/EffectiveToolBindingDiffPayload" }
+        },
+        "environmentMiddlewareBinding": { "$ref": "#/definitions/ToolMiddlewareBindingInput" },
+        "componentMiddlewareBindings": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/definitions/ToolMiddlewareBindingInput" }
+        },
+        "agentMiddlewareBindings": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/definitions/ToolMiddlewareBindingInput" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "ToolMiddlewareBindingInput": {
+      "type": "object",
+      "required": [
+        "configKeysReadable",
+        "secretKeysReadable",
+        "secretKeysRevealable",
+        "middleware",
+        "middlewareMergeMode"
+      ],
+      "properties": {
+        "configKeysReadable": { "$ref": "#/definitions/ConfigKeyScope" },
+        "secretKeysReadable": { "$ref": "#/definitions/SecretKeyScope" },
+        "secretKeysRevealable": { "$ref": "#/definitions/SecretKeyScope" },
+        "middleware": {
+          "oneOf": [
+            {
+              "type": "array",
+              "items": { "$ref": "#/definitions/ToolMiddlewareInstallation" }
+            },
+            { "type": "null" }
+          ]
+        },
+        "middlewareMergeMode": {
+          "oneOf": [
+            { "$ref": "#/definitions/ToolMiddlewareMergeMode" },
+            { "type": "null" }
+          ]
         }
       },
       "additionalProperties": false

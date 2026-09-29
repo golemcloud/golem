@@ -28,6 +28,7 @@ use golem_test_framework::config::dsl_impl::TestUserContext;
 use golem_test_framework::config::{BenchmarkTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use indoc::indoc;
+use std::sync::Mutex;
 use tracing::{Instrument, Level, info};
 
 pub struct DurabilityOverhead {
@@ -43,6 +44,7 @@ pub struct DurabilityOverheadIterationContext {
     component: ComponentDto,
     durable_persistent_agent_ids: Vec<ParsedAgentId>,
     ephemeral_agent_ids: Vec<ParsedAgentId>,
+    final_ephemeral_agent_ids: Mutex<Vec<AgentId>>,
     durable_persistent_commit_agent_ids: Vec<ParsedAgentId>,
     env_id: EnvironmentId,
 }
@@ -144,6 +146,7 @@ impl Benchmark for DurabilityOverhead {
             component: durable_component,
             durable_persistent_agent_ids,
             ephemeral_agent_ids,
+            final_ephemeral_agent_ids: Mutex::new(Vec::new()),
             durable_persistent_commit_agent_ids,
             env_id: env.id,
         })
@@ -235,6 +238,15 @@ impl Benchmark for DurabilityOverhead {
                 })
                 .collect::<Vec<_>>();
             let results = result_futures.join().await;
+            *context.final_ephemeral_agent_ids.lock().unwrap() = results
+                .iter()
+                .map(|result| {
+                    result
+                        .agent_id
+                        .clone()
+                        .expect("agent invocation must return its final agent ID")
+                })
+                .collect();
             for (idx, result) in results.iter().enumerate() {
                 result.record(&recorder, "ephemeral-", idx.to_string().as_str());
             }
@@ -286,7 +298,7 @@ impl Benchmark for DurabilityOverhead {
         .await;
         delete_workers(
             &context.user,
-            &agent_ids_to_agent_ids(context.component.id, &context.ephemeral_agent_ids),
+            &context.final_ephemeral_agent_ids.into_inner().unwrap(),
             &recorder,
         )
         .await;

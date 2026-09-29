@@ -147,11 +147,16 @@ impl Drop for LogOutputGuard {
 #[derive(Debug, Clone, PartialEq)]
 pub struct AgentResult {
     value: Option<SchemaValue>,
+    agent_id: AgentId,
 }
 
 impl AgentResult {
-    pub fn new(value: Option<SchemaValue>) -> Self {
-        Self { value }
+    pub fn new(value: Option<SchemaValue>, agent_id: AgentId) -> Self {
+        Self { value, agent_id }
+    }
+
+    pub fn agent_id(&self) -> &AgentId {
+        &self.agent_id
     }
 
     /// The raw decoded output value, if the method returned one.
