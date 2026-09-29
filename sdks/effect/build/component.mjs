@@ -45,28 +45,24 @@ export async function componentConfiguration(rollup, optionsFactory) {
   if (options.watch) throw new Error("Effect component builds do not support watch mode")
   if (options.cache) throw new Error("Effect component builds do not support Rollup cache")
   const input = resolve(options.input)
-  const makeSdkPlugin = () => {
-    let usesSourceHttpRouter = false
-    return {
-      name: "golem-effect-sdk-source",
-      resolveId(source) {
-        if (source === `${packageName}/HttpRouter`) usesSourceHttpRouter = true
-        if (source === packageName)
-          return {
-            id: join(sdkSource, usesSourceHttpRouter ? "internal/component/index.js" : "index.js"),
-            moduleSideEffects: false,
-          }
-        const path = publicEntries.get(source)
-        if (path) return { id: join(sdkSource, path), moduleSideEffects: false }
-        if (source.startsWith(sdkSource + sep)) return { id: source, moduleSideEffects: false }
-        return null
-      },
-      transform(code, id) {
-        if (id.startsWith(sdkSource + sep)) return { code, map: null, moduleSideEffects: false }
-        return null
-      },
-    }
-  }
+  const makeSdkPlugin = () => ({
+    name: "golem-effect-sdk-source",
+    resolveId(source) {
+      if (source === packageName)
+        return {
+          id: join(sdkSource, "internal/component/index.js"),
+          moduleSideEffects: false,
+        }
+      const path = publicEntries.get(source)
+      if (path) return { id: join(sdkSource, path), moduleSideEffects: false }
+      if (source.startsWith(sdkSource + sep)) return { id: source, moduleSideEffects: false }
+      return null
+    },
+    transform(code, id) {
+      if (id.startsWith(sdkSource + sep)) return { code, map: null, moduleSideEffects: false }
+      return null
+    },
+  })
   const plugins = [
     staticContracts(sdkSource, publicEntries),
     makeSdkPlugin(),

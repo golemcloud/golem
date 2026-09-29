@@ -57,7 +57,7 @@ const sourcePlugin = () => ({
   },
 })
 
-const build = async (fixture: string) => {
+const build = async (fixture: string, execute = true) => {
   const source = resolve(root, `test/fixtures/capabilities/${fixture}`)
   const options = await componentConfiguration(rollup, () => ({
     input: existsSync(`${source}.ts`) ? `${source}.ts` : `${source}.mjs`,
@@ -98,7 +98,7 @@ const build = async (fixture: string) => {
       return runtime
     }
     return {
-      runtime: instantiate(),
+      runtime: execute ? instantiate() : undefined,
       instantiate,
       chunk,
       modules,
@@ -110,6 +110,15 @@ const build = async (fixture: string) => {
 }
 
 describe("capability-sensitive component exports", () => {
+  it.each(["router-root-first", "router-subpath-first"])(
+    "%s shares one HTTP router module between root and subpath imports",
+    async (fixture) => {
+      const { modules } = await build(fixture, false)
+      expect(modules).toContain("internal/component/HttpRouter.js")
+      expect(modules).not.toContain("HttpRouter.js")
+    },
+  )
+
   it("does not rewrite a shadowed local DSL function", async () => {
     const { runtime } = await build("shadowed-dsl")
     expect(runtime.golemAgent200Guest).toBeDefined()
