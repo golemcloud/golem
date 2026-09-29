@@ -67,9 +67,11 @@ func TestPromisePayloadNamedBytesUsesJSON(t *testing.T) {
 // and back, and String() renders the component/agent/oplog form.
 func TestPromiseIDRoundTrip(t *testing.T) {
 	id := PromiseID{
-		ComponentID: UUID{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15},
-		AgentID:     "Approval(\"order-7\")",
-		OplogIndex:  42,
+		AgentID: AgentID{
+			ComponentID: UUID{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15},
+			AgentID:     "Approval(\"order-7\")",
+		},
+		OplogIndex: 42,
 	}
 
 	got := promiseIDFromWit(id.toWit())
@@ -94,11 +96,11 @@ func TestPromiseIDFromWit(t *testing.T) {
 	}
 
 	id := promiseIDFromWit(w)
-	if id.AgentID != "Shop(\"acme\")" || id.OplogIndex != 99 {
+	if id.AgentID.AgentID != "Shop(\"acme\")" || id.OplogIndex != 99 {
 		t.Fatalf("agent/oplog not mapped: %+v", id)
 	}
-	if id.ComponentID != (UUID{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}) {
-		t.Fatalf("component uuid not mapped: %v", id.ComponentID)
+	if id.AgentID.ComponentID != (UUID{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}) {
+		t.Fatalf("component uuid not mapped: %v", id.AgentID.ComponentID)
 	}
 }
 
@@ -107,7 +109,7 @@ func TestPromiseIDFromWit(t *testing.T) {
 // actually wrote, because the completer is usually somewhere else entirely.
 func TestPromisePayloadDecodeFailureNamesPromiseAndPayload(t *testing.T) {
 	type Verdict struct{ Approved bool }
-	id := PromiseID{AgentID: `ApprovalAgent("q")`, OplogIndex: 12}
+	id := PromiseID{AgentID: AgentID{AgentID: `ApprovalAgent("q")`}, OplogIndex: 12}
 
 	defer func() {
 		r := recover()
@@ -143,7 +145,7 @@ func TestPromisePayloadTruncatesLongPayloads(t *testing.T) {
 // overlapping fields, as a silently zero value).
 func TestPromiseTypeMismatchIsCaughtAtTheMistake(t *testing.T) {
 	type Verdict struct{ Approved bool }
-	id := PromiseID{AgentID: `ApprovalAgent("q")`, OplogIndex: 3}
+	id := PromiseID{AgentID: AgentID{AgentID: `ApprovalAgent("q")`}, OplogIndex: 3}
 	recordPromisePayloadType[Verdict](id)
 	t.Cleanup(func() { delete(promisePayloadTypes, id) })
 
@@ -167,5 +169,5 @@ func TestPromiseTypeMismatchIsCaughtAtTheMistake(t *testing.T) {
 // snapshot-based recovery the creating invocation may not have re-executed, so
 // an unknown id must pass rather than fail.
 func TestPromiseTypeCheckIsSilentWithoutARecord(t *testing.T) {
-	checkPromisePayloadType[string](PromiseID{AgentID: "never-created", OplogIndex: 99})
+	checkPromisePayloadType[string](PromiseID{AgentID: AgentID{AgentID: "never-created"}, OplogIndex: 99})
 }

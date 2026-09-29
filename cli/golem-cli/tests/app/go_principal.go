@@ -30,7 +30,7 @@ var Ask = Relay.Method[RelayIn, string]("ask")
 func describe(p golem.Principal) string {
 	switch p := p.(type) {
 	case golem.AgentPrincipal:
-		return "agent:" + p.AgentID
+		return "agent:" + p.AgentID.AgentID
 	case golem.GolemUserPrincipal:
 		return "golem-user"
 	case golem.OidcPrincipal:

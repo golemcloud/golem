@@ -158,6 +158,22 @@ before a critical external effect to bound how much progress a crash could lose:
 golem.OplogCommit(3) // ensure the oplog is replicated to 3 replicas before proceeding
 ```
 
+## Checkpoints
+
+A checkpoint is a point in the agent's execution to go back to. Reverting discards everything recorded since and runs again from there, live — the way to retry a side effect whose outcome was not acceptable:
+
+```go
+cp := golem.NewCheckpoint()
+quote := cp.Must(fetchQuote())           // fetchQuote() (Quote, error): reverts on an error
+cp.AssertOrRevert(quote.Price < limit)   // reverts unless the condition holds
+
+total := golem.WithCheckpoint(func(cp golem.Checkpoint) (int64, error) {
+	return charge(amount)                // a returned error reverts to the checkpoint
+})
+```
+
+`cp.MustRun(func() (T, error))` is the function form of `cp.Must`, and `cp.Revert()` goes back unconditionally. A revert does not return. `golem.OplogIndex()` / `golem.SetOplogIndex(i)` are the raw operations underneath. A revert rewinds the whole agent, so don't revert while other goroutines are mid-await.
+
 ## Retry policy for a block
 
 There is no `WithRetryPolicy` in the `golem` package. To override retry behavior

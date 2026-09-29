@@ -39,15 +39,12 @@ import (
 
 // PromiseID is the durable, serializable identity of a promise. Hand it to
 // whoever will complete the promise — another agent, or an external system via
-// the worker-service complete endpoint (which needs exactly these three fields).
-// The exported fields make it directly JSON-marshalable.
+// the worker-service complete endpoint (which needs its component, agent and
+// oplog index). The exported fields make it directly JSON-marshalable.
 type PromiseID struct {
-	// ComponentID is the component the owning agent belongs to.
-	ComponentID UUID
-	// AgentID is the string agent id (agent type + constructor parameters) of the
-	// agent that created the promise — the ":agent" path segment of the REST
-	// complete endpoint.
-	AgentID string
+	// AgentID is the agent that created the promise; its AgentID string is the
+	// ":agent" path segment of the REST complete endpoint.
+	AgentID AgentID
 	// OplogIndex disambiguates promises created by the same agent — the "oplogIdx"
 	// field of the REST complete endpoint.
 	OplogIndex uint64
@@ -55,25 +52,15 @@ type PromiseID struct {
 
 // String renders a compact, human-readable form (not a parse target).
 func (id PromiseID) String() string {
-	return fmt.Sprintf("%s/%s/%d", id.ComponentID, id.AgentID, id.OplogIndex)
+	return fmt.Sprintf("%s/%s/%d", id.AgentID.ComponentID, id.AgentID.AgentID, id.OplogIndex)
 }
 
 func promiseIDFromWit(w types.PromiseId) PromiseID {
-	return PromiseID{
-		ComponentID: uuidFromWit(w.AgentId.ComponentId.Uuid),
-		AgentID:     w.AgentId.AgentId,
-		OplogIndex:  w.OplogIdx,
-	}
+	return PromiseID{AgentID: agentIDFromWit(w.AgentId), OplogIndex: w.OplogIdx}
 }
 
 func (id PromiseID) toWit() types.PromiseId {
-	return types.PromiseId{
-		AgentId: types.AgentId{
-			ComponentId: types.ComponentId{Uuid: uuidToWit(id.ComponentID)},
-			AgentId:     id.AgentID,
-		},
-		OplogIdx: id.OplogIndex,
-	}
+	return types.PromiseId{AgentId: id.AgentID.toWit(), OplogIdx: id.OplogIndex}
 }
 
 // Promise is a handle to a durable promise whose completion payload is T. Obtain

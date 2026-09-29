@@ -199,7 +199,7 @@ curl -X POST \
   -d '{"oplogIdx": <oplog_index>, "data": [<bytes>]}'
 ```
 
-`$AGENT_ID` is the same `AgentTypeName(params)` string the CLI uses. This is the mechanism a promise's `PromiseID` fields (`ComponentID`, `AgentID`, `OplogIndex`) feed into for external completion.
+`$AGENT_ID` is the same `AgentTypeName(params)` string the CLI uses. This is the mechanism a promise's `PromiseID` (`AgentID.ComponentID`, `AgentID.AgentID`, `OplogIndex`) feeds into for external completion.
 
 ## Key Constraints
 

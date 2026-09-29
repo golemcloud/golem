@@ -56,13 +56,7 @@ type OidcPrincipal struct {
 }
 
 // AgentPrincipal is another agent, calling over RPC.
-type AgentPrincipal struct {
-	// ComponentID is the component the calling agent belongs to.
-	ComponentID UUID
-	// AgentID is the calling agent's string id (agent type + constructor
-	// parameters).
-	AgentID string
-}
+type AgentPrincipal struct{ AgentID AgentID }
 
 // GolemUserPrincipal is a Golem account, e.g. calling from the CLI.
 type GolemUserPrincipal struct{ AccountID UUID }
@@ -90,8 +84,7 @@ func principalFromWit(p common.Principal) Principal {
 			Claims: o.Claims,
 		}
 	case common.PrincipalAgent:
-		a := p.Agent().AgentId
-		return AgentPrincipal{ComponentID: uuidFromWit(a.ComponentId.Uuid), AgentID: a.AgentId}
+		return AgentPrincipal{AgentID: agentIDFromWit(p.Agent().AgentId)}
 	case common.PrincipalGolemUser:
 		return GolemUserPrincipal{AccountID: uuidFromWit(p.GolemUser().AccountId.Uuid)}
 	default:
@@ -111,10 +104,7 @@ func principalToWit(p Principal) common.Principal {
 			Claims: p.Claims,
 		})
 	case AgentPrincipal:
-		return common.MakePrincipalAgent(common.AgentPrincipal{AgentId: types.AgentId{
-			ComponentId: types.ComponentId{Uuid: uuidToWit(p.ComponentID)},
-			AgentId:     p.AgentID,
-		}})
+		return common.MakePrincipalAgent(common.AgentPrincipal{AgentId: p.AgentID.toWit()})
 	case GolemUserPrincipal:
 		return common.MakePrincipalGolemUser(common.GolemUserPrincipal{
 			AccountId: types.AccountId{Uuid: uuidToWit(p.AccountID)},

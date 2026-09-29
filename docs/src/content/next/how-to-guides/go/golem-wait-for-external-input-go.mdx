@@ -28,13 +28,12 @@ In Go a promise is a typed handle `golem.Promise[T]`: the completion payload is 
 
 ## `PromiseID` structure
 
-`golem.PromiseID` has three exported (JSON-marshalable) fields, which are exactly what the REST complete endpoint needs:
+`golem.PromiseID` is JSON-marshalable and carries exactly what the REST complete endpoint needs:
 
 ```go
 type PromiseID struct {
-    ComponentID golem.UUID // the component the owning agent belongs to
-    AgentID     string     // agent type + constructor params (the ":agent" path segment)
-    OplogIndex  uint64     // disambiguates promises from the same agent ("oplogIdx")
+    AgentID    golem.AgentID // ComponentID: the owning agent's component; AgentID: agent type + constructor params (the ":agent" path segment)
+    OplogIndex uint64        // disambiguates promises from the same agent ("oplogIdx")
 }
 ```
 
