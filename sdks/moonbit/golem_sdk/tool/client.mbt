@@ -39,38 +39,100 @@ fn release_optional_value(
 }
 
 ///|
-priv enum CollectedStdout {
+priv enum CollectedOutput {
   Collected(Bytes?)
   Failed(Error)
 }
 
 ///|
+pub(all) struct CollectedToolInvocation[T] {
+  result : T
+  stdout : Bytes?
+  stderr : Bytes?
+}
+
+///|
 pub struct ToolInvocation[E] {
-  priv future : @toolHost.FutureInvokeResult
-  priv decode_error : (String, @model.TypedSchemaValue) -> Result[E, String]?
+  priv observer : ToolInvocationObserver[E]
   priv stdout_source : @async-core.Stream[
     Result[FixedArray[Byte], @toolStreams.ByteStreamFailure],
   ]?
+  priv stderr_source : @async-core.Stream[
+    Result[FixedArray[Byte], @toolStreams.ByteStreamFailure],
+  ]?
   stdout : @async-core.Stream[Byte]?
+  stderr : @async-core.Stream[Byte]?
+}
+
+///|
+priv struct ToolInvocationObserver[E] {
+  future : @toolHost.FutureInvokeResult
+  decode_error : (String, @model.TypedSchemaValue) -> Result[E, String]?
+  result_lock : @async-core.Mutex
+  cached_result : Ref[Result[InvocationResult, ToolError[E]]?]
+  drive_started : Ref[Bool]
+}
+
+///|
+async fn[E] ToolInvocationObserver::get(
+  self : ToolInvocationObserver[E],
+) -> Result[InvocationResult, ToolError[E]] {
+  self.drive_started.val = true
+  self.result_lock.acquire()
+  defer self.result_lock.release()
+  if self.cached_result.val is Some(result) {
+    return result
+  }
+  @async-core.protect_from_cancel(async fn() {
+    let result = match self.future.get() {
+      Ok(result) => decode_invocation_result(result)
+      Err(error) => Err(map_rpc_error(error, self.decode_error))
+    }
+    self.cached_result.val = Some(result)
+    result
+  })
+}
+
+///|
+fn[E] ToolInvocationObserver::drive(self : ToolInvocationObserver[E]) -> Unit {
+  if self.drive_started.val {
+    return
+  }
+  self.drive_started.val = true
+  @async-core.spawn_component_task_current(async fn() { ignore(self.get()) })
 }
 
 ///|
 pub struct TypedToolInvocation[T, E] {
   priv invocation : ToolInvocation[E]
   priv decode : (InvocationResult) -> Result[T, ToolError[E]]
-  stdout : @async-core.Stream[Byte]
+  stdout : @async-core.Stream[Byte]?
+  stderr : @async-core.Stream[Byte]?
 }
 
 ///|
 pub fn[T, E] typed_invocation(
   invocation : ToolInvocation[E],
+  stdout : Bool,
+  stderr : Bool,
   decode : (InvocationResult) -> Result[T, ToolError[E]],
 ) -> Result[TypedToolInvocation[T, E], ToolError[E]] {
-  match invocation.stdout {
-    None =>
-      Err(tool_protocol_error("tool invocation did not create declared stdout"))
-    Some(stdout) => Ok({ invocation, decode, stdout, })
+  if stdout && invocation.stdout is None {
+    return Err(
+      tool_protocol_error("tool invocation did not create declared stdout"),
+    )
   }
+  if stderr && invocation.stderr is None {
+    return Err(
+      tool_protocol_error("tool invocation did not create declared stderr"),
+    )
+  }
+  Ok({
+    invocation,
+    decode,
+    stdout: invocation.stdout,
+    stderr: invocation.stderr,
+  })
 }
 
 ///|
@@ -100,22 +162,25 @@ pub async fn[T, E] TypedToolInvocation::get(
 ///|
 pub async fn[T, E] TypedToolInvocation::collect(
   self : TypedToolInvocation[T, E],
-) -> Result[(T, Bytes), ToolError[E]] {
+) -> Result[CollectedToolInvocation[T], ToolError[E]] {
   match self.invocation.collect() {
     Err(error) => Err(error)
-    Ok((result, Some(bytes))) =>
-      match (self.decode)(result) {
-        Ok(value) => Ok((value, bytes))
+    Ok(collected) =>
+      match (self.decode)(collected.result) {
+        Ok(value) =>
+          Ok({
+            result: value,
+            stdout: collected.stdout,
+            stderr: collected.stderr,
+          })
         Err(error) => Err(error)
       }
-    Ok((_, None)) =>
-      Err(tool_protocol_error("declared stdout was not collected"))
   }
 }
 
 ///|
 pub fn[E] ToolInvocation::cancel(self : ToolInvocation[E]) -> Unit {
-  self.future.cancel()
+  self.observer.future.cancel()
 }
 
 ///|
@@ -126,14 +191,29 @@ pub fn[E] ToolInvocation::stdout_stream(
 }
 
 ///|
+pub fn[E] ToolInvocation::stderr_stream(
+  self : ToolInvocation[E],
+) -> @async-core.Stream[Byte]? {
+  self.stderr
+}
+
+///|
 pub fn[E] ToolInvocation::drop(self : ToolInvocation[E]) -> Unit {
-  self.future.drop()
+  self.observer.future.drop()
   match self.stdout_source {
+    Some(source) => source.drop_sync()
+    None => ()
+  }
+  match self.stderr_source {
     Some(source) => source.drop_sync()
     None => ()
   }
   match self.stdout {
     Some(stdout) => stdout.drop_sync()
+    None => ()
+  }
+  match self.stderr {
+    Some(stderr) => stderr.drop_sync()
     None => ()
   }
 }
@@ -142,20 +222,17 @@ pub fn[E] ToolInvocation::drop(self : ToolInvocation[E]) -> Unit {
 pub async fn[E] ToolInvocation::get(
   self : ToolInvocation[E],
 ) -> Result[InvocationResult, ToolError[E]] {
-  match self.future.get() {
-    Ok(result) => decode_invocation_result(result)
-    Err(error) => Err(map_rpc_error(error, self.decode_error))
-  }
+  self.observer.get()
 }
 
 ///|
 pub async fn[E] ToolInvocation::collect(
   self : ToolInvocation[E],
-) -> Result[(InvocationResult, Bytes?), ToolError[E]] {
+) -> Result[CollectedToolInvocation[InvocationResult], ToolError[E]] {
   @async-core.with_task_group(async fn(group) {
-    let output = group.spawn(async fn() {
+    let collect = async fn(stream : @async-core.Stream[Byte]?) {
       try {
-        let collected = match self.stdout {
+        let collected = match stream {
           None => None
           Some(stream) => {
             let bytes : Array[Byte] = []
@@ -168,28 +245,34 @@ pub async fn[E] ToolInvocation::collect(
             Some(Bytes::from_array(bytes))
           }
         }
-        CollectedStdout::Collected(collected)
+        CollectedOutput::Collected(collected)
       } catch {
-        error => CollectedStdout::Failed(error)
+        error => CollectedOutput::Failed(error)
       }
-    })
+    }
+    let stdout = group.spawn(() => collect(self.stdout))
+    let stderr = group.spawn(() => collect(self.stderr))
     let result = self.get()
-    let output = output.wait()
-    select_collected_terminals(result, output)
+    let stdout = stdout.wait()
+    let stderr = stderr.wait()
+    select_collected_terminals(result, stdout, stderr)
   })
 }
 
 ///|
 fn[E] select_collected_terminals(
   result : Result[InvocationResult, ToolError[E]],
-  output : CollectedStdout,
-) -> Result[(InvocationResult, Bytes?), ToolError[E]] raise {
+  stdout : CollectedOutput,
+  stderr : CollectedOutput,
+) -> Result[CollectedToolInvocation[InvocationResult], ToolError[E]] raise {
   match result {
     Err(error) => Err(error)
     Ok(result) =>
-      match output {
-        Collected(bytes) => Ok((result, bytes))
-        Failed(error) => raise error
+      match (stdout, stderr) {
+        (Failed(error), _) => raise error
+        (_, Failed(error)) => raise error
+        (Collected(stdout), Collected(stderr)) =>
+          Ok({ result, stdout, stderr, })
       }
   }
 }
@@ -244,6 +327,7 @@ pub fn[E] ToolClient::start(
   input : @model.TypedSchemaValue,
   stdin : @async-core.Stream[Byte]?,
   stdout : Bool,
+  stderr : Bool,
   decode_error : (String, @model.TypedSchemaValue) -> Result[E, String]?,
 ) -> Result[ToolInvocation[E], ToolError[E]] {
   let wire_input = @model.typed_schema_value_to_wit(input) catch {
@@ -257,16 +341,40 @@ pub fn[E] ToolClient::start(
     }
   }
   let wire_stdin = prepare_stdin(stdin)
-  let (wire_stdout, output, stdout_source) = if stdout {
-    let (target, stream) = @toolHost.create_stdout()
-    (Some(target), Some(invocation_stdout(stream)), Some(stream))
+  let (wire_stdout, stdout_source) = if stdout {
+    let (target, stream) = @toolHost.create_output()
+    (Some(target), Some(stream))
   } else {
-    (None, None, None)
+    (None, None)
   }
-  let future = self.rpc.async_invoke_and_await(
-    command_path, wire_input, wire_stdin, wire_stdout,
-  )
-  Ok({ future, decode_error, stdout_source, stdout: output, })
+  let (wire_stderr, stderr_source) = if stderr {
+    let (target, stream) = @toolHost.create_output()
+    (Some(target), Some(stream))
+  } else {
+    (None, None)
+  }
+  let observer : ToolInvocationObserver[E] = {
+    future: self.rpc.async_invoke_and_await(
+      command_path, wire_input, wire_stdin, wire_stdout, wire_stderr,
+    ),
+    decode_error,
+    result_lock: @async-core.Mutex(),
+    cached_result: Ref(None),
+    drive_started: Ref(false),
+  }
+  let output = stdout_source.map(stream => {
+    invocation_stdout(stream, () => observer.drive())
+  })
+  let error_output = stderr_source.map(stream => {
+    invocation_stdout(stream, () => observer.drive())
+  })
+  Ok({
+    observer,
+    stdout_source,
+    stderr_source,
+    stdout: output,
+    stderr: error_output,
+  })
 }
 
 ///|
@@ -367,6 +475,7 @@ pub async fn[E] invoke_and_await(
     wire_input,
     wire_stdin,
     None,
+    None,
   )
   let wire_result = match wire_result {
     Ok(result) => result
@@ -421,12 +530,31 @@ pub async fn invoke_and_await_no_tool_error(
 fn[E] decode_invocation_result(
   result : @toolCommon.InvocationResult,
 ) -> Result[InvocationResult, ToolError[E]] {
+  if result.stdout is Some(_) || result.stderr is Some(_) {
+    match result.stdout {
+      Some(stdout) => stdout.drop_sync()
+      None => ()
+    }
+    match result.stderr {
+      Some(stderr) => stderr.drop_sync()
+      None => ()
+    }
+    return Err(
+      tool_protocol_error(
+        "tool result unexpectedly returned output streams; attachments use pre-created endpoints",
+      ),
+    )
+  }
   let decoded = match result.result {
     Some(value) => {
       let decoded_value = @model_host.typed_schema_value_from_wit(value) catch {
         e => {
           match result.stdout {
             Some(stdout) => stdout.drop_sync()
+            None => ()
+          }
+          match result.stderr {
+            Some(stderr) => stderr.drop_sync()
             None => ()
           }
           return Err(
@@ -438,7 +566,7 @@ fn[E] decode_invocation_result(
     }
     None => None
   }
-  Ok({ result: decoded, stdout: result.stdout, })
+  Ok({ result: decoded, stdout: None, stderr: None, })
 }
 
 ///|

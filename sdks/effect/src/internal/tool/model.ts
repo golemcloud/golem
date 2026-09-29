@@ -111,6 +111,7 @@ export interface BodyModel<
   readonly constraints: readonly ToolCommon.Constraint[]
   readonly stdin?: StreamOptions
   readonly stdout?: StreamOptions
+  readonly stderr?: StreamOptions
   readonly annotations?: CommandAnnotations
 }
 
@@ -206,6 +207,9 @@ export class BodyBuilder<
   output(options: StreamOptions = {}): BodyBuilder<F, O, Errors> {
     return new BodyBuilder({ ...this.model, stdout: options })
   }
+  stderr(options: StreamOptions = {}): BodyBuilder<F, O, Errors> {
+    return new BodyBuilder({ ...this.model, stderr: options })
+  }
   returns<S extends Schema.Top>(schema: S, options?: ResultOptions): BodyBuilder<F, S, Errors> {
     const formatters = options?.formatters ?? ["default"]
     const first = formatters[0]
@@ -244,6 +248,9 @@ export type HandlerContext = {
   readonly principal: unknown
   readonly stdin?: Stream.Stream<Uint8Array, ToolInvokeError>
   readonly stdout?: <R2>(
+    source: Stream.Stream<Uint8Array, ToolInvokeError, R2>,
+  ) => Effect.Effect<void, ToolInvokeError, R2>
+  readonly stderr?: <R2>(
     source: Stream.Stream<Uint8Array, ToolInvokeError, R2>,
   ) => Effect.Effect<void, ToolInvokeError, R2>
 }
@@ -671,6 +678,13 @@ export function compileDefinition(
             doc: doc(b.model.stdout.doc),
             mime: [...(b.model.stdout.mime ?? [])],
             required: b.model.stdout.required ?? false,
+          }
+        : undefined,
+      stderr: b.model.stderr
+        ? {
+            doc: doc(b.model.stderr.doc),
+            mime: [...(b.model.stderr.mime ?? [])],
+            required: b.model.stderr.required ?? false,
           }
         : undefined,
       result: b.output

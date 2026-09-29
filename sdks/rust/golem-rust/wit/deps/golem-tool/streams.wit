@@ -28,7 +28,7 @@ interface streams {
   /// Host-owned writer supplied to a tool or middleware implementation. Exactly
   /// one write, finish, or fail operation may be outstanding. The first terminal
   /// is immutable; dropping an open writer selects `abandoned`.
-  resource tool-stdout-writer {
+  resource tool-output-writer {
     write: async func(bytes: list<u8>) -> result<_, stream-write-error>;
     finish: async func() -> result<_, stream-write-error>;
     fail: async func(reason: byte-stream-failure) -> result<_, stream-write-error>;

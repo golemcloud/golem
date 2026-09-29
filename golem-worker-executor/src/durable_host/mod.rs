@@ -815,6 +815,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         has_stdin: false,
                         has_stdout: false,
                         declares_stdout: false,
+                        has_stderr: false,
+                        declares_stderr: false,
                         output_contract: golem_common::model::entity::ToolOutputContract {
                             result: None,
                             errors: Vec::new(),

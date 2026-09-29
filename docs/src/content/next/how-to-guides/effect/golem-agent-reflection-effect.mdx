@@ -120,7 +120,7 @@ const scheduled = Effect.scoped(Effect.gen(function* () {
 }))
 ```
 
-Streams and opaque capabilities have no canonical JSON form. Use the `*Value` APIs, transfer an owned handle once, and consume returned streams inside the scope. Reflected tool `startJson`/`startValue` exposes independent `stdout`, `result`, `collect`, and `cancel` Effects. `collect` waits for both result and stdout and gives the result error precedence. Scope closure releases observers and owned handles; invoke `cancel` when the remote operation itself must be cancelled.
+Streams and opaque capabilities have no canonical JSON form. Use the `*Value` APIs, transfer an owned handle once, and consume returned streams inside the scope. Reflected tool `startJson`/`startValue` exposes independent `stdout`, `stderr`, `result`, `collect`, and `cancel` Effects. `collect` concurrently waits for the result and both outputs and gives the result error precedence. Scope closure releases observers and owned handles; invoke `cancel` when the remote operation itself must be cancelled.
 
 ## Discovery to a fully dynamic agent
 

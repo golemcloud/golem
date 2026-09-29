@@ -164,21 +164,22 @@ fn synthesize_leaf_method(
     let inherited_params = inherited_root_params(ir, cmd, tool_name);
     let input_args =
         kept_client_args_omitting(ir, cmd, &inherited_params, false, omitted_names, tool_name);
-    let (stdin_ident, has_stdout) = stream_idents(cmd);
+    let (stdin_ident, has_stdout, has_stderr) = stream_idents(cmd);
+    let has_output = has_stdout || has_stderr;
     let stdin_expr = match stdin_ident {
         Some((ident, true)) => quote! { ::std::option::Option::Some(#ident) },
         Some((ident, false)) => quote! { #ident },
         None => quote! { ::std::option::Option::None },
     };
     let value_inserts = value_inserts(ir, cmd, &inherited_params, tool_name, omitted_names);
-    let result_ty = client_result_type(&cmd.output, has_stdout);
+    let result_ty = client_result_type(&cmd.output, has_output);
     let decode_result = decode_client_result(&cmd.output);
     let invoke = invoke_call(&cmd.output, stdin_expr.clone());
     let input_expr = input_build_expr(&descriptor_fn_ident, quote! { __golem_param_values });
 
-    if has_stdout {
+    if has_output {
         let started_ty = started_result_type(&cmd.output);
-        let start = start_call(&cmd.output, stdin_expr);
+        let start = start_call(&cmd.output, stdin_expr, has_stdout, has_stderr);
         return quote! {
             pub async fn #method_ident(&self, #(#input_args),*) -> #started_ty {
                 #(#value_inserts)*
@@ -272,7 +273,8 @@ fn synthesize_leaf_method_dynamic(
             __schema_path.push(#command_name.to_string());
         }
     };
-    let (_, has_stdout) = stream_idents(cmd);
+    let (_, has_stdout, has_stderr) = stream_idents(cmd);
+    let has_output = has_stdout || has_stderr;
     let stdin_expr = match cmd
         .params
         .iter()
@@ -284,14 +286,14 @@ fn synthesize_leaf_method_dynamic(
         Some((ident, false)) => quote! { #ident },
         None => quote! { ::std::option::Option::None },
     };
-    let result_ty = client_result_type(&cmd.output, has_stdout);
+    let result_ty = client_result_type(&cmd.output, has_output);
     let decode_result = decode_client_result(&cmd.output);
     let invoke = invoke_call(&cmd.output, stdin_expr.clone());
     let input_expr = input_build_expr(&descriptor_fn_ident, param_values.clone());
 
-    if has_stdout {
+    if has_output {
         let result_ty = started_result_type(&cmd.output);
-        let start = start_call(&cmd.output, stdin_expr);
+        let start = start_call(&cmd.output, stdin_expr, has_stdout, has_stderr);
         return quote! {
             pub async fn #method_ident(&self #input_args) -> #result_ty {
                 let mut #param_values: ::std::vec::Vec<(&'static str, golem_rust::SchemaValue)> =
@@ -1191,17 +1193,29 @@ fn is_flag_param(cmd: &CommandIr, param: &ParamIr) -> bool {
         || type_last_ident(&param.ty).as_deref() == Some("bool")
 }
 
-pub(crate) fn stream_idents(cmd: &CommandIr) -> (Option<(Ident, bool)>, bool) {
+pub(crate) fn stream_idents(cmd: &CommandIr) -> (Option<(Ident, bool)>, bool, bool) {
     let mut stdin = None;
     let mut stdout = false;
+    let mut stderr = false;
     for param in &cmd.params {
         match stream_type(&param.ty) {
             Some((StreamKind::Input, required)) => stdin = Some((param.ident.clone(), required)),
-            Some((StreamKind::Output, _)) => stdout = true,
+            Some((StreamKind::Output, _)) => {
+                let channel = cmd
+                    .args
+                    .iter()
+                    .find(|arg| arg.param == param.ident)
+                    .and_then(|arg| arg.output_channel)
+                    .unwrap_or(crate::tool::ir::OutputChannelIr::Stdout);
+                match channel {
+                    crate::tool::ir::OutputChannelIr::Stdout => stdout = true,
+                    crate::tool::ir::OutputChannelIr::Stderr => stderr = true,
+                }
+            }
             _ => {}
         }
     }
-    (stdin, stdout)
+    (stdin, stdout, stderr)
 }
 
 fn client_result_type(output: &ReturnType, has_stdout: bool) -> TokenStream {
@@ -1232,7 +1246,12 @@ fn started_result_type(output: &ReturnType) -> TokenStream {
     }
 }
 
-fn start_call(output: &ReturnType, stdin_expr: TokenStream) -> TokenStream {
+fn start_call(
+    output: &ReturnType,
+    stdin_expr: TokenStream,
+    has_stdout: bool,
+    has_stderr: bool,
+) -> TokenStream {
     let (ok, err) = split_result(output);
     let decode = match ok {
         Some(ok) => {
@@ -1250,6 +1269,8 @@ fn start_call(output: &ReturnType, stdin_expr: TokenStream) -> TokenStream {
                     &__command_path,
                     &__input,
                     #stdin_expr,
+                    #has_stdout,
+                    #has_stderr,
                     #decode,
                     golem_rust::agentic::decode_declared_tool_error::<#err>,
                 )
@@ -1261,6 +1282,8 @@ fn start_call(output: &ReturnType, stdin_expr: TokenStream) -> TokenStream {
                 &__command_path,
                 &__input,
                 #stdin_expr,
+                #has_stdout,
+                #has_stderr,
                 #decode,
                 |_, _| ::std::result::Result::Ok(::std::option::Option::None),
             )
@@ -1281,6 +1304,7 @@ fn invoke_call(output: &ReturnType, stdin_expr: TokenStream) -> TokenStream {
                     &__input,
                     (#stdin_expr).map(golem_rust::agentic::pump_tool_stdin),
                     ::std::option::Option::None,
+                    ::std::option::Option::None,
                     golem_rust::agentic::decode_declared_tool_error::<#err>,
                 ).await
             }
@@ -1291,6 +1315,7 @@ fn invoke_call(output: &ReturnType, stdin_expr: TokenStream) -> TokenStream {
                 &__command_path,
                 &__input,
                 (#stdin_expr).map(golem_rust::agentic::pump_tool_stdin),
+                ::std::option::Option::None,
                 ::std::option::Option::None,
             ).await
         },

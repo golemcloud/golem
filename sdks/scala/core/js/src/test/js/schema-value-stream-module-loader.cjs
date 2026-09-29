@@ -107,7 +107,7 @@ Module._load = function (request) {
       getAllTools: missingHostImport("getAllTools"),
       getTool: missingHostImport("getTool"),
       createStdin: missingHostImport("createStdin"),
-      createStdout: missingHostImport("createStdout"),
+      createOutput: missingHostImport("createOutput"),
       ToolRpc: { create: missingHostImport("createToolRpc") },
       FutureInvokeResult: {},
     };

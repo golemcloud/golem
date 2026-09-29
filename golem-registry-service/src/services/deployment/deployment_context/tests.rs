@@ -902,6 +902,7 @@ fn executable_test_tool(root: &str, command: &str) -> Tool {
         constraints: Vec::new(),
         stdin: None,
         stdout: None,
+        stderr: None,
         result: None,
         errors: Vec::new(),
         annotations: None,

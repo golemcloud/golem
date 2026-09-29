@@ -11,7 +11,7 @@ fn tool_stream_failure(
 }
 
 ///|
-priv struct ProviderStdoutState {
+priv struct ProviderOutputState {
   write_callback : async (FixedArray[Byte]) -> Result[
     Unit,
     @toolStreams.StreamWriteError,
@@ -31,13 +31,13 @@ priv struct ProviderStdoutState {
 }
 
 ///|
-pub struct ProviderStdout {
-  priv state : Ref[ProviderStdoutState]
+pub struct ProviderOutput {
+  priv state : Ref[ProviderOutputState]
   priv output : @async-core.Sink[Byte]
 }
 
 ///|
-fn provider_stdout_from_callbacks(
+fn provider_output_from_callbacks(
   write_callback : async (FixedArray[Byte]) -> Result[
     Unit,
     @toolStreams.StreamWriteError,
@@ -48,7 +48,7 @@ fn provider_stdout_from_callbacks(
     @toolStreams.StreamWriteError,
   ],
   drop_callback : () -> Unit,
-) -> ProviderStdout {
+) -> ProviderOutput {
   let state = @ref.new({
     write_callback,
     finish_callback,
@@ -102,7 +102,7 @@ fn provider_stdout_from_callbacks(
 }
 
 ///|
-fn ProviderStdoutState::begin_operation(self : ProviderStdoutState) -> Unit {
+fn ProviderOutputState::begin_operation(self : ProviderOutputState) -> Unit {
   let (idle, promise) = @async-core.Future::new()
   self.idle = idle
   self.idle_promise = Some(promise)
@@ -110,7 +110,7 @@ fn ProviderStdoutState::begin_operation(self : ProviderStdoutState) -> Unit {
 }
 
 ///|
-fn ProviderStdout::begin_write(self : ProviderStdout) -> Unit raise {
+fn ProviderOutput::begin_write(self : ProviderOutput) -> Unit raise {
   if self.state.val.busy || self.state.val.closing {
     raise @toolStreams.StreamWriteError::ConcurrentOperation
   }
@@ -118,7 +118,7 @@ fn ProviderStdout::begin_write(self : ProviderStdout) -> Unit raise {
 }
 
 ///|
-fn ProviderStdoutState::end_operation(self : ProviderStdoutState) -> Unit {
+fn ProviderOutputState::end_operation(self : ProviderOutputState) -> Unit {
   self.busy = false
   if self.dropped {
     (self.drop_callback)()
@@ -130,10 +130,10 @@ fn ProviderStdoutState::end_operation(self : ProviderStdoutState) -> Unit {
 }
 
 ///|
-pub fn provider_stdout(
-  writer : @toolStreams.ToolStdoutWriter,
-) -> ProviderStdout {
-  provider_stdout_from_callbacks(
+pub fn provider_output(
+  writer : @toolStreams.ToolOutputWriter,
+) -> ProviderOutput {
+  provider_output_from_callbacks(
     bytes => writer.write(bytes),
     () => writer.finish(),
     reason => writer.fail(reason),
@@ -142,8 +142,8 @@ pub fn provider_stdout(
 }
 
 ///|
-pub async fn ProviderStdout::write(
-  self : ProviderStdout,
+pub async fn ProviderOutput::write(
+  self : ProviderOutput,
   data : ArrayView[Byte],
 ) -> Int {
   if !self.is_open() {
@@ -155,8 +155,8 @@ pub async fn ProviderStdout::write(
 }
 
 ///|
-pub async fn ProviderStdout::write_bytes(
-  self : ProviderStdout,
+pub async fn ProviderOutput::write_bytes(
+  self : ProviderOutput,
   data : BytesView,
 ) -> Int {
   if !self.is_open() {
@@ -168,8 +168,8 @@ pub async fn ProviderStdout::write_bytes(
 }
 
 ///|
-pub async fn ProviderStdout::write_all(
-  self : ProviderStdout,
+pub async fn ProviderOutput::write_all(
+  self : ProviderOutput,
   data : ArrayView[Byte],
 ) -> Bool {
   if !self.is_open() {
@@ -181,8 +181,8 @@ pub async fn ProviderStdout::write_all(
 }
 
 ///|
-pub async fn ProviderStdout::write_all_bytes(
-  self : ProviderStdout,
+pub async fn ProviderOutput::write_all_bytes(
+  self : ProviderOutput,
   data : BytesView,
 ) -> Bool {
   if !self.is_open() {
@@ -194,12 +194,12 @@ pub async fn ProviderStdout::write_all_bytes(
 }
 
 ///|
-pub fn ProviderStdout::is_open(self : ProviderStdout) -> Bool {
+pub fn ProviderOutput::is_open(self : ProviderOutput) -> Bool {
   self.state.val.open && !self.state.val.dropped
 }
 
 ///|
-pub async fn ProviderStdout::finish(self : ProviderStdout) -> Unit {
+pub async fn ProviderOutput::finish(self : ProviderOutput) -> Unit {
   if !self.state.val.open || self.state.val.dropped {
     return
   }
@@ -219,8 +219,8 @@ pub async fn ProviderStdout::finish(self : ProviderStdout) -> Unit {
 }
 
 ///|
-pub async fn ProviderStdout::fail(
-  self : ProviderStdout,
+pub async fn ProviderOutput::fail(
+  self : ProviderOutput,
   reason : @toolCore.ToolStreamError,
 ) -> Unit {
   if !self.state.val.open || self.state.val.dropped {
@@ -242,7 +242,7 @@ pub async fn ProviderStdout::fail(
 }
 
 ///|
-pub fn ProviderStdout::drop(self : ProviderStdout) -> Unit {
+pub fn ProviderOutput::drop(self : ProviderOutput) -> Unit {
   if !self.state.val.dropped {
     self.state.val.dropped = true
     self.state.val.open = false
@@ -253,8 +253,8 @@ pub fn ProviderStdout::drop(self : ProviderStdout) -> Unit {
 }
 
 ///|
-async fn ProviderStdout::complete(
-  self : ProviderStdout,
+async fn ProviderOutput::complete(
+  self : ProviderOutput,
   failure : ToolStreamError?,
 ) -> Unit {
   self.state.val.closing = true
@@ -267,11 +267,11 @@ async fn ProviderStdout::complete(
 
 ///|
 #doc(hidden)
-pub async fn invoke_with_stdout(
-  stdout : ProviderStdout,
+pub async fn invoke_with_output(
+  output : ProviderOutput,
   invoke : async () -> Result[@toolCommon.InvocationResult, @types.ToolError],
 ) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
-  defer stdout.drop()
+  defer output.drop()
   let result = invoke() catch {
     error => {
       let reason = match error {
@@ -279,7 +279,7 @@ pub async fn invoke_with_stdout(
         _ => ToolStreamError::Failed(error.to_string())
       }
       @async-core.protect_from_cancel(
-        () => stdout.complete(Some(reason)) catch { _ => () },
+        () => output.complete(Some(reason)) catch { _ => () },
         resume_on_cancel=true,
       )
       raise error
@@ -289,7 +289,7 @@ pub async fn invoke_with_stdout(
     Ok(_) | Err(@types.ToolError::CustomError(_)) => None
     Err(_) => Some(ToolStreamError::Failed("tool invocation failed"))
   }
-  @async-core.protect_from_cancel(() => stdout.complete(reason)) catch {
+  @async-core.protect_from_cancel(() => output.complete(reason)) catch {
     error =>
       match (error, result) {
         (@async-core.Cancelled::Cancelled, Ok(value)) => {

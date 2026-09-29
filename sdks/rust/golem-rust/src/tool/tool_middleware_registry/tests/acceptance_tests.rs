@@ -166,6 +166,7 @@ fn typed_result(value: impl IntoSchema) -> wire::InvocationResult {
             encode_typed_schema_value_owned(value.into_typed_schema_value().unwrap()).unwrap(),
         ),
         stdout: None,
+        stderr: None,
     }
 }
 
@@ -199,6 +200,7 @@ async fn invoke(
         command_path,
         input,
         stdin,
+        None,
         None,
         principal,
         underlying,
@@ -781,6 +783,7 @@ async fn universal_acceptance(
     input: TypedSchemaValue,
     stdin: Option<InputStream>,
     stdout: Option<OutputStream>,
+    stderr: Option<OutputStream>,
     principal: Principal,
     underlying: UnderlyingTool,
 ) -> Result<InvocationResult, ToolInvokeError<RawCustomToolError>> {
@@ -795,7 +798,7 @@ async fn universal_acceptance(
         });
     });
     underlying
-        .invoke_forwarding_stdout(command_path, input, stdin, stdout)
+        .invoke_forwarding_outputs(command_path, input, stdin, stdout, stderr)
         .await
 }
 
@@ -860,10 +863,12 @@ fn universal_middleware_observes_runtime_context_and_forwards_raw_semantics(
 
 #[tool_definition]
 trait StreamTool {
+    #[arg(diagnostics, channel = "stderr")]
     fn copy(
         &self,
         input: crate::agentic::InputStream,
         output: Option<crate::agentic::OutputStream>,
+        diagnostics: Option<crate::agentic::OutputStream>,
     ) -> String;
 }
 
@@ -885,16 +890,17 @@ impl StreamToolMiddleware for StreamPolicy {
         underlying: &StreamToolUnderlying,
         input: InputStream,
         output: Option<OutputStream>,
+        diagnostics: Option<OutputStream>,
     ) -> Result<String, ToolInvokeError<Infallible>> {
         underlying
             .start_copy(input)
             .await?
-            .get_forwarding_stdout(output)
+            .get_forwarding_outputs(output, diagnostics)
             .await
     }
 }
 
-fn stream_underlying(include_stdout: bool) -> UnderlyingTool {
+fn stream_underlying(include_stdout: bool, include_stderr: bool) -> UnderlyingTool {
     UnderlyingTool::from_fake_started(Box::new(move |path, _input, stdin| {
         assert_eq!(path, ["copy"]);
         let result = Box::pin(async move {
@@ -917,6 +923,7 @@ fn stream_underlying(include_stdout: bool) -> UnderlyingTool {
         (
             result as _,
             include_stdout.then(|| readable_stream(b"response")),
+            include_stderr.then(|| readable_stream(b"diagnostic")),
             Rc::new(Cell::new(false)),
         )
     }))
@@ -945,9 +952,12 @@ fn middleware_receives_ordinary_output_writer_parameter(
 ) {
     TEST_STREAM_NEW_CALLS.store(0, Ordering::Relaxed);
     run_acceptance(async {
-        let result = invoke_stream(Some(readable_stream(b"request")), stream_underlying(true))
-            .await
-            .unwrap();
+        let result = invoke_stream(
+            Some(readable_stream(b"request")),
+            stream_underlying(true, true),
+        )
+        .await
+        .unwrap();
         assert_eq!(
             String::from_value(result.result.unwrap().value()).unwrap(),
             "copied"
@@ -1018,16 +1028,30 @@ fn dispatch_rejects_invalid_commands_inputs_results_and_stream_shapes(
             Err(ToolInvokeError::InvalidResult(_))
         ));
 
-        let missing_stdin = invoke_stream(None, stream_underlying(true)).await;
+        let missing_stdin = invoke_stream(None, stream_underlying(true, true)).await;
         assert!(matches!(
             missing_stdin,
             Err(ToolInvokeError::InvalidInput(_))
         ));
 
         let missing_stdout =
-            invoke_stream(Some(readable_stream(b"request")), stream_underlying(false)).await;
+            invoke_stream(
+                Some(readable_stream(b"request")),
+                stream_underlying(false, true),
+            )
+            .await;
         assert!(matches!(
             missing_stdout,
+            Err(ToolInvokeError::InvalidResult(_))
+        ));
+
+        let missing_stderr = invoke_stream(
+            Some(readable_stream(b"request")),
+            stream_underlying(true, false),
+        )
+        .await;
+        assert!(matches!(
+            missing_stderr,
             Err(ToolInvokeError::InvalidResult(_))
         ));
 
@@ -1049,6 +1073,7 @@ fn dispatch_rejects_invalid_commands_inputs_results_and_stream_shapes(
                 (
                     Box::pin(async { Ok(typed_result("value".to_string()).result) }),
                     Some(readable_stream(b"unexpected")),
+                    None,
                     Rc::new(Cell::new(false)),
                 )
             })),
@@ -1117,6 +1142,7 @@ fn capability_underlying(seen: Rc<RefCell<(Vec<u32>, Vec<u32>)>>) -> UnderlyingT
             Ok(wire::InvocationResult {
                 result: None,
                 stdout: None,
+                stderr: None,
             })
         })
     }))

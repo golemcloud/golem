@@ -132,7 +132,7 @@ object ToolRpcCodegen {
 
     private def keptLeafParams(tool: Tool, m: Method, omitted: List[String]): List[Param] =
       (inheritedRootParams(tool, m) ++ m.params).filter { p =>
-        !p.isPrincipal && !p.isStdout && !omittedMatches(tool, m, p, omitted)
+        !p.isPrincipal && !p.isStdout && !p.isStderr && !omittedMatches(tool, m, p, omitted)
       }
 
     private def keptSubtreeParams(tool: Tool, m: Method, omitted: List[String]): List[Param] =
@@ -140,18 +140,13 @@ object ToolRpcCodegen {
         !p.isPrincipal && !omittedMatches(tool, m, p, omitted)
       }
 
-    private def okResultType(okType: Option[String], hasStdout: Boolean): String =
-      (okType, hasStdout) match {
-        case (Some(ok), true)  => ok
-        case (None, true)      => "_root_.scala.Unit"
-        case (Some(ok), false) => ok
-        case (None, false)     => "_root_.scala.Unit"
-      }
+    private def okResultType(okType: Option[String]): String =
+      okType.getOrElse("_root_.scala.Unit")
 
-    private def leafReturnType(shape: LeafReturn, hasStdout: Boolean): String = {
+    private def leafReturnType(shape: LeafReturn): String = {
       val err = shape.errType.getOrElse("_root_.scala.Nothing")
-      val ok  = okResultType(shape.okType, hasStdout)
-      if (hasStdout)
+      val ok  = okResultType(shape.okType)
+      if (shape.hasStdout || shape.hasStderr)
         s"_root_.scala.Either[_root_.golem.tool.ToolError[$err], _root_.golem.tool.ToolInvocation[$err, $ok]]"
       else
         s"_root_.scala.concurrent.Future[_root_.scala.Either[_root_.golem.tool.ToolError[$err], $ok]]"
@@ -188,7 +183,7 @@ object ToolRpcCodegen {
     ): String = {
       val kept    = keptLeafParams(tool, m, omitted)
       val stdin   = m.params.find(_.isStdin)
-      val retType = leafReturnType(shape, shape.hasStdout)
+      val retType = leafReturnType(shape)
 
       val valueEntries = kept
         .filterNot(isStreamParam)
@@ -198,7 +193,7 @@ object ToolRpcCodegen {
 
       val paramDecls = kept.map(paramDecl).mkString(", ")
       val prefixExpr = if (isWrapper) "__inheritedPrefix" else "_root_.scala.Nil"
-      val operation  = if (shape.hasStdout) "__start" else "__await"
+      val operation  = if (shape.hasStdout || shape.hasStderr) "__start" else "__await"
 
       s"""${indent}def ${m.name}($paramDecls): $retType = {
 $indent  val __params = _root_.golem.tool.ToolCallPreparation.encodeParams(${listExpr(valueEntries, s"$indent ")})
@@ -289,7 +284,7 @@ $indent}"""
         case shape: LeafReturn =>
           val kept = keptLeafParams(tool, m, Nil)
           Some(
-            s"  def ${m.name}(${kept.map(paramDecl).mkString(", ")}): ${leafReturnType(shape, shape.hasStdout)}"
+            s"  def ${m.name}(${kept.map(paramDecl).mkString(", ")}): ${leafReturnType(shape)}"
           )
       }
 

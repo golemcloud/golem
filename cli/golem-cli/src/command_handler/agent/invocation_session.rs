@@ -27,7 +27,7 @@ use golem_client::invocation_session::{
     AdmittedInput, DeliveryTracker, InputReplayBuffer, InvocationSession,
     InvocationSessionRequestProvider, InvocationSessionSender, InvocationSessionStateObserver,
     InvocationSessionStateSnapshot, ReplayableInput, ServerFrame, SessionTransportError,
-    send_replayable_input,
+    StableStreamIdentity, send_replayable_input,
 };
 use golem_common::model::IdempotencyKey;
 use golem_common::model::invocation_session_public::{
@@ -63,7 +63,7 @@ use tokio_util::sync::CancellationToken;
 const PIPELINE_CAPACITY: usize = 16;
 const RAW_CHUNK_SIZE: usize = 64 * 1024;
 const UNACKNOWLEDGED_INPUT_BYTES: usize = 16 * 1024 * 1024;
-const SESSION_CHECKPOINT_VERSION: u8 = 1;
+const SESSION_CHECKPOINT_VERSION: u8 = 2;
 
 pub(super) enum InvocationSessionMode {
     Start { save_session: Option<PathBuf> },
@@ -97,6 +97,7 @@ struct InvocationSessionCheckpoint {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     session_token: Option<String>,
     delivered_output_cursors: BTreeMap<String, String>,
+    stable_stream_bindings: BTreeMap<String, StableStreamIdentity>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pending_operation: Option<PendingOperation>,
 }
@@ -149,6 +150,7 @@ impl InvocationSessionStateObserver for CliCheckpointObserver {
         };
         checkpoint.session_token = state.session_token.clone();
         checkpoint.delivered_output_cursors = state.delivered_output_cursors.clone();
+        checkpoint.stable_stream_bindings = state.stable_stream_bindings.clone();
         checkpoint.pending_operation = state
             .pending_operation
             .clone()
@@ -335,6 +337,7 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
                 idempotency_key: idempotency_key_value.clone(),
                 session_token: None,
                 delivered_output_cursors: BTreeMap::new(),
+                stable_stream_bindings: BTreeMap::new(),
                 pending_operation: Some(PendingOperation {
                     request: initial.clone(),
                 }),
@@ -419,6 +422,10 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
         delivered_output_cursors: checkpoint
             .as_ref()
             .map(|checkpoint| checkpoint.delivered_output_cursors.clone())
+            .unwrap_or_default(),
+        stable_stream_bindings: checkpoint
+            .as_ref()
+            .map(|checkpoint| checkpoint.stable_stream_bindings.clone())
             .unwrap_or_default(),
         pending_operation: Some(initial),
         session_token: checkpoint
@@ -2636,6 +2643,13 @@ mod public_tests {
             delivered_output_cursors: BTreeMap::from([(
                 "opaque-stream-token".to_string(),
                 "opaque-cursor".to_string(),
+            )]),
+            stable_stream_bindings: BTreeMap::from([(
+                "opaque-stream-token".to_string(),
+                StableStreamIdentity {
+                    direction: PublicStreamDirection::Output,
+                    byte_role: None,
+                },
             )]),
             pending_operation: None,
         }

@@ -215,7 +215,7 @@ describe("tool metadata WIT validation", () => {
         throw new Error("must use concurrent writer pump")
       },
       createStdin: () => [writer, source, { wait: () => new Promise(() => {}) }],
-      createStdout: () => {
+      createOutput: () => {
         throw new Error("no stdout declared")
       },
       rpc: () => ({ asyncInvokeAndAwait: invoke }) as never,
@@ -307,6 +307,76 @@ describe("tool metadata WIT validation", () => {
       phase: "stream",
       cause: "sink failed",
     })
+  })
+
+  it("settles delayed stderr when the stdout callback fails", async () => {
+    let stderrSettled = false
+    const transport: ToolTransport = {
+      start: () =>
+        Effect.succeed({
+          stdout: (async function* () {
+            yield { tag: "ok", val: Uint8Array.of(1) } as const
+          })(),
+          stderr: (async function* () {
+            try {
+              await new Promise((resolve) => setTimeout(resolve, 10))
+              yield { tag: "ok", val: Uint8Array.of(2) } as const
+            } finally {
+              stderrSettled = true
+            }
+          })(),
+          result: Effect.succeed({ result: undefined }),
+          cancel: Effect.void,
+        }),
+    }
+    const definition = toolDefinition("failed-stdout-settles-stderr").body((body) =>
+      body.output().stderr(),
+    )
+    const failure = client(definition, { transport })(
+      {},
+      { stdout: () => Effect.fail("stdout sink failed") },
+    ).pipe(Effect.flip)
+
+    await expect(Effect.runPromise(failure)).resolves.toMatchObject({
+      phase: "stream",
+      cause: "stdout sink failed",
+    })
+    expect(stderrSettled).toBe(true)
+  })
+
+  it("settles delayed stdout when the stderr callback fails", async () => {
+    let stdoutSettled = false
+    const transport: ToolTransport = {
+      start: () =>
+        Effect.succeed({
+          stdout: (async function* () {
+            try {
+              await new Promise((resolve) => setTimeout(resolve, 10))
+              yield { tag: "ok", val: Uint8Array.of(1) } as const
+            } finally {
+              stdoutSettled = true
+            }
+          })(),
+          stderr: (async function* () {
+            yield { tag: "ok", val: Uint8Array.of(2) } as const
+          })(),
+          result: Effect.succeed({ result: undefined }),
+          cancel: Effect.void,
+        }),
+    }
+    const definition = toolDefinition("failed-stderr-settles-stdout").body((body) =>
+      body.output().stderr(),
+    )
+    const failure = client(definition, { transport })(
+      {},
+      { stderr: () => Effect.fail("stderr sink failed") },
+    ).pipe(Effect.flip)
+
+    await expect(Effect.runPromise(failure)).resolves.toMatchObject({
+      phase: "stream",
+      cause: "stderr sink failed",
+    })
+    expect(stdoutSettled).toBe(true)
   })
 
   it("drains backpressured stdout after its callback fails", async () => {
@@ -506,7 +576,14 @@ describe("tool metadata WIT validation", () => {
     await Effect.runPromise(
       client(definition, { transport: { start }, lookupName: "registered-leaf" })({}),
     )
-    expect(start).toHaveBeenCalledWith("registered-leaf", [], expect.anything(), undefined, false)
+    expect(start).toHaveBeenCalledWith(
+      "registered-leaf",
+      [],
+      expect.anything(),
+      undefined,
+      false,
+      false,
+    )
   })
 
   it("decodes same-shaped host custom errors by authoritative name", async () => {
@@ -578,9 +655,10 @@ describe("tool metadata WIT validation", () => {
         })(),
       ),
       undefined,
+      undefined,
       { tag: "anonymous" },
       {
-        invoke: async () => [{ get: async () => undefined, cancel: vi.fn() }, undefined],
+        invoke: async () => [{ get: async () => undefined, cancel: vi.fn() }, undefined, undefined],
       } as never,
     )
     const exit = await Effect.runPromiseExit(
@@ -635,11 +713,13 @@ describe("tool metadata WIT validation", () => {
       typedUnit,
       byteItems(iterable(stdinReturn)),
       undefined,
+      undefined,
       { tag: "anonymous" },
       {
         invoke: async () => [
           { get: async () => undefined, cancel, [Symbol.dispose]: dispose },
           byteItems(iterable(stdoutReturn)),
+          undefined,
         ],
       } as never,
     )

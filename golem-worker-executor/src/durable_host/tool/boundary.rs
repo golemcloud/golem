@@ -308,6 +308,7 @@ mod tests {
                         constraints: vec![],
                         stdin: None,
                         stdout: None,
+                        stderr: None,
                         result: Some(ResultSpec {
                             type_: result,
                             doc: Default::default(),

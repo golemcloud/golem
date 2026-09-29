@@ -17,7 +17,7 @@ import { AgentType, Principal } from 'golem:agent/common@2.0.0';
 import { SchemaValueTree, uuidToString, parseUuid } from 'golem:core/types@2.0.0';
 import type { Snapshot } from 'golem:api/host@1.5.0';
 import type { InvocationResult, Tool, ToolError, TypedSchemaValue } from 'golem:tool/common@0.1.0';
-import type { ByteStreamItem, ToolStdoutWriter } from 'golem:tool/streams@0.1.0';
+import type { ByteStreamItem, ToolOutputWriter } from 'golem:tool/streams@0.1.0';
 import { schemaValueConforms, type ExtendedCommandBody } from './internal/tool';
 import {
   schemaValueFromWit,
@@ -251,7 +251,8 @@ interface GolemToolGuest {
     commandPath: string[],
     input: TypedSchemaValue,
     stdin: AsyncIterable<ByteStreamItem> | undefined,
-    stdout: ToolStdoutWriter | undefined,
+    stdout: ToolOutputWriter | undefined,
+    stderr: ToolOutputWriter | undefined,
     principal: Principal,
   ): Promise<InvocationResult>;
 }
@@ -342,11 +343,13 @@ async function invokeTool(
   commandPath: string[],
   input: TypedSchemaValue,
   stdin: AsyncIterable<ByteStreamItem> | undefined,
-  stdout: ToolStdoutWriter | undefined,
+  stdout: ToolOutputWriter | undefined,
+  stderr: ToolOutputWriter | undefined,
   principal: Principal,
 ): Promise<InvocationResult> {
   let inputAdapter: ToolInputStreamAdapter | undefined;
-  let outputAdapter: ToolOutputStreamAdapter | undefined;
+  let stdoutAdapter: ToolOutputStreamAdapter | undefined;
+  let stderrAdapter: ToolOutputStreamAdapter | undefined;
   let inputCleanup: Promise<void> | undefined;
   const disposeInput = async (reason?: unknown): Promise<void> => {
     if (!inputCleanup) {
@@ -387,18 +390,32 @@ async function invokeTool(
         throw invalidToolInput('tool invocation did not contain declared stdout stream');
       }
       if (stdout) {
-        outputAdapter = createToolOutputStream(stdout);
-        context.stdout = outputAdapter.stream;
+        stdoutAdapter = createToolOutputStream(stdout);
+        context.stdout = stdoutAdapter.stream;
+      }
+    }
+
+    if (body.stderr) {
+      if (!stderr && body.stderr.required) {
+        throw invalidToolInput('tool invocation did not contain declared stderr stream');
+      }
+      if (stderr) {
+        stderrAdapter = createToolOutputStream(stderr);
+        context.stderr = stderrAdapter.stream;
       }
     }
 
     const outcome = await prepared.invoke(context);
-    await outputAdapter?.finish();
+    await Promise.all([stdoutAdapter?.finish(), stderrAdapter?.finish()]);
     const result = projectToolOutcome(body, outcome);
     await disposeInput();
     return result;
   } catch (error) {
-    await Promise.allSettled([outputAdapter?.abort(error), disposeInput(error)]);
+    await Promise.allSettled([
+      stdoutAdapter?.abort(error),
+      stderrAdapter?.abort(error),
+      disposeInput(error),
+    ]);
     throw error;
   }
 }
@@ -539,7 +556,7 @@ async function pullInput(
   }
 }
 
-function createToolOutputStream(writer: ToolStdoutWriter): ToolOutputStreamAdapter {
+function createToolOutputStream(writer: ToolOutputWriter): ToolOutputStreamAdapter {
   const invocationCompleted = new Error('tool invocation completed');
   let activeOperation: Promise<void> | undefined;
   let controller: WritableStreamDefaultController | undefined;

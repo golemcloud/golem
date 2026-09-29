@@ -17,8 +17,8 @@ use crate::tool::client::{
     omitted_marker_ident, param_omission_surfaces, split_result, stream_idents,
 };
 use crate::tool::descriptor::descriptor_fn_ident;
-use crate::tool::helpers::to_kebab_case;
-use crate::tool::ir::{CommandIr, ParamIr, ToolDefinitionIr};
+use crate::tool::helpers::{stream_type, to_kebab_case};
+use crate::tool::ir::{CommandIr, OutputChannelIr, ParamIr, ToolDefinitionIr};
 use proc_macro2::{Span, TokenStream};
 use quote::{format_ident, quote};
 use syn::ext::IdentExt;
@@ -71,7 +71,7 @@ pub fn synthesize_middleware_surface(ir: &ToolDefinitionIr) -> TokenStream {
                 [],
                 [],
                 [#(#direct_leaf_names)*],
-                [unused_instance unused_tool unused_command_index unused_input unused_stdin unused_stdout unused_principal unused_underlying]
+                [unused_instance unused_tool unused_command_index unused_input unused_stdin unused_stdout unused_stderr unused_principal unused_underlying]
             );
         }
 
@@ -90,7 +90,7 @@ pub fn synthesize_middleware_surface(ir: &ToolDefinitionIr) -> TokenStream {
                 [],
                 [],
                 [#(#direct_leaf_names_for_trait)*],
-                [unused_instance unused_tool unused_command_index unused_input unused_stdin unused_stdout unused_principal unused_underlying]
+                [unused_instance unused_tool unused_command_index unused_input unused_stdin unused_stdout unused_stderr unused_principal unused_underlying]
             );
 
             #[doc(hidden)]
@@ -123,6 +123,7 @@ pub fn synthesize_middleware_surface(ir: &ToolDefinitionIr) -> TokenStream {
                 __golem_middleware_input: golem_rust::TypedSchemaValue,
                 __golem_middleware_stdin: ::std::option::Option<golem_rust::tool::InputStream>,
                 __golem_middleware_stdout: ::std::option::Option<golem_rust::tool::OutputStream>,
+                __golem_middleware_stderr: ::std::option::Option<golem_rust::tool::OutputStream>,
                 __golem_middleware_principal: golem_rust::tool::Principal,
                 __golem_middleware_underlying: golem_rust::tool::UnderlyingTool,
             ) -> golem_rust::tool::ToolMiddlewareInvokeFutureFor<'a>
@@ -162,6 +163,7 @@ pub fn synthesize_middleware_surface(ir: &ToolDefinitionIr) -> TokenStream {
                             __golem_middleware_input
                             __golem_middleware_stdin
                             __golem_middleware_stdout
+                            __golem_middleware_stderr
                             __golem_middleware_principal
                             __golem_middleware_underlying
                         ]
@@ -207,7 +209,7 @@ fn synthesize_projection_macro(ir: &ToolDefinitionIr) -> TokenStream {
                 [$($ancestor)*],
                 [$($omitted)*],
                 [$($direct)*],
-                [$instance $tool $command_index $input $stdin $stdout $principal $underlying],
+                [$instance $tool $command_index $input $stdin $stdout $stderr $principal $underlying],
                 [],
                 [];
                 $($omitted)*
@@ -242,6 +244,7 @@ fn synthesize_projection_macro(ir: &ToolDefinitionIr) -> TokenStream {
                     $input:ident
                     $stdin:ident
                     $stdout:ident
+                    $stderr:ident
                     $principal:ident
                     $underlying:ident
                 ]
@@ -352,7 +355,7 @@ fn projection_param_arms(
             [$($ancestor)*],
             [$($omitted)*],
             [$($direct)*],
-            [$instance $tool $command_index $input $stdin $stdout $principal $underlying],
+            [$instance $tool $command_index $input $stdin $stdout $stderr $principal $underlying],
             [$($args)* (#ident: #ty => #canonical_name)],
             [$($new_omitted)* #(#markers_for_keep)*];
             $($omitted)*
@@ -370,7 +373,7 @@ fn projection_param_arms(
             [$($ancestor)*],
             [$($omitted)*],
             [$($direct)*],
-            [$instance $tool $command_index $input $stdin $stdout $principal $underlying],
+            [$instance $tool $command_index $input $stdin $stdout $stderr $principal $underlying],
             [$($args)*],
             [$($new_omitted)*];
             $($omitted)*
@@ -394,6 +397,7 @@ fn projection_param_arms(
             $input:ident
             $stdin:ident
             $stdout:ident
+            $stderr:ident
             $principal:ident
             $underlying:ident
         ],
@@ -429,7 +433,7 @@ fn projection_param_arms(
                 [$($ancestor)*],
                 [$($omitted)*],
                 [$($direct)*],
-                [$instance $tool $command_index $input $stdin $stdout $principal $underlying],
+                [$instance $tool $command_index $input $stdin $stdout $stderr $principal $underlying],
                 [$($args)*],
                 [$($new_omitted)*];
                 $($all)*
@@ -478,6 +482,7 @@ fn projection_done_arm(
             $input:ident
             $stdin:ident
             $stdout:ident
+            $stderr:ident
             $principal:ident
             $underlying:ident
         ],
@@ -499,13 +504,39 @@ fn projection_done_arm(
                     [$($ancestor)* $($args)*],
                     [$($omitted)* $($new_omitted)*],
                     [$($direct)*],
-                    [$instance $tool $command_index $input $stdin $stdout $principal $underlying]
+                    [$instance $tool $command_index $input $stdin $stdout $stderr $principal $underlying]
                 );
             };
         }
     } else {
         let output = &command.output;
-        let (_, has_stdout) = stream_idents(command);
+        let (_, has_stdout, has_stderr) = stream_idents(command);
+        let output_channel = |param: &ParamIr| {
+            command
+                .args
+                .iter()
+                .find(|arg| arg.param == param.ident)
+                .and_then(|arg| arg.output_channel)
+                .unwrap_or(OutputChannelIr::Stdout)
+        };
+        let stdout_params = command.params.iter().filter_map(|param| {
+            matches!(
+                stream_type(&param.ty),
+                Some((crate::tool::helpers::StreamKind::Output, _))
+            )
+            .then_some(param)
+            .filter(|param| output_channel(param) == OutputChannelIr::Stdout)
+            .map(|param| &param.ident)
+        });
+        let stderr_params = command.params.iter().filter_map(|param| {
+            matches!(
+                stream_type(&param.ty),
+                Some((crate::tool::helpers::StreamKind::Output, _))
+            )
+            .then_some(param)
+            .filter(|param| output_channel(param) == OutputChannelIr::Stderr)
+            .map(|param| &param.ident)
+        });
         quote! {
             (@#state #base_pattern; $($rest:ident)*) => {
                 golem_rust::__golem_emit_tool_middleware_leaf! {
@@ -518,6 +549,9 @@ fn projection_done_arm(
                     params: [$($ancestor)* $($args)*],
                     output: (#output),
                     stdout: #has_stdout,
+                    stderr: #has_stderr,
+                    stdout_params: [#(#stdout_params)*],
+                    stderr_params: [#(#stderr_params)*],
                     direct: [$($direct)*],
                     instance: $instance,
                     tool: $tool,
@@ -525,6 +559,7 @@ fn projection_done_arm(
                     input: $input,
                     stdin: $stdin,
                     stdout_writer: $stdout,
+                    stderr_writer: $stderr,
                     principal: $principal,
                     underlying: $underlying
                 }
@@ -570,6 +605,9 @@ struct LeafInput {
     params: Vec<ProjectedParam>,
     output: ReturnType,
     stdout: bool,
+    stderr: bool,
+    stdout_params: Vec<Ident>,
+    stderr_params: Vec<Ident>,
     direct: Vec<Ident>,
     instance: Ident,
     tool: Ident,
@@ -577,6 +615,7 @@ struct LeafInput {
     input: Ident,
     stdin: Ident,
     stdout_writer: Ident,
+    stderr_writer: Ident,
     principal: Ident,
     underlying: Ident,
 }
@@ -612,6 +651,15 @@ impl Parse for LeafInput {
         parse_key(input, "stdout")?;
         let stdout = input.parse::<LitBool>()?.value;
         input.parse::<Token![,]>()?;
+        parse_key(input, "stderr")?;
+        let stderr = input.parse::<LitBool>()?.value;
+        input.parse::<Token![,]>()?;
+        parse_key(input, "stdout_params")?;
+        let stdout_params = parse_bracketed(input)?;
+        input.parse::<Token![,]>()?;
+        parse_key(input, "stderr_params")?;
+        let stderr_params = parse_bracketed(input)?;
+        input.parse::<Token![,]>()?;
         parse_key(input, "direct")?;
         let direct = parse_bracketed(input)?;
         input.parse::<Token![,]>()?;
@@ -633,6 +681,9 @@ impl Parse for LeafInput {
         parse_key(input, "stdout_writer")?;
         let stdout_writer = input.parse()?;
         input.parse::<Token![,]>()?;
+        parse_key(input, "stderr_writer")?;
+        let stderr_writer = input.parse()?;
+        input.parse::<Token![,]>()?;
         parse_key(input, "principal")?;
         let principal = input.parse()?;
         input.parse::<Token![,]>()?;
@@ -649,6 +700,9 @@ impl Parse for LeafInput {
             params,
             output,
             stdout,
+            stderr,
+            stdout_params,
+            stderr_params,
             direct,
             instance,
             tool,
@@ -656,6 +710,7 @@ impl Parse for LeafInput {
             input: invocation_input,
             stdin,
             stdout_writer,
+            stderr_writer,
             principal,
             underlying,
         })
@@ -717,7 +772,7 @@ pub fn emit_tool_middleware_leaf(input: TokenStream) -> syn::Result<TokenStream>
         let ty = &param.ty;
         quote! { #ident: #ty }
     });
-    let author_result_ty = middleware_result_type(&input.output, false, &input.sdk);
+    let author_result_ty = middleware_result_type(&input.output, false, false, &input.sdk);
 
     match input.mode.to_string().as_str() {
         "middleware" => Ok(quote! {
@@ -728,7 +783,8 @@ pub fn emit_tool_middleware_leaf(input: TokenStream) -> syn::Result<TokenStream>
             ) -> #author_result_ty;
         }),
         "underlying" => {
-            let result_ty = middleware_result_type(&input.output, input.stdout, &input.sdk);
+            let result_ty =
+                middleware_result_type(&input.output, input.stdout, input.stderr, &input.sdk);
             emit_underlying_method(input, method_ident, result_ty)
         }
         "dispatch" => emit_dispatch_block(input, method_ident),
@@ -810,7 +866,13 @@ fn emit_underlying_method(
         &input_ident,
         sdk,
     );
-    let decode = decode_underlying_result(&input.output, input.stdout, &result_ident, sdk);
+    let decode = decode_underlying_result(
+        &input.output,
+        input.stdout,
+        input.stderr,
+        &result_ident,
+        sdk,
+    );
     let (ok, error) = split_result(&input.output);
     let ok_ty = ok.map(|ty| quote! { #ty }).unwrap_or_else(|| quote! { () });
     let error_ty = error
@@ -841,6 +903,19 @@ fn emit_underlying_method(
         let #input_ident = #sdk::agentic::build_canonical_input(&#model_ident, #param_values_ident)
             .map_err(#sdk::tool::ToolInvokeError::InvalidInput)?;
     };
+    let has_stdout = input.stdout;
+    let has_stderr = input.stderr;
+    let direct_method = if has_stdout || has_stderr {
+        quote! {}
+    } else {
+        quote! {
+            pub async fn #method_ident(&self #(, #args)*) -> #result_ty {
+                #setup
+                let #result_ident = #invoke?;
+                #decode
+            }
+        }
+    };
 
     Ok(quote! {
         pub async fn #start_method_ident(&self #(, #args)*) -> ::std::result::Result<
@@ -851,16 +926,14 @@ fn emit_underlying_method(
             let #invocation_ident = self.underlying.start_with::<#error_ty>(#command_path_ident, #input_ident, #stdin).await?;
             ::std::result::Result::Ok(#sdk::tool::TypedUnderlyingInvocation::new(
                 #invocation_ident,
+                #has_stdout,
+                #has_stderr,
                 #decode_started,
                 #decode_error,
-            ))
+            )?)
         }
 
-        pub async fn #method_ident(&self #(, #args)*) -> #result_ty {
-            #setup
-            let #result_ident = #invoke?;
-            #decode
-        }
+        #direct_method
     })
 }
 
@@ -873,6 +946,7 @@ fn emit_dispatch_block(input: LeafInput, method_ident: Ident) -> syn::Result<Tok
     let invocation_input = &input.input;
     let invocation_stdin = &input.stdin;
     let invocation_stdout = &input.stdout_writer;
+    let invocation_stderr = &input.stderr_writer;
     let invocation_principal = &input.principal;
     let invocation_underlying = &input.underlying;
     let command_path = input.command_path;
@@ -881,6 +955,7 @@ fn emit_dispatch_block(input: LeafInput, method_ident: Ident) -> syn::Result<Tok
     let input_fields_ident = fresh_projected_ident(&input.params, "__golem_dispatch_input_fields");
     let stdin_ident = fresh_projected_ident(&input.params, "__golem_dispatch_stdin");
     let stdout_ident = fresh_projected_ident(&input.params, "__golem_dispatch_stdout");
+    let stderr_ident = fresh_projected_ident(&input.params, "__golem_dispatch_stderr");
     let principal_ident = fresh_projected_ident(&input.params, "__golem_dispatch_principal");
     let underlying_ident = fresh_projected_ident(&input.params, "__golem_dispatch_underlying");
     let field_index_ident = fresh_projected_ident(&input.params, "__golem_dispatch_field_index");
@@ -915,15 +990,25 @@ fn emit_dispatch_block(input: LeafInput, method_ident: Ident) -> syn::Result<Tok
                 Some((crate::tool::helpers::StreamKind::Input, false)) => quote! {
                     let #ident = #stdin_ident.take();
                 },
-                Some((crate::tool::helpers::StreamKind::Output, true)) => quote! {
-                    let #ident = #stdout_ident.take().ok_or_else(|| {
-                        #sdk::tool::ToolInvokeError::InvalidInput(
-                            "tool invocation did not contain declared stdout stream".to_string()
-                        )
-                    })?;
-                },
-                Some((crate::tool::helpers::StreamKind::Output, false)) => quote! {
-                    let #ident = #stdout_ident.take();
+                Some((crate::tool::helpers::StreamKind::Output, required)) => {
+                    let (writer, channel) = if input.stderr_params.contains(ident) {
+                        (&stderr_ident, "stderr")
+                    } else if input.stdout_params.contains(ident) {
+                        (&stdout_ident, "stdout")
+                    } else {
+                        unreachable!("output parameter must have a projected channel")
+                    };
+                    if required {
+                        quote! {
+                            let #ident = #writer.take().ok_or_else(|| {
+                                #sdk::tool::ToolInvokeError::InvalidInput(
+                                    concat!("tool invocation did not contain declared ", #channel, " stream").to_string()
+                                )
+                            })?;
+                        }
+                    } else {
+                        quote! { let #ident = #writer.take(); }
+                    }
                 },
                 None => quote! {
                     let #ident = {
@@ -955,15 +1040,16 @@ fn emit_dispatch_block(input: LeafInput, method_ident: Ident) -> syn::Result<Tok
         }
     });
     let has_stdout = input.stdout;
-    let finish_stdout = input.params.iter().find_map(|param| {
+    let has_stderr = input.stderr;
+    let finish_outputs = input.params.iter().filter_map(|param| {
         let ident = &param.ident;
         match crate::tool::helpers::stream_type(&param.ty) {
             Some((crate::tool::helpers::StreamKind::Output, true)) => Some(quote! {
                 let _ = #ident.finish().await;
             }),
             Some((crate::tool::helpers::StreamKind::Output, false)) => Some(quote! {
-                if let ::std::option::Option::Some(__golem_stdout_writer) = #ident {
-                    let _ = __golem_stdout_writer.finish().await;
+                if let ::std::option::Option::Some(__golem_output_writer) = #ident {
+                    let _ = __golem_output_writer.finish().await;
                 }
             }),
             _ => None,
@@ -980,7 +1066,14 @@ fn emit_dispatch_block(input: LeafInput, method_ident: Ident) -> syn::Result<Tok
             quote! { #ident }
         }
     });
-    let encode = encode_dispatch_result(&input.output, false, &result_ident, &input.params, sdk);
+    let encode = encode_dispatch_result(
+        &input.output,
+        false,
+        false,
+        &result_ident,
+        &input.params,
+        sdk,
+    );
 
     Ok(quote! {
         let #path_ident = ::std::vec![#(#command_path.to_string()),*];
@@ -998,10 +1091,18 @@ fn emit_dispatch_block(input: LeafInput, method_ident: Ident) -> syn::Result<Tok
                 })?;
             let mut #stdin_ident = #invocation_stdin;
             let mut #stdout_ident = #invocation_stdout;
+            let mut #stderr_ident = #invocation_stderr;
             if #stdout_ident.is_some() && !#has_stdout {
                 return ::std::result::Result::Err(
                     #sdk::tool::ToolInvokeError::InvalidInput(
                         "tool invocation contained an unexpected stdout stream".to_string()
+                    )
+                );
+            }
+            if #stderr_ident.is_some() && !#has_stderr {
+                return ::std::result::Result::Err(
+                    #sdk::tool::ToolInvokeError::InvalidInput(
+                        "tool invocation contained an unexpected stderr stream".to_string()
                     )
                 );
             }
@@ -1028,7 +1129,7 @@ fn emit_dispatch_block(input: LeafInput, method_ident: Ident) -> syn::Result<Tok
             let #result_ident = #instance
                 .#method_ident(&#underlying_ident, #(#call_args),*)
                 .await;
-            #finish_stdout
+            #(#finish_outputs)*
             #encode
         }
     })
@@ -1037,6 +1138,7 @@ fn emit_dispatch_block(input: LeafInput, method_ident: Ident) -> syn::Result<Tok
 fn encode_dispatch_result(
     output: &ReturnType,
     has_stdout: bool,
+    has_stderr: bool,
     result_ident: &Ident,
     params: &[ProjectedParam],
     sdk: &Path,
@@ -1044,13 +1146,18 @@ fn encode_dispatch_result(
     let (ok, error) = split_result(output);
     let value_ident = fresh_projected_ident(params, "__golem_dispatch_value");
     let stdout_ident = fresh_projected_ident(params, "__golem_dispatch_stdout");
+    let stderr_ident = fresh_projected_ident(params, "__golem_dispatch_stderr");
     let error_ident = fresh_projected_ident(params, "__golem_dispatch_error");
     let payload_ident = fresh_projected_ident(params, "__golem_dispatch_error_payload");
-    let success_pattern = match (ok, has_stdout) {
-        (Some(_), true) => quote! { (#value_ident, #stdout_ident) },
-        (None, true) => quote! { #stdout_ident },
-        (Some(_), false) => quote! { #value_ident },
-        (None, false) => quote! { () },
+    let success_pattern = match (ok, has_stdout, has_stderr) {
+        (Some(_), true, true) => quote! { (#value_ident, #stdout_ident, #stderr_ident) },
+        (None, true, true) => quote! { (#stdout_ident, #stderr_ident) },
+        (Some(_), true, false) => quote! { (#value_ident, #stdout_ident) },
+        (None, true, false) => quote! { #stdout_ident },
+        (Some(_), false, true) => quote! { (#value_ident, #stderr_ident) },
+        (None, false, true) => quote! { #stderr_ident },
+        (Some(_), false, false) => quote! { #value_ident },
+        (None, false, false) => quote! { () },
     };
     let value = ok.map(|_| {
         quote! {
@@ -1072,11 +1179,17 @@ fn encode_dispatch_result(
     } else {
         quote! { ::std::option::Option::None }
     };
+    let stderr = if has_stderr {
+        quote! { ::std::option::Option::Some(#stderr_ident) }
+    } else {
+        quote! { ::std::option::Option::None }
+    };
     let success = quote! {
         #value
         return ::std::result::Result::Ok(#sdk::tool::InvocationResult {
             result: #result,
             stdout: #stdout,
+            stderr: #stderr,
         });
     };
 
@@ -1124,16 +1237,27 @@ fn encode_dispatch_result(
     }
 }
 
-fn middleware_result_type(output: &ReturnType, has_stdout: bool, sdk: &Path) -> TokenStream {
+fn middleware_result_type(
+    output: &ReturnType,
+    has_stdout: bool,
+    has_stderr: bool,
+    sdk: &Path,
+) -> TokenStream {
     let (ok, error) = split_result(output);
     let error = error
         .map(|error| quote! { #error })
         .unwrap_or_else(|| quote! { ::std::convert::Infallible });
-    let ok = match (ok, has_stdout) {
-        (Some(ok), true) => quote! { (#ok, #sdk::tool::InputStream) },
-        (None, true) => quote! { #sdk::tool::InputStream },
-        (Some(ok), false) => quote! { #ok },
-        (None, false) => quote! { () },
+    let ok = match (ok, has_stdout, has_stderr) {
+        (Some(ok), true, true) => {
+            quote! { (#ok, #sdk::tool::InputStream, #sdk::tool::InputStream) }
+        }
+        (None, true, true) => quote! { (#sdk::tool::InputStream, #sdk::tool::InputStream) },
+        (Some(ok), true, false) | (Some(ok), false, true) => {
+            quote! { (#ok, #sdk::tool::InputStream) }
+        }
+        (None, true, false) | (None, false, true) => quote! { #sdk::tool::InputStream },
+        (Some(ok), false, false) => quote! { #ok },
+        (None, false, false) => quote! { () },
     };
     quote! { ::std::result::Result<#ok, #sdk::tool::ToolInvokeError<#error>> }
 }
@@ -1169,21 +1293,34 @@ fn underlying_invoke(
 fn decode_underlying_result(
     output: &ReturnType,
     has_stdout: bool,
+    has_stderr: bool,
     result_ident: &Ident,
     sdk: &Path,
 ) -> TokenStream {
     let (ok, _) = split_result(output);
-    match (ok, has_stdout) {
-        (Some(ok), true) => quote! {
+    match (ok, has_stdout, has_stderr) {
+        (Some(ok), true, true) => quote! {
+            #sdk::tool::decode_result_with_outputs::<#ok, _>(#result_ident)
+        },
+        (None, true, true) => quote! {
+            #sdk::tool::decode_result_outputs_only(#result_ident)
+        },
+        (Some(ok), true, false) => quote! {
             #sdk::tool::decode_result_with_stdout::<#ok, _>(#result_ident)
         },
-        (None, true) => quote! {
+        (None, true, false) => quote! {
             #sdk::tool::decode_result_stdout_only(#result_ident)
         },
-        (Some(ok), false) => quote! {
+        (Some(ok), false, true) => quote! {
+            #sdk::tool::decode_result_with_stderr::<#ok, _>(#result_ident)
+        },
+        (None, false, true) => quote! {
+            #sdk::tool::decode_result_stderr_only(#result_ident)
+        },
+        (Some(ok), false, false) => quote! {
             #sdk::tool::decode_result_value::<#ok, _>(#result_ident)
         },
-        (None, false) => quote! {
+        (None, false, false) => quote! {
             #sdk::tool::decode_result_empty(#result_ident)
         },
     }
@@ -1264,6 +1401,9 @@ mod tests {
             ],
             output: (-> Result<String, ExampleError>),
             stdout: false,
+            stderr: false,
+            stdout_params: [],
+            stderr_params: [],
             direct: [run],
             instance: instance,
             tool: tool,
@@ -1271,6 +1411,7 @@ mod tests {
             input: input,
             stdin: stdin,
             stdout_writer: stdout,
+            stderr_writer: stderr,
             principal: invocation_principal,
             underlying: underlying
         })
@@ -1297,6 +1438,9 @@ mod tests {
             params: [],
             output: (),
             stdout: false,
+            stderr: false,
+            stdout_params: [],
+            stderr_params: [],
             direct: [remote__add],
             instance: instance,
             tool: tool,
@@ -1304,6 +1448,7 @@ mod tests {
             input: input,
             stdin: stdin,
             stdout_writer: stdout,
+            stderr_writer: stderr,
             principal: principal,
             underlying: underlying
         })
@@ -1326,6 +1471,9 @@ mod tests {
             params: [],
             output: (),
             stdout: false,
+            stderr: false,
+            stdout_params: [],
+            stderr_params: [],
             direct: [r#remote__add],
             instance: instance,
             tool: tool,
@@ -1333,6 +1481,7 @@ mod tests {
             input: input,
             stdin: stdin,
             stdout_writer: stdout,
+            stderr_writer: stderr,
             principal: principal,
             underlying: underlying
         })

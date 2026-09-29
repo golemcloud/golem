@@ -45,6 +45,7 @@ pub(all) struct CommandBodyDef {
   constraints : Array[ConstraintDef]
   stdin : @toolCommon.StreamSpec?
   stdout : @toolCommon.StreamSpec?
+  stderr : @toolCommon.StreamSpec?
   result : ResultSpecDef?
   errors : Array[ErrorCaseDef]
   annotations : @toolCommon.CommandAnnotations?
@@ -374,6 +375,7 @@ fn CommandBodyDef::to_command_body(
     },
     stdin: self.stdin,
     stdout: self.stdout,
+    stderr: self.stderr,
     result: match self.result {
       Some(result) => Some(result.to_result_spec(encoder))
       None => None

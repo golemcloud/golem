@@ -44,21 +44,39 @@ pub fn get_registered_tool(String) -> Result[@golemcloud/golem_sdk/interface/gol
 
 pub fn invocation_result_empty() -> @golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult
 
+pub fn invocation_result_outputs(@async-core.Stream[Byte], @async-core.Stream[Byte]) -> @golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult
+
+pub fn invocation_result_stderr(@async-core.Stream[Byte]) -> @golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult
+
 pub fn invocation_result_stdout(@async-core.Stream[Byte]) -> @golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult
 
 pub async fn[T : @schema.IntoSchema] invocation_result_value(T) -> @golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult
+
+pub async fn[T : @schema.IntoSchema] invocation_result_value_with_outputs(T, @async-core.Stream[Byte], @async-core.Stream[Byte]) -> @golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult
+
+pub async fn[T : @schema.IntoSchema] invocation_result_value_with_stderr(T, @async-core.Stream[Byte]) -> @golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult
 
 pub async fn[T : @schema.IntoSchema] invocation_result_value_with_stdout(T, @async-core.Stream[Byte]) -> @golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult
 
 pub fn literal_to_schema_value(@schema_model.SchemaGraph, ToolLiteral) -> @schema_model.SchemaValue raise ToolBuildError
 
+pub fn new_stderr() -> (@async-core.Stream[Byte], @async-core.Sink[Byte])
+
 pub fn new_stdout() -> (@async-core.Stream[Byte], @async-core.Sink[Byte])
 
 pub fn project_result_empty(InvocationResult) -> Result[Unit, String]
 
+pub fn project_result_outputs_only(InvocationResult) -> Result[(@async-core.Stream[Byte], @async-core.Stream[Byte]), String]
+
+pub fn project_result_stderr_only(InvocationResult) -> Result[@async-core.Stream[Byte], String]
+
 pub fn project_result_stdout_only(InvocationResult) -> Result[@async-core.Stream[Byte], String]
 
 pub fn[T : @schema.FromSchema] project_result_value(InvocationResult) -> Result[T, String]
+
+pub fn[T : @schema.FromSchema] project_result_with_outputs(InvocationResult) -> Result[(T, @async-core.Stream[Byte], @async-core.Stream[Byte]), String]
+
+pub fn[T : @schema.FromSchema] project_result_with_stderr(InvocationResult) -> Result[(T, @async-core.Stream[Byte]), String]
 
 pub fn[T : @schema.FromSchema] project_result_with_stdout(InvocationResult) -> Result[(T, @async-core.Stream[Byte]), String]
 
@@ -151,6 +169,7 @@ pub(all) struct CommandBodyDef {
   constraints : Array[ConstraintDef]
   stdin : @golemcloud/golem_sdk/interface/golem/tool/common.StreamSpec?
   stdout : @golemcloud/golem_sdk/interface/golem/tool/common.StreamSpec?
+  stderr : @golemcloud/golem_sdk/interface/golem/tool/common.StreamSpec?
   result : ResultSpecDef?
   errors : Array[ErrorCaseDef]
   annotations : @golemcloud/golem_sdk/interface/golem/tool/common.CommandAnnotations?
@@ -203,6 +222,7 @@ pub(all) struct ImpliesDef {
 pub(all) struct InvocationResult {
   result : @schema_model.TypedSchemaValue?
   stdout : @async-core.Stream[Byte]?
+  stderr : @async-core.Stream[Byte]?
 }
 
 pub(all) enum NoToolError {

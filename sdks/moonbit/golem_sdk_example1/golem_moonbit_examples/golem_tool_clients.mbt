@@ -59,10 +59,18 @@ pub fn MoonbitStreamingClient::stream(
   }
   match self
     .client
-    .start(["stream"], __golem_input, Some(stdin), true, fn(_, _) { None }) {
+    .start(
+      ["stream"], __golem_input, Some(stdin), true, false, fn(_, _) { None }
+    ) {
     Err(__golem_error) => Err(__golem_error)
-    Ok(__golem_invocation) =>
-      @tool.typed_invocation(__golem_invocation, @tool.decode_result_value)
+    Ok(__golem_invocation) => {
+      @tool.typed_invocation(
+        __golem_invocation,
+        true,
+        false,
+        @tool.decode_result_value,
+      )
+    }
   }
 }
 
@@ -136,13 +144,20 @@ pub fn CanonicalGrepClient::canonical_grep(
   match self
     .client
     .start(
-      [], __golem_input, Some(stdin), true, fn(__golem_name, __golem_value) {
-        @tool.decode_named_tool_error(__golem_name, __golem_value)
-      },
+      [], __golem_input, Some(stdin), true, false, fn(
+        __golem_name,
+        __golem_value,
+      ) { @tool.decode_named_tool_error(__golem_name, __golem_value) },
     ) {
     Err(__golem_error) => Err(__golem_error)
-    Ok(__golem_invocation) =>
-      @tool.typed_invocation(__golem_invocation, @tool.decode_result_value)
+    Ok(__golem_invocation) => {
+      @tool.typed_invocation(
+        __golem_invocation,
+        true,
+        false,
+        @tool.decode_result_value,
+      )
+    }
   }
 }
 

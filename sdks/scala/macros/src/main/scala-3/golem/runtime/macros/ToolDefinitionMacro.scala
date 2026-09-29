@@ -223,6 +223,7 @@ private[macros] class ToolDefinitionAssembler(val core: ToolMacroCore) {
           constraints = ${ Expr(m.constraints) },
           stdin = ${ Expr(c.stdin) },
           stdout = ${ Expr(c.stdout) },
+          stderr = ${ Expr(c.stderr) },
           result = $resultExpr,
           errors = $errorsExpr,
           annotations = ${ Expr(m.annotations) },

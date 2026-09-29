@@ -37,7 +37,7 @@ import scala.scalajs.js.annotation.JSName
 @js.native
 sealed trait JsByteStreamIteratorResult extends js.Object {
   def done: Boolean = js.native
-  def value: Int    = js.native
+  def value: js.Any = js.native
 }
 
 @js.native
@@ -491,6 +491,7 @@ sealed trait JsCommandBody extends js.Object {
   def constraints: js.Array[JsConstraint]           = js.native
   def stdin: js.UndefOr[JsStreamSpec]               = js.native
   def stdout: js.UndefOr[JsStreamSpec]              = js.native
+  def stderr: js.UndefOr[JsStreamSpec]              = js.native
   def result: js.UndefOr[JsResultSpec]              = js.native
   def errors: js.Array[JsErrorCase]                 = js.native
   def annotations: js.UndefOr[JsCommandAnnotations] = js.native
@@ -503,6 +504,7 @@ object JsCommandBody {
     constraints: js.Array[JsConstraint],
     stdin: js.UndefOr[JsStreamSpec],
     stdout: js.UndefOr[JsStreamSpec],
+    stderr: js.UndefOr[JsStreamSpec],
     result: js.UndefOr[JsResultSpec],
     errors: js.Array[JsErrorCase],
     annotations: js.UndefOr[JsCommandAnnotations]
@@ -516,6 +518,7 @@ object JsCommandBody {
     )
     stdin.foreach(v => o.updateDynamic("stdin")(v))
     stdout.foreach(v => o.updateDynamic("stdout")(v))
+    stderr.foreach(v => o.updateDynamic("stderr")(v))
     result.foreach(v => o.updateDynamic("result")(v))
     annotations.foreach(v => o.updateDynamic("annotations")(v))
     o.asInstanceOf[JsCommandBody]
@@ -599,15 +602,18 @@ object JsToolError {
 sealed trait JsInvocationResult extends js.Object {
   def result: js.UndefOr[JsTypedSchemaValue] = js.native
   def stdout: js.UndefOr[JsWasiOutputStream] = js.native
+  def stderr: js.UndefOr[JsWasiOutputStream] = js.native
 }
 object JsInvocationResult {
   def apply(
     result: js.UndefOr[JsTypedSchemaValue],
-    stdout: js.UndefOr[JsWasiOutputStream] = js.undefined
+    stdout: js.UndefOr[JsWasiOutputStream] = js.undefined,
+    stderr: js.UndefOr[JsWasiOutputStream] = js.undefined
   ): JsInvocationResult = {
     val o = js.Dynamic.literal()
     result.foreach(v => o.updateDynamic("result")(v))
     stdout.foreach(v => o.updateDynamic("stdout")(v))
+    stderr.foreach(v => o.updateDynamic("stderr")(v))
     o.asInstanceOf[JsInvocationResult]
   }
 }
@@ -673,7 +679,9 @@ trait JsUnderlyingTool extends js.Object {
     commandPath: js.Array[String],
     input: JsTypedSchemaValue,
     stdin: js.UndefOr[JsWasiInputStream]
-  ): js.Promise[js.Tuple2[JsUnderlyingInvokeResult, js.UndefOr[JsWasiOutputStream]]] = js.native
+  ): js.Promise[
+    js.Tuple3[JsUnderlyingInvokeResult, js.UndefOr[JsWasiOutputStream], js.UndefOr[JsWasiOutputStream]]
+  ] = js.native
 }
 
 @js.native

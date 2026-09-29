@@ -148,6 +148,7 @@ fn remote_release_tool(version: &str) -> Tool {
                     constraints: Vec::new(),
                     stdin: None,
                     stdout: None,
+                    stderr: None,
                     result: None,
                     errors: Vec::new(),
                     annotations: None,

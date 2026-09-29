@@ -50,6 +50,7 @@ fn empty_body() -> CommandBody {
         constraints: Vec::new(),
         stdin: None,
         stdout: None,
+        stderr: None,
         result: None,
         errors: Vec::new(),
         annotations: None,
@@ -259,6 +260,15 @@ fn kitchen_sink_tool() -> Tool {
         doc: Doc::default(),
         mime: Vec::new(),
         required: true,
+    });
+    body.stderr = Some(StreamSpec {
+        doc: Doc {
+            summary: "diagnostics".to_string(),
+            description: String::new(),
+            examples: Vec::new(),
+        },
+        mime: vec!["application/octet-stream".to_string()],
+        required: false,
     });
 
     let mut node = root("tool");
@@ -2381,6 +2391,7 @@ fn arb_command_body() -> impl Strategy<Value = CommandBody> {
         prop::collection::vec(arb_constraint(), 0..2),
         prop::option::of(arb_stream_spec()),
         prop::option::of(arb_stream_spec()),
+        prop::option::of(arb_stream_spec()),
         prop::option::of(arb_result_spec()),
         prop::collection::vec(arb_error_case(), 0..2),
         prop::option::of(arb_command_annotations()),
@@ -2393,6 +2404,7 @@ fn arb_command_body() -> impl Strategy<Value = CommandBody> {
                 constraints,
                 stdin,
                 stdout,
+                stderr,
                 result,
                 errors,
                 annotations,
@@ -2404,6 +2416,7 @@ fn arb_command_body() -> impl Strategy<Value = CommandBody> {
                     constraints,
                     stdin,
                     stdout,
+                    stderr,
                     result,
                     errors,
                     annotations,

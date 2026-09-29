@@ -10,11 +10,11 @@ import {
 }
 
 // Values
+pub fn create_output() -> (ToolOutput, @async-core.Stream[Result[FixedArray[Byte], @streams.ByteStreamFailure]])
+
 pub fn create_stdin() -> (ToolStdinWriter, ToolStdin, ToolStdinClosed)
 
 pub fn create_stdin_from_stream(@async-core.Stream[Result[FixedArray[Byte], @streams.ByteStreamFailure]]) -> ToolStdin
-
-pub fn create_stdout() -> (ToolStdout, @async-core.Stream[Result[FixedArray[Byte], @streams.ByteStreamFailure]])
 
 pub fn get_all_tools() -> Array[RegisteredTool]
 
@@ -36,12 +36,15 @@ pub(all) struct RegisteredTool {
   implemented_by : @types.ComponentId
 } derive(Eq, @debug.Debug)
 
+pub(all) struct ToolOutput(Int) derive(Eq, @debug.Debug)
+pub fn ToolOutput::drop(Self) -> Unit
+
 pub(all) struct ToolRpc(Int) derive(Eq, @debug.Debug)
-pub fn ToolRpc::async_invoke_and_await(Self, Array[String], @types.TypedSchemaValue, ToolStdin?, ToolStdout?) -> FutureInvokeResult
+pub fn ToolRpc::async_invoke_and_await(Self, Array[String], @types.TypedSchemaValue, ToolStdin?, ToolOutput?, ToolOutput?) -> FutureInvokeResult
 pub fn ToolRpc::create(String) -> Result[Self, @types.ToolRpcError]
 pub fn ToolRpc::drop(Self) -> Unit
 pub fn ToolRpc::invoke(Self, Array[String], @types.TypedSchemaValue, ToolStdin?) -> Result[Unit, @types.ToolRpcError]
-pub async fn ToolRpc::invoke_and_await(Self, Array[String], @types.TypedSchemaValue, ToolStdin?, ToolStdout?) -> Result[@common.InvocationResult, @types.ToolRpcError]
+pub async fn ToolRpc::invoke_and_await(Self, Array[String], @types.TypedSchemaValue, ToolStdin?, ToolOutput?, ToolOutput?) -> Result[@common.InvocationResult, @types.ToolRpcError]
 pub fn ToolRpc::tool_rpc(String) -> Self
 
 pub(all) struct ToolStdin(Int) derive(Eq, @debug.Debug)
@@ -56,9 +59,6 @@ pub fn ToolStdinWriter::drop(Self) -> Unit
 pub async fn ToolStdinWriter::fail(Self, @streams.ByteStreamFailure) -> Result[Unit, @streams.StreamWriteError]
 pub async fn ToolStdinWriter::finish(Self) -> Result[Unit, @streams.StreamWriteError]
 pub async fn ToolStdinWriter::write(Self, FixedArray[Byte]) -> Result[Unit, @streams.StreamWriteError]
-
-pub(all) struct ToolStdout(Int) derive(Eq, @debug.Debug)
-pub fn ToolStdout::drop(Self) -> Unit
 
 // Type aliases
 

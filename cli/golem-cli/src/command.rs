@@ -1352,14 +1352,20 @@ pub mod tool {
         /// Write raw stdout to a file instead of process stdout
         #[arg(long, requires = "stdout")]
         pub output: Option<std::path::PathBuf>,
+        /// Request raw tool stderr
+        #[arg(long)]
+        pub stderr: bool,
+        /// Write raw stderr to a file instead of process stderr
+        #[arg(long, requires = "stderr")]
+        pub stderr_output: Option<std::path::PathBuf>,
         /// Enqueue without waiting
-        #[arg(long, conflicts_with_all = ["lookup", "stdin", "stdout", "output"])]
+        #[arg(long, conflicts_with_all = ["lookup", "stdin", "stdout", "output", "stderr", "stderr_output"])]
         pub trigger: bool,
         /// Look up an existing invocation without starting execution or input
-        #[arg(long, conflicts_with_all = ["trigger", "schedule_at", "stdin", "stdout", "output"])]
+        #[arg(long, conflicts_with_all = ["trigger", "schedule_at", "stdin", "stdout", "output", "stderr", "stderr_output"])]
         pub lookup: bool,
         /// Schedule execution at an RFC 3339 timestamp
-        #[arg(long, requires = "trigger", conflicts_with_all = ["stdin", "stdout", "output"])]
+        #[arg(long, requires = "trigger", conflicts_with_all = ["stdin", "stdout", "output", "stderr", "stderr_output"])]
         pub schedule_at: Option<DateTime<Utc>>,
         /// Idempotency key; `-` generates a fresh key
         #[arg(long, short)]
@@ -3214,8 +3220,12 @@ mod test {
         for suffix in [
             &["--trigger", "--stdin", "-"][..],
             &["--trigger", "--stdout"][..],
+            &["--trigger", "--stderr"][..],
             &["--lookup", "--input", "{}"][..],
             &["--lookup", "--stdin", "-"][..],
+            &["--lookup", "--stderr-output", "errors.bin"][..],
+            &["--output", "result.bin"][..],
+            &["--stderr-output", "errors.bin"][..],
         ] {
             assert!(
                 GolemCliCommand::try_parse_from(base.into_iter().chain(suffix.iter().copied()))
@@ -3229,7 +3239,10 @@ mod test {
                 "-",
                 "--stdout",
                 "--output",
-                "result.bin"
+                "result.bin",
+                "--stderr",
+                "--stderr-output",
+                "errors.bin"
             ]))
             .is_ok()
         );

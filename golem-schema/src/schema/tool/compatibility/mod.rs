@@ -947,6 +947,13 @@ pub fn compile_tool_compatibility(
             ));
             continue;
         }
+        if !stream_specs_equal(&eb.stderr, &nb.stderr) {
+            errors.push(err(
+                format!("{}.stderr", format_path(path)),
+                "standard-error stream contracts differ",
+            ));
+            continue;
+        }
         let input = compile_inputs(
             expected,
             ei,
@@ -1720,6 +1727,9 @@ fn erase_ignored_tool_documentation(tool: &mut Tool) {
             }
             if let Some(stdout) = &mut body.stdout {
                 stdout.doc = Default::default();
+            }
+            if let Some(stderr) = &mut body.stderr {
+                stderr.doc = Default::default();
             }
             if let Some(result) = &mut body.result {
                 result.doc = Default::default();

@@ -32,7 +32,7 @@ use crate::TypedSchemaValue;
 use crate::agentic::AmbientToolRpc;
 use crate::agentic::InputStream;
 use crate::bindings::golem::tool::host::{
-    self, ToolRpc as HostToolRpc, ToolStdin as HostToolStdin, ToolStdout as HostToolStdout,
+    self, ToolOutput as HostToolOutput, ToolRpc as HostToolRpc, ToolStdin as HostToolStdin,
 };
 use crate::golem_agentic::golem::tool::host as agentic_host_api;
 use crate::schema::validation::subtyping::is_equivalent_cross_graph;
@@ -276,6 +276,7 @@ pub fn expect_no_value<E>(value: Option<TypedSchemaValue>) -> Result<(), ToolErr
 pub trait ToolRpcClient {
     type Stdin;
     type Stdout;
+    type Stderr;
 
     async fn invoke_and_await_tool(
         &self,
@@ -283,6 +284,7 @@ pub trait ToolRpcClient {
         input: crate::schema::wit::wire::TypedSchemaValue,
         stdin: Option<Self::Stdin>,
         stdout: Option<Self::Stdout>,
+        stderr: Option<Self::Stderr>,
     ) -> Result<host::InvocationResult, WitRpcError>;
 }
 
@@ -293,13 +295,15 @@ pub trait StartedToolRpcClient {
         command_path: &[String],
         input: crate::schema::wit::wire::TypedSchemaValue,
         stdin: Option<agentic_host_api::ToolStdin>,
-        stdout: Option<agentic_host_api::ToolStdout>,
+        stdout: Option<agentic_host_api::ToolOutput>,
+        stderr: Option<agentic_host_api::ToolOutput>,
     ) -> agentic_host_api::FutureInvokeResult;
 }
 
 impl ToolRpcClient for HostToolRpc {
     type Stdin = HostToolStdin;
-    type Stdout = HostToolStdout;
+    type Stdout = HostToolOutput;
+    type Stderr = HostToolOutput;
 
     async fn invoke_and_await_tool(
         &self,
@@ -307,15 +311,17 @@ impl ToolRpcClient for HostToolRpc {
         input: crate::schema::wit::wire::TypedSchemaValue,
         stdin: Option<Self::Stdin>,
         stdout: Option<Self::Stdout>,
+        stderr: Option<Self::Stderr>,
     ) -> Result<host::InvocationResult, WitRpcError> {
-        self.invoke_and_await(command_path.to_vec(), input, stdin, stdout)
+        self.invoke_and_await(command_path.to_vec(), input, stdin, stdout, stderr)
             .await
     }
 }
 
 impl ToolRpcClient for AmbientToolRpc {
     type Stdin = agentic_host_api::ToolStdin;
-    type Stdout = agentic_host_api::ToolStdout;
+    type Stdout = agentic_host_api::ToolOutput;
+    type Stderr = agentic_host_api::ToolOutput;
 
     async fn invoke_and_await_tool(
         &self,
@@ -323,9 +329,10 @@ impl ToolRpcClient for AmbientToolRpc {
         input: crate::schema::wit::wire::TypedSchemaValue,
         stdin: Option<Self::Stdin>,
         stdout: Option<Self::Stdout>,
+        stderr: Option<Self::Stderr>,
     ) -> Result<host::InvocationResult, WitRpcError> {
         self.inner
-            .invoke_and_await(command_path.to_vec(), input, stdin, stdout)
+            .invoke_and_await(command_path.to_vec(), input, stdin, stdout, stderr)
             .await
     }
 }
@@ -336,16 +343,18 @@ impl StartedToolRpcClient for AmbientToolRpc {
         command_path: &[String],
         input: crate::schema::wit::wire::TypedSchemaValue,
         stdin: Option<agentic_host_api::ToolStdin>,
-        stdout: Option<agentic_host_api::ToolStdout>,
+        stdout: Option<agentic_host_api::ToolOutput>,
+        stderr: Option<agentic_host_api::ToolOutput>,
     ) -> agentic_host_api::FutureInvokeResult {
         self.inner
-            .async_invoke_and_await(command_path, input, stdin, stdout)
+            .async_invoke_and_await(command_path, input, stdin, stdout, stderr)
     }
 }
 
 impl ToolRpcClient for crate::golem_agentic::golem::tool::host::ToolRpc {
     type Stdin = crate::golem_agentic::golem::tool::host::ToolStdin;
-    type Stdout = crate::golem_agentic::golem::tool::host::ToolStdout;
+    type Stdout = crate::golem_agentic::golem::tool::host::ToolOutput;
+    type Stderr = crate::golem_agentic::golem::tool::host::ToolOutput;
 
     async fn invoke_and_await_tool(
         &self,
@@ -353,8 +362,9 @@ impl ToolRpcClient for crate::golem_agentic::golem::tool::host::ToolRpc {
         input: crate::schema::wit::wire::TypedSchemaValue,
         stdin: Option<Self::Stdin>,
         stdout: Option<Self::Stdout>,
+        stderr: Option<Self::Stderr>,
     ) -> Result<host::InvocationResult, WitRpcError> {
-        self.invoke_and_await(command_path.to_vec(), input, stdin, stdout)
+        self.invoke_and_await(command_path.to_vec(), input, stdin, stdout, stderr)
             .await
     }
 }
@@ -365,9 +375,10 @@ impl StartedToolRpcClient for crate::golem_agentic::golem::tool::host::ToolRpc {
         command_path: &[String],
         input: crate::schema::wit::wire::TypedSchemaValue,
         stdin: Option<agentic_host_api::ToolStdin>,
-        stdout: Option<agentic_host_api::ToolStdout>,
+        stdout: Option<agentic_host_api::ToolOutput>,
+        stderr: Option<agentic_host_api::ToolOutput>,
     ) -> agentic_host_api::FutureInvokeResult {
-        self.async_invoke_and_await(command_path, input, stdin, stdout)
+        self.async_invoke_and_await(command_path, input, stdin, stdout, stderr)
     }
 }
 
@@ -378,9 +389,19 @@ pub async fn invoke_and_await<E, R: ToolRpcClient>(
     input: &TypedSchemaValue,
     stdin: Option<R::Stdin>,
     stdout: Option<R::Stdout>,
+    stderr: Option<R::Stderr>,
     decode_error: impl Fn(String, TypedSchemaValue) -> Result<Option<E>, String>,
 ) -> Result<InvocationResult, ToolError<E>> {
-    invoke_and_await_with_error_decoder(rpc, command_path, input, stdin, stdout, decode_error).await
+    invoke_and_await_with_error_decoder(
+        rpc,
+        command_path,
+        input,
+        stdin,
+        stdout,
+        stderr,
+        decode_error,
+    )
+    .await
 }
 
 /// Invokes a tool whose remote custom-error payload is directly encoded as `E`.
@@ -390,6 +411,7 @@ pub async fn invoke_and_await_payload_error<E: FromSchema, R: ToolRpcClient>(
     input: &TypedSchemaValue,
     stdin: Option<R::Stdin>,
     stdout: Option<R::Stdout>,
+    stderr: Option<R::Stderr>,
 ) -> Result<InvocationResult, ToolError<E>> {
     invoke_and_await_with_error_decoder(
         rpc,
@@ -397,6 +419,7 @@ pub async fn invoke_and_await_payload_error<E: FromSchema, R: ToolRpcClient>(
         input,
         stdin,
         stdout,
+        stderr,
         decode_custom_tool_error::<E>,
     )
     .await
@@ -408,13 +431,14 @@ async fn invoke_and_await_with_error_decoder<E, R: ToolRpcClient>(
     input: &TypedSchemaValue,
     stdin: Option<R::Stdin>,
     stdout: Option<R::Stdout>,
+    stderr: Option<R::Stderr>,
     decode_error: impl Fn(String, TypedSchemaValue) -> Result<Option<E>, String>,
 ) -> Result<InvocationResult, ToolError<E>> {
     let input = crate::encode_typed_schema_value_async(input)
         .await
         .map_err(|error| protocol_error(format!("failed to encode tool input: {error}")))?;
     let result = rpc
-        .invoke_and_await_tool(command_path, input, stdin, stdout)
+        .invoke_and_await_tool(command_path, input, stdin, stdout, stderr)
         .await
         .map_err(|error| map_rpc_error(error, &decode_error))?;
 
@@ -428,12 +452,13 @@ pub async fn invoke_and_await_infallible<R: ToolRpcClient>(
     input: &TypedSchemaValue,
     stdin: Option<R::Stdin>,
     stdout: Option<R::Stdout>,
+    stderr: Option<R::Stderr>,
 ) -> Result<InvocationResult, ToolError<Infallible>> {
     let input = crate::encode_typed_schema_value_async(input)
         .await
         .map_err(|error| protocol_error(format!("failed to encode tool input: {error}")))?;
     let result = rpc
-        .invoke_and_await_tool(command_path, input, stdin, stdout)
+        .invoke_and_await_tool(command_path, input, stdin, stdout, stderr)
         .await
         .map_err(map_infallible_rpc_error)?;
 
@@ -561,16 +586,16 @@ type CachedInvocationResult = Result<InvocationResult, ToolError<TypedSchemaValu
 type InvocationResultDriver =
     crate::tool::invocation_result::InvocationResultDriver<CachedInvocationResult>;
 
-/// The readable stdout of a started tool invocation.
+/// One readable output of a started tool invocation.
 ///
 /// Reading this stream also drives the invocation's shared result observer so
-/// stdout-only consumers can make progress for filesystem-capable tools.
-pub struct ToolInvocationStdout {
+/// output-only consumers can make progress for filesystem-capable tools.
+pub struct ToolInvocationOutput {
     stream: Option<InputStream>,
     result: Rc<InvocationResultDriver>,
 }
 
-impl ToolInvocationStdout {
+impl ToolInvocationOutput {
     pub async fn next(&mut self) -> Option<Result<Vec<u8>, agentic_host_api::ByteStreamFailure>> {
         let stream = self.stream.as_mut()?;
         drive_left_until_right(Rc::clone(&self.result).wait(), stream.next()).await
@@ -589,10 +614,11 @@ impl ToolInvocationStdout {
     }
 }
 
-/// A started stdout-bearing tool call. Output, structured completion, and
+/// A started output-bearing tool call. Outputs, structured completion, and
 /// cancellation are independent capabilities.
 pub struct ToolInvocation<T, E> {
-    pub stdout: ToolInvocationStdout,
+    pub stdout: Option<ToolInvocationOutput>,
+    pub stderr: Option<ToolInvocationOutput>,
     future: Rc<agentic_host_api::FutureInvokeResult>,
     result: Rc<InvocationResultDriver>,
     decode: Rc<dyn Fn(InvocationResult) -> Result<T, ToolError<E>>>,
@@ -601,7 +627,7 @@ pub struct ToolInvocation<T, E> {
 
 impl<T, E> ToolInvocation<T, E> {
     /// Returns an independently owned structured-completion future. The
-    /// stdout field may be moved into a concurrent consumer after this call.
+    /// output fields may be moved into concurrent consumers after this call.
     pub fn result(&self) -> impl Future<Output = Result<T, ToolError<E>>> + use<T, E> {
         let result = Rc::clone(&self.result);
         let decode = Rc::clone(&self.decode);
@@ -636,36 +662,71 @@ impl<T, E> ToolInvocation<T, E> {
         self.future.cancel();
     }
 
-    /// Drives stdout and structured completion concurrently.
-    pub async fn collect(self) -> Result<(T, Vec<u8>), ToolError<E>> {
+    /// Drives both outputs and structured completion concurrently.
+    pub async fn collect(self) -> Result<CollectedToolInvocation<T>, ToolError<E>> {
         let result = self.result();
-        let mut stdout = self.stdout;
-        let output = async {
+        let collect_output = |mut output: Option<ToolInvocationOutput>, channel: &'static str| async move {
+            let Some(ref mut output) = output else {
+                return Ok(None);
+            };
             let mut bytes = Vec::new();
             loop {
-                match stdout.next().await {
-                    None => return Ok(bytes),
+                match output.next().await {
+                    None => return Ok(Some(bytes)),
                     Some(Ok(chunk)) => bytes.extend(chunk),
                     Some(Err(reason)) => {
                         return Err(tool_protocol_error(format!(
-                            "tool stdout failed: {reason:?}"
+                            "tool {channel} failed: {reason:?}"
                         )));
                     }
                 }
             }
         };
-        let (result, output) = join(result, output).await;
-        Ok((result?, output?))
+        let outputs = async {
+            let stdout = collect_output(self.stdout, "stdout");
+            let stderr = collect_output(self.stderr, "stderr");
+            join(stdout, stderr).await
+        };
+        let (result, outputs) = join(result, outputs).await;
+        finish_collection(result, outputs)
     }
+}
+
+fn finish_collection<T, E>(
+    result: Result<T, ToolError<E>>,
+    outputs: (
+        Result<Option<Vec<u8>>, ToolError<E>>,
+        Result<Option<Vec<u8>>, ToolError<E>>,
+    ),
+) -> Result<CollectedToolInvocation<T>, ToolError<E>> {
+    let result = result?;
+    let (stdout, stderr) = outputs;
+    let stdout = stdout?;
+    let stderr = stderr?;
+    Ok(CollectedToolInvocation {
+        result,
+        stdout,
+        stderr,
+    })
+}
+
+pub struct CollectedToolInvocation<T> {
+    pub result: T,
+    pub stdout: Option<Vec<u8>>,
+    pub stderr: Option<Vec<u8>>,
 }
 
 fn decode_wire_invocation_result<E>(
     result: host::InvocationResult,
 ) -> Result<InvocationResult, ToolError<E>> {
-    let host::InvocationResult { result, stdout } = result;
-    if stdout.is_some() {
+    let host::InvocationResult {
+        result,
+        stdout,
+        stderr,
+    } = result;
+    if stdout.is_some() || stderr.is_some() {
         return Err(protocol_error(
-            "tool result unexpectedly contained an embedded stdout stream".to_string(),
+            "tool result unexpectedly contained an embedded output stream".to_string(),
         ));
     }
     let result = result
@@ -675,25 +736,14 @@ fn decode_wire_invocation_result<E>(
     Ok(InvocationResult { result })
 }
 
-/// Starts a stdout-bearing invocation with a generated structured-result decoder.
+/// Starts an output-bearing invocation with a generated structured-result decoder.
 pub async fn start_tool_invocation<T: 'static, E: 'static>(
     rpc: &impl StartedToolRpcClient,
     command_path: &[String],
     input: &TypedSchemaValue,
     stdin: Option<InputStream>,
-    decode: impl Fn(InvocationResult) -> Result<T, ToolError<E>> + 'static,
-    decode_error: impl Fn(String, TypedSchemaValue) -> Result<Option<E>, String> + 'static,
-) -> Result<ToolInvocation<T, E>, ToolError<E>> {
-    start_tool_invocation_with_stdout(rpc, command_path, input, stdin, true, decode, decode_error)
-        .await
-}
-
-pub async fn start_tool_invocation_with_stdout<T: 'static, E: 'static>(
-    rpc: &impl StartedToolRpcClient,
-    command_path: &[String],
-    input: &TypedSchemaValue,
-    stdin: Option<InputStream>,
     attach_stdout: bool,
+    attach_stderr: bool,
     decode: impl Fn(InvocationResult) -> Result<T, ToolError<E>> + 'static,
     decode_error: impl Fn(String, TypedSchemaValue) -> Result<Option<E>, String> + 'static,
 ) -> Result<ToolInvocation<T, E>, ToolError<E>> {
@@ -702,12 +752,19 @@ pub async fn start_tool_invocation_with_stdout<T: 'static, E: 'static>(
         .map_err(|error| protocol_error(format!("failed to encode tool input: {error}")))?;
     let stdin = stdin.map(pump_tool_stdin);
     let (stdout_target, stdout) = if attach_stdout {
-        let (target, stream) = agentic_host_api::create_stdout();
+        let (target, stream) = agentic_host_api::create_output();
         (Some(target), Some(stream))
     } else {
         (None, None)
     };
-    let future = rpc.async_invoke_and_await_tool(command_path, input, stdin, stdout_target);
+    let (stderr_target, stderr) = if attach_stderr {
+        let (target, stream) = agentic_host_api::create_output();
+        (Some(target), Some(stream))
+    } else {
+        (None, None)
+    };
+    let future =
+        rpc.async_invoke_and_await_tool(command_path, input, stdin, stdout_target, stderr_target);
     let future = Rc::new(future);
     let result = Rc::new(InvocationResultDriver::new({
         let future = Rc::clone(&future);
@@ -721,10 +778,14 @@ pub async fn start_tool_invocation_with_stdout<T: 'static, E: 'static>(
         }
     }));
     Ok(ToolInvocation {
-        stdout: ToolInvocationStdout {
-            stream: stdout,
+        stdout: stdout.map(|stream| ToolInvocationOutput {
+            stream: Some(stream),
             result: Rc::clone(&result),
-        },
+        }),
+        stderr: stderr.map(|stream| ToolInvocationOutput {
+            stream: Some(stream),
+            result: Rc::clone(&result),
+        }),
         future,
         result,
         decode: Rc::new(decode),
@@ -818,6 +879,37 @@ mod tests {
     enum DeclaredError {
         #[tool_error(kind = "usage-error", exit_code = 2)]
         Usage(CallerPayload),
+    }
+
+    fn declared_error() -> ToolError<DeclaredError> {
+        ToolError::Tool(DeclaredError::Usage(CallerPayload {
+            message: "selected".to_string(),
+        }))
+    }
+
+    #[test]
+    fn collection_preserves_structured_error_precedence_over_each_output_failure() {
+        for outputs in [
+            (
+                Err(ToolError::MalformedRemoteOutput(
+                    "stdout failed".to_string(),
+                )),
+                Ok(None),
+            ),
+            (
+                Ok(None),
+                Err(ToolError::MalformedRemoteOutput(
+                    "stderr failed".to_string(),
+                )),
+            ),
+        ] {
+            match finish_collection::<(), _>(Err(declared_error()), outputs) {
+                Err(ToolError::Tool(DeclaredError::Usage(payload))) => {
+                    assert_eq!(payload.message, "selected")
+                }
+                _ => panic!("structured error must take precedence over output failure"),
+            }
+        }
     }
 
     #[test]
@@ -1079,6 +1171,7 @@ mod tests {
     impl ToolRpcClient for FakeToolRpc {
         type Stdin = ();
         type Stdout = ();
+        type Stderr = ();
 
         async fn invoke_and_await_tool(
             &self,
@@ -1086,6 +1179,7 @@ mod tests {
             _input: crate::schema::wit::wire::TypedSchemaValue,
             _stdin: Option<Self::Stdin>,
             _stdout: Option<Self::Stdout>,
+            _stderr: Option<Self::Stderr>,
         ) -> Result<host::InvocationResult, WitRpcError> {
             let payload = "bad flag".to_string().into_typed_schema_value().unwrap();
             let wire_payload = crate::encode_typed_schema_value(&payload).unwrap();
@@ -1109,6 +1203,7 @@ mod tests {
     impl ToolRpcClient for FailingToolRpc {
         type Stdin = ();
         type Stdout = ();
+        type Stderr = ();
 
         async fn invoke_and_await_tool(
             &self,
@@ -1116,6 +1211,7 @@ mod tests {
             _input: crate::schema::wit::wire::TypedSchemaValue,
             _stdin: Option<Self::Stdin>,
             _stdout: Option<Self::Stdout>,
+            _stderr: Option<Self::Stderr>,
         ) -> Result<host::InvocationResult, WitRpcError> {
             Err(match self.0 {
                 FakeFailure::Denied => WitRpcError::Denied("no access".to_string()),
@@ -1138,7 +1234,7 @@ mod tests {
                 .map_err(format_from_schema_error)
         };
 
-        match invoke_and_await(&FakeToolRpc, &[], &input, None, None, decode_error).await {
+        match invoke_and_await(&FakeToolRpc, &[], &input, None, None, None, decode_error).await {
             Err(ToolError::Tool(CliError::Usage(message))) => assert_eq!(message, "bad flag"),
             Err(ToolError::Rpc(error)) => {
                 panic!("expected declared tool error, got RPC error: {error:?}")
@@ -1166,6 +1262,7 @@ mod tests {
             &input,
             None,
             None,
+            None,
         )
         .await
         {
@@ -1178,6 +1275,7 @@ mod tests {
             &FailingToolRpc(FakeFailure::RemoteInvalidInput),
             &[],
             &input,
+            None,
             None,
             None,
         )

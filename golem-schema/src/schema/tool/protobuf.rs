@@ -216,6 +216,7 @@ impl From<CommandBody> for proto::CommandBody {
             constraints: value.constraints.into_iter().map(Into::into).collect(),
             stdin: value.stdin.map(Into::into),
             stdout: value.stdout.map(Into::into),
+            stderr: value.stderr.map(Into::into),
             result: value.result.map(Into::into),
             errors: value.errors.into_iter().map(Into::into).collect(),
             annotations: value.annotations.map(Into::into),
@@ -246,6 +247,7 @@ impl TryFrom<proto::CommandBody> for CommandBody {
                 .collect::<Result<_, _>>()?,
             stdin: value.stdin.map(TryInto::try_into).transpose()?,
             stdout: value.stdout.map(TryInto::try_into).transpose()?,
+            stderr: value.stderr.map(TryInto::try_into).transpose()?,
             result: value.result.map(TryInto::try_into).transpose()?,
             errors: value
                 .errors

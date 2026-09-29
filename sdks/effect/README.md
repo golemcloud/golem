@@ -439,8 +439,8 @@ service requirements flow through the Effect environment; the agent dispatcher s
 services. Stream-free methods also expose `.trigger(...)` and `.schedule(...)`, with cancelable
 scheduling. Streaming methods cannot be triggered or scheduled.
 
-Generated tool clients expose Effect stdin/stdout streams and an Effect result. Consume stdout and
-the result concurrently when the tool can block writing its output:
+Generated tool clients expose independent Effect stdin/stdout/stderr streams and an Effect result.
+Consume both declared outputs and the result concurrently when the tool can block writing output:
 
 ```ts
 import { Effect, Stream } from "effect"
@@ -487,7 +487,7 @@ external bridges support agents; tool bridges are guest-only.
 
 `Tool.toolDefinition(name)` builds nested, typed commands. `.implement(...)` registers a tool guest;
 `Tool.client(definition)` derives a camel-cased Effect client. Bodies define positional/named input,
-declared errors, a structured return, and optional stdin/stdout byte streams.
+declared errors, a structured return, and optional stdin/stdout/stderr byte streams.
 
 ```ts
 import { Effect, Schema } from "effect"
@@ -529,8 +529,9 @@ const call = Effect.gen(function* () {
 
 `invokeJson` and `invokeValue` validate inputs before opening RPC and check declared outputs.
 Canonical JSON records include every argument key; use `null` for absent optional values.
-`startJson` and `startValue` expose scoped stdout, result, concurrent collection, and cancellation
-for pending calls. Use them when stdout is required. `Reflection.DynamicToolClient` accepts a
+`startJson` and `startValue` expose scoped stdout, stderr, result, concurrent collection, and
+cancellation for pending calls. Use them when either output is required and drain both outputs
+concurrently. `Reflection.DynamicToolClient` accepts a
 caller-packed value when the deployed schema is unavailable and does not infer validation rules.
 Reflected failures are typed Effect errors, including `ToolReflectionError` for malformed output.
 
@@ -563,9 +564,9 @@ it can present a different definition from the wrapped tool. Both support aliase
 per-invocation Effect `layer`. Underlying access and streams are affine and valid only for that
 invocation.
 
-`parameters` must be a static Effect `Schema` (streams, secrets, and other installation-time-ineligible capabilities are rejected). `underlying.start(...)` and typed command `.start(...)` return scoped started invocations whose `get`, optional `stdout`, and `cancel` effects are independent. Calls may overlap; consume stdout and `get` concurrently when needed. Scope closure disposes the observer and owned streams but does **not** cancel the tool call—run `started.cancel` explicitly to cancel it.
+`parameters` must be a static Effect `Schema` (streams, secrets, and other installation-time-ineligible capabilities are rejected). `underlying.start(...)` and typed command `.start(...)` return scoped started invocations whose `get`, optional `stdout` and `stderr`, and `cancel` effects are independent. Calls may overlap; consume both outputs and `get` concurrently when needed. Scope closure disposes the observer and owned streams but does **not** cancel the tool call—run `started.cancel` explicitly to cancel it.
 
-When a handler returns, the underlying rejects new admissions but does not implicitly cancel calls already admitted. Cleanup releases their observers after pending observation is safe. For a command declaring stdout, return/select a stream with the typed `context.stdout` callback (or the universal result's `stdout`). The SDK forwards it into the host-provided writer, calls `finish` after clean EOF, and calls `fail` on forwarding failure; middleware never owns that writer directly.
+When a handler returns, the underlying rejects new admissions but does not implicitly cancel calls already admitted. Cleanup releases their observers after pending observation is safe. For a command declaring stdout or stderr, return/select each stream with the matching typed `context.stdout`/`context.stderr` callback (or universal result field). The SDK forwards each into its host-provided writer concurrently, calls `finish` after clean EOF, and calls `fail` on forwarding failure; middleware never owns those writers directly.
 
 The single `agent-guest` build world exports agents, tools, snapshots, and tool middleware. It
 supports ordinary, standalone-middleware, and combined components; discovery returns empty lists

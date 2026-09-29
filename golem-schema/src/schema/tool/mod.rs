@@ -267,6 +267,7 @@ pub struct CommandBody {
     pub constraints: Vec<Constraint>,
     pub stdin: Option<StreamSpec>,
     pub stdout: Option<StreamSpec>,
+    pub stderr: Option<StreamSpec>,
     pub result: Option<ResultSpec>,
     pub errors: Vec<ErrorCase>,
     pub annotations: Option<CommandAnnotations>,

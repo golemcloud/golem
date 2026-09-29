@@ -12,9 +12,17 @@ import {
 // Values
 pub fn[E] decode_result_empty(OwnedInvocationResult) -> Result[Unit, ToolInvokeError[E]]
 
+pub fn[E] decode_result_outputs_only(OwnedInvocationResult) -> Result[ToolOutputStreams, ToolInvokeError[E]]
+
+pub fn[E] decode_result_stderr_only(OwnedInvocationResult) -> Result[@async-core.Stream[Byte], ToolInvokeError[E]]
+
 pub fn[E] decode_result_stdout_only(OwnedInvocationResult) -> Result[@async-core.Stream[Byte], ToolInvokeError[E]]
 
 pub fn[T : @schema.FromSchema, E] decode_result_value(OwnedInvocationResult) -> Result[T, ToolInvokeError[E]]
+
+pub fn[T : @schema.FromSchema, E] decode_result_with_outputs(OwnedInvocationResult) -> Result[(T, ToolOutputStreams), ToolInvokeError[E]]
+
+pub fn[T : @schema.FromSchema, E] decode_result_with_stderr(OwnedInvocationResult) -> Result[(T, @async-core.Stream[Byte]), ToolInvokeError[E]]
 
 pub fn[T : @schema.FromSchema, E] decode_result_with_stdout(OwnedInvocationResult) -> Result[(T, @async-core.Stream[Byte]), ToolInvokeError[E]]
 
@@ -25,6 +33,12 @@ pub fn encode_tool_error(ToolInvokeError[RawCustomToolError]) -> @types.ToolErro
 // Errors
 
 // Types and methods
+pub(all) struct CollectedUnderlyingInvocation[T] {
+  result : T
+  stdout : @async-core.Stream[Byte]?
+  stderr : @async-core.Stream[Byte]?
+}
+
 pub struct MiddlewareStdin {
   // private fields
 }
@@ -118,12 +132,20 @@ pub(all) enum ToolMiddlewareScope {
   Universal
 }
 
+pub(all) struct ToolOutputStreams {
+  stdout : @async-core.Stream[Byte]
+  stderr : @async-core.Stream[Byte]
+}
+
 pub struct UnderlyingInvocation[T, E] {
   // private fields
 }
 pub fn[T, E] UnderlyingInvocation::cancel(Self[T, E]) -> Unit
 pub fn[T, E] UnderlyingInvocation::drop(Self[T, E]) -> Unit
 pub async fn[T, E] UnderlyingInvocation::get(Self[T, E]) -> Result[T, ToolInvokeError[E]]
+pub async fn[T, E] UnderlyingInvocation::get_buffering_outputs(Self[T, E]) -> Result[CollectedUnderlyingInvocation[T], ToolInvokeError[E]]
+pub async fn UnderlyingInvocation::get_raw_buffering_outputs(Self[RawInvocationResult, RawTypedSchemaValue]) -> Result[RawInvocationResult, ToolInvokeError[RawTypedSchemaValue]]
+pub fn[T, E] UnderlyingInvocation::stderr(Self[T, E]) -> @async-core.Stream[Byte]?
 pub fn[T, E] UnderlyingInvocation::stdout(Self[T, E]) -> @async-core.Stream[Byte]?
 
 pub struct UnderlyingTool {

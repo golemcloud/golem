@@ -1439,7 +1439,9 @@ mod tests {
                     command_path: vec!["files".to_string(), "lookup".to_string()],
                     has_stdin: true,
                     has_stdout: false,
+                    has_stderr: false,
                     declares_stdout: true,
+                    declares_stderr: false,
                 },
             )),
         };

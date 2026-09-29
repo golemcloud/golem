@@ -46,6 +46,7 @@ fn sample_tool() -> ToolType raise {
     constraints: [],
     stdin: None,
     stdout: None,
+    stderr: None,
     result: Some({
       type_: graph.root,
       doc,
@@ -96,6 +97,48 @@ test "reflected tool resolves aliases and rejects input before RPC" {
   match command.start_value(invalid) {
     Err(@tool.ToolError::InvalidInput(_)) => ()
     _ => fail("expected local tool input rejection")
+  }
+}
+
+///|
+test "reflected trigger rejects each required output before RPC" {
+  let base = sample_tool()
+  let nodes = base.definition.commands.nodes
+  let command = nodes[1]
+  let body = command.body.unwrap()
+  let required : @toolCommon.StreamSpec = {
+    doc: { summary: "", description: "", examples: [], },
+    mime: [],
+    required: true,
+  }
+  let input = @model.SchemaValue::Record([
+    @model.SchemaValue::String("hello"),
+    @model.SchemaValue::Option(None),
+    @model.SchemaValue::Option(None),
+  ])
+  for
+    output_case in [
+      (Some(required), None, "command requires caller-readable stdout"),
+      (None, Some(required), "command requires caller-readable stderr"),
+    ] {
+    let (stdout, stderr, expected) = output_case
+    let tool : ToolType = {
+      ..base,
+      definition: {
+        ..base.definition,
+        commands: {
+          nodes: [
+            nodes[0],
+            { ..command, body: Some({ ..body, stdout, stderr, }), },
+          ],
+        },
+      },
+    }
+    match tool.command(["run"]).trigger_value(input) {
+      Err(@tool.ToolError::InvalidInput(message)) =>
+        assert_eq(message, expected)
+      _ => fail("expected required output to be rejected before RPC")
+    }
   }
 }
 
@@ -385,7 +428,7 @@ test "repeated reflected convenience calls release result futures on every exit"
 ///|
 test "reflected tool reports malformed remote result" {
   let command = sample_tool().command(["run"])
-  match command.decode_result({ result: None, stdout: None, }) {
+  match command.decode_result({ result: None, stdout: None, stderr: None, }) {
     Err(@tool.ToolError::MalformedRemoteOutput(_)) => ()
     _ => fail("expected missing tool result to be malformed")
   }

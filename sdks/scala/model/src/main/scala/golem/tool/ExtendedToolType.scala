@@ -218,6 +218,7 @@ final case class ExtendedCommandBody(
   constraints: List[ExtendedConstraint],
   stdin: Option[StreamSpec],
   stdout: Option[StreamSpec],
+  stderr: Option[StreamSpec],
   result: Option[ExtendedResultSpec],
   errors: List[ExtendedErrorCase],
   annotations: Option[CommandAnnotations],

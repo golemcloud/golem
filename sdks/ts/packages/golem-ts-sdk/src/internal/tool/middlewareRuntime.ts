@@ -23,7 +23,7 @@ import type {
   UnderlyingInvokeResult,
   UnderlyingTool as WireUnderlyingTool,
 } from 'golem:tool/underlying@0.1.0';
-import type { ByteStreamItem, ToolStdoutWriter } from 'golem:tool/streams@0.1.0';
+import type { ByteStreamItem, ToolOutputWriter } from 'golem:tool/streams@0.1.0';
 import {
   deepEqual,
   drainUnconsumedQuotaAndPermissionCardHandles,
@@ -56,6 +56,27 @@ import type {
   UniversalToolMiddlewareSource,
 } from '../registry/toolMiddlewareRegistry';
 import { resolveToolInvocation } from '../registry/toolRegistry';
+
+async function collectAsyncIterable(
+  source: AsyncIterable<number> | undefined,
+): Promise<readonly number[] | undefined> {
+  if (source === undefined) return undefined;
+  const values: number[] = [];
+  try {
+    for await (const value of source) values.push(value);
+    return values;
+  } finally {
+    await closeAsyncIterable(source);
+  }
+}
+
+function replayAsyncIterable(values: readonly number[]): AsyncIterable<number> {
+  return {
+    async *[Symbol.asyncIterator]() {
+      yield* values;
+    },
+  };
+}
 
 type RawUnderlyingTool = Pick<WireUnderlyingTool, 'invoke'>;
 
@@ -162,6 +183,7 @@ async function adaptUniversalInvocation(
   let result: Promise<WireTypedSchemaValue | undefined> | undefined;
   return {
     stdout: invocation.stdout,
+    stderr: invocation.stderr,
     cancel: () => invocation.cancel(),
     get result() {
       return (result ??= invocation.result.then((carrier) => carrier.result));
@@ -176,7 +198,8 @@ export interface MonomorphicToolMiddlewareInvocation {
   readonly commandPath: readonly string[];
   readonly input: WireTypedSchemaValue;
   readonly stdin: AsyncIterable<number> | undefined;
-  readonly stdout?: ToolStdoutWriter;
+  readonly stdout?: ToolOutputWriter;
+  readonly stderr?: ToolOutputWriter;
   readonly principal: Principal;
 }
 
@@ -245,7 +268,10 @@ export async function invokeMonomorphicToolMiddleware(
           presentedCallName(source, commandPath),
         );
       } catch (error) {
-        await closeAsyncIterable(presentedOutcomeStdout(body, outcome));
+        await Promise.all([
+          closeAsyncIterable(presentedOutcomeOutput(body, outcome, 'stdout')),
+          closeAsyncIterable(presentedOutcomeOutput(body, outcome, 'stderr')),
+        ]);
         if (isWireToolError(error) && error.tag === 'invalid-result') {
           throw new ToolInvokeError(error);
         }
@@ -253,6 +279,7 @@ export async function invokeMonomorphicToolMiddleware(
       }
     },
     invocation.stdout,
+    invocation.stderr,
   );
 }
 
@@ -281,6 +308,7 @@ export async function invokeUniversalToolMiddleware(
                 input: invocation.input,
                 stdin,
                 stdout: invocation.stdout,
+                stderr: invocation.stderr,
                 principal: invocation.principal,
               },
           {
@@ -293,6 +321,7 @@ export async function invokeUniversalToolMiddleware(
         );
       },
       invocation.stdout,
+      invocation.stderr,
     );
   } catch (error) {
     throw encodeRawMiddlewareError(error);
@@ -324,7 +353,8 @@ export async function withInvocationScopedUnderlying(
     underlying: UniversalToolUnderlying,
     stdin: AsyncIterable<number> | undefined,
   ) => WireInvocationResult | Promise<WireInvocationResult>,
-  stdoutWriter?: ToolStdoutWriter,
+  stdoutWriter?: ToolOutputWriter,
+  stderrWriter?: ToolOutputWriter,
 ): Promise<WireInvocationResult> {
   const ownership = new InvocationOwnership(stdin);
   const underlying = InvocationScopedUnderlying.create(raw, ownership);
@@ -337,15 +367,30 @@ export async function withInvocationScopedUnderlying(
     try {
       result = validateInvocationResult(carrier);
     } catch (error) {
-      await closeAsyncIterable(invocationStdout(carrier));
+      await Promise.all([
+        closeAsyncIterable(invocationOutput(carrier, 'stdout')),
+        closeAsyncIterable(invocationOutput(carrier, 'stderr')),
+      ]);
       throw new ToolInvokeError({ tag: 'invalid-result', val: errorMessage(error) });
     }
-    const stdout = ownership.forwardStdout(result.stdout);
-    if (stdoutWriter) {
-      await Promise.all([pumpMiddlewareStdout(stdout, stdoutWriter), underlying.cleanup()]);
-      return { result: result.result };
+    const { stdout, stderr } = ownership.forwardOutputs(result.stdout, result.stderr);
+    const settled = await Promise.allSettled([
+      stdoutWriter ? pumpMiddlewareOutput(stdout, stdoutWriter) : undefined,
+      stderrWriter ? pumpMiddlewareOutput(stderr, stderrWriter) : undefined,
+      underlying.cleanup(),
+    ]);
+    const failure = settled.find(
+      (entry): entry is PromiseRejectedResult => entry.status === 'rejected',
+    );
+    if (failure) {
+      await Promise.allSettled([closeAsyncIterable(stdout), closeAsyncIterable(stderr)]);
+      throw failure.reason;
     }
-    return stdout === undefined ? result : { result: result.result, stdout };
+    return {
+      result: result.result,
+      ...(stdoutWriter || stdout === undefined ? {} : { stdout }),
+      ...(stderrWriter || stderr === undefined ? {} : { stderr }),
+    };
   } finally {
     underlying.revoke();
     await ownership.dispose();
@@ -353,14 +398,14 @@ export async function withInvocationScopedUnderlying(
   }
 }
 
-async function pumpMiddlewareStdout(
-  stdout: AsyncIterable<number> | undefined,
-  writer: ToolStdoutWriter,
+async function pumpMiddlewareOutput(
+  output: AsyncIterable<number> | undefined,
+  writer: ToolOutputWriter,
 ): Promise<void> {
   try {
     const chunk: number[] = [];
-    if (stdout) {
-      for await (const byte of stdout) {
+    if (output) {
+      for await (const byte of output) {
         chunk.push(byte);
         if (chunk.length === 16 * 1024) {
           await writer.write(Uint8Array.from(chunk));
@@ -374,7 +419,7 @@ async function pumpMiddlewareStdout(
     try {
       await writer.fail({ tag: 'failed', val: errorMessage(error) });
     } catch {
-      // Preserve the stdout pump failure.
+      // Preserve the output pump failure.
     }
     throw error;
   }
@@ -425,15 +470,23 @@ class InvocationScopedUnderlying implements UniversalToolUnderlying {
     stdin: AsyncIterable<number> | undefined,
   ): Promise<WireInvocationResult> {
     const invocation = await this.invoke(commandPath, input, stdin);
-    try {
-      const result = await invocation.result;
-      return invocation.stdout === undefined
-        ? result
-        : { result: result.result, stdout: invocation.stdout };
-    } catch (error) {
-      await closeAsyncIterable(invocation.stdout);
-      throw error;
-    }
+    const [result, stdout, stderr] = await Promise.allSettled([
+      invocation.result,
+      collectAsyncIterable(invocation.stdout),
+      collectAsyncIterable(invocation.stderr),
+    ]);
+    if (result.status === 'rejected') throw result.reason;
+    if (stdout.status === 'rejected') throw stdout.reason;
+    if (stderr.status === 'rejected') throw stderr.reason;
+    const replay = this.ownership.trackOutputs({
+      stdout: stdout.value === undefined ? undefined : replayAsyncIterable(stdout.value),
+      stderr: stderr.value === undefined ? undefined : replayAsyncIterable(stderr.value),
+    });
+    return {
+      result: result.value.result,
+      ...(replay.stdout === undefined ? {} : { stdout: replay.stdout }),
+      ...(replay.stderr === undefined ? {} : { stderr: replay.stderr }),
+    };
   }
 
   revoke(): void {
@@ -452,7 +505,7 @@ class InvocationScopedUnderlying implements UniversalToolUnderlying {
     stdin: AsyncIterable<number> | undefined,
   ) {
     try {
-      const [observer, stdout] = await this.raw.invoke(
+      const [observer, stdout, stderr] = await this.raw.invoke(
         [...commandPath],
         input,
         stdin === undefined ? undefined : encodeByteStream(stdin),
@@ -460,11 +513,16 @@ class InvocationScopedUnderlying implements UniversalToolUnderlying {
       const lease = new ObserverLease(observer);
       this.observers.add(lease);
       const decodedStdout = stdout === undefined ? undefined : decodeByteStream(stdout);
+      const decodedStderr = stderr === undefined ? undefined : decodeByteStream(stderr);
       try {
-        const tracked = this.ownership.trackStdout({ stdout: decodedStdout });
+        const tracked = this.ownership.trackOutputs({
+          stdout: decodedStdout,
+          stderr: decodedStderr,
+        });
         let result: Promise<WireInvocationResult> | undefined;
         return {
           stdout: tracked.stdout,
+          stderr: tracked.stderr,
           cancel: () => lease.cancel(),
           get result() {
             return (result ??= lease.observe().then(
@@ -480,7 +538,7 @@ class InvocationScopedUnderlying implements UniversalToolUnderlying {
           },
         };
       } catch (error) {
-        await closeAsyncIterable(decodedStdout);
+        await Promise.all([closeAsyncIterable(decodedStdout), closeAsyncIterable(decodedStderr)]);
         throw new ToolInvokeError({ tag: 'invalid-result', val: errorMessage(error) });
       }
     } catch (error) {
@@ -592,9 +650,9 @@ function decodeUnderlyingTerminal(error: unknown): unknown {
 
 class InvocationOwnership {
   private readonly transferredStreams = new Set<AsyncIterable<number>>();
-  private readonly stdout = new Map<AsyncIterable<number>, TrackedOutputStream>();
+  private readonly outputs = new Map<AsyncIterable<number>, TrackedOutputStream>();
   private outerStdinTransferred = false;
-  private stdoutForwarded = false;
+  private forwardedOutputs = 0;
   private disposed = false;
   readonly stdin: TrackedOutputStream | undefined;
 
@@ -606,42 +664,66 @@ class InvocationOwnership {
     this.transfer(stdin);
   }
 
-  trackStdout(result: WireInvocationResult): WireInvocationResult {
-    if (result.stdout === undefined) return result;
-    const tracked = new TrackedOutputStream(result.stdout);
-    this.stdout.set(tracked, tracked);
-    if (this.disposed) void tracked.dispose().catch(() => undefined);
-    return { result: result.result, stdout: tracked };
+  trackOutputs(result: WireInvocationResult): WireInvocationResult {
+    const track = (output: AsyncIterable<number> | undefined) => {
+      if (output === undefined) return undefined;
+      const tracked = new TrackedOutputStream(output);
+      this.outputs.set(tracked, tracked);
+      if (this.disposed) void tracked.dispose().catch(() => undefined);
+      return tracked;
+    };
+    return {
+      result: result.result,
+      stdout: track(result.stdout),
+      stderr: track(result.stderr),
+    };
   }
 
-  forwardStdout(stdout: AsyncIterable<number> | undefined): AsyncIterable<number> | undefined {
-    if (stdout === undefined) return undefined;
-    const forwarded = new TrackedOutputStream(stdout, () => this.disposeUntransferredStreams());
-    this.transfer(stdout);
-    this.stdoutForwarded = true;
-    return forwarded;
+  forwardOutputs(
+    stdout: AsyncIterable<number> | undefined,
+    stderr: AsyncIterable<number> | undefined,
+  ): Pick<WireInvocationResult, 'stdout' | 'stderr'> {
+    if (stdout !== undefined) this.assertTransferable(stdout);
+    if (stderr !== undefined) {
+      if (stderr === stdout) throw new ToolUnderlyingMisuseError('stream was already transferred');
+      this.assertTransferable(stderr);
+    }
+    const forward = (output: AsyncIterable<number> | undefined) => {
+      if (output === undefined) return undefined;
+      this.transfer(output);
+      this.forwardedOutputs += 1;
+      return new TrackedOutputStream(output, async () => {
+        this.forwardedOutputs -= 1;
+        if (this.forwardedOutputs === 0) await this.disposeUntransferredStreams();
+      });
+    };
+    return { stdout: forward(stdout), stderr: forward(stderr) };
   }
 
   async dispose(): Promise<void> {
     this.disposed = true;
-    if (!this.stdoutForwarded) await this.disposeUntransferredStreams();
+    if (this.forwardedOutputs === 0) await this.disposeUntransferredStreams();
   }
 
   private async disposeUntransferredStreams(): Promise<void> {
     await Promise.allSettled([
       this.outerStdinTransferred ? undefined : this.stdin?.dispose(),
-      ...Array.from(this.stdout.values(), (stream) => stream.dispose()),
+      ...Array.from(this.outputs.values(), (stream) => stream.dispose()),
     ]);
   }
 
   private transfer(stream: AsyncIterable<number> | undefined): void {
     if (stream === undefined) return;
+    this.assertTransferable(stream);
+    this.transferredStreams.add(stream);
+    if (stream === this.stdin) this.outerStdinTransferred = true;
+    this.outputs.get(stream)?.transfer();
+  }
+
+  private assertTransferable(stream: AsyncIterable<number>): void {
     if (this.transferredStreams.has(stream)) {
       throw new ToolUnderlyingMisuseError('stream was already transferred');
     }
-    this.transferredStreams.add(stream);
-    if (stream === this.stdin) this.outerStdinTransferred = true;
-    this.stdout.get(stream)?.transfer();
   }
 }
 
@@ -653,7 +735,7 @@ class TrackedOutputStream implements AsyncIterableIterator<number> {
   private transferred = false;
 
   constructor(
-    private readonly stdout: AsyncIterable<number>,
+    private readonly output: AsyncIterable<number>,
     private readonly onClose?: () => Promise<void>,
   ) {}
 
@@ -744,7 +826,7 @@ class TrackedOutputStream implements AsyncIterableIterator<number> {
   }
 
   private getIterator(): AsyncIterator<number> {
-    return (this.iterator ??= this.stdout[Symbol.asyncIterator]());
+    return (this.iterator ??= this.output[Symbol.asyncIterator]());
   }
 
   private async finalize(): Promise<void> {
@@ -799,7 +881,7 @@ function encodePresentedMiddlewareResult(
   outcome: unknown,
   callName: string,
 ): WireInvocationResult {
-  if (!body.stdout) {
+  if (!body.stdout && !body.stderr) {
     if (!body.result) {
       if (outcome !== undefined) {
         throw new Error('unit middleware command returned a structured result');
@@ -811,19 +893,25 @@ function encodePresentedMiddlewareResult(
 
   let result: unknown;
   let stdout: unknown;
-  if (body.result) {
-    if (!isObject(outcome) || Array.isArray(outcome) || !hasOwn(outcome, 'result')) {
+  let stderr: unknown;
+  if (body.result || body.stderr) {
+    if (
+      !isObject(outcome) ||
+      Array.isArray(outcome) ||
+      (body.result && !hasOwn(outcome, 'result'))
+    ) {
       throw new Error(
-        'middleware command with a structured result and stdout must return an object',
+        'middleware command with named outputs or a structured result must return an object',
       );
     }
     for (const key of Object.keys(outcome)) {
-      if (key !== 'result' && key !== 'stdout') {
+      if (key !== 'result' && key !== 'stdout' && key !== 'stderr') {
         throw new Error(`middleware command returned unexpected result field "${key}"`);
       }
     }
     result = outcome.result;
     stdout = outcome.stdout;
+    stderr = outcome.stderr;
   } else {
     stdout = outcome;
   }
@@ -831,8 +919,20 @@ function encodePresentedMiddlewareResult(
   if (stdout !== undefined && !isAsyncIterable(stdout)) {
     throw new Error('middleware stdout must be an async iterable');
   }
-  if (body.stdout.required && stdout === undefined) {
+  if (stdout !== undefined && !body.stdout) {
+    throw new Error('middleware command returned undeclared stdout');
+  }
+  if (body.stdout?.required && stdout === undefined) {
     throw new Error('required middleware stdout stream is missing');
+  }
+  if (stderr !== undefined && !isAsyncIterable(stderr)) {
+    throw new Error('middleware stderr must be an async iterable');
+  }
+  if (stderr !== undefined && !body.stderr) {
+    throw new Error('middleware command returned undeclared stderr');
+  }
+  if (body.stderr?.required && stderr === undefined) {
+    throw new Error('required middleware stderr stream is missing');
   }
 
   return {
@@ -840,6 +940,7 @@ function encodePresentedMiddlewareResult(
       ? encodeToolValue(body.result.codec, result, `${callName} result`)
       : undefined,
     stdout,
+    stderr,
   };
 }
 
@@ -910,14 +1011,17 @@ function presentedCallName(
   return [source.presented.toolName, ...commandPath].join(' ');
 }
 
-function presentedOutcomeStdout(
+function presentedOutcomeOutput(
   body: ExtendedCommandBody,
   outcome: unknown,
+  channel: 'stdout' | 'stderr',
 ): AsyncIterable<number> | undefined {
   try {
-    if (!body.stdout) return isAsyncIterable(outcome) ? outcome : undefined;
-    const stdout = body.result && isObject(outcome) ? outcome.stdout : outcome;
-    return isAsyncIterable(stdout) ? stdout : undefined;
+    if (channel === 'stdout' && body.stdout && !body.result && !body.stderr) {
+      return isAsyncIterable(outcome) ? outcome : undefined;
+    }
+    const output = isObject(outcome) ? outcome[channel] : undefined;
+    return isAsyncIterable(output) ? output : undefined;
   } catch {
     return undefined;
   }
@@ -976,19 +1080,26 @@ function validateInvocationResult(value: unknown): WireInvocationResult {
   }
   const result = value.result as WireTypedSchemaValue | undefined;
   const stdout = value.stdout;
+  const stderr = value.stderr;
   if (result !== undefined) {
     preflightTypedSchemaValue(result);
   }
   if (stdout !== undefined && !isAsyncIterable(stdout)) {
     throw new Error('tool invocation stdout must be an async iterable');
   }
-  return { result, stdout };
+  if (stderr !== undefined && !isAsyncIterable(stderr)) {
+    throw new Error('tool invocation stderr must be an async iterable');
+  }
+  return { result, stdout, stderr };
 }
 
-function invocationStdout(value: unknown): AsyncIterable<number> | undefined {
+function invocationOutput(
+  value: unknown,
+  channel: 'stdout' | 'stderr',
+): AsyncIterable<number> | undefined {
   try {
     if (!isObject(value) || Array.isArray(value)) return undefined;
-    return isAsyncIterable(value.stdout) ? value.stdout : undefined;
+    return isAsyncIterable(value[channel]) ? value[channel] : undefined;
   } catch {
     return undefined;
   }

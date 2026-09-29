@@ -55,6 +55,7 @@ private[golem] object ToolRegistry {
       WitTypedSchemaValue,
       Option[ToolInputStream],
       Option[ToolOutputStream],
+      Option[ToolOutputStream],
       Principal
     ) => Future[Either[WitToolError, ToolInvocationResult]]
 

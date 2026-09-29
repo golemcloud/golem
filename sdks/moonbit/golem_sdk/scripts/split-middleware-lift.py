@@ -12,7 +12,7 @@ from pathlib import Path
 
 
 EXPECTED_INVOKE_LIFT_SHA256 = (
-    "5f8598fa5c25a5a201da1477992095125fab7d9a1cd4699cf081360f59f59965"
+    "dbff328ded5f29e0e38788b9a901780458a34cdd25d4ec9550dbd0c64d447c8e"
 )
 
 
@@ -48,7 +48,7 @@ def main() -> None:
     output = lines[:raw_start]
 
     def source_line(original_line: int) -> int:
-        return raw_start + (original_line - 13263)
+        return raw_start + (original_line - 13583)
 
     def block(start: int, end: int) -> list[str]:
         return [
@@ -63,57 +63,63 @@ def main() -> None:
 
     helper(
         "fn __wit_bindgen_lift_invoke_tool_commands(p0 : Int) -> @common.CommandTree {",
-        13274,
-        17366,
-        "@common.CommandTree::{nodes : array547}",
+        13594,
+        17721,
+        "@common.CommandTree::{nodes : array557}",
     )
     helper(
         "fn __wit_bindgen_lift_invoke_tool_schema(p0 : Int) -> @types.SchemaGraph {",
-        17368,
-        18910,
-        "@types.SchemaGraph::{type_nodes : array745, defs : array750, root : mbt_ffi_load32((p0) + 48)}",
+        17723,
+        19265,
+        "@types.SchemaGraph::{type_nodes : array755, defs : array760, root : mbt_ffi_load32((p0) + 48)}",
     )
     helper(
         "fn __wit_bindgen_lift_invoke_installation_parameters(p0 : Int) -> @types.TypedSchemaValue {",
-        18912,
-        20738,
-        "@types.TypedSchemaValue::{graph : @types.SchemaGraph::{type_nodes : array948, defs : array953, root : mbt_ffi_load32((p0) + 68)}, value : @types.SchemaValueTree::{value_nodes : array984, root : mbt_ffi_load32((p0) + 80)}}",
+        19267,
+        21093,
+        "@types.TypedSchemaValue::{graph : @types.SchemaGraph::{type_nodes : array958, defs : array963, root : mbt_ffi_load32((p0) + 68)}, value : @types.SchemaValueTree::{value_nodes : array994, root : mbt_ffi_load32((p0) + 80)}}",
     )
     helper(
         "fn __wit_bindgen_lift_invoke_command_path(p0 : Int) -> Array[String] {",
-        20740,
-        20748,
-        "array987",
+        21095,
+        21103,
+        "array997",
     )
     helper(
         "fn __wit_bindgen_lift_invoke_input_graph(p0 : Int) -> @types.SchemaGraph {",
-        20750,
-        22292,
-        "@types.SchemaGraph::{type_nodes : array1185, defs : array1190, root : mbt_ffi_load32((p0) + 108)}",
+        21105,
+        22647,
+        "@types.SchemaGraph::{type_nodes : array1195, defs : array1200, root : mbt_ffi_load32((p0) + 108)}",
     )
     helper(
         "fn __wit_bindgen_lift_invoke_input_value(p0 : Int) -> @types.SchemaValueTree {",
-        22294,
-        22576,
-        "@types.SchemaValueTree::{value_nodes : array1221, root : mbt_ffi_load32((p0) + 120)}",
+        22649,
+        22931,
+        "@types.SchemaValueTree::{value_nodes : array1231, root : mbt_ffi_load32((p0) + 120)}",
     )
     helper(
         "fn __wit_bindgen_lift_invoke_stdin(p0 : Int) -> @async-core.Stream[Result[FixedArray[Byte], @streams.ByteStreamFailure]]? {",
-        22578,
-        22586,
-        "lifted1224",
+        22933,
+        22941,
+        "lifted1234",
     )
     helper(
-        "fn __wit_bindgen_lift_invoke_stdout(p0 : Int) -> @streams.ToolStdoutWriter? {",
-        22588,
-        22595,
-        "lifted1225",
+        "fn __wit_bindgen_lift_invoke_stdout(p0 : Int) -> @streams.ToolOutputWriter? {",
+        22943,
+        22950,
+        "lifted1235",
+    )
+    helper(
+        "fn __wit_bindgen_lift_invoke_stderr(p0 : Int) -> @streams.ToolOutputWriter? {",
+        22952,
+        22959,
+        "lifted1236",
     )
     helper(
         "fn __wit_bindgen_lift_invoke_principal(p0 : Int) -> @common0.Principal {",
-        22597,
-        22698,
-        "lifted1243",
+        22961,
+        23062,
+        "lifted1254",
     )
     output.extend(
         """///|
@@ -143,8 +149,9 @@ pub fn wasmExportInvokeToolMiddleware(p0 : Int) -> Int {
                         input,
                         __wit_bindgen_lift_invoke_stdin(p0),
                         __wit_bindgen_lift_invoke_stdout(p0),
+                        __wit_bindgen_lift_invoke_stderr(p0),
                         __wit_bindgen_lift_invoke_principal(p0),
-                        @underlying.UnderlyingTool::UnderlyingTool(mbt_ffi_load32((p0) + 256)),
+                        @underlying.UnderlyingTool::UnderlyingTool(mbt_ffi_load32((p0) + 264)),
                         background_group,
                   ))
                   invoke_tool_middleware_task_return(return_result)

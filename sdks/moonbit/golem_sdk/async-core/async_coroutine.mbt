@@ -156,9 +156,7 @@ async fn Coroutine::wait(target : Coroutine) -> Unit {
     Running | Suspend(_) => ()
   }
   target.downstream.add(coro)
-  errdefer {
-    target.downstream.remove(coro)
-  }
+  errdefer target.downstream.remove(coro)
   suspend()
   target.unwrap()
 }

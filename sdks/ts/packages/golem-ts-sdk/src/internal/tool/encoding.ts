@@ -209,6 +209,9 @@ function encodeBody(body: ExtendedCommandBody, context: EncodingContext): Comman
     stdout: body.stdout
       ? { ...body.stdout, doc: cloneDoc(body.stdout.doc), mime: [...body.stdout.mime] }
       : undefined,
+    stderr: body.stderr
+      ? { ...body.stderr, doc: cloneDoc(body.stderr.doc), mime: [...body.stderr.mime] }
+      : undefined,
     result: body.result ? encodeResult(body.result, context) : undefined,
     errors: body.errors.map((errorCase) => encodeError(errorCase, context)),
     annotations: body.annotations ? { ...body.annotations } : undefined,

@@ -95,7 +95,7 @@ private[golem] object ToolHostApi {
     def getAllTools(): js.Array[JsRegisteredTool]           = js.native
     def getTool(name: String): js.UndefOr[JsRegisteredTool] = js.native
     def createStdin(): js.Array[js.Any]                     = js.native
-    def createStdout(): js.Array[js.Any]                    = js.native
+    def createOutput(): js.Array[js.Any]                    = js.native
   }
 
   def createStdin(): (RawToolStdinWriter, RawToolStdin, RawToolStdinClosed) = {
@@ -107,9 +107,9 @@ private[golem] object ToolHostApi {
     )
   }
 
-  def createStdout(): (RawToolStdout, RawByteStream) = {
-    val endpoints = ToolHostModule.createStdout()
-    (endpoints(0).asInstanceOf[RawToolStdout], endpoints(1).asInstanceOf[RawByteStream])
+  def createOutput(): (RawToolOutput, RawByteStream) = {
+    val endpoints = ToolHostModule.createOutput()
+    (endpoints(0).asInstanceOf[RawToolOutput], endpoints(1).asInstanceOf[RawByteStream])
   }
 
   @js.native
@@ -130,7 +130,7 @@ private[golem] object ToolHostApi {
   @js.native
   sealed trait RawToolStdin extends js.Object
   @js.native
-  sealed trait RawToolStdout extends js.Object
+  sealed trait RawToolOutput extends js.Object
   @js.native
   sealed trait RawToolStdinWriter extends js.Object {
     def write(bytes: js.typedarray.Uint8Array): js.Promise[Unit] = js.native
@@ -142,7 +142,7 @@ private[golem] object ToolHostApi {
     @JSName("wait") def waitClosed(): js.Promise[js.Any] = js.native
   }
   @js.native
-  sealed trait RawToolStdoutWriter extends js.Object {
+  sealed trait RawToolOutputWriter extends js.Object {
     def write(bytes: js.typedarray.Uint8Array): js.Promise[Unit] = js.native
     def finish(): js.Promise[Unit]                               = js.native
     def fail(reason: js.Any): js.Promise[Unit]                   = js.native
@@ -155,7 +155,8 @@ private[golem] object ToolHostApi {
       commandPath: js.Array[String],
       input: JsTypedSchemaValue,
       stdin: js.UndefOr[RawToolStdin],
-      stdout: js.UndefOr[RawToolStdout]
+      stdout: js.UndefOr[RawToolOutput],
+      stderr: js.UndefOr[RawToolOutput]
     ): js.Promise[JsInvocationResult] = js.native
 
     def invoke(
@@ -168,7 +169,8 @@ private[golem] object ToolHostApi {
       commandPath: js.Array[String],
       input: JsTypedSchemaValue,
       stdin: js.UndefOr[RawToolStdin],
-      stdout: js.UndefOr[RawToolStdout]
+      stdout: js.UndefOr[RawToolOutput],
+      stderr: js.UndefOr[RawToolOutput]
     ): RawToolFutureInvokeResult = js.native
   }
 

@@ -1244,6 +1244,7 @@ fn request_claim_identity_matches(
                 && request.input_decode_failure == expected.rejected.input_decode_failure
                 && request.has_stdin == expected.rejected.has_stdin
                 && request.has_stdout == expected.rejected.has_stdout
+                && request.has_stderr == expected.rejected.has_stderr
                 && request.call_mode == expected.rejected.call_mode),
             _ => Ok(false),
         },
@@ -1402,6 +1403,8 @@ mod tests {
             has_stdin: true,
             has_stdout: false,
             declares_stdout: false,
+            has_stderr: true,
+            declares_stderr: true,
             output_contract: ToolOutputContract {
                 result: None,
                 errors: Vec::new(),
@@ -1447,6 +1450,7 @@ mod tests {
             input_decode_failure: None,
             has_stdin: true,
             has_stdout: false,
+            has_stderr: true,
             call_mode: EntityCallMode::Synchronous,
         };
         (
@@ -1569,6 +1573,7 @@ mod tests {
                     input_decode_failure: None,
                     has_stdin: true,
                     has_stdout: false,
+                    has_stderr: true,
                     call_mode: EntityCallMode::Asynchronous,
                 },
             }));
@@ -1581,6 +1586,7 @@ mod tests {
                 input_decode_failure: None,
                 has_stdin: true,
                 has_stdout: false,
+                has_stderr: true,
                 call_mode: EntityCallMode::Asynchronous,
                 error: SerializableToolRpcError::Denied("recorded decision".to_string()),
             });
@@ -1600,10 +1606,22 @@ mod tests {
             .unwrap()
         );
 
-        let HostRequest::GolemToolInvocationRejected(mut mismatched) = request else {
+        let HostRequest::GolemToolInvocationRejected(mut mismatched) = request.clone() else {
             unreachable!();
         };
         mismatched.has_stdout = true;
+        assert!(
+            !request_claim_identity_matches(
+                &HostRequest::GolemToolInvocationRejected(mismatched),
+                &expected,
+            )
+            .unwrap()
+        );
+
+        let HostRequest::GolemToolInvocationRejected(mut mismatched) = request.clone() else {
+            unreachable!();
+        };
+        mismatched.has_stderr = false;
         assert!(
             !request_claim_identity_matches(
                 &HostRequest::GolemToolInvocationRejected(mismatched),
@@ -1626,6 +1644,7 @@ mod tests {
                     input_decode_failure: Some(ToolInputDecodeFailure::InvalidSchemaGraph),
                     has_stdin: false,
                     has_stdout: false,
+                    has_stderr: false,
                     call_mode: EntityCallMode::Synchronous,
                 },
             }));
@@ -1638,6 +1657,7 @@ mod tests {
                 input_decode_failure: Some(ToolInputDecodeFailure::InvalidSchemaValue),
                 has_stdin: false,
                 has_stdout: false,
+                has_stderr: false,
                 call_mode: EntityCallMode::Synchronous,
                 error: SerializableToolRpcError::RemoteInternalError(
                     "selected error is not claim identity".to_string(),

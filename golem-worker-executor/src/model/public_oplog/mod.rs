@@ -548,6 +548,8 @@ fn public_entity_invocation(
                 has_stdin: tool.has_stdin,
                 has_stdout: tool.has_stdout,
                 declares_stdout: tool.declares_stdout,
+                has_stderr: tool.has_stderr,
+                declares_stderr: tool.declares_stderr,
             })
         }
     });

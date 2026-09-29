@@ -102,7 +102,7 @@ Path|Method|Protected
 ---|---|---
 `/v1/agents/invoke-tool`|POST|Yes
 
-Uses normal invocation permissions, queueing and idempotency. Byte stdin and stdout
+Uses normal invocation permissions, queueing and idempotency. Byte stdin, stdout and stderr
 require an attached invocation session rather than this scalar endpoint.
 
 **Example Request JSON**
@@ -556,6 +556,22 @@ Path|Method|Protected
               "required": true
             },
             "stdout": {
+              "doc": {
+                "summary": "string",
+                "description": "string",
+                "examples": [
+                  {
+                    "title": "string",
+                    "body": "string"
+                  }
+                ]
+              },
+              "mime": [
+                "string"
+              ],
+              "required": true
+            },
+            "stderr": {
               "doc": {
                 "summary": "string",
                 "description": "string",

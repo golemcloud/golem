@@ -1266,6 +1266,8 @@ fn emit_body(
   emit_stream(command, InputStream) +
   ", stdout: " +
   emit_stream(command, OutputStream) +
+  ", stderr: " +
+  emit_stream(command, ErrorStream) +
   ", result: " +
   emit_result(command) +
   ", errors: " +
@@ -1813,6 +1815,16 @@ fn output_stream_source(command : ToolCommandInfo) -> String? {
 }
 
 ///|
+fn error_stream_source(command : ToolCommandInfo) -> String? {
+  for pair in command.params {
+    if pair.1 == Hidden(ErrorStream) || pair.1 == LabelledHidden(ErrorStream) {
+      return Some(pair.0)
+    }
+  }
+  None
+}
+
+///|
 fn input_stream_source(command : ToolCommandInfo) -> String? {
   for pair in command.params {
     if pair.1 == Hidden(InputStream) || pair.1 == LabelledHidden(InputStream) {
@@ -1936,7 +1948,7 @@ fn emit_invoker(
   buf.write_string(
     "///|\n#warnings(\"-alert_wit_bindgen\")\nasync fn " +
     name +
-    "(__golem_command_path : Array[String], __golem_input : @types.TypedSchemaValue, __golem_stdin : @asyncCore.Stream[Byte]?, __golem_stdout : @tool.ProviderStdout?, __golem_principal : @tool.Principal) -> Result[@toolCommon.InvocationResult, @types.ToolError] {\n  let __golem_def = " +
+    "(__golem_command_path : Array[String], __golem_input : @types.TypedSchemaValue, __golem_stdin : @asyncCore.Stream[Byte]?, __golem_stdout : @tool.ProviderOutput?, __golem_stderr : @tool.ProviderOutput?, __golem_principal : @tool.Principal) -> Result[@toolCommon.InvocationResult, @types.ToolError] {\n  let __golem_def = " +
     descriptor_name(tool, symbol_scope) +
     "()\n  let __golem_index = match __golem_def.command_index_by_path(__golem_command_path) {\n    Some(__golem_index) => __golem_index\n    None => return @tool.reject_wire_invocation(__golem_input, __golem_stdin, @types.ToolError::InvalidCommandPath(__golem_command_path))\n  }\n  let __golem_decoded = @tool.decode_canonical_input(__golem_def, __golem_index, __golem_input, \"" +
     escape_string_lit(context) +
@@ -1951,7 +1963,7 @@ fn emit_invoker(
         emit_strings(names) +
         ".contains(__golem_command_path[0]) {\n    return @tool.invoke_registered_subtool(\"" +
         escape_string_lit(child.name) +
-        "\", __golem_command_path[1:].to_owned(), __golem_decoded, __golem_stdin, __golem_stdout, __golem_principal)\n  }\n",
+        "\", __golem_command_path[1:].to_owned(), __golem_decoded, __golem_stdin, __golem_stdout, __golem_stderr, __golem_principal)\n  }\n",
       )
     }
   }
@@ -1990,6 +2002,11 @@ fn emit_invoker(
         "      if __golem_stdout is Some(_) {\n        return @tool.reject_decoded_invocation(__golem_decoded, __golem_stdin, @types.ToolError::InvalidInput(\"command does not accept a stdout stream\"))\n      }\n",
       )
     }
+    if error_stream_source(command) is None {
+      buf.write_string(
+        "      if __golem_stderr is Some(_) {\n        return @tool.reject_decoded_invocation(__golem_decoded, __golem_stdin, @types.ToolError::InvalidInput(\"command does not accept a stderr stream\"))\n      }\n",
+      )
+    }
     for arg in args {
       match arg.placement {
         Hidden(_) => ()
@@ -2020,6 +2037,12 @@ fn emit_invoker(
             "      let " +
             arg.source +
             " = match __golem_stdout {\n        Some(__golem_output) => __golem_output\n        None => return @tool.reject_decoded_invocation(__golem_decoded, __golem_stdin, @types.ToolError::InvalidInput(\"required stdout stream is missing\"))\n      }\n",
+          )
+        Hidden(ErrorStream) =>
+          buf.write_string(
+            "      let " +
+            arg.source +
+            " = match __golem_stderr {\n        Some(__golem_output) => __golem_output\n        None => return @tool.reject_decoded_invocation(__golem_decoded, __golem_stdin, @types.ToolError::InvalidInput(\"required stderr stream is missing\"))\n      }\n",
           )
         _ => ()
       }
@@ -2226,7 +2249,7 @@ fn client_args(
     if !projected_arg_identity_names(arg).any(name => {
         inherited_identities.contains(name)
       }) &&
-      !(arg.placement is Hidden(Principal | OutputStream)) {
+      !(arg.placement is Hidden(Principal | OutputStream | ErrorStream)) {
       result.push(arg)
     }
   }
@@ -2356,14 +2379,16 @@ fn emit_tool_client_method(
   let error = command.error_type.map(emit_type).unwrap_or("@tool.NoToolError")
   let success = command.success_type.map(emit_type).unwrap_or("Unit")
   let has_stdout = output_stream_source(command) is Some(_)
-  let client_success = if has_stdout {
+  let has_stderr = error_stream_source(command) is Some(_)
+  let has_output = has_stdout || has_stderr
+  let client_success = if has_output {
     "@tool.TypedToolInvocation[" + success + ", " + error + "]"
   } else {
     success
   }
   buf.write_string(
     "///|\npub " +
-    (if has_stdout { "fn " } else { "async fn " }) +
+    (if has_output { "fn " } else { "async fn " }) +
     receiver +
     "::" +
     command.source_name +
@@ -2408,7 +2433,7 @@ fn emit_tool_client_method(
   } else {
     "self.client.invoke_and_await_no_tool_error"
   }
-  if has_stdout {
+  if has_output {
     let decode_error = if command.error_type is Some(_) {
       "fn(__golem_name, __golem_value) { @tool.decode_named_tool_error(__golem_name, __golem_value) }"
     } else {
@@ -2424,9 +2449,17 @@ fn emit_tool_client_method(
       emit_strings(path) +
       ", __golem_input, " +
       stdin +
-      ", true, " +
+      ", " +
+      has_stdout.to_string() +
+      ", " +
+      has_stderr.to_string() +
+      ", " +
       decode_error +
       ") {\n    Err(__golem_error) => Err(__golem_error)\n    Ok(__golem_invocation) => @tool.typed_invocation(__golem_invocation, " +
+      has_stdout.to_string() +
+      ", " +
+      has_stderr.to_string() +
+      ", " +
       decode_result +
       ")\n  }\n}\n\n",
     )

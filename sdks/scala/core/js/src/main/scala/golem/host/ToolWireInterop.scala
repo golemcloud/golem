@@ -501,6 +501,7 @@ object ToolWireInterop {
       b.constraints.map(constraintToJs).toJSArray,
       b.stdin.map(streamSpecToJs).orUndefined,
       b.stdout.map(streamSpecToJs).orUndefined,
+      b.stderr.map(streamSpecToJs).orUndefined,
       b.result.map(resultSpecToJs).orUndefined,
       b.errors.map(errorCaseToJs).toJSArray,
       b.annotations.map(annotationsToJs).orUndefined
@@ -514,6 +515,7 @@ object ToolWireInterop {
       j.constraints.toList.map(constraintFromJs),
       j.stdin.toOption.map(streamSpecFromJs),
       j.stdout.toOption.map(streamSpecFromJs),
+      j.stderr.toOption.map(streamSpecFromJs),
       j.result.toOption.map(resultSpecFromJs),
       j.errors.toList.map(errorCaseFromJs),
       j.annotations.toOption.map(annotationsFromJs)

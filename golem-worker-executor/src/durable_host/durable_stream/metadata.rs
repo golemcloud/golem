@@ -2391,6 +2391,7 @@ mod tests {
                 transport_stream_id: 0,
                 source: ProducerOutputSource::Existing(handle),
                 cancellation_epoch: None,
+                role: SessionStreamRole::Output,
             }],
             entity_parent_start_index,
         )

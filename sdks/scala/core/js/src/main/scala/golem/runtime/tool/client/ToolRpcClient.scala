@@ -87,7 +87,8 @@ private[golem] final class JsToolRpcTransport(rpc: ToolHostApi.RawToolRpc) exten
     commandPath: List[String],
     input: TypedSchemaValue,
     stdin: Option[ToolInputStream],
-    stdout: Boolean
+    stdout: Boolean,
+    stderr: Boolean
   ): Either[ToolRpcFailure, ToolRpcStarted] = {
     val prepared = encodeInput(input)
 
@@ -97,17 +98,20 @@ private[golem] final class JsToolRpcTransport(rpc: ToolHostApi.RawToolRpc) exten
       case Right(jsInput) =>
         try {
           val stdinEndpoints  = stdin.map(_ => ToolHostApi.createStdin())
-          val stdoutEndpoints = if (stdout) Some(ToolHostApi.createStdout()) else None
+          val stdoutEndpoints = if (stdout) Some(ToolHostApi.createOutput()) else None
+          val stderrEndpoints = if (stderr) Some(ToolHostApi.createOutput()) else None
           stdinEndpoints.foreach { case (writer, _, closed) => pump(stdin.get, writer, closed) }
           val observer = rpc.asyncInvokeAndAwait(
             commandPath.toJSArray,
             jsInput,
             stdinEndpoints.map(_._2).orUndefined,
-            stdoutEndpoints.map(_._1).orUndefined
+            stdoutEndpoints.map(_._1).orUndefined,
+            stderrEndpoints.map(_._1).orUndefined
           )
           Right(
             ToolRpcStarted(
               stdoutEndpoints.map(e => new JsToolInputStream(e._2)),
+              stderrEndpoints.map(e => new JsToolInputStream(e._2)),
               awaitFutureResult(observer),
               () => observer.cancel()
             )
@@ -187,13 +191,16 @@ private[golem] final class JsToolRpcTransport(rpc: ToolHostApi.RawToolRpc) exten
     }
 
   private def decodeResult(result: JsInvocationResult): Either[ToolRpcFailure, ToolInvokeResult] =
-    try
-      Right(
-        ToolInvokeResult(
-          result.result.toOption.map(js => SchemaWire.typedSchemaValueFromWit(SchemaWireInterop.typedFromJs(js)))
+    try {
+      if (result.stdout.isDefined || result.stderr.isDefined)
+        Left(ToolRpcFailure.ProtocolError("tool result unexpectedly contained output streams"))
+      else
+        Right(
+          ToolInvokeResult(
+            result.result.toOption.map(js => SchemaWire.typedSchemaValueFromWit(SchemaWireInterop.typedFromJs(js)))
+          )
         )
-      )
-    catch {
+    } catch {
       case t: Throwable =>
         Left(ToolRpcFailure.ProtocolError(s"failed to decode tool result: ${String.valueOf(t.getMessage)}"))
     }

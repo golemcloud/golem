@@ -115,6 +115,7 @@ final class arg(
   val minLength: Int = -1,
   val maxLength: Int = -1,
   val direction: String = "",
+  val channel: String = "",
   val mime: Array[String] = null,
   val schemes: Array[String] = null,
   val min: Any = null,

@@ -646,6 +646,7 @@ fn __golem_tool_def_raw_MoonBitStreaming() -> @tool.ToolDef {
                   required: true,
                 },
               ),
+              stderr: None,
               result: Some(
                 {
                   type_: @schema.into_schema_graph(
@@ -744,7 +745,8 @@ async fn __golem_tool_invoke_MoonBitStreaming(
   __golem_command_path : Array[String],
   __golem_input : @types.TypedSchemaValue,
   __golem_stdin : @asyncCore.Stream[Byte]?,
-  __golem_stdout : @tool.ProviderStdout?,
+  __golem_stdout : @tool.ProviderOutput?,
+  __golem_stderr : @tool.ProviderOutput?,
   __golem_principal : @tool.Principal,
 ) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
   let __golem_def = __golem_tool_def_MoonBitStreaming()
@@ -773,6 +775,15 @@ async fn __golem_tool_invoke_MoonBitStreaming(
   }
   match __golem_index {
     1 => {
+      if __golem_stderr is Some(_) {
+        return @tool.reject_decoded_invocation(
+          __golem_decoded,
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "command does not accept a stderr stream",
+          ),
+        )
+      }
       let mode :String = try {
         @tool.decode_canonical_field(
           __golem_decoded,
@@ -1005,6 +1016,7 @@ fn __golem_tool_def_raw_CanonicalGrep() -> @tool.ToolDef {
                   required: true,
                 },
               ),
+              stderr: None,
               result: Some(
                 {
                   type_: @schema.into_schema_graph(
@@ -1148,6 +1160,7 @@ fn __golem_tool_def_raw_CanonicalGrep() -> @tool.ToolDef {
               constraints: [],
               stdin: None,
               stdout: None,
+              stderr: None,
               result: Some(
                 {
                   type_: @schema.into_schema_graph(
@@ -1253,7 +1266,8 @@ async fn __golem_tool_invoke_CanonicalGrep(
   __golem_command_path : Array[String],
   __golem_input : @types.TypedSchemaValue,
   __golem_stdin : @asyncCore.Stream[Byte]?,
-  __golem_stdout : @tool.ProviderStdout?,
+  __golem_stdout : @tool.ProviderOutput?,
+  __golem_stderr : @tool.ProviderOutput?,
   __golem_principal : @tool.Principal,
 ) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
   let __golem_def = __golem_tool_def_CanonicalGrep()
@@ -1282,6 +1296,15 @@ async fn __golem_tool_invoke_CanonicalGrep(
   }
   match __golem_index {
     0 => {
+      if __golem_stderr is Some(_) {
+        return @tool.reject_decoded_invocation(
+          __golem_decoded,
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "command does not accept a stderr stream",
+          ),
+        )
+      }
       let case_sensitive :Bool = try {
         @tool.decode_canonical_field(
           __golem_decoded,
@@ -1458,6 +1481,15 @@ async fn __golem_tool_invoke_CanonicalGrep(
           __golem_stdin,
           @types.ToolError::InvalidInput(
             "command does not accept a stdout stream",
+          ),
+        )
+      }
+      if __golem_stderr is Some(_) {
+        return @tool.reject_decoded_invocation(
+          __golem_decoded,
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "command does not accept a stderr stream",
           ),
         )
       }
@@ -1823,6 +1855,7 @@ fn __golem_tool_def_raw_CanonicalGit() -> @tool.ToolDef {
               ],
               stdin: None,
               stdout: None,
+              stderr: None,
               result: Some(
                 {
                   type_: @schema.into_schema_graph(
@@ -2039,6 +2072,7 @@ fn __golem_tool_def_raw_CanonicalGit() -> @tool.ToolDef {
               ],
               stdin: None,
               stdout: None,
+              stderr: None,
               result: Some(
                 {
                   type_: @schema.into_schema_graph(
@@ -2310,7 +2344,8 @@ async fn __golem_tool_invoke_CanonicalGit(
   __golem_command_path : Array[String],
   __golem_input : @types.TypedSchemaValue,
   __golem_stdin : @asyncCore.Stream[Byte]?,
-  __golem_stdout : @tool.ProviderStdout?,
+  __golem_stdout : @tool.ProviderOutput?,
+  __golem_stderr : @tool.ProviderOutput?,
   __golem_principal : @tool.Principal,
 ) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
   let __golem_def = __golem_tool_def_CanonicalGit()
@@ -2346,6 +2381,7 @@ async fn __golem_tool_invoke_CanonicalGit(
       __golem_decoded,
       __golem_stdin,
       __golem_stdout,
+      __golem_stderr,
       __golem_principal,
     )
   }
@@ -2358,6 +2394,7 @@ async fn __golem_tool_invoke_CanonicalGit(
       __golem_decoded,
       __golem_stdin,
       __golem_stdout,
+      __golem_stderr,
       __golem_principal,
     )
   }
@@ -2378,6 +2415,15 @@ async fn __golem_tool_invoke_CanonicalGit(
           __golem_stdin,
           @types.ToolError::InvalidInput(
             "command does not accept a stdout stream",
+          ),
+        )
+      }
+      if __golem_stderr is Some(_) {
+        return @tool.reject_decoded_invocation(
+          __golem_decoded,
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "command does not accept a stderr stream",
           ),
         )
       }
@@ -2599,6 +2645,15 @@ async fn __golem_tool_invoke_CanonicalGit(
           __golem_stdin,
           @types.ToolError::InvalidInput(
             "command does not accept a stdout stream",
+          ),
+        )
+      }
+      if __golem_stderr is Some(_) {
+        return @tool.reject_decoded_invocation(
+          __golem_decoded,
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "command does not accept a stderr stream",
           ),
         )
       }
@@ -2948,6 +3003,7 @@ fn __golem_tool_def_raw_CanonicalRemote() -> @tool.ToolDef {
               constraints: [],
               stdin: None,
               stdout: None,
+              stderr: None,
               result: None,
               errors: match CanonicalRemoteError::error_cases() {
                 Ok(__golem_errors) => __golem_errors
@@ -2998,6 +3054,7 @@ fn __golem_tool_def_raw_CanonicalRemote() -> @tool.ToolDef {
               constraints: [],
               stdin: None,
               stdout: None,
+              stderr: None,
               result: None,
               errors: match CanonicalRemoteError::error_cases() {
                 Ok(__golem_errors) => __golem_errors
@@ -3113,6 +3170,7 @@ fn __golem_tool_def_raw_CanonicalRemote() -> @tool.ToolDef {
               ],
               stdin: None,
               stdout: None,
+              stderr: None,
               result: None,
               errors: match CanonicalSetUrlError::error_cases() {
                 Ok(__golem_errors) => __golem_errors
@@ -3200,7 +3258,8 @@ async fn __golem_tool_invoke_CanonicalRemote(
   __golem_command_path : Array[String],
   __golem_input : @types.TypedSchemaValue,
   __golem_stdin : @asyncCore.Stream[Byte]?,
-  __golem_stdout : @tool.ProviderStdout?,
+  __golem_stdout : @tool.ProviderOutput?,
+  __golem_stderr : @tool.ProviderOutput?,
   __golem_principal : @tool.Principal,
 ) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
   let __golem_def = __golem_tool_def_CanonicalRemote()
@@ -3244,6 +3303,15 @@ async fn __golem_tool_invoke_CanonicalRemote(
           __golem_stdin,
           @types.ToolError::InvalidInput(
             "command does not accept a stdout stream",
+          ),
+        )
+      }
+      if __golem_stderr is Some(_) {
+        return @tool.reject_decoded_invocation(
+          __golem_decoded,
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "command does not accept a stderr stream",
           ),
         )
       }
@@ -3400,6 +3468,15 @@ async fn __golem_tool_invoke_CanonicalRemote(
           ),
         )
       }
+      if __golem_stderr is Some(_) {
+        return @tool.reject_decoded_invocation(
+          __golem_decoded,
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "command does not accept a stderr stream",
+          ),
+        )
+      }
       let name :String = try {
         @tool.decode_canonical_field(
           __golem_decoded,
@@ -3460,6 +3537,15 @@ async fn __golem_tool_invoke_CanonicalRemote(
           __golem_stdin,
           @types.ToolError::InvalidInput(
             "command does not accept a stdout stream",
+          ),
+        )
+      }
+      if __golem_stderr is Some(_) {
+        return @tool.reject_decoded_invocation(
+          __golem_decoded,
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "command does not accept a stderr stream",
           ),
         )
       }
@@ -3656,6 +3742,7 @@ fn __golem_tool_def_raw_CanonicalStash() -> @tool.ToolDef {
               constraints: [],
               stdin: None,
               stdout: None,
+              stderr: None,
               result: None,
               errors: match CanonicalStashError::error_cases() {
                 Ok(__golem_errors) => __golem_errors
@@ -3721,6 +3808,7 @@ fn __golem_tool_def_raw_CanonicalStash() -> @tool.ToolDef {
               constraints: [],
               stdin: None,
               stdout: None,
+              stderr: None,
               result: None,
               errors: match CanonicalStashError::error_cases() {
                 Ok(__golem_errors) => __golem_errors
@@ -3786,6 +3874,7 @@ fn __golem_tool_def_raw_CanonicalStash() -> @tool.ToolDef {
               constraints: [],
               stdin: None,
               stdout: None,
+              stderr: None,
               result: None,
               errors: match CanonicalStashError::error_cases() {
                 Ok(__golem_errors) => __golem_errors
@@ -3873,7 +3962,8 @@ async fn __golem_tool_invoke_CanonicalStash(
   __golem_command_path : Array[String],
   __golem_input : @types.TypedSchemaValue,
   __golem_stdin : @asyncCore.Stream[Byte]?,
-  __golem_stdout : @tool.ProviderStdout?,
+  __golem_stdout : @tool.ProviderOutput?,
+  __golem_stderr : @tool.ProviderOutput?,
   __golem_principal : @tool.Principal,
 ) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
   let __golem_def = __golem_tool_def_CanonicalStash()
@@ -3917,6 +4007,15 @@ async fn __golem_tool_invoke_CanonicalStash(
           __golem_stdin,
           @types.ToolError::InvalidInput(
             "command does not accept a stdout stream",
+          ),
+        )
+      }
+      if __golem_stderr is Some(_) {
+        return @tool.reject_decoded_invocation(
+          __golem_decoded,
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "command does not accept a stderr stream",
           ),
         )
       }
@@ -4013,6 +4112,15 @@ async fn __golem_tool_invoke_CanonicalStash(
           ),
         )
       }
+      if __golem_stderr is Some(_) {
+        return @tool.reject_decoded_invocation(
+          __golem_decoded,
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "command does not accept a stderr stream",
+          ),
+        )
+      }
       let name :String? = try {
         @tool.decode_canonical_field(
           __golem_decoded,
@@ -4088,6 +4196,15 @@ async fn __golem_tool_invoke_CanonicalStash(
           __golem_stdin,
           @types.ToolError::InvalidInput(
             "command does not accept a stdout stream",
+          ),
+        )
+      }
+      if __golem_stderr is Some(_) {
+        return @tool.reject_decoded_invocation(
+          __golem_decoded,
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "command does not accept a stderr stream",
           ),
         )
       }
@@ -4206,6 +4323,7 @@ fn __golem_tool_def_raw_CanonicalBigBound() -> @tool.ToolDef {
               constraints: [],
               stdin: None,
               stdout: None,
+              stderr: None,
               result: None,
               errors: match CanonicalGrepError::error_cases() {
                 Ok(__golem_errors) => __golem_errors
@@ -4293,7 +4411,8 @@ async fn __golem_tool_invoke_CanonicalBigBound(
   __golem_command_path : Array[String],
   __golem_input : @types.TypedSchemaValue,
   __golem_stdin : @asyncCore.Stream[Byte]?,
-  __golem_stdout : @tool.ProviderStdout?,
+  __golem_stdout : @tool.ProviderOutput?,
+  __golem_stderr : @tool.ProviderOutput?,
   __golem_principal : @tool.Principal,
 ) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
   let __golem_def = __golem_tool_def_CanonicalBigBound()
@@ -4337,6 +4456,15 @@ async fn __golem_tool_invoke_CanonicalBigBound(
           __golem_stdin,
           @types.ToolError::InvalidInput(
             "command does not accept a stdout stream",
+          ),
+        )
+      }
+      if __golem_stderr is Some(_) {
+        return @tool.reject_decoded_invocation(
+          __golem_decoded,
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "command does not accept a stderr stream",
           ),
         )
       }
@@ -4438,6 +4566,7 @@ fn __golem_tool_def_raw_MoonBitReflectionTest() -> @tool.ToolDef {
               constraints: [],
               stdin: None,
               stdout: None,
+              stderr: None,
               result: Some(
                 {
                   type_: @schema.into_schema_graph(
@@ -4495,6 +4624,7 @@ fn __golem_tool_def_raw_MoonBitReflectionTest() -> @tool.ToolDef {
               constraints: [],
               stdin: None,
               stdout: None,
+              stderr: None,
               result: Some(
                 {
                   type_: @schema.into_schema_graph(
@@ -4606,6 +4736,7 @@ fn __golem_tool_def_raw_MoonBitReflectionTest() -> @tool.ToolDef {
               constraints: [],
               stdin: None,
               stdout: None,
+              stderr: None,
               result: Some(
                 {
                   type_: @schema.into_schema_graph(
@@ -4704,7 +4835,8 @@ async fn __golem_tool_invoke_MoonBitReflectionTest(
   __golem_command_path : Array[String],
   __golem_input : @types.TypedSchemaValue,
   __golem_stdin : @asyncCore.Stream[Byte]?,
-  __golem_stdout : @tool.ProviderStdout?,
+  __golem_stdout : @tool.ProviderOutput?,
+  __golem_stderr : @tool.ProviderOutput?,
   __golem_principal : @tool.Principal,
 ) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
   let __golem_def = __golem_tool_def_MoonBitReflectionTest()
@@ -4748,6 +4880,15 @@ async fn __golem_tool_invoke_MoonBitReflectionTest(
           __golem_stdin,
           @types.ToolError::InvalidInput(
             "command does not accept a stdout stream",
+          ),
+        )
+      }
+      if __golem_stderr is Some(_) {
+        return @tool.reject_decoded_invocation(
+          __golem_decoded,
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "command does not accept a stderr stream",
           ),
         )
       }
@@ -4798,6 +4939,15 @@ async fn __golem_tool_invoke_MoonBitReflectionTest(
           ),
         )
       }
+      if __golem_stderr is Some(_) {
+        return @tool.reject_decoded_invocation(
+          __golem_decoded,
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "command does not accept a stderr stream",
+          ),
+        )
+      }
       let maybe :String? = try {
         @tool.decode_canonical_field(
           __golem_decoded,
@@ -4842,6 +4992,15 @@ async fn __golem_tool_invoke_MoonBitReflectionTest(
           __golem_stdin,
           @types.ToolError::InvalidInput(
             "command does not accept a stdout stream",
+          ),
+        )
+      }
+      if __golem_stderr is Some(_) {
+        return @tool.reject_decoded_invocation(
+          __golem_decoded,
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "command does not accept a stderr stream",
           ),
         )
       }

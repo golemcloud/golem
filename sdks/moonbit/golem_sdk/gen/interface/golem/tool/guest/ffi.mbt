@@ -47,14 +47,14 @@ pub fn wasmExportDiscoverTools() -> Int {
 pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
   match mbt_ffi_load8_u(p0 + 0) {
     0 => {
-      for index69 = 0; index69 < mbt_ffi_load32(p0 + 8); index69 = index69 + 1 {
-        let iter_base = mbt_ffi_load32(p0 + 4) + index69 * 36
+      for index71 = 0; index71 < mbt_ffi_load32(p0 + 8); index71 = index71 + 1 {
+        let iter_base = mbt_ffi_load32(p0 + 4) + index71 * 36
         mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
 
-        for index46 = 0
-            index46 < mbt_ffi_load32(iter_base + 12)
-            index46 = index46 + 1 {
-          let iter_base = mbt_ffi_load32(iter_base + 8) + index46 * 324
+        for index48 = 0
+            index48 < mbt_ffi_load32(iter_base + 12)
+            index48 = index48 + 1 {
+          let iter_base = mbt_ffi_load32(iter_base + 8) + index48 * 364
           mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
 
           for index = 0
@@ -1234,72 +1234,100 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
               match mbt_ffi_load8_u(iter_base + 260) {
                 0 => ()
                 1 => {
-                  mbt_ffi_free(mbt_ffi_load32(iter_base + 268))
-                  mbt_ffi_free(mbt_ffi_load32(iter_base + 276))
+                  mbt_ffi_free(mbt_ffi_load32(iter_base + 264))
+                  mbt_ffi_free(mbt_ffi_load32(iter_base + 272))
 
                   for index41 = 0
-                      index41 < mbt_ffi_load32(iter_base + 288)
+                      index41 < mbt_ffi_load32(iter_base + 284)
                       index41 = index41 + 1 {
-                    let iter_base = mbt_ffi_load32(iter_base + 284) +
+                    let iter_base = mbt_ffi_load32(iter_base + 280) +
                       index41 * 16
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
                   }
-                  mbt_ffi_free(mbt_ffi_load32(iter_base + 284))
+                  mbt_ffi_free(mbt_ffi_load32(iter_base + 280))
+
+                  for index42 = 0
+                      index42 < mbt_ffi_load32(iter_base + 292)
+                      index42 = index42 + 1 {
+                    let iter_base = mbt_ffi_load32(iter_base + 288) +
+                      index42 * 8
+                    mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
+                  }
+                  mbt_ffi_free(mbt_ffi_load32(iter_base + 288))
+                }
+                _ => panic()
+              }
+
+              match mbt_ffi_load8_u(iter_base + 300) {
+                0 => ()
+                1 => {
+                  mbt_ffi_free(mbt_ffi_load32(iter_base + 308))
+                  mbt_ffi_free(mbt_ffi_load32(iter_base + 316))
 
                   for index43 = 0
-                      index43 < mbt_ffi_load32(iter_base + 296)
+                      index43 < mbt_ffi_load32(iter_base + 328)
                       index43 = index43 + 1 {
-                    let iter_base = mbt_ffi_load32(iter_base + 292) +
-                      index43 * 32
+                    let iter_base = mbt_ffi_load32(iter_base + 324) +
+                      index43 * 16
+                    mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
+                    mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+                  }
+                  mbt_ffi_free(mbt_ffi_load32(iter_base + 324))
+
+                  for index45 = 0
+                      index45 < mbt_ffi_load32(iter_base + 336)
+                      index45 = index45 + 1 {
+                    let iter_base = mbt_ffi_load32(iter_base + 332) +
+                      index45 * 32
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
 
-                    for index42 = 0
-                        index42 < mbt_ffi_load32(iter_base + 28)
-                        index42 = index42 + 1 {
+                    for index44 = 0
+                        index44 < mbt_ffi_load32(iter_base + 28)
+                        index44 = index44 + 1 {
                       let iter_base = mbt_ffi_load32(iter_base + 24) +
-                        index42 * 16
+                        index44 * 16
                       mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
                       mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 24))
                   }
-                  mbt_ffi_free(mbt_ffi_load32(iter_base + 292))
-                  mbt_ffi_free(mbt_ffi_load32(iter_base + 300))
+                  mbt_ffi_free(mbt_ffi_load32(iter_base + 332))
+                  mbt_ffi_free(mbt_ffi_load32(iter_base + 340))
                 }
                 _ => panic()
               }
 
-              for index45 = 0
-                  index45 < mbt_ffi_load32(iter_base + 312)
-                  index45 = index45 + 1 {
-                let iter_base = mbt_ffi_load32(iter_base + 308) + index45 * 44
+              for index47 = 0
+                  index47 < mbt_ffi_load32(iter_base + 352)
+                  index47 = index47 + 1 {
+                let iter_base = mbt_ffi_load32(iter_base + 348) + index47 * 44
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
 
-                for index44 = 0
-                    index44 < mbt_ffi_load32(iter_base + 28)
-                    index44 = index44 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 24) + index44 * 16
+                for index46 = 0
+                    index46 < mbt_ffi_load32(iter_base + 28)
+                    index46 = index46 + 1 {
+                  let iter_base = mbt_ffi_load32(iter_base + 24) + index46 * 16
                   mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
                   mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
                 }
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 24))
               }
-              mbt_ffi_free(mbt_ffi_load32(iter_base + 308))
+              mbt_ffi_free(mbt_ffi_load32(iter_base + 348))
             }
             _ => panic()
           }
         }
         mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-        for index67 = 0
-            index67 < mbt_ffi_load32(iter_base + 20)
-            index67 = index67 + 1 {
-          let iter_base = mbt_ffi_load32(iter_base + 16) + index67 * 144
+        for index69 = 0
+            index69 < mbt_ffi_load32(iter_base + 20)
+            index69 = index69 + 1 {
+          let iter_base = mbt_ffi_load32(iter_base + 16) + index69 * 144
 
           match mbt_ffi_load8_u(iter_base + 0) {
             0 => ()
@@ -1417,10 +1445,10 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
             12 => ()
             13 => ()
             14 => {
-              for index49 = 0
-                  index49 < mbt_ffi_load32(iter_base + 12)
-                  index49 = index49 + 1 {
-                let iter_base = mbt_ffi_load32(iter_base + 8) + index49 * 68
+              for index51 = 0
+                  index51 < mbt_ffi_load32(iter_base + 12)
+                  index51 = index51 + 1 {
+                let iter_base = mbt_ffi_load32(iter_base + 8) + index51 * 68
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
 
                 match mbt_ffi_load8_u(iter_base + 12) {
@@ -1429,18 +1457,18 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
                   _ => panic()
                 }
 
-                for index47 = 0
-                    index47 < mbt_ffi_load32(iter_base + 28)
-                    index47 = index47 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 24) + index47 * 8
+                for index49 = 0
+                    index49 < mbt_ffi_load32(iter_base + 28)
+                    index49 = index49 + 1 {
+                  let iter_base = mbt_ffi_load32(iter_base + 24) + index49 * 8
                   mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
                 }
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 24))
 
-                for index48 = 0
-                    index48 < mbt_ffi_load32(iter_base + 36)
-                    index48 = index48 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 32) + index48 * 8
+                for index50 = 0
+                    index50 < mbt_ffi_load32(iter_base + 36)
+                    index50 = index50 + 1 {
+                  let iter_base = mbt_ffi_load32(iter_base + 32) + index50 * 8
                   mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
                 }
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 32))
@@ -1467,10 +1495,10 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
               mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
             }
             15 => {
-              for index52 = 0
-                  index52 < mbt_ffi_load32(iter_base + 12)
-                  index52 = index52 + 1 {
-                let iter_base = mbt_ffi_load32(iter_base + 8) + index52 * 72
+              for index54 = 0
+                  index54 < mbt_ffi_load32(iter_base + 12)
+                  index54 = index54 + 1 {
+                let iter_base = mbt_ffi_load32(iter_base + 8) + index54 * 72
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
 
                 match mbt_ffi_load8_u(iter_base + 16) {
@@ -1479,18 +1507,18 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
                   _ => panic()
                 }
 
-                for index50 = 0
-                    index50 < mbt_ffi_load32(iter_base + 32)
-                    index50 = index50 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 28) + index50 * 8
+                for index52 = 0
+                    index52 < mbt_ffi_load32(iter_base + 32)
+                    index52 = index52 + 1 {
+                  let iter_base = mbt_ffi_load32(iter_base + 28) + index52 * 8
                   mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
                 }
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 28))
 
-                for index51 = 0
-                    index51 < mbt_ffi_load32(iter_base + 40)
-                    index51 = index51 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 36) + index51 * 8
+                for index53 = 0
+                    index53 < mbt_ffi_load32(iter_base + 40)
+                    index53 = index53 + 1 {
+                  let iter_base = mbt_ffi_load32(iter_base + 36) + index53 * 8
                   mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
                 }
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 36))
@@ -1517,19 +1545,19 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
               mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
             }
             16 => {
-              for index53 = 0
-                  index53 < mbt_ffi_load32(iter_base + 12)
-                  index53 = index53 + 1 {
-                let iter_base = mbt_ffi_load32(iter_base + 8) + index53 * 8
+              for index55 = 0
+                  index55 < mbt_ffi_load32(iter_base + 12)
+                  index55 = index55 + 1 {
+                let iter_base = mbt_ffi_load32(iter_base + 8) + index55 * 8
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
               }
               mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
             }
             17 => {
-              for index54 = 0
-                  index54 < mbt_ffi_load32(iter_base + 12)
-                  index54 = index54 + 1 {
-                let iter_base = mbt_ffi_load32(iter_base + 8) + index54 * 8
+              for index56 = 0
+                  index56 < mbt_ffi_load32(iter_base + 12)
+                  index56 = index56 + 1 {
+                let iter_base = mbt_ffi_load32(iter_base + 8) + index56 * 8
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
               }
               mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
@@ -1544,10 +1572,10 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
               match mbt_ffi_load8_u(iter_base + 8) {
                 0 => ()
                 1 => {
-                  for index55 = 0
-                      index55 < mbt_ffi_load32(iter_base + 16)
-                      index55 = index55 + 1 {
-                    let iter_base = mbt_ffi_load32(iter_base + 12) + index55 * 8
+                  for index57 = 0
+                      index57 < mbt_ffi_load32(iter_base + 16)
+                      index57 = index57 + 1 {
+                    let iter_base = mbt_ffi_load32(iter_base + 12) + index57 * 8
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
                   }
                   mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
@@ -1565,10 +1593,10 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
               match mbt_ffi_load8_u(iter_base + 8) {
                 0 => ()
                 1 => {
-                  for index56 = 0
-                      index56 < mbt_ffi_load32(iter_base + 16)
-                      index56 = index56 + 1 {
-                    let iter_base = mbt_ffi_load32(iter_base + 12) + index56 * 8
+                  for index58 = 0
+                      index58 < mbt_ffi_load32(iter_base + 16)
+                      index58 = index58 + 1 {
+                    let iter_base = mbt_ffi_load32(iter_base + 12) + index58 * 8
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
                   }
                   mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
@@ -1579,10 +1607,10 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
               match mbt_ffi_load8_u(iter_base + 12) {
                 0 => ()
                 1 => {
-                  for index57 = 0
-                      index57 < mbt_ffi_load32(iter_base + 20)
-                      index57 = index57 + 1 {
-                    let iter_base = mbt_ffi_load32(iter_base + 16) + index57 * 8
+                  for index59 = 0
+                      index59 < mbt_ffi_load32(iter_base + 20)
+                      index59 = index59 + 1 {
+                    let iter_base = mbt_ffi_load32(iter_base + 16) + index59 * 8
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
                   }
                   mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
@@ -1593,10 +1621,10 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
               match mbt_ffi_load8_u(iter_base + 24) {
                 0 => ()
                 1 => {
-                  for index58 = 0
-                      index58 < mbt_ffi_load32(iter_base + 32)
-                      index58 = index58 + 1 {
-                    let iter_base = mbt_ffi_load32(iter_base + 28) + index58 * 8
+                  for index60 = 0
+                      index60 < mbt_ffi_load32(iter_base + 32)
+                      index60 = index60 + 1 {
+                    let iter_base = mbt_ffi_load32(iter_base + 28) + index60 * 8
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
                   }
                   mbt_ffi_free(mbt_ffi_load32(iter_base + 28))
@@ -1608,10 +1636,10 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
               match mbt_ffi_load8_u(iter_base + 8) {
                 0 => ()
                 1 => {
-                  for index59 = 0
-                      index59 < mbt_ffi_load32(iter_base + 16)
-                      index59 = index59 + 1 {
-                    let iter_base = mbt_ffi_load32(iter_base + 12) + index59 * 8
+                  for index61 = 0
+                      index61 < mbt_ffi_load32(iter_base + 16)
+                      index61 = index61 + 1 {
+                    let iter_base = mbt_ffi_load32(iter_base + 12) + index61 * 8
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
                   }
                   mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
@@ -1622,10 +1650,10 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
               match mbt_ffi_load8_u(iter_base + 20) {
                 0 => ()
                 1 => {
-                  for index60 = 0
-                      index60 < mbt_ffi_load32(iter_base + 28)
-                      index60 = index60 + 1 {
-                    let iter_base = mbt_ffi_load32(iter_base + 24) + index60 * 8
+                  for index62 = 0
+                      index62 < mbt_ffi_load32(iter_base + 28)
+                      index62 = index62 + 1 {
+                    let iter_base = mbt_ffi_load32(iter_base + 24) + index62 * 8
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
                   }
                   mbt_ffi_free(mbt_ffi_load32(iter_base + 24))
@@ -1638,10 +1666,10 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
             30 => {
               mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-              for index61 = 0
-                  index61 < mbt_ffi_load32(iter_base + 20)
-                  index61 = index61 + 1 {
-                let iter_base = mbt_ffi_load32(iter_base + 16) + index61 * 8
+              for index63 = 0
+                  index63 < mbt_ffi_load32(iter_base + 20)
+                  index63 = index63 + 1 {
+                let iter_base = mbt_ffi_load32(iter_base + 16) + index63 * 8
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
               }
               mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
@@ -1659,10 +1687,10 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
               }
             }
             31 => {
-              for index64 = 0
-                  index64 < mbt_ffi_load32(iter_base + 12)
-                  index64 = index64 + 1 {
-                let iter_base = mbt_ffi_load32(iter_base + 8) + index64 * 92
+              for index66 = 0
+                  index66 < mbt_ffi_load32(iter_base + 12)
+                  index66 = index66 + 1 {
+                let iter_base = mbt_ffi_load32(iter_base + 8) + index66 * 92
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
 
                 match mbt_ffi_load8_u(iter_base + 12) {
@@ -1689,18 +1717,18 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
                   _ => panic()
                 }
 
-                for index62 = 0
-                    index62 < mbt_ffi_load32(iter_base + 52)
-                    index62 = index62 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 48) + index62 * 8
+                for index64 = 0
+                    index64 < mbt_ffi_load32(iter_base + 52)
+                    index64 = index64 + 1 {
+                  let iter_base = mbt_ffi_load32(iter_base + 48) + index64 * 8
                   mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
                 }
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 48))
 
-                for index63 = 0
-                    index63 < mbt_ffi_load32(iter_base + 60)
-                    index63 = index63 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 56) + index63 * 8
+                for index65 = 0
+                    index65 < mbt_ffi_load32(iter_base + 60)
+                    index65 = index65 + 1 {
+                  let iter_base = mbt_ffi_load32(iter_base + 56) + index65 * 8
                   mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
                 }
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 56))
@@ -1750,18 +1778,18 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
             _ => panic()
           }
 
-          for index65 = 0
-              index65 < mbt_ffi_load32(iter_base + 104)
-              index65 = index65 + 1 {
-            let iter_base = mbt_ffi_load32(iter_base + 100) + index65 * 8
+          for index67 = 0
+              index67 < mbt_ffi_load32(iter_base + 104)
+              index67 = index67 + 1 {
+            let iter_base = mbt_ffi_load32(iter_base + 100) + index67 * 8
             mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
           }
           mbt_ffi_free(mbt_ffi_load32(iter_base + 100))
 
-          for index66 = 0
-              index66 < mbt_ffi_load32(iter_base + 112)
-              index66 = index66 + 1 {
-            let iter_base = mbt_ffi_load32(iter_base + 108) + index66 * 8
+          for index68 = 0
+              index68 < mbt_ffi_load32(iter_base + 112)
+              index68 = index68 + 1 {
+            let iter_base = mbt_ffi_load32(iter_base + 108) + index68 * 8
             mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
           }
           mbt_ffi_free(mbt_ffi_load32(iter_base + 108))
@@ -1787,10 +1815,10 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
         }
         mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
 
-        for index68 = 0
-            index68 < mbt_ffi_load32(iter_base + 28)
-            index68 = index68 + 1 {
-          let iter_base = mbt_ffi_load32(iter_base + 24) + index68 * 24
+        for index70 = 0
+            index70 < mbt_ffi_load32(iter_base + 28)
+            index70 = index70 + 1 {
+          let iter_base = mbt_ffi_load32(iter_base + 24) + index70 * 24
           mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
 
           match mbt_ffi_load8_u(iter_base + 8) {
@@ -1807,10 +1835,10 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
       match mbt_ffi_load8_u(p0 + 4) {
         0 => mbt_ffi_free(mbt_ffi_load32(p0 + 8))
         1 => {
-          for index70 = 0
-              index70 < mbt_ffi_load32(p0 + 12)
-              index70 = index70 + 1 {
-            let iter_base = mbt_ffi_load32(p0 + 8) + index70 * 8
+          for index72 = 0
+              index72 < mbt_ffi_load32(p0 + 12)
+              index72 = index72 + 1 {
+            let iter_base = mbt_ffi_load32(p0 + 8) + index72 * 8
             mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
           }
           mbt_ffi_free(mbt_ffi_load32(p0 + 8))
@@ -1821,10 +1849,10 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
         5 => {
           mbt_ffi_free(mbt_ffi_load32(p0 + 8))
 
-          for index91 = 0
-              index91 < mbt_ffi_load32(p0 + 20)
-              index91 = index91 + 1 {
-            let iter_base = mbt_ffi_load32(p0 + 16) + index91 * 144
+          for index93 = 0
+              index93 < mbt_ffi_load32(p0 + 20)
+              index93 = index93 + 1 {
+            let iter_base = mbt_ffi_load32(p0 + 16) + index93 * 144
 
             match mbt_ffi_load8_u(iter_base + 0) {
               0 => ()
@@ -1942,10 +1970,10 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
               12 => ()
               13 => ()
               14 => {
-                for index73 = 0
-                    index73 < mbt_ffi_load32(iter_base + 12)
-                    index73 = index73 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 8) + index73 * 68
+                for index75 = 0
+                    index75 < mbt_ffi_load32(iter_base + 12)
+                    index75 = index75 + 1 {
+                  let iter_base = mbt_ffi_load32(iter_base + 8) + index75 * 68
                   mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
 
                   match mbt_ffi_load8_u(iter_base + 12) {
@@ -1954,18 +1982,18 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
                     _ => panic()
                   }
 
-                  for index71 = 0
-                      index71 < mbt_ffi_load32(iter_base + 28)
-                      index71 = index71 + 1 {
-                    let iter_base = mbt_ffi_load32(iter_base + 24) + index71 * 8
+                  for index73 = 0
+                      index73 < mbt_ffi_load32(iter_base + 28)
+                      index73 = index73 + 1 {
+                    let iter_base = mbt_ffi_load32(iter_base + 24) + index73 * 8
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
                   }
                   mbt_ffi_free(mbt_ffi_load32(iter_base + 24))
 
-                  for index72 = 0
-                      index72 < mbt_ffi_load32(iter_base + 36)
-                      index72 = index72 + 1 {
-                    let iter_base = mbt_ffi_load32(iter_base + 32) + index72 * 8
+                  for index74 = 0
+                      index74 < mbt_ffi_load32(iter_base + 36)
+                      index74 = index74 + 1 {
+                    let iter_base = mbt_ffi_load32(iter_base + 32) + index74 * 8
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
                   }
                   mbt_ffi_free(mbt_ffi_load32(iter_base + 32))
@@ -1992,10 +2020,10 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
               }
               15 => {
-                for index76 = 0
-                    index76 < mbt_ffi_load32(iter_base + 12)
-                    index76 = index76 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 8) + index76 * 72
+                for index78 = 0
+                    index78 < mbt_ffi_load32(iter_base + 12)
+                    index78 = index78 + 1 {
+                  let iter_base = mbt_ffi_load32(iter_base + 8) + index78 * 72
                   mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
 
                   match mbt_ffi_load8_u(iter_base + 16) {
@@ -2004,18 +2032,18 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
                     _ => panic()
                   }
 
-                  for index74 = 0
-                      index74 < mbt_ffi_load32(iter_base + 32)
-                      index74 = index74 + 1 {
-                    let iter_base = mbt_ffi_load32(iter_base + 28) + index74 * 8
+                  for index76 = 0
+                      index76 < mbt_ffi_load32(iter_base + 32)
+                      index76 = index76 + 1 {
+                    let iter_base = mbt_ffi_load32(iter_base + 28) + index76 * 8
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
                   }
                   mbt_ffi_free(mbt_ffi_load32(iter_base + 28))
 
-                  for index75 = 0
-                      index75 < mbt_ffi_load32(iter_base + 40)
-                      index75 = index75 + 1 {
-                    let iter_base = mbt_ffi_load32(iter_base + 36) + index75 * 8
+                  for index77 = 0
+                      index77 < mbt_ffi_load32(iter_base + 40)
+                      index77 = index77 + 1 {
+                    let iter_base = mbt_ffi_load32(iter_base + 36) + index77 * 8
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
                   }
                   mbt_ffi_free(mbt_ffi_load32(iter_base + 36))
@@ -2042,19 +2070,19 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
               }
               16 => {
-                for index77 = 0
-                    index77 < mbt_ffi_load32(iter_base + 12)
-                    index77 = index77 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 8) + index77 * 8
+                for index79 = 0
+                    index79 < mbt_ffi_load32(iter_base + 12)
+                    index79 = index79 + 1 {
+                  let iter_base = mbt_ffi_load32(iter_base + 8) + index79 * 8
                   mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
                 }
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
               }
               17 => {
-                for index78 = 0
-                    index78 < mbt_ffi_load32(iter_base + 12)
-                    index78 = index78 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 8) + index78 * 8
+                for index80 = 0
+                    index80 < mbt_ffi_load32(iter_base + 12)
+                    index80 = index80 + 1 {
+                  let iter_base = mbt_ffi_load32(iter_base + 8) + index80 * 8
                   mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
                 }
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
@@ -2069,11 +2097,11 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
                 match mbt_ffi_load8_u(iter_base + 8) {
                   0 => ()
                   1 => {
-                    for index79 = 0
-                        index79 < mbt_ffi_load32(iter_base + 16)
-                        index79 = index79 + 1 {
+                    for index81 = 0
+                        index81 < mbt_ffi_load32(iter_base + 16)
+                        index81 = index81 + 1 {
                       let iter_base = mbt_ffi_load32(iter_base + 12) +
-                        index79 * 8
+                        index81 * 8
                       mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
@@ -2091,11 +2119,11 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
                 match mbt_ffi_load8_u(iter_base + 8) {
                   0 => ()
                   1 => {
-                    for index80 = 0
-                        index80 < mbt_ffi_load32(iter_base + 16)
-                        index80 = index80 + 1 {
+                    for index82 = 0
+                        index82 < mbt_ffi_load32(iter_base + 16)
+                        index82 = index82 + 1 {
                       let iter_base = mbt_ffi_load32(iter_base + 12) +
-                        index80 * 8
+                        index82 * 8
                       mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
@@ -2106,11 +2134,11 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
                 match mbt_ffi_load8_u(iter_base + 12) {
                   0 => ()
                   1 => {
-                    for index81 = 0
-                        index81 < mbt_ffi_load32(iter_base + 20)
-                        index81 = index81 + 1 {
+                    for index83 = 0
+                        index83 < mbt_ffi_load32(iter_base + 20)
+                        index83 = index83 + 1 {
                       let iter_base = mbt_ffi_load32(iter_base + 16) +
-                        index81 * 8
+                        index83 * 8
                       mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
@@ -2121,11 +2149,11 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
                 match mbt_ffi_load8_u(iter_base + 24) {
                   0 => ()
                   1 => {
-                    for index82 = 0
-                        index82 < mbt_ffi_load32(iter_base + 32)
-                        index82 = index82 + 1 {
+                    for index84 = 0
+                        index84 < mbt_ffi_load32(iter_base + 32)
+                        index84 = index84 + 1 {
                       let iter_base = mbt_ffi_load32(iter_base + 28) +
-                        index82 * 8
+                        index84 * 8
                       mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 28))
@@ -2137,11 +2165,11 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
                 match mbt_ffi_load8_u(iter_base + 8) {
                   0 => ()
                   1 => {
-                    for index83 = 0
-                        index83 < mbt_ffi_load32(iter_base + 16)
-                        index83 = index83 + 1 {
+                    for index85 = 0
+                        index85 < mbt_ffi_load32(iter_base + 16)
+                        index85 = index85 + 1 {
                       let iter_base = mbt_ffi_load32(iter_base + 12) +
-                        index83 * 8
+                        index85 * 8
                       mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
@@ -2152,11 +2180,11 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
                 match mbt_ffi_load8_u(iter_base + 20) {
                   0 => ()
                   1 => {
-                    for index84 = 0
-                        index84 < mbt_ffi_load32(iter_base + 28)
-                        index84 = index84 + 1 {
+                    for index86 = 0
+                        index86 < mbt_ffi_load32(iter_base + 28)
+                        index86 = index86 + 1 {
                       let iter_base = mbt_ffi_load32(iter_base + 24) +
-                        index84 * 8
+                        index86 * 8
                       mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 24))
@@ -2169,10 +2197,10 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
               30 => {
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-                for index85 = 0
-                    index85 < mbt_ffi_load32(iter_base + 20)
-                    index85 = index85 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 16) + index85 * 8
+                for index87 = 0
+                    index87 < mbt_ffi_load32(iter_base + 20)
+                    index87 = index87 + 1 {
+                  let iter_base = mbt_ffi_load32(iter_base + 16) + index87 * 8
                   mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
                 }
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
@@ -2190,10 +2218,10 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
                 }
               }
               31 => {
-                for index88 = 0
-                    index88 < mbt_ffi_load32(iter_base + 12)
-                    index88 = index88 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 8) + index88 * 92
+                for index90 = 0
+                    index90 < mbt_ffi_load32(iter_base + 12)
+                    index90 = index90 + 1 {
+                  let iter_base = mbt_ffi_load32(iter_base + 8) + index90 * 92
                   mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
 
                   match mbt_ffi_load8_u(iter_base + 12) {
@@ -2220,18 +2248,18 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
                     _ => panic()
                   }
 
-                  for index86 = 0
-                      index86 < mbt_ffi_load32(iter_base + 52)
-                      index86 = index86 + 1 {
-                    let iter_base = mbt_ffi_load32(iter_base + 48) + index86 * 8
+                  for index88 = 0
+                      index88 < mbt_ffi_load32(iter_base + 52)
+                      index88 = index88 + 1 {
+                    let iter_base = mbt_ffi_load32(iter_base + 48) + index88 * 8
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
                   }
                   mbt_ffi_free(mbt_ffi_load32(iter_base + 48))
 
-                  for index87 = 0
-                      index87 < mbt_ffi_load32(iter_base + 60)
-                      index87 = index87 + 1 {
-                    let iter_base = mbt_ffi_load32(iter_base + 56) + index87 * 8
+                  for index89 = 0
+                      index89 < mbt_ffi_load32(iter_base + 60)
+                      index89 = index89 + 1 {
+                    let iter_base = mbt_ffi_load32(iter_base + 56) + index89 * 8
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
                   }
                   mbt_ffi_free(mbt_ffi_load32(iter_base + 56))
@@ -2281,18 +2309,18 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
               _ => panic()
             }
 
-            for index89 = 0
-                index89 < mbt_ffi_load32(iter_base + 104)
-                index89 = index89 + 1 {
-              let iter_base = mbt_ffi_load32(iter_base + 100) + index89 * 8
+            for index91 = 0
+                index91 < mbt_ffi_load32(iter_base + 104)
+                index91 = index91 + 1 {
+              let iter_base = mbt_ffi_load32(iter_base + 100) + index91 * 8
               mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
             }
             mbt_ffi_free(mbt_ffi_load32(iter_base + 100))
 
-            for index90 = 0
-                index90 < mbt_ffi_load32(iter_base + 112)
-                index90 = index90 + 1 {
-              let iter_base = mbt_ffi_load32(iter_base + 108) + index90 * 8
+            for index92 = 0
+                index92 < mbt_ffi_load32(iter_base + 112)
+                index92 = index92 + 1 {
+              let iter_base = mbt_ffi_load32(iter_base + 108) + index92 * 8
               mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
             }
             mbt_ffi_free(mbt_ffi_load32(iter_base + 108))
@@ -2318,10 +2346,10 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
           }
           mbt_ffi_free(mbt_ffi_load32(p0 + 16))
 
-          for index92 = 0
-              index92 < mbt_ffi_load32(p0 + 28)
-              index92 = index92 + 1 {
-            let iter_base = mbt_ffi_load32(p0 + 24) + index92 * 24
+          for index94 = 0
+              index94 < mbt_ffi_load32(p0 + 28)
+              index94 = index94 + 1 {
+            let iter_base = mbt_ffi_load32(p0 + 24) + index94 * 24
             mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
 
             match mbt_ffi_load8_u(iter_base + 8) {
@@ -2332,10 +2360,10 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
           }
           mbt_ffi_free(mbt_ffi_load32(p0 + 24))
 
-          for index93 = 0
-              index93 < mbt_ffi_load32(p0 + 40)
-              index93 = index93 + 1 {
-            let iter_base = mbt_ffi_load32(p0 + 36) + index93 * 32
+          for index95 = 0
+              index95 < mbt_ffi_load32(p0 + 40)
+              index95 = index95 + 1 {
+            let iter_base = mbt_ffi_load32(p0 + 36) + index95 * 32
 
             match mbt_ffi_load8_u(iter_base + 0) {
               0 => ()
@@ -2964,14 +2992,252 @@ fn wasmExportGolemToolGuest010InvokeStream1StreamLowerCommitted(
 }
 
 ///|
+#warnings("-unused_value")
+fn wasmImportExportGolemToolGuest010InvokeStream2DropReadable(handle : Int) = "[export]golem:tool/guest@0.1.0" "[stream-drop-readable-1]invoke"
+
+///|
+fn wasmImportExportGolemToolGuest010InvokeStream2New() -> UInt64 = "[export]golem:tool/guest@0.1.0" "[stream-new-1]invoke"
+
+///|
+fn wasmImportExportGolemToolGuest010InvokeStream2Write(
+  handle : Int,
+  buffer_ptr : Int,
+  length : Int,
+) -> Int = "[export]golem:tool/guest@0.1.0" "[async-lower][stream-write-1]invoke"
+
+///|
+fn wasmImportExportGolemToolGuest010InvokeStream2CancelWrite(
+  handle : Int,
+) -> Int = "[export]golem:tool/guest@0.1.0" "[stream-cancel-write-1]invoke"
+
+///|
+fn wasmImportExportGolemToolGuest010InvokeStream2DropWritable(handle : Int) = "[export]golem:tool/guest@0.1.0" "[stream-drop-writable-1]invoke"
+
+///|
+fn wasmExportGolemToolGuest010InvokeStream2Malloc(length : Int) -> Int {
+  let ptr = mbt_ffi_malloc(1 * length)
+  ptr
+}
+
+///|
+fn wasmExportGolemToolGuest010InvokeStream2Commit(
+  ptr : Int,
+  start : Int,
+  length : Int,
+) -> Unit {
+  ignore((ptr, start, length))
+}
+
+///|
+fn wasmExportGolemToolGuest010InvokeStream2Reject(
+  ptr : Int,
+  start : Int,
+  length : Int,
+) -> Unit {
+  ignore((ptr, start, length))
+}
+
+///|
+fn wasmExportGolemToolGuest010InvokeStream2Lower(
+  value : Byte,
+  ptr : Int,
+) -> Unit {
+  mbt_ffi_store8(ptr + 0, value.to_int())
+}
+
+///|
+priv struct WasmExportGolemToolGuest010InvokeStream2StreamProducer {
+  stream : @async-core.Stream[Byte]
+  writer : Int
+}
+
+///|
+let wasmExportGolemToolGuest010InvokeStream2StreamProducers : Map[
+  Int,
+  WasmExportGolemToolGuest010InvokeStream2StreamProducer,
+] = Map([])
+
+///|
+fn wasmExportGolemToolGuest010InvokeStream2StreamCommit(handle : Int) -> Unit {
+  guard wasmExportGolemToolGuest010InvokeStream2StreamProducers.get(handle)
+    is Some(prepared) else {
+    return
+  }
+  wasmExportGolemToolGuest010InvokeStream2StreamProducers.remove(handle)
+  let stream = prepared.stream
+  let writer = prepared.writer
+  if !@async-core.has_component_task_scope() {
+    abort("component stream producer requires an async task scope")
+  }
+  let producer = stream.take_producer()
+  @async-core.spawn_component_task_current(async fn() {
+    let writer_closed = Ref(false)
+    let writer_lock = @async-core.Mutex()
+    let close_writer = fn() -> Unit {
+      if !writer_closed.val {
+        writer_closed.val = true
+        wasmImportExportGolemToolGuest010InvokeStream2DropWritable(writer)
+      }
+    }
+    let close_writer_serialized = async fn() -> Unit {
+      writer_lock.acquire()
+      defer writer_lock.release()
+      close_writer()
+    }
+    let cleanup_value = fn(value : Byte) -> Unit {
+      let ptr = wasmExportGolemToolGuest010InvokeStream2Malloc(1)
+      wasmExportGolemToolGuest010InvokeStream2Lower(value, ptr)
+      wasmExportGolemToolGuest010InvokeStream2Reject(ptr, 0, 1)
+      mbt_ffi_free(ptr)
+    }
+    let sink = @async-core.Sink::from_callbacks(
+      (data : ArrayView[Byte]) => {
+        writer_lock.acquire()
+        defer writer_lock.release()
+        if writer_closed.val || data.length() == 0 {
+          return 0
+        }
+        let data_len = if data.length() < 64 { data.length() } else { 64 }
+        let ptr = wasmExportGolemToolGuest010InvokeStream2Malloc(data_len)
+        for i in 0..<data_len {
+          let value : Byte = data[i]
+          wasmExportGolemToolGuest010InvokeStream2Lower(value, ptr + i * 1)
+        }
+        let settle_staging = fn(transferred : Int) -> Unit {
+          wasmExportGolemToolGuest010InvokeStream2Commit(ptr, 0, transferred)
+          if transferred < data_len {
+            wasmExportGolemToolGuest010InvokeStream2Reject(
+              ptr,
+              transferred,
+              data_len - transferred,
+            )
+          }
+          mbt_ffi_free(ptr)
+        }
+        let mut total = 0
+        let mut dropped = false
+        while total < data_len {
+          let (progress, end) = @async-core.suspend_for_stream_write(
+            writer,
+            wasmImportExportGolemToolGuest010InvokeStream2Write(
+              writer,
+              ptr + total * 1,
+              data_len - total,
+            ),
+          ) catch {
+            _ => {
+              total = total +
+                @async-core.cancel_stream_write(writer, () => {
+                  wasmImportExportGolemToolGuest010InvokeStream2CancelWrite(
+                    writer,
+                  )
+                })
+              settle_staging(total)
+              close_writer()
+              return data_len
+            }
+          }
+          total = total + progress
+          if end {
+            dropped = true
+            break
+          }
+        }
+        settle_staging(total)
+        if dropped {
+          close_writer()
+        }
+        // The canonical writer accepted `total`; generated cleanup
+        // consumed the rest of this staging window.
+        data_len
+      },
+      () => close_writer_serialized(),
+      () => !writer_closed.val,
+      Some(cleanup_value),
+    )
+    let relay_source = producer is None
+    let run_producer = async fn() -> Unit {
+      match producer {
+        Some(producer) => {
+          producer(sink)
+          sink.close()
+        }
+        None =>
+          for ;; {
+            match stream.read(64) {
+              Some(data) =>
+                if !sink.write_all(data[:]) {
+                  stream.reject(cleanup_value)
+                  return
+                }
+              None => {
+                sink.close()
+                return
+              }
+            }
+          }
+      }
+    }
+    errdefer {
+      if relay_source {
+        @async-core.protect_from_cancel(
+          () => stream.reject(cleanup_value),
+          resume_on_cancel=true,
+        ) catch {
+          _ => ()
+        }
+      }
+      @async-core.protect_from_cancel(
+        () => close_writer_serialized(),
+        resume_on_cancel=true,
+      )
+    }
+    run_producer()
+    // A retained Sink may still own an in-flight canonical write after its
+    // producer returns. Do not drop the writable endpoint until that write
+    // has reached a terminal event and released its staging buffer.
+    @async-core.protect_from_cancel(
+      () => close_writer_serialized(),
+      resume_on_cancel=true,
+    )
+  })
+}
+
+///|
+fn wasmExportGolemToolGuest010InvokeStream2StreamLower(
+  stream : @async-core.Stream[Byte],
+) -> Int {
+  if !@async-core.has_component_task_scope() {
+    abort("component stream producer requires an async task scope")
+  }
+  let pair = wasmImportExportGolemToolGuest010InvokeStream2New()
+  let reader = pair.to_int()
+  let writer = (pair >> 32).to_int()
+  wasmExportGolemToolGuest010InvokeStream2StreamProducers.set(reader, {
+    stream,
+    writer,
+  })
+  reader
+}
+
+///|
+fn wasmExportGolemToolGuest010InvokeStream2StreamLowerCommitted(
+  stream : @async-core.Stream[Byte],
+) -> Int {
+  let reader = wasmExportGolemToolGuest010InvokeStream2StreamLower(stream)
+  wasmExportGolemToolGuest010InvokeStream2StreamCommit(reader)
+  reader
+}
+
+///|
 #doc(hidden)
 pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
   match mbt_ffi_load8_u(p0 + 0) {
     0 => {
       mbt_ffi_free(mbt_ffi_load32(p0 + 4))
 
-      for index46 = 0; index46 < mbt_ffi_load32(p0 + 16); index46 = index46 + 1 {
-        let iter_base = mbt_ffi_load32(p0 + 12) + index46 * 324
+      for index48 = 0; index48 < mbt_ffi_load32(p0 + 16); index48 = index48 + 1 {
+        let iter_base = mbt_ffi_load32(p0 + 12) + index48 * 364
         mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
 
         for index = 0; index < mbt_ffi_load32(iter_base + 12); index = index + 1 {
@@ -4122,68 +4388,94 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
             match mbt_ffi_load8_u(iter_base + 260) {
               0 => ()
               1 => {
-                mbt_ffi_free(mbt_ffi_load32(iter_base + 268))
-                mbt_ffi_free(mbt_ffi_load32(iter_base + 276))
+                mbt_ffi_free(mbt_ffi_load32(iter_base + 264))
+                mbt_ffi_free(mbt_ffi_load32(iter_base + 272))
 
                 for index41 = 0
-                    index41 < mbt_ffi_load32(iter_base + 288)
+                    index41 < mbt_ffi_load32(iter_base + 284)
                     index41 = index41 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 284) + index41 * 16
+                  let iter_base = mbt_ffi_load32(iter_base + 280) + index41 * 16
                   mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
                   mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
                 }
-                mbt_ffi_free(mbt_ffi_load32(iter_base + 284))
+                mbt_ffi_free(mbt_ffi_load32(iter_base + 280))
+
+                for index42 = 0
+                    index42 < mbt_ffi_load32(iter_base + 292)
+                    index42 = index42 + 1 {
+                  let iter_base = mbt_ffi_load32(iter_base + 288) + index42 * 8
+                  mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
+                }
+                mbt_ffi_free(mbt_ffi_load32(iter_base + 288))
+              }
+              _ => panic()
+            }
+
+            match mbt_ffi_load8_u(iter_base + 300) {
+              0 => ()
+              1 => {
+                mbt_ffi_free(mbt_ffi_load32(iter_base + 308))
+                mbt_ffi_free(mbt_ffi_load32(iter_base + 316))
 
                 for index43 = 0
-                    index43 < mbt_ffi_load32(iter_base + 296)
+                    index43 < mbt_ffi_load32(iter_base + 328)
                     index43 = index43 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 292) + index43 * 32
+                  let iter_base = mbt_ffi_load32(iter_base + 324) + index43 * 16
+                  mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
+                  mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+                }
+                mbt_ffi_free(mbt_ffi_load32(iter_base + 324))
+
+                for index45 = 0
+                    index45 < mbt_ffi_load32(iter_base + 336)
+                    index45 = index45 + 1 {
+                  let iter_base = mbt_ffi_load32(iter_base + 332) + index45 * 32
                   mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
                   mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
                   mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
 
-                  for index42 = 0
-                      index42 < mbt_ffi_load32(iter_base + 28)
-                      index42 = index42 + 1 {
+                  for index44 = 0
+                      index44 < mbt_ffi_load32(iter_base + 28)
+                      index44 = index44 + 1 {
                     let iter_base = mbt_ffi_load32(iter_base + 24) +
-                      index42 * 16
+                      index44 * 16
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
                   }
                   mbt_ffi_free(mbt_ffi_load32(iter_base + 24))
                 }
-                mbt_ffi_free(mbt_ffi_load32(iter_base + 292))
-                mbt_ffi_free(mbt_ffi_load32(iter_base + 300))
+                mbt_ffi_free(mbt_ffi_load32(iter_base + 332))
+                mbt_ffi_free(mbt_ffi_load32(iter_base + 340))
               }
               _ => panic()
             }
 
-            for index45 = 0
-                index45 < mbt_ffi_load32(iter_base + 312)
-                index45 = index45 + 1 {
-              let iter_base = mbt_ffi_load32(iter_base + 308) + index45 * 44
+            for index47 = 0
+                index47 < mbt_ffi_load32(iter_base + 352)
+                index47 = index47 + 1 {
+              let iter_base = mbt_ffi_load32(iter_base + 348) + index47 * 44
               mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
               mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
               mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
 
-              for index44 = 0
-                  index44 < mbt_ffi_load32(iter_base + 28)
-                  index44 = index44 + 1 {
-                let iter_base = mbt_ffi_load32(iter_base + 24) + index44 * 16
+              for index46 = 0
+                  index46 < mbt_ffi_load32(iter_base + 28)
+                  index46 = index46 + 1 {
+                let iter_base = mbt_ffi_load32(iter_base + 24) + index46 * 16
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
               }
               mbt_ffi_free(mbt_ffi_load32(iter_base + 24))
             }
-            mbt_ffi_free(mbt_ffi_load32(iter_base + 308))
+            mbt_ffi_free(mbt_ffi_load32(iter_base + 348))
           }
           _ => panic()
         }
       }
       mbt_ffi_free(mbt_ffi_load32(p0 + 12))
 
-      for index67 = 0; index67 < mbt_ffi_load32(p0 + 24); index67 = index67 + 1 {
-        let iter_base = mbt_ffi_load32(p0 + 20) + index67 * 144
+      for index69 = 0; index69 < mbt_ffi_load32(p0 + 24); index69 = index69 + 1 {
+        let iter_base = mbt_ffi_load32(p0 + 20) + index69 * 144
 
         match mbt_ffi_load8_u(iter_base + 0) {
           0 => ()
@@ -4301,10 +4593,10 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
           12 => ()
           13 => ()
           14 => {
-            for index49 = 0
-                index49 < mbt_ffi_load32(iter_base + 12)
-                index49 = index49 + 1 {
-              let iter_base = mbt_ffi_load32(iter_base + 8) + index49 * 68
+            for index51 = 0
+                index51 < mbt_ffi_load32(iter_base + 12)
+                index51 = index51 + 1 {
+              let iter_base = mbt_ffi_load32(iter_base + 8) + index51 * 68
               mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
 
               match mbt_ffi_load8_u(iter_base + 12) {
@@ -4313,18 +4605,18 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
                 _ => panic()
               }
 
-              for index47 = 0
-                  index47 < mbt_ffi_load32(iter_base + 28)
-                  index47 = index47 + 1 {
-                let iter_base = mbt_ffi_load32(iter_base + 24) + index47 * 8
+              for index49 = 0
+                  index49 < mbt_ffi_load32(iter_base + 28)
+                  index49 = index49 + 1 {
+                let iter_base = mbt_ffi_load32(iter_base + 24) + index49 * 8
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
               }
               mbt_ffi_free(mbt_ffi_load32(iter_base + 24))
 
-              for index48 = 0
-                  index48 < mbt_ffi_load32(iter_base + 36)
-                  index48 = index48 + 1 {
-                let iter_base = mbt_ffi_load32(iter_base + 32) + index48 * 8
+              for index50 = 0
+                  index50 < mbt_ffi_load32(iter_base + 36)
+                  index50 = index50 + 1 {
+                let iter_base = mbt_ffi_load32(iter_base + 32) + index50 * 8
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
               }
               mbt_ffi_free(mbt_ffi_load32(iter_base + 32))
@@ -4351,10 +4643,10 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
             mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
           }
           15 => {
-            for index52 = 0
-                index52 < mbt_ffi_load32(iter_base + 12)
-                index52 = index52 + 1 {
-              let iter_base = mbt_ffi_load32(iter_base + 8) + index52 * 72
+            for index54 = 0
+                index54 < mbt_ffi_load32(iter_base + 12)
+                index54 = index54 + 1 {
+              let iter_base = mbt_ffi_load32(iter_base + 8) + index54 * 72
               mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
 
               match mbt_ffi_load8_u(iter_base + 16) {
@@ -4363,18 +4655,18 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
                 _ => panic()
               }
 
-              for index50 = 0
-                  index50 < mbt_ffi_load32(iter_base + 32)
-                  index50 = index50 + 1 {
-                let iter_base = mbt_ffi_load32(iter_base + 28) + index50 * 8
+              for index52 = 0
+                  index52 < mbt_ffi_load32(iter_base + 32)
+                  index52 = index52 + 1 {
+                let iter_base = mbt_ffi_load32(iter_base + 28) + index52 * 8
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
               }
               mbt_ffi_free(mbt_ffi_load32(iter_base + 28))
 
-              for index51 = 0
-                  index51 < mbt_ffi_load32(iter_base + 40)
-                  index51 = index51 + 1 {
-                let iter_base = mbt_ffi_load32(iter_base + 36) + index51 * 8
+              for index53 = 0
+                  index53 < mbt_ffi_load32(iter_base + 40)
+                  index53 = index53 + 1 {
+                let iter_base = mbt_ffi_load32(iter_base + 36) + index53 * 8
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
               }
               mbt_ffi_free(mbt_ffi_load32(iter_base + 36))
@@ -4401,19 +4693,19 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
             mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
           }
           16 => {
-            for index53 = 0
-                index53 < mbt_ffi_load32(iter_base + 12)
-                index53 = index53 + 1 {
-              let iter_base = mbt_ffi_load32(iter_base + 8) + index53 * 8
+            for index55 = 0
+                index55 < mbt_ffi_load32(iter_base + 12)
+                index55 = index55 + 1 {
+              let iter_base = mbt_ffi_load32(iter_base + 8) + index55 * 8
               mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
             }
             mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
           }
           17 => {
-            for index54 = 0
-                index54 < mbt_ffi_load32(iter_base + 12)
-                index54 = index54 + 1 {
-              let iter_base = mbt_ffi_load32(iter_base + 8) + index54 * 8
+            for index56 = 0
+                index56 < mbt_ffi_load32(iter_base + 12)
+                index56 = index56 + 1 {
+              let iter_base = mbt_ffi_load32(iter_base + 8) + index56 * 8
               mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
             }
             mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
@@ -4428,10 +4720,10 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
             match mbt_ffi_load8_u(iter_base + 8) {
               0 => ()
               1 => {
-                for index55 = 0
-                    index55 < mbt_ffi_load32(iter_base + 16)
-                    index55 = index55 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 12) + index55 * 8
+                for index57 = 0
+                    index57 < mbt_ffi_load32(iter_base + 16)
+                    index57 = index57 + 1 {
+                  let iter_base = mbt_ffi_load32(iter_base + 12) + index57 * 8
                   mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
                 }
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
@@ -4449,10 +4741,10 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
             match mbt_ffi_load8_u(iter_base + 8) {
               0 => ()
               1 => {
-                for index56 = 0
-                    index56 < mbt_ffi_load32(iter_base + 16)
-                    index56 = index56 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 12) + index56 * 8
+                for index58 = 0
+                    index58 < mbt_ffi_load32(iter_base + 16)
+                    index58 = index58 + 1 {
+                  let iter_base = mbt_ffi_load32(iter_base + 12) + index58 * 8
                   mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
                 }
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
@@ -4463,10 +4755,10 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
             match mbt_ffi_load8_u(iter_base + 12) {
               0 => ()
               1 => {
-                for index57 = 0
-                    index57 < mbt_ffi_load32(iter_base + 20)
-                    index57 = index57 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 16) + index57 * 8
+                for index59 = 0
+                    index59 < mbt_ffi_load32(iter_base + 20)
+                    index59 = index59 + 1 {
+                  let iter_base = mbt_ffi_load32(iter_base + 16) + index59 * 8
                   mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
                 }
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
@@ -4477,10 +4769,10 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
             match mbt_ffi_load8_u(iter_base + 24) {
               0 => ()
               1 => {
-                for index58 = 0
-                    index58 < mbt_ffi_load32(iter_base + 32)
-                    index58 = index58 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 28) + index58 * 8
+                for index60 = 0
+                    index60 < mbt_ffi_load32(iter_base + 32)
+                    index60 = index60 + 1 {
+                  let iter_base = mbt_ffi_load32(iter_base + 28) + index60 * 8
                   mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
                 }
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 28))
@@ -4492,10 +4784,10 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
             match mbt_ffi_load8_u(iter_base + 8) {
               0 => ()
               1 => {
-                for index59 = 0
-                    index59 < mbt_ffi_load32(iter_base + 16)
-                    index59 = index59 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 12) + index59 * 8
+                for index61 = 0
+                    index61 < mbt_ffi_load32(iter_base + 16)
+                    index61 = index61 + 1 {
+                  let iter_base = mbt_ffi_load32(iter_base + 12) + index61 * 8
                   mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
                 }
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
@@ -4506,10 +4798,10 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
             match mbt_ffi_load8_u(iter_base + 20) {
               0 => ()
               1 => {
-                for index60 = 0
-                    index60 < mbt_ffi_load32(iter_base + 28)
-                    index60 = index60 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 24) + index60 * 8
+                for index62 = 0
+                    index62 < mbt_ffi_load32(iter_base + 28)
+                    index62 = index62 + 1 {
+                  let iter_base = mbt_ffi_load32(iter_base + 24) + index62 * 8
                   mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
                 }
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 24))
@@ -4522,10 +4814,10 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
           30 => {
             mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-            for index61 = 0
-                index61 < mbt_ffi_load32(iter_base + 20)
-                index61 = index61 + 1 {
-              let iter_base = mbt_ffi_load32(iter_base + 16) + index61 * 8
+            for index63 = 0
+                index63 < mbt_ffi_load32(iter_base + 20)
+                index63 = index63 + 1 {
+              let iter_base = mbt_ffi_load32(iter_base + 16) + index63 * 8
               mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
             }
             mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
@@ -4543,10 +4835,10 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
             }
           }
           31 => {
-            for index64 = 0
-                index64 < mbt_ffi_load32(iter_base + 12)
-                index64 = index64 + 1 {
-              let iter_base = mbt_ffi_load32(iter_base + 8) + index64 * 92
+            for index66 = 0
+                index66 < mbt_ffi_load32(iter_base + 12)
+                index66 = index66 + 1 {
+              let iter_base = mbt_ffi_load32(iter_base + 8) + index66 * 92
               mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
 
               match mbt_ffi_load8_u(iter_base + 12) {
@@ -4573,18 +4865,18 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
                 _ => panic()
               }
 
-              for index62 = 0
-                  index62 < mbt_ffi_load32(iter_base + 52)
-                  index62 = index62 + 1 {
-                let iter_base = mbt_ffi_load32(iter_base + 48) + index62 * 8
+              for index64 = 0
+                  index64 < mbt_ffi_load32(iter_base + 52)
+                  index64 = index64 + 1 {
+                let iter_base = mbt_ffi_load32(iter_base + 48) + index64 * 8
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
               }
               mbt_ffi_free(mbt_ffi_load32(iter_base + 48))
 
-              for index63 = 0
-                  index63 < mbt_ffi_load32(iter_base + 60)
-                  index63 = index63 + 1 {
-                let iter_base = mbt_ffi_load32(iter_base + 56) + index63 * 8
+              for index65 = 0
+                  index65 < mbt_ffi_load32(iter_base + 60)
+                  index65 = index65 + 1 {
+                let iter_base = mbt_ffi_load32(iter_base + 56) + index65 * 8
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
               }
               mbt_ffi_free(mbt_ffi_load32(iter_base + 56))
@@ -4634,18 +4926,18 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
           _ => panic()
         }
 
-        for index65 = 0
-            index65 < mbt_ffi_load32(iter_base + 104)
-            index65 = index65 + 1 {
-          let iter_base = mbt_ffi_load32(iter_base + 100) + index65 * 8
+        for index67 = 0
+            index67 < mbt_ffi_load32(iter_base + 104)
+            index67 = index67 + 1 {
+          let iter_base = mbt_ffi_load32(iter_base + 100) + index67 * 8
           mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
         }
         mbt_ffi_free(mbt_ffi_load32(iter_base + 100))
 
-        for index66 = 0
-            index66 < mbt_ffi_load32(iter_base + 112)
-            index66 = index66 + 1 {
-          let iter_base = mbt_ffi_load32(iter_base + 108) + index66 * 8
+        for index68 = 0
+            index68 < mbt_ffi_load32(iter_base + 112)
+            index68 = index68 + 1 {
+          let iter_base = mbt_ffi_load32(iter_base + 108) + index68 * 8
           mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
         }
         mbt_ffi_free(mbt_ffi_load32(iter_base + 108))
@@ -4671,8 +4963,8 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
       }
       mbt_ffi_free(mbt_ffi_load32(p0 + 20))
 
-      for index68 = 0; index68 < mbt_ffi_load32(p0 + 32); index68 = index68 + 1 {
-        let iter_base = mbt_ffi_load32(p0 + 28) + index68 * 24
+      for index70 = 0; index70 < mbt_ffi_load32(p0 + 32); index70 = index70 + 1 {
+        let iter_base = mbt_ffi_load32(p0 + 28) + index70 * 24
         mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
 
         match mbt_ffi_load8_u(iter_base + 8) {
@@ -4687,10 +4979,10 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
       match mbt_ffi_load8_u(p0 + 4) {
         0 => mbt_ffi_free(mbt_ffi_load32(p0 + 8))
         1 => {
-          for index69 = 0
-              index69 < mbt_ffi_load32(p0 + 12)
-              index69 = index69 + 1 {
-            let iter_base = mbt_ffi_load32(p0 + 8) + index69 * 8
+          for index71 = 0
+              index71 < mbt_ffi_load32(p0 + 12)
+              index71 = index71 + 1 {
+            let iter_base = mbt_ffi_load32(p0 + 8) + index71 * 8
             mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
           }
           mbt_ffi_free(mbt_ffi_load32(p0 + 8))
@@ -4701,10 +4993,10 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
         5 => {
           mbt_ffi_free(mbt_ffi_load32(p0 + 8))
 
-          for index90 = 0
-              index90 < mbt_ffi_load32(p0 + 20)
-              index90 = index90 + 1 {
-            let iter_base = mbt_ffi_load32(p0 + 16) + index90 * 144
+          for index92 = 0
+              index92 < mbt_ffi_load32(p0 + 20)
+              index92 = index92 + 1 {
+            let iter_base = mbt_ffi_load32(p0 + 16) + index92 * 144
 
             match mbt_ffi_load8_u(iter_base + 0) {
               0 => ()
@@ -4822,10 +5114,10 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
               12 => ()
               13 => ()
               14 => {
-                for index72 = 0
-                    index72 < mbt_ffi_load32(iter_base + 12)
-                    index72 = index72 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 8) + index72 * 68
+                for index74 = 0
+                    index74 < mbt_ffi_load32(iter_base + 12)
+                    index74 = index74 + 1 {
+                  let iter_base = mbt_ffi_load32(iter_base + 8) + index74 * 68
                   mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
 
                   match mbt_ffi_load8_u(iter_base + 12) {
@@ -4834,18 +5126,18 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
                     _ => panic()
                   }
 
-                  for index70 = 0
-                      index70 < mbt_ffi_load32(iter_base + 28)
-                      index70 = index70 + 1 {
-                    let iter_base = mbt_ffi_load32(iter_base + 24) + index70 * 8
+                  for index72 = 0
+                      index72 < mbt_ffi_load32(iter_base + 28)
+                      index72 = index72 + 1 {
+                    let iter_base = mbt_ffi_load32(iter_base + 24) + index72 * 8
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
                   }
                   mbt_ffi_free(mbt_ffi_load32(iter_base + 24))
 
-                  for index71 = 0
-                      index71 < mbt_ffi_load32(iter_base + 36)
-                      index71 = index71 + 1 {
-                    let iter_base = mbt_ffi_load32(iter_base + 32) + index71 * 8
+                  for index73 = 0
+                      index73 < mbt_ffi_load32(iter_base + 36)
+                      index73 = index73 + 1 {
+                    let iter_base = mbt_ffi_load32(iter_base + 32) + index73 * 8
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
                   }
                   mbt_ffi_free(mbt_ffi_load32(iter_base + 32))
@@ -4872,10 +5164,10 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
               }
               15 => {
-                for index75 = 0
-                    index75 < mbt_ffi_load32(iter_base + 12)
-                    index75 = index75 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 8) + index75 * 72
+                for index77 = 0
+                    index77 < mbt_ffi_load32(iter_base + 12)
+                    index77 = index77 + 1 {
+                  let iter_base = mbt_ffi_load32(iter_base + 8) + index77 * 72
                   mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
 
                   match mbt_ffi_load8_u(iter_base + 16) {
@@ -4884,18 +5176,18 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
                     _ => panic()
                   }
 
-                  for index73 = 0
-                      index73 < mbt_ffi_load32(iter_base + 32)
-                      index73 = index73 + 1 {
-                    let iter_base = mbt_ffi_load32(iter_base + 28) + index73 * 8
+                  for index75 = 0
+                      index75 < mbt_ffi_load32(iter_base + 32)
+                      index75 = index75 + 1 {
+                    let iter_base = mbt_ffi_load32(iter_base + 28) + index75 * 8
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
                   }
                   mbt_ffi_free(mbt_ffi_load32(iter_base + 28))
 
-                  for index74 = 0
-                      index74 < mbt_ffi_load32(iter_base + 40)
-                      index74 = index74 + 1 {
-                    let iter_base = mbt_ffi_load32(iter_base + 36) + index74 * 8
+                  for index76 = 0
+                      index76 < mbt_ffi_load32(iter_base + 40)
+                      index76 = index76 + 1 {
+                    let iter_base = mbt_ffi_load32(iter_base + 36) + index76 * 8
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
                   }
                   mbt_ffi_free(mbt_ffi_load32(iter_base + 36))
@@ -4922,19 +5214,19 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
               }
               16 => {
-                for index76 = 0
-                    index76 < mbt_ffi_load32(iter_base + 12)
-                    index76 = index76 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 8) + index76 * 8
+                for index78 = 0
+                    index78 < mbt_ffi_load32(iter_base + 12)
+                    index78 = index78 + 1 {
+                  let iter_base = mbt_ffi_load32(iter_base + 8) + index78 * 8
                   mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
                 }
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
               }
               17 => {
-                for index77 = 0
-                    index77 < mbt_ffi_load32(iter_base + 12)
-                    index77 = index77 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 8) + index77 * 8
+                for index79 = 0
+                    index79 < mbt_ffi_load32(iter_base + 12)
+                    index79 = index79 + 1 {
+                  let iter_base = mbt_ffi_load32(iter_base + 8) + index79 * 8
                   mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
                 }
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
@@ -4949,11 +5241,11 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
                 match mbt_ffi_load8_u(iter_base + 8) {
                   0 => ()
                   1 => {
-                    for index78 = 0
-                        index78 < mbt_ffi_load32(iter_base + 16)
-                        index78 = index78 + 1 {
+                    for index80 = 0
+                        index80 < mbt_ffi_load32(iter_base + 16)
+                        index80 = index80 + 1 {
                       let iter_base = mbt_ffi_load32(iter_base + 12) +
-                        index78 * 8
+                        index80 * 8
                       mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
@@ -4971,11 +5263,11 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
                 match mbt_ffi_load8_u(iter_base + 8) {
                   0 => ()
                   1 => {
-                    for index79 = 0
-                        index79 < mbt_ffi_load32(iter_base + 16)
-                        index79 = index79 + 1 {
+                    for index81 = 0
+                        index81 < mbt_ffi_load32(iter_base + 16)
+                        index81 = index81 + 1 {
                       let iter_base = mbt_ffi_load32(iter_base + 12) +
-                        index79 * 8
+                        index81 * 8
                       mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
@@ -4986,11 +5278,11 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
                 match mbt_ffi_load8_u(iter_base + 12) {
                   0 => ()
                   1 => {
-                    for index80 = 0
-                        index80 < mbt_ffi_load32(iter_base + 20)
-                        index80 = index80 + 1 {
+                    for index82 = 0
+                        index82 < mbt_ffi_load32(iter_base + 20)
+                        index82 = index82 + 1 {
                       let iter_base = mbt_ffi_load32(iter_base + 16) +
-                        index80 * 8
+                        index82 * 8
                       mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
@@ -5001,11 +5293,11 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
                 match mbt_ffi_load8_u(iter_base + 24) {
                   0 => ()
                   1 => {
-                    for index81 = 0
-                        index81 < mbt_ffi_load32(iter_base + 32)
-                        index81 = index81 + 1 {
+                    for index83 = 0
+                        index83 < mbt_ffi_load32(iter_base + 32)
+                        index83 = index83 + 1 {
                       let iter_base = mbt_ffi_load32(iter_base + 28) +
-                        index81 * 8
+                        index83 * 8
                       mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 28))
@@ -5017,11 +5309,11 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
                 match mbt_ffi_load8_u(iter_base + 8) {
                   0 => ()
                   1 => {
-                    for index82 = 0
-                        index82 < mbt_ffi_load32(iter_base + 16)
-                        index82 = index82 + 1 {
+                    for index84 = 0
+                        index84 < mbt_ffi_load32(iter_base + 16)
+                        index84 = index84 + 1 {
                       let iter_base = mbt_ffi_load32(iter_base + 12) +
-                        index82 * 8
+                        index84 * 8
                       mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
@@ -5032,11 +5324,11 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
                 match mbt_ffi_load8_u(iter_base + 20) {
                   0 => ()
                   1 => {
-                    for index83 = 0
-                        index83 < mbt_ffi_load32(iter_base + 28)
-                        index83 = index83 + 1 {
+                    for index85 = 0
+                        index85 < mbt_ffi_load32(iter_base + 28)
+                        index85 = index85 + 1 {
                       let iter_base = mbt_ffi_load32(iter_base + 24) +
-                        index83 * 8
+                        index85 * 8
                       mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 24))
@@ -5049,10 +5341,10 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
               30 => {
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-                for index84 = 0
-                    index84 < mbt_ffi_load32(iter_base + 20)
-                    index84 = index84 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 16) + index84 * 8
+                for index86 = 0
+                    index86 < mbt_ffi_load32(iter_base + 20)
+                    index86 = index86 + 1 {
+                  let iter_base = mbt_ffi_load32(iter_base + 16) + index86 * 8
                   mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
                 }
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
@@ -5070,10 +5362,10 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
                 }
               }
               31 => {
-                for index87 = 0
-                    index87 < mbt_ffi_load32(iter_base + 12)
-                    index87 = index87 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 8) + index87 * 92
+                for index89 = 0
+                    index89 < mbt_ffi_load32(iter_base + 12)
+                    index89 = index89 + 1 {
+                  let iter_base = mbt_ffi_load32(iter_base + 8) + index89 * 92
                   mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
 
                   match mbt_ffi_load8_u(iter_base + 12) {
@@ -5100,18 +5392,18 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
                     _ => panic()
                   }
 
-                  for index85 = 0
-                      index85 < mbt_ffi_load32(iter_base + 52)
-                      index85 = index85 + 1 {
-                    let iter_base = mbt_ffi_load32(iter_base + 48) + index85 * 8
+                  for index87 = 0
+                      index87 < mbt_ffi_load32(iter_base + 52)
+                      index87 = index87 + 1 {
+                    let iter_base = mbt_ffi_load32(iter_base + 48) + index87 * 8
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
                   }
                   mbt_ffi_free(mbt_ffi_load32(iter_base + 48))
 
-                  for index86 = 0
-                      index86 < mbt_ffi_load32(iter_base + 60)
-                      index86 = index86 + 1 {
-                    let iter_base = mbt_ffi_load32(iter_base + 56) + index86 * 8
+                  for index88 = 0
+                      index88 < mbt_ffi_load32(iter_base + 60)
+                      index88 = index88 + 1 {
+                    let iter_base = mbt_ffi_load32(iter_base + 56) + index88 * 8
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
                   }
                   mbt_ffi_free(mbt_ffi_load32(iter_base + 56))
@@ -5161,18 +5453,18 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
               _ => panic()
             }
 
-            for index88 = 0
-                index88 < mbt_ffi_load32(iter_base + 104)
-                index88 = index88 + 1 {
-              let iter_base = mbt_ffi_load32(iter_base + 100) + index88 * 8
+            for index90 = 0
+                index90 < mbt_ffi_load32(iter_base + 104)
+                index90 = index90 + 1 {
+              let iter_base = mbt_ffi_load32(iter_base + 100) + index90 * 8
               mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
             }
             mbt_ffi_free(mbt_ffi_load32(iter_base + 100))
 
-            for index89 = 0
-                index89 < mbt_ffi_load32(iter_base + 112)
-                index89 = index89 + 1 {
-              let iter_base = mbt_ffi_load32(iter_base + 108) + index89 * 8
+            for index91 = 0
+                index91 < mbt_ffi_load32(iter_base + 112)
+                index91 = index91 + 1 {
+              let iter_base = mbt_ffi_load32(iter_base + 108) + index91 * 8
               mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
             }
             mbt_ffi_free(mbt_ffi_load32(iter_base + 108))
@@ -5198,10 +5490,10 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
           }
           mbt_ffi_free(mbt_ffi_load32(p0 + 16))
 
-          for index91 = 0
-              index91 < mbt_ffi_load32(p0 + 28)
-              index91 = index91 + 1 {
-            let iter_base = mbt_ffi_load32(p0 + 24) + index91 * 24
+          for index93 = 0
+              index93 < mbt_ffi_load32(p0 + 28)
+              index93 = index93 + 1 {
+            let iter_base = mbt_ffi_load32(p0 + 24) + index93 * 24
             mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
 
             match mbt_ffi_load8_u(iter_base + 8) {
@@ -5212,10 +5504,10 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
           }
           mbt_ffi_free(mbt_ffi_load32(p0 + 24))
 
-          for index92 = 0
-              index92 < mbt_ffi_load32(p0 + 40)
-              index92 = index92 + 1 {
-            let iter_base = mbt_ffi_load32(p0 + 36) + index92 * 32
+          for index94 = 0
+              index94 < mbt_ffi_load32(p0 + 40)
+              index94 = index94 + 1 {
+            let iter_base = mbt_ffi_load32(p0 + 36) + index94 * 32
 
             match mbt_ffi_load8_u(iter_base + 0) {
               0 => ()
@@ -5294,6 +5586,8 @@ fn wasmExportAsyncInvokeGolemToolGuestTaskReturn(
   p9 : Int,
   p10 : Int,
   p11 : Int,
+  p12 : Int,
+  p13 : Int,
 ) = "[export]golem:tool/guest@0.1.0" "[task-return]invoke"
 
 ///|
@@ -5305,11 +5599,6 @@ fn invoke_task_return(
       let cleanup_list : Array[Int] = []
 
       let (
-        lowered305,
-        lowered306,
-        lowered307,
-        lowered308,
-        lowered309,
         lowered310,
         lowered311,
         lowered312,
@@ -5317,11 +5606,17 @@ fn invoke_task_return(
         lowered314,
         lowered315,
         lowered316,
+        lowered317,
+        lowered318,
+        lowered319,
+        lowered320,
+        lowered321,
+        lowered322,
+        lowered323,
       ) = match return_value {
         Ok(payload) => {
           let (
             lowered,
-            lowered262,
             lowered263,
             lowered264,
             lowered265,
@@ -5329,196 +5624,209 @@ fn invoke_task_return(
             lowered267,
             lowered268,
             lowered269,
+            lowered270,
           ) = match payload.result {
             None => (0, 0, 0, 0, 0, 0, 0, 0, 0)
-            Some(payload256) => {
+            Some(payload257) => {
               let address = mbt_ffi_malloc(
-                payload256.graph.type_nodes.length() * 144,
+                payload257.graph.type_nodes.length() * 144,
               )
-              for index257 = 0
-                  index257 < payload256.graph.type_nodes.length()
-                  index257 = index257 + 1 {
-                let iter_elem : @types.SchemaTypeNode = payload256.graph.type_nodes[index257]
-                let iter_base = address + index257 * 144
+              for index258 = 0
+                  index258 < payload257.graph.type_nodes.length()
+                  index258 = index258 + 1 {
+                let iter_elem : @types.SchemaTypeNode = payload257.graph.type_nodes[index258]
+                let iter_base = address + index258 * 144
                 __wit_bindgen_lower_t56(iter_base + 0, iter_elem)
               }
 
-              let address258 = mbt_ffi_malloc(
-                payload256.graph.defs.length() * 24,
+              let address259 = mbt_ffi_malloc(
+                payload257.graph.defs.length() * 24,
               )
-              for index259 = 0
-                  index259 < payload256.graph.defs.length()
-                  index259 = index259 + 1 {
-                let iter_elem : @types.SchemaTypeDef = payload256.graph.defs[index259]
-                let iter_base = address258 + index259 * 24
+              for index260 = 0
+                  index260 < payload257.graph.defs.length()
+                  index260 = index260 + 1 {
+                let iter_elem : @types.SchemaTypeDef = payload257.graph.defs[index260]
+                let iter_base = address259 + index260 * 24
                 __wit_bindgen_lower_t18(iter_base + 0, iter_elem)
               }
 
-              let address260 = mbt_ffi_malloc(
-                payload256.value.value_nodes.length() * 32,
+              let address261 = mbt_ffi_malloc(
+                payload257.value.value_nodes.length() * 32,
               )
-              for index261 = 0
-                  index261 < payload256.value.value_nodes.length()
-                  index261 = index261 + 1 {
-                let iter_elem : @types.SchemaValueNode = payload256.value.value_nodes[index261]
-                let iter_base = address260 + index261 * 32
+              for index262 = 0
+                  index262 < payload257.value.value_nodes.length()
+                  index262 = index262 + 1 {
+                let iter_elem : @types.SchemaValueNode = payload257.value.value_nodes[index262]
+                let iter_base = address261 + index262 * 32
                 __wit_bindgen_lower_t76(iter_base + 0, iter_elem)
               }
               cleanup_list.push(address)
-              cleanup_list.push(address258)
-              cleanup_list.push(address260)
+              cleanup_list.push(address259)
+              cleanup_list.push(address261)
 
               (
                 1,
                 address,
-                payload256.graph.type_nodes.length(),
-                address258,
-                payload256.graph.defs.length(),
-                payload256.graph.root,
-                address260,
-                payload256.value.value_nodes.length(),
-                payload256.value.root,
+                payload257.graph.type_nodes.length(),
+                address259,
+                payload257.graph.defs.length(),
+                payload257.graph.root,
+                address261,
+                payload257.value.value_nodes.length(),
+                payload257.value.root,
               )
             }
           }
 
-          let (lowered272, lowered273) = match payload.stdout {
+          let (lowered273, lowered274) = match payload.stdout {
             None => (0, 0)
-            Some(payload271) =>
+            Some(payload272) =>
               (
                 1,
                 wasmExportGolemToolGuest010InvokeStream1StreamLowerCommitted(
-                  payload271,
+                  payload272,
+                ),
+              )
+          }
+
+          let (lowered277, lowered278) = match payload.stderr {
+            None => (0, 0)
+            Some(payload276) =>
+              (
+                1,
+                wasmExportGolemToolGuest010InvokeStream2StreamLowerCommitted(
+                  payload276,
                 ),
               )
           }
 
           (
-            0, lowered, lowered262, lowered263, lowered264, lowered265, lowered266,
-            lowered267, lowered268, lowered269, lowered272, lowered273,
+            0, lowered, lowered263, lowered264, lowered265, lowered266, lowered267,
+            lowered268, lowered269, lowered270, lowered273, lowered274, lowered277,
+            lowered278,
           )
         }
-        Err(payload274) => {
+        Err(payload279) => {
           let (
-            lowered294,
-            lowered295,
-            lowered296,
-            lowered297,
-            lowered298,
             lowered299,
             lowered300,
             lowered301,
             lowered302,
             lowered303,
             lowered304,
-          ) = match payload274 {
-            InvalidToolName(payload275) => {
-              let ptr = mbt_ffi_str2ptr(payload275)
+            lowered305,
+            lowered306,
+            lowered307,
+            lowered308,
+            lowered309,
+          ) = match payload279 {
+            InvalidToolName(payload280) => {
+              let ptr = mbt_ffi_str2ptr(payload280)
               cleanup_list.push(ptr)
 
-              (0, ptr, payload275.length(), 0, 0, 0, 0, 0, 0, 0, 0)
+              (0, ptr, payload280.length(), 0, 0, 0, 0, 0, 0, 0, 0)
             }
-            InvalidCommandPath(payload276) => {
-              let address278 = mbt_ffi_malloc(payload276.length() * 8)
-              for index279 = 0
-                  index279 < payload276.length()
-                  index279 = index279 + 1 {
-                let iter_elem : String = payload276[index279]
-                let iter_base = address278 + index279 * 8
+            InvalidCommandPath(payload281) => {
+              let address283 = mbt_ffi_malloc(payload281.length() * 8)
+              for index284 = 0
+                  index284 < payload281.length()
+                  index284 = index284 + 1 {
+                let iter_elem : String = payload281[index284]
+                let iter_base = address283 + index284 * 8
 
-                let ptr277 = mbt_ffi_str2ptr(iter_elem)
+                let ptr282 = mbt_ffi_str2ptr(iter_elem)
                 mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                mbt_ffi_store32(iter_base + 0, ptr277)
-                cleanup_list.push(ptr277)
+                mbt_ffi_store32(iter_base + 0, ptr282)
+                cleanup_list.push(ptr282)
               }
-              cleanup_list.push(address278)
+              cleanup_list.push(address283)
 
-              (1, address278, payload276.length(), 0, 0, 0, 0, 0, 0, 0, 0)
+              (1, address283, payload281.length(), 0, 0, 0, 0, 0, 0, 0, 0)
             }
-            InvalidInput(payload280) => {
-              let ptr281 = mbt_ffi_str2ptr(payload280)
-              cleanup_list.push(ptr281)
+            InvalidInput(payload285) => {
+              let ptr286 = mbt_ffi_str2ptr(payload285)
+              cleanup_list.push(ptr286)
 
-              (2, ptr281, payload280.length(), 0, 0, 0, 0, 0, 0, 0, 0)
+              (2, ptr286, payload285.length(), 0, 0, 0, 0, 0, 0, 0, 0)
             }
-            ConstraintViolation(payload282) => {
-              let ptr283 = mbt_ffi_str2ptr(payload282)
-              cleanup_list.push(ptr283)
+            ConstraintViolation(payload287) => {
+              let ptr288 = mbt_ffi_str2ptr(payload287)
+              cleanup_list.push(ptr288)
 
-              (3, ptr283, payload282.length(), 0, 0, 0, 0, 0, 0, 0, 0)
+              (3, ptr288, payload287.length(), 0, 0, 0, 0, 0, 0, 0, 0)
             }
-            InvalidResult(payload284) => {
-              let ptr285 = mbt_ffi_str2ptr(payload284)
-              cleanup_list.push(ptr285)
+            InvalidResult(payload289) => {
+              let ptr290 = mbt_ffi_str2ptr(payload289)
+              cleanup_list.push(ptr290)
 
-              (4, ptr285, payload284.length(), 0, 0, 0, 0, 0, 0, 0, 0)
+              (4, ptr290, payload289.length(), 0, 0, 0, 0, 0, 0, 0, 0)
             }
-            CustomError(payload286) => {
-              let ptr287 = mbt_ffi_str2ptr(payload286.name)
+            CustomError(payload291) => {
+              let ptr292 = mbt_ffi_str2ptr(payload291.name)
 
-              let address288 = mbt_ffi_malloc(
-                payload286.payload.graph.type_nodes.length() * 144,
+              let address293 = mbt_ffi_malloc(
+                payload291.payload.graph.type_nodes.length() * 144,
               )
-              for index289 = 0
-                  index289 < payload286.payload.graph.type_nodes.length()
-                  index289 = index289 + 1 {
-                let iter_elem : @types.SchemaTypeNode = payload286.payload.graph.type_nodes[index289]
-                let iter_base = address288 + index289 * 144
+              for index294 = 0
+                  index294 < payload291.payload.graph.type_nodes.length()
+                  index294 = index294 + 1 {
+                let iter_elem : @types.SchemaTypeNode = payload291.payload.graph.type_nodes[index294]
+                let iter_base = address293 + index294 * 144
                 __wit_bindgen_lower_t56(iter_base + 0, iter_elem)
               }
 
-              let address290 = mbt_ffi_malloc(
-                payload286.payload.graph.defs.length() * 24,
+              let address295 = mbt_ffi_malloc(
+                payload291.payload.graph.defs.length() * 24,
               )
-              for index291 = 0
-                  index291 < payload286.payload.graph.defs.length()
-                  index291 = index291 + 1 {
-                let iter_elem : @types.SchemaTypeDef = payload286.payload.graph.defs[index291]
-                let iter_base = address290 + index291 * 24
+              for index296 = 0
+                  index296 < payload291.payload.graph.defs.length()
+                  index296 = index296 + 1 {
+                let iter_elem : @types.SchemaTypeDef = payload291.payload.graph.defs[index296]
+                let iter_base = address295 + index296 * 24
                 __wit_bindgen_lower_t18(iter_base + 0, iter_elem)
               }
 
-              let address292 = mbt_ffi_malloc(
-                payload286.payload.value.value_nodes.length() * 32,
+              let address297 = mbt_ffi_malloc(
+                payload291.payload.value.value_nodes.length() * 32,
               )
-              for index293 = 0
-                  index293 < payload286.payload.value.value_nodes.length()
-                  index293 = index293 + 1 {
-                let iter_elem : @types.SchemaValueNode = payload286.payload.value.value_nodes[index293]
-                let iter_base = address292 + index293 * 32
+              for index298 = 0
+                  index298 < payload291.payload.value.value_nodes.length()
+                  index298 = index298 + 1 {
+                let iter_elem : @types.SchemaValueNode = payload291.payload.value.value_nodes[index298]
+                let iter_base = address297 + index298 * 32
                 __wit_bindgen_lower_t76(iter_base + 0, iter_elem)
               }
-              cleanup_list.push(ptr287)
-              cleanup_list.push(address288)
-              cleanup_list.push(address290)
-              cleanup_list.push(address292)
+              cleanup_list.push(ptr292)
+              cleanup_list.push(address293)
+              cleanup_list.push(address295)
+              cleanup_list.push(address297)
 
               (
                 5,
-                ptr287,
-                payload286.name.length(),
-                address288,
-                payload286.payload.graph.type_nodes.length(),
-                address290,
-                payload286.payload.graph.defs.length(),
-                payload286.payload.graph.root,
-                address292,
-                payload286.payload.value.value_nodes.length(),
-                payload286.payload.value.root,
+                ptr292,
+                payload291.name.length(),
+                address293,
+                payload291.payload.graph.type_nodes.length(),
+                address295,
+                payload291.payload.graph.defs.length(),
+                payload291.payload.graph.root,
+                address297,
+                payload291.payload.value.value_nodes.length(),
+                payload291.payload.value.root,
               )
             }
           }
 
           (
-            1, lowered294, lowered295, lowered296, lowered297, lowered298, lowered299,
-            lowered300, lowered301, lowered302, lowered303, lowered304,
+            1, lowered299, lowered300, lowered301, lowered302, lowered303, lowered304,
+            lowered305, lowered306, lowered307, lowered308, lowered309, 0, 0,
           )
         }
       }
 
       wasmExportAsyncInvokeGolemToolGuestTaskReturn(
-        lowered305, lowered306, lowered307, lowered308, lowered309, lowered310, lowered311,
-        lowered312, lowered313, lowered314, lowered315, lowered316,
+        lowered310, lowered311, lowered312, lowered313, lowered314, lowered315, lowered316,
+        lowered317, lowered318, lowered319, lowered320, lowered321, lowered322, lowered323,
       )
 
       cleanup_list.each(mbt_ffi_free)
@@ -7623,145 +7931,155 @@ pub fn wasmExportInvokeGolemToolGuest(p0 : Int) -> Int {
         _ => panic()
       }
 
-      let lifted236 : @streams.ToolStdoutWriter? = match
+      let lifted236 : @streams.ToolOutputWriter? = match
         mbt_ffi_load8_u(p0 + 56) {
         0 => Option::None
         1 =>
           Option::Some(
-            @streams.ToolStdoutWriter::ToolStdoutWriter(mbt_ffi_load32(p0 + 60)),
+            @streams.ToolOutputWriter::ToolOutputWriter(mbt_ffi_load32(p0 + 60)),
           )
         _ => panic()
       }
 
-      let lifted254 = match mbt_ffi_load8_u(p0 + 64) {
-        0 => {
-          let result237 = mbt_ffi_ptr2str(
-            mbt_ffi_load32(p0 + 72),
-            mbt_ffi_load32(p0 + 76),
+      let lifted237 : @streams.ToolOutputWriter? = match
+        mbt_ffi_load8_u(p0 + 64) {
+        0 => Option::None
+        1 =>
+          Option::Some(
+            @streams.ToolOutputWriter::ToolOutputWriter(mbt_ffi_load32(p0 + 68)),
           )
+        _ => panic()
+      }
 
+      let lifted255 = match mbt_ffi_load8_u(p0 + 72) {
+        0 => {
           let result238 = mbt_ffi_ptr2str(
             mbt_ffi_load32(p0 + 80),
             mbt_ffi_load32(p0 + 84),
           )
 
-          let lifted240 : String? = match mbt_ffi_load8_u(p0 + 88) {
+          let result239 = mbt_ffi_ptr2str(
+            mbt_ffi_load32(p0 + 88),
+            mbt_ffi_load32(p0 + 92),
+          )
+
+          let lifted241 : String? = match mbt_ffi_load8_u(p0 + 96) {
             0 => Option::None
             1 => {
-              let result239 = mbt_ffi_ptr2str(
-                mbt_ffi_load32(p0 + 92),
-                mbt_ffi_load32(p0 + 96),
-              )
-
-              Option::Some(result239)
-            }
-            _ => panic()
-          }
-
-          let lifted242 : String? = match mbt_ffi_load8_u(p0 + 100) {
-            0 => Option::None
-            1 => {
-              let result241 = mbt_ffi_ptr2str(
+              let result240 = mbt_ffi_ptr2str(
+                mbt_ffi_load32(p0 + 100),
                 mbt_ffi_load32(p0 + 104),
-                mbt_ffi_load32(p0 + 108),
               )
 
-              Option::Some(result241)
+              Option::Some(result240)
             }
             _ => panic()
           }
 
-          let lifted243 : Bool? = match mbt_ffi_load8_u(p0 + 112) {
-            0 => Option::None
-            1 => Option::Some(mbt_ffi_load8_u(p0 + 113) != 0)
-            _ => panic()
-          }
-
-          let lifted245 : String? = match mbt_ffi_load8_u(p0 + 116) {
+          let lifted243 : String? = match mbt_ffi_load8_u(p0 + 108) {
             0 => Option::None
             1 => {
-              let result244 = mbt_ffi_ptr2str(
-                mbt_ffi_load32(p0 + 120),
-                mbt_ffi_load32(p0 + 124),
+              let result242 = mbt_ffi_ptr2str(
+                mbt_ffi_load32(p0 + 112),
+                mbt_ffi_load32(p0 + 116),
               )
 
-              Option::Some(result244)
+              Option::Some(result242)
             }
             _ => panic()
           }
 
-          let lifted247 : String? = match mbt_ffi_load8_u(p0 + 128) {
+          let lifted244 : Bool? = match mbt_ffi_load8_u(p0 + 120) {
+            0 => Option::None
+            1 => Option::Some(mbt_ffi_load8_u(p0 + 121) != 0)
+            _ => panic()
+          }
+
+          let lifted246 : String? = match mbt_ffi_load8_u(p0 + 124) {
             0 => Option::None
             1 => {
-              let result246 = mbt_ffi_ptr2str(
+              let result245 = mbt_ffi_ptr2str(
+                mbt_ffi_load32(p0 + 128),
                 mbt_ffi_load32(p0 + 132),
-                mbt_ffi_load32(p0 + 136),
               )
 
-              Option::Some(result246)
+              Option::Some(result245)
             }
             _ => panic()
           }
 
-          let lifted249 : String? = match mbt_ffi_load8_u(p0 + 140) {
+          let lifted248 : String? = match mbt_ffi_load8_u(p0 + 136) {
             0 => Option::None
             1 => {
-              let result248 = mbt_ffi_ptr2str(
+              let result247 = mbt_ffi_ptr2str(
+                mbt_ffi_load32(p0 + 140),
                 mbt_ffi_load32(p0 + 144),
-                mbt_ffi_load32(p0 + 148),
               )
 
-              Option::Some(result248)
+              Option::Some(result247)
             }
             _ => panic()
           }
 
-          let lifted251 : String? = match mbt_ffi_load8_u(p0 + 152) {
+          let lifted250 : String? = match mbt_ffi_load8_u(p0 + 148) {
             0 => Option::None
             1 => {
-              let result250 = mbt_ffi_ptr2str(
+              let result249 = mbt_ffi_ptr2str(
+                mbt_ffi_load32(p0 + 152),
                 mbt_ffi_load32(p0 + 156),
-                mbt_ffi_load32(p0 + 160),
               )
 
-              Option::Some(result250)
+              Option::Some(result249)
             }
             _ => panic()
           }
 
-          let result252 = mbt_ffi_ptr2str(
-            mbt_ffi_load32(p0 + 164),
-            mbt_ffi_load32(p0 + 168),
+          let lifted252 : String? = match mbt_ffi_load8_u(p0 + 160) {
+            0 => Option::None
+            1 => {
+              let result251 = mbt_ffi_ptr2str(
+                mbt_ffi_load32(p0 + 164),
+                mbt_ffi_load32(p0 + 168),
+              )
+
+              Option::Some(result251)
+            }
+            _ => panic()
+          }
+
+          let result253 = mbt_ffi_ptr2str(
+            mbt_ffi_load32(p0 + 172),
+            mbt_ffi_load32(p0 + 176),
           )
 
           @common0.Principal::Oidc(@common0.OidcPrincipal::{
-            sub: result237,
-            issuer: result238,
-            email: lifted240,
-            name: lifted242,
-            email_verified: lifted243,
-            given_name: lifted245,
-            family_name: lifted247,
-            picture: lifted249,
-            preferred_username: lifted251,
-            claims: result252,
+            sub: result238,
+            issuer: result239,
+            email: lifted241,
+            name: lifted243,
+            email_verified: lifted244,
+            given_name: lifted246,
+            family_name: lifted248,
+            picture: lifted250,
+            preferred_username: lifted252,
+            claims: result253,
           })
         }
         1 => {
-          let result253 = mbt_ffi_ptr2str(
-            mbt_ffi_load32(p0 + 88),
-            mbt_ffi_load32(p0 + 92),
+          let result254 = mbt_ffi_ptr2str(
+            mbt_ffi_load32(p0 + 96),
+            mbt_ffi_load32(p0 + 100),
           )
 
           @common0.Principal::Agent(@common0.AgentPrincipal::{
             agent_id: @types.AgentId::{
               component_id: @types.ComponentId::{
                 uuid: @types.Uuid::{
-                  high_bits: mbt_ffi_load64(p0 + 72).reinterpret_as_uint64(),
-                  low_bits: mbt_ffi_load64(p0 + 80).reinterpret_as_uint64(),
+                  high_bits: mbt_ffi_load64(p0 + 80).reinterpret_as_uint64(),
+                  low_bits: mbt_ffi_load64(p0 + 88).reinterpret_as_uint64(),
                 },
               },
-              agent_id: result253,
+              agent_id: result254,
             },
           })
         }
@@ -7769,8 +8087,8 @@ pub fn wasmExportInvokeGolemToolGuest(p0 : Int) -> Int {
           @common0.Principal::GolemUser(@common0.GolemUserPrincipal::{
             account_id: @types.AccountId::{
               uuid: @types.Uuid::{
-                high_bits: mbt_ffi_load64(p0 + 72).reinterpret_as_uint64(),
-                low_bits: mbt_ffi_load64(p0 + 80).reinterpret_as_uint64(),
+                high_bits: mbt_ffi_load64(p0 + 80).reinterpret_as_uint64(),
+                low_bits: mbt_ffi_load64(p0 + 88).reinterpret_as_uint64(),
               },
             },
           })
@@ -7798,7 +8116,8 @@ pub fn wasmExportInvokeGolemToolGuest(p0 : Int) -> Int {
           },
           lifted235,
           lifted236,
-          lifted254,
+          lifted237,
+          lifted255,
           background_group,
         ),
       )
@@ -10319,7 +10638,7 @@ fn __wit_bindgen_lower_t588(ptr : Int, value : @common.CommandBody) -> Unit {
     }
   }
 
-  match value.result {
+  match value.stderr {
     None => {
       mbt_ffi_store8(ptr + 192, 0)
 
@@ -10327,30 +10646,44 @@ fn __wit_bindgen_lower_t588(ptr : Int, value : @common.CommandBody) -> Unit {
     }
     Some(payload8) => {
       mbt_ffi_store8(ptr + 192, 1)
-      __wit_bindgen_lower_t580(ptr + 196, payload8)
+      __wit_bindgen_lower_t577(ptr + 196, payload8)
 
       ()
     }
   }
 
-  let address9 = mbt_ffi_malloc(value.errors.length() * 44)
-  for index10 = 0; index10 < value.errors.length(); index10 = index10 + 1 {
-    let iter_elem : @common.ErrorCase = value.errors[index10]
-    let iter_base = address9 + index10 * 44
+  match value.result {
+    None => {
+      mbt_ffi_store8(ptr + 232, 0)
+
+      ()
+    }
+    Some(payload10) => {
+      mbt_ffi_store8(ptr + 232, 1)
+      __wit_bindgen_lower_t580(ptr + 236, payload10)
+
+      ()
+    }
+  }
+
+  let address11 = mbt_ffi_malloc(value.errors.length() * 44)
+  for index12 = 0; index12 < value.errors.length(); index12 = index12 + 1 {
+    let iter_elem : @common.ErrorCase = value.errors[index12]
+    let iter_base = address11 + index12 * 44
     __wit_bindgen_lower_t582(iter_base + 0, iter_elem)
   }
-  mbt_ffi_store32(ptr + 244, value.errors.length())
-  mbt_ffi_store32(ptr + 240, address9)
+  mbt_ffi_store32(ptr + 284, value.errors.length())
+  mbt_ffi_store32(ptr + 280, address11)
 
   match value.annotations {
     None => {
-      mbt_ffi_store8(ptr + 248, 0)
+      mbt_ffi_store8(ptr + 288, 0)
 
       ()
     }
-    Some(payload12) => {
-      mbt_ffi_store8(ptr + 248, 1)
-      __wit_bindgen_lower_t541(ptr + 249, payload12)
+    Some(payload14) => {
+      mbt_ffi_store8(ptr + 288, 1)
+      __wit_bindgen_lower_t541(ptr + 289, payload14)
 
       ()
     }
@@ -10405,10 +10738,10 @@ fn __wit_bindgen_lower_t591(ptr : Int, value : @common.CommandNode) -> Unit {
 ///|
 #doc(hidden)
 fn __wit_bindgen_lower_t593(ptr : Int, value : @common.CommandTree) -> Unit {
-  let address = mbt_ffi_malloc(value.nodes.length() * 324)
+  let address = mbt_ffi_malloc(value.nodes.length() * 364)
   for index = 0; index < value.nodes.length(); index = index + 1 {
     let iter_elem : @common.CommandNode = value.nodes[index]
-    let iter_base = address + index * 324
+    let iter_base = address + index * 364
     __wit_bindgen_lower_t591(iter_base + 0, iter_elem)
   }
   mbt_ffi_store32(ptr + 4, value.nodes.length())

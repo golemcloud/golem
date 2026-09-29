@@ -282,7 +282,7 @@ const scheduled = add.schedule({ seconds: 1n, nanoseconds: 0 }, { by: 2 });
 scheduled.cancellationToken.cancel();
 ```
 
-Schema-native streams and opaque capabilities cannot be packed as JSON. Use `invokeValue`, transfer an owned input stream once, consume returned streams to EOF or call `return()` when abandoning them, and do not reuse transferred handles. For reflected tools, `startJson`/`startValue` return independent `stdout`, `result`, `collect()`, and `cancel()` handles. `collect()` settles both channels and reports a result failure before a stdout failure; always consume or cancel a started operation.
+Schema-native streams and opaque capabilities cannot be packed as JSON. Use `invokeValue`, transfer an owned input stream once, consume returned streams to EOF or call `return()` when abandoning them, and do not reuse transferred handles. For reflected tools, `startJson`/`startValue` return independent `stdout`, `stderr`, `result`, `collect()`, and `cancel()` handles. `collect()` concurrently settles both outputs and the result, reporting a result failure before output failures; always consume or cancel a started operation.
 
 ## Discovery to a Fully Dynamic Agent
 

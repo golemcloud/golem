@@ -87,9 +87,16 @@ Raw stream attachments are separate from structured tool arguments:
 golem tool invoke --component my-app:tool-owner \
   --stdin input.bin --stdout file-tools -- transform >output.bin
 golem tool invoke --component my-app:tool-owner \
-  --stdin - --stdout --output output.bin file-tools -- transform
+  --stdin - --stdout --output output.bin \
+  --stderr --stderr-output warnings.txt file-tools -- transform
+golem tool invoke --component my-app:tool-owner \
+  --stdout --stderr file-tools -- transform >output.bin 2>warnings.txt
 ```
 
-These examples assume `file-tools transform` declares byte stdin and stdout. `--stdin -` reads process stdin; `--stdout` writes only tool bytes to process stdout, with diagnostics and the final structured report on stderr. With `--output`, bytes go to the named file and the report remains on process stdout. Streams use the ordinary resumable invocation transport.
+These examples assume `file-tools transform` declares byte stdin, stdout, and stderr. `--stdin -` reads process stdin. `--stdout` writes tool stdout to process stdout unless `--output PATH` selects a file; `--stderr` similarly writes tool stderr to process stderr unless `--stderr-output PATH` selects a file. `-` is a literal output filename for both output options.
+
+The completion report uses stdout when neither process output fd carries raw tool bytes. If only stdout is raw, the report and routine diagnostics use stderr; if only stderr is raw, they use stdout. When both are raw, the report is suppressed for structured success and tool failure so neither byte channel is corrupted. Direct CLI failures still use stderr. Direct at least one tool output to a file when you need both raw bytes and the structured report. Non-empty stderr does not make a successful tool result fail.
+
+Streams use the ordinary resumable invocation transport and are checkpointed independently.
 
 `--trigger`, `--schedule-at`, and `--idempotency-key` remain Golem options before `--`. Triggering and scheduling cannot attach live byte streams. To observe an existing invocation, use `--lookup --idempotency-key KEY` and supply only its tool command path after `--`, without input arguments. Lookup does not start a new invocation.

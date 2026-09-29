@@ -1041,7 +1041,7 @@ impl GolemHostApi for GolemHostApiImpl {
     ) -> Result<(), String> {
         tool_host::ToolRpc::create(&tool_name)
             .map_err(|error| format!("{error:?}"))?
-            .async_invoke_and_await(&command_path, encode_tool_input(input)?, None, None)
+            .async_invoke_and_await(&command_path, encode_tool_input(input)?, None, None, None)
             .get()
             .await
             .map(|_| ())
@@ -1056,7 +1056,7 @@ impl GolemHostApi for GolemHostApiImpl {
     ) -> Result<(), String> {
         tool_host::ToolRpc::create(&tool_name)
             .map_err(|error| format!("{error:?}"))?
-            .invoke_and_await(command_path, encode_tool_input(input)?, None, None)
+            .invoke_and_await(command_path, encode_tool_input(input)?, None, None, None)
             .await
             .map(|_| ())
             .map_err(|error| format!("{error:?}"))
@@ -1079,12 +1079,13 @@ impl GolemHostApi for GolemHostApiImpl {
         tool_name: String,
         checkpoint: Option<String>,
     ) -> (Result<(), String>, Result<Vec<u8>, String>) {
-        let (stdout_target, mut stdout) = tool_host::create_stdout();
+        let (stdout_target, mut stdout) = tool_host::create_output();
         let result = tool_host::ToolRpc::new(&tool_name).async_invoke_and_await(
             &[],
             encode_tool_input(String::new()).expect("encode empty tool input"),
             None,
             Some(stdout_target),
+            None,
         );
         if let Some(checkpoint) = checkpoint {
             let port = std::env::var("MCP_STDOUT_CHECKPOINT_PORT")
@@ -1119,12 +1120,13 @@ impl GolemHostApi for GolemHostApiImpl {
         &self,
         tool_name: String,
     ) -> (Result<(), String>, Result<Vec<u8>, String>) {
-        let (stdout_target, mut stdout) = tool_host::create_stdout();
+        let (stdout_target, mut stdout) = tool_host::create_output();
         let result = tool_host::ToolRpc::new(&tool_name).async_invoke_and_await(
             &[],
             encode_tool_input(String::new()).expect("encode empty tool input"),
             None,
             Some(stdout_target),
+            None,
         );
         let port = std::env::var("MCP_STDOUT_CHECKPOINT_PORT")
             .expect("MCP_STDOUT_CHECKPOINT_PORT is configured");
@@ -1154,6 +1156,7 @@ impl GolemHostApi for GolemHostApiImpl {
             .invoke_and_await(
                 vec![format!("observed-{stdout:?}")],
                 encode_tool_input(String::new()).expect("encode empty tool input"),
+                None,
                 None,
                 None,
             )

@@ -7,6 +7,11 @@ pub fn new_stdout() -> (@async-core.Stream[Byte], @async-core.Sink[Byte]) {
 }
 
 ///|
+pub fn new_stderr() -> (@async-core.Stream[Byte], @async-core.Sink[Byte]) {
+  @async-core.Stream::new()
+}
+
+///|
 priv struct ToolState {
   tools : Map[String, @toolCommon.Tool]
   defs : Map[String, ToolDef]

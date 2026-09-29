@@ -41,6 +41,7 @@ export class ToolClientError extends Error {
 export interface TransportInvocation {
   readonly result: Effect.Effect<Common.InvocationResult, unknown>
   readonly stdout?: AsyncIterable<Host.ByteStreamItem>
+  readonly stderr?: AsyncIterable<Host.ByteStreamItem>
   readonly cancel: Effect.Effect<void>
 }
 
@@ -52,6 +53,7 @@ export interface ToolTransport {
     input: Common.TypedSchemaValue,
     stdin: AsyncIterable<Host.ByteStreamItem> | undefined,
     stdout: boolean,
+    stderr: boolean,
   ) => Effect.Effect<TransportInvocation, unknown>
 }
 
@@ -62,6 +64,9 @@ export const ToolTransport = Context.Service<ToolTransport>("effect-golem/ToolTr
 export interface Streams {
   readonly stdin?: Stream.Stream<Uint8Array, ToolClientError>
   readonly stdout?: (
+    stream: Stream.Stream<Uint8Array, ToolClientError>,
+  ) => Effect.Effect<void, unknown>
+  readonly stderr?: (
     stream: Stream.Stream<Uint8Array, ToolClientError>,
   ) => Effect.Effect<void, unknown>
 }
@@ -121,6 +126,7 @@ export const liveToolStart = (
   input: Common.TypedSchemaValue,
   stdin: AsyncIterable<Host.ByteStreamItem> | undefined,
   withStdout: boolean,
+  withStderr: boolean,
   reflected = false,
 ) =>
   Effect.gen(function* () {
@@ -130,9 +136,11 @@ export const liveToolStart = (
       catch: (cause) => new ToolClientError("invoke", cause),
     })
     const inputEndpoints = stdin ? host.createStdin() : undefined
-    const output = withStdout ? host.createStdout() : undefined
+    const stdout = withStdout ? host.createOutput() : undefined
+    const stderr = withStderr ? host.createOutput() : undefined
     const future = yield* Effect.try({
-      try: () => rpc.asyncInvokeAndAwait([...path], input, inputEndpoints?.[1], output?.[0]),
+      try: () =>
+        rpc.asyncInvokeAndAwait([...path], input, inputEndpoints?.[1], stdout?.[0], stderr?.[0]),
       catch: (cause) => new ToolClientError("invoke", cause),
     })
     if (inputEndpoints && stdin) {
@@ -158,7 +166,8 @@ export const liveToolStart = (
     }
     return {
       result: Effect.tryPromise({ try: () => future.get(), catch: (cause) => cause }),
-      stdout: output?.[1],
+      stdout: stdout?.[1],
+      stderr: stderr?.[1],
       cancel: Effect.sync(() => future.cancel()),
     }
   })
@@ -182,6 +191,7 @@ export function client<D extends ToolDefinition<any, any>>(
     input: Common.TypedSchemaValue,
     stdin: AsyncIterable<Host.ByteStreamItem> | undefined,
     stdout: boolean,
+    stderr: boolean,
   ) => Effect.Effect<TransportInvocation, unknown, ToolClient | Scope.Scope> =
     options.transport?.start ?? liveToolStart
   const call = (
@@ -221,26 +231,48 @@ export function client<D extends ToolDefinition<any, any>>(
           { graph: codec.schemaGraph, value },
           stdin,
           !!model.body.stdout,
+          !!model.body.stderr,
         ).pipe(Effect.mapError((cause) => new ToolClientError("invoke", cause)))
         yield* Effect.addFinalizer(() => started.cancel)
+        if (model.body.stdout && !started.stdout)
+          return yield* Effect.fail(new ToolClientError("stream", "required stdout is missing"))
+        if (model.body.stderr && !started.stderr)
+          return yield* Effect.fail(new ToolClientError("stream", "required stderr is missing"))
         const stdoutIterator = started.stdout?.[Symbol.asyncIterator]()
         const stdout = stdoutIterator ? { [Symbol.asyncIterator]: () => stdoutIterator } : undefined
-        const consume = stdout
-          ? streams?.stdout
-            ? streams
-                .stdout(decodeByteStream(stdout))
-                .pipe(
+        const stderrIterator = started.stderr?.[Symbol.asyncIterator]()
+        const stderr = stderrIterator ? { [Symbol.asyncIterator]: () => stderrIterator } : undefined
+        const consumeOutput = (
+          output: AsyncIterable<Host.ByteStreamItem> | undefined,
+          consume: Streams["stdout"] | Streams["stderr"],
+        ) =>
+          output
+            ? consume
+              ? consume(decodeByteStream(output)).pipe(
                   Effect.catchCause((cause) =>
                     cause.reasons.some(Cause.isInterruptReason)
                       ? Effect.failCause(cause)
-                      : drainByteStream(stdout).pipe(
+                      : drainByteStream(output).pipe(
                           Effect.ignore,
                           Effect.andThen(Effect.failCause(cause)),
                         ),
                   ),
                 )
-            : drainByteStream(stdout)
-          : Effect.void
+              : drainByteStream(output)
+            : Effect.void
+        const consume = Effect.all(
+          [consumeOutput(stdout, streams?.stdout), consumeOutput(stderr, streams?.stderr)].map(
+            (output) =>
+              Effect.exit(
+                output.pipe(
+                  Effect.mapError((cause) =>
+                    cause instanceof ToolClientError ? cause : new ToolClientError("stream", cause),
+                  ),
+                ),
+              ),
+          ),
+          { concurrency: "unbounded" },
+        )
         const invocationResult = started.result.pipe(
           Effect.catchIf(
             (): boolean => true,
@@ -285,6 +317,10 @@ export function client<D extends ToolDefinition<any, any>>(
         )
         const decodedResult = invocationResult.pipe(
           Effect.flatMap((result) => {
+            if (result.stdout !== undefined || result.stderr !== undefined)
+              return Effect.fail(
+                new ToolClientError("result", "tool returned output attachments in its result"),
+              )
             if (!model.body!.output)
               return result.result === undefined
                 ? Effect.succeed(undefined)
@@ -302,19 +338,16 @@ export function client<D extends ToolDefinition<any, any>>(
             )
           }),
         )
-        const normalizedConsume = consume.pipe(
-          Effect.mapError((cause) =>
-            cause instanceof ToolClientError ? cause : new ToolClientError("stream", cause),
-          ),
-        )
-        const [consumeExit, resultExit] = yield* Effect.all(
-          [Effect.exit(normalizedConsume), Effect.exit(decodedResult)] as const,
+        const [consumeExits, resultExit] = yield* Effect.all(
+          [consume, Effect.exit(decodedResult)] as const,
           {
             concurrency: "unbounded",
           },
         )
         if (Exit.isFailure(resultExit)) return yield* Effect.failCause(resultExit.cause)
-        if (Exit.isFailure(consumeExit)) return yield* Effect.failCause(consumeExit.cause)
+        const consumeFailure = consumeExits.find(Exit.isFailure)
+        if (consumeFailure && Exit.isFailure(consumeFailure))
+          return yield* Effect.failCause(consumeFailure.cause)
         return resultExit.value
       }),
     )

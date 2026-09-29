@@ -124,6 +124,7 @@ fn __golem_middleware_tool_def_raw_Messages() -> @tool.ToolDef {
             constraints: [],
             stdin: None,
             stdout: None,
+            stderr: None,
             result: Some({
               type_: @schema.into_schema_graph(
                 (@schema.TypeTag::{ } : @schema.TypeTag[String]),
@@ -255,6 +256,7 @@ fn __golem_middleware_tool_def_raw_PublicFiles() -> @tool.ToolDef {
             constraints: [],
             stdin: None,
             stdout: None,
+            stderr: None,
             result: Some({
               type_: @schema.into_schema_graph(
                 (@schema.TypeTag::{ } : @schema.TypeTag[String]),
@@ -386,6 +388,7 @@ fn __golem_middleware_tool_def_raw_Storage() -> @tool.ToolDef {
             constraints: [],
             stdin: None,
             stdout: None,
+            stderr: None,
             result: Some({
               type_: @schema.into_schema_graph(
                 (@schema.TypeTag::{ } : @schema.TypeTag[String]),

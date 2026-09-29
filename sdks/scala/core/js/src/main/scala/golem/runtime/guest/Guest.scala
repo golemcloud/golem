@@ -184,12 +184,14 @@ object Guest {
     commandPath: js.Array[String],
     input: JsTypedSchemaValue,
     stdin: js.UndefOr[golem.runtime.tool.host.ToolHostApi.RawByteStream],
-    stdout: js.UndefOr[golem.runtime.tool.host.ToolHostApi.RawToolStdoutWriter],
+    stdout: js.UndefOr[golem.runtime.tool.host.ToolHostApi.RawToolOutputWriter],
+    stderr: js.UndefOr[golem.runtime.tool.host.ToolHostApi.RawToolOutputWriter],
     principal: js.Dynamic
   ): js.Promise[JsInvocationResult] = {
     val inputOwnership = new AgentStreamOwnership
     val scalaStdin     = stdin.toOption.map(new JsToolInputStream(_))
     var scalaStdout    = Option.empty[JsToolOutputStream]
+    var scalaStderr    = Option.empty[JsToolOutputStream]
     val invoked        =
       try {
         val decodedInput =
@@ -216,10 +218,17 @@ object Guest {
                     Future.successful(
                       Left(WitToolError.InvalidInput("tool invocation did not contain declared stdout stream"))
                     )
+                  case Some(selected) if selected.stderr.isEmpty && stderr.isDefined =>
+                    Future.successful(Left(WitToolError.InvalidInput("unexpected stderr stream")))
+                  case Some(selected) if selected.stderr.exists(_.required) && stderr.isEmpty =>
+                    Future.successful(
+                      Left(WitToolError.InvalidInput("tool invocation did not contain declared stderr stream"))
+                    )
                   case Some(_) =>
                     val scalaPrincipal = PrincipalConverter.fromJs(principal)
                     scalaStdout = stdout.toOption.map(new JsToolOutputStream(_))
-                    invoker(path, in, scalaStdin, scalaStdout, scalaPrincipal)
+                    scalaStderr = stderr.toOption.map(new JsToolOutputStream(_))
+                    invoker(path, in, scalaStdin, scalaStdout, scalaStderr, scalaPrincipal)
                 }
             }
         }
@@ -240,6 +249,17 @@ object Guest {
               }
             case None =>
               stdout.toOption.foreach(JsToolOutputStream.dispose)
+              Future.successful(())
+          },
+        () =>
+          scalaStderr match {
+            case Some(stream) =>
+              result match {
+                case Success(_)     => stream.close()
+                case Failure(error) => stream.failInvocation(error)
+              }
+            case None =>
+              stderr.toOption.foreach(JsToolOutputStream.dispose)
               Future.successful(())
           }
       )
@@ -327,6 +347,7 @@ object Guest {
           input: js.Dynamic,
           stdin: js.UndefOr[js.Any],
           stdout: js.UndefOr[js.Any],
+          stderr: js.UndefOr[js.Any],
           principal: js.Dynamic
         ) =>
           invokeTool(
@@ -334,7 +355,8 @@ object Guest {
             commandPath,
             input.asInstanceOf[JsTypedSchemaValue],
             stdin.asInstanceOf[js.UndefOr[golem.runtime.tool.host.ToolHostApi.RawByteStream]],
-            stdout.asInstanceOf[js.UndefOr[golem.runtime.tool.host.ToolHostApi.RawToolStdoutWriter]],
+            stdout.asInstanceOf[js.UndefOr[golem.runtime.tool.host.ToolHostApi.RawToolOutputWriter]],
+            stderr.asInstanceOf[js.UndefOr[golem.runtime.tool.host.ToolHostApi.RawToolOutputWriter]],
             principal
           )
       )

@@ -44,7 +44,8 @@ pub(crate) async fn invoke_tool_middleware(
     command_path: Vec<String>,
     input: crate::schema::wit::wire::TypedSchemaValue,
     stdin: Option<InputStream>,
-    stdout: Option<crate::golem_agentic::golem::tool::streams::ToolStdoutWriter>,
+    stdout: Option<crate::golem_agentic::golem::tool::streams::ToolOutputWriter>,
+    stderr: Option<crate::golem_agentic::golem::tool::streams::ToolOutputWriter>,
     principal: Principal,
     wrapped: crate::tool_underlying_bindings::UnderlyingTool,
 ) -> Result<wire::InvocationResult, wire::ToolError> {
@@ -58,6 +59,7 @@ pub(crate) async fn invoke_tool_middleware(
         .map_err(|error| wire::ToolError::InvalidInput(error.to_string()))?;
 
     let stdout = stdout.map(OutputStream::new);
+    let stderr = stderr.map(OutputStream::new);
     match invoker(
         tool_name,
         tool_metadata,
@@ -66,6 +68,7 @@ pub(crate) async fn invoke_tool_middleware(
         input,
         stdin,
         stdout,
+        stderr,
         principal,
         UnderlyingTool::from_raw(wrapped),
     )
@@ -84,9 +87,9 @@ fn encode_middleware(middleware: &ToolMiddleware) -> Result<wire::ToolMiddleware
 async fn encode_invocation_result(
     result: InvocationResult,
 ) -> Result<wire::InvocationResult, wire::ToolError> {
-    if result.stdout.is_some() {
+    if result.stdout.is_some() || result.stderr.is_some() {
         return Err(wire::ToolError::InvalidResult(
-            "middleware must write stdout through its output writer".to_string(),
+            "middleware must write outputs through their output writers".to_string(),
         ));
     }
     let result = match result.result {
@@ -100,6 +103,7 @@ async fn encode_invocation_result(
     Ok(wire::InvocationResult {
         result,
         stdout: None,
+        stderr: None,
     })
 }
 
@@ -169,7 +173,8 @@ impl crate::golem_agentic::exports::golem::tool::tool_middleware_guest::Guest
         command_path: Vec<String>,
         input: crate::schema::wit::wire::TypedSchemaValue,
         stdin: Option<InputStream>,
-        stdout: Option<crate::golem_agentic::golem::tool::streams::ToolStdoutWriter>,
+        stdout: Option<crate::golem_agentic::golem::tool::streams::ToolOutputWriter>,
+        stderr: Option<crate::golem_agentic::golem::tool::streams::ToolOutputWriter>,
         principal: Principal,
         wrapped: crate::tool_underlying_bindings::UnderlyingTool,
     ) -> Result<wire::InvocationResult, wire::ToolError> {
@@ -182,6 +187,7 @@ impl crate::golem_agentic::exports::golem::tool::tool_middleware_guest::Guest
             input,
             stdin,
             stdout,
+            stderr,
             principal,
             wrapped,
         )

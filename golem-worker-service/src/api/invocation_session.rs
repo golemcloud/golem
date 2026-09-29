@@ -31,8 +31,8 @@ use golem_api_grpc::proto::golem::worker::{
     DurableStreamMapping, InputStreamEnd, InputStreamItem, InvocationAccepted, InvocationRejected,
     InvocationRejectionReason, InvocationRequest, InvocationResponse, InvocationSessionResult,
     OutputStreamEnd, OutputStreamError, OutputStreamItem, ResumeOperation, StreamCancel,
-    StreamCancelReason, StreamCancelRole, StreamCursor, StreamMappingRole, input_stream_item,
-    invocation_request, invocation_response, invocation_session_completion,
+    StreamCancelReason, StreamCancelRole, StreamCursor, StreamMappingRole, ToolByteStreamRole,
+    input_stream_item, invocation_request, invocation_response, invocation_session_completion,
     invocation_session_result,
 };
 use golem_common::SafeDisplay;
@@ -1107,6 +1107,7 @@ where
                         input,
                         stdin,
                         stdout,
+                        stderr,
                         ..
                     } => Ok(Some(InitialMessage::ToolStart {
                         start: PublicToolSessionStart {
@@ -1118,6 +1119,7 @@ where
                             input: *input,
                             stdin,
                             stdout,
+                            stderr,
                             idempotency_key,
                             attempt_id,
                             expected_deployment_revision: None,
@@ -2102,10 +2104,14 @@ fn translate_accepted(
         .map_err(|error| AdapterError::new(error.code, error.to_string()))?;
     if accepted.tool_name.is_some() {
         for mapping in &accepted.stream_mappings {
-            let role = match mapping.role() {
-                StreamMappingRole::Input => PublicByteStreamRole::Stdin,
-                StreamMappingRole::Output => PublicByteStreamRole::Stdout,
-                StreamMappingRole::Unspecified => continue,
+            let Some(role) = mapping.tool_byte_stream_role else {
+                continue;
+            };
+            let role = match ToolByteStreamRole::try_from(role) {
+                Ok(ToolByteStreamRole::Stdin) => PublicByteStreamRole::Stdin,
+                Ok(ToolByteStreamRole::Stdout) => PublicByteStreamRole::Stdout,
+                Ok(ToolByteStreamRole::Stderr) => PublicByteStreamRole::Stderr,
+                Err(_) => continue,
             };
             state.byte_roles.insert(mapping.transport_stream_id, role);
         }
@@ -3091,6 +3097,7 @@ mod tests {
             }),
             high_water: None,
             role: role as i32,
+            tool_byte_stream_role: None,
         }
     }
 

@@ -12,7 +12,7 @@ For each `@toolDefinition` trait, the sbt and Mill plugins generate these middle
 - `<Tool>Middleware`: the transparent middleware surface;
 - `<Tool>Middleware.Adapter[U]`: the same presented surface with a different expected underlying type `U`.
 
-Every generated middleware method takes its underlying as the first parameter and returns `Future[Either[ToolInvokeError[E], A]]`. Global arguments, command arguments, and `Principal` follow the generated projection for that command. Declared stdin becomes a `ToolMiddlewareInputHandle`; declared stdout is carried by the successful result as a `ToolMiddlewareOutputHandle`.
+Every generated middleware method takes its underlying as the first parameter and returns `Future[Either[ToolInvokeError[E], A]]`. Global arguments, command arguments, and `Principal` follow the generated projection for that command. Declared stdin becomes a `ToolMiddlewareInputHandle`; declared stdout and stderr are carried independently by the successful result as `ToolMiddlewareOutputHandle`s and must be drained concurrently.
 
 Installation parameters are statically typed. Extend `<Tool>Middleware.WithParameters[P]` (or `UniversalToolMiddleware.WithParameters[P]`) and use `UniversalToolMiddlewareInvocation[P]`; monomorphic generated handlers receive `parameters: P` immediately after the underlying. `P` must have a `zio.blocks.schema.Schema`. The no-configuration universal form uses `UniversalToolMiddlewareInvocation[ToolMiddleware.NoParameters]`. See the compile fixture linked above for both forms.
 
@@ -122,8 +122,8 @@ Return these errors in `Left` when rejecting an invocation deliberately. A monom
 The supplied underlying is affine and valid only during its middleware invocation:
 
 - Convenience calls return `ToolUnderlyingInvocation`; call `.toMiddlewareResult` for the former await-the-whole-call behavior.
-- Calls may overlap. Each invocation has an independent admission, result, stdout, `cancel`, and `drop` handle, so middleware can fan out and observe completions in any order.
-- Sequential and concurrent `get()` calls share one lazy host observation and return the cached terminal result, including errors. This does not duplicate or rewind stdout.
+- Calls may overlap. Each invocation has an independent admission, result, stdout, stderr, `cancel`, and `drop` handle, so middleware can fan out and observe completions in any order.
+- Sequential and concurrent `get()` calls share one lazy host observation and return the cached terminal result, including errors. This does not duplicate or rewind either output.
 - Do not store, return, capture for later, or otherwise let the underlying escape. It is revoked when the middleware handler returns.
 - Revocation at handler return prevents new admissions but does not implicitly cancel admitted calls. Cleanup requests disposal of their observers; when observation is pending, disposal waits for it to settle.
 - Dropping an observer releases observation; it is not cancellation. Invoke its `cancel` callback only when cancellation is intended.
@@ -142,11 +142,11 @@ The handles follow the same invocation ownership:
 
 - Passing the invocation's stdin to an underlying call transfers it exactly once. If it is never forwarded, the SDK closes it when the middleware settles.
 - Forwarding the same stream twice is SDK misuse.
-- Stdout returned from underlying calls is tracked. Intermediate, abandoned, malformed, or error-path stdout is closed best-effort.
-- Only the stdout selected in the middleware's final successful result is transferred to the caller; it remains open for the caller.
-- Cleanup is identity-based and idempotent, including when the same stdout handle appears more than once.
+- Stdout and stderr returned from underlying calls are tracked independently. Intermediate, abandoned, malformed, or error-path outputs are closed best-effort.
+- Only the outputs selected in the middleware's final successful result are transferred to the caller; they remain open for the caller.
+- Cleanup is identity-based and idempotent, including when the same output handle appears more than once.
 
-The guest ABI supplies a stdout writer for commands that declare stdout. The SDK copies the selected final stdout into that writer while the structured result is pending, calls `finish` after clean EOF, and calls `fail` if forwarding fails. Middleware receives only the transfer-oriented handles above; it must not finish or fail the host writer itself.
+The guest ABI supplies independent stdout and stderr writers for commands that declare them. The SDK copies each selected final output into its matching writer while the structured result is pending, calls `finish` after clean EOF, and calls `fail` if forwarding fails. Middleware receives only the transfer-oriented handles above; it must not finish or fail the host writers itself.
 
 ## Component template
 

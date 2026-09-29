@@ -69,12 +69,13 @@ object ToolClientRuntimeSpec extends ZIOSpecDefault {
       commandPath: List[String],
       input: TypedSchemaValue,
       stdin: Option[ToolInputStream],
-      stdout: Boolean
+      stdout: Boolean,
+      stderr: Boolean
     ): Either[ToolRpcFailure, ToolRpcStarted] = {
       lastCommandPath = commandPath
       lastInput = Some(input)
       lastStdin = stdin
-      Right(ToolRpcStarted(None, Future.successful(response), () => ()))
+      Right(ToolRpcStarted(None, None, Future.successful(response), () => ()))
     }
   }
 
