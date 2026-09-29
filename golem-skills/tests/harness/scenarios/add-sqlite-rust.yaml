@@ -1,0 +1,76 @@
+name: "add-sqlite-rust"
+steps:
+  - id: "create-project"
+    only_if:
+      language: "rust"
+    create_project:
+      name: test-app
+    verify:
+      build: true
+      deploy: true
+
+  - id: "add-sqlite-agent"
+    only_if:
+      language: "rust"
+    prompt: >
+      In test-app, add a durable agent named SqliteNotes whose constructor takes one string. Use
+      rusqlite 0.38 with the bundled and wasm32-wasi-vfs features, patched to the exact Golem rusqlite
+      revision documented by the SQLite skill. Open one file-backed connection at
+      /data/sqlite-notes.db, creating the directory and a notes table if needed. Add an `add` method
+      taking one string and returning the total row count as u64, and a `list` method returning all
+      texts in insertion order. Use bound SQL parameters. Make sure the project builds and deploys.
+    expectedSkills:
+      - "golem-add-sqlite-rust"
+    verify:
+      build: true
+      deploy: true
+
+  - id: "add-first-note"
+    only_if:
+      language: "rust"
+    invoke_json:
+      agent: 'SqliteNotes("db-test")'
+      method: "add"
+      args: '"first"'
+    expect:
+      result_json:
+        - path: "$"
+          equals: 1
+
+  - id: "add-second-note"
+    only_if:
+      language: "rust"
+    invoke_json:
+      agent: 'SqliteNotes("db-test")'
+      method: "add"
+      args: '"second"'
+    expect:
+      result_json:
+        - path: "$"
+          equals: 2
+
+  - id: "simulate-crash"
+    only_if:
+      language: "rust"
+    shell:
+      command: "golem"
+      args: ["agent", "simulate-crash", 'SqliteNotes("db-test")']
+      cwd: "test-app"
+    expect:
+      exit_code: 0
+
+  - id: "wait-for-recovery"
+    only_if:
+      language: "rust"
+    sleep: 2
+
+  - id: "verify-file-database"
+    only_if:
+      language: "rust"
+    invoke_json:
+      agent: 'SqliteNotes("db-test")'
+      method: "list"
+    expect:
+      result_json:
+        - path: "$"
+          equals: ["first", "second"]

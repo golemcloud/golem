@@ -2,6 +2,7 @@ manifestVersion: 1.6.0
 
 componentTemplates:
   rust-test-component:
+    guestLanguage: rust
     presets:
       debug:
         customCommands:
@@ -20,6 +21,7 @@ componentTemplates:
           copy:
           - command: cp "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}_release.wasm" "{{ appRootDir }}/../{{ component_name | to_snake_case }}_release.wasm"
   ts-test-component:
+    guestLanguage: ts
     customCommands:
       copy:
       - command: cp "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.wasm" "{{ appRootDir }}/../{{ component_name | to_snake_case }}.wasm"

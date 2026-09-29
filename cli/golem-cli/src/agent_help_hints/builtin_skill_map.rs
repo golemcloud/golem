@@ -136,7 +136,7 @@ pub const SKILL_BINDINGS: &[SkillBinding] = &[
 
     // ── secrets ──────────────────────────────────────────────────────────
     SkillBinding { cli_path: &["secret", "create"],       basename: "golem-add-secret", kind: SkillKind::PerLanguage(ALL_LANGS), summary: "Add a typed secret available to your agents." },
-    SkillBinding { cli_path: &["secret", "update-value"], basename: "golem-add-secret", kind: SkillKind::PerLanguage(ALL_LANGS), summary: "Add or change a secret available to your agents." },
+    SkillBinding { cli_path: &["secret", "update"],       basename: "golem-add-secret", kind: SkillKind::PerLanguage(ALL_LANGS), summary: "Add or change a secret available to your agents." },
 
     // ── resource quotas ──────────────────────────────────────────────────
     SkillBinding { cli_path: &["resource", "create"], basename: "golem-quota", kind: SkillKind::PerLanguage(ALL_LANGS), summary: "Add resource quotas (rate limiting, capacity, concurrency)." },

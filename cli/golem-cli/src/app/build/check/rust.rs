@@ -42,7 +42,7 @@ pub(super) fn plan_rust_cargo_fix_steps(
     let mut steps_by_path = BTreeMap::new();
     for component_name in ctx.application_context().selected_component_names() {
         let component = ctx.application().component(component_name);
-        if component.guess_language() != Some(GuestLanguage::Rust) {
+        if component.guest_language() != Some(GuestLanguage::Rust) {
             continue;
         }
 

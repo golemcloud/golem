@@ -12,9 +12,9 @@ Every method on a definition RPC client has a `.trigger()` variant. It takes
 the same input record as the awaited call but returns `void` immediately:
 
 ```typescript
-import { Counter } from './counter-agent.js';
+import { CounterAgent } from './counter-agent.js';
 
-const counter = Counter.client.get({ name: 'my-counter' });
+const counter = CounterAgent.client.get({ name: 'my-counter' });
 
 // Fire-and-forget — returns immediately
 counter.increment.trigger();          // input: {}
@@ -64,5 +64,5 @@ From the command line, use `--trigger` (or `-t`) to enqueue an invocation withou
 waiting:
 
 ```shell
-golem agent invoke --trigger 'Counter("my-counter")' increment
+golem agent invoke --trigger 'CounterAgent("my-counter")' increment
 ```

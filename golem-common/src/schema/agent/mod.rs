@@ -129,6 +129,46 @@ fn validate_input_value(graph: &SchemaGraph, value: &SchemaValue) -> Result<(), 
 
 pub use crate::schema::graph::reachable_defs;
 
+/// Projects the value schema stored for an agent secret from the agent's config
+/// declaration type: `secret<T>` or `option<secret<T>>` yields `T` with the definitions of
+/// `agent_graph` reachable from it. Returns `None` for any other declaration type.
+pub fn agent_secret_value_schema(
+    agent_graph: &SchemaGraph,
+    config_type: &SchemaType,
+) -> Option<SchemaGraph> {
+    let root = match resolve_schema_ref_lenient(agent_graph, config_type) {
+        SchemaType::Secret { spec, .. } => (*spec.inner).clone(),
+        SchemaType::Option { inner, .. } => match resolve_schema_ref_lenient(agent_graph, inner) {
+            SchemaType::Secret { spec, .. } => (*spec.inner).clone(),
+            _ => return None,
+        },
+        _ => return None,
+    };
+
+    Some(SchemaGraph {
+        defs: reachable_defs(agent_graph, &root),
+        root,
+    })
+}
+
+/// Follows `Ref` indirections, stopping at the first cycle or dangling reference.
+fn resolve_schema_ref_lenient<'a>(
+    graph: &'a SchemaGraph,
+    mut ty: &'a SchemaType,
+) -> &'a SchemaType {
+    let mut seen = std::collections::HashSet::new();
+    while let SchemaType::Ref { id, .. } = ty {
+        if !seen.insert(id.clone()) {
+            break;
+        }
+        match graph.lookup(id) {
+            Some(def) => ty = &def.body,
+            None => break,
+        }
+    }
+    ty
+}
+
 /// Build a self-contained [`TypedSchemaValue`] from an already-validated
 /// [`SchemaValue`] and an explicit `root`, projecting `graph`'s definitions to
 /// exactly those reachable from `root`.

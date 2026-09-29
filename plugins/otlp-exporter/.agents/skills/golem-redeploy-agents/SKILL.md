@@ -41,7 +41,7 @@ This deploys the new component version and then, for every existing agent of eac
 | `--update-agents <MODE>` | Update agents in-place via oplog replay (`auto`) or snapshots (`manual`) — preserves state |
 | `--reset` | Delete agents **and** the environment, then deploy from scratch |
 
-These flags are mutually exclusive — only one can be used at a time. If both `--redeploy-agents` and `--reset` are specified, `--reset` takes precedence and agents are simply deleted (not recreated).
+These flags are mutually exclusive — only one can be used at a time; the CLI rejects combining them.
 
 ## Method 2: Environment-Level Default
 
@@ -54,7 +54,7 @@ environments:
       redeployAgents: true
 ```
 
-With this configuration, every `golem deploy` targeting the `local` environment will automatically redeploy agents. The CLI `--redeploy-agents` flag overrides or supplements this setting.
+With this configuration, every `golem deploy` targeting the `local` environment will automatically redeploy agents. Passing `--update-agents`, `--redeploy-agents`, or `--reset` on the command line overrides this setting.
 
 ## What Gets Preserved
 

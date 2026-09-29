@@ -58,7 +58,7 @@ use golem_common::model::tool_middleware_release::{
     ToolMiddlewareReleaseSource, tool_middleware_metadata_digest,
 };
 use golem_common::model::tool_release::ToolReleaseId;
-use golem_common::schema::agent::reachable_defs;
+use golem_common::schema::agent::agent_secret_value_schema;
 use golem_common::schema::graph::SchemaGraph;
 use golem_common::schema::schema_type::SchemaType;
 use golem_common::schema::tool::validation::validate_tool;
@@ -302,8 +302,13 @@ impl DeploymentContext {
         published_tool_middlewares: &[ToolMiddlewareName],
         universal_tool_middlewares: &[golem_common::model::tool_middleware::ToolMiddlewareInstallation],
         tool_compatibility_mode: golem_common::schema::tool::compatibility::ToolCompatibilityMode,
-        environment_tool_bindings: &BTreeMap<ToolName, ToolBindingInput>,
-        agent_tool_bindings: &BTreeMap<AgentTypeName, BTreeMap<ToolName, ToolBindingInput>>,
+        effective_environment_tool_bindings: &BTreeMap<ToolName, ToolBindingInput>,
+        effective_agent_tool_bindings: &BTreeMap<
+            AgentTypeName,
+            BTreeMap<ToolName, ToolBindingInput>,
+        >,
+        dynamic_environment_tool_bindings: &BTreeMap<ToolName, ToolBindingInput>,
+        dynamic_agent_tool_bindings: &BTreeMap<AgentTypeName, BTreeMap<ToolName, ToolBindingInput>>,
     ) -> Result<diff::Hash, diff::DiffError> {
         let published_tools = published_tools.iter().map(ToString::to_string).collect();
         let published_tool_middlewares = published_tool_middlewares
@@ -311,7 +316,10 @@ impl DeploymentContext {
             .map(ToString::to_string)
             .collect();
         let (environment_tool_middleware_bindings, agent_tool_middleware_bindings) =
-            diff::tool_middleware_binding_inputs(environment_tool_bindings, agent_tool_bindings);
+            diff::tool_middleware_binding_inputs(
+                dynamic_environment_tool_bindings,
+                dynamic_agent_tool_bindings,
+            );
         let diffable = diff::Deployment {
             components: self
                 .components
@@ -331,6 +339,8 @@ impl DeploymentContext {
             remote_tools: diff::remote_tool_deployments(
                 compiled_tools.registered_tools.clone(),
                 compiled_tools.agent_tool_bindings.clone(),
+                effective_environment_tool_bindings,
+                effective_agent_tool_bindings,
                 &self
                     .components
                     .values()
@@ -1589,45 +1599,10 @@ fn stored_agent_secret_schema(
     agent_graph: &SchemaGraph,
     config_type: &SchemaType,
 ) -> Result<SchemaGraph, DeployValidationError> {
-    let root = match resolve_schema_ref(agent_graph, config_type) {
-        SchemaType::Secret { spec, .. } => (*spec.inner).clone(),
-        SchemaType::Option { inner, .. } => match resolve_schema_ref(agent_graph, inner) {
-            SchemaType::Secret { spec, .. } => (*spec.inner).clone(),
-            _ => {
-                return Err(DeployValidationError::AgentSecretInvalidConfigType {
-                    path: path.clone(),
-                });
-            }
-        },
-        _ => {
-            return Err(DeployValidationError::AgentSecretInvalidConfigType { path: path.clone() });
-        }
-    };
-
-    let schema = SchemaGraph {
-        defs: reachable_defs(agent_graph, &root),
-        root,
-    };
-
-    if schema_contains_host_managed_capability(&schema) {
-        Err(DeployValidationError::AgentSecretInvalidConfigType { path: path.clone() })
-    } else {
-        Ok(schema)
+    match agent_secret_value_schema(agent_graph, config_type) {
+        Some(schema) if !schema_contains_host_managed_capability(&schema) => Ok(schema),
+        _ => Err(DeployValidationError::AgentSecretInvalidConfigType { path: path.clone() }),
     }
-}
-
-fn resolve_schema_ref<'a>(graph: &'a SchemaGraph, mut ty: &'a SchemaType) -> &'a SchemaType {
-    let mut seen = std::collections::HashSet::new();
-    while let SchemaType::Ref { id, .. } = ty {
-        if !seen.insert(id.clone()) {
-            break;
-        }
-        match graph.lookup(id) {
-            Some(def) => ty = &def.body,
-            None => break,
-        }
-    }
-    ty
 }
 
 pub fn extract_registered_agent_types(

@@ -331,7 +331,7 @@
       "$ref": "#/definitions/secret.list"
     },
     {
-      "$ref": "#/definitions/secret.update-value"
+      "$ref": "#/definitions/secret.update"
     }
   ],
   "definitions": {
@@ -2522,6 +2522,7 @@
       "x-golem-command": "api security-scheme create",
       "required": [
         "$type",
+        "action",
         "id",
         "revision",
         "name",
@@ -2534,6 +2535,11 @@
       "properties": {
         "$type": {
           "const": "api.security-scheme.create"
+        },
+        "action": {
+          "description": "Whether the security scheme was created, or an existing one was updated (`--update-existing`).",
+          "type": "string",
+          "enum": ["created", "updated"]
         },
         "id": {
           "type": "string"
@@ -3114,6 +3120,7 @@
     "ComponentLayerProperties": {
       "type": "object",
       "required": [
+        "guestLanguage",
         "componentWasm",
         "outputWasm",
         "dependencyAgents",
@@ -3130,6 +3137,7 @@
       ],
       "properties": {
         "appliedLayers": { "type": "array", "items": { "type": "string" } },
+        "guestLanguage": { "$ref": "#/definitions/ComponentLayerOptionalGuestLanguageProperty" },
         "componentWasm": { "$ref": "#/definitions/ComponentLayerOptionalStringProperty" },
         "outputWasm": { "$ref": "#/definitions/ComponentLayerOptionalStringProperty" },
         "dependencyAgents": { "$ref": "#/definitions/ComponentLayerDependencyReferenceVecProperty" },
@@ -3260,6 +3268,36 @@
       "required": ["componentCustomPresets"],
       "properties": { "componentCustomPresets": { "type": "string" } },
       "additionalProperties": false
+    },
+    "ComponentLayerOptionalGuestLanguageProperty": {
+      "type": "object",
+      "required": ["value", "trace"],
+      "properties": {
+        "value": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/definitions/GuestLanguage" }
+          ]
+        },
+        "trace": { "type": "array", "items": { "$ref": "#/definitions/ComponentLayerOptionalGuestLanguageTraceElem" } }
+      },
+      "additionalProperties": false
+    },
+    "ComponentLayerOptionalGuestLanguageTraceElem": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["type", "id", "value"],
+          "properties": {
+            "type": { "const": "override" },
+            "id": { "$ref": "#/definitions/ComponentLayerId" },
+            "selection": { "type": "string" },
+            "value": { "$ref": "#/definitions/GuestLanguage" }
+          },
+          "additionalProperties": false
+        },
+        { "$ref": "#/definitions/ComponentLayerOptionalStringSkipTraceElem" }
+      ]
     },
     "ComponentLayerOptionalStringProperty": {
       "type": "object",
@@ -4077,7 +4115,7 @@
     },
     "GuestLanguage": {
       "type": "string",
-      "enum": ["TypeScript", "Rust", "Scala", "MoonBit"]
+      "enum": ["TypeScript", "Effect", "Rust", "Scala", "MoonBit"]
     },
     "ComponentView": {
       "type": "object",
@@ -5898,6 +5936,46 @@
         "bindings": {
           "type": "object",
           "additionalProperties": { "$ref": "#/definitions/EffectiveToolBindingDiffPayload" }
+        },
+        "environmentMiddlewareBinding": { "$ref": "#/definitions/ToolMiddlewareBindingInput" },
+        "componentMiddlewareBindings": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/definitions/ToolMiddlewareBindingInput" }
+        },
+        "agentMiddlewareBindings": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/definitions/ToolMiddlewareBindingInput" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "ToolMiddlewareBindingInput": {
+      "type": "object",
+      "required": [
+        "configKeysReadable",
+        "secretKeysReadable",
+        "secretKeysRevealable",
+        "middleware",
+        "middlewareMergeMode"
+      ],
+      "properties": {
+        "configKeysReadable": { "$ref": "#/definitions/ConfigKeyScope" },
+        "secretKeysReadable": { "$ref": "#/definitions/SecretKeyScope" },
+        "secretKeysRevealable": { "$ref": "#/definitions/SecretKeyScope" },
+        "middleware": {
+          "oneOf": [
+            {
+              "type": "array",
+              "items": { "$ref": "#/definitions/ToolMiddlewareInstallation" }
+            },
+            { "type": "null" }
+          ]
+        },
+        "middlewareMergeMode": {
+          "oneOf": [
+            { "$ref": "#/definitions/ToolMiddlewareMergeMode" },
+            { "type": "null" }
+          ]
         }
       },
       "additionalProperties": false
@@ -6101,7 +6179,7 @@
       "required": [
         "display",
         "agentSecretDefaults",
-        "skippedExistingAgentSecretDefaults",
+        "replaceableAgentSecretDefaults",
         "retryPolicyDefaults",
         "resourceDefaults"
       ],
@@ -6111,7 +6189,7 @@
           "type": "array",
           "items": { "$ref": "#/definitions/DeploymentAgentSecretDefault" }
         },
-        "skippedExistingAgentSecretDefaults": {
+        "replaceableAgentSecretDefaults": {
           "type": "array",
           "items": { "$ref": "#/definitions/DeploymentAgentSecretDefault" }
         },
@@ -7613,6 +7691,7 @@
       "x-golem-command": "resource create",
       "required": [
         "$type",
+        "action",
         "id",
         "revision",
         "environmentId",
@@ -7625,6 +7704,11 @@
       "properties": {
         "$type": {
           "const": "resource.create"
+        },
+        "action": {
+          "description": "Whether the resource definition was created, or an existing one was updated (`--update-existing`).",
+          "type": "string",
+          "enum": ["created", "updated"]
         },
         "id": { "type": "string" },
         "revision": { "type": "integer", "minimum": 0 },
@@ -7807,6 +7891,7 @@
       "x-golem-command": "retry-policy create",
       "required": [
         "$type",
+        "action",
         "id",
         "environmentId",
         "name",
@@ -7818,6 +7903,11 @@
       "properties": {
         "$type": {
           "const": "retry-policy.create"
+        },
+        "action": {
+          "description": "Whether the retry policy was created, or an existing one was updated (`--update-existing`).",
+          "type": "string",
+          "enum": ["created", "updated"]
         },
         "id": { "type": "string" },
         "environmentId": { "type": "string" },
@@ -8768,6 +8858,7 @@
       "x-golem-command": "secret create",
       "required": [
         "$type",
+        "action",
         "id",
         "environmentId",
         "path",
@@ -8777,6 +8868,11 @@
       "properties": {
         "$type": {
           "const": "secret.create"
+        },
+        "action": {
+          "description": "Whether the secret was created, an existing secret was updated (`--update-existing`), or an existing secret with a different type was deleted and created again (`--replace-on-type-change`).",
+          "type": "string",
+          "enum": ["created", "updated", "replaced"]
         },
         "id": { "type": "string" },
         "environmentId": { "type": "string" },
@@ -8870,11 +8966,11 @@
       },
       "additionalProperties": false
     },
-    "secret.update-value": {
+    "secret.update": {
       "type": "object",
-      "description": "Single structured output document emitted by `golem secret update-value`.",
+      "description": "Single structured output document emitted by `golem secret update`.",
       "x-golem-output-mode": "single",
-      "x-golem-command": "secret update-value",
+      "x-golem-command": "secret update",
       "required": [
         "$type",
         "id",
@@ -8885,7 +8981,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "secret.update-value"
+          "const": "secret.update"
         },
         "id": { "type": "string" },
         "environmentId": { "type": "string" },
@@ -9373,7 +9469,7 @@
       "rustType": "SecretListView"
     },
     {
-      "type": "secret.update-value",
+      "type": "secret.update",
       "rustType": "SecretUpdateView"
     }
   ]

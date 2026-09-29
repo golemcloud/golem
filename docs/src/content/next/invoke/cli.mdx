@@ -18,9 +18,9 @@ There are multiple options for selecting the agent:
 - `application/environment/AgentType(agent-parameters)`
 - `account/application/environment/AgentType(agent-parameters)`
 
-Note that `AgentType(agent-parameters)` is the _agent ID_. The agent type name uses PascalCase, matching the name in the source code.
+Note that `AgentType(agent-parameters)` is the _agent ID_. The agent type name uses the casing of the agent's source language, matching the name in the source code.
 
-Also note that you can only omit the component name if it can be inferred from the context, for example if the current directory is a component directory or the application root with a single component only.
+The account, application and environment prefixes can be omitted when they can be inferred from the context, i.e. from the `--environment`/`--local`/`--cloud` flags, the selected profile, or the application manifest found from the current directory.
 
 The function to be invoked is selected by the second parameter. Read the [page about name mapping](/next/name-mapping) for more information about the possible function names.
 
@@ -30,7 +30,7 @@ The function parameters are specified as positional arguments following the func
 
 ## Getting results
 
-When using `invoke` without the `--trigger` flag, the CLI awaits the result of the invocation and prints the result value to the standard output. By default it uses the `text` format, in which case it prints the result value using the [WebAssembly Value Encoding](https://github.com/bytecodealliance/wasm-tools/tree/main/crates/wasm-wave).
+When using `invoke` without the `--trigger` flag, the CLI awaits the result of the invocation and prints the result value to the standard output. By default it uses the `text` format, in which case it prints the result value using the source language syntax of the invoked agent (for example `Invocation result in TypeScript syntax:` followed by the value).
 
 This can be changed with `--format json` or `--format yaml` to print the invocation result in JSON or YAML, using the [mapping described on Type Mapping page](/next/type-mapping).
 

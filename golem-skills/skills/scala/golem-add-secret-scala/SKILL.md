@@ -64,14 +64,17 @@ final class MyAgentImpl(input: String, config: Config[MyAppConfig]) extends MyAg
 Secret paths use camelCase, matching Scala field names:
 
 ```shell
-golem secret create apiKey --secret-type String --secret-value "sk-abc123"
-golem secret create db.password --secret-type String --secret-value "s3cret"
+golem secret create apiKey --type String --value "sk-abc123"
+golem secret create db.password --type String --value "s3cret"
+printenv DB_PASSWORD | golem secret create db.password --type String --value-stdin
+golem secret create apiKey --type String --value "sk-abc123" --update-existing
 golem secret list
-golem secret update-value apiKey --secret-value "new-value"
+golem secret update apiKey --value "new-value"
+golem secret update apiKey --unset
 golem secret delete apiKey
 ```
 
-> **Note:** For `update-value` and `delete`, you can also use `--id <uuid>` instead of the positional path.
+> **Note:** Without a value option, `create` and `update` prompt for the value (hidden input). `--update-existing` updates the value of an existing secret instead of failing. `delete` asks for confirmation (`--yes` skips it). For `update` and `delete`, you can also use `--id <uuid>` instead of the positional path.
 
 ## Secret Defaults in golem.yaml
 
@@ -93,6 +96,6 @@ secretDefaults:
 - The `Secret[T]` companion provides an implicit `Schema` so `Schema.derived` works on parent case classes
 - Missing required secrets cause agent creation to fail
 - Secret paths use camelCase (matching Scala field names)
-- The `--secret-type` argument accepts Scala type names: `String`, `Int`, `Boolean`, `List[String]`, `Option[Int]` (JSON-encoded analysed types like `'{"type":"Str"}'` are also supported as a fallback)
+- The `--type` argument accepts Scala type names: `String`, `Int`, `Boolean`, `List[String]`, `Option[Int]` (if parsing as Scala fails, the other supported languages' type syntax is tried)
 - Use `secretDefaults` in `golem.yaml` only for development; manage production secrets via CLI
 - If the agent also needs non-secret typed config guidance, use `golem-add-config-scala` alongside this skill

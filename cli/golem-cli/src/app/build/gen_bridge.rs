@@ -313,7 +313,7 @@ pub(crate) async fn collect_custom_targets_lenient(
 
         let target_language = custom_target
             .target_language
-            .or_else(|| component.guess_language())
+            .or_else(|| component.guest_language())
             .unwrap_or(GuestLanguage::TypeScript);
 
         let mut agent_types = extract_and_store_component_metadata(ctx, component_name)
@@ -1109,7 +1109,7 @@ fn dependency_guest_bridge_target_languages(
         .filter_map(|consumer_component_name| {
             ctx.application()
                 .component(consumer_component_name)
-                .guess_language()
+                .guest_language()
         })
         .filter(|language| supported_dependency_guest_bridge_target_language(dependency, *language))
         .collect()
@@ -1141,7 +1141,7 @@ async fn collect_custom_targets(
         let component = ctx.application().component(component_name);
         let target_language = custom_target
             .target_language
-            .or_else(|| component.guess_language())
+            .or_else(|| component.guest_language())
             .unwrap_or(GuestLanguage::TypeScript);
 
         let agent_types = {
@@ -1817,6 +1817,7 @@ mcp:
       - url: https://tools.example/mcp
 componentTemplates:
   {language}-test:
+    guestLanguage: {language}
     componentWasm: consumer.wasm
 components:
   app:consumer:
@@ -1882,6 +1883,7 @@ environments:
     server: local
 componentTemplates:
   rust-test:
+    guestLanguage: rust
     componentWasm: consumer.wasm
 components:
   app:consumer:

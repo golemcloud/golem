@@ -99,6 +99,10 @@ fn arb_map_merge_mode_model() -> BoxedStrategy<MapMergeMode> {
     .boxed()
 }
 
+fn arb_guest_language_model() -> BoxedStrategy<GuestLanguage> {
+    prop::sample::select(GuestLanguage::iter().collect::<Vec<_>>()).boxed()
+}
+
 fn arb_vec_merge_mode_model() -> BoxedStrategy<VecMergeMode> {
     prop_oneof![
         Just(VecMergeMode::Append),
@@ -492,7 +496,7 @@ fn arb_component_preset_model() -> BoxedStrategy<ComponentPreset> {
 
 fn arb_component_template_model() -> BoxedStrategy<ComponentTemplate> {
     (
-        arb_token_list_model(),
+        (arb_token_list_model(), arb_opt(arb_guest_language_model())),
         arb_opt(arb_ident()),
         arb_opt(arb_ident()),
         (
@@ -529,7 +533,7 @@ fn arb_component_template_model() -> BoxedStrategy<ComponentTemplate> {
     )
         .prop_map(
             |(
-                templates,
+                (templates, guest_language),
                 component_wasm,
                 output_wasm,
                 (build_merge_mode, build, custom_commands, clean),
@@ -539,6 +543,7 @@ fn arb_component_template_model() -> BoxedStrategy<ComponentTemplate> {
                 presets,
             )| ComponentTemplate {
                 templates,
+                guest_language,
                 component_wasm,
                 output_wasm,
                 dependencies: ComponentDependencies::default(),
@@ -1560,6 +1565,48 @@ fn schema_and_serde_accept_inherited_component_config_schema() {
     });
     assert!(JSON_SCHEMA_VALIDATOR.is_valid(&value));
     serde_json::from_value::<Application>(value).unwrap();
+}
+
+#[test]
+fn schema_and_serde_accept_component_template_guest_language() {
+    for language in GuestLanguage::iter() {
+        let value = serde_json::json!({
+            "app": "test-app",
+            "componentTemplates": {"custom": {"guestLanguage": language.id()}}
+        });
+        assert!(JSON_SCHEMA_VALIDATOR.is_valid(&value), "{}", language.id());
+        let app = serde_json::from_value::<Application>(value.clone()).unwrap();
+        assert_eq!(
+            app.component_templates["custom"].guest_language,
+            Some(language)
+        );
+        assert_eq!(serde_json::to_value(&app).unwrap(), value);
+    }
+}
+
+#[test]
+fn schema_and_serde_reject_unknown_component_template_guest_language() {
+    for language in ["typescript", "TypeScript", "java"] {
+        let value = serde_json::json!({
+            "app": "test-app",
+            "componentTemplates": {"custom": {"guestLanguage": language}}
+        });
+        assert!(!JSON_SCHEMA_VALIDATOR.is_valid(&value), "{language}");
+        assert!(
+            serde_json::from_value::<Application>(value).is_err(),
+            "{language}"
+        );
+    }
+}
+
+#[test]
+fn schema_and_serde_reject_component_guest_language() {
+    let value = serde_json::json!({
+        "app": "test-app",
+        "components": {"app:main": {"componentWasm": "main.wasm", "guestLanguage": "ts"}}
+    });
+    assert!(!JSON_SCHEMA_VALIDATOR.is_valid(&value));
+    assert!(serde_json::from_value::<Application>(value).is_err());
 }
 
 #[test]
