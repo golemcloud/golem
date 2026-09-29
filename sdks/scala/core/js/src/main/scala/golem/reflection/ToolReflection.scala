@@ -19,6 +19,7 @@ import golem.schema.SchemaValue._
 import golem.schema.wire.SchemaWire
 import golem.tool._
 import golem.tool.wire._
+import zio.blocks.async.*
 import zio.blocks.schema.json.Json
 
 import scala.concurrent.{ExecutionContext, Future}
@@ -46,17 +47,16 @@ private[reflection] object ToolReflectionFailures {
     stdout: Option[ToolInputStream],
     result: Future[Either[ToolError[NamedToolError], A]]
   )(implicit ec: ExecutionContext): Future[Either[ToolError[NamedToolError], (A, Array[Byte])]] = {
-    def drain(stream: ToolInputStream, chunks: Vector[Array[Byte]]): Future[Array[Byte]] =
-      stream.read().flatMap {
-        case Right(Some(bytes)) => drain(stream, chunks :+ bytes)
-        case Right(None)        => Future.successful(chunks.flatten.toArray)
-        case Left(failure)      => Future.failed(new ToolStreamException(failure))
+    def drain(stream: ToolInputStream): Future[Array[Byte]] =
+      stream.stream.runCollectAsync.toFuture.flatMap {
+        case Left(failure) => Future.failed(new ToolStreamException(failure))
+        case Right(bytes)  => Future.successful(bytes.toArray)
       }
     val terminal = result.map(Right(_): Either[Throwable, Either[ToolError[NamedToolError], A]]).recover { case error =>
       Left(error)
     }
     val output = stdout
-      .fold(Future.successful(Array.emptyByteArray))(drain(_, Vector.empty))
+      .fold(Future.successful(Array.emptyByteArray))(drain)
       .map(Right(_): Either[Throwable, Array[Byte]])
       .recover { case error => Left(error) }
     terminal.zip(output).map {

@@ -26,24 +26,40 @@ import golem.tool.wire.WitToolError
 import scala.concurrent.{Future, Promise}
 import scala.scalajs.js
 import scala.scalajs.js.JSConverters._
+import zio.blocks.async.*
+import zio.blocks.streams.{JvmType, Stream}
 
 /** The stdin handle of a JS-guest tool invocation. */
 final class JsToolInputStream(val underlying: ToolHostApi.RawByteStream) extends ToolInputStream {
-  private lazy val iterator                                                   = underlying.asyncIterator()
-  private var cancellation: Option[Future[Unit]]                              = None
-  override def read(): Future[Either[ByteStreamFailure, Option[Array[Byte]]]] =
-    FutureInterop
-      .fromPromise(iterator.next())
-      .map { next =>
-        if (next.done) Right(None)
-        else {
-          val item = next.value.asInstanceOf[js.Dynamic]
-          item.tag.asInstanceOf[String] match {
-            case "ok"  => Right(Some(item.`val`.asInstanceOf[js.typedarray.Uint8Array].toArray.map(_.toByte)))
-            case "err" => Left(JsToolOutputStream.decodeFailure(item.`val`))
-          }
-        }
-      }(ToolInvokerRuntime.executionContext)
+  private lazy val iterator                      = underlying.asyncIterator()
+  private var cancellation: Option[Future[Unit]] = None
+
+  private[golem] lazy val chunks: Stream[ByteStreamFailure, Array[Byte]] =
+    Stream
+      .unfoldAsync(()) { _ =>
+        Async.fromFuture(
+          FutureInterop
+            .fromPromise(iterator.next())
+            .map { next =>
+              if (next.done) None
+              else {
+                val item = next.value.asInstanceOf[js.Dynamic]
+                item.tag.asInstanceOf[String] match {
+                  case "ok" =>
+                    Some(Right(item.`val`.asInstanceOf[js.typedarray.Uint8Array].toArray.map(_.toByte)) -> ())
+                  case "err" => Some(Left(JsToolOutputStream.decodeFailure(item.`val`)) -> ())
+                }
+              }
+            }(ToolInvokerRuntime.executionContext)
+        )
+      }(using JvmType.Infer.boxed[Either[ByteStreamFailure, Array[Byte]]])
+      .flatMap {
+        case Right(bytes) => Stream.succeed(bytes)
+        case Left(error)  => Stream.fail(error)
+      }
+      .ensuringAsync(Async.fromFuture(cancel()))
+
+  override lazy val stream: Stream[ByteStreamFailure, Byte] = chunks.flatMap(Stream.fromArray)
 
   override def cancel(): Future[Unit] =
     synchronized {

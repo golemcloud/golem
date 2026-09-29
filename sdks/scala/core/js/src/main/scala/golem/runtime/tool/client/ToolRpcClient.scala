@@ -29,6 +29,9 @@ import golem.tool._
 import scala.concurrent.Future
 import scala.scalajs.js
 import scala.scalajs.js.JSConverters._
+import scala.util.{Failure, Success}
+import zio.blocks.async.*
+import zio.blocks.streams.internal.StreamError
 
 /**
  * Entry point generated typed tool clients use to obtain the RPC transport of
@@ -149,19 +152,46 @@ private[golem] final class JsToolRpcTransport(rpc: ToolHostApi.RawToolRpc) exten
     writer: ToolHostApi.RawToolStdinWriter,
     closed: ToolHostApi.RawToolStdinClosed
   ): Unit = {
-    val closedF              = FutureInterop.fromPromise(closed.waitClosed()).map(_ => false)
-    def loop(): Future[Unit] =
-      Future.firstCompletedOf(List(source.read().map(Some(_)), closedF.map(_ => None))).flatMap {
-        case None                                      => source.cancel().recover { case _ => () }
-        case Some(Right(None))                         => FutureInterop.fromPromise(writer.finish())
-        case Some(Right(Some(bytes))) if bytes.isEmpty => loop()
-        case Some(Right(Some(bytes)))                  =>
-          FutureInterop
-            .fromPromise(writer.write(js.typedarray.Uint8Array.from(bytes.map(_.toShort).toJSArray)))
-            .flatMap(_ => loop())
-        case Some(Left(failure)) => FutureInterop.fromPromise(writer.fail(encodeFailure(failure)))
+    object End
+    val acquisition                                                = source.stream.startAsync.start
+    val reader                                                     = acquisition.toFuture
+    val hostClosed: Future[Option[Either[ByteStreamFailure, Any]]] =
+      FutureInterop.fromPromise(closed.waitClosed()).map(_ => None)
+
+    def cleanup(): Future[Unit] =
+      reader.value match {
+        case Some(Success(active)) => active.close().toFuture
+        case Some(Failure(_))      => Future.successful(())
+        case None                  =>
+          acquisition.cancel()
+          source.cancel().recover { case _ => () }
       }
-    loop().recover { case _ => () }
+
+    def loop(): Future[Unit] =
+      Future
+        .firstCompletedOf(
+          List(
+            reader
+              .flatMap(_.read[Any](End).toFuture)
+              .map(value => Option(Right(value): Either[ByteStreamFailure, Any]))
+              .recover { case error: StreamError => Option(Left(error.value.asInstanceOf[ByteStreamFailure])) },
+            hostClosed
+          )
+        )
+        .flatMap {
+          case None                                                    => Future.successful(())
+          case Some(Right(value)) if value.asInstanceOf[AnyRef] eq End => FutureInterop.fromPromise(writer.finish())
+          case Some(Right(byte: Byte))                                 =>
+            FutureInterop
+              .fromPromise(writer.write(js.typedarray.Uint8Array.from(js.Array((byte & 0xff).toShort))))
+              .flatMap(_ => loop())
+          case Some(Left(failure)) => FutureInterop.fromPromise(writer.fail(encodeFailure(failure)))
+          case Some(Right(other))  => Future.failed(new IllegalStateException(s"unexpected stdin stream value: $other"))
+        }
+    loop().transformWith {
+      case Success(_)     => cleanup()
+      case Failure(error) => cleanup().transformWith(_ => Future.failed(error))
+    }.recover { case _ => () }
     ()
   }
 

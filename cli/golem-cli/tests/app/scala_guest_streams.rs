@@ -124,6 +124,7 @@ async fn deployed_scala_streams_context() -> TestContext {
         import golem.bridge.client.stream_provider.{StreamProviderClient, Item, Bundle}
         import scala.concurrent.Future
         import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+        import zio.blocks.streams.Stream
 
         @agentDefinition()
         trait StreamConsumer extends BaseAgent {
@@ -136,14 +137,8 @@ async fn deployed_scala_streams_context() -> TestContext {
         }
         @agentImplementation()
         final class StreamConsumerImpl(private val name: String) extends StreamConsumer {
-          private def stream[A](values: List[A]): AgentStream[A] = {
-            var remaining = values
-            AgentStream.fromPull(() => {
-              val result = remaining.headOption
-              remaining = remaining.drop(1)
-              Future.successful(result)
-            })
-          }
+          private def stream[A](values: List[A]): AgentStream[A] =
+            AgentStream.fromStream(Stream.fromIterable(values))
           private def collect[A](input: AgentStream[A]): Future[List[A]] =
             input.pull().flatMap {
               case None => input.close().map(_ => Nil)

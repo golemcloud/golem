@@ -292,8 +292,8 @@ object ToolReflectionSpec extends ZIOSpecDefault {
     },
     test("stream failures remain recoverable for reflected calls") {
       val broken = new ToolInputStream {
-        override def read(): Future[Either[ByteStreamFailure, Option[Array[Byte]]]] =
-          Future.successful(Left(ByteStreamFailure.Failed("broken")))
+        override val stream   = zio.blocks.streams.Stream.fail(ByteStreamFailure.Failed("broken"))
+        override def cancel() = Future.successful(())
       }
       val terminal: Future[Either[ToolError[NamedToolError], Option[SchemaValue]]] = Future.successful(Right(None))
       val invocation                                                               = ReflectedToolInvocation(Some(broken), terminal, () => ())
@@ -303,8 +303,8 @@ object ToolReflectionSpec extends ZIOSpecDefault {
     },
     test("declared tool errors win after stdout failure while both channels settle") {
       val broken = new ToolInputStream {
-        override def read(): Future[Either[ByteStreamFailure, Option[Array[Byte]]]] =
-          Future.successful(Left(ByteStreamFailure.Failed("broken")))
+        override val stream   = zio.blocks.streams.Stream.fail(ByteStreamFailure.Failed("broken"))
+        override def cancel() = Future.successful(())
       }
       val terminal   = Promise[Either[ToolError[NamedToolError], Option[SchemaValue]]]()
       val invocation = ReflectedToolInvocation(Some(broken), terminal.future, () => ())

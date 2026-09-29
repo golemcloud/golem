@@ -16,6 +16,9 @@
 
 package golem.tool
 
+import zio.blocks.async.*
+import zio.blocks.streams.Stream
+
 import scala.concurrent.{ExecutionContext, Future}
 
 /**
@@ -26,12 +29,13 @@ import scala.concurrent.{ExecutionContext, Future}
  */
 trait ToolInputStream {
 
-  /** Reads the next chunk. `Right(None)` is clean EOF. */
-  def read(): Future[Either[ByteStreamFailure, Option[Array[Byte]]]] =
-    Future.failed(new UnsupportedOperationException("tool input stream is not readable"))
+  /**
+   * The invocation-scoped byte stream. It must be materialized at most once.
+   */
+  def stream: Stream[ByteStreamFailure, Byte]
 
   /** Stops further consumption and releases any blocked read. */
-  def cancel(): Future[Unit]               = close()
+  def cancel(): Future[Unit]
   private[golem] def close(): Future[Unit] = Future.successful(())
 }
 
@@ -103,14 +107,12 @@ final case class ToolInvocation[+E, +A](
 
   /** Drains stdout concurrently with the structured result. */
   def collect()(implicit ec: ExecutionContext): Future[Either[ToolError[E], (A, Array[Byte])]] = {
-    def drain(chunks: Vector[Array[Byte]]): Future[Array[Byte]] =
-      stdout.read().flatMap {
-        case Right(Some(chunk)) => drain(chunks :+ chunk)
-        case Right(None)        => Future.successful(chunks.flatten.toArray)
-        case Left(failure)      => Future.failed(new ToolStreamException(failure))
-      }
+    val drain = stdout.stream.runCollectAsync.toFuture.flatMap {
+      case Left(failure) => Future.failed(new ToolStreamException(failure))
+      case Right(bytes)  => Future.successful(bytes.toArray)
+    }
     val terminal = result.map(Right(_): Either[Throwable, Either[ToolError[E], A]]).recover { case t => Left(t) }
-    val output   = drain(Vector.empty).map(Right(_): Either[Throwable, Array[Byte]]).recover { case t => Left(t) }
+    val output   = drain.map(Right(_): Either[Throwable, Array[Byte]]).recover { case t => Left(t) }
     terminal.zip(output).flatMap {
       case (Right(Left(error @ ToolError.Tool(_))), _) => Future.successful(Left(error))
       case (Left(error), _)                            => Future.failed(error)

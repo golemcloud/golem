@@ -64,7 +64,7 @@ fn corpus_router_source(cases: &[Value]) -> String {
             format!("HttpHeader({name:?}, {})", scala_bytes(&value))
         }).collect::<Vec<_>>().join(",");
         let stream = if input["body_producer"] == "fails-if-polled" {
-            "AgentStream.fromPull[Array[Byte]](() => Future.failed(new IllegalStateException(\"body polled\")))".into()
+            "AgentStream.fromStream(Stream.die(new IllegalStateException(\"body polled\")))".into()
         } else {
             let chunks = input["chunks_hex"].as_array().into_iter().flatten().map(|c| scala_bytes(&bytes(c.as_str().unwrap()))).collect::<Vec<_>>().join(",");
             format!("stream(List({chunks}))")
@@ -78,20 +78,15 @@ fn corpus_router_source(cases: &[Value]) -> String {
         import golem.runtime.http.*
         import golem.schema.AgentStream
         import scala.concurrent.Future
+        import zio.blocks.streams.Stream
         @httpRouter("ScalaCorpusRouter", "/")
         trait ScalaCorpusRouter extends BaseAgent {{
           @httpHandler def serve(request: HttpRequest): HttpResponse
         }}
         @agentImplementation()
         final class ScalaCorpusRouterImpl() extends ScalaCorpusRouter {{
-          private def stream(chunks: List[Array[Byte]]): AgentStream[Array[Byte]] = {{
-            var remaining = chunks
-            AgentStream.fromPull(() => {{
-              val next = remaining.headOption
-              remaining = remaining.drop(1)
-              Future.successful(next)
-            }})
-          }}
+          private def stream(chunks: List[Array[Byte]]): AgentStream[Array[Byte]] =
+            AgentStream.fromStream(Stream.fromIterable(chunks))
           def serve(request: HttpRequest): HttpResponse = request.path match {{
             {branches}
             case _ => HttpResponse(UShort(200), List(

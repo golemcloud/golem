@@ -37,6 +37,7 @@ import scala.concurrent.Future
 import scala.scalajs.js
 import scala.scalajs.js.JSConverters._
 import scala.scalajs.js.annotation.JSExportTopLevel
+import zio.blocks.async.*
 
 object ToolMiddlewareGuest {
   private implicit val ec: scala.concurrent.ExecutionContext =
@@ -306,32 +307,39 @@ object ToolMiddlewareGuest {
             case Left(error) => Future.failed(new IllegalStateException(s"middleware stdout finish failed: $error"))
           }
         case Some(stream: JsMiddlewareOutputStream) =>
-          val source               = new JsToolInputStream(stream.underlying.asInstanceOf[ToolHostApi.RawByteStream])
-          val target               = new JsToolOutputStream(writer)
-          def loop(): Future[Unit] = source.read().flatMap {
-            case Right(Some(bytes)) =>
-              target.write(bytes).flatMap {
-                case Right(_)    => loop()
-                case Left(error) => Future.failed(new IllegalStateException(s"middleware stdout write failed: $error"))
-              }
-            case Right(None) =>
-              target.finish().flatMap {
-                case Right(_)    => Future.successful(())
-                case Left(error) => Future.failed(new IllegalStateException(s"middleware stdout finish failed: $error"))
-              }
-            case Left(failure) =>
-              target.fail(failure).flatMap {
-                case Right(_)    => Future.successful(())
-                case Left(error) =>
-                  Future.failed(new IllegalStateException(s"middleware stdout failure forwarding failed: $error"))
-              }
-          }
-          loop().map(_ =>
-            JsInvocationResult(
-              result.result.map(v => SchemaWireInterop.typedToJs(SchemaWire.typedSchemaValueToWit(v))).orUndefined,
-              js.undefined
+          val source = new JsToolInputStream(stream.underlying.asInstanceOf[ToolHostApi.RawByteStream])
+          val target = new JsToolOutputStream(writer)
+          source.chunks
+            .runForeachAsync(bytes =>
+              Async.fromFuture(
+                target.write(bytes).flatMap {
+                  case Right(_)    => Future.successful(())
+                  case Left(error) =>
+                    Future.failed(new IllegalStateException(s"middleware stdout write failed: $error"))
+                }
+              )
             )
-          )
+            .toFuture
+            .flatMap {
+              case Right(_) =>
+                target.finish().flatMap {
+                  case Right(_)    => Future.successful(())
+                  case Left(error) =>
+                    Future.failed(new IllegalStateException(s"middleware stdout finish failed: $error"))
+                }
+              case Left(failure) =>
+                target.fail(failure).flatMap {
+                  case Right(_)    => Future.successful(())
+                  case Left(error) =>
+                    Future.failed(new IllegalStateException(s"middleware stdout failure forwarding failed: $error"))
+                }
+            }
+            .map(_ =>
+              JsInvocationResult(
+                result.result.map(v => SchemaWireInterop.typedToJs(SchemaWire.typedSchemaValueToWit(v))).orUndefined,
+                js.undefined
+              )
+            )
         case Some(other) =>
           Future.failed(new IllegalStateException(s"unexpected middleware stdout: ${other.getClass.getName}"))
       }
