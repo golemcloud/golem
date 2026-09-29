@@ -39,8 +39,7 @@ use crate::filesystem_snapshot::{
 use crate::sandbox_filesystem::FilesystemVolume;
 use crate::services::agent_filesystem::FilesystemCapture;
 use crate::services::golem_config::{
-    FilesystemPressureConfig, FilesystemSnapshotStoreConfig, FilesystemSnapshotUploadConfig,
-    FilesystemSnapshotsConfig,
+    FilesystemPressureConfig, FilesystemSnapshotUploadConfig, FilesystemSnapshotsConfig,
 };
 use futures::future::BoxFuture;
 use golem_common::model::oplog::FilesystemSnapshotName;
@@ -254,6 +253,39 @@ pub(crate) fn store_name(
     SnapshotName::new(name.as_str())
 }
 
+/// Where the store of an enabled service comes from.
+pub struct StoreSource(Source);
+
+enum Source {
+    /// The store that the configuration names, on the blob storage of the executor.
+    Configured(Arc<dyn golem_service_base::storage::blob::BlobStorage>),
+    /// A store that a test gives, with its upload settings. It bypasses the configuration, and
+    /// its volume always has room.
+    #[cfg(feature = "test-utils")]
+    Given(
+        Arc<dyn FilesystemSnapshotStore>,
+        FilesystemSnapshotUploadConfig,
+    ),
+}
+
+impl StoreSource {
+    /// The store that the configuration names, on `blob_storage`.
+    pub fn configured(
+        blob_storage: Arc<dyn golem_service_base::storage::blob::BlobStorage>,
+    ) -> Self {
+        Self(Source::Configured(blob_storage))
+    }
+
+    /// `store` with `settings`, on any storage mode and whatever the configuration says.
+    #[cfg(feature = "test-utils")]
+    pub(crate) fn given(
+        store: Arc<dyn FilesystemSnapshotStore>,
+        settings: FilesystemSnapshotUploadConfig,
+    ) -> Self {
+        Self(Source::Given(store, settings))
+    }
+}
+
 /// The filesystem snapshots of the agents of this executor.
 ///
 /// A disabled service answers each admission with [`SnapshotSkip::Disabled`], each restore with
@@ -280,47 +312,43 @@ struct Core {
 }
 
 impl AgentFilesystemSnapshots {
-    /// Makes the service that the configuration asks for.
-    ///
-    /// `Managed` needs a sandbox provisioning on managed XFS storage, and `managed_storage` tells
-    /// whether the executor has it. `store` makes the store of an enabled service from its
-    /// settings. A shutdown of the service also shuts the store down.
+    /// Makes the service that the configuration asks for, as [`rules::binding`] says, with the
+    /// store of `source`. `managed_storage` tells whether the sandbox provisioning uses managed
+    /// XFS storage. When `shutdown` ends, the service stops its jobs and shuts the store down.
     pub(crate) fn bind(
         config: &FilesystemSnapshotsConfig,
-        managed_storage: bool,
-        store: impl FnOnce(&FilesystemSnapshotStoreConfig) -> Arc<dyn FilesystemSnapshotStore>,
+        source: StoreSource,
         room: VolumeRoom,
-        shutdown: CancellationToken,
-    ) -> Result<Self, String> {
-        match config {
-            FilesystemSnapshotsConfig::Disabled(_) => Ok(Self::disabled()),
-            FilesystemSnapshotsConfig::Managed(_) if !managed_storage => {
-                Err("filesystem snapshots require managed XFS storage".to_string())
+        managed_storage: bool,
+        shutdown: &crate::services::shutdown::Shutdown,
+    ) -> Result<Arc<Self>, String> {
+        let snapshots = Arc::new(match source.0 {
+            Source::Configured(blob_storage) => match rules::binding(config, managed_storage)? {
+                rules::Binding::Disabled => Self::disabled(),
+                rules::Binding::Managed(config) => Self::enabled(
+                    crate::filesystem_snapshot::managed_store(blob_storage, config),
+                    config.uploads().clone(),
+                    room,
+                    shutdown.token(),
+                ),
+            },
+            #[cfg(feature = "test-utils")]
+            Source::Given(store, settings) => {
+                Self::enabled(store, settings, VolumeRoom::Unlimited, shutdown.token())
             }
-            FilesystemSnapshotsConfig::Managed(config) => Ok(Self::enabled(
-                store(config),
-                config.uploads().clone(),
-                room,
-                shutdown,
-            )),
-        }
+        });
+        let token = shutdown.token();
+        let stopping = Arc::clone(&snapshots);
+        shutdown.spawn(async move {
+            token.cancelled().await;
+            stopping.shut_down().await;
+        });
+        Ok(snapshots)
     }
 
     /// Makes a service that keeps no filesystem snapshots.
     fn disabled() -> Self {
         Self { core: None }
-    }
-
-    /// Makes an enabled service over `store` without the storage check of [`Self::bind`], so
-    /// that executor tests can keep filesystem snapshots on unmanaged storage.
-    #[cfg(feature = "test-utils")]
-    pub(crate) fn enabled_without_storage_check(
-        store: Arc<dyn FilesystemSnapshotStore>,
-        settings: FilesystemSnapshotUploadConfig,
-        room: VolumeRoom,
-        shutdown: CancellationToken,
-    ) -> Self {
-        Self::enabled(store, settings, room, shutdown)
     }
 
     /// Makes a service over `store` with `settings`.
@@ -522,9 +550,8 @@ impl AgentFilesystemSnapshots {
         }
     }
 
-    /// Stops the jobs and the clean-up queue, and waits for them. Call it once, when the executor
-    /// shuts down.
-    pub(crate) async fn shut_down(&self) {
+    /// Stops the jobs and the clean-up queue, and waits for them, then shuts the store down.
+    async fn shut_down(&self) {
         if let Some(core) = &self.core {
             core.shutdown.cancel();
             core.jobs.close();

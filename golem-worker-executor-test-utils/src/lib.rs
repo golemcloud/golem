@@ -1965,13 +1965,13 @@ pub struct TestExecutorOverrides {
     /// should expose to running agents (mirrors `retryPolicyDefaults` in
     /// `golem.yaml`).  When `None`, an empty policy list is used.
     pub retry_policies: Option<Vec<NamedRetryPolicy>>,
-    /// Keeps filesystem snapshots in this store, on any storage mode. A test keeps the store
-    /// across restarts of the executor. When `None`, the configuration decides.
-    pub filesystem_snapshot_store:
-        Option<golem_worker_executor::filesystem_snapshot_testing::TestFilesystemSnapshotStore>,
-    /// The upload settings of `filesystem_snapshot_store`. When `None`, the defaults.
-    pub filesystem_snapshot_uploads:
-        Option<golem_worker_executor::services::golem_config::FilesystemSnapshotUploadConfig>,
+    /// Keeps filesystem snapshots in this store, with these upload settings, on any storage
+    /// mode. A test keeps the store across restarts of the executor. When `None`, the
+    /// configuration decides.
+    pub filesystem_snapshot_store: Option<(
+        golem_worker_executor::filesystem_snapshot_testing::TestFilesystemSnapshotStore,
+        golem_worker_executor::services::golem_config::FilesystemSnapshotUploadConfig,
+    )>,
 }
 
 fn make_base_test_config(deps: &WorkerExecutorTestDependencies) -> GolemConfig {
@@ -3256,29 +3256,17 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
         }
     }
 
-    fn create_agent_filesystem_snapshots(
+    fn filesystem_snapshot_store(
         &self,
-        golem_config: &GolemConfig,
         blob_storage: Arc<dyn golem_service_base::storage::blob::BlobStorage>,
-        active_agents: &Arc<ActiveAgents<TestWorkerCtx>>,
-        shutdown: &golem_worker_executor::services::shutdown::Shutdown,
-    ) -> anyhow::Result<
-        Arc<golem_worker_executor::services::agent_filesystem_snapshots::AgentFilesystemSnapshots>,
-    > {
+    ) -> golem_worker_executor::services::agent_filesystem_snapshots::StoreSource {
         match &self.overrides.filesystem_snapshot_store {
-            Some(store) => Ok(store.service(
-                self.overrides
-                    .filesystem_snapshot_uploads
-                    .clone()
-                    .unwrap_or_default(),
-                shutdown,
-            )),
-            None => golem_worker_executor::bind_agent_filesystem_snapshots(
-                golem_config,
-                blob_storage,
-                active_agents,
-                shutdown,
-            ),
+            Some((store, uploads)) => store.source(uploads.clone()),
+            None => {
+                golem_worker_executor::services::agent_filesystem_snapshots::StoreSource::configured(
+                    blob_storage,
+                )
+            }
         }
     }
 

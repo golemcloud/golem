@@ -93,8 +93,7 @@ async fn start_snapshotting(
                 config.filesystem_storage.deterministic_root_dir = root.clone();
                 config.oplog.default_snapshotting = SnapshotPolicy::EveryNInvocation { count: 1 };
             })),
-            filesystem_snapshot_store: Some(store.clone()),
-            filesystem_snapshot_uploads: Some(uploads(confirmation_wait)),
+            filesystem_snapshot_store: Some((store.clone(), uploads(confirmation_wait))),
             ..TestExecutorOverrides::default()
         },
     )
@@ -129,7 +128,8 @@ async fn start_replaying_with(
                 config.oplog.default_snapshotting = SnapshotPolicy::Disabled;
                 config.oplog.oplog_processor_snapshotting = SnapshotPolicy::Disabled;
             })),
-            filesystem_snapshot_store: store.cloned(),
+            filesystem_snapshot_store: store
+                .map(|store| (store.clone(), FilesystemSnapshotUploadConfig::default())),
             ..TestExecutorOverrides::default()
         },
     )

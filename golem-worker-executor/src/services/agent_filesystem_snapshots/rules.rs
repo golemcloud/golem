@@ -19,7 +19,9 @@
 use super::{ConfirmOutcome, JobDecision, SnapshotKind, SnapshotSkip};
 use crate::filesystem_snapshot::{SnapshotInfo, SnapshotScope, SnapshotStoreError};
 use crate::sandbox_filesystem::FilesystemSpace;
-use crate::services::golem_config::FilesystemPressureConfig;
+use crate::services::golem_config::{
+    FilesystemPressureConfig, FilesystemSnapshotStoreConfig, FilesystemSnapshotsConfig,
+};
 use golem_common::model::RetryConfig;
 use golem_common::model::oplog::FilesystemSnapshotName;
 use golem_common::retries::get_delay;
@@ -453,6 +455,30 @@ pub(super) fn update_admission(skip: SnapshotSkip, running: Option<JobId>) -> Up
     match (skip, running) {
         (SnapshotSkip::UploadInFlight, Some(id)) => UpdateAdmit::WaitForEnd(id),
         _ => UpdateAdmit::Refuse,
+    }
+}
+
+/// What a service binds to.
+#[derive(Debug)]
+pub(super) enum Binding<'a> {
+    /// The service keeps no filesystem snapshots.
+    Disabled,
+    /// The service keeps filesystem snapshots with the store and settings of `config`.
+    Managed(&'a FilesystemSnapshotStoreConfig),
+}
+
+/// What `config` binds to. `Managed` needs a sandbox provisioning on managed XFS storage, and
+/// `managed_storage` tells whether the executor has it.
+pub(super) fn binding(
+    config: &FilesystemSnapshotsConfig,
+    managed_storage: bool,
+) -> Result<Binding<'_>, String> {
+    match config {
+        FilesystemSnapshotsConfig::Disabled(_) => Ok(Binding::Disabled),
+        FilesystemSnapshotsConfig::Managed(_) if !managed_storage => {
+            Err("filesystem snapshots require managed XFS storage".to_string())
+        }
+        FilesystemSnapshotsConfig::Managed(config) => Ok(Binding::Managed(config)),
     }
 }
 
@@ -995,6 +1021,23 @@ mod tests {
                 UpdateAdmit::Refuse,
                 UpdateAdmit::Refuse,
             ]
+        );
+    }
+
+    #[test]
+    fn managed_snapshots_bind_only_to_managed_storage() {
+        let managed = FilesystemSnapshotsConfig::Managed(Box::new(
+            FilesystemSnapshotStoreConfig::new(&"0".repeat(128), Duration::from_secs(30), 4, 3)
+                .unwrap(),
+        ));
+        let disabled = FilesystemSnapshotsConfig::default();
+
+        assert!(matches!(binding(&disabled, false), Ok(Binding::Disabled)));
+        assert!(matches!(binding(&disabled, true), Ok(Binding::Disabled)));
+        assert!(matches!(binding(&managed, true), Ok(Binding::Managed(_))));
+        assert_eq!(
+            binding(&managed, false).err(),
+            Some("filesystem snapshots require managed XFS storage".to_string())
         );
     }
 

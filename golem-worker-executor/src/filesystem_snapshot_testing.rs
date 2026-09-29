@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! A filesystem snapshot store and the service over it, for the tests of the executor.
+//! A filesystem snapshot store for the tests of the executor.
 //!
 //! The store keeps the snapshots in memory. A clone shares the snapshots, so a test keeps its
 //! store across a restart of the executor. A test can make saves fail or slow, make restores
@@ -22,9 +22,8 @@ use crate::filesystem_snapshot::{
     ChangeDetection, FilesystemSnapshotStore, InMemorySnapshotStore, SnapshotInfo, SnapshotName,
     SnapshotScope, SnapshotStoreError,
 };
-use crate::services::agent_filesystem_snapshots::AgentFilesystemSnapshots;
+use crate::services::agent_filesystem_snapshots::StoreSource;
 use crate::services::golem_config::FilesystemSnapshotUploadConfig;
-use crate::services::shutdown::Shutdown;
 use async_trait::async_trait;
 use golem_common::model::OwnedAgentId;
 use std::path::Path;
@@ -168,26 +167,10 @@ impl TestFilesystemSnapshotStore {
         }
     }
 
-    /// Gives the service over this store with `uploads`. The service stops when the executor
-    /// shuts down.
-    pub fn service(
-        &self,
-        uploads: FilesystemSnapshotUploadConfig,
-        shutdown: &Shutdown,
-    ) -> Arc<AgentFilesystemSnapshots> {
-        let snapshots = Arc::new(AgentFilesystemSnapshots::enabled_without_storage_check(
-            Arc::new(self.clone()),
-            uploads,
-            crate::services::agent_filesystem_snapshots::VolumeRoom::Unlimited,
-            shutdown.token(),
-        ));
-        let stopping = Arc::clone(&snapshots);
-        let token = shutdown.token();
-        shutdown.spawn(async move {
-            token.cancelled().await;
-            stopping.shut_down().await;
-        });
-        snapshots
+    /// Gives this store as the store of the service, with `uploads`, on any storage mode and
+    /// whatever the configuration says.
+    pub fn source(&self, uploads: FilesystemSnapshotUploadConfig) -> StoreSource {
+        StoreSource::given(Arc::new(self.clone()), uploads)
     }
 }
 

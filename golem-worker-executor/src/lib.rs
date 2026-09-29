@@ -68,7 +68,9 @@ use self::services::worker_fork::DefaultWorkerFork;
 use self::wasi_host::create_linker;
 use crate::grpc::WorkerExecutorImpl;
 use crate::services::active_agents::{ActiveAgents, InvocationLoops};
-use crate::services::agent_filesystem_snapshots::{AgentFilesystemSnapshots, VolumeRoom};
+use crate::services::agent_filesystem_snapshots::{
+    AgentFilesystemSnapshots, StoreSource, VolumeRoom,
+};
 use crate::services::agent_types::AgentTypesService;
 use crate::services::blob_store::{BlobStoreService, DefaultBlobStoreService};
 use crate::services::card::{CardService, CardServiceDefault};
@@ -186,35 +188,26 @@ impl Drop for RunDetails {
     }
 }
 
-/// Binds the service of the filesystem snapshots to the configuration. It builds the store on
-/// `blob_storage` when the service is enabled, and stops the service and the store when the
-/// executor shuts down.
-pub fn bind_agent_filesystem_snapshots<Ctx: WorkerCtx>(
+/// Binds the service of the filesystem snapshots to the configuration, with the store of
+/// `source`. The service stops its jobs and its store when the executor shuts down.
+fn bind_agent_filesystem_snapshots<Ctx: WorkerCtx>(
     golem_config: &GolemConfig,
-    blob_storage: Arc<dyn BlobStorage>,
+    source: StoreSource,
     active_agents: &Arc<ActiveAgents<Ctx>>,
     shutdown: &services::shutdown::Shutdown,
 ) -> anyhow::Result<Arc<AgentFilesystemSnapshots>> {
     let filesystems = active_agents.agent_filesystems();
-    let snapshots = AgentFilesystemSnapshots::bind(
+    AgentFilesystemSnapshots::bind(
         &golem_config.filesystem_snapshots,
-        filesystems.provisioning().uses_managed_storage(),
-        |config| filesystem_snapshot::managed_store(blob_storage, config),
+        source,
         VolumeRoom::Pressure {
             volume: filesystems.volume().clone(),
             pressure: filesystems.pressure_policy().clone(),
         },
-        shutdown.token(),
+        filesystems.provisioning().uses_managed_storage(),
+        shutdown,
     )
-    .map_err(|error| anyhow!(error))?;
-    let snapshots = Arc::new(snapshots);
-    let token = shutdown.token();
-    let stopping = Arc::clone(&snapshots);
-    shutdown.spawn(async move {
-        token.cancelled().await;
-        stopping.shut_down().await;
-    });
-    Ok(snapshots)
+    .map_err(|error| anyhow!(error))
 }
 
 /// The Bootstrap trait should be implemented by all Worker Executors to customize the initialization
@@ -402,16 +395,10 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         rpc
     }
 
-    /// Creates the service of the filesystem snapshots. The default is
-    /// [`bind_agent_filesystem_snapshots`].
-    fn create_agent_filesystem_snapshots(
-        &self,
-        golem_config: &GolemConfig,
-        blob_storage: Arc<dyn BlobStorage>,
-        active_agents: &Arc<ActiveAgents<Ctx>>,
-        shutdown: &services::shutdown::Shutdown,
-    ) -> anyhow::Result<Arc<AgentFilesystemSnapshots>> {
-        bind_agent_filesystem_snapshots(golem_config, blob_storage, active_agents, shutdown)
+    /// Gives the store of the filesystem snapshots. The default is the store that the
+    /// configuration names, on `blob_storage`.
+    fn filesystem_snapshot_store(&self, blob_storage: Arc<dyn BlobStorage>) -> StoreSource {
+        StoreSource::configured(blob_storage)
     }
 
     fn wrap_worker_enumeration_service(
@@ -1110,9 +1097,9 @@ pub async fn create_worker_executor_impl<
 
     let additional_deps = bootstrap.create_additional_deps(registry_service.clone());
 
-    let agent_filesystem_snapshots = bootstrap.create_agent_filesystem_snapshots(
+    let agent_filesystem_snapshots = bind_agent_filesystem_snapshots(
         &golem_config,
-        blob_storage.clone(),
+        bootstrap.filesystem_snapshot_store(blob_storage.clone()),
         &active_agents,
         &shutdown,
     )?;
