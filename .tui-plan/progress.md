@@ -1,5 +1,34 @@
 # Progress
 
+## 2026-09-29
+
+- Added `product-contract.md` as the authoritative behavior and readiness
+  contract for the rebuilt TUI.
+- Locked Dev and Ops as the initial workspaces. Dev owns Build & Deploy, Server,
+  and REPL with optional right/bottom subviews; Ops owns resource subjects,
+  Activity, Metrics, and contextual resource actions.
+- Locked the scalable hierarchical leader, switchable All/Context palette,
+  subject/view/pane navigation, finite Jobs versus persistent sessions,
+  bounded Activity scope, family-first Metrics model, and remote mutation
+  safeguards.
+- Rewrote the architecture, phases, and task ledger around reviewable
+  implementation checkpoints with explicit planning prerequisites and
+  recommended commit boundaries.
+- Reconciled the UI-system, testing, and review ledgers with the new contract
+  and marked the accepted Ops Agents implementation as the visual and
+  interaction baseline rather than the final product topology.
+- Removed the previous embedded Metrics receiver/store direction from the
+  active plan. Acquisition, retention, Docker integration, and any companion
+  web UI are deferred until the provider-independent TUI is accepted.
+- Kept seven required planning gates visible: Dev view content, responsive
+  shell priorities, quit policy, resource action/risk inventory, Activity
+  bounds, Metrics controls, and typed provider boundaries/order.
+
+Validation:
+
+- documentation authority and stale-contract searches
+- `git diff --check`
+
 ## 2026-09-28
 
 - Replaced the unreliable `alt`+arrow details resize binding with the

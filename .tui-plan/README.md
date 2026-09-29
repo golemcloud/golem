@@ -1,63 +1,62 @@
 # Golem CLI TUI Plan
 
-This directory tracks the active product and implementation plan for the terminal UI in `cli/golem-cli`, exposed as `golem tui` and `golem-cli tui`.
+This directory tracks the active product, design, architecture, implementation,
+and validation plan for the terminal UI in cli/golem-cli, exposed through both
+golem tui and golem-cli tui.
 
-The TUI is being rebuilt from the accepted terminal design foundation. The
-first production surface is an Ops-first agent explorer backed by the existing
-typed agent-list call. Earlier Home, Dev, server-drawer, REPL, command-output,
-and nested agent-inspect UI remains implementation history rather than the
-visible product contract.
+## Current State
 
-## Current Direction
+- The accepted visual foundation and the live typed Agents Overview are in
+  production.
+- Production currently exposes only Ops, Agents Overview, and a visibly fake
+  Metrics interaction fixture.
+- Dormant Dev, Server, REPL, Output, and older workspace code is implementation
+  history, not the current product contract.
+- The next rebuild restores Dev and expands Ops using the locked model in
+  product-contract.md.
+- Metrics acquisition, persistence, Docker integration, and a possible web UI
+  are intentionally deferred until the provider-independent TUI feels right.
 
-The current work promotes the accepted visual foundation into production and
-uses it to establish the first real product workflow:
+## Locked Direction
 
-- A rule-based action system for long names, shortcuts, palette entries, help, footer hints, scopes, and availability.
-- A test driver and high-level scenario tests that reduce regressions between manual TUI reviews.
-- A TUI-owned context model for manifest, local, cloud, custom, and non-manifest modes.
-- A scoped logging context so concurrent direct handler calls can capture logs without global cross-talk.
-- An Ops-only shell that starts on the Agents subject and retains `[Ops]` as
-  the single workspace selector without reserving a keyboard-layout-dependent
-  number shortcut.
-- Overview and Metrics as views over the selected server/app/environment scope;
-  Metrics currently contains a permanently labelled fake OTLP explorer for UI
-  review, while Activity follows only with a direct typed provider.
-- Reusable cursor-backed collections with exact server Dataset filters, local
-  loaded-row Find, explicit loaded/more-available state, and focusable
-  resizable details.
-- A local observability implementation for GOL-162, continuing the discovery
-  recorded in [golemcloud/golem#3456](https://github.com/golemcloud/golem/issues/3456).
+- The global context is app/env/server.
+- Dev and Ops are the initial top-level workspaces, with navigation designed for
+  additional workspaces later.
+- Dev contains Build & Deploy, Server, and REPL as one primary view plus
+  optional right or bottom subviews.
+- Ops uses subject then view navigation with Agents, Deployment, Environment,
+  and Server as minimal root subjects.
+- Activity provides Timeline, Journal, and single-Agent Live representations.
+- Metrics uses metric-family then concrete-series drill-down and keeps Golem
+  service metrics distinct from Agent OTLP telemetry.
+- Relevant resource mutations are available through contextual actions with
+  explicit risk classes and a session-only remote write lock.
+- Finite commands and mutations use the global Jobs overlay. Server, REPL, and
+  Live are persistent sessions.
+- Only visual preferences persist across restarts; operational state remains
+  session-local.
 
-## Main Arcs
+## Sources Of Truth
 
-1. Action and help rules.
-2. Test driver and regression harness.
-3. Scoped logging and context execution.
-4. Context and environment model.
-5. Ops-first production rebuild.
-6. Local observability workflow for GOL-162.
+- product-contract.md: locked behavior, vocabulary, scope, and remaining
+  product decisions.
+- ui-system.md: accepted visual and interaction rules.
+- architecture.md: runtime boundaries, state ownership, providers, Jobs, and
+  persistence structure.
+- tasks.md: exact readiness checklist and executable backlog.
+- phases.md: checkpoint order and acceptance gates.
+- testing.md: test layers, scenarios, preview coverage, and validation commands.
+- dx-ux-review.md: visual review ledger and active acceptance focus.
+- progress.md: chronological implementation and validation history.
 
-## Key Decisions
+When documents disagree, product-contract.md owns product behavior,
+ui-system.md owns rendering, and tasks.md owns current executable status.
+Progress entries remain historical and must not override the active contract.
 
-- Keep the TUI in `golem-cli` so both entry points use the same implementation.
-- Prefer nested CLI/PTTY workflows where they preserve existing dev/interactive behavior; ops/resource exploration should move toward direct typed calls.
-- Treat the initial CLI `Context` as input, not permanent global truth. The TUI needs its own selected context and each job needs an immutable launch context.
-- Do not centralize all TUI event mapping in a generic data provider. Use a small context executor that handles context/logging/background execution while each view owns its request and event mapping.
-- Do not add TUI-specific command handler methods such as `list_agents_for_tui`. Extract or expose neutral data-returning helpers and let CLI rendering plus TUI mapping sit at the edges.
-- Derive visible shortcuts and help from action metadata wherever possible.
-- Keep neutral context, terminal, PTY, job, and output building blocks, while
-  deleting or hiding obsolete workspace-specific UI instead of preserving a
-  compatibility renderer.
-- Keep tests focused on behavior and inspectable frame output instead of large brittle snapshots.
+## Working Rule
 
-## Document Index
-
-- `architecture.md`: runtime, action rules, context model, job model, and module direction.
-- `ui-system.md`: visual system, action/help rules, shortcuts, and dev/ops workspace split.
-- `testing.md`: TUI driver strategy, scenario coverage, and validation commands.
-- `dx-ux-review.md`: case-by-case design review workflow, coverage, and active
-  feedback ledger.
-- `phases.md`: prioritized arcs and acceptance criteria.
-- `tasks.md`: active goal-sized backlog.
-- `progress.md`: running implementation notes and validation history.
+Before implementing a milestone, close its unchecked planning gate in tasks.md,
+update the owning source-of-truth document, and record a checkpoint-sized
+implementation batch. After implementation, run the smallest focused tests,
+the relevant preview coverage, package checks, and git diff --check before
+marking the milestone complete.

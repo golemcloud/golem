@@ -22,24 +22,23 @@ a separate explicit decision and never creates a user-selectable theme.
 
 ## Current Focus
 
-- Focus: Ops-first production rebuild (`UX-022`)
-- Cases: `ops-agents`, `ops-metrics-demo`, `activity-timeline`,
-  `activity-journal`, plus `shell-compact`
-- Decision: promote the accepted foundation as the sole production visual
-  system, start directly in Ops, and rebuild around Agents Overview and a
-  permanently labelled fake OTLP explorer for Metrics layout review.
-- Options: no legacy visual variant. Activity is preview-only until its direct
-  typed provider is ready.
-- Scratch observations: the focused row and explicit cross-agent selection are
-  separate states. The frozen marker slot must communicate both without
-  changing column alignment. Reachable overlays now share the accepted frame,
-  notice, selected-row, and shortcut grammar. Agent Find retains modified
-  shortcuts, and pane focus/resize plus list mouse scrolling are discoverable
-  and covered by interaction tests.
-- Queued next: live Agents Overview visual acceptance
-- Exit: production and deterministic previews share the same shell/table
-  components, legacy workspaces are unreachable, and wide/compact agent and
-  metric states are accepted.
+- Focus: lock the Dev/Ops rebuild contract and readiness (`UX-023`)
+- Cases: no new workflow preview until its owning planning gate closes.
+- Decision: Dev owns Build & Deploy, Server, and REPL; Ops owns resource
+  subjects, Activity, Metrics, and their contextual actions. Dev starts with
+  one primary view and optional right/bottom subviews. Ops navigates subject,
+  then view, then pane. Jobs are finite operations, while Server, REPL, and Live
+  are persistent sessions.
+- Options: Metrics acquisition and any Docker or web companion remain deferred
+  until the provider-independent TUI passes visual and terminal acceptance.
+- Scratch observations: the accepted Agents explorer and visual system are the
+  implementation baseline, not the complete product. Exact Dev content, shell
+  priorities, quit behavior, action/risk inventory, Activity bounds, Metrics
+  controls, and provider ordering remain explicit planning gates.
+- Queued next: discuss and check the remaining gates in tasks.md, beginning
+  with the three Dev views.
+- Exit: every non-deferred planning gate is checked and the first eligible
+  implementation checkpoint has decision-complete stories and acceptance.
 
 The `shell-compact` case reuses the default shell content at 50×16 so compact
 behavior can be evaluated without introducing another workflow or visual
@@ -47,6 +46,8 @@ direction.
 
 ## Sources Of Truth
 
+- Locked product behavior and open planning gates belong in
+  `product-contract.md`.
 - Durable product, visual, and interaction rules belong in `ui-system.md`.
 - Approved executable work belongs in `tasks.md`.
 - Completed batches and validation history belong in `progress.md`.
@@ -504,7 +505,9 @@ explicit review.
   available for compact tables and occupy one cell without padding. Multi-line
   selection is restricted to odd/even tables, which distinguish odd/even ×
   selected/unselected with four row surfaces. Selected surfaces carry the
-  accepted restrained amber tint and accent-colored full-height rail.
+  accepted restrained amber tint and accent-colored full-height rail. The
+  later product contract supersedes selected-row expansion for primary resource
+  collections: those rows are one line and full values live in Details.
 
 ### UX-020 — Establish adaptive and minimal layouts
 
@@ -528,7 +531,9 @@ explicit review.
   selection shapes only at narrower widths; contextual hints collapse while
   the workspace and Commands/Help/Quit rows remain. `ContextHeader`,
   `WorkspaceSelector`, `design_lab_compact_shell`, and focused size-boundary
-  render tests enforce the contract.
+  render tests enforce the historical shell. `UX-023` supersedes the numbered
+  Home/Dev/Ops navigation with grouped, scalable Dev/Ops navigation while
+  retaining the compact-priority principle.
 
 ### UX-021 — Inventory user goals and derive workflows
 
@@ -551,11 +556,12 @@ explicit review.
 - Outcome: the first product is an Ops-only explorer. Agents is the initial
   subject; Overview and Metrics are production views; Activity later provides
   Timeline and Journal over an explicit bounded agent selection. Home is
-  dropped, and Dev returns only with a rebuilt workflow.
+  dropped, and Dev returns only with a rebuilt workflow. `UX-023` records that
+  rebuilt Dev/Ops contract and supersedes the Ops-only product boundary.
 
 ### UX-022 — Promote the foundation into an Ops-first product
 
-- Status: awaiting visual acceptance
+- Status: accepted
 - Preview: deterministic Ops agent, fake-OTLP-explorer, and Activity stories
 - Area: production shell and Ops explorer
 - Theme: product | navigation | content | implementation
@@ -571,7 +577,8 @@ explicit review.
   persistently marked `FAKE` and states that no receiver/store was queried;
   Activity is absent from production; all cases survive wide, compact, and
   extreme non-zero sizes.
-- Outcome: implemented; awaiting visual acceptance.
+- Outcome: accepted as the visual and Agents interaction baseline; its Ops-only
+  product topology is superseded by `UX-023`.
   The Columns chooser uses the popup-table selection grammar and exposes
   `↑/↓ Navigate` explicitly.
   Agents now distinguishes exact server-side Dataset filtering from local
@@ -580,3 +587,28 @@ explicit review.
   pane is focusable, scrollable, resizable, and shows structured AgentID plus
   colored agent-type and instance metadata. Auto-refresh state is visible in
   the pane header.
+
+### UX-023 — Lock the Dev/Ops rebuild contract and readiness
+
+- Status: implemented
+- Preview: no new preview; this note governs planning before workflow stories
+- Area: product topology, navigation, layout, sessions, Ops resources,
+  Activity, Metrics, actions, and implementation order
+- Theme: product | navigation | workflow | safety
+- Problem: the accepted visual foundation and Agents explorer do not define a
+  decision-complete minimal product, while older documents preserve conflicting
+  Home, Ops-only, preset, drawer, and observability-backend directions.
+- Desired outcome: one authoritative contract states every locked decision,
+  every remaining planning gate, and an ordered checkpoint plan with explicit
+  acceptance and commit boundaries.
+- Scope: `product-contract.md`, `README.md`, `architecture.md`, `ui-system.md`,
+  `tasks.md`, `phases.md`, `testing.md`, `dx-ux-review.md`, and `progress.md`.
+- Dependencies: accepted visual and Agents baseline through `UX-022` and the
+  subsequent Dev/Ops design discussion.
+- Acceptance: the listed documents agree on Dev/Ops ownership, hierarchical
+  navigation, right/bottom subviews, finite Jobs versus persistent sessions,
+  Ops subjects, bounded Activity, provider-independent Metrics, action safety,
+  deferred acquisition, readiness gates, and implementation order.
+- Outcome: documentation implemented and awaiting user review of the readiness
+  ledger. No product implementation checkpoint is authorized by this note
+  until its named planning prerequisites are checked.

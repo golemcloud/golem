@@ -39,13 +39,38 @@ Use the driver for scenario tests that protect manual UX paths. Keep exact snaps
 
 High-value scenarios:
 
-- help/footer/palette surfaces match registered action labels and shortcuts;
-- leader help shows leader-scoped actions;
-- agent inspect mode has reachable scoped help;
-- REPL focus and leader modes show the correct controls;
-- future context switching preserves launch context for running jobs;
-- stale typed refresh results are ignored by request generation and context generation;
-- non-manifest contexts hide unavailable dev actions with reasons.
+- help, footer, leader, and palette surfaces match registered action labels,
+  paths, availability reasons, and risk metadata;
+- ctrl+x w/v/l/a/j/e opens the correct hierarchical group and scales without
+  assigning top-level numeric shortcuts to destinations;
+- ctrl+p and ctrl+x a switch an open palette between All and Context without
+  losing its query;
+- tab and shift+tab move pane focus only, including while Layout mode selects
+  and resizes physical dividers;
+- Dev restores primary view, visible subviews, right/bottom placement, focus,
+  ratios, persistent Server, and persistent REPL after an Ops round trip;
+- direct navigation focuses a visible Dev view and replaces the primary when
+  the target is hidden without increasing the pane count;
+- Jobs retain immutable launch targets, remain globally visible, and enforce
+  one mutating Job per environment with no implicit queue;
+- local and remote resource actions exercise availability, target review,
+  remote unlock, risk confirmation, masking, cancellation, and stale-result
+  handling;
+- context switching applies the accepted stop/preserve/close rules separately
+  to Jobs, Server, REPL, and Live;
+- Ops root subjects, drill-down subjects, breadcrumbs, direct palette jumps,
+  collection/details focus, and Enter-to-open semantics remain consistent;
+- Activity scope is an explicit bounded snapshot, Timeline and Journal retain
+  AgentID plus per-Agent oplog index, and Live never silently retargets;
+- Metrics navigates family to concrete series, distinguishes service and Agent
+  OTLP sources, and renders every provider-availability state truthfully;
+- deterministic fake Metrics data is available only to preview/test providers;
+- stale typed refresh results are ignored by request and context generation;
+- non-manifest, unreachable, and incomplete contexts keep unavailable views
+  and actions discoverable with concrete reasons;
+- only visual preferences survive restart; operational session state does not;
+- quit behavior covers every active Job and TUI-owned session combination once
+  the quit-policy planning gate is closed.
 # TUI preview verification
 
 The browser and terminal preview galleries render deterministic `TuiApp`
@@ -81,8 +106,8 @@ after acceptance only when it provides useful regression coverage. Add compact
 coverage after normal-sized foundation rules settle.
 
 Production wrapper equivalence is tested separately from the design lab. The
-generic cases intentionally do not construct representative Home, Dev, or Ops
-application states.
+generic cases intentionally avoid product-state assumptions. Workflow stories
+are added for the Dev and Ops checkpoints only after their planning gates close.
 
 Pane geometry tests assert that every visible scrollbar occupies its pane's
 trailing-right cell, removes exactly one usable content column, preserves the
@@ -92,13 +117,14 @@ assert that text and ellipses stop immediately before that reserved cell.
 Terminal preview tests route resize events through a backend-generic helper and
 verify both viewport dimensions and redraw signaling.
 
-Pane-table tests cover required and optional visibility, transactional chooser
-apply/cancel behavior, horizontal offset clamping, frozen marker placement,
-unselected ellipsis, selected-only wrapping, full-height selection surfaces,
-continuous full-height `▌` selection rails, and independent minimal/rule/zebra decorations. Preview coverage includes the
-table/details split and all four pane-table focus stories at standard and
-degenerate terminal sizes. Fitting and wrapping tests include wide, emoji, and
-combining characters and assert exact terminal display widths.
+Pane-table tests cover required and optional visibility, persisted visual
+preferences, transactional chooser apply/cancel behavior, content-aware width
+allocation, horizontal offset clamping, frozen marker placement, one-line
+ellipsis, one-cell selection rails, and independent minimal/rule/zebra
+decorations. Preview coverage includes right/bottom table-details splits and
+pane focus at standard and degenerate terminal sizes. Fitting and truncation
+tests include wide, emoji, and combining characters and assert exact terminal
+display widths.
 
 Decoration tests also assert unpadded one-cell rules and all four odd/even ×
 selected/unselected surface tokens. The Columns overlay coverage checks its

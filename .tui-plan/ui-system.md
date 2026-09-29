@@ -71,24 +71,14 @@ preview watcher supervises the live runtime.
 
 ## Core Model
 
-The TUI is a keyboard-first operational shell for both local development and
-production operations. Local development often includes monitoring, inspection,
-and REPL-driven testing; production work may also use REPL-like inspection and
-interactive operations. The shell must therefore avoid a hard split where Dev is
-only local and Ops is only production.
+The TUI is a keyboard-first shell over one explicit app/env/server context. Dev
+and Ops are the first top-level workspaces, but workspace navigation must scale
+to later additions. Dev owns application development workflows; Ops owns
+deployed-resource exploration, signals, and contextual operations. Switching
+between them preserves context, processes, focus, navigation, and layout.
 
-The current runtime top-level workspaces are:
-
-- Home;
-- Dev;
-- Ops.
-
-These workspaces remain the production implementation baseline while the
-generic visual and interaction foundation is designed. They are not a
-constraint on the later goal-led flow review: workspace grouping, navigation,
-and workflows may be retained, renamed, regrouped, or replaced after the
-foundation is accepted. Foundation work must not change runtime behavior merely
-to anticipate that later review.
+The complete behavioral contract and vocabulary live in product-contract.md.
+This document owns their visual and interaction representation.
 
 ## Generic Foundation Review
 
@@ -123,22 +113,26 @@ geometry, content density, panels and splits, shortcut grammar, overlays, then
 compact behavior. The compact case is added after the normal-sized foundation
 is coherent rather than maintained as a separate visual language.
 
-The TUI must not add top-level workspaces for Jobs, Observe, Context, Settings,
-Server, Output, or REPL. Those are global surfaces, panels, sub-pages, or jobs
-inside the three workspaces.
+The TUI must not add top-level workspaces for Home, Jobs, Observe, Context,
+Settings, Server, Output, or REPL. Those are global surfaces, Dev views,
+subject views, panes, or sessions.
 
 Terms:
 
-- Workspace: a top-level area. The initial workspaces are Home, Dev, and Ops.
-- Sub-page or tab: a stable page inside a workspace.
-- Panel: a named layout region inside a preset layout.
-- Focus: the active panel or control that receives keyboard input.
+- Workspace: a top-level area. The initial workspaces are Dev and Ops.
+- Dev view: Build & Deploy, Server, or REPL.
+- Primary view: the Dev view occupying the main layout region.
+- Subview: an optional secondary Dev view beside the primary view.
+- Ops subject: the resource or collection being inspected.
+- Ops view: the representation of that subject.
+- Pane: a focusable rendered layout region. Details is a pane, not a subview.
+- Focus: the active pane or control that receives keyboard input.
 
 Every workspace body uses the pane model. A layout with one pane is not a
 separate single-view mode; it is a one-pane layout with one focused pane. Focus
 switch actions appear only when another pane is reachable.
-- Job: a running or completed command, server process, REPL, stream, or
-  inspection with output history and launch context.
+- Job: a finite command or resource operation with status, output, and launch
+  context. Server, REPL, and Live are persistent sessions instead.
 - Context: the global selected target used by future actions. A context is not
   just an environment name; it is a resolved app/environment scope plus a
   server target, with enough selector provenance to explain why it is
@@ -178,100 +172,43 @@ state the action, the affected jobs or resources, and the confirm/cancel keys.
 
 ## Workspaces
 
-Home is the overview and jump workspace. It should combine:
+Dev contains Build & Deploy, Server, and REPL. One is primary and the others may
+be shown as right or bottom subviews. There are no named presets. The first Dev
+visit shows Build & Deploy alone when available. Hidden Server and REPL sessions
+continue running, and returning to Dev restores the session layout.
 
-- current context and health summary;
-- project/application dashboard information;
-- recent and running work;
-- common commands;
-- jump points into Dev and Ops.
+Build & Deploy owns Plan, Build, Deploy, Clean, and their finite Jobs. Server
+owns local lifecycle, health, ports, data directory, and logs. REPL owns its
+interactive PTY. View capability is independent: unavailable views stay
+discoverable and explain what context is missing.
 
-Home should help users answer "where am I, what is running, and where should I
-go next?" It should not become a dumping ground for every entity table.
+Ops uses subject then view navigation. Agents, Deployment, Environment, and
+Server are the minimal roots. Individual Agents, Components, Agent Types,
+Deployment Revisions, and Environment resource kinds are drill-down subjects.
+Overview, History, Diff, Resources, Activity, and Metrics appear only where the
+subject supports them.
 
-Dev is the integrated workbench for building, running, testing, and inspecting
-an application. Dev owns:
+Activity contains Timeline, Journal, and single-Agent Live. Metrics lists
+families before concrete series and keeps Golem service and Agent OTLP source
+availability separate. Fake metrics belong only to deterministic preview/test
+providers and must never appear as live production data.
 
-- build, deploy, and clean commands;
-- local server controls and server logs as one view onto the global local
-  server service;
-- REPL;
-- command output;
-- app-local agents and components;
-- pinned jobs and inspection panels relevant to the active development loop.
-
-Dev must use preset layouts first. Arbitrary user-created splits are out of
-scope until the preset model is proven. Presets should make the common loops
-fast: command output beside logs, REPL beside server state, and app entities
-beside details or streams.
-
-The first Dev layout presets are right, left, top, and bottom. These presets
-are session state only. Pointer resizing may adjust split ratios for the
-current TUI run, but it must not write configuration or create a persistence
-migration.
-
-The global local server is not a top-level workspace. Its v1 primary full
-surface is a toggleable right-side drawer available from Home, Dev, and Ops.
-Dev may keep a compact Server panel when the drawer is closed, but when the
-drawer is open the drawer is the primary server surface and Dev should avoid a
-second large server log panel.
-
-Ops is the first and only production workspace during the rebuild. It starts on
-the Agents subject rather than a generic dashboard. The accepted footer retains
-`[Ops]` without a shortcut; Home is removed and Dev is added back only with a real rebuilt
-workflow.
-
-The earlier Ops dashboard group names are deferred implementation history:
-
-- Dev;
-- Deploy;
-- ClickOps;
-- Monitor.
-
-These names and group boundaries are open questions and must be reviewed again.
-The design intent is:
-
-- basic development resources, especially agents and components;
-- deployment, deployed entities, and environments;
-- click-ops/admin entities such as secrets, policies, resources, accounts,
-  tokens, plugins, and profiles;
-- devops monitoring, including future server metrics and exposed operational
-  telemetry.
-
-Ops uses separate subject and view axes. Agents is the initial subject.
-Overview and Metrics are the first production views. Activity is a later view
-with Timeline and Journal modes and is not exposed until a direct typed
-provider supports the agreed multi-agent rules. The selected server and
-optional app/environment remain the scope shown by the global context header.
-
-Before live metrics ingestion exists, Metrics may use deterministic sample
-series as an interaction demo only. Both the series and details panes must
-retain visible `FAKE` labels, details must say that no OTLP receiver or query
-store was read, and demo samples must never be combined with live data.
-
-Agents and components are shared entities between Dev and Ops. The UI must not
-invent separate Dev-agent and Ops-agent concepts. Dev may show app-local
-shortcuts and workflow-specific panels, but details should link to the same
-underlying entity model used by Ops.
+Shared resources have one entity identity. Dev may link to an Ops subject, but
+must not invent a duplicate Dev-specific resource explorer.
 
 ## Layout And Navigation
 
-Ops is currently the only top-level workspace, so it has no keyboard shortcut.
-When Dev or another workspace is introduced, its navigation must avoid
-`alt`+number bindings and punctuation-heavy keys that produce characters or
-conflict with desktop navigation on common keyboard layouts.
+Workspace navigation lives under the ctrl+x w group. It provides next,
+previous, list, and direct mnemonic destinations and must scale beyond Dev and
+Ops. It avoids alt+number, ctrl+arrow, and punctuation-heavy bindings.
 
-Workspace tabs mean stable sub-pages. They are not user-opened documents or
-browser-style resource tabs.
+View navigation lives under ctrl+x v. Workspace selectors and view selectors
+represent stable product destinations, not user-opened documents.
 
-Workspace sub-page and dashboard tab navigation should use leader commands by
-default:
-
-- `ctrl+x n` for next sub-page;
-- `ctrl+x p` for previous sub-page.
-
-Splits are named layout regions in a preset layout. A split must have a clear
-panel identity and focus behavior.
+Dev split geometry is derived from primary view, visible subviews, and right or
+bottom placement. Ops uses the same split machinery for collection/details.
+Every split has explicit pane identity, focus, ratio, minimum size, divider,
+and hit metadata.
 
 Focus movement must be keyboard-first. The UI should provide:
 
@@ -282,7 +219,13 @@ Focus movement must be keyboard-first. The UI should provide:
 Pointer interaction should become native to the layout model, while remaining
 optional for primary workflows. Scrolling must affect the panel under the
 pointer, clicks should focus tabs, splits, buttons, and selectable rows, and
-split handles should be resizable by pointer once split geometry is stable.
+split handles are resizable by pointer.
+
+ctrl+x l enters temporary Layout mode. Tab and shift+tab choose a pane;
+arrows move the applicable divider one cell and shift+arrow moves five cells.
+Layout mode also flips right/bottom placement and shows or hides subviews or
+Details. Enter or esc exits. Compact rendering may temporarily hide panes but
+retains the wider-layout ratios and visibility preferences.
 
 Breadcrumbs should be used inside Ops drilldowns and other nested resource
 views. Breadcrumbs are for orientation and jumping back up the current resource
@@ -296,8 +239,9 @@ navigation.
 focus modes next, then exits the current drilldown one level. Normal shell
 `esc` should not be the primary quit command.
 
-`ctrl+q` quits from a normal shell state. If jobs are running or state may be
-lost, quit must show a confirmation modal.
+ctrl+q quits from a normal shell state. If Jobs or TUI-owned sessions are
+active, quit follows the explicit lifecycle policy that remains a planning gate
+in tasks.md and never silently abandons a mutating Job.
 
 The initial navigation history model is back/step-out only. Forward history is
 deferred until there is a concrete workflow that needs it.
@@ -320,12 +264,11 @@ global and pane shortcuts remain active while the field is being edited, so a
 user can open Commands or Help, change pane focus, resize a split, refresh, or
 apply loaded-match actions without first leaving Find.
 
-`tab` and `shift+tab` are reserved for pane focus. They do not switch explorer
-views or change the Find field. Ops uses `ctrl+x v` for Overview/Metrics and
-`ctrl+x f` for the local Find field. `ctrl`+arrow is avoided because macOS uses
-it for Spaces navigation, and `alt`+number is avoided because it produces
-characters on some keyboard layouts. The Columns overlay deliberately permits
-bare `space` to toggle its focused row.
+Tab and shift+tab are reserved for pane focus. They do not switch workspaces,
+views, Activity representations, palette scopes, or Find fields. ctrl+arrow is
+avoided because macOS uses it for Spaces navigation, and alt+number is avoided
+because it produces characters on some keyboard layouts. The Columns overlay
+deliberately permits bare space to toggle its focused row.
 
 Only a few shortcuts should be truly global:
 
@@ -343,16 +286,17 @@ The leader key is `ctrl+x`. Pressing it should open a visible transient menu.
 The leader menu is the universal structured command grammar, while the palette
 is universal search and jump.
 
-Leader commands should be organized by mnemonic groups. Initial groups should
-cover:
+Leader commands use stable mnemonic groups:
 
-- workspace navigation;
-- panel and focus movement;
-- run commands;
-- layout selection;
-- context switching;
-- Ops/entity actions;
-- help.
+- ctrl+x w: workspace next, previous, list, and direct destinations;
+- ctrl+x v: views or representations within the current product scope;
+- ctrl+x l: temporary Layout mode;
+- ctrl+x a: contextual actions;
+- ctrl+x j: Jobs;
+- ctrl+x e: context.
+
+Only common leaf actions deserve dedicated sequences. The global palette
+remains the complete searchable surface.
 
 Leader hints should show immediate available keys. Scoped help should provide
 the full reference for the current workspace, sub-page, panel, and focus.
@@ -360,8 +304,8 @@ Help and Commands use left-aligned, fixed-height table rows with stable key,
 label, shortcut, and description columns. Long content ellipsizes within its
 column; it must not wrap one action across multiple visual records.
 
-The persistent footer names concrete scoped actions rather than a generic
-`ctrl+x More` entry. At narrow widths it keeps whole actions in priority order
+The persistent footer names concrete scoped actions rather than a generic More
+leader entry. At narrow widths it keeps whole actions in priority order
 and exposes `ctrl+p Commands` when lower-priority actions do not fit. A fallback
 belongs only to the row that owns that action; contextual overflow uses a
 neutral ellipsis and must not duplicate a global shortcut in another row.
@@ -371,9 +315,10 @@ top boundary using the same connected geometry as pane titles. Global,
 workspace, and focused-pane rows continue beneath it on one left spine, which
 opens with `┌` on the identity row and closes with `└` on the final row.
 
-The workspace selector containing `[Ops]` is always visible. The remaining
-global, workspace, and focused-pane shortcut-hint rows will be
-toggleable as a group, without hiding or moving that primary selector.
+The Dev/Ops workspace selector is always visible when size permits. Additional
+workspace destinations use the same ordered selector model. Remaining global,
+workspace, and focused-pane shortcut hints may collapse without hiding or
+moving the primary selector.
 
 Frame Base enters its compact shell below 72 columns or 20 rows. Compact mode
 keeps the workspace selector and one global Commands/Help/Quit row, while
@@ -387,7 +332,7 @@ Structural decorators never change color to communicate focus or mode. Rails,
 junctions, rules, and popup borders use one neutral decorator color; semantic
 status glyphs and active pane titles may still use semantic or accent colors.
 The top terminal-facing pane-title rule ends with `┐`, additional stacked title
-rules end with `┤`, and the `[1, 2, 3]` workspace-selector row ends with `┘`.
+rules end with `┤`, and the workspace-selector row ends with `┘`.
 These are isolated terminators: no right rail is drawn between them, so panes
 retain the terminal-edge content column. Internal split rails join the
 workspace-selector boundary with `┴` only when the junction cell contains no
@@ -502,10 +447,11 @@ When enabled columns exceed the pane width, plain left and right arrows pan the
 table's actual rendered data viewport while it owns focus. Required columns
 cannot be disabled.
 Optional columns are changed transactionally in a scoped Columns overlay and
-remain session-local. Enter toggles an optional 60/40 right details pane;
-selection changes update details without stealing focus. Pointer clicks or
-`tab`/`shift+tab` move focus between list and details, and
-`ctrl+x` then left/right or pointer dragging resizes their shared divider. The
+persist as visual preferences. Details visibility and right/bottom placement
+belong to Layout actions; Enter opens the selected resource subject. Selection
+changes update visible Details without stealing focus. Pointer clicks or tab
+and shift+tab move focus between collection and Details, and Layout mode or
+pointer dragging resizes their shared divider. The
 details document scrolls independently with arrows, paging keys, boundaries,
 and the mouse wheel. Its AgentID remains inline when it fits and uses the CLI's
 structured multiline formatter otherwise. Status is semantically colored, and
@@ -518,13 +464,13 @@ the details pane is visible and in scoped Help.
 Table and details panes own independent trailing-right scrollbars and preserve
 the shared pane boundary rules.
 
-Main-pane tables use odd/even background rows. Their four surfaces cover odd
-and even rows in selected and unselected states so wrapped selected records
-remain visually coherent. Pane-table selection uses a restrained, desaturated
-amber fill plus an accent-colored full-height `▌` rail; the brighter selection
-surface remains reserved for search overlays. Faint one-cell `│` rules directly
-between cells without space padding remain available for compact tables where
-row wrapping is not needed.
+Main-pane tables use one-line odd/even background rows. Their four surfaces
+cover odd and even rows in selected and unselected states. Pane-table selection
+uses a restrained, desaturated amber fill plus an accent-colored full-height
+`▌` rail; the brighter selection surface remains reserved for search overlays.
+Faint one-cell `│` rules directly between cells without space padding remain
+available where separators improve scanning. Full or wrapped values belong in
+Details rather than collection rows.
 
 Rows below a short table return to the pane surface across the complete pane
 width; virtual table width must not leave a differently shaded text-width
@@ -600,9 +546,9 @@ Lists and tables should use arrow-first navigation:
 - `home` and `end` jump to boundaries;
 - `enter` opens or drills into details.
 
-`enter` on a row opens details. The leader menu exposes actions for the
-selected row or entity. Destructive or mutating row actions should not rely on
-bare direct keys as the only path.
+Enter on a row opens its resource subject. Details remains a live preview. The
+contextual palette exposes actions for the focused subject or explicit
+selection. Destructive or mutating row actions never rely on bare direct keys.
 
 Shortcut resolution is scope-first:
 
@@ -615,31 +561,22 @@ would be surprising, but reuse is allowed when focus makes the meaning clear.
 
 ## Jobs And Output
 
-Output is not a top-level workspace. Output belongs to jobs.
+Output is not a top-level workspace. Finite commands and resource mutations are
+Jobs with kind, status, risk, immutable target, masked inputs, structured result
+or output, timing, exit state, and error. Jobs appears as a global overlay and
+Build & Deploy embeds only its relevant subset.
 
-Every command, server process, REPL, stream, and inspection should be modeled as
-a job when it has lifecycle or output history. Jobs should record:
+The shell always exposes running or failed Jobs. Navigation does not cancel a
+Job. Only one mutating Job may run per application environment; other mutations
+are disabled with the active Job named and are never queued automatically.
 
-- kind;
-- status;
-- launch context;
-- command or request summary;
-- output or terminal screen;
-- exit or stop state when available.
+Server, REPL, and Live are persistent sessions rather than Jobs. Each has its
+own status, buffer or terminal state, and stop policy. Hiding its pane or
+switching workspaces does not stop it.
 
-The Dev workspace should expose a job timeline and allow active jobs to be
-pinned into panels. The same job can be reachable from Home summaries, Dev
-panels, palette search, and contextual links without becoming a separate
-top-level workspace.
-
-Running jobs must keep their launch context identity visible in history and
-details.
-
-When the user switches global context while context-bound jobs are running, the
-TUI must ask for confirmation. The confirmation must explain which jobs need to
-stop, restart, or remain attached to their launch context. Server, build,
-deploy, REPL, stream, and inspection jobs are context-bound unless documented
-otherwise.
+Context switching confirms and stops context-bound Jobs and REPL. Server may
+continue only when the server target is unchanged. Live closes on context
+change. The remaining quit policy is tracked explicitly in tasks.md.
 
 ## Context And Environments
 
@@ -656,9 +593,9 @@ The TUI context model has two axes:
 
 A manifested app context is selected when the current workspace has an
 application manifest and the selected environment is one of the environments
-defined by that manifest. This enables both Dev and Ops, because build, deploy,
-clean, REPL, local-server control, and app-local resource shortcuts have a
-manifest-backed application model.
+defined by that manifest. Capabilities are evaluated per view rather than by a
+single Dev-enabled flag: Build & Deploy needs a manifest project, Server needs
+a local target, and REPL needs an app environment plus reachable server.
 
 A server target is selected from the union of:
 
@@ -675,30 +612,15 @@ group duplicates visually, but it must preserve selectable source variants such
 as manifest server, built-in server, profile, and launch selector.
 
 After selecting a server target, the user may select an application environment
-known to that server. This server app-environment context is Ops-only by
-default. It enables Dev only when it matches the current manifest application
-and environment. Matching means the selected server app/environment identifies
-the same application and environment as the manifest context, not merely a
-similar display name.
+known to that server. That is a valid Dev context even without a matching local
+manifest: REPL may be available while Build & Deploy is not. Ops may run against
+any target with enough information for the requested subject or action.
 
-Dev eligibility is therefore:
-
-- enabled for manifested app contexts;
-- enabled for server app-environment contexts only when they match the current
-  manifest app/environment;
-- disabled for server-only, profile-only, and unrelated app-environment
-  contexts.
-
-Ops eligibility is broader. Ops may run against any selected server target or
-server app-environment context that has enough information for the requested
-operation.
-
-Local server is a global TUI-managed service, not a selected-context job. It
-may be shown inside Dev and later as a global side panel, but changing the
-selected context or leaving Dev must not stop it. Server launch uses launch
-scope, not the currently selected Ops context. Selecting a built-in local server
-target may query the running local server; if no local server is reachable, the
-picker should report that as a loading error and must not auto-start it.
+Local Server is a persistent Dev session bound to an exact server target, not a
+global drawer and not a finite Job. Leaving Dev does not stop it. Switching
+between environments on the same server may preserve it; changing server target
+requires stopping it or cancelling the switch. Selecting an unreachable local
+target reports unavailability and never auto-starts it.
 
 The selected-context model must account for all global selector inputs that can
 change available options or context semantics:
@@ -743,14 +665,27 @@ define:
 
 - stable ID;
 - long label;
-- shortcut when useful;
-- category or workspace;
+- hierarchical leader path when useful;
+- global/contextual palette relevance;
+- category, workspace, subject, and view scope;
 - scope;
 - availability rule and reason;
-- execution kind.
+- execution kind;
+- risk class and review/confirmation policy;
+- resolved target summary.
 
 Palette rows, footer hints, leader hints, and help should derive from action
 metadata where practical.
+
+ctrl+p opens the All palette scope and ctrl+x a opens Context. Using either
+shortcut while the palette is open switches scope, preserves the query, and
+resets selection to the best first match. Context includes relevant unavailable
+actions and their reasons.
+
+Non-local mutations are disabled until the exact app/env is unlocked for the
+current session. Read-only, routine-write, disruptive, and destructive actions
+use progressively stronger review. Destructive confirmation is cancel-focused
+and requires a typed target. Unlock never bypasses action-specific safeguards.
 
 Help is scoped by workspace, sub-page, mode, and focus:
 
@@ -785,114 +720,71 @@ They must not grow TUI-specific methods such as `for_tui`.
 
 ## Current Implementation Audit
 
-Current top-level views are Dashboard, Agents, Output, Server, and REPL. These
-do not match the target top-level model. Dashboard maps roughly to Home; Agents
-maps to part of Ops and part of Dev; Output, Server, and REPL should become Dev
-panels and jobs.
+The production workspace list currently contains only Ops. Agents Overview is
+the live typed-data surface and already exercises the accepted collection,
+details, Dataset/Find, paging, refresh, focus, resize, and compact behavior.
+Metrics is a deterministic fake explorer used for layout review; it must not be
+presented as live context data and will be replaced by truthful provider
+availability during the Metrics checkpoint.
 
-Current modes include normal, leader, palette, help, agent filter, command
-interaction, REPL, and REPL leader. These are input/focus states, not
-workspaces.
+Dormant Dev models and renderers remain in the tree as implementation history.
+They are not the product contract and must be removed as the Build & Deploy,
+Server, and REPL views replace them. The current one-entry workspace constant,
+flat leader/action state, and persistent-session treatment cannot represent the
+target product and are scheduled for replacement rather than compatibility.
 
-Current registered actions cover build, deploy, clean, server control, agent
-refresh/settings, view navigation, REPL control, context switching, palette,
-help, and quit.
+Useful foundations already exist: scoped logging, the context executor, typed
+Agents refresh, generation checks, reusable shell/pane/table/overlay blocks,
+recursive pane geometry, and deterministic previews. Agent oplog and stream
+still use nested CLI execution; Activity replaces both with direct typed or
+streaming providers.
 
-Bare printable global run keys have been removed: command actions now use
-modified shortcuts or the `ctrl+x` leader, while typing in the Agents list
-starts loaded-row Find. Current `tab` behavior cycles views, which conflicts
-with the target focus model. Modified numeric jumps should be retained
-conceptually and remapped to Home, Dev, and Ops when workspaces land.
-
-Agents list refresh already uses a direct typed context-executor call.
-
-Agent inspect oplog and stream still use nested CLI. That is transitional Ops
-debt and should move to direct streaming providers.
+The visual foundation and current Agents interaction baseline are accepted.
+The Dev workspace, expanded Ops subject tree, global Jobs model, persistent
+session lifecycles, Activity, and provider-independent Metrics UI remain to be
+built.
 
 ## Review Status
 
-The earlier Home, Dev, and Ops shell remap remains implemented history. Its
-workspace and flow choices are reopened for the goal-led review that follows the
-generic foundation.
+The visual system, live Agents baseline, and product topology in
+product-contract.md are accepted. This document is synchronized to that
+contract; tasks.md is the authoritative readiness ledger for unchecked design
+gates and implementation work.
 
-Accepted sections:
-
-- Core Model;
-- Global Shell;
-- Workspaces;
-- Layout And Navigation;
-- Interaction And Shortcuts;
-- Jobs And Output;
-- Context And Environments;
-- Actions And Help;
-- Ops Data Rules;
-- Current Implementation Audit;
-- Roadmap;
-- Accessibility And Stability.
-
-The remaining open questions are non-blocking deferred decisions. They should
-be answered when their owning milestone is planned or when implementation hits
-the decision directly. They must not block the first workspace-shell remap.
+The rebuild is not decision-complete. A checkpoint may start only after its
+named planning prerequisites are checked in tasks.md.
 
 ## Roadmap
 
-Milestone 0: review and accept this design-system document. This is complete.
-Major workspace or navigation reshaping must wait for the generic foundation
-and the subsequent goal inventory.
+The executable order is maintained in phases.md and tasks.md:
 
-Milestone 1: align interaction metadata with the design-system vocabulary. Fix
-shortcut notation, action metadata drift, execution kind drift, availability
-reasons, and help wording. This milestone should be behavior-preserving except
-for clearer unavailable-action handling and help/metadata text. This is
-complete.
-
-Milestone 2: implement the Home, Dev, and Ops workspace shell full remap.
-Dashboard should become Home. Output, Server, and REPL should become Dev panels
-and jobs. Agents should move into the new workspace model while preserving the
-existing list, filter, details, refresh, and inspect behavior during the
-transition. This milestone may reuse the initial TUI context.
-
-Milestone 3: harden global selected-context UX. Replace the current flat
-context picker with a scoped target model that separates server targets from
-app/environment scopes, derives options from all resolved global selectors, and
-gates Dev/Ops availability by the rules in this document. Add confirmation for
-context switches that affect running jobs.
-
-Milestone 4: migrate remaining Ops refresh and inspect paths to direct typed or
-streaming providers. Agent oplog/stream is the first known streaming debt.
-
-Milestone 5: split stable modules out of `app.rs` after the rules settle.
-Likely modules include actions, help, selected context, jobs, layouts, and Ops
-view state.
-
-Milestone 6: plan local observability integration. Local/server metrics should
-fit into Dev panels and Ops Monitor dashboard surfaces, not a new top-level
-workspace.
-
-Milestone 7: establish the generic design lab and compact minimal foundation.
-Compare Production with Frame Base through focused cases, promote accepted
-themed batches, then add compact validation.
-
-Milestone 8: inventory user goals and redefine product flows. Derive navigation,
-workspace grouping, and scenario stories from that inventory instead of treating
-the current Home, Dev, and Ops model as fixed.
+1. synchronize and accept the product/readiness contract;
+2. replace product state, action metadata, shell, and recursive layout;
+3. introduce finite Jobs, persistent sessions, and mutation safeguards;
+4. rebuild the minimal Dev loop;
+5. expand Ops subjects and resource actions;
+6. add Activity through direct providers;
+7. accept the provider-independent Metrics UI;
+8. only then choose Metrics acquisition and companion tooling;
+9. remove replaced paths and pass final terminal acceptance.
 
 ## Open Questions
 
-These questions are deferred and non-blocking:
+These are required planning gates, not implementation details to infer:
 
-- Final Ops dashboard group names and boundaries. Use the placeholder groups
-  for planning, then rename or regroup during Ops dashboard implementation.
-- Which Dev layout presets should ship first. Start from the existing Output,
-  Server, REPL, and Agents workflows during the workspace-shell remap, then
-  refine presets once the panels exist in the new model.
-- Whether Home should eventually support configurable dashboard sections. Keep
-  the first Home static and curated.
-- How much customization local and production contexts should get after the
-  shared model is implemented. Keep the shared model first; revisit during the
-  selected-context UX milestone.
-- Which action/help documentation artifacts should be generated during DX/UX
-  hardening. Defer until the action and workspace model has settled.
+- exact content, controls, states, and contextual actions for Build & Deploy,
+  Server, and REPL;
+- responsive header/footer priority rules for Jobs, Live, context, and remote
+  lock state;
+- quit behavior with active Jobs and TUI-owned Server, REPL, and Live sessions;
+- exact contextual action and risk inventory for each minimal Ops subject;
+- Activity soft/default and hard Agent bounds and overflow review;
+- backend-independent Metrics range, aggregation, refresh, auto-refresh, and
+  follow controls;
+- final typed provider boundaries and implementation ordering.
+
+Metrics receiver, storage, retention, Docker integration, and a possible web UI
+are deliberately deferred until the TUI contract is accepted.
 
 ## Accessibility And Stability
 
