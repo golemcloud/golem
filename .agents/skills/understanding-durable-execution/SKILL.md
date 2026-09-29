@@ -750,13 +750,15 @@ underlying cause.
 ### Filesystem snapshots
 
 With `filesystem_snapshots` set to `Managed`, a snapshot record also names a filesystem snapshot
-(`services/agent_filesystem_snapshots`). `invocation_loop.rs::save_snapshot` asks the service for
-admission, runs the guest save hook, captures the tree (`agent_filesystem::capture`), appends the
+(`services/agent_filesystem_snapshots`). `invocation_loop.rs::save_snapshot` calls one function,
+`worker/filesystem_snapshots.rs::periodic_snapshot`, which asks the service for admission, runs
+the guest save hook, captures the tree (`agent_filesystem::capture`), appends the
 `Snapshot` entry, commits, and gives the capture to an upload job. The record has no name when the
 tree holds only the initial files of the agent. When the tree did not change since the last
 confirmed snapshot, the record reuses its name and the confirmation comes with it
 (`Snapshot` then `SnapshotConfirmed`); the status then keeps the older usable record as the
-fallback. A manual update saves its filesystem snapshot before it writes `PendingUpdate`. When a
+fallback. A manual update saves its filesystem snapshot before it writes `PendingUpdate`
+(`worker/filesystem_snapshots.rs::update_snapshot`). When a
 periodic upload of the agent runs, the update waits for it to decide and end once, for at most
 `confirmation_wait`, and asks again; another refusal fails the update. A terminal interrupt ends
 that wait, or the upload of the update, and fails the update. The retention of the update

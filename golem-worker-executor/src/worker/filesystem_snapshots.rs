@@ -19,24 +19,29 @@
 
 use super::Worker;
 use crate::filesystem_snapshot::ChangeDetection as StoreChangeDetection;
+use crate::filesystem_snapshot::SnapshotScope;
 use crate::services::agent_filesystem::{
     CaptureOutcome, ChangeDetection, FilesystemCapture, InitialFilesRestore, RestoreError,
-    RestoreTree, TreeMark,
+    RestoreTree, TreeMark, WholeCapture,
 };
-use crate::services::agent_filesystem_snapshots::SnapshotsDisabled;
 use crate::services::agent_filesystem_snapshots::{
-    Admission, Confirm, ConfirmOutcome, SnapshotSkip, StoreRestore, UploadNowError,
+    Admission, AgentFilesystemSnapshots, Confirm, ConfirmOutcome, SavedUpdate, SnapshotSkip,
+    SnapshotsDisabled, StoreRestore, UpdateRefusal, UploadNowError,
 };
+use crate::services::oplog::OplogError;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::oplog::{
     FilesystemSnapshotName, OplogIndex, TimestampedUpdateDescription, UpdateDescription,
 };
+use golem_common::model::oplog::{OplogEntry, RawSnapshotData};
 use golem_common::model::{AgentId, Timestamp, UsableAutomaticSnapshot};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use std::future::Future;
 use std::path::Path;
-use std::sync::Arc;
 use std::sync::Weak;
+use std::time::Duration;
+use tokio::sync::watch;
 use uuid::Uuid;
 
 /// Where the confirmed filesystem snapshot of a worker came from.
@@ -253,8 +258,9 @@ impl PeriodicPlan {
         self.confirmed_at_once.clone()
     }
 
-    /// Starts the upload of a written record. Its confirmation goes to `worker`.
-    pub(crate) fn submit<Ctx: WorkerCtx>(self, worker: &Arc<Worker<Ctx>>) {
+    /// Starts the upload of a written record. `confirm` gives the confirmation of the capture
+    /// with the mark.
+    pub(crate) fn submit(self, confirm: impl FnOnce(TreeMark) -> Confirm) {
         if let Some(PendingUpload {
             admission,
             tree,
@@ -262,11 +268,7 @@ impl PeriodicPlan {
             parent,
         }) = self.upload
         {
-            admission.submit(
-                tree.into(),
-                parent,
-                confirm_by(Arc::downgrade(worker), mark),
-            );
+            admission.submit(tree.into(), parent, confirm(mark));
         }
     }
 
@@ -281,6 +283,236 @@ impl PeriodicPlan {
                 tracing::warn!("Failed to discard a filesystem capture: {error}");
             }
         }
+    }
+}
+
+/// Why a periodic snapshot record did not reach the oplog.
+#[derive(Debug)]
+pub(crate) enum PeriodicFailure {
+    /// The payload of the record was not made, with the details.
+    Entry(String),
+    /// The append or the commit of the record failed.
+    Write(OplogError),
+}
+
+impl std::fmt::Display for PeriodicFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Entry(details) => formatter.write_str(details),
+            Self::Write(error) => {
+                write!(
+                    formatter,
+                    "Failed to append the periodic snapshot record: {error}"
+                )
+            }
+        }
+    }
+}
+
+/// What a periodic snapshot needs from the invocation loop of the agent.
+pub(crate) trait PeriodicSnapshotHost {
+    /// What ends the snapshot when the save hook of the guest does not give a snapshot.
+    type Stop;
+    /// Runs the save hook of the guest.
+    fn save_guest(&mut self) -> impl Future<Output = Result<RawSnapshotData, Self::Stop>> + Send;
+    /// The confirmed snapshot that a capture compares with now.
+    fn since(&self) -> Option<ConfirmedFilesystemSnapshot>;
+    /// Captures the tree against the mark `since`, and gives `None` when the capture failed.
+    fn capture(
+        &self,
+        wait: Duration,
+        since: Option<TreeMark>,
+    ) -> impl Future<Output = Option<CaptureOutcome>> + Send;
+    /// Makes the record of `snapshot` with the filesystem snapshot `name`, or gives the details
+    /// when its payload is not made.
+    fn entry(
+        &self,
+        snapshot: RawSnapshotData,
+        name: Option<FilesystemSnapshotName>,
+    ) -> impl Future<Output = Result<OplogEntry, String>> + Send;
+    /// Appends `entry`, with the confirmation record of `confirmed_at_once` in the same append,
+    /// commits and checkpoints the status.
+    fn write(
+        &self,
+        confirmed_at_once: Option<FilesystemSnapshotName>,
+        entry: OplogEntry,
+    ) -> impl Future<Output = Result<(), OplogError>> + Send;
+    /// The confirmation of an upload whose capture has `mark`.
+    fn confirm(&self, mark: TreeMark) -> Confirm;
+}
+
+/// How a periodic snapshot ended.
+#[derive(Debug)]
+pub(crate) enum PeriodicResult<Stop> {
+    /// The loop continues: the record is written and its upload runs, or the snapshot was
+    /// skipped.
+    Continue,
+    /// The save hook of the guest ended the snapshot.
+    Guest(Stop),
+    /// The record did not reach the oplog. The capture was discarded.
+    NotWritten(PeriodicFailure),
+}
+
+/// Takes a periodic snapshot of the agent of `scope`, in the order of the design: admission, the
+/// save hook of the guest, the capture, the record with the name, its commit and the checkpoint
+/// of the status, then the upload. An admission that the service refuses skips the snapshot,
+/// and a disabled service gives a record without a name. A capture that fails writes no
+/// record. A record that does not reach the oplog drops the admission and discards the capture
+/// at one place.
+pub(crate) async fn periodic_snapshot<Host: PeriodicSnapshotHost>(
+    host: &mut Host,
+    snapshots: &AgentFilesystemSnapshots,
+    scope: &SnapshotScope,
+) -> PeriodicResult<Host::Stop> {
+    let admission = match snapshots.admit_periodic(scope).await {
+        Ok(admission) => Some(admission),
+        Err(SnapshotSkip::Disabled) => None,
+        Err(skip) => {
+            tracing::debug!("Skipping periodic snapshot: {skip}");
+            return PeriodicResult::Continue;
+        }
+    };
+    let snapshot = match host.save_guest().await {
+        Ok(snapshot) => snapshot,
+        Err(stop) => return PeriodicResult::Guest(stop),
+    };
+    let capture = match admission {
+        Some(admission) => {
+            let since = host.since();
+            match host
+                .capture(
+                    admission.capture_wait(),
+                    since.as_ref().map(|since| since.mark),
+                )
+                .await
+            {
+                Some(outcome) => Some((admission, since, outcome)),
+                None => return PeriodicResult::Continue,
+            }
+        }
+        None => None,
+    };
+    let Some(plan) = PeriodicPlan::new(capture) else {
+        return PeriodicResult::Continue;
+    };
+    let written = match host.entry(snapshot, plan.name()).await {
+        Ok(entry) => host
+            .write(plan.confirmed_at_once(), entry)
+            .await
+            .map_err(PeriodicFailure::Write),
+        Err(details) => Err(PeriodicFailure::Entry(details)),
+    };
+    match written {
+        Ok(()) => {
+            plan.submit(|mark| host.confirm(mark));
+            PeriodicResult::Continue
+        }
+        Err(failure) => {
+            tracing::warn!("{failure}");
+            plan.abandon().await;
+            PeriodicResult::NotWritten(failure)
+        }
+    }
+}
+
+/// What the filesystem part of a manual update needs from the invocation loop of the agent.
+pub(crate) trait UpdateSnapshotHost {
+    /// What ends the update when the save hook of the guest does not give a snapshot.
+    type Stop;
+    /// Runs the save hook of the guest.
+    fn save_guest(&mut self) -> impl Future<Output = Result<RawSnapshotData, Self::Stop>> + Send;
+    /// Captures the whole tree, and gives `None` when the capture failed.
+    fn capture_whole(&self, wait: Duration) -> impl Future<Output = Option<WholeCapture>> + Send;
+    /// A receiver of whether a terminal interrupt waits for the agent.
+    fn terminal(&self) -> watch::Receiver<bool>;
+    /// Whether the shard of the agent is lost.
+    fn lost_shard(&self) -> bool;
+}
+
+/// How the snapshot part of a manual update ended.
+pub(crate) enum UpdateSnapshot<Stop> {
+    /// The store holds the filesystem snapshot `name`, or the tree holds only initial files and
+    /// `name` is `None`. `saved` is retained after the update record commits.
+    Saved {
+        snapshot: RawSnapshotData,
+        name: Option<FilesystemSnapshotName>,
+        saved: Option<SavedUpdate>,
+    },
+    /// The update fails with the details.
+    Fail(String),
+    /// The shard is lost. Nothing is written, and the update stays pending for the new owner.
+    WriteNothing,
+    /// The save hook of the guest ended the update.
+    Guest(Stop),
+}
+
+/// Takes the snapshots of a manual update of the agent of `scope`, before the update record:
+/// admission, the save hook of the guest, a capture of the whole tree, and the upload, which
+/// the update waits for. An upload of a periodic snapshot of the agent can run at the
+/// admission; the update waits for it once and asks again, so a frequent snapshot does not fail
+/// the update. A terminal interrupt ends that wait or the upload and fails the update, except on
+/// a lost shard: then nothing is written, and the update stays pending for the shard's new
+/// owner. A disabled service gives a record without a name.
+pub(crate) async fn update_snapshot<Host: UpdateSnapshotHost>(
+    host: &mut Host,
+    snapshots: &AgentFilesystemSnapshots,
+    scope: &SnapshotScope,
+) -> UpdateSnapshot<Host::Stop> {
+    let stopped = |host: &Host, details: String| match update_stop(host.lost_shard()) {
+        UpdateStop::WriteNothing => UpdateSnapshot::WriteNothing,
+        UpdateStop::FailUpdate => UpdateSnapshot::Fail(details),
+    };
+    let admission = match snapshots.admit_update(scope, host.terminal()).await {
+        Ok(admission) => Some(admission),
+        Err(UpdateRefusal::Skip(SnapshotSkip::Disabled)) => None,
+        Err(UpdateRefusal::Interrupted) => {
+            return stopped(host, UPDATE_WAIT_INTERRUPTED.to_string());
+        }
+        Err(UpdateRefusal::Skip(skip)) => return UpdateSnapshot::Fail(update_refused(skip)),
+    };
+    let snapshot = match host.save_guest().await {
+        Ok(snapshot) => snapshot,
+        Err(stop) => return UpdateSnapshot::Guest(stop),
+    };
+    let Some(admission) = admission else {
+        return UpdateSnapshot::Saved {
+            snapshot,
+            name: None,
+            saved: None,
+        };
+    };
+    let tree = match host.capture_whole(admission.capture_wait()).await {
+        None => {
+            return UpdateSnapshot::Fail(
+                "failed to capture the agent filesystem for the update".to_string(),
+            );
+        }
+        Some(WholeCapture::InitialFiles) => {
+            return UpdateSnapshot::Saved {
+                snapshot,
+                name: None,
+                saved: None,
+            };
+        }
+        Some(WholeCapture::Captured { capture, .. }) => capture,
+    };
+    let name = admission.name().clone();
+    // A terminal interrupt stops the save, and the capture is discarded. An interrupted save
+    // writes no record: a snapshot that its publish still leaves has no record, and nothing
+    // selects it.
+    let terminal = host.terminal();
+    match admission.upload_now(tree.into(), terminal.clone()).await {
+        Ok(saved) => UpdateSnapshot::Saved {
+            snapshot,
+            name: Some(name),
+            saved: Some(saved),
+        },
+        Err(error) => match update_upload_failure(&error, *terminal.borrow()) {
+            UpdateUploadFailure::Interrupted => {
+                stopped(host, UpdateUploadFailure::Interrupted.details())
+            }
+            UpdateUploadFailure::Failed(details) => UpdateSnapshot::Fail(details),
+        },
     }
 }
 
@@ -625,6 +857,7 @@ pub(crate) fn owner_gate(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
     use test_r::test;
 
     /// Gives a mark of a new generation and a later mark of the same generation.
@@ -999,6 +1232,381 @@ mod tests {
             ],
             [false, true, false]
         );
+    }
+
+    /// A host that records its calls and answers as the test says.
+    struct ScriptedHost {
+        calls: std::sync::Mutex<Vec<String>>,
+        guest: Option<Result<RawSnapshotData, &'static str>>,
+        since: Option<ConfirmedFilesystemSnapshot>,
+        capture: std::sync::Mutex<Option<CaptureOutcome>>,
+        whole: std::sync::Mutex<Option<WholeCapture>>,
+        entry_fails: bool,
+        write_fails: bool,
+        terminal: watch::Sender<bool>,
+        lost_shard: bool,
+    }
+
+    impl ScriptedHost {
+        fn new() -> Self {
+            Self {
+                calls: std::sync::Mutex::default(),
+                guest: Some(Ok(RawSnapshotData {
+                    data: vec![1],
+                    mime_type: "application/octet-stream".to_string(),
+                })),
+                since: None,
+                capture: std::sync::Mutex::default(),
+                whole: std::sync::Mutex::default(),
+                entry_fails: false,
+                write_fails: false,
+                terminal: watch::channel(false).0,
+                lost_shard: false,
+            }
+        }
+
+        fn call(&self, call: String) {
+            self.calls.lock().unwrap().push(call);
+        }
+
+        fn calls(&self) -> Vec<String> {
+            self.calls.lock().unwrap().clone()
+        }
+    }
+
+    fn named(name: Option<&FilesystemSnapshotName>) -> String {
+        name.map_or_else(|| "none".to_string(), |name| name.as_str().to_string())
+    }
+
+    impl PeriodicSnapshotHost for ScriptedHost {
+        type Stop = &'static str;
+
+        async fn save_guest(&mut self) -> Result<RawSnapshotData, &'static str> {
+            self.call("save_guest".to_string());
+            self.guest.take().unwrap_or(Err("saved twice"))
+        }
+
+        fn since(&self) -> Option<ConfirmedFilesystemSnapshot> {
+            self.call("since".to_string());
+            self.since.clone()
+        }
+
+        async fn capture(
+            &self,
+            _wait: Duration,
+            since: Option<TreeMark>,
+        ) -> Option<CaptureOutcome> {
+            self.call(format!("capture({})", since.is_some()));
+            self.capture.lock().unwrap().take()
+        }
+
+        async fn entry(
+            &self,
+            _snapshot: RawSnapshotData,
+            name: Option<FilesystemSnapshotName>,
+        ) -> Result<OplogEntry, String> {
+            self.call(format!("entry({})", named(name.as_ref())));
+            if self.entry_fails {
+                Err("no payload".to_string())
+            } else {
+                Ok(OplogEntry::interrupted())
+            }
+        }
+
+        async fn write(
+            &self,
+            confirmed_at_once: Option<FilesystemSnapshotName>,
+            _entry: OplogEntry,
+        ) -> Result<(), OplogError> {
+            self.call(format!("write({})", named(confirmed_at_once.as_ref())));
+            if self.write_fails {
+                Err(OplogError::Payload("refused".to_string()))
+            } else {
+                Ok(())
+            }
+        }
+
+        fn confirm(&self, _mark: TreeMark) -> Confirm {
+            self.call("confirm".to_string());
+            Box::new(|_| Box::pin(async { ConfirmOutcome::Deferred }))
+        }
+    }
+
+    impl UpdateSnapshotHost for ScriptedHost {
+        type Stop = &'static str;
+
+        async fn save_guest(&mut self) -> Result<RawSnapshotData, &'static str> {
+            PeriodicSnapshotHost::save_guest(self).await
+        }
+
+        async fn capture_whole(&self, _wait: Duration) -> Option<WholeCapture> {
+            self.call("capture_whole".to_string());
+            self.whole.lock().unwrap().take()
+        }
+
+        fn terminal(&self) -> watch::Receiver<bool> {
+            self.terminal.subscribe()
+        }
+
+        fn lost_shard(&self) -> bool {
+            self.lost_shard
+        }
+    }
+
+    fn agent_scope(name: &str) -> SnapshotScope {
+        SnapshotScope::agent(&golem_common::model::OwnedAgentId::new(
+            golem_common::model::environment::EnvironmentId::new(),
+            &AgentId {
+                component_id: golem_common::model::component::ComponentId::new(),
+                agent_id: name.to_string(),
+            },
+        ))
+    }
+
+    /// An enabled service over an in-memory store, with the shutdown that keeps it running.
+    fn enabled_service() -> (
+        Arc<AgentFilesystemSnapshots>,
+        crate::services::shutdown::Shutdown,
+    ) {
+        let shutdown = crate::services::shutdown::Shutdown::new();
+        let snapshots = AgentFilesystemSnapshots::bind(
+            &crate::services::golem_config::FilesystemSnapshotsConfig::default(),
+            crate::services::agent_filesystem_snapshots::StoreSource::given(
+                Arc::new(crate::filesystem_snapshot::InMemorySnapshotStore::default()),
+                crate::services::golem_config::FilesystemSnapshotUploadConfig::default(),
+            ),
+            crate::services::agent_filesystem_snapshots::VolumeRoom::Unlimited,
+            false,
+            &shutdown,
+        )
+        .unwrap();
+        (snapshots, shutdown)
+    }
+
+    fn outcome<Stop: std::fmt::Debug>(result: &PeriodicResult<Stop>) -> String {
+        format!("{result:?}")
+    }
+
+    #[test]
+    async fn a_periodic_snapshot_without_snapshots_writes_a_record_without_a_name() {
+        let disabled = AgentFilesystemSnapshots::disabled();
+        let scope = agent_scope("periodic-disabled");
+        let run = |host: ScriptedHost| {
+            let disabled = &disabled;
+            let scope = &scope;
+            async move {
+                let mut host = host;
+                let result = periodic_snapshot(&mut host, disabled, scope).await;
+                (outcome(&result), host.calls())
+            }
+        };
+
+        let written = run(ScriptedHost::new()).await;
+        let guest_stop = run(ScriptedHost {
+            guest: Some(Err("stop")),
+            ..ScriptedHost::new()
+        })
+        .await;
+        let no_entry = run(ScriptedHost {
+            entry_fails: true,
+            ..ScriptedHost::new()
+        })
+        .await;
+        let not_written = run(ScriptedHost {
+            write_fails: true,
+            ..ScriptedHost::new()
+        })
+        .await;
+
+        assert_eq!(
+            written,
+            (
+                "Continue".to_string(),
+                vec!["save_guest", "entry(none)", "write(none)"]
+                    .into_iter()
+                    .map(String::from)
+                    .collect()
+            )
+        );
+        assert_eq!(
+            guest_stop,
+            (
+                "Guest(\"stop\")".to_string(),
+                vec!["save_guest".to_string()]
+            )
+        );
+        assert_eq!(
+            no_entry,
+            (
+                "NotWritten(Entry(\"no payload\"))".to_string(),
+                vec!["save_guest".to_string(), "entry(none)".to_string()]
+            )
+        );
+        assert_eq!(
+            not_written.0,
+            "NotWritten(Write(Payload(\"refused\")))".to_string()
+        );
+    }
+
+    #[test]
+    async fn a_periodic_snapshot_admits_before_the_guest_saves_and_captures_after() {
+        let (mark, _) = marks().await;
+        let (snapshots, _shutdown) = enabled_service();
+        let scope = agent_scope("periodic-enabled");
+        let since = confirmed(&FilesystemSnapshotName::periodic(), mark);
+
+        let held = snapshots.admit_periodic(&scope).await.unwrap();
+        let mut refused = ScriptedHost::new();
+        let while_held = outcome(&periodic_snapshot(&mut refused, &snapshots, &scope).await);
+        drop(held);
+        let mut failed_capture = ScriptedHost::new();
+        let capture_failed =
+            outcome(&periodic_snapshot(&mut failed_capture, &snapshots, &scope).await);
+        let mut initial = ScriptedHost {
+            capture: std::sync::Mutex::new(Some(CaptureOutcome::InitialFiles)),
+            ..ScriptedHost::new()
+        };
+        let initial_files = outcome(&periodic_snapshot(&mut initial, &snapshots, &scope).await);
+        let mut unchanged = ScriptedHost {
+            since: Some(since.clone()),
+            capture: std::sync::Mutex::new(Some(CaptureOutcome::Unchanged)),
+            ..ScriptedHost::new()
+        };
+        let reused = outcome(&periodic_snapshot(&mut unchanged, &snapshots, &scope).await);
+        let free_after = snapshots.admit_periodic(&scope).await.is_ok();
+
+        let name = since.name.as_str().to_string();
+        assert_eq!(
+            (while_held, refused.calls()),
+            ("Continue".to_string(), vec![])
+        );
+        assert_eq!(
+            (capture_failed, failed_capture.calls()),
+            (
+                "Continue".to_string(),
+                vec!["save_guest", "since", "capture(false)"]
+                    .into_iter()
+                    .map(String::from)
+                    .collect()
+            )
+        );
+        assert_eq!(
+            (initial_files, initial.calls()),
+            (
+                "Continue".to_string(),
+                vec![
+                    "save_guest",
+                    "since",
+                    "capture(false)",
+                    "entry(none)",
+                    "write(none)"
+                ]
+                .into_iter()
+                .map(String::from)
+                .collect()
+            )
+        );
+        assert_eq!(
+            (reused, unchanged.calls()),
+            (
+                "Continue".to_string(),
+                vec![
+                    "save_guest".to_string(),
+                    "since".to_string(),
+                    "capture(true)".to_string(),
+                    format!("entry({name})"),
+                    format!("write({name})"),
+                ]
+            )
+        );
+        assert!(free_after);
+    }
+
+    fn update_outcome(result: &UpdateSnapshot<&'static str>) -> String {
+        match result {
+            UpdateSnapshot::Saved { name, saved, .. } => {
+                format!("Saved({}, {})", named(name.as_ref()), saved.is_some())
+            }
+            UpdateSnapshot::Fail(details) => format!("Fail({details})"),
+            UpdateSnapshot::WriteNothing => "WriteNothing".to_string(),
+            UpdateSnapshot::Guest(stop) => format!("Guest({stop})"),
+        }
+    }
+
+    #[test]
+    async fn a_manual_update_snapshot_saves_the_guest_then_captures_the_whole_tree() {
+        let disabled = AgentFilesystemSnapshots::disabled();
+        let (snapshots, _shutdown) = enabled_service();
+        let scope = agent_scope("update");
+
+        let mut without = ScriptedHost::new();
+        let without_snapshots =
+            update_outcome(&update_snapshot(&mut without, &disabled, &scope).await);
+        let mut stopped = ScriptedHost {
+            guest: Some(Err("stop")),
+            ..ScriptedHost::new()
+        };
+        let guest_stop = update_outcome(&update_snapshot(&mut stopped, &snapshots, &scope).await);
+        let mut failed = ScriptedHost::new();
+        let capture_failed =
+            update_outcome(&update_snapshot(&mut failed, &snapshots, &scope).await);
+        let mut initial = ScriptedHost {
+            whole: std::sync::Mutex::new(Some(WholeCapture::InitialFiles)),
+            ..ScriptedHost::new()
+        };
+        let initial_files =
+            update_outcome(&update_snapshot(&mut initial, &snapshots, &scope).await);
+
+        assert_eq!(
+            (without_snapshots, without.calls()),
+            (
+                "Saved(none, false)".to_string(),
+                vec!["save_guest".to_string()]
+            )
+        );
+        assert_eq!(guest_stop, "Guest(stop)");
+        assert_eq!(
+            (capture_failed, failed.calls()),
+            (
+                "Fail(failed to capture the agent filesystem for the update)".to_string(),
+                vec!["save_guest".to_string(), "capture_whole".to_string()]
+            )
+        );
+        assert_eq!(initial_files, "Saved(none, false)");
+        assert!(snapshots.admit_periodic(&scope).await.is_ok());
+    }
+
+    #[test]
+    async fn an_interrupted_wait_of_a_manual_update_fails_it_or_writes_nothing_on_a_lost_shard() {
+        let (snapshots, _shutdown) = enabled_service();
+        let scope = agent_scope("update-interrupted");
+        let held = snapshots.admit_periodic(&scope).await.unwrap();
+        let run = |lost_shard| {
+            let snapshots = &snapshots;
+            let scope = &scope;
+            async move {
+                let mut host = ScriptedHost {
+                    lost_shard,
+                    ..ScriptedHost::new()
+                };
+                host.terminal.send_replace(true);
+                let result = update_snapshot(&mut host, snapshots, scope).await;
+                (update_outcome(&result), host.calls())
+            }
+        };
+
+        let failed = run(false).await;
+        let lost = run(true).await;
+        drop(held);
+
+        assert_eq!(
+            failed,
+            (
+                format!("Fail({UPDATE_WAIT_INTERRUPTED})"),
+                Vec::<String>::new()
+            )
+        );
+        assert_eq!(lost, ("WriteNothing".to_string(), Vec::<String>::new()));
     }
 
     #[test]

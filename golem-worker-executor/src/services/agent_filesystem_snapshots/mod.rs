@@ -347,7 +347,7 @@ impl AgentFilesystemSnapshots {
     }
 
     /// Makes a service that keeps no filesystem snapshots.
-    fn disabled() -> Self {
+    pub(crate) fn disabled() -> Self {
         Self { core: None }
     }
 
