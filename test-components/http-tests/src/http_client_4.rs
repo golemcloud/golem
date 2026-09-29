@@ -32,6 +32,9 @@ pub trait HttpClient4 {
     /// Sends a GET request and reads the response body in chunks.
     async fn get_and_read_body_chunked(&self) -> String;
 
+    /// Sends a raw P2 GET, reads one byte, then blocking-reads the rest.
+    fn get_and_read_body_p2_blocking(&mut self, authority: String) -> String;
+
     /// Sends a buffered POST with a body composed of: 4 bytes "HEAD", then 1024
     /// zero bytes, then 1024 bytes of 0xAB. The name is historical (the body was
     /// once produced with the wasip2 `output-stream::write-zeroes` API); the body
@@ -191,6 +194,12 @@ impl HttpClient4 for HttpClient4Impl {
 
     async fn get_and_read_body_chunked(&self) -> String {
         do_get_chunked_read().await
+    }
+
+    fn get_and_read_body_p2_blocking(&mut self, authority: String) -> String {
+        let response = do_get_and_read_body_p2_blocking(authority);
+        self.last_full_response = Some(response.clone());
+        response
     }
 
     async fn post_with_write_zeroes(&self) -> String {
@@ -1274,6 +1283,42 @@ async fn do_get_chunked_read() -> String {
         body.extend_from_slice(&chunk);
     }
     format!("{status} {}", String::from_utf8_lossy(&body))
+}
+
+fn do_get_and_read_body_p2_blocking(authority: String) -> String {
+    use wasi::http::{outgoing_handler, types};
+    use wasi::io::streams::StreamError;
+
+    let request = types::OutgoingRequest::new(types::Fields::new());
+    request.set_method(&types::Method::Get).unwrap();
+    request.set_scheme(Some(&types::Scheme::Http)).unwrap();
+    request.set_authority(Some(&authority)).unwrap();
+    request.set_path_with_query(Some("/")).unwrap();
+    types::OutgoingBody::finish(request.body().unwrap(), None).unwrap();
+    let response = outgoing_handler::handle(request, None).unwrap();
+    let response = loop {
+        match response.get() {
+            Some(Ok(Ok(response))) => break response,
+            Some(Ok(Err(error))) => panic!("HTTP response failed: {error:?}"),
+            Some(Err(error)) => panic!("HTTP response failed: {error:?}"),
+            None => {
+                let pollable = response.subscribe();
+                let _ = wasi::io::poll::poll(&[&pollable]);
+            }
+        }
+    };
+    let status = response.status();
+    let body = response.consume().unwrap();
+    let stream = body.stream().unwrap();
+    let mut bytes = stream.blocking_read(1).unwrap();
+    loop {
+        match stream.blocking_read(1) {
+            Ok(chunk) => bytes.extend_from_slice(&chunk),
+            Err(StreamError::Closed) => break,
+            Err(error) => panic!("P2 body read failed: {error:?}"),
+        }
+    }
+    format!("{status} {}", String::from_utf8_lossy(&bytes))
 }
 
 async fn do_get_chunked_read_with_range() -> String {
