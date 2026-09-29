@@ -70,9 +70,29 @@ func (c *DynamicAgentClient) AgentID() string { return c.agentID }
 // Parsed returns what the host made of the identity.
 func (c *DynamicAgentClient) Parsed() RawAgentID { return c.parsed }
 
-// InvokeDynamic calls a method with an already-packed parameter tree and
-// returns the raw result, which is none for a method that returns nothing.
-func (c *DynamicAgentClient) InvokeDynamic(method string, input types.SchemaValueTree) (Option[types.SchemaValueTree], error) {
+// InvokeDynamic calls a method with an already-packed parameter value and
+// returns the result, which is none for a method that returns nothing.
+func (c *DynamicAgentClient) InvokeDynamic(method string, input core.SchemaValue) (Option[core.SchemaValue], error) {
+	tree, err := witschema.ValueToWit(input)
+	if err != nil {
+		return None[core.SchemaValue](), fmt.Errorf("golem: %s: %w", method, err)
+	}
+	out, err := c.invokeTree(method, tree)
+	if err != nil {
+		return None[core.SchemaValue](), err
+	}
+	result, has := out.Get()
+	if !has {
+		return None[core.SchemaValue](), nil
+	}
+	value, err := witschema.ValueToCore(result)
+	if err != nil {
+		return None[core.SchemaValue](), fmt.Errorf("golem: %s returned an unreadable result: %w", method, err)
+	}
+	return Some(value), nil
+}
+
+func (c *DynamicAgentClient) invokeTree(method string, input types.SchemaValueTree) (Option[types.SchemaValueTree], error) {
 	tree, has, err := c.rpc.invokeAndAwait(method, input)
 	if err != nil {
 		return None[types.SchemaValueTree](), err
@@ -87,16 +107,12 @@ func (c *DynamicAgentClient) InvokeDynamic(method string, input types.SchemaValu
 // supplies, which is the shape an infrastructure transport already holds.
 func (c *DynamicAgentClient) InvokeJSON(
 	method string, ref core.Ref, params []core.Parameter, args map[string]any,
-) (Option[types.SchemaValueTree], error) {
+) (Option[core.SchemaValue], error) {
 	built, err := ref.PackParameters(params, args)
 	if err != nil {
-		return None[types.SchemaValueTree](), fmt.Errorf("golem: %s: %w", method, err)
+		return None[core.SchemaValue](), fmt.Errorf("golem: %s: %w", method, err)
 	}
-	input, err := witschema.ValueToWit(built)
-	if err != nil {
-		return None[types.SchemaValueTree](), fmt.Errorf("golem: %s: %w", method, err)
-	}
-	return c.InvokeDynamic(method, input)
+	return c.InvokeDynamic(method, built)
 }
 
 // Invoke calls a method using the caller's own compile-time types. The target's
@@ -111,7 +127,7 @@ func Invoke[In any, Out any](c *DynamicAgentClient, method string, in In) (Out, 
 	}
 	input := encodeParams(inFields, valueOf(&in))
 
-	tree, err := c.InvokeDynamic(method, input)
+	tree, err := c.invokeTree(method, input)
 	if err != nil {
 		return zero, err
 	}

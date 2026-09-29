@@ -118,14 +118,18 @@ func (c ReflectedConstructor) Parameters() ([]core.Parameter, error) {
 	return userParameters(c.conv, c.convErr, c.wit.InputSchema)
 }
 
-// PackJSON builds the constructor's value tree from named arguments, validating
-// each against the snapshot before anything is sent.
-func (c ReflectedConstructor) PackJSON(args map[string]any) (types.SchemaValueTree, error) {
+// PackJSON builds the constructor's parameter value from named arguments,
+// validating each against the snapshot before anything is sent.
+func (c ReflectedConstructor) PackJSON(args map[string]any) (core.SchemaValue, error) {
 	params, err := c.Parameters()
 	if err != nil {
-		return types.SchemaValueTree{}, err
+		return nil, err
 	}
-	built, err := core.NewRef(c.conv.Graph).PackParameters(params, args)
+	return core.NewRef(c.conv.Graph).PackParameters(params, args)
+}
+
+func (c ReflectedConstructor) packTree(args map[string]any) (types.SchemaValueTree, error) {
+	built, err := c.PackJSON(args)
 	if err != nil {
 		return types.SchemaValueTree{}, err
 	}
@@ -183,30 +187,38 @@ func (m ReflectedMethod) Output() (core.Ref, bool) {
 	return ref, true
 }
 
-// PackJSON builds the method's input tree from named arguments.
-func (m ReflectedMethod) PackJSON(args map[string]any) (types.SchemaValueTree, error) {
+// PackJSON builds the method's parameter value from named arguments.
+func (m ReflectedMethod) PackJSON(args map[string]any) (core.SchemaValue, error) {
 	params, err := m.Parameters()
 	if err != nil {
-		return types.SchemaValueTree{}, err
+		return nil, err
 	}
-	built, err := core.NewRef(m.conv.Graph).PackParameters(params, args)
+	return core.NewRef(m.conv.Graph).PackParameters(params, args)
+}
+
+func (m ReflectedMethod) packTree(args map[string]any) (types.SchemaValueTree, error) {
+	built, err := m.PackJSON(args)
 	if err != nil {
 		return types.SchemaValueTree{}, err
 	}
 	return witschema.ValueToWit(built)
 }
 
-// UnpackOutput reads a returned value tree as canonical JSON.
-func (m ReflectedMethod) UnpackOutput(tree types.SchemaValueTree) (any, error) {
+// UnpackOutput reads a returned value as canonical JSON.
+func (m ReflectedMethod) UnpackOutput(value core.SchemaValue) (any, error) {
 	out, has := m.Output()
 	if !has {
 		return nil, fmt.Errorf("golem: method %q returns nothing", m.wit.Name)
 	}
+	return out.UnpackJSON(value)
+}
+
+func (m ReflectedMethod) unpackTree(tree types.SchemaValueTree) (any, error) {
 	value, err := witschema.ValueToCore(tree)
 	if err != nil {
 		return nil, err
 	}
-	return out.UnpackJSON(value)
+	return m.UnpackOutput(value)
 }
 
 // ToJSONSchema renders the method's parameters as a JSON Schema object.
@@ -280,7 +292,7 @@ func (c *ReflectedAgentClient) InvokeAndAwait(method string, args map[string]any
 	if !known {
 		return nil, fmt.Errorf("golem: agent type %q has no method %q", c.agentType.Name(), method)
 	}
-	input, err := m.PackJSON(args)
+	input, err := m.packTree(args)
 	if err != nil {
 		return nil, fmt.Errorf("golem: %s.%s: %w", c.agentType.Name(), method, err)
 	}
@@ -302,7 +314,7 @@ func (c *ReflectedAgentClient) InvokeAndAwait(method string, args map[string]any
 	case !has:
 		return nil, nil
 	}
-	out, err := m.UnpackOutput(tree)
+	out, err := m.unpackTree(tree)
 	if err != nil {
 		return nil, fmt.Errorf("golem: %s.%s returned an unreadable result: %w",
 			c.agentType.Name(), method, err)
@@ -492,29 +504,60 @@ func (c ReflectedCommand) Result() (core.Ref, bool) {
 	return ref, true
 }
 
+// ReflectedError is a failure a command declares.
+type ReflectedError struct {
+	Name        string
+	Kind        ToolErrorKind
+	ExitCode    uint8
+	Summary     string
+	Description string
+	// Payload is the error's payload type, if it carries one.
+	Payload Option[core.Ref]
+}
+
 // Errors returns the failures the command declares.
-func (c ReflectedCommand) Errors() []toolCommon.ErrorCase {
+func (c ReflectedCommand) Errors() []ReflectedError {
 	if !c.Callable() {
 		return nil
 	}
-	return c.node().Body.Some().Errors
+	var out []ReflectedError
+	for _, e := range c.node().Body.Some().Errors {
+		r := ReflectedError{
+			Name:        e.Name,
+			Kind:        UsageError,
+			ExitCode:    e.ExitCode,
+			Summary:     e.Doc.Summary,
+			Description: e.Doc.Description,
+			Payload:     None[core.Ref](),
+		}
+		if e.Kind == toolCommon.ErrorKindRuntimeError {
+			r.Kind = RuntimeError
+		}
+		if e.Payload.IsSome() && c.convErr == nil {
+			if ref, err := c.conv.Ref(e.Payload.Some()); err == nil {
+				r.Payload = Some(ref)
+			}
+		}
+		out = append(out, r)
+	}
+	return out
 }
 
 // PackJSON builds the command's invocation input from named arguments.
-func (c ReflectedCommand) PackJSON(args map[string]any) (types.TypedSchemaValue, error) {
+func (c ReflectedCommand) PackJSON(args map[string]any) (TypedValue, error) {
 	params, err := c.Arguments()
 	if err != nil {
-		return types.TypedSchemaValue{}, err
+		return TypedValue{}, err
 	}
 	built, err := core.NewRef(c.conv.Graph).PackParameters(params, args)
 	if err != nil {
-		return types.TypedSchemaValue{}, err
+		return TypedValue{}, err
 	}
 	tree, err := witschema.ValueToWit(built)
 	if err != nil {
-		return types.TypedSchemaValue{}, err
+		return TypedValue{}, err
 	}
-	return types.TypedSchemaValue{Graph: c.witGraph, Value: tree}, nil
+	return TypedValue{wit: types.TypedSchemaValue{Graph: c.witGraph, Value: tree}}, nil
 }
 
 // ToJSONSchema renders the command's arguments as a JSON Schema object.
@@ -578,7 +621,7 @@ func (c *ReflectedToolClient) InvokeAndAwait(path []string, args map[string]any)
 		return nil, fmt.Errorf("golem: %s %s: %w", c.tool.Name(), commandLabel(path), err)
 	}
 
-	out, has, err := c.rpc.invokeAndAwait(path, input)
+	out, has, err := c.rpc.invokeAndAwait(path, input.wit)
 	if err != nil {
 		return nil, err
 	}

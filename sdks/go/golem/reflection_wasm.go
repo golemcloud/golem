@@ -93,7 +93,7 @@ func (r ReflectedAgentType) BindPhantom(ctorArgs map[string]any, phantom UUID, o
 func (r ReflectedAgentType) bind(
 	ctorArgs map[string]any, phantom witTypes.Option[types.Uuid], opts []ClientOpt,
 ) (*ReflectedAgentClient, error) {
-	ctor, err := r.Constructor().PackJSON(ctorArgs)
+	ctor, err := r.Constructor().packTree(ctorArgs)
 	if err != nil {
 		return nil, fmt.Errorf("golem: %s constructor: %w", r.Name(), err)
 	}

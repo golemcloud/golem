@@ -72,7 +72,7 @@ Build values with `golem.EncodeTypedValue(goValue)`, read them with `v.JSON()` o
 
 ## Wrapping One Tool
 
-Without options a middleware is universal and applies to any tool; `ctx.ToolMetadata()` describes the tool it is wrapping. `golem.Wraps(presented, expected)` narrows it to one tool shape, published for installation checks:
+Without options a middleware is universal and applies to any tool; `ctx.ToolMetadata()` returns a `golem.ReflectedTool` describing the tool it is wrapping (its commands, arguments, results and errors, as in `golem-call-tool-go`). `golem.Wraps(presented, expected)` narrows it to one tool shape, published for installation checks:
 
 ```go
 var Policy = golem.DefineToolMiddleware[golem.Unit]("greeter-policy",

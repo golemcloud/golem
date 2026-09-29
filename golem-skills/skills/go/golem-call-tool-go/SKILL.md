@@ -75,8 +75,11 @@ if ok && cmd.Callable() {
 	params := golem.Must(cmd.Arguments())   // []schema.Parameter, positionals first
 	schema := golem.Must(cmd.ToJSONSchema(true))
 	_, returns := cmd.Result()
-	for _, e := range cmd.Errors() {
-		fmt.Println(e.Name, e.ExitCode)
+	for _, e := range cmd.Errors() {     // golem.ReflectedError
+		fmt.Println(e.Name, e.Kind, e.ExitCode, e.Summary)
+		if payload, has := e.Payload.Get(); has {
+			_ = payload                    // a schema.Ref for the error's payload
+		}
 	}
 	_, _, _ = params, schema, returns
 }

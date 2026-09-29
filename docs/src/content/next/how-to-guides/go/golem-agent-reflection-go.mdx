@@ -110,12 +110,12 @@ params := golem.Must(m.Parameters())
 
 client := golem.Must(golem.BindAgentID(agentID))
 out := golem.Must(client.InvokeJSON(method, ref, params, args))
-if tree, has := out.Get(); has {
-	fmt.Println(golem.Must(m.UnpackOutput(tree)))
+if v, has := out.Get(); has {
+	fmt.Println(golem.Must(m.UnpackOutput(v)))
 }
 ```
 
-`client.InvokeDynamic(method, packed)` takes a value already packed, e.g. by `m.PackJSON(args)`, and returns the raw result.
+`client.InvokeDynamic(method, packed)` takes a value already packed, e.g. by `m.PackJSON(args)`, and returns the result. Both are `schema.SchemaValue`s from `github.com/golemcloud/golem/sdks/go/core/schema`, the same value model `schema.Ref` packs and unpacks.
 
 ## Canonical JSON
 

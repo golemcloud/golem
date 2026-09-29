@@ -196,3 +196,40 @@ func TestDuplicateErrorCaseIsADefinitionError(t *testing.T) {
 	defineToolErrorInto[Unit](r, d, def, "same", ToolErrorSpec{})
 	mustDefErr(t, d, "error case already declared")
 }
+
+// TestReflectedCommandErrorsAreDescribed — a caller reading a tool learns its
+// declared failures in the SDK's own terms, payload type included.
+func TestReflectedCommandErrorsAreDescribed(t *testing.T) {
+	r, d := newToolRegistry(), newDefinitions()
+	declareLookup(r, d)
+	tools, ok := r.discover(d)
+	if !ok {
+		t.Fatalf("tool discovery failed: %s", allDefErrors(d.errs))
+	}
+	tool := newReflectedTool("lookup", tools[0])
+	errs := tool.Root().Errors()
+	if len(errs) != 2 {
+		t.Fatalf("errors = %+v, want not-found and offline", errs)
+	}
+	byName := map[string]ReflectedError{}
+	for _, e := range errs {
+		byName[e.Name] = e
+	}
+	notFound, offline := byName["not-found"], byName["offline"]
+	if notFound.Kind != UsageError || notFound.ExitCode != 2 || notFound.Summary != "no such name" {
+		t.Errorf("not-found = %+v", notFound)
+	}
+	if ref, has := notFound.Payload.Get(); !has {
+		t.Error("not-found lost its payload type")
+	} else if _, err := ref.PackJSON(map[string]any{"name": "x"}); err != nil {
+		t.Errorf("the payload type does not accept its own shape: %v", err)
+	}
+	if offline.Kind != RuntimeError || offline.ExitCode != 69 || offline.Payload.IsSome() {
+		t.Errorf("offline = %+v", offline)
+	}
+
+	ctx := &MiddlewareContext[Unit]{call: &middlewareCall{toolName: "lookup", tool: tools[0]}}
+	if md := ctx.ToolMetadata(); md.Name() != "lookup" || md.Version() != "1.0.0" {
+		t.Errorf("ToolMetadata = %q %q", md.Name(), md.Version())
+	}
+}

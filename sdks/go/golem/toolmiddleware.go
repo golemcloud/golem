@@ -181,7 +181,9 @@ func (c *MiddlewareContext[P]) ToolName() string { return c.call.toolName }
 
 // ToolMetadata returns the wrapped tool's published metadata, which is how a
 // universal middleware learns the shape of a tool it was not written for.
-func (c *MiddlewareContext[P]) ToolMetadata() toolCommon.Tool { return c.call.tool }
+func (c *MiddlewareContext[P]) ToolMetadata() ReflectedTool {
+	return newReflectedTool(c.call.toolName, c.call.tool)
+}
 
 // CommandPath returns the command being invoked, from the tool's root.
 func (c *MiddlewareContext[P]) CommandPath() []string {

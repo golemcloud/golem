@@ -137,17 +137,6 @@ func NewAgentStream[T any]() (*AgentStreamWriter[T], AgentStream[T]) {
 	return newAgentStreamWith(defaultStreamCodec[T]())
 }
 
-// NewAgentStreamWithCodec creates a stream whose items are converted by the
-// supplied functions, so a caller holding the source schema can pin
-// distinctions T alone does not carry. dispose may be nil.
-func NewAgentStreamWithCodec[T any](
-	encode func(T) (types.SchemaValueTree, error),
-	decode func(types.SchemaValueTree) (T, error),
-	dispose func(T),
-) (*AgentStreamWriter[T], AgentStream[T]) {
-	return newAgentStreamWith(streamCodec[T]{encode: encode, decode: decode, dispose: dispose})
-}
-
 func newAgentStreamWith[T any](c streamCodec[T]) (*AgentStreamWriter[T], AgentStream[T]) {
 	sink, src := newStreamPair()
 	return &AgentStreamWriter[T]{sink: sink, codec: c},

@@ -104,19 +104,20 @@ func TestPackParametersBuildsTheInvocationRecord(t *testing.T) {
 	r := snapshotOf(t)
 	m, _ := r.Method("greet")
 
-	tree, err := m.PackJSON(map[string]any{"greeting": "hi", "times": 2})
+	packed, err := m.PackJSON(map[string]any{"greeting": "hi", "times": 2})
 	if err != nil {
 		t.Fatalf("PackJSON: %v", err)
 	}
-	root := tree.ValueNodes[tree.Root]
-	if root.Tag() != types.SchemaValueNodeRecordValue {
-		t.Fatalf("root tag %d, want record", root.Tag())
-	}
-	if n := len(root.RecordValue()); n != 2 {
-		t.Fatalf("record has %d fields, want 2", n)
+	rec, ok := packed.(core.RecordValue)
+	if !ok || len(rec.Fields) != 2 {
+		t.Fatalf("packed %#v, want a record of 2 fields", packed)
 	}
 
-	// The same tree decodes back into the agent's own Go type.
+	// On the wire, the same value decodes back into the agent's own Go type.
+	tree, err := witschema.ValueToWit(packed)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var in GreetIn
 	fields := newDefinitions().structFields(reflect.TypeFor[GreetIn]())
 	if err := decodeParams(tree, fields, reflect.ValueOf(&in).Elem(), nil); err != nil {
@@ -149,7 +150,7 @@ func TestPackParametersRoundTrips(t *testing.T) {
 	r := snapshotOf(t)
 	m, _ := r.Method("greet")
 
-	tree, err := m.PackJSON(map[string]any{"greeting": "hi", "times": 3})
+	value, err := m.PackJSON(map[string]any{"greeting": "hi", "times": 3})
 	if err != nil {
 		t.Fatalf("PackJSON: %v", err)
 	}
@@ -160,10 +161,6 @@ func TestPackParametersRoundTrips(t *testing.T) {
 	params, err := m.Parameters()
 	if err != nil {
 		t.Fatalf("Parameters: %v", err)
-	}
-	value, err := witschema.ValueToCore(tree)
-	if err != nil {
-		t.Fatalf("ValueToCore: %v", err)
 	}
 	back, err := ref.UnpackParameters(params, value)
 	if err != nil {
@@ -422,7 +419,7 @@ func TestToolCommandPacksAndRendersItsArguments(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PackJSON: %v", err)
 	}
-	root := input.Value.ValueNodes[input.Value.Root]
+	root := input.wit.Value.ValueNodes[input.wit.Value.Root]
 	if root.Tag() != types.SchemaValueNodeRecordValue || len(root.RecordValue()) != 3 {
 		t.Fatalf("input root is %v", root)
 	}
@@ -532,11 +529,7 @@ func TestDynamicAgentClientInvokesWithPackedValues(t *testing.T) {
 	if got.IsNone() {
 		t.Fatal("the result was dropped")
 	}
-	decoded, err := witschema.ValueToCore(got.Unwrap())
-	if err != nil {
-		t.Fatalf("ValueToCore: %v", err)
-	}
-	value, err := out.UnpackJSON(decoded)
+	value, err := m.UnpackOutput(got.Unwrap())
 	if err != nil || value != "hi" {
 		t.Errorf("result %v (%v)", value, err)
 	}
@@ -623,7 +616,7 @@ func TestDynamicToolClientInvokes(t *testing.T) {
 	rpc := &fakeToolRPC{out: result.wit, has: true}
 	client := &DynamicToolClient{toolName: "files", rpc: rpc}
 
-	got, err := client.InvokeDynamic([]string{"index", "add"}, TypedValue{wit: input})
+	got, err := client.InvokeDynamic([]string{"index", "add"}, input)
 	if err != nil {
 		t.Fatalf("InvokeDynamic: %v", err)
 	}
