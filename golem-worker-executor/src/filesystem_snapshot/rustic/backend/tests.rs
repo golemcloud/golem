@@ -618,9 +618,11 @@ fn a_range_that_is_not_cacheable_is_a_ranged_read_each_time() {
 
 #[test]
 fn two_threads_that_miss_one_pack_make_one_storage_read() {
-    // The first read waits at the gate. The gate opens after the second thread had 200 ms to ask
-    // for the same pack while the first read was held. A second read in that time fails the test.
-    // The value tests of the kept packs hold the rule that the second thread waits.
+    // The first read waits at the gate. The second thread signals just before it asks for the same
+    // pack, and the test then waits 200 ms with the gate closed. At the end of that time, no second
+    // read reached the storage and the second thread has not returned. Only a thread that waits in
+    // the kept packs for the first read fits both. The value tests of `want` hold the rule that it
+    // waits.
     let fixture = PackFixture::new(1024, |op_label, _| {
         if op_label == "read" {
             Script::WaitForGate
@@ -636,27 +638,35 @@ fn two_threads_that_miss_one_pack_make_one_storage_read() {
         std::thread::sleep(Duration::from_millis(10));
         !fixture.pack_calls().is_empty()
     });
+    let (asking, asked) = std::sync::mpsc::channel();
     let second = on_own_thread({
         let backend = fixture.backend.clone();
-        move || tree_range(&backend, 50, 10).ok()
+        move || {
+            let _ = asking.send(());
+            tree_range(&backend, 50, 10).ok()
+        }
     });
-    let second_read_during_the_hold = (0..20).any(|_| {
-        std::thread::sleep(Duration::from_millis(10));
-        fixture.pack_calls().len() > 1
-    });
+    let second_asks = asked.recv_timeout(LIMIT).is_ok();
+    std::thread::sleep(Duration::from_millis(200));
+    let second_read_during_the_hold = fixture.pack_calls().len() > 1;
+    let second_waits = matches!(second.try_recv(), Err(std::sync::mpsc::TryRecvError::Empty));
     fixture.storage.open_gate();
 
     assert_eq!(
         (
             first_read_started,
+            second_asks,
             second_read_during_the_hold,
+            second_waits,
             first.recv_timeout(LIMIT).ok().flatten(),
             second.recv_timeout(LIMIT).ok().flatten(),
             fixture.pack_calls()
         ),
         (
             true,
+            true,
             false,
+            true,
             Some(Bytes::from_iter(0..10)),
             Some(Bytes::from_iter(50..60)),
             vec!["read"]
