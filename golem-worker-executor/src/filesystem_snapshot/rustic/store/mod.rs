@@ -174,7 +174,8 @@ pub(crate) struct RusticSnapshotStore {
     tracker: TaskTracker,
     /// Runs saves and prunes at a low priority.
     low_priority: LowPriority,
-    /// Gives the time of each decision and of each time that the store writes.
+    /// Gives the wall time that the store compares with the times from storage, and the times that
+    /// it writes.
     clock: Arc<dyn Clock>,
 }
 

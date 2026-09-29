@@ -16,7 +16,7 @@
 
 use golem_common::model::Timestamp;
 
-/// Gives the wall time of the host. A store reads the time only through its clock.
+/// Gives the wall time.
 pub(super) trait Clock: Send + Sync {
     /// Gives the time now.
     fn now(&self) -> Timestamp;
