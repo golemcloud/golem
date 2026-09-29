@@ -161,12 +161,13 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
                     26 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
                     27 => ()
                     28 => ()
-                    29 => mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
-                    30 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-                    31 => ()
+                    29 => ()
+                    30 => mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
+                    31 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
                     32 => ()
                     33 => ()
                     34 => ()
+                    35 => ()
                     _ => panic()
                   }
                 }
@@ -298,12 +299,13 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
                         26 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
                         27 => ()
                         28 => ()
-                        29 => mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
-                        30 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-                        31 => ()
+                        29 => ()
+                        30 => mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
+                        31 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
                         32 => ()
                         33 => ()
                         34 => ()
+                        35 => ()
                         _ => panic()
                       }
                     }
@@ -432,12 +434,13 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
                         26 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
                         27 => ()
                         28 => ()
-                        29 => mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
-                        30 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-                        31 => ()
+                        29 => ()
+                        30 => mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
+                        31 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
                         32 => ()
                         33 => ()
                         34 => ()
+                        35 => ()
                         _ => panic()
                       }
                     }
@@ -559,12 +562,13 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
                               26 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
                               27 => ()
                               28 => ()
-                              29 => mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
-                              30 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-                              31 => ()
+                              29 => ()
+                              30 => mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
+                              31 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
                               32 => ()
                               33 => ()
                               34 => ()
+                              35 => ()
                               _ => panic()
                             }
                           }
@@ -641,12 +645,13 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
                               26 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
                               27 => ()
                               28 => ()
-                              29 => mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
-                              30 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-                              31 => ()
+                              29 => ()
+                              30 => mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
+                              31 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
                               32 => ()
                               33 => ()
                               34 => ()
+                              35 => ()
                               _ => panic()
                             }
                           }
@@ -723,12 +728,13 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
                               26 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
                               27 => ()
                               28 => ()
-                              29 => mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
-                              30 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-                              31 => ()
+                              29 => ()
+                              30 => mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
+                              31 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
                               32 => ()
                               33 => ()
                               34 => ()
+                              35 => ()
                               _ => panic()
                             }
                           }
@@ -824,14 +830,15 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
                                   mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
                                 27 => ()
                                 28 => ()
-                                29 =>
-                                  mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
+                                29 => ()
                                 30 =>
+                                  mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
+                                31 =>
                                   mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-                                31 => ()
                                 32 => ()
                                 33 => ()
                                 34 => ()
+                                35 => ()
                                 _ => panic()
                               }
                             }
@@ -910,12 +917,13 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
                               26 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
                               27 => ()
                               28 => ()
-                              29 => mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
-                              30 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-                              31 => ()
+                              29 => ()
+                              30 => mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
+                              31 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
                               32 => ()
                               33 => ()
                               34 => ()
+                              35 => ()
                               _ => panic()
                             }
                           }
@@ -991,12 +999,13 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
                               26 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
                               27 => ()
                               28 => ()
-                              29 => mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
-                              30 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-                              31 => ()
+                              29 => ()
+                              30 => mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
+                              31 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
                               32 => ()
                               33 => ()
                               34 => ()
+                              35 => ()
                               _ => panic()
                             }
                           }
@@ -1073,12 +1082,13 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
                               26 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
                               27 => ()
                               28 => ()
-                              29 => mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
-                              30 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-                              31 => ()
+                              29 => ()
+                              30 => mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
+                              31 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
                               32 => ()
                               33 => ()
                               34 => ()
+                              35 => ()
                               _ => panic()
                             }
                           }
@@ -1154,12 +1164,13 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
                               26 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
                               27 => ()
                               28 => ()
-                              29 => mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
-                              30 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-                              31 => ()
+                              29 => ()
+                              30 => mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
+                              31 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
                               32 => ()
                               33 => ()
                               34 => ()
+                              35 => ()
                               _ => panic()
                             }
                           }
@@ -1635,7 +1646,8 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
             }
             28 => ()
             29 => ()
-            30 => {
+            30 => ()
+            31 => {
               mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
               for index61 = 0
@@ -1658,7 +1670,7 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
                 _ => panic()
               }
             }
-            31 => {
+            32 => {
               for index64 = 0
                   index64 < mbt_ffi_load32(iter_base + 12)
                   index64 = index64 + 1 {
@@ -1726,21 +1738,21 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
               }
               mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
             }
-            32 =>
+            33 =>
               match mbt_ffi_load8_u(iter_base + 12) {
                 0 => ()
                 1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
                 _ => panic()
               }
-            33 =>
+            34 =>
               match mbt_ffi_load8_u(iter_base + 8) {
                 0 => ()
                 1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
                 _ => panic()
               }
-            34 => ()
             35 => ()
             36 => ()
+            37 => ()
             _ => panic()
           }
 
@@ -2166,7 +2178,8 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
               }
               28 => ()
               29 => ()
-              30 => {
+              30 => ()
+              31 => {
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
                 for index85 = 0
@@ -2189,7 +2202,7 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
                   _ => panic()
                 }
               }
-              31 => {
+              32 => {
                 for index88 = 0
                     index88 < mbt_ffi_load32(iter_base + 12)
                     index88 = index88 + 1 {
@@ -2257,21 +2270,21 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
                 }
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
               }
-              32 =>
+              33 =>
                 match mbt_ffi_load8_u(iter_base + 12) {
                   0 => ()
                   1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
                   _ => panic()
                 }
-              33 =>
+              34 =>
                 match mbt_ffi_load8_u(iter_base + 8) {
                   0 => ()
                   1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
                   _ => panic()
                 }
-              34 => ()
               35 => ()
               36 => ()
+              37 => ()
               _ => panic()
             }
 
@@ -2383,12 +2396,13 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
               26 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
               27 => ()
               28 => ()
-              29 => mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
-              30 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-              31 => ()
+              29 => ()
+              30 => mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
+              31 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
               32 => ()
               33 => ()
               34 => ()
+              35 => ()
               _ => panic()
             }
           }
@@ -3076,12 +3090,13 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
                   26 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
                   27 => ()
                   28 => ()
-                  29 => mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
-                  30 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-                  31 => ()
+                  29 => ()
+                  30 => mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
+                  31 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
                   32 => ()
                   33 => ()
                   34 => ()
+                  35 => ()
                   _ => panic()
                 }
               }
@@ -3212,12 +3227,13 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
                       26 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
                       27 => ()
                       28 => ()
-                      29 => mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
-                      30 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-                      31 => ()
+                      29 => ()
+                      30 => mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
+                      31 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
                       32 => ()
                       33 => ()
                       34 => ()
+                      35 => ()
                       _ => panic()
                     }
                   }
@@ -3345,12 +3361,13 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
                       26 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
                       27 => ()
                       28 => ()
-                      29 => mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
-                      30 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-                      31 => ()
+                      29 => ()
+                      30 => mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
+                      31 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
                       32 => ()
                       33 => ()
                       34 => ()
+                      35 => ()
                       _ => panic()
                     }
                   }
@@ -3471,12 +3488,13 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
                             26 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
                             27 => ()
                             28 => ()
-                            29 => mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
-                            30 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-                            31 => ()
+                            29 => ()
+                            30 => mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
+                            31 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
                             32 => ()
                             33 => ()
                             34 => ()
+                            35 => ()
                             _ => panic()
                           }
                         }
@@ -3552,12 +3570,13 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
                             26 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
                             27 => ()
                             28 => ()
-                            29 => mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
-                            30 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-                            31 => ()
+                            29 => ()
+                            30 => mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
+                            31 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
                             32 => ()
                             33 => ()
                             34 => ()
+                            35 => ()
                             _ => panic()
                           }
                         }
@@ -3633,12 +3652,13 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
                             26 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
                             27 => ()
                             28 => ()
-                            29 => mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
-                            30 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-                            31 => ()
+                            29 => ()
+                            30 => mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
+                            31 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
                             32 => ()
                             33 => ()
                             34 => ()
+                            35 => ()
                             _ => panic()
                           }
                         }
@@ -3720,12 +3740,13 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
                               26 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
                               27 => ()
                               28 => ()
-                              29 => mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
-                              30 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-                              31 => ()
+                              29 => ()
+                              30 => mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
+                              31 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
                               32 => ()
                               33 => ()
                               34 => ()
+                              35 => ()
                               _ => panic()
                             }
                           }
@@ -3803,12 +3824,13 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
                             26 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
                             27 => ()
                             28 => ()
-                            29 => mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
-                            30 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-                            31 => ()
+                            29 => ()
+                            30 => mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
+                            31 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
                             32 => ()
                             33 => ()
                             34 => ()
+                            35 => ()
                             _ => panic()
                           }
                         }
@@ -3884,12 +3906,13 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
                             26 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
                             27 => ()
                             28 => ()
-                            29 => mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
-                            30 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-                            31 => ()
+                            29 => ()
+                            30 => mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
+                            31 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
                             32 => ()
                             33 => ()
                             34 => ()
+                            35 => ()
                             _ => panic()
                           }
                         }
@@ -3965,12 +3988,13 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
                             26 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
                             27 => ()
                             28 => ()
-                            29 => mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
-                            30 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-                            31 => ()
+                            29 => ()
+                            30 => mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
+                            31 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
                             32 => ()
                             33 => ()
                             34 => ()
+                            35 => ()
                             _ => panic()
                           }
                         }
@@ -4046,12 +4070,13 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
                             26 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
                             27 => ()
                             28 => ()
-                            29 => mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
-                            30 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-                            31 => ()
+                            29 => ()
+                            30 => mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
+                            31 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
                             32 => ()
                             33 => ()
                             34 => ()
+                            35 => ()
                             _ => panic()
                           }
                         }
@@ -4519,7 +4544,8 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
           }
           28 => ()
           29 => ()
-          30 => {
+          30 => ()
+          31 => {
             mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
             for index61 = 0
@@ -4542,7 +4568,7 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
               _ => panic()
             }
           }
-          31 => {
+          32 => {
             for index64 = 0
                 index64 < mbt_ffi_load32(iter_base + 12)
                 index64 = index64 + 1 {
@@ -4610,21 +4636,21 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
             }
             mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
           }
-          32 =>
+          33 =>
             match mbt_ffi_load8_u(iter_base + 12) {
               0 => ()
               1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
               _ => panic()
             }
-          33 =>
+          34 =>
             match mbt_ffi_load8_u(iter_base + 8) {
               0 => ()
               1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
               _ => panic()
             }
-          34 => ()
           35 => ()
           36 => ()
+          37 => ()
           _ => panic()
         }
 
@@ -5046,7 +5072,8 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
               }
               28 => ()
               29 => ()
-              30 => {
+              30 => ()
+              31 => {
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
                 for index84 = 0
@@ -5069,7 +5096,7 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
                   _ => panic()
                 }
               }
-              31 => {
+              32 => {
                 for index87 = 0
                     index87 < mbt_ffi_load32(iter_base + 12)
                     index87 = index87 + 1 {
@@ -5137,21 +5164,21 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
                 }
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
               }
-              32 =>
+              33 =>
                 match mbt_ffi_load8_u(iter_base + 12) {
                   0 => ()
                   1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
                   _ => panic()
                 }
-              33 =>
+              34 =>
                 match mbt_ffi_load8_u(iter_base + 8) {
                   0 => ()
                   1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
                   _ => panic()
                 }
-              34 => ()
               35 => ()
               36 => ()
+              37 => ()
               _ => panic()
             }
 
@@ -5263,12 +5290,13 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
               26 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
               27 => ()
               28 => ()
-              29 => mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
-              30 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-              31 => ()
+              29 => ()
+              30 => mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
+              31 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
               32 => ()
               33 => ()
               34 => ()
+              35 => ()
               _ => panic()
             }
           }
@@ -6878,9 +6906,10 @@ pub fn wasmExportInvokeGolemToolGuest(p0 : Int) -> Int {
               allowed_hosts: lifted142,
             })
           }
-          28 => @types.SchemaTypeBody::DatetimeType
-          29 => @types.SchemaTypeBody::DurationType
-          30 => {
+          28 => @types.SchemaTypeBody::UuidType
+          29 => @types.SchemaTypeBody::DatetimeType
+          30 => @types.SchemaTypeBody::DurationType
+          31 => {
             let result143 = mbt_ffi_ptr2str(
               mbt_ffi_load32(iter_base + 8),
               mbt_ffi_load32(iter_base + 12),
@@ -6944,7 +6973,7 @@ pub fn wasmExportInvokeGolemToolGuest(p0 : Int) -> Int {
               max: lifted150,
             })
           }
-          31 => {
+          32 => {
             let array174 : Array[@types.UnionBranch] = []
             for index175 = 0
                 index175 < mbt_ffi_load32(iter_base + 12)
@@ -7124,7 +7153,7 @@ pub fn wasmExportInvokeGolemToolGuest(p0 : Int) -> Int {
               branches: array174,
             })
           }
-          32 => {
+          33 => {
             let lifted177 : String? = match mbt_ffi_load8_u(iter_base + 12) {
               0 => Option::None
               1 => {
@@ -7143,7 +7172,7 @@ pub fn wasmExportInvokeGolemToolGuest(p0 : Int) -> Int {
               category: lifted177,
             })
           }
-          33 => {
+          34 => {
             let lifted179 : String? = match mbt_ffi_load8_u(iter_base + 8) {
               0 => Option::None
               1 => {
@@ -7161,11 +7190,11 @@ pub fn wasmExportInvokeGolemToolGuest(p0 : Int) -> Int {
               resource_name: lifted179,
             })
           }
-          34 =>
+          35 =>
             @types.SchemaTypeBody::PermissionCardType(@types.PermissionCardSpec::{
               polymorphic: mbt_ffi_load8_u(iter_base + 8) != 0,
             })
-          35 => {
+          36 => {
             let lifted180 : Int? = match mbt_ffi_load8_u(iter_base + 8) {
               0 => Option::None
               1 => Option::Some(mbt_ffi_load32(iter_base + 12))
@@ -7174,7 +7203,7 @@ pub fn wasmExportInvokeGolemToolGuest(p0 : Int) -> Int {
 
             @types.SchemaTypeBody::FutureType(lifted180)
           }
-          36 => {
+          37 => {
             let lifted181 : Int? = match mbt_ffi_load8_u(iter_base + 8) {
               0 => Option::None
               1 => Option::Some(mbt_ffi_load32(iter_base + 12))
@@ -7551,15 +7580,20 @@ pub fn wasmExportInvokeGolemToolGuest(p0 : Int) -> Int {
             @types.SchemaValueNode::UrlValue(result228)
           }
           27 =>
+            @types.SchemaValueNode::UuidValue(@types.Uuid::{
+              high_bits: mbt_ffi_load64(iter_base + 8).reinterpret_as_uint64(),
+              low_bits: mbt_ffi_load64(iter_base + 16).reinterpret_as_uint64(),
+            })
+          28 =>
             @types.SchemaValueNode::DatetimeValue(@types.Datetime::{
               seconds: mbt_ffi_load64(iter_base + 8),
               nanoseconds: mbt_ffi_load32(iter_base + 16).reinterpret_as_uint(),
             })
-          28 =>
+          29 =>
             @types.SchemaValueNode::DurationValue(@types.DurationValuePayload::{
               nanoseconds: mbt_ffi_load64(iter_base + 8),
             })
-          29 => {
+          30 => {
             let result229 = mbt_ffi_ptr2str(
               mbt_ffi_load32(iter_base + 20),
               mbt_ffi_load32(iter_base + 24),
@@ -7571,7 +7605,7 @@ pub fn wasmExportInvokeGolemToolGuest(p0 : Int) -> Int {
               unit: result229,
             })
           }
-          30 => {
+          31 => {
             let result230 = mbt_ffi_ptr2str(
               mbt_ffi_load32(iter_base + 8),
               mbt_ffi_load32(iter_base + 12),
@@ -7582,21 +7616,21 @@ pub fn wasmExportInvokeGolemToolGuest(p0 : Int) -> Int {
               body: mbt_ffi_load32(iter_base + 16),
             })
           }
-          31 =>
+          32 =>
             @types.SchemaValueNode::SecretValue(
               @types.Secret::Secret(mbt_ffi_load32(iter_base + 8)),
             )
-          32 =>
+          33 =>
             @types.SchemaValueNode::QuotaTokenHandle(
               @types.QuotaToken::QuotaToken(mbt_ffi_load32(iter_base + 8)),
             )
-          33 =>
+          34 =>
             @types.SchemaValueNode::PermissionCardHandle(
               @types.PermissionCard::PermissionCard(
                 mbt_ffi_load32(iter_base + 8),
               ),
             )
-          34 =>
+          35 =>
             @types.SchemaValueNode::StreamValue(
               @types.SchemaValueStream::SchemaValueStream(
                 mbt_ffi_load32(iter_base + 8),
@@ -7805,6 +7839,13 @@ pub fn wasmExportInvokeGolemToolGuest(p0 : Int) -> Int {
       invoke_task_return(return_result)
     })
   })
+}
+
+///|
+#doc(hidden)
+fn __wit_bindgen_lower_t4(ptr : Int, value : @types.Uuid) -> Unit {
+  mbt_ffi_store64(ptr + 0, value.high_bits.reinterpret_as_int64())
+  mbt_ffi_store64(ptr + 8, value.low_bits.reinterpret_as_int64())
 }
 
 ///|
@@ -8915,58 +8956,63 @@ fn __wit_bindgen_lower_t55(ptr : Int, value : @types.SchemaTypeBody) -> Unit {
 
       ()
     }
-    DatetimeType => {
+    UuidType => {
       mbt_ffi_store8(ptr + 0, 28)
 
       ()
     }
-    DurationType => {
+    DatetimeType => {
       mbt_ffi_store8(ptr + 0, 29)
 
       ()
     }
-    QuantityType(payload59) => {
+    DurationType => {
       mbt_ffi_store8(ptr + 0, 30)
-      __wit_bindgen_lower_t42(ptr + 8, payload59)
 
       ()
     }
-    UnionType(payload60) => {
+    QuantityType(payload60) => {
       mbt_ffi_store8(ptr + 0, 31)
-      __wit_bindgen_lower_t47(ptr + 8, payload60)
+      __wit_bindgen_lower_t42(ptr + 8, payload60)
 
       ()
     }
-    SecretType(payload61) => {
+    UnionType(payload61) => {
       mbt_ffi_store8(ptr + 0, 32)
-      __wit_bindgen_lower_t48(ptr + 8, payload61)
+      __wit_bindgen_lower_t47(ptr + 8, payload61)
 
       ()
     }
-    QuotaTokenType(payload62) => {
+    SecretType(payload62) => {
       mbt_ffi_store8(ptr + 0, 33)
-      __wit_bindgen_lower_t49(ptr + 8, payload62)
+      __wit_bindgen_lower_t48(ptr + 8, payload62)
 
       ()
     }
-    PermissionCardType(payload63) => {
+    QuotaTokenType(payload63) => {
       mbt_ffi_store8(ptr + 0, 34)
-      __wit_bindgen_lower_t50(ptr + 8, payload63)
+      __wit_bindgen_lower_t49(ptr + 8, payload63)
 
       ()
     }
-    FutureType(payload64) => {
+    PermissionCardType(payload64) => {
       mbt_ffi_store8(ptr + 0, 35)
+      __wit_bindgen_lower_t50(ptr + 8, payload64)
 
-      match payload64 {
+      ()
+    }
+    FutureType(payload65) => {
+      mbt_ffi_store8(ptr + 0, 36)
+
+      match payload65 {
         None => {
           mbt_ffi_store8(ptr + 8, 0)
 
           ()
         }
-        Some(payload66) => {
+        Some(payload67) => {
           mbt_ffi_store8(ptr + 8, 1)
-          mbt_ffi_store32(ptr + 12, payload66)
+          mbt_ffi_store32(ptr + 12, payload67)
 
           ()
         }
@@ -8974,18 +9020,18 @@ fn __wit_bindgen_lower_t55(ptr : Int, value : @types.SchemaTypeBody) -> Unit {
 
       ()
     }
-    StreamType(payload67) => {
-      mbt_ffi_store8(ptr + 0, 36)
+    StreamType(payload68) => {
+      mbt_ffi_store8(ptr + 0, 37)
 
-      match payload67 {
+      match payload68 {
         None => {
           mbt_ffi_store8(ptr + 8, 0)
 
           ()
         }
-        Some(payload69) => {
+        Some(payload70) => {
           mbt_ffi_store8(ptr + 8, 1)
-          mbt_ffi_store32(ptr + 12, payload69)
+          mbt_ffi_store32(ptr + 12, payload70)
 
           ()
         }
@@ -9412,59 +9458,65 @@ fn __wit_bindgen_lower_t76(ptr : Int, value : @types.SchemaValueNode) -> Unit {
 
       ()
     }
-    DatetimeValue(payload41) => {
+    UuidValue(payload41) => {
       mbt_ffi_store8(ptr + 0, 27)
-      __wit_bindgen_lower_t5(ptr + 8, payload41)
+      __wit_bindgen_lower_t4(ptr + 8, payload41)
 
       ()
     }
-    DurationValue(payload42) => {
+    DatetimeValue(payload42) => {
       mbt_ffi_store8(ptr + 0, 28)
-      __wit_bindgen_lower_t67(ptr + 8, payload42)
+      __wit_bindgen_lower_t5(ptr + 8, payload42)
 
       ()
     }
-    QuantityValueNode(payload43) => {
+    DurationValue(payload43) => {
       mbt_ffi_store8(ptr + 0, 29)
-      __wit_bindgen_lower_t40(ptr + 8, payload43)
+      __wit_bindgen_lower_t67(ptr + 8, payload43)
 
       ()
     }
-    UnionValue(payload44) => {
+    QuantityValueNode(payload44) => {
       mbt_ffi_store8(ptr + 0, 30)
-      __wit_bindgen_lower_t68(ptr + 8, payload44)
+      __wit_bindgen_lower_t40(ptr + 8, payload44)
 
       ()
     }
-    SecretValue(payload45) => {
+    UnionValue(payload45) => {
       mbt_ffi_store8(ptr + 0, 31)
+      __wit_bindgen_lower_t68(ptr + 8, payload45)
 
-      let @types.Secret(handle) = payload45
+      ()
+    }
+    SecretValue(payload46) => {
+      mbt_ffi_store8(ptr + 0, 32)
+
+      let @types.Secret(handle) = payload46
       mbt_ffi_store32(ptr + 8, handle)
 
       ()
     }
-    QuotaTokenHandle(payload46) => {
-      mbt_ffi_store8(ptr + 0, 32)
-
-      let @types.QuotaToken(handle47) = payload46
-      mbt_ffi_store32(ptr + 8, handle47)
-
-      ()
-    }
-    PermissionCardHandle(payload48) => {
+    QuotaTokenHandle(payload47) => {
       mbt_ffi_store8(ptr + 0, 33)
 
-      let @types.PermissionCard(handle49) = payload48
-      mbt_ffi_store32(ptr + 8, handle49)
+      let @types.QuotaToken(handle48) = payload47
+      mbt_ffi_store32(ptr + 8, handle48)
 
       ()
     }
-    StreamValue(payload50) => {
+    PermissionCardHandle(payload49) => {
       mbt_ffi_store8(ptr + 0, 34)
 
-      let @types.SchemaValueStream(handle51) = payload50
-      mbt_ffi_store32(ptr + 8, handle51)
+      let @types.PermissionCard(handle50) = payload49
+      mbt_ffi_store32(ptr + 8, handle50)
+
+      ()
+    }
+    StreamValue(payload51) => {
+      mbt_ffi_store8(ptr + 0, 35)
+
+      let @types.SchemaValueStream(handle52) = payload51
+      mbt_ffi_store32(ptr + 8, handle52)
 
       ()
     }

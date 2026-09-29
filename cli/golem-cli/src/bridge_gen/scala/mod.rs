@@ -2857,6 +2857,10 @@ impl ScalaBridgeGenerator {
             }
             SchemaType::Path { .. } => format!("{SV}.PathValue({val_expr})"),
             SchemaType::Url { .. } => format!("{SV}.UrlValue({val_expr})"),
+            SchemaType::Uuid { .. } if self.mode == ScalaBridgeMode::GuestWasmRpc => {
+                format!("{GUEST_SV}.UuidValue({val_expr})")
+            }
+            SchemaType::Uuid { .. } => format!("{SV}.UuidValue({val_expr})"),
             SchemaType::Datetime { .. } if self.mode == ScalaBridgeMode::GuestWasmRpc => format!(
                 "{GUEST_SV}.DatetimeValue(_root_.golem.schema.Datetime({val_expr}.getEpochSecond, {val_expr}.getNano))"
             ),
@@ -3037,6 +3041,12 @@ impl ScalaBridgeGenerator {
             }
             SchemaType::Path { .. } => format!("{CODEC}.asPath({val_expr})"),
             SchemaType::Url { .. } => format!("{CODEC}.asUrl({val_expr})"),
+            SchemaType::Uuid { .. } if self.mode == ScalaBridgeMode::GuestWasmRpc => format!(
+                "{val_expr} match {{ case {GUEST_SV}.UuidValue(value) => value; case other => throw {GUEST_CLIENT_ERROR}(s\"Expected UUID value, got $other\") }}"
+            ),
+            SchemaType::Uuid { .. } => format!(
+                "{val_expr} match {{ case {SV}.UuidValue(value) => value; case other => throw {BRIDGE_EXCEPTION}(s\"Expected UUID value, got $other\") }}"
+            ),
             SchemaType::Datetime { .. } => format!("{CODEC}.asDatetime({val_expr})"),
             SchemaType::Duration { .. } => format!("{CODEC}.asDuration({val_expr})"),
             SchemaType::Secret { .. } if self.mode == ScalaBridgeMode::GuestWasmRpc => format!(
@@ -3272,6 +3282,7 @@ impl ScalaBridgeGenerator {
             SchemaType::Path { .. } | SchemaType::Url { .. } => {
                 Ok("_root_.scala.Predef.String".to_string())
             }
+            SchemaType::Uuid { .. } => Ok("_root_.golem.Uuid".to_string()),
             SchemaType::Datetime { .. } => Ok("_root_.java.time.Instant".to_string()),
             SchemaType::Duration { .. } => Ok("_root_.scala.Long".to_string()),
             SchemaType::Secret { .. } if self.mode == ScalaBridgeMode::GuestWasmRpc => {

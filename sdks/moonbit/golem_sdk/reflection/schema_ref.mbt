@@ -962,6 +962,8 @@ fn SchemaRef::unpack(
     (@model.SchemaTypeBody::Path(_), @model.SchemaValue::Path(value))
     | (@model.SchemaTypeBody::Url(_), @model.SchemaValue::Url(value)) =>
       Json::string(value)
+    (@model.SchemaTypeBody::Uuid, @model.SchemaValue::Uuid(value)) =>
+      Json::string(@types.uuid_to_string(value))
     (
       @model.SchemaTypeBody::Union(branches),
       @model.SchemaValue::Union(tag, value),
@@ -1219,6 +1221,11 @@ fn SchemaRef::pack(
     }
     Path(_) => Path(json_string(json))
     Url(_) => Url(json_string(json))
+    Uuid =>
+      match @types.parse_uuid(json_string(json)) {
+        Ok(value) => Uuid(value)
+        Err(message) => raise Json(message)
+      }
     Union(branches) => {
       let matching = branches.filter(branch => {
         discriminator_matches(branch.discriminator, json)

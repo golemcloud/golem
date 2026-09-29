@@ -1008,6 +1008,10 @@ fn scalar_payload_charge(value: &SchemaValue, json: &Value) -> Result<u64, Publi
                 .unwrap_or_default()),
         SchemaValue::Path { path } => Ok(path.len() as u64),
         SchemaValue::Url { url } => Ok(url.len() as u64),
+        SchemaValue::Uuid(_) => json
+            .as_str()
+            .map(|value| value.len() as u64)
+            .ok_or_else(|| PublicSchemaValueError::validation("uuid must be a string")),
         SchemaValue::Datetime { .. } => json
             .as_str()
             .map(|value| value.len() as u64)

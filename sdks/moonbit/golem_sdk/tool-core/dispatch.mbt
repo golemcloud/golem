@@ -206,6 +206,7 @@ fn value_matches_type(
     @model.SchemaTypeBody::Binary(_) => value is @model.SchemaValue::Binary(_)
     @model.SchemaTypeBody::Path(_) => value is @model.SchemaValue::Path(_)
     @model.SchemaTypeBody::Url(_) => value is @model.SchemaValue::Url(_)
+    @model.SchemaTypeBody::Uuid => value is @model.SchemaValue::Uuid(_)
     @model.SchemaTypeBody::Datetime => value is @model.SchemaValue::Datetime(_)
     @model.SchemaTypeBody::Duration => value is @model.SchemaValue::Duration(_)
     @model.SchemaTypeBody::Quantity(_) =>

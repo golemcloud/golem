@@ -251,33 +251,31 @@ object SchemaDerivationSpec extends ZIOSpecDefault {
       // -------------------------------------------------------------------
       // built-ins: Uuid + unsigned wrappers
       // -------------------------------------------------------------------
-      test("Uuid derives the canonical cross-SDK record and round-trips") {
-        val g  = IntoSchema[Uuid].graph
-        val id = refId(g.root)
+      test("Uuid derives the first-class UUID schema and round-trips") {
+        val g = IntoSchema[Uuid].graph
         assertTrue(
-          id == "uuid.Uuid",
-          g.defs(id).name.contains("uuid"),
-          defBody(g, id) == RecordType(List(NamedFieldType("high-bits", t.u64), NamedFieldType("low-bits", t.u64)))
+          g.root.body == UuidType,
+          g.defs.isEmpty
         ) && assert(
           Uuid.fromStandardString("12345678-1234-5678-1234-567812345678").flatMap(roundTrip(_).left.map(_.getMessage))
         )(isRight(equalTo(Uuid.fromStandardString("12345678-1234-5678-1234-567812345678").toOption.get)))
       },
-      test("EnvironmentId derives a record over the canonical Uuid built-in and round-trips") {
-        val g       = IntoSchema[EnvironmentId].graph
-        val id      = refId(g.root)
-        val uuidRef = defBody(g, id) match {
-          case RecordType(List(NamedFieldType("uuid", body, _))) => refId(body)
+      test("EnvironmentId derives a record over the first-class Uuid and round-trips") {
+        val g        = IntoSchema[EnvironmentId].graph
+        val id       = refId(g.root)
+        val uuidBody = defBody(g, id) match {
+          case RecordType(List(NamedFieldType("uuid", body, _))) => body.body
           case other                                             => throw new AssertionError(other.toString)
         }
         val envId = EnvironmentId(Uuid.fromStandardString("12345678-1234-5678-1234-567812345678").toOption.get)
-        assertTrue(g.defs.contains(id), uuidRef == "uuid.Uuid") &&
+        assertTrue(g.defs.contains(id), uuidBody == UuidType) &&
         assert(roundTrip(envId))(isRight(equalTo(envId)))
       },
-      test("Uuid value encodes high/low as raw u64 bits") {
+      test("Uuid value uses the first-class UUID node") {
         val maxHi   = Uuid(BigInt("18446744073709551615"), BigInt(0)) // 2^64 - 1, 0
         val encoded = IntoSchema[Uuid].toValue(maxHi)
         assertTrue(
-          encoded == SchemaValue.RecordValue(List(SchemaValue.U64Value(-1L), SchemaValue.U64Value(0L)))
+          encoded == SchemaValue.UuidValue(maxHi)
         ) && assert(roundTrip(maxHi))(isRight(equalTo(maxHi)))
       },
       test("unsigned wrappers derive u8/u16/u32/u64 and round-trip (incl. boundary)") {
@@ -302,6 +300,12 @@ object SchemaDerivationSpec extends ZIOSpecDefault {
           negHi.failed.toOption.exists(_.isInstanceOf[SchemaEncodeError]),
           overLo.failed.toOption.exists(_.isInstanceOf[SchemaEncodeError]),
           overHi.failed.toOption.exists(_.isInstanceOf[SchemaEncodeError])
+        )
+      },
+      test("Uuid decode rejects out-of-range high/low bits with FromSchemaError") {
+        assertTrue(
+          FromSchema[Uuid].fromValue(SchemaValue.UuidValue(Uuid(BigInt(-1), BigInt(0)))).isLeft,
+          FromSchema[Uuid].fromValue(SchemaValue.UuidValue(Uuid(BigInt(0), BigInt(1) << 64))).isLeft
         )
       },
       test("char decode rejects out-of-Char-range code points with FromSchemaError") {

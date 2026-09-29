@@ -12,7 +12,7 @@ from pathlib import Path
 
 
 EXPECTED_INVOKE_LIFT_SHA256 = (
-    "5f8598fa5c25a5a201da1477992095125fab7d9a1cd4699cf081360f59f59965"
+    "b2b3f476a025ef1229ab750b294f9dbb5c3b02af875f2e1e3e501ec97879ed77"
 )
 
 
@@ -48,7 +48,7 @@ def main() -> None:
     output = lines[:raw_start]
 
     def source_line(original_line: int) -> int:
-        return raw_start + (original_line - 13263)
+        return raw_start + (original_line - 13318)
 
     def block(start: int, end: int) -> list[str]:
         return [
@@ -63,56 +63,56 @@ def main() -> None:
 
     helper(
         "fn __wit_bindgen_lift_invoke_tool_commands(p0 : Int) -> @common.CommandTree {",
-        13274,
-        17366,
+        13328,
+        17465,
         "@common.CommandTree::{nodes : array547}",
     )
     helper(
         "fn __wit_bindgen_lift_invoke_tool_schema(p0 : Int) -> @types.SchemaGraph {",
-        17368,
-        18910,
+        17466,
+        19013,
         "@types.SchemaGraph::{type_nodes : array745, defs : array750, root : mbt_ffi_load32((p0) + 48)}",
     )
     helper(
         "fn __wit_bindgen_lift_invoke_installation_parameters(p0 : Int) -> @types.TypedSchemaValue {",
-        18912,
-        20738,
+        19014,
+        20849,
         "@types.TypedSchemaValue::{graph : @types.SchemaGraph::{type_nodes : array948, defs : array953, root : mbt_ffi_load32((p0) + 68)}, value : @types.SchemaValueTree::{value_nodes : array984, root : mbt_ffi_load32((p0) + 80)}}",
     )
     helper(
         "fn __wit_bindgen_lift_invoke_command_path(p0 : Int) -> Array[String] {",
-        20740,
-        20748,
+        20850,
+        20859,
         "array987",
     )
     helper(
         "fn __wit_bindgen_lift_invoke_input_graph(p0 : Int) -> @types.SchemaGraph {",
-        20750,
-        22292,
+        20860,
+        22407,
         "@types.SchemaGraph::{type_nodes : array1185, defs : array1190, root : mbt_ffi_load32((p0) + 108)}",
     )
     helper(
         "fn __wit_bindgen_lift_invoke_input_value(p0 : Int) -> @types.SchemaValueTree {",
-        22294,
-        22576,
+        22408,
+        22695,
         "@types.SchemaValueTree::{value_nodes : array1221, root : mbt_ffi_load32((p0) + 120)}",
     )
     helper(
         "fn __wit_bindgen_lift_invoke_stdin(p0 : Int) -> @async-core.Stream[Result[FixedArray[Byte], @streams.ByteStreamFailure]]? {",
-        22578,
-        22586,
+        22696,
+        22705,
         "lifted1224",
     )
     helper(
         "fn __wit_bindgen_lift_invoke_stdout(p0 : Int) -> @streams.ToolStdoutWriter? {",
-        22588,
-        22595,
+        22706,
+        22714,
         "lifted1225",
     )
     helper(
         "fn __wit_bindgen_lift_invoke_principal(p0 : Int) -> @common0.Principal {",
-        22597,
-        22698,
+        22715,
+        22817,
         "lifted1243",
     )
     output.extend(

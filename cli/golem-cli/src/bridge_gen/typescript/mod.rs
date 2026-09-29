@@ -1989,6 +1989,7 @@ impl TypeScriptBridgeGenerator {
             | SchemaType::Path { .. }
             | SchemaType::Url { .. }
             | SchemaType::Datetime { .. } => value.to_string(),
+            SchemaType::Uuid { .. } => format!("({value}).toString()"),
             SchemaType::F32 { .. } | SchemaType::F64 { .. } => format!(
                 "((v: number) => Number.isNaN(v) ? {{ $float: 'nan' }} : v === Number.POSITIVE_INFINITY ? {{ $float: 'positive-infinity' }} : v === Number.NEGATIVE_INFINITY ? {{ $float: 'negative-infinity' }} : v)({value})"
             ),
@@ -2171,6 +2172,7 @@ impl TypeScriptBridgeGenerator {
             | SchemaType::Path { .. }
             | SchemaType::Url { .. }
             | SchemaType::Datetime { .. } => value.to_string(),
+            SchemaType::Uuid { .. } => format!("({value}).toString()"),
             SchemaType::F32 { .. } | SchemaType::F64 { .. } => format!(
                 "((v: number) => {{ if (!Number.isFinite(v)) throw new Error('configuration floats must be finite'); return v; }})({value})"
             ),
@@ -3117,6 +3119,9 @@ impl TypeScriptBridgeGenerator {
             SchemaType::Path { .. } | SchemaType::Url { .. } => {
                 format!("((n: any) => n.value as string)({value})")
             }
+            SchemaType::Uuid { .. } => {
+                format!("((n: any) => base.Uuid.parse(n.value as string))({value})")
+            }
             SchemaType::Datetime { .. } => {
                 format!("((n: any) => base.datetimeToISOString(n.value))({value})")
             }
@@ -3379,6 +3384,9 @@ impl TypeScriptBridgeGenerator {
             SchemaType::Url { .. } => {
                 format!("((n: any) => n.value.url as string)({value})")
             }
+            SchemaType::Uuid { .. } => {
+                format!("((n: any) => base.Uuid.from(n.value))({value})")
+            }
             SchemaType::Datetime { .. } => {
                 format!("((n: any) => n.value.value as string)({value})")
             }
@@ -3540,6 +3548,7 @@ impl TypeScriptBridgeGenerator {
             }
             SchemaType::Path { .. } => format!("{{ tag: 'path', value: {value} }}"),
             SchemaType::Url { .. } => format!("{{ tag: 'url', value: {value} }}"),
+            SchemaType::Uuid { .. } => format!("{{ tag: 'uuid', value: {value} }}"),
             SchemaType::Datetime { .. } => {
                 format!("{{ tag: 'datetime', value: base.datetimeFromISOString({value}) }}")
             }
@@ -3779,6 +3788,9 @@ impl TypeScriptBridgeGenerator {
             }
             SchemaType::Url { .. } => {
                 format!("{{ kind: 'url', value: {{ url: {value} }} }}")
+            }
+            SchemaType::Uuid { .. } => {
+                format!("{{ kind: 'uuid', value: ({value}).toString() }}")
             }
             SchemaType::Datetime { .. } => {
                 format!("{{ kind: 'datetime', value: {{ value: {value} }} }}")
@@ -4029,6 +4041,7 @@ impl TypeScriptBridgeGenerator {
             | SchemaType::Path { .. }
             | SchemaType::Url { .. }
             | SchemaType::Datetime { .. } => "string".to_string(),
+            SchemaType::Uuid { .. } => "base.Uuid".to_string(),
             SchemaType::Enum { .. } => self.streaming_type_definition(typ)?,
             SchemaType::F64 { .. }
             | SchemaType::F32 { .. }
@@ -4222,6 +4235,7 @@ impl TypeScriptBridgeGenerator {
             | SchemaType::Path { .. }
             | SchemaType::Url { .. }
             | SchemaType::Datetime { .. } => "string".to_string(),
+            SchemaType::Uuid { .. } => "base.Uuid".to_string(),
             SchemaType::F64 { .. }
             | SchemaType::F32 { .. }
             | SchemaType::U32 { .. }
@@ -4373,6 +4387,7 @@ impl TypeScriptBridgeGenerator {
                     SchemaType::Union { spec, .. } => self.union_tagged_type(spec),
                     SchemaType::Path { .. } => Ok("string".to_string()),
                     SchemaType::Url { .. } => Ok("string".to_string()),
+                    SchemaType::Uuid { .. } => Ok("base.Uuid".to_string()),
                     SchemaType::Datetime { .. } => Ok("string".to_string()),
                     SchemaType::Duration { .. } => Ok("bigint".to_string()),
                     SchemaType::Secret { .. }
@@ -4544,6 +4559,7 @@ impl TypeScriptBridgeGenerator {
             SchemaType::Union { spec, .. } => self.union_tagged_type(spec),
             SchemaType::Path { .. } => Ok("string".to_string()),
             SchemaType::Url { .. } => Ok("string".to_string()),
+            SchemaType::Uuid { .. } => Ok("base.Uuid".to_string()),
             SchemaType::Datetime { .. } => Ok("string".to_string()),
             SchemaType::Duration { .. } => Ok("bigint".to_string()),
             SchemaType::Secret { .. } if self.mode == TypeScriptBridgeMode::GuestWasmRpc => {

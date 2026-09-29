@@ -158,6 +158,7 @@ impl TypeName for ScalaTypeName {
             | SchemaType::Binary { .. }
             | SchemaType::Path { .. }
             | SchemaType::Url { .. }
+            | SchemaType::Uuid { .. }
             | SchemaType::Datetime { .. }
             | SchemaType::Duration { .. }
             | SchemaType::Quantity { .. }

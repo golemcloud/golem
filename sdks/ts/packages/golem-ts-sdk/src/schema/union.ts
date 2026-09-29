@@ -29,6 +29,7 @@
 //     (ArkType branch nodes / Effect AST members) rather than Standard Schemas.
 
 import { SchemaCodec } from './codec';
+import { Uuid } from '../uuid';
 import {
   mergeGraphDefs,
   SchemaType,
@@ -109,6 +110,8 @@ export function matchesSchemaType(
     case 'string':
     case 'url':
       return typeof value === 'string';
+    case 'uuid':
+      return value instanceof Uuid;
     case 'enum':
       return typeof value === 'string';
     case 'binary':

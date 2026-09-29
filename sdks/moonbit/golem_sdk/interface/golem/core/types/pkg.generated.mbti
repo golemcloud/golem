@@ -240,6 +240,7 @@ pub(all) enum SchemaTypeBody {
   BinaryType(BinaryRestrictions)
   PathType(PathSpec)
   UrlType(UrlRestrictions)
+  UuidType
   DatetimeType
   DurationType
   QuantityType(QuantitySpec)
@@ -290,6 +291,7 @@ pub(all) enum SchemaValueNode {
   BinaryValue(BinaryValuePayload)
   PathValue(String)
   UrlValue(String)
+  UuidValue(Uuid)
   DatetimeValue(Datetime)
   DurationValue(DurationValuePayload)
   QuantityValueNode(QuantityValue)

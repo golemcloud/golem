@@ -2670,6 +2670,7 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
             }
             SchemaType::Path { .. } => format!("@runtime.PathValue({val})"),
             SchemaType::Url { .. } => format!("@runtime.UrlValue({val})"),
+            SchemaType::Uuid { .. } => format!("@model.SchemaValue::Uuid({val})"),
             SchemaType::Datetime { .. } => format!("@runtime.DatetimeValue({val})"),
             SchemaType::Duration { .. } => format!("@runtime.DurationValue({val})"),
             SchemaType::Record { .. }
@@ -2854,6 +2855,9 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
             }
             SchemaType::Path { .. } => format!("@runtime.as_path({val})"),
             SchemaType::Url { .. } => format!("@runtime.as_url({val})"),
+            SchemaType::Uuid { .. } => format!(
+                "match {val} {{ Uuid(value) => value; other => raise @runtime.BridgeError(\"Expected UUID value, got \" + other.to_string()) }}"
+            ),
             SchemaType::Datetime { .. } => format!("@runtime.as_datetime({val})"),
             SchemaType::Duration { .. } => format!("@runtime.as_duration({val})"),
             SchemaType::Record { .. }
@@ -3062,6 +3066,7 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
                 Ok(format!("Result[{ok_type}, {err_type}]"))
             }
             SchemaType::Path { .. } | SchemaType::Url { .. } => Ok("String".to_string()),
+            SchemaType::Uuid { .. } => Ok("@types.Uuid".to_string()),
             SchemaType::Datetime { .. } => Ok(match self.mode {
                 MoonBitBridgeMode::ExternalRest => "String",
                 MoonBitBridgeMode::GuestWasmRpc => "@types.Datetime",
@@ -3438,6 +3443,7 @@ fn emit_schema_type(ty: &SchemaType) -> String {
             mb_opt_strings(restrictions.allowed_schemes.as_deref()),
             mb_opt_strings(restrictions.allowed_hosts.as_deref())
         ),
+        Uuid { .. } => "@model.Uuid".into(),
         Datetime { .. } => "@model.Datetime".into(),
         Duration { .. } => "@model.Duration".into(),
         Quantity { spec, .. } => format!(

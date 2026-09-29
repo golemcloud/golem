@@ -564,6 +564,7 @@ fn shape_name(value: &SchemaValue) -> &'static str {
         SchemaValue::Binary(_) => "binary",
         SchemaValue::Path { .. } => "path",
         SchemaValue::Url { .. } => "url",
+        SchemaValue::Uuid(_) => "uuid",
         SchemaValue::Datetime { .. } => "datetime",
         SchemaValue::Duration(_) => "duration",
         SchemaValue::Quantity(_) => "quantity",
@@ -605,6 +606,7 @@ fn type_name(ty: &SchemaType) -> &'static str {
         SchemaType::Binary { .. } => "binary",
         SchemaType::Path { .. } => "path",
         SchemaType::Url { .. } => "url",
+        SchemaType::Uuid { .. } => "uuid",
         SchemaType::Datetime { .. } => "datetime",
         SchemaType::Duration { .. } => "duration",
         SchemaType::Quantity { .. } => "quantity",
@@ -806,6 +808,7 @@ fn check<'a>(
         (SchemaType::Url { restrictions, .. }, SchemaValue::Url { url }) => {
             check_url(restrictions, url.as_str(), path, errors);
         }
+        (SchemaType::Uuid { .. }, SchemaValue::Uuid(_)) => {}
         (SchemaType::Datetime { .. }, SchemaValue::Datetime { .. }) => {}
         (SchemaType::Duration { .. }, SchemaValue::Duration(_)) => {}
         (SchemaType::Quantity { spec, .. }, SchemaValue::Quantity(value)) => {

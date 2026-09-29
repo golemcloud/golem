@@ -207,6 +207,9 @@ fn emit_schema_type(typ: &SchemaType) -> TokenStream {
                 restrictions: #restrictions, metadata: #metadata,
             } }
         }
+        Uuid { .. } => {
+            quote! { golem_rust::schema::schema_type::SchemaType::Uuid { metadata: #metadata } }
+        }
         Datetime { .. } => {
             quote! { golem_rust::schema::schema_type::SchemaType::Datetime { metadata: #metadata } }
         }

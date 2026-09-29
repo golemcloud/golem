@@ -333,6 +333,9 @@ function encodeType(encoder: CborEncoder, type: SchemaType): void {
       encoder.boolean(body.spec.polymorphic);
       encodeMetadata(encoder, type.metadata);
       break;
+    case 'uuid':
+      leaf(38);
+      break;
     case 'future':
     case 'stream':
       encoder.array(3);
