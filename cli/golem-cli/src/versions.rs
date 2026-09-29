@@ -55,7 +55,7 @@ pub mod build_tool {
 // whose recorded tag differs.
 pub mod go_toolchain {
     pub const REPO: &str = "golemcloud/go";
-    pub const TAG: &str = "go1.27.1-golem.1";
+    pub const TAG: &str = "go1.27.1-golem.2";
 }
 
 // Keep this aligned with the Go component template's `tool` directive.

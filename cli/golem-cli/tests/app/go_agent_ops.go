@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/golemcloud/golem/sdks/go/golem"
+	"github.com/golemcloud/golem/sdks/go/golem/oplog"
 )
 
 type CounterID struct{ Name string }
@@ -29,6 +30,7 @@ var (
 	ForkJoin    = Ops.Method[golem.Unit, string]("forkJoin")
 	RevertOne   = Ops.Method[NameIn, int64]("revertOne")
 	Counters    = Ops.Method[golem.Unit, string]("counters")
+	Invocations = Ops.Method[golem.Unit, int64]("invocations")
 )
 
 type counterState struct{ N int64 }
@@ -95,5 +97,20 @@ func init() {
 			names = append(names, md.AgentID.AgentID)
 		}
 		return strings.Join(names, ",")
+	})
+
+	// Reading a whole oplog lowers large pages into guest memory, which can
+	// finish a GC cycle inside cabi_realloc.
+	ops.Handle(Invocations, func(*golem.Context[opsState], golem.Unit) int64 {
+		var n int64
+		for e, err := range oplog.Get(golem.MustGetSelfMetadata().AgentID, 0) {
+			if err != nil {
+				panic(err)
+			}
+			if e.Tag() == oplog.AgentInvocationStarted {
+				n++
+			}
+		}
+		return n
 	})
 }

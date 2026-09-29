@@ -33,7 +33,7 @@ fn go_component_dir(ctx: &TestContext) -> PathBuf {
 /// A Go agent inspects and manages agents through the host API: its own
 /// metadata, a checkpoint retried until another agent's state is right, a fork
 /// joined through a promise, reverting another agent, listing agents with a
-/// filter.
+/// filter, and reading its own oplog.
 #[test]
 #[timeout("15 minutes")]
 async fn test_go_agent_ops() {
@@ -126,4 +126,12 @@ async fn test_go_agent_ops() {
         .find(|line| line.contains("CounterAgent("))
         .unwrap_or_default();
     assert!(!listed.contains("OpsAgent"), "{counters}");
+
+    let invocations = invoke("invocations", &[]).await;
+    let n: i64 = invocations
+        .lines()
+        .rev()
+        .find_map(|line| line.trim().parse().ok())
+        .unwrap_or_else(|| panic!("no count in {invocations}"));
+    assert!(n >= 6, "{invocations}");
 }
