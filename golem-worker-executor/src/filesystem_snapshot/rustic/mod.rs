@@ -228,15 +228,17 @@ const CHUNKER: Chunker = Chunker::Rabin;
 /// The zstd level of a new repository, which compresses each blob.
 const ZSTD_LEVEL: i32 = 3;
 
-/// Whether a save of a new repository decompresses and decrypts each pack again before it writes
-/// the pack, so a pack that does not read back is never written.
+/// Whether a save into a new repository decrypts and decompresses each blob and each file again
+/// after it encrypts them, so data that does not read back gives an error before it is written.
 const EXTRA_VERIFY: bool = true;
 
-/// The most unused data that a prune leaves in a repository: 5% of the size after the prune. A pack
-/// that holds more unused data than this allows is repacked.
+/// The target of unused data after a prune: while the unused data that would stay is 5% or more of
+/// the size of the repository after the prune, the prune repacks the data packs that hold both used
+/// and unused blobs, within [`MAX_REPACK`].
 const MAX_UNUSED: LimitOption = LimitOption::Percentage(5);
 
-/// The most data that one prune repacks: 10% of the size of the repository.
+/// The limit of the repack of one prune: the prune repacks a pack only while the used data that it
+/// copies stays below 10% of the size of the repository before the prune.
 const MAX_REPACK: LimitOption = LimitOption::Percentage(10);
 
 /// The options of a repository that a save makes: [`CHUNKER`], [`ZSTD_LEVEL`] and
