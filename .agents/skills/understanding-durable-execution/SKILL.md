@@ -733,7 +733,8 @@ then branches on `PendingUpdate`:
   files of the new revision that fails at the end of the replay puts the update back as pending,
   so it takes the same path.
 - No pending update — `try_load_snapshot`; an automatic snapshot load failure or divergent replay
-  suffix adds the exact index of that record to `Worker::rejected_periodic_snapshots` and returns
+  suffix rejects the exact index of that record (`SnapshotExclusions::reject`, through
+  `Worker::with_exclusions`) and returns
   `RetryDecision::Immediate`. The outer loop recreates the entire Store, component metadata,
   revision, and plugin context, and selects again: the other usable record, the manual-update
   baseline, or a full replay. It never replays pre-migration history. Only after preparation
@@ -770,7 +771,8 @@ The upload job saves the snapshot, then asks the worker for a confirmation
 appends `SnapshotConfirmed` only while the instance that took the snapshot runs, in one status job
 that checks that the record is still the status candidate. Otherwise the answer is `Deferred`, and the snapshot stays in the
 store. `Superseded` (an update or a revert replaced the record) deletes it. A stop never waits for
-an upload, and `forget_scope` or a shutdown ends a job also during its retention or its delete.
+an upload. A shutdown ends a job also during its retention or its delete, and so does a call of
+`AgentFilesystemSnapshots::forget_scope` for the scope of the job.
 
 The next start confirms instead (`Worker::confirm_filesystem_snapshot_before_start`, called from
 `WaitingWorker::new` before it takes permits, with `AgentFilesystemSnapshots::prepare_start` for

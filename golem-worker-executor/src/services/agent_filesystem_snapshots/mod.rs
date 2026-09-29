@@ -138,7 +138,8 @@ pub(crate) enum JobDecision {
     Confirmed(ConfirmOutcome),
     /// The save failed after its retries. The store does not hold the snapshot.
     SaveFailed,
-    /// `forget_scope` or a shutdown stopped the job, or the admission ended without an upload.
+    /// A shutdown, or a call of `forget_scope` for the scope, stopped the job, or the admission
+    /// ended without an upload.
     Stopped,
 }
 
@@ -169,7 +170,8 @@ pub(crate) enum UpdateRefusal {
 /// Why a manual-update upload did not save.
 #[derive(Debug)]
 pub(crate) enum UploadNowError {
-    /// A terminal interrupt, `forget_scope` or a shutdown stopped the save.
+    /// A terminal interrupt, a shutdown, or a call of `forget_scope` for the scope stopped the
+    /// save.
     Stopped,
     /// The save failed, after the retries when the error allows them.
     Store(SnapshotStoreError),
@@ -624,8 +626,8 @@ impl Admission {
     /// confirms. On `Confirmed` it applies retention. On `Superseded` it deletes the snapshot and
     /// runs no retention. On `Deferred` it keeps the snapshot and runs no retention, because a
     /// later start can confirm it. When the retries are used up, it confirms nothing.
-    /// `forget_scope` or a shutdown stops the job at each step, also in its retention or its
-    /// delete: it then sends nothing more and deletes nothing more. A confirmation that it
+    /// A shutdown, or a call of `forget_scope` for the scope, stops the job at each step, also in
+    /// its retention or its delete: it then sends nothing more and deletes nothing more. A confirmation that it
     /// already sent can still be appended.
     pub(crate) fn submit(
         self,
@@ -639,8 +641,8 @@ impl Admission {
 
     /// Uploads `tree` and waits until the store holds it. A manual update calls this before it
     /// writes its record. The scope stays reserved until the [`SavedUpdate`] is retained or
-    /// dropped. When `stop` reports a terminal interrupt, or `forget_scope` or a shutdown stops
-    /// the upload, the save stops, the tree is discarded, and the call gives
+    /// dropped. When `stop` reports a terminal interrupt, or a shutdown or a call of
+    /// `forget_scope` for the scope stops the upload, the save stops, the tree is discarded, and the call gives
     /// [`UploadNowError::Stopped`].
     pub(crate) async fn upload_now(
         self,
@@ -665,7 +667,8 @@ impl SavedUpdate {
     /// Applies retention in the background, under a slot of the uploads: it keeps the own
     /// snapshot and the newest older update snapshots, with the rules of periodic retention, and
     /// it never deletes `kept`, the snapshot of the last successful manual update, whose record a
-    /// start restores without a fallback. `forget_scope` or a shutdown stops it.
+    /// start restores without a fallback. A shutdown, or a call of `forget_scope` for the scope,
+    /// stops it.
     pub(crate) fn retain(self, kept: Option<&FilesystemSnapshotName>) {
         let kept = kept.and_then(|name| store_name(name).ok());
         let Self {

@@ -39,7 +39,8 @@ enum SaveOutcome {
     Saved(SnapshotInfo, OwnedSemaphorePermit),
     /// The save failed, after the retries when the error allows them.
     Failed(SnapshotStoreError),
-    /// `forget_scope`, a shutdown or the stop of the caller stopped the upload.
+    /// A shutdown, a call of `forget_scope` for the scope, or the stop of the caller stopped the
+    /// upload.
     Stopped,
 }
 
@@ -163,8 +164,8 @@ pub(super) async fn raised(mut stop: watch::Receiver<bool>) {
     }
 }
 
-/// Waits for a slot of the uploads and saves the tree with retries. `stop`, `forget_scope` or a
-/// shutdown ends the save with `Stopped`.
+/// Waits for a slot of the uploads and saves the tree with retries. `stop`, a shutdown, or a call
+/// of `forget_scope` for the scope ends the save with `Stopped`.
 async fn save_phase(
     core: &Core,
     ticket: &JobTicket,
