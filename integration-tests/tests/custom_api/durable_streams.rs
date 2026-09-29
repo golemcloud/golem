@@ -87,6 +87,13 @@ fn native_string(value: impl Into<String>) -> Value {
     serde_json::json!({"kind": "string", "value": value.into()})
 }
 
+fn native_constructor_id(value: impl Into<String>) -> Value {
+    serde_json::json!({
+        "kind": "record",
+        "value": {"fields": [native_string(value)]}
+    })
+}
+
 fn native_input_stream(provisional_ref: Uuid) -> Value {
     serde_json::json!({
         "kind": "record",
@@ -2292,7 +2299,7 @@ async fn websocket_input_is_readable_through_http(
             selector: Box::new(InvocationSelector {
                 agent_type: "DurableStreamAgent".into(),
                 application: agent.application_name.clone(),
-                constructor_parameters: native_string(format!("ds3-{session}")),
+                constructor_parameters: native_constructor_id(format!("ds3-{session}")),
                 environment: agent.environment_name.clone(),
                 method: "echo".into(),
                 phantom_id: None,
@@ -2528,7 +2535,7 @@ async fn input_slot_delete_is_guest_observable_and_tombstoned(
             selector: Box::new(InvocationSelector {
                 agent_type: "DurableStreamAgent".into(),
                 application: agent.application_name.clone(),
-                constructor_parameters: native_string(id.clone()),
+                constructor_parameters: native_constructor_id(id.clone()),
                 environment: agent.environment_name.clone(),
                 method: "echo".into(),
                 phantom_id: None,

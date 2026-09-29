@@ -147,18 +147,6 @@ fn pvc_field(object : Map[String, Json], name : String) -> Json raise {
 }
 
 ///|
-fn pvc_exact(object : Map[String, Json], names : Array[String]) -> Unit raise {
-  if object.length() != names.length() {
-    pvc_fail("object members do not match the expected representation")
-  }
-  for name, _ in object {
-    if !names.any(fn(expected) { expected == name }) {
-      pvc_fail("unexpected object member '\{name}'")
-    }
-  }
-}
-
-///|
 fn pvc_obj(fields : Array[(String, Json)]) -> Json {
   let object : Map[String, Json] = Map([])
   for field in fields {
@@ -528,7 +516,7 @@ fn pvc_datetime(value : String) -> Bool raise {
 
 ///|
 fn pvc_canonical_datetime(value : String) -> String {
-  let without_z = value.substring(start=0, end=value.length() - 1)
+  let without_z = value[0:value.length() - 1].to_owned()
   match without_z.split(".").to_array() {
     [whole] => whole.to_owned() + ".000000000Z"
     [whole, fraction] =>

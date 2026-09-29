@@ -1053,7 +1053,7 @@ fn external_generation_keeps_rest_runtime_and_name() {
     assert!(source.contains("unsigned: bigint"));
     assert!(source.contains("{ kind: 's64', value:"));
     assert!(source.contains("{ kind: 'u64', value:"));
-    assert!(source.contains("n.value as bigint"));
+    assert!(source.contains("BigInt("), "{source}");
     assert!(!source.contains("signed: number"));
     assert!(!source.contains("unsigned: number"));
     assert!(source.contains("Creates a new agent instance with a fresh random phantom id."));
@@ -1437,7 +1437,6 @@ fn external_streaming_generation_compiles_recursive_streams() {
     }
 }
 
-// PROVISIONAL bug_finder reproducer — remove if the finding is rejected.
 #[test]
 fn external_streaming_generation_uses_binary_lane_for_referenced_u8() {
     let dir = TempDir::new().unwrap();
@@ -1468,7 +1467,7 @@ fn external_streaming_generation_uses_binary_lane_for_referenced_u8() {
     )
     .unwrap();
     assert!(
-        source.contains(", \"u8\")") && source.contains(", \"u8\"));"),
+        source.contains(", \"u8\")") && source.contains(", \"u8\");"),
         "stream<ref ByteAlias -> ref Byte -> u8> must use the direct packed-u8 lane:\n{source}"
     );
 }
