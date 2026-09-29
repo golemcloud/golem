@@ -17,9 +17,9 @@ use crate::filesystem_snapshot::SnapshotScope;
 use crate::model::{LookupResult, TrapType};
 use crate::sandbox_filesystem::{SandboxFilesystem, SandboxFilesystemAdapter};
 use crate::services::agent_filesystem::{
-    CaptureError, CaptureOutcome, DeleteFailure, FilesystemCapture, LimitTransition,
-    ResidentFilesystem, ResidentFilesystemActivity, SealedFilesystem, TreeMark, WholeCapture,
-    capture, capture_whole, drain_sealed_filesystem, filesystem_activity, seal, set_limits,
+    CaptureError, CaptureOutcome, DeleteFailure, LimitTransition, ResidentFilesystem,
+    ResidentFilesystemActivity, SealedFilesystem, TreeMark, WholeCapture, capture, capture_whole,
+    drain_sealed_filesystem, filesystem_activity, seal, set_limits,
 };
 use crate::services::agent_filesystem_snapshots::{
     Admission, SavedUpdate, SnapshotSkip, UpdateRefusal,
@@ -33,8 +33,8 @@ use crate::services::{
     HasShardService, HasWorker,
 };
 use crate::worker::filesystem_snapshots::{
-    CaptureFinding, ConfirmedFilesystemSnapshot, PeriodicRecord, SnapshotSlot, confirm_by,
-    plan_periodic_record,
+    PeriodicPlan, SnapshotSlot, UPDATE_WAIT_INTERRUPTED, UpdateStop, UpdateUploadFailure,
+    update_refused, update_stop, update_upload_failure,
 };
 use crate::worker::interrupt::Interrupts;
 use crate::worker::invocation::{
@@ -3055,24 +3055,17 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             Ok(admission) => Some(admission),
             Err(UpdateRefusal::Skip(SnapshotSkip::Disabled)) => None,
             Err(UpdateRefusal::Interrupted) => {
-                if self.parent.retired_for_lost_shard() {
-                    return CommandOutcome::BreakInnerLoop(RetryDecision::None);
-                }
-                return self
-                    .fail_update(
-                        target_revision,
-                        "the update was interrupted while it waited for an upload of a \
-                         filesystem snapshot of the agent"
-                            .to_string(),
-                    )
-                    .await;
+                return match update_stop(self.parent.retired_for_lost_shard()) {
+                    UpdateStop::WriteNothing => CommandOutcome::BreakInnerLoop(RetryDecision::None),
+                    UpdateStop::FailUpdate => {
+                        self.fail_update(target_revision, UPDATE_WAIT_INTERRUPTED.to_string())
+                            .await
+                    }
+                };
             }
             Err(UpdateRefusal::Skip(skip)) => {
                 return self
-                    .fail_update(
-                        target_revision,
-                        format!("cannot take a filesystem snapshot for the update: {skip}"),
-                    )
+                    .fail_update(target_revision, update_refused(skip))
                     .await;
             }
         };
@@ -3158,10 +3151,19 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                         Ok(None) => (None, None),
                         // On a lost shard nothing is written, and the update stays pending for
                         // the shard's new owner.
-                        Err(UpdateUploadError::Interrupted)
-                            if self.parent.retired_for_lost_shard() =>
-                        {
-                            return CommandOutcome::BreakInnerLoop(RetryDecision::None);
+                        Err(UpdateUploadFailure::Interrupted) => {
+                            return match update_stop(self.parent.retired_for_lost_shard()) {
+                                UpdateStop::WriteNothing => {
+                                    CommandOutcome::BreakInnerLoop(RetryDecision::None)
+                                }
+                                UpdateStop::FailUpdate => {
+                                    self.fail_update(
+                                        target_revision,
+                                        UpdateUploadFailure::Interrupted.details(),
+                                    )
+                                    .await
+                                }
+                            };
                         }
                         Err(error) => {
                             return self.fail_update(target_revision, error.details()).await;
@@ -3330,6 +3332,71 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         .await;
     }
 
+    /// Makes the periodic snapshot record of `snapshot` with the filesystem snapshot `name`: it
+    /// uploads the payload and gives the entry. Gives the details when the payload is not made.
+    async fn periodic_entry(
+        &self,
+        snapshot: golem_common::model::oplog::RawSnapshotData,
+        name: Option<FilesystemSnapshotName>,
+    ) -> Result<OplogEntry, String> {
+        let serialized = golem_common::serialization::serialize(&snapshot.data)
+            .map_err(|err| format!("Failed to serialize snapshot data: {err}"))?;
+        let payload = self
+            .parent
+            .oplog
+            .upload_raw_payload(serialized)
+            .await
+            .map_err(|err| format!("Failed to upload periodic snapshot payload: {err}"))?
+            .into_payload::<Vec<u8>>()
+            .map_err(|err| format!("Failed to convert snapshot payload: {err}"))?;
+        Ok(OplogEntry::snapshot(
+            payload,
+            snapshot.mime_type,
+            self.store
+                .data()
+                .durable_ctx()
+                .agent_wallet_cards_snapshot(),
+            self.store.data().durable_ctx().wallet_generation(),
+            name,
+        ))
+    }
+
+    /// Appends the periodic snapshot record `entry`, with the confirmation record of
+    /// `confirmed_at_once` in the same append when it is set, commits, and checkpoints the
+    /// status.
+    async fn write_periodic_record(
+        &self,
+        confirmed_at_once: Option<FilesystemSnapshotName>,
+        entry: OplogEntry,
+    ) -> Result<(), OplogError> {
+        match confirmed_at_once {
+            Some(name) => match self
+                .parent
+                .oplog
+                .add_pair(
+                    entry,
+                    Box::new(move |_| OplogEntry::snapshot_confirmed(name)),
+                )
+                .await
+            {
+                Ok(_) => Ok(()),
+                Err(OplogError::Fenced(fence)) => Err(self.parent.retired_by(fence)),
+                Err(error) => Err(error),
+            },
+            None => self.parent.add_to_oplog(entry).await.map(drop),
+        }?;
+        self.parent
+            .commit_oplog_and_update_state(CommitLevel::Always)
+            .await?;
+        debug!("Periodic snapshot saved successfully");
+        // A snapshot is committed between invocations, so no jumpable region is open: a clean
+        // boundary to checkpoint the status, aligning the checkpoint with the snapshot index.
+        self.parent
+            .checkpoint_status(status_checkpointer::CheckpointReason::Snapshot)
+            .await;
+        Ok(())
+    }
+
     /// Captures the agent filesystem at a boundary, against the confirmed mark `since`. Gives
     /// `None` when the capture failed: the loop then writes no record.
     async fn capture_filesystem(
@@ -3351,10 +3418,10 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     async fn upload_update_filesystem(
         &self,
         admission: Admission,
-    ) -> Result<Option<(FilesystemSnapshotName, SavedUpdate)>, UpdateUploadError> {
+    ) -> Result<Option<(FilesystemSnapshotName, SavedUpdate)>, UpdateUploadFailure> {
         let wait = admission.capture_wait();
         match measured_capture(|| capture_whole(self.filesystem, wait), WholeCapture::label).await {
-            None => Err(UpdateUploadError::Failed(
+            None => Err(UpdateUploadFailure::Failed(
                 "failed to capture the agent filesystem for the update".to_string(),
             )),
             Some(WholeCapture::InitialFiles) => Ok(None),
@@ -3368,12 +3435,10 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     .await
                 {
                     Ok(saved) => Ok(Some((name, saved))),
-                    Err(_) if self.parent.terminal_interrupt_pending() => {
-                        Err(UpdateUploadError::Interrupted)
-                    }
-                    Err(error) => Err(UpdateUploadError::Failed(format!(
-                        "failed to upload the filesystem snapshot for the update: {error}"
-                    ))),
+                    Err(error) => Err(update_upload_failure(
+                        &error,
+                        self.parent.terminal_interrupt_pending(),
+                    )),
                 }
             }
         }
@@ -3556,103 +3621,28 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     }
                     None => None,
                 };
-                let record = PeriodicSnapshotRecord::new(capture);
-                if record.skipped() {
-                    record.abandon().await;
+                let Some(plan) = PeriodicPlan::new(capture) else {
                     return CommandOutcome::Continue;
-                }
-                let serialized = golem_common::serialization::serialize(&snapshot.data);
-                match serialized {
-                    Ok(serialized_bytes) => {
-                        match self.parent.oplog.upload_raw_payload(serialized_bytes).await {
-                            Ok(raw_payload) => match raw_payload.into_payload::<Vec<u8>>() {
-                                Ok(payload) => {
-                                    let active_cards = self
-                                        .store
-                                        .data()
-                                        .durable_ctx()
-                                        .agent_wallet_cards_snapshot();
-                                    let wallet_generation =
-                                        self.store.data().durable_ctx().wallet_generation();
-                                    let entry = OplogEntry::snapshot(
-                                        payload,
-                                        snapshot.mime_type,
-                                        active_cards,
-                                        wallet_generation,
-                                        record.name(),
-                                    );
-                                    let appended = match record.confirmed_at_once() {
-                                        Some(name) => {
-                                            match self
-                                                .parent
-                                                .oplog
-                                                .add_pair(
-                                                    entry,
-                                                    Box::new(move |_| {
-                                                        OplogEntry::snapshot_confirmed(name)
-                                                    }),
-                                                )
-                                                .await
-                                            {
-                                                Ok(_) => Ok(()),
-                                                Err(OplogError::Fenced(fence)) => {
-                                                    Err(self.parent.retired_by(fence))
-                                                }
-                                                Err(error) => Err(error),
-                                            }
-                                        }
-                                        None => self.parent.add_to_oplog(entry).await.map(drop),
-                                    };
-                                    let appended = match appended {
-                                        Ok(()) => self
-                                            .parent
-                                            .commit_oplog_and_update_state(CommitLevel::Always)
-                                            .await
-                                            .map(drop),
-                                        Err(error) => Err(error),
-                                    };
-                                    // A record that did not reach the oplog is abandoned. A
-                                    // refused write means the shard has a new owner, so the loop
-                                    // stops; any other failure retries.
-                                    if let Err(error) = appended {
-                                        warn!(
-                                            "Failed to append the periodic snapshot record: {error}"
-                                        );
-                                        record.abandon().await;
-                                        return CommandOutcome::BreakInnerLoop(match error {
-                                            OplogError::Fenced(_) => RetryDecision::None,
-                                            OplogError::Payload(_) => RetryDecision::Immediate,
-                                        });
-                                    }
-                                    debug!("Periodic snapshot saved successfully");
-
-                                    // A snapshot is committed between invocations, so no jumpable
-                                    // region is open: a clean boundary to checkpoint the status,
-                                    // aligning the checkpoint with the snapshot index.
-                                    self.parent
-                                        .checkpoint_status(
-                                            status_checkpointer::CheckpointReason::Snapshot,
-                                        )
-                                        .await;
-                                    record.submit(&self.parent);
-                                }
-                                Err(err) => {
-                                    warn!("Failed to convert snapshot payload: {err}");
-                                    record.abandon().await;
-                                }
-                            },
-                            Err(err) => {
-                                warn!("Failed to upload periodic snapshot payload: {err}");
-                                record.abandon().await;
-                            }
-                        }
+                };
+                // A record that did not reach the oplog is abandoned, at this one place.
+                let written = match self.periodic_entry(snapshot, plan.name()).await {
+                    Ok(entry) => self
+                        .write_periodic_record(plan.confirmed_at_once(), entry)
+                        .await
+                        .map_err(PeriodicFailure::Write),
+                    Err(details) => Err(PeriodicFailure::Entry(details)),
+                };
+                match written {
+                    Ok(()) => {
+                        plan.submit(&self.parent);
+                        CommandOutcome::Continue
                     }
-                    Err(err) => {
-                        warn!("Failed to serialize snapshot data: {err}");
-                        record.abandon().await;
+                    Err(failure) => {
+                        warn!("{failure}");
+                        plan.abandon().await;
+                        periodic_failure_outcome(&failure)
                     }
                 }
-                CommandOutcome::Continue
             }
             Ok(InvokeResult::Exited { .. }) => {
                 warn!("Worker exited during periodic snapshot save");
@@ -3768,26 +3758,6 @@ fn snapshot_action_at(
     }
 }
 
-/// Why the filesystem snapshot of a manual update was not uploaded.
-enum UpdateUploadError {
-    /// A terminal interrupt stopped the upload.
-    Interrupted,
-    /// The capture or the upload failed, with the details of the failed update.
-    Failed(String),
-}
-
-impl UpdateUploadError {
-    /// The details of the failed update.
-    fn details(self) -> String {
-        match self {
-            Self::Interrupted => {
-                "the update was interrupted while it uploaded the filesystem snapshot".to_string()
-            }
-            Self::Failed(details) => details,
-        }
-    }
-}
-
 /// Waits for a capture of the agent filesystem and counts its outcome with the label `label`
 /// gives, or with the label of its error. Gives `None` when the capture failed.
 async fn measured_capture<Outcome, Capturing>(
@@ -3810,98 +3780,40 @@ where
         .ok()
 }
 
-/// The filesystem part of a periodic snapshot record, from the admission and the capture to the
-/// submit of the upload.
-struct PeriodicSnapshotRecord {
-    plan: PeriodicRecord,
-    /// The admission, the capture and its mark, when the record uploads a capture.
-    upload: Option<(Admission, FilesystemCapture, TreeMark)>,
+/// Why a periodic snapshot record did not reach the oplog.
+#[derive(Debug)]
+enum PeriodicFailure {
+    /// The payload of the record was not made, with the details.
+    Entry(String),
+    /// The append or the commit of the record failed.
+    Write(OplogError),
 }
 
-impl PeriodicSnapshotRecord {
-    /// Decides the record from the admission, the confirmed snapshot that the capture compared
-    /// with, and the outcome of the capture. Without an admission the record has no name. The
-    /// admission is dropped unless the record uploads the capture.
-    fn new(
-        capture: Option<(
-            Admission,
-            Option<ConfirmedFilesystemSnapshot>,
-            CaptureOutcome,
-        )>,
-    ) -> Self {
-        match capture {
-            None => Self {
-                plan: PeriodicRecord::WithoutName,
-                upload: None,
-            },
-            Some((admission, since, outcome)) => {
-                let (finding, upload) = match outcome {
-                    CaptureOutcome::Unchanged => (CaptureFinding::Unchanged, None),
-                    CaptureOutcome::InitialFiles => (CaptureFinding::InitialFiles, None),
-                    CaptureOutcome::Captured {
-                        capture,
-                        mark,
-                        detection,
-                    } => (
-                        CaptureFinding::Captured(detection),
-                        Some((admission, capture, mark)),
-                    ),
-                };
-                Self {
-                    plan: plan_periodic_record(finding, since.as_ref()),
-                    upload,
-                }
+impl std::fmt::Display for PeriodicFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Entry(details) => formatter.write_str(details),
+            Self::Write(error) => {
+                write!(
+                    formatter,
+                    "Failed to append the periodic snapshot record: {error}"
+                )
             }
         }
     }
+}
 
-    /// The filesystem snapshot name of the record.
-    fn name(&self) -> Option<FilesystemSnapshotName> {
-        match &self.plan {
-            PeriodicRecord::Skipped | PeriodicRecord::WithoutName => None,
-            PeriodicRecord::Uploaded { .. } => self
-                .upload
-                .as_ref()
-                .map(|(admission, _, _)| admission.name().clone()),
-            PeriodicRecord::Reused(name) => Some(name.clone()),
+/// What the loop does after a periodic snapshot record did not reach the oplog. A payload that
+/// was not made skips the snapshot. A refused write means the shard has a new owner, so the loop
+/// stops; any other failed write retries.
+fn periodic_failure_outcome(failure: &PeriodicFailure) -> CommandOutcome {
+    match failure {
+        PeriodicFailure::Entry(_) => CommandOutcome::Continue,
+        PeriodicFailure::Write(OplogError::Fenced(_)) => {
+            CommandOutcome::BreakInnerLoop(RetryDecision::None)
         }
-    }
-
-    /// The name whose confirmation record follows the record at once, in one append.
-    fn confirmed_at_once(&self) -> Option<FilesystemSnapshotName> {
-        match &self.plan {
-            PeriodicRecord::Reused(name) => Some(name.clone()),
-            PeriodicRecord::Skipped
-            | PeriodicRecord::WithoutName
-            | PeriodicRecord::Uploaded { .. } => None,
-        }
-    }
-
-    /// Whether no record is written.
-    fn skipped(&self) -> bool {
-        self.plan == PeriodicRecord::Skipped
-    }
-
-    /// Drops the admission and discards the capture of a record that was not written.
-    async fn abandon(self) {
-        if let Some((admission, capture, _)) = self.upload {
-            drop(admission);
-            if let Err(error) = capture.discard().await {
-                warn!("Failed to discard a filesystem capture: {error}");
-            }
-        }
-    }
-
-    /// Starts the upload of the capture of a written record.
-    fn submit<Ctx: WorkerCtx>(self, worker: &Arc<Worker<Ctx>>) {
-        if let (PeriodicRecord::Uploaded { parent }, Some((admission, capture, mark))) =
-            (self.plan, self.upload)
-        {
-            admission.submit(
-                capture.into(),
-                parent,
-                confirm_by(Arc::downgrade(worker), mark),
-            );
+        PeriodicFailure::Write(OplogError::Payload(_)) => {
+            CommandOutcome::BreakInnerLoop(RetryDecision::Immediate)
         }
     }
 }
@@ -3909,10 +3821,10 @@ impl PeriodicSnapshotRecord {
 #[cfg(test)]
 mod tests {
     use super::{
-        CommandOutcome, ConcurrentAgentPermitState, InvocationLoop, PeriodicSnapshotAction,
-        ResidentAgentOwnership, ResidentWakeup, catch_invocation_loop_panic,
-        close_usage_before_delete, coalesce_filesystem_limit_update,
-        failed_agent_invocation_outcome, finish_filesystem_limit_unload,
+        CommandOutcome, ConcurrentAgentPermitState, InvocationLoop, PeriodicFailure,
+        PeriodicSnapshotAction, ResidentAgentOwnership, ResidentWakeup,
+        catch_invocation_loop_panic, close_usage_before_delete, coalesce_filesystem_limit_update,
+        failed_agent_invocation_outcome, finish_filesystem_limit_unload, periodic_failure_outcome,
         periodic_snapshot_failure_outcome, publish_unload_outcome, run_invocation_loop_task,
         snapshot_action_at, snapshot_baseline_timestamp, spawn_module_owned_unload,
         successful_agent_invocation_outcome, unload_resident_agent_ownership,
@@ -3945,6 +3857,34 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
     use test_r::{test, timeout};
+
+    #[test]
+    fn a_periodic_record_that_did_not_reach_the_oplog_skips_stops_or_retries() {
+        let fence = crate::services::oplog::OplogFence {
+            agent_id: golem_common::model::AgentId {
+                component_id: golem_common::model::component::ComponentId::new(),
+                agent_id: "fenced".to_string(),
+            },
+            expected_epoch: golem_common::model::ShardEpoch(2),
+            actual_epoch: Some(golem_common::model::ShardEpoch(3)),
+        };
+        assert_eq!(
+            [
+                PeriodicFailure::Entry("no payload".to_string()),
+                PeriodicFailure::Write(crate::services::oplog::OplogError::Fenced(fence)),
+                PeriodicFailure::Write(crate::services::oplog::OplogError::Payload(
+                    "failed".to_string()
+                )),
+            ]
+            .each_ref()
+            .map(periodic_failure_outcome),
+            [
+                CommandOutcome::Continue,
+                CommandOutcome::BreakInnerLoop(RetryDecision::None),
+                CommandOutcome::BreakInnerLoop(RetryDecision::Immediate),
+            ]
+        );
+    }
 
     #[test]
     fn filesystem_turns_allow_pending_invocations_and_updates_to_progress() {

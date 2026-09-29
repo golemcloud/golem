@@ -20,13 +20,17 @@
 use super::Worker;
 use crate::filesystem_snapshot::ChangeDetection as StoreChangeDetection;
 use crate::services::agent_filesystem::{
-    ChangeDetection, InitialFilesRestore, RestoreError, RestoreTree, TreeMark,
+    CaptureOutcome, ChangeDetection, FilesystemCapture, InitialFilesRestore, RestoreError,
+    RestoreTree, TreeMark,
 };
-use crate::services::agent_filesystem_snapshots::{Confirm, ConfirmOutcome, StoreRestore};
+use crate::services::agent_filesystem_snapshots::{
+    Admission, Confirm, ConfirmOutcome, SnapshotSkip, StoreRestore, UploadNowError,
+};
 use crate::workerctx::WorkerCtx;
 use golem_common::model::UsableAutomaticSnapshot;
 use golem_common::model::oplog::{FilesystemSnapshotName, OplogIndex};
 use std::path::Path;
+use std::sync::Arc;
 use std::sync::Weak;
 use uuid::Uuid;
 
@@ -161,6 +165,182 @@ pub(crate) fn plan_periodic_record(
         }
         (CaptureFinding::Captured(_), _) => PeriodicRecord::Uploaded { parent: None },
     }
+}
+
+/// What a periodic snapshot writes: the name of its record, the name whose confirmation record
+/// follows the record at once, and the upload that starts after the record commits.
+pub(crate) struct PeriodicPlan {
+    name: Option<FilesystemSnapshotName>,
+    confirmed_at_once: Option<FilesystemSnapshotName>,
+    upload: Option<PendingUpload>,
+}
+
+/// The upload of a periodic snapshot whose record is not written yet. It is consumed once, by
+/// [`PeriodicPlan::submit`] or by [`PeriodicPlan::abandon`].
+struct PendingUpload {
+    admission: Admission,
+    tree: FilesystemCapture,
+    mark: TreeMark,
+    parent: Option<(FilesystemSnapshotName, StoreChangeDetection)>,
+}
+
+impl PeriodicPlan {
+    /// Plans the record of a periodic snapshot from the admission, the confirmed snapshot that
+    /// the capture compared with, and the outcome of the capture, as [`plan_periodic_record`]
+    /// decides. Without an admission the record has no name. Gives `None` when no record is
+    /// written. The admission is dropped unless the record uploads the capture.
+    pub(crate) fn new(
+        capture: Option<(
+            Admission,
+            Option<ConfirmedFilesystemSnapshot>,
+            CaptureOutcome,
+        )>,
+    ) -> Option<Self> {
+        let without_name = Self {
+            name: None,
+            confirmed_at_once: None,
+            upload: None,
+        };
+        let Some((admission, since, outcome)) = capture else {
+            return Some(without_name);
+        };
+        let finding = match &outcome {
+            CaptureOutcome::Unchanged => CaptureFinding::Unchanged,
+            CaptureOutcome::InitialFiles => CaptureFinding::InitialFiles,
+            CaptureOutcome::Captured { detection, .. } => CaptureFinding::Captured(*detection),
+        };
+        let record = plan_periodic_record(finding, since.as_ref());
+        match outcome {
+            CaptureOutcome::Captured { capture, mark, .. } => Some(Self {
+                name: Some(admission.name().clone()),
+                confirmed_at_once: None,
+                upload: Some(PendingUpload {
+                    admission,
+                    tree: capture,
+                    mark,
+                    parent: match record {
+                        PeriodicRecord::Uploaded { parent } => parent,
+                        PeriodicRecord::Skipped
+                        | PeriodicRecord::WithoutName
+                        | PeriodicRecord::Reused(_) => None,
+                    },
+                }),
+            }),
+            CaptureOutcome::Unchanged | CaptureOutcome::InitialFiles => match record {
+                PeriodicRecord::Skipped => None,
+                PeriodicRecord::Reused(name) => Some(Self {
+                    name: Some(name.clone()),
+                    confirmed_at_once: Some(name),
+                    upload: None,
+                }),
+                PeriodicRecord::WithoutName | PeriodicRecord::Uploaded { .. } => Some(without_name),
+            },
+        }
+    }
+
+    /// The filesystem snapshot name of the record.
+    pub(crate) fn name(&self) -> Option<FilesystemSnapshotName> {
+        self.name.clone()
+    }
+
+    /// The name whose confirmation record follows the record at once, in one append.
+    pub(crate) fn confirmed_at_once(&self) -> Option<FilesystemSnapshotName> {
+        self.confirmed_at_once.clone()
+    }
+
+    /// Starts the upload of a written record. Its confirmation goes to `worker`.
+    pub(crate) fn submit<Ctx: WorkerCtx>(self, worker: &Arc<Worker<Ctx>>) {
+        if let Some(PendingUpload {
+            admission,
+            tree,
+            mark,
+            parent,
+        }) = self.upload
+        {
+            admission.submit(
+                tree.into(),
+                parent,
+                confirm_by(Arc::downgrade(worker), mark),
+            );
+        }
+    }
+
+    /// Drops the admission and discards the capture of a record that was not written.
+    pub(crate) async fn abandon(self) {
+        if let Some(PendingUpload {
+            admission, tree, ..
+        }) = self.upload
+        {
+            drop(admission);
+            if let Err(error) = tree.discard().await {
+                tracing::warn!("Failed to discard a filesystem capture: {error}");
+            }
+        }
+    }
+}
+
+/// What a manual update does when a terminal interrupt stopped it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum UpdateStop {
+    /// The shard is lost. Nothing is written, and the update stays pending for the new owner.
+    WriteNothing,
+    /// The update fails.
+    FailUpdate,
+}
+
+/// What a manual update does when a terminal interrupt stopped it, with `lost_shard` telling
+/// whether the shard of the agent is lost.
+pub(crate) fn update_stop(lost_shard: bool) -> UpdateStop {
+    if lost_shard {
+        UpdateStop::WriteNothing
+    } else {
+        UpdateStop::FailUpdate
+    }
+}
+
+/// Why the filesystem snapshot of a manual update was not uploaded.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum UpdateUploadFailure {
+    /// A terminal interrupt stopped the upload.
+    Interrupted,
+    /// The upload failed, with the details of the failed update.
+    Failed(String),
+}
+
+impl UpdateUploadFailure {
+    /// The details of the failed update.
+    pub(crate) fn details(self) -> String {
+        match self {
+            Self::Interrupted => {
+                "the update was interrupted while it uploaded the filesystem snapshot".to_string()
+            }
+            Self::Failed(details) => details,
+        }
+    }
+}
+
+/// Classifies a failed upload of a manual update. A failure while a terminal interrupt waits
+/// counts as interrupted, because the interrupt stops the save.
+pub(crate) fn update_upload_failure(
+    error: &UploadNowError,
+    terminal_pending: bool,
+) -> UpdateUploadFailure {
+    if terminal_pending {
+        UpdateUploadFailure::Interrupted
+    } else {
+        UpdateUploadFailure::Failed(format!(
+            "failed to upload the filesystem snapshot for the update: {error}"
+        ))
+    }
+}
+
+/// The details of a manual update that fails because a terminal interrupt stopped the wait for a
+/// running upload.
+pub(crate) const UPDATE_WAIT_INTERRUPTED: &str = "the update was interrupted while it waited for an upload of a filesystem snapshot of the agent";
+
+/// The details of a manual update that fails because its admission gave `skip`.
+pub(crate) fn update_refused(skip: SnapshotSkip) -> String {
+    format!("cannot take a filesystem snapshot for the update: {skip}")
 }
 
 /// The restore of a start: a filesystem snapshot of the store, or the initial files of the
@@ -408,6 +588,41 @@ mod tests {
             true
         });
         assert!(!asked);
+    }
+
+    #[test]
+    async fn a_stopped_manual_update_writes_nothing_only_on_a_lost_shard() {
+        assert_eq!(
+            [update_stop(true), update_stop(false)],
+            [UpdateStop::WriteNothing, UpdateStop::FailUpdate]
+        );
+    }
+
+    #[test]
+    async fn a_failed_update_upload_is_interrupted_while_a_terminal_interrupt_waits() {
+        let store = UploadNowError::Store(crate::filesystem_snapshot::SnapshotStoreError::NotFound);
+        assert_eq!(
+            [
+                update_upload_failure(&UploadNowError::Stopped, true),
+                update_upload_failure(&store, true),
+                update_upload_failure(&UploadNowError::Stopped, false),
+                update_upload_failure(&store, false),
+            ],
+            [
+                UpdateUploadFailure::Interrupted,
+                UpdateUploadFailure::Interrupted,
+                UpdateUploadFailure::Failed(
+                    "failed to upload the filesystem snapshot for the update: the upload of the \
+                     filesystem snapshot was stopped"
+                        .to_string()
+                ),
+                UpdateUploadFailure::Failed(
+                    "failed to upload the filesystem snapshot for the update: no complete \
+                     filesystem snapshot has the name"
+                        .to_string()
+                ),
+            ]
+        );
     }
 
     #[test]
