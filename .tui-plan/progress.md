@@ -1,5 +1,19 @@
 # Progress
 
+## 2026-09-29: Local Dev And Read-Only Ops Contract
+
+- Locked terminal-first nested CLI execution for Plan, Build, Deploy, Clean,
+  Server, and interactive REPL.
+- Locked typed handler/provider execution for other operations, retaining and
+  testing shared CLI cache behavior instead of parsing command output.
+- Locked the exact Dev forms, process states, 20-Job history, 2,000-line PTY
+  scrollback, five-second graceful-stop window, and process/ports-file Server
+  readiness boundary.
+- Approved real read-only Deployment, Environment, Server, and individual Agent
+  Ops overviews in the same slice as the local Dev rebuild.
+- Left extreme shell priorities, final quit behavior, Ops mutations, Activity,
+  real Metrics controls/providers, and metrics acquisition for later planning.
+
 ## 2026-09-29
 
 - Added `product-contract.md` as the authoritative behavior and readiness

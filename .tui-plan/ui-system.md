@@ -178,7 +178,7 @@ visit shows Build & Deploy alone when available. Hidden Server and REPL sessions
 continue running, and returning to Dev restores the session layout.
 
 Build & Deploy owns Plan, Build, Deploy, Clean, and their finite Jobs. Server
-owns local lifecycle, health, ports, data directory, and logs. REPL owns its
+owns local lifecycle, process state, bound ports, data directory, and logs. REPL owns its
 interactive PTY. View capability is independent: unavailable views stay
 discoverable and explain what context is missing.
 

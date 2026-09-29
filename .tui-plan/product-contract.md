@@ -7,10 +7,11 @@ belongs in architecture.md; executable work belongs in tasks.md.
 
 ## Status
 
-The visual foundation and the live Agents explorer are implemented. The product
-topology below is accepted, but the rebuilt Dev workspace, expanded Ops subjects,
-Activity, real Metrics providers, Jobs, and mutation safeguards are not yet
-implemented.
+The visual foundation and the live Agents explorer are implemented. The next
+implementation slice rebuilds the shared shell and the complete local Dev loop,
+then adds read-only Deployment, Environment, Server, and individual Agent
+overviews to Ops. Activity, real Metrics providers, resource catalogs, and Ops
+mutations remain later work.
 
 The metrics acquisition backend and any companion Docker or web UI are
 deliberately undecided. They will be planned only after the provider-independent
@@ -53,7 +54,7 @@ TUI interactions have passed visual and terminal review.
 - Results carry context identity and generation so stale results can be ignored.
 - Dev capabilities are evaluated per view:
   - Build & Deploy requires a manifest-backed application project.
-  - Server requires a local server target.
+- Server requires a local server target.
   - REPL requires a selected application environment and reachable server.
 - Ops is available whenever the selected target contains enough information for
   the requested subject or action.
@@ -86,6 +87,13 @@ TUI interactions have passed visual and terminal review.
   modifier or the ctrl+x leader.
 - ctrl+arrow and alt+number are prohibited. Bare space is allowed only in an
   explicitly focused chooser such as Columns.
+
+The accepted normal shell uses one header row, three footer rows at normal
+sizes, and two footer rows when width is below 72 cells or height is below 20
+cells. The exact metadata priority at extreme widths and the final body/footer
+priority at extreme heights remain a visual-review gate. Until that review, the
+renderer must clip safely, retain a body row whenever geometry allows, and
+avoid inventing another context identity format.
 
 ### Hierarchical leader
 
@@ -120,8 +128,8 @@ inside the group rather than consuming the top-level ctrl+x namespace.
 
 - Build & Deploy owns Plan, Build, Deploy, Clean, their structured results, and
   bounded session history.
-- Server owns local-server lifecycle, status, health, resolved ports, data
-  directory, and logs.
+- Server owns local-server lifecycle, process state, resolved bound ports, data
+  directory, and logs. It does not claim HTTP readiness.
 - REPL owns the persistent interactive application REPL.
 
 The first Dev visit uses Build & Deploy when available, otherwise the first
@@ -155,6 +163,61 @@ session.
 - Minimum sizes prevent unusable panes.
 - Compact mode renders one pane while retaining wider-layout preferences.
 
+### Dev command execution
+
+- Plan, Build, Deploy, Clean, Server, and interactive REPL run the real nested
+  CLI in a PTY. The TUI provides typed review forms and process/session state;
+  it does not reimplement those command handlers.
+- Each launch uses an immutable context, the application root as working
+  directory, and a fresh terminal. The PTY receives the actual pane content
+  size rather than the outer terminal size.
+- The terminal owns printable input, arrows, Enter, and ctrl+c while focused.
+  ctrl+x escapes to TUI commands; ctrl+x ctrl+x forwards a literal ctrl+x.
+- Mouse wheel scrolls terminal history. Explicit Scrollback mode gives arrows,
+  pageup, pagedown, home, and end to history; esc returns to live input.
+- Terminal scrollback is bounded to 2,000 lines. Build & Deploy retains the
+  latest 20 completed Jobs plus active Jobs for the current TUI session.
+- A first Stop is graceful. Force Stop becomes available after five seconds
+  and is never automatic.
+
+### Build & Deploy
+
+- Plan, Build, Deploy, and Clean are independent application-wide actions.
+  Component selectors are deliberately omitted.
+- Build reviews build steps, skip-check, force-build, and per-launch --yes.
+- Plan and Deploy review full-diff, force-build, rollback version or revision,
+  one post-deploy Agent policy, and per-launch --yes. Plan invokes deploy with
+  --plan; it is not a prerequisite for Deploy.
+- Clean removes all application build artifacts and reviews per-launch --yes.
+- Form values are remembered per context for the TUI session after launch.
+  Cancel is transactional, and --yes always reopens disabled.
+- Only one Plan, Build, Deploy, or Clean command may run for an application at
+  a time. Later commands are unavailable rather than queued.
+- This slice enables Dev commands only for manifest-backed local contexts.
+  Remote Dev commands remain visible with a safety-planning reason.
+
+### Server
+
+- Start and Restart always review system-memory override, router address,
+  router/custom/MCP ports, ports file, data directory, clean,
+  agent-filesystem root, and per-launch --yes.
+- When no ports file is supplied, the TUI supplies one from the CLI user
+  configuration area. Starting changes to running only after the child process
+  remains alive and rewrites a parseable ports file after launch.
+- Restart first stops the current process, then launches the reviewed settings.
+  Cancelling the form leaves the current server untouched.
+- Server readiness is process-and-bound-port evidence only. No HTTP health
+  probe or deeper readiness claim belongs in this slice.
+
+### REPL
+
+- Start and Restart always review language, log streaming, automatic imports,
+  one post-deploy Agent policy, and per-launch --yes.
+- The embedded view runs interactive REPL only. Script and script-file modes
+  remain standalone CLI commands, and component/revision selectors are omitted.
+- The REPL continues while hidden and retains its terminal and scrollback until
+  stopped or replaced by a fresh launch.
+
 ## Ops Workspace
 
 Ops navigation is subject then view then pane.
@@ -170,6 +233,22 @@ Components, Agent Types, individual Agents, Deployment Revisions, and
 environment resource kinds or items are drill-down subjects. Components and
 Agent Types remain reachable through breadcrumbs and the palette without
 becoming permanent root entries.
+
+The first rebuilt Ops slice is intentionally read-only beyond the existing
+Agents collection:
+
+- Enter opens an individual Agent Overview and esc unwinds to Agents.
+- Deployment Overview shows the current deployment identity only.
+- Environment Overview shows selected-environment identity and configuration.
+- Server Overview shows selected target provenance, endpoints, transport
+  configuration, and matching TUI-owned local process/bound-port state.
+- These providers call neutral typed handler/client operations directly. They
+  preserve the CLI cache behavior and change shared caching only when a tested
+  TUI freshness requirement exposes a mismatch.
+- Read-only environment discovery must never use a get-or-create helper.
+- Deployment History, revision Diff, Environment Resources, Components, Agent
+  Types, Activity, and all Ops mutations remain discoverable only where a clear
+  unavailable reason can be shown.
 
 ### View matrix
 
@@ -317,6 +396,7 @@ use a cancel-focused confirmation and typed target.
 - Selecting a Job shows target, status, structured result, output, duration,
   exit state, and error.
 - Job history is bounded and session-only.
+- The initial bound is the latest 20 completed Jobs plus every active Job.
 - Only one mutating Job may run for an application environment. Other
   mutations are temporarily unavailable; they are not queued automatically.
 - Read-only refreshes and signal subscriptions remain independent.
@@ -343,8 +423,6 @@ application manifest or project tree.
 The product direction is locked, but implementation readiness still depends on
 these decision groups, which tasks.md tracks before their checkpoints:
 
-- exact content hierarchy, controls, states, and contextual actions inside
-  Build & Deploy, Server, and REPL;
 - final wide, short, narrow, and extreme header/footer priority rules,
   including Jobs, Live, and remote-lock status;
 - quit behavior for active Jobs and TUI-owned persistent sessions;
@@ -355,3 +433,8 @@ these decision groups, which tasks.md tracks before their checkpoints:
 - typed provider interfaces and final implementation ordering;
 - Metrics acquisition and companion tooling, deliberately postponed until the
   provider-independent TUI passes review.
+
+Until quit behavior is planned, quitting is unavailable while a finite Job or
+TUI-owned Server or REPL session is active and explains that the work must be
+stopped first. This is a conservative implementation constraint, not the final
+quit policy.

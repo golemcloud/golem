@@ -53,6 +53,9 @@ High-value scenarios:
   the target is hidden without increasing the pane count;
 - Jobs retain immutable launch targets, remain globally visible, and enforce
   one mutating Job per environment with no implicit queue;
+- nested Plan/Build/Deploy/Clean, Server, and interactive REPL sessions receive
+  the actual pane content size, preserve ANSI, expose 2,000 lines of scrollback,
+  and never spawn a real child process from a unit test;
 - local and remote resource actions exercise availability, target review,
   remote unlock, risk confirmation, masking, cancellation, and stale-result
   handling;
@@ -60,6 +63,9 @@ High-value scenarios:
   to Jobs, Server, REPL, and Live;
 - Ops root subjects, drill-down subjects, breadcrumbs, direct palette jumps,
   collection/details focus, and Enter-to-open semantics remain consistent;
+- read-only Deployment, Environment, and Server refreshes use typed data,
+  ignore stale generations, retain stale snapshots on failure, and never
+  create a missing application or environment;
 - Activity scope is an explicit bounded snapshot, Timeline and Journal retain
   AgentID plus per-Agent oplog index, and Live never silently retargets;
 - Metrics navigates family to concrete series, distinguishes service and Agent

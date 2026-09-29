@@ -49,7 +49,7 @@ in progress.md; this file describes only the current rebuild and its gates.
 
 ### Planning gates still open
 
-- [ ] Lock the content hierarchy, controls, empty/running/error states, and
+- [x] Lock the content hierarchy, controls, empty/running/error states, and
   contextual actions for Build & Deploy, Server, and REPL.
 - [ ] Lock wide, short, narrow, and extreme header/footer priority rules,
   including Jobs, Live, and remote-lock status.
@@ -66,9 +66,27 @@ in progress.md; this file describes only the current rebuild and its gates.
 - [-] Choose OTLP receiver, storage, retention, query backend, Docker stack, or
   web UI only after TUI acceptance.
 
-The rebuild is not decision-complete until every non-deferred planning gate is
-checked. Implementation may proceed milestone by milestone only when the gate
-owned by that milestone is closed.
+The rebuild is not globally decision-complete until every non-deferred planning
+gate is checked. The accepted local Dev and read-only Ops slice may proceed
+while later mutation, Activity, Metrics, and final shell/quit gates remain open.
+
+## Accepted Implementation Slice
+
+- [ ] Replace the legacy product topology with Dev and Ops plus the shared
+  navigation/action/layout foundation.
+- [ ] Implement typed review forms and nested-CLI PTYs for Plan, Build, Deploy,
+  Clean, Server, and interactive REPL.
+- [ ] Add bounded Jobs with 20 completed records, persistent Server/REPL
+  sessions, pane-sized resize, and 2,000-line terminal scrollback.
+- [ ] Enable Dev execution only for manifest-backed local contexts; keep remote
+  Dev mutations unavailable with reasons.
+- [ ] Migrate Agents into the subject shell and add individual Agent Overview.
+- [ ] Add real read-only Deployment, Environment, and Server overviews through
+  typed operations that never create missing resources.
+- [ ] Move fake Metrics to preview/test data and render truthful production
+  unavailability.
+- [ ] Use conservative quit blocking while active work exists until the final
+  quit-policy session.
 
 ## Checkpoint 0: Synchronize The Planning Sources
 
@@ -84,7 +102,9 @@ Recommended commit checkpoint: product contract and rebuild plan only.
 
 ## Checkpoint 1: Product State And Action Foundations
 
-Planning prerequisites: provider/order gate and exact resource-action inventory.
+Planning prerequisites for the accepted slice are satisfied by the nested-CLI
+Dev boundary and read-only Ops provider boundary. Mutation inventory remains a
+gate for later Ops actions.
 
 - [ ] Replace the one-entry workspace constant with ordered Dev/Ops workspace
   state that can accept future workspaces.
@@ -108,7 +128,9 @@ rendering.
 
 ## Checkpoint 2: Shared Shell And Recursive Layout
 
-Planning prerequisite: shell priority gate.
+Planning prerequisite for full acceptance: shell priority gate. The accepted
+slice implements normal/compact geometry and a safe, explicitly provisional
+extreme fallback.
 
 - [ ] Render Dev/Ops selectors, current view or subject, app/env/server, Jobs,
   Live, and remote-lock status through one responsive header model.
@@ -131,7 +153,9 @@ Recommended commit checkpoint: shell, navigation, layout, and preferences.
 
 ## Checkpoint 3: Jobs, Persistent Sessions, And Safety
 
-Planning prerequisites: quit policy and exact action-risk inventory.
+Planning prerequisites for the full checkpoint: quit policy and exact Ops
+action-risk inventory. The accepted slice implements finite local Dev Jobs and
+conservative quit blocking only.
 
 - [ ] Introduce the global bounded Jobs registry for finite Dev commands and Ops
   mutations.
@@ -156,7 +180,7 @@ made reachable.
 
 ## Checkpoint 4: Dev Workspace Rebuild
 
-Planning prerequisite: Dev view-content gate.
+Planning prerequisite: Dev view-content gate. Complete.
 
 ### Build & Deploy
 
@@ -164,14 +188,15 @@ Planning prerequisite: Dev view-content gate.
   subview first-run default.
 - [ ] Expose Plan, Build, Deploy, and Clean through contextual actions and
   visible controls without bare global run keys.
-- [ ] Render the current or selected Job, structured Plan/diff result, status,
-  output, error, and bounded history projection.
+- [ ] Render the current or selected Job, exact nested-CLI terminal, status,
+  error, exit metadata, and bounded history projection without parsing the
+  human diff into a second representation.
 - [ ] Apply remote write unlock and risk policy to Deploy modes; never retain a
   global yes/reset toggle.
 
 ### Server
 
-- [ ] Show local availability, process state, health, resolved ports, data
+- [ ] Show local availability, process state, resolved ports, data
   directory, launch mode, and bounded logs.
 - [ ] Support start, stop, restart, and clean-start through reviewed actions.
 - [ ] Preserve the same server across workspace/context changes only when the
@@ -197,7 +222,8 @@ Recommended commit checkpoint: complete minimal Dev loop.
 
 ## Checkpoint 5: Ops Navigation And Resource Roots
 
-Planning prerequisite: exact resource-action inventory.
+Planning prerequisite for mutations: exact resource-action inventory. The
+read-only root subset below may proceed first.
 
 - [ ] Add root-subject navigation for Agents, Deployment, Environment, and
   Server with subject-specific views and breadcrumbs.
@@ -211,7 +237,7 @@ Planning prerequisite: exact resource-action inventory.
 - [ ] Add Deployment Overview/History and revision Overview/Diff.
 - [ ] Add Environment Overview/Resources, resource-kind catalogs, homogeneous
   collections, masked secret handling, and contextual CRUD where planned.
-- [ ] Add Server Overview/health/capability data without duplicating Dev server
+- [ ] Add Server Overview/capability data without duplicating Dev server
   lifecycle controls.
 - [ ] Implement relevant Invoke, Interrupt, Resume, Update, Redeploy, Delete,
   and resource CRUD actions through typed helpers and Jobs.
@@ -220,6 +246,17 @@ Planning prerequisite: exact resource-action inventory.
 
 Recommended commit checkpoints: Agents migration; Deployment; Environment;
 Server and action coverage.
+
+### Accepted Read-Only Subset
+
+- [ ] Preserve the complete Agents collection interaction model.
+- [ ] Open a read-only individual Agent Overview from Enter and remove the old
+  nested oplog/stream Inspect path.
+- [ ] Show current Deployment identity without implementing History or Diff.
+- [ ] Show selected Environment identity/configuration without Resources.
+- [ ] Show Server provenance/endpoints and matching local process/port state,
+  without an HTTP readiness claim or lifecycle duplication.
+- [ ] Keep all Ops writes unavailable until their inventory and risk review.
 
 ## Checkpoint 6: Activity
 

@@ -130,7 +130,8 @@ Read-only requests and signal subscriptions are not blocked by this guard.
 Server, REPL, and Live have independent lifecycle models because they are not
 finite Jobs:
 
-- Server owns process control, health, ports, data directory, and log buffer.
+- Server owns process control, bound ports, data directory, and terminal
+  buffer. Process/ports-file evidence is not presented as HTTP health.
 - REPL owns PTY screen, input mode, scrollback, resize, and process lifecycle.
 - Live owns exact Agent identity, connection/retry state, follow state, and a
   bounded transient buffer.
@@ -138,6 +139,17 @@ finite Jobs:
 Persistent sessions publish compact global status and remain addressable from
 the palette. They are stopped according to context-switch and quit policies,
 not because their pane becomes hidden.
+
+Plan, Build, Deploy, Clean, Server, and interactive REPL use the nested CLI PTY
+adapter. Other Ops operations use neutral typed helpers from existing handlers
+or clients, retain their cache semantics, and never parse human or ANSI output.
+If a TUI freshness rule conflicts with an existing cache, change the shared
+cache contract with focused tests instead of bypassing it in the renderer.
+
+Each PTY has one TerminalScreen with 2,000 lines of scrollback and is resized to
+the content rectangle from LayoutSnapshot. A finite Job keeps its terminal
+after completion. The registry keeps active Jobs and the latest 20 completed
+Jobs, evicting the oldest completed record first.
 
 ## Layout
 
@@ -209,6 +221,13 @@ Use subject-specific typed providers behind a small shared lifecycle contract:
 Do not create a universal data-provider enum that absorbs resource-specific
 queries. Agents, Deployment, Environment Resources, Server, Activity, and
 Metrics keep their own request and response types.
+
+The initial read-only Ops providers are deliberately small. Deployment derives
+the current revision/version/hash from the selected environment snapshot;
+Environment returns its identity and configuration; Server derives immutable
+endpoint/provenance data from the selected target and may join matching
+TUI-owned local-session state. Initial environment lookup uses visible/get-only
+APIs and must not invoke application or environment creation.
 
 ### Activity
 

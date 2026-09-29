@@ -73,13 +73,14 @@ Acceptance:
 
 ## 4. Minimal Dev Workspace
 
-Prerequisite: exact Dev view content, controls, states, and actions.
+Prerequisite: exact Dev view content, controls, states, and actions. Complete.
 
 Deliverables:
 
 - Build & Deploy with Plan, Build, Deploy, Clean, structured results, and Job
   history projection;
-- Server with local lifecycle, health, ports, data directory, and logs;
+- Server with local lifecycle, process state, bound ports, data directory, and
+  logs;
 - REPL with explicit input ownership and persistent PTY state;
 - optional right/bottom subviews with no-subview first-run default.
 
@@ -107,6 +108,11 @@ Acceptance:
 - resource navigation is complete by mouse, leader, and palette;
 - server Dataset paging and local Find remain visibly distinct and bounded;
 - local and remote mutations follow the same explicit risk contract.
+
+The first implementation pass through this checkpoint is read-only: it adds
+the four root subjects, individual Agent Overview, current Deployment identity,
+selected Environment configuration, and Server target/capability information.
+History, Diff, Resources, deeper drilldowns, and mutations remain gated.
 
 ## 6. Activity
 
