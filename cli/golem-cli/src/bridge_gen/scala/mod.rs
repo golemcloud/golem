@@ -3322,7 +3322,10 @@ impl ScalaBridgeGenerator {
             SchemaType::Path { .. } | SchemaType::Url { .. } => {
                 Ok("_root_.scala.Predef.String".to_string())
             }
-            SchemaType::Uuid { .. } => Ok("_root_.golem.Uuid".to_string()),
+            SchemaType::Uuid { .. } => Ok(match self.mode {
+                ScalaBridgeMode::ExternalRest => UUID.to_string(),
+                ScalaBridgeMode::GuestWasmRpc => GUEST_UUID.to_string(),
+            }),
             SchemaType::Datetime { .. } => Ok("_root_.java.time.Instant".to_string()),
             SchemaType::Duration { .. } => Ok("_root_.scala.Long".to_string()),
             SchemaType::Secret { .. } if self.mode == ScalaBridgeMode::GuestWasmRpc => {

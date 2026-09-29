@@ -319,6 +319,70 @@ fn single_agent_compiles(#[tagged_as("scala_single_agent")] pkg: &GeneratedPacka
     compile(pkg.package_dir().as_path());
 }
 
+#[test]
+fn first_class_uuid_uses_self_contained_runtime_type() {
+    let pkg = GeneratedPackage::new(agent(
+        "UuidAgent",
+        "scala",
+        vec![field("id", SchemaType::uuid())],
+        vec![method(
+            "round-trip",
+            vec![field("value", SchemaType::uuid())],
+            Some(SchemaType::uuid()),
+        )],
+        vec![],
+        AgentMode::Durable,
+    ));
+    let package_dir = pkg.package_dir();
+    let client = std::fs::read_to_string(
+        package_dir.join("src/main/scala/golem/bridge/client/uuid_agent/UuidAgentClient.scala"),
+    )
+    .unwrap();
+
+    assert!(client.contains("_root_.golem.bridge.runtime.Uuid"));
+    assert!(!client.contains("_root_.golem.Uuid"));
+    compile(package_dir.as_path());
+}
+
+#[test]
+fn first_class_uuid_rejects_non_canonical_strings() {
+    let pkg = GeneratedPackage::new(agent(
+        "UuidAgent",
+        "scala",
+        vec![],
+        vec![method(
+            "round-trip",
+            vec![field("value", SchemaType::uuid())],
+            Some(SchemaType::uuid()),
+        )],
+        vec![],
+        AgentMode::Durable,
+    ));
+
+    run_sbt_test(
+        pkg.package_dir().as_path(),
+        r#"
+package golem.bridge.runtime
+
+class StreamRuntimeTest extends munit.FunSuite {
+  test("first-class UUID decoder rejects non-canonical UUID strings") {
+    val malformed = List(
+      "000000000-0000-0000-0000-000000000000",
+      "550E8400-E29B-41D4-A716-446655440000"
+    )
+    malformed.foreach { value =>
+      val jsonValue = json.Json.obj(
+        "kind" -> json.Json.string("uuid"),
+        "value" -> json.Json.string(value)
+      )
+      assert(SchemaValueCodec.fromJson(jsonValue).isLeft)
+    }
+  }
+}
+"#,
+    );
+}
+
 /// Recursive stream leaves retain their structural position and compile to
 /// nested `AgentStream` values in both inputs and outputs.
 #[test]
