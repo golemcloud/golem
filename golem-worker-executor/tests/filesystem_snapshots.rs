@@ -438,7 +438,7 @@ async fn a_periodic_snapshot_brings_the_files_back_after_a_restart(
     agent.confirmed(&executor).await?;
     let live = agent.describe(&executor).await?;
     let applied = agent.applied(&executor).await?;
-    drop(executor);
+    executor.release().await?;
     let restores = store.restore_count();
 
     let restarted =
@@ -510,12 +510,12 @@ async fn a_restart_from_a_snapshot_gives_the_tree_of_a_full_replay(
         .await?;
     agent.confirmed(&executor).await?;
     let live = agent.describe(&executor).await?;
-    drop(executor);
+    executor.release().await?;
 
     let from_snapshot =
         start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
     let restored = agent.describe(&from_snapshot).await?;
-    drop(from_snapshot);
+    from_snapshot.release().await?;
     let replay_root = tempfile::tempdir()?;
     let replaying = start_replaying(deps, &context, replay_root.path()).await?;
     let replayed = agent.describe(&replaying).await?;
@@ -554,7 +554,7 @@ async fn an_injected_upload_failure_falls_back_and_a_later_upload_recovers(
     .await?;
     let failed = agent.records(&executor).await?;
     let live = agent.describe(&executor).await?;
-    drop(executor);
+    executor.release().await?;
 
     let falling_back =
         start_snapshotting(deps, &context, &store, Duration::from_secs(1), None).await?;
@@ -565,7 +565,7 @@ async fn an_injected_upload_failure_falls_back_and_a_later_upload_recovers(
         .await?;
     let recovered = agent.confirmed(&falling_back).await?;
     let recovered_live = agent.describe(&falling_back).await?;
-    drop(falling_back);
+    falling_back.release().await?;
     let restores = store.restore_count();
     let recovering =
         start_snapshotting(deps, &context, &store, Duration::from_secs(1), None).await?;
@@ -613,7 +613,7 @@ async fn invocations_during_an_upload_keep_their_results_after_a_restart(
     let applied = agent.applied(&executor).await?;
     agent.confirmed(&executor).await?;
     store.set_save_delay(Duration::ZERO);
-    drop(executor);
+    executor.release().await?;
 
     let restarted =
         start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
@@ -668,7 +668,7 @@ async fn a_start_on_another_executor_confirms_a_whole_snapshot_and_restores_it(
         start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
     let agent = Agent::start(&executor, &context, initial_file_system, "moved", &[]).await?;
     let (live, named) = stop_during_an_upload(&executor, &context, &store, &agent).await?;
-    drop(executor);
+    executor.release().await?;
     let restores = store.restore_count();
 
     let restarted =
@@ -755,7 +755,7 @@ async fn a_crash_during_an_upload_restarts_with_the_tree_of_a_run_without_a_cras
         .apply_all(&reference_executor, &operations)
         .await?;
     let expected = reference.describe(&reference_executor).await?;
-    drop(reference_executor);
+    reference_executor.release().await?;
 
     let context = TestContext::new(last_unique_id);
     let store = TestFilesystemSnapshotStore::new();
@@ -764,7 +764,7 @@ async fn a_crash_during_an_upload_restarts_with_the_tree_of_a_run_without_a_cras
         start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
     let agent = Agent::start(&executor, &context, initial_file_system, "crashing", &[]).await?;
     agent.apply_all(&executor, &operations).await?;
-    drop(executor);
+    executor.release().await?;
     store.set_save_delay(Duration::ZERO);
     let restores = store.restore_count();
 
@@ -846,7 +846,7 @@ async fn a_tree_of_initial_files_writes_records_without_a_name_and_uses_no_store
         worker_id: agent.worker_id.clone(),
     };
     let after_update = updated_agent.describe(&executor).await?;
-    drop(executor);
+    executor.release().await?;
     let replay_root = tempfile::tempdir()?;
     let replaying = start_replaying(deps, &context, replay_root.path()).await?;
     let replayed = updated_agent.describe(&replaying).await?;
@@ -905,7 +905,7 @@ async fn an_unchanged_tree_reuses_the_confirmed_name_and_saves_nothing(
     })
     .await?;
     let records = agent.records(&executor).await?;
-    drop(executor);
+    executor.release().await?;
     let restarted =
         start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
 
@@ -986,7 +986,7 @@ async fn a_manual_update_brings_the_files_into_the_target_revision(
         worker_id: agent.worker_id.clone(),
     };
     let after_update = updated_agent.describe(&executor).await?;
-    drop(executor);
+    executor.release().await?;
     let restarted =
         start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
 
@@ -1284,7 +1284,7 @@ async fn a_rejected_record_stays_rejected_after_a_restart_and_the_older_record_s
     })
     .await?;
     agent.stop(&executor, &context).await?;
-    drop(executor);
+    executor.release().await?;
 
     let restarted =
         start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
@@ -1411,13 +1411,13 @@ async fn run_history(
         })
         .await?;
     let live = agent.outcome(&executor).await?;
-    drop(executor);
+    executor.release().await?;
     let restores = store.restore_count();
     let restarted =
         start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
     let restored = agent.outcome(&restarted).await?;
     let restores = store.restore_count() - restores;
-    drop(restarted);
+    restarted.release().await?;
     // Without the periodic snapshots, the start uses the snapshot of the last manual update, or
     // replays the whole oplog.
     let owned = agent.owned(&context);
@@ -1574,11 +1574,11 @@ async fn managed_xfs_restart_from_a_snapshot_gives_the_tree_of_a_full_replay(
         .await?;
     agent.confirmed(&executor).await?;
     let live = agent.describe(&executor).await?;
-    drop(executor);
+    executor.release().await?;
 
     let restarted = start(managed_snapshots()).await?;
     let restored = agent.describe(&restarted).await?;
-    drop(restarted);
+    restarted.release().await?;
     let replaying = start(FilesystemSnapshotsConfig::default()).await?;
     let replayed = agent.describe(&replaying).await?;
 
@@ -1653,7 +1653,7 @@ async fn managed_xfs_manual_update_brings_the_files_into_the_target_revision(
         worker_id: agent.worker_id.clone(),
     };
     let after_update = updated_agent.describe(&executor).await?;
-    drop(executor);
+    executor.release().await?;
     let restarted = start().await?;
 
     assert_eq!(
@@ -1913,7 +1913,7 @@ async fn a_named_manual_update_record_fails_a_start_without_filesystem_snapshots
     executor
         .wait_for_component_revision(&agent.worker_id, updated.revision, Duration::from_secs(60))
         .await?;
-    drop(executor);
+    executor.release().await?;
 
     let root = tempfile::tempdir()?;
     let disabled = start_replaying(deps, &context, root.path()).await?;

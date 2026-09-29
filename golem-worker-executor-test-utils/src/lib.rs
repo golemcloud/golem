@@ -817,6 +817,23 @@ impl TestWorkerExecutor {
         self.leak_detector.clone()
     }
 
+    /// Drops the executor and waits until its service graph is released, for at most 30
+    /// seconds. A drop only asks the tasks of the executor to stop, so a start that follows it at
+    /// once can find what the old graph still holds, such as the exclusive lock of a managed XFS
+    /// root. A test calls this before the next start in the same process.
+    pub async fn release(self) -> anyhow::Result<()> {
+        let released = self.leak_detector();
+        drop(self);
+        use futures::StreamExt as _;
+        let gone = futures::stream::repeat(())
+            .then(|()| tokio::time::sleep(Duration::from_millis(10)))
+            .filter(|()| std::future::ready(released.upgrade().is_none()));
+        tokio::time::timeout(Duration::from_secs(30), std::pin::pin!(gone).next())
+            .await
+            .map(drop)
+            .map_err(|_| anyhow::anyhow!("the executor was not released within 30 seconds"))
+    }
+
     pub fn auth_ctx(&self) -> AuthCtx {
         AuthCtx::User(UserAuthCtx {
             account_id: self.context.account_id,
