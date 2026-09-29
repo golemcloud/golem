@@ -430,12 +430,14 @@ impl DeploymentWriteService {
             .map(|s| {
                 let details = golem_service_base::custom_api::SecuritySchemeDetails {
                     id: s.id,
+                    revision: s.revision,
                     name: s.name.clone(),
                     provider_type: s.provider_type,
                     client_id: s.client_id,
                     client_secret: s.client_secret,
                     redirect_url: s.redirect_url,
                     scopes: s.scopes,
+                    login: s.login,
                 };
                 (s.name, details)
             })

@@ -158,6 +158,9 @@ pub fn get_route_response_schema(
                 },
             );
         }
+        RichRouteBehaviour::OidcPkceAuthorize(_) | RichRouteBehaviour::OidcPkceToken(_) => {
+            responses.insert(501, ResponseBodyOpenApiSchema::NoBody);
+        }
         RichRouteBehaviour::HttpRouter(_) | RichRouteBehaviour::AgentFilesystem(_) => {
             responses.insert(501, ResponseBodyOpenApiSchema::NoBody);
         }

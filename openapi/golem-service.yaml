@@ -23570,6 +23570,21 @@ components:
           type: string
       required:
       - currentRevision
+    AuthorizationCodePkceConfig:
+      title: AuthorizationCodePkceConfig
+      type: object
+      properties:
+        redirectUris:
+          type: array
+          items:
+            type: string
+        origins:
+          type: array
+          items:
+            type: string
+      required:
+      - redirectUris
+      - origins
     AutoInjectedKind:
       type: string
       enum:
@@ -27413,6 +27428,8 @@ components:
           type: array
           items:
             type: string
+        login:
+          $ref: '#/components/schemas/SecuritySchemeLogin'
       required:
       - name
       - providerType
@@ -27420,6 +27437,7 @@ components:
       - clientSecret
       - redirectUrl
       - scopes
+      - login
     SecuritySchemeDto:
       title: SecuritySchemeDto
       type: object
@@ -27445,6 +27463,8 @@ components:
           type: array
           items:
             type: string
+        login:
+          $ref: '#/components/schemas/SecuritySchemeLogin'
       required:
       - id
       - revision
@@ -27454,6 +27474,41 @@ components:
       - clientId
       - redirectUrl
       - scopes
+      - login
+    SecuritySchemeLogin:
+      discriminator:
+        propertyName: type
+        mapping:
+          Cookie: '#/components/schemas/SecuritySchemeLogin_Empty'
+          AuthorizationCodePkce: '#/components/schemas/SecuritySchemeLogin_AuthorizationCodePkceConfig'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/SecuritySchemeLogin_Empty'
+      - $ref: '#/components/schemas/SecuritySchemeLogin_AuthorizationCodePkceConfig'
+    SecuritySchemeLogin_AuthorizationCodePkceConfig:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: AuthorizationCodePkce
+            type: string
+            enum:
+            - AuthorizationCodePkce
+        required:
+        - type
+      - $ref: '#/components/schemas/AuthorizationCodePkceConfig'
+    SecuritySchemeLogin_Empty:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Cookie
+            type: string
+            enum:
+            - Cookie
+        required:
+        - type
+      - $ref: '#/components/schemas/Empty'
     SecuritySchemeUpdate:
       title: SecuritySchemeUpdate
       type: object
@@ -27473,6 +27528,8 @@ components:
           type: array
           items:
             type: string
+        login:
+          $ref: '#/components/schemas/SecuritySchemeLogin'
       required:
       - currentRevision
     SetMemoryLimit:

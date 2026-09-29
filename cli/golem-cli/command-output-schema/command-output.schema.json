@@ -2530,7 +2530,8 @@
         "providerType",
         "clientId",
         "redirectUrl",
-        "scopes"
+        "scopes",
+        "login"
       ],
       "properties": {
         "$type": {
@@ -2568,6 +2569,9 @@
           "items": {
             "type": "string"
           }
+        },
+        "login": {
+          "$ref": "#/definitions/SecuritySchemeLogin"
         }
       },
       "additionalProperties": false
@@ -2622,7 +2626,8 @@
         "providerType",
         "clientId",
         "redirectUrl",
-        "scopes"
+        "scopes",
+        "login"
       ],
       "properties": {
         "$type": {
@@ -2655,6 +2660,9 @@
           "items": {
             "type": "string"
           }
+        },
+        "login": {
+          "$ref": "#/definitions/SecuritySchemeLogin"
         }
       },
       "additionalProperties": false
@@ -2695,7 +2703,8 @@
         "providerType",
         "clientId",
         "redirectUrl",
-        "scopes"
+        "scopes",
+        "login"
       ],
       "properties": {
         "$type": {
@@ -2728,6 +2737,9 @@
           "items": {
             "type": "string"
           }
+        },
+        "login": {
+          "$ref": "#/definitions/SecuritySchemeLogin"
         }
       },
       "additionalProperties": false
@@ -2742,7 +2754,8 @@
         "providerType",
         "clientId",
         "redirectUrl",
-        "scopes"
+        "scopes",
+        "login"
       ],
       "properties": {
         "id": {
@@ -2772,9 +2785,54 @@
           "items": {
             "type": "string"
           }
+        },
+        "login": {
+          "$ref": "#/definitions/SecuritySchemeLogin"
         }
       },
       "additionalProperties": false
+    },
+    "SecuritySchemeLogin": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "const": "Cookie"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "type",
+            "redirectUris",
+            "origins"
+          ],
+          "properties": {
+            "type": {
+              "const": "AuthorizationCodePkce"
+            },
+            "redirectUris": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "origins": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
     },
     "SecuritySchemeProvider": {
       "oneOf": [

@@ -24,6 +24,7 @@ mod routes;
 mod write;
 
 pub use self::deploy_validation_error::DeployValidationError;
+pub(crate) use self::deployment_context::validate_final_http_api_router_for_origin;
 pub use self::mcp::{DeployedMcpError, DeployedMcpService};
 pub use self::read::{DeploymentError, DeploymentService};
 pub use self::routes::{DeployedRoutesError, DeployedRoutesService};

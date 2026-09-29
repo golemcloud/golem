@@ -385,6 +385,11 @@ async fn missing_security_retains_active_route_barrier(deps: &Deps) {
 }
 
 #[test]
+async fn test_security_scheme_login_persistence(deps: &Deps) {
+    crate::repo::common::test_security_scheme_login_persistence(deps).await;
+}
+
+#[test]
 async fn test_resolve_agent_type_nonexistent_revision_returns_none(deps: &Deps) {
     crate::repo::common::test_resolve_agent_type_nonexistent_revision_returns_none(deps).await;
 }

@@ -9400,6 +9400,12 @@ pub async fn missing_security_retains_active_route_barrier(deps: &Deps) {
     assert_eq!(records.len(), 2);
     assert!(!records[0].security_scheme_missing);
     assert!(records[1].security_scheme_missing);
+    assert_eq!(
+        repo.list_active_domains_for_environment(env.revision.environment_id)
+            .await
+            .unwrap(),
+        vec![domain.clone()]
+    );
     let service = DeployedRoutesService::new(repo);
     let routes = service
         .get_currently_active_compiled_routes(&Domain(domain.clone()))
@@ -9469,6 +9475,9 @@ pub async fn missing_security_retains_active_route_barrier(deps: &Deps) {
             "test".into(),
             &openidconnect::RedirectUrl::new("https://example.com/callback".into()).unwrap(),
             &[],
+            &golem_common::model::security_scheme::SecuritySchemeLogin::Cookie(
+                golem_common::model::Empty {},
+            ),
             golem_common::model::account::AccountId(owner.revision.account_id),
         );
         schemes
@@ -9506,5 +9515,66 @@ pub async fn missing_security_retains_active_route_barrier(deps: &Deps) {
             RouteSecurity::Unavailable
         ));
         assert!(routes.security_schemes.is_empty());
+    }
+}
+
+pub async fn test_security_scheme_login_persistence(deps: &Deps) {
+    use golem_common::base_model::Empty;
+    use golem_common::model::security_scheme::{
+        AuthorizationCodePkceConfig, Provider, SecuritySchemeId, SecuritySchemeLogin,
+    };
+    use golem_registry_service::model::security_scheme::SecurityScheme;
+    use golem_registry_service::repo::model::security_scheme::SecuritySchemeRevisionRecord;
+    use golem_registry_service::repo::security_scheme::{DbSecuritySchemeRepo, SecuritySchemeRepo};
+    use golem_registry_service::services::registry_change_notifier::RequiresNotificationSignalExt;
+    use openidconnect::{RedirectUrl, Scope};
+
+    let repo: Box<dyn SecuritySchemeRepo> = match &deps.test_db {
+        TestDb::Sqlite(pool) => Box::new(DbSecuritySchemeRepo::logged(pool.clone())),
+        TestDb::Postgres(pool) => Box::new(DbSecuritySchemeRepo::logged(pool.clone())),
+    };
+    let owner = deps.create_account().await;
+    let app = deps.create_application(owner.revision.account_id).await;
+    let env = deps.create_env(app.revision.application_id).await;
+    let logins = [
+        SecuritySchemeLogin::Cookie(Empty {}),
+        SecuritySchemeLogin::AuthorizationCodePkce(AuthorizationCodePkceConfig {
+            redirect_uris: vec![
+                "https://app.example.test/callback".into(),
+                "http://127.0.0.1:3000/callback".into(),
+            ],
+            origins: vec![
+                "https://app.example.test".into(),
+                "http://127.0.0.1:3000".into(),
+            ],
+        }),
+    ];
+
+    for (index, login) in logins.into_iter().enumerate() {
+        let id = SecuritySchemeId::new();
+        let name = format!("login-persistence-{index}");
+        let revision = SecuritySchemeRevisionRecord::creation(
+            id,
+            Provider::Google(Empty {}),
+            "client-id".into(),
+            "client-secret".into(),
+            &RedirectUrl::new("https://service.example.test/auth/callback".into()).unwrap(),
+            &[Scope::new("openid".into())],
+            &login,
+            owner.revision.account_id.into(),
+        );
+
+        repo.create(env.revision.environment_id, name.clone(), revision)
+            .await
+            .unwrap()
+            .signal_new_events_available(&deps.test_registry_change_notifier());
+
+        let stored = repo
+            .get_for_environment_and_name(env.revision.environment_id, &name)
+            .await
+            .unwrap()
+            .expect("created security scheme should be readable");
+        let stored: SecurityScheme = stored.try_into().unwrap();
+        assert_eq!(stored.login, login);
     }
 }

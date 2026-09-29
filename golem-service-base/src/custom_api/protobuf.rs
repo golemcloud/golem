@@ -30,7 +30,9 @@ use golem_api_grpc::proto;
 use golem_common::model::account::AccountEmail;
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::http_api_deployment::HttpApiDeploymentScheme;
-use golem_common::model::security_scheme::{Provider, SecuritySchemeName};
+use golem_common::model::security_scheme::{
+    Provider, SecuritySchemeLogin, SecuritySchemeName, SecuritySchemeRevision,
+};
 use http::HeaderName;
 use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
 use std::collections::HashMap;
@@ -58,6 +60,8 @@ impl TryFrom<proto::golem::customapi::SecuritySchemeDetails> for SecuritySchemeD
 
         Ok(Self {
             id,
+            revision: SecuritySchemeRevision::new(value.revision)
+                .map_err(|e| format!("invalid security scheme revision: {e}"))?,
             name: SecuritySchemeName(value.name),
             provider_type,
             client_id: ClientId::new(value.client_id),
@@ -65,6 +69,8 @@ impl TryFrom<proto::golem::customapi::SecuritySchemeDetails> for SecuritySchemeD
             redirect_url: RedirectUrl::new(value.redirect_url)
                 .map_err(|e| format!("Failed parsing redirect url: {e}"))?,
             scopes: value.scopes.into_iter().map(Scope::new).collect(),
+            login: serde_json::from_str::<SecuritySchemeLogin>(&value.login_config)
+                .map_err(|e| format!("invalid login config: {e}"))?,
         })
     }
 }
@@ -75,12 +81,15 @@ impl From<SecuritySchemeDetails>
     fn from(value: SecuritySchemeDetails) -> Self {
         Self {
             id: Some(value.id.into()),
+            revision: value.revision.get(),
             name: value.name.0,
             provider: Some(value.provider_type.into()),
             client_id: value.client_id.deref().clone(),
             client_secret: value.client_secret.secret().clone(),
             redirect_url: value.redirect_url.deref().clone(),
             scopes: value.scopes.iter().map(|s| s.deref().clone()).collect(),
+            login_config: serde_json::to_string(&value.login)
+                .expect("security scheme login must serialize"),
         }
     }
 }
@@ -1254,6 +1263,38 @@ mod tests {
         assert!(matches!(
             RouteSecurity::try_from(encoded).unwrap(),
             RouteSecurity::Unavailable
+        ));
+    }
+
+    #[test]
+    fn security_scheme_revision_and_login_roundtrip() {
+        let details = SecuritySchemeDetails {
+            id: golem_common::model::security_scheme::SecuritySchemeId::new(),
+            revision: SecuritySchemeRevision::new(7).unwrap(),
+            name: SecuritySchemeName("frontend-login".into()),
+            provider_type: Provider::Google(golem_common::model::Empty {}),
+            client_id: ClientId::new("client".into()),
+            client_secret: ClientSecret::new("secret".into()),
+            redirect_url: RedirectUrl::new("https://api.example/callback".into()).unwrap(),
+            scopes: vec![Scope::new("openid".into())],
+            login: SecuritySchemeLogin::AuthorizationCodePkce(
+                golem_common::model::security_scheme::AuthorizationCodePkceConfig {
+                    redirect_uris: vec!["https://frontend.example/callback".into()],
+                    origins: vec!["https://frontend.example".into()],
+                },
+            ),
+        };
+        let id = details.id;
+        let encoded: proto::golem::customapi::SecuritySchemeDetails = details.into();
+        let decoded = SecuritySchemeDetails::try_from(encoded).unwrap();
+
+        assert_eq!(decoded.id, id);
+        assert_eq!(decoded.revision, SecuritySchemeRevision::new(7).unwrap());
+        assert!(matches!(
+            decoded.login,
+            SecuritySchemeLogin::AuthorizationCodePkce(ref config)
+                if config.redirect_uris == ["https://frontend.example/callback"]
+                    && config.origins == ["https://frontend.example"]
         ));
     }
 

@@ -13,7 +13,9 @@
 // limitations under the License.
 
 use super::environment::{EnvironmentError, EnvironmentService};
+use crate::model::api_definition::BoundCompiledRoute;
 use crate::model::security_scheme::SecurityScheme;
+use crate::repo::deployment::DeploymentRepo;
 use crate::repo::model::audit::DeletableRevisionAuditFields;
 use crate::repo::model::security_scheme::{
     SecuritySchemeAuthExtRevisionRecord, SecuritySchemeRepoError, SecuritySchemeRevisionRecord,
@@ -31,8 +33,8 @@ use golem_common::model::card::{
 };
 use golem_common::model::environment::{Environment, EnvironmentId, EnvironmentName};
 use golem_common::model::security_scheme::{
-    SecuritySchemeCreation, SecuritySchemeId, SecuritySchemeName, SecuritySchemeRevision,
-    SecuritySchemeUpdate,
+    AuthorizationCodePkceConfig, SecuritySchemeCreation, SecuritySchemeId, SecuritySchemeLogin,
+    SecuritySchemeName, SecuritySchemeRevision, SecuritySchemeUpdate,
 };
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
@@ -46,6 +48,8 @@ pub enum SecuritySchemeError {
     SecuritySchemeWithNameAlreadyExists(SecuritySchemeName),
     #[error("Invalid redirect url provided")]
     InvalidRedirectUrl,
+    #[error("Invalid login configuration: {0}")]
+    InvalidLoginConfiguration(String),
     #[error("Invalid custom provider issuer URL: {0}")]
     InvalidCustomProviderIssuerUrl(String),
     #[error("Environment {0} not found")]
@@ -115,6 +119,7 @@ impl SafeDisplay for SecuritySchemeError {
     fn to_safe_string(&self) -> String {
         match self {
             Self::InvalidRedirectUrl => self.to_string(),
+            Self::InvalidLoginConfiguration(_) => self.to_string(),
             Self::InvalidCustomProviderIssuerUrl(_) => self.to_string(),
             Self::SecuritySchemeWithNameAlreadyExists(_) => self.to_string(),
             Self::SecuritySchemeForNameNotFound(_) => self.to_string(),
@@ -135,6 +140,7 @@ error_forwarding!(
 
 pub struct SecuritySchemeService {
     security_scheme_repo: Arc<dyn SecuritySchemeRepo>,
+    deployment_repo: Arc<dyn DeploymentRepo>,
     environment_service: Arc<EnvironmentService>,
     registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
     strict_issuer_url_validation: bool,
@@ -143,12 +149,14 @@ pub struct SecuritySchemeService {
 impl SecuritySchemeService {
     pub fn new(
         security_scheme_repo: Arc<dyn SecuritySchemeRepo>,
+        deployment_repo: Arc<dyn DeploymentRepo>,
         environment_service: Arc<EnvironmentService>,
         registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
         strict_issuer_url_validation: bool,
     ) -> Self {
         Self {
             security_scheme_repo,
+            deployment_repo,
             environment_service,
             registry_change_notifier,
             strict_issuer_url_validation,
@@ -184,6 +192,8 @@ impl SecuritySchemeService {
                 .validate_issuer_url_strict()
                 .map_err(SecuritySchemeError::InvalidCustomProviderIssuerUrl)?;
         }
+        validate_callback_url(&data.redirect_url)?;
+        validate_login(&data.login)?;
 
         let id = SecuritySchemeId::new();
 
@@ -198,6 +208,7 @@ impl SecuritySchemeService {
             data.client_secret,
             &redirect_url,
             &scopes,
+            &data.login,
             auth.actor_account_id(),
         );
 
@@ -255,6 +266,7 @@ impl SecuritySchemeService {
             security_scheme.client_secret = ClientSecret::new(client_secret);
         };
         if let Some(redirect_url) = update.redirect_url {
+            validate_callback_url(&redirect_url)?;
             let redirect_url: RedirectUrl = RedirectUrl::new(redirect_url)
                 .map_err(|_| SecuritySchemeError::InvalidRedirectUrl)?;
             security_scheme.redirect_url = redirect_url;
@@ -263,6 +275,12 @@ impl SecuritySchemeService {
             let scopes: Vec<Scope> = scopes.into_iter().map(Scope::new).collect();
             security_scheme.scopes = scopes;
         };
+        if let Some(login) = update.login {
+            validate_login(&login)?;
+            security_scheme.login = login;
+        }
+
+        self.validate_active_deployments(&security_scheme).await?;
 
         let audit = DeletableRevisionAuditFields::new(auth.actor_account_id().0);
 
@@ -466,5 +484,224 @@ impl SecuritySchemeService {
         .map_err(|_| SecuritySchemeError::SecuritySchemeNotFound(security_scheme_id))?;
 
         Ok((security_scheme, owner))
+    }
+
+    async fn validate_active_deployments(
+        &self,
+        candidate: &SecurityScheme,
+    ) -> Result<(), SecuritySchemeError> {
+        use crate::services::deployment::validate_final_http_api_router_for_origin;
+        use golem_service_base::custom_api::{RouteBehaviour, SecuritySchemeDetails};
+        use std::collections::HashMap;
+
+        for domain in self
+            .deployment_repo
+            .list_active_domains_for_environment(candidate.environment_id.0)
+            .await
+            .map_err(anyhow::Error::from)?
+        {
+            let bound_routes: Vec<BoundCompiledRoute> = self
+                .deployment_repo
+                .list_active_compiled_routes_for_domain(&domain)
+                .await
+                .map_err(anyhow::Error::from)?
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<Result<_, _>>()
+                .map_err(anyhow::Error::from)?;
+            let mut schemes = HashMap::new();
+            let mut routes = Vec::with_capacity(bound_routes.len());
+            for bound in bound_routes {
+                if bound.environment_id != candidate.environment_id {
+                    continue;
+                }
+                if let Some(details) = bound.security_scheme {
+                    schemes.insert(details.name.clone(), details);
+                }
+                routes.push(bound.route);
+            }
+            if !schemes.values().any(|details| details.id == candidate.id) {
+                continue;
+            }
+            schemes.insert(
+                candidate.name.clone(),
+                SecuritySchemeDetails {
+                    id: candidate.id,
+                    revision: candidate.revision,
+                    name: candidate.name.clone(),
+                    provider_type: candidate.provider_type.clone(),
+                    client_id: candidate.client_id.clone(),
+                    client_secret: candidate.client_secret.clone(),
+                    redirect_url: candidate.redirect_url.clone(),
+                    scopes: candidate.scopes.clone(),
+                    login: candidate.login.clone(),
+                },
+            );
+            let Some(public_origin) = routes.iter().find_map(|route| match &route.behaviour {
+                RouteBehaviour::OpenApiSpec(behavior) => Some(behavior.scheme.origin(
+                    &golem_common::model::domain_registration::Domain(domain.clone()),
+                )),
+                _ => None,
+            }) else {
+                return Err(SecuritySchemeError::InternalError(anyhow::anyhow!(
+                    "Active HTTP API deployment for {domain} has no OpenAPI route"
+                )));
+            };
+            let mut errors = Vec::new();
+            validate_final_http_api_router_for_origin(
+                &golem_common::model::domain_registration::Domain(domain),
+                &public_origin,
+                &routes,
+                &schemes,
+                &mut errors,
+            );
+            if !errors.is_empty() {
+                return Err(SecuritySchemeError::InvalidLoginConfiguration(format!(
+                    "security scheme update conflicts with an active deployment: {errors:?}"
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+
+fn validate_callback_url(value: &str) -> Result<(), SecuritySchemeError> {
+    let url = url::Url::parse(value).map_err(|_| SecuritySchemeError::InvalidRedirectUrl)?;
+    if !is_https_or_loopback_http(&url)
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.fragment().is_some()
+        || url.query_pairs().any(|(name, _)| {
+            matches!(
+                name.as_ref(),
+                "code" | "state" | "error" | "error_description"
+            )
+        })
+    {
+        return Err(SecuritySchemeError::InvalidRedirectUrl);
+    }
+    Ok(())
+}
+
+fn validate_login(login: &SecuritySchemeLogin) -> Result<(), SecuritySchemeError> {
+    let SecuritySchemeLogin::AuthorizationCodePkce(AuthorizationCodePkceConfig {
+        redirect_uris,
+        origins,
+    }) = login
+    else {
+        return Ok(());
+    };
+
+    if redirect_uris.is_empty() {
+        return invalid_login("at least one frontend redirect URI is required");
+    }
+    if origins.is_empty() {
+        return invalid_login("at least one frontend origin is required");
+    }
+    if has_duplicates(redirect_uris) {
+        return invalid_login("frontend redirect URIs must be unique");
+    }
+    if has_duplicates(origins) {
+        return invalid_login("frontend origins must be unique");
+    }
+
+    let parsed_origins = origins
+        .iter()
+        .map(|value| {
+            let url = url::Url::parse(value)
+                .map_err(|_| "frontend origin must be an absolute URL".to_string())?;
+            let canonical = url.origin().ascii_serialization();
+            if !is_https_or_loopback_http(&url)
+                || url.host_str().is_none()
+                || !url.username().is_empty()
+                || url.password().is_some()
+                || url.path() != "/"
+                || url.query().is_some()
+                || url.fragment().is_some()
+                || canonical != *value
+            {
+                return Err(
+                    "frontend origin must be an exact HTTPS origin or loopback HTTP origin"
+                        .to_string(),
+                );
+            }
+            Ok(canonical)
+        })
+        .collect::<Result<std::collections::HashSet<_>, _>>()
+        .map_err(SecuritySchemeError::InvalidLoginConfiguration)?;
+
+    for value in redirect_uris {
+        let url = url::Url::parse(value).map_err(|_| {
+            SecuritySchemeError::InvalidLoginConfiguration(
+                "frontend redirect URI must be an absolute URL".to_string(),
+            )
+        })?;
+        if !is_https_or_loopback_http(&url)
+            || url.host_str().is_none()
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || url.fragment().is_some()
+            || url.query_pairs().any(|(name, _)| {
+                matches!(
+                    name.as_ref(),
+                    "code" | "error" | "error_description" | "state"
+                )
+            })
+        {
+            return invalid_login(
+                "frontend redirect URI must be HTTPS (or loopback HTTP), without credentials, fragment, or OAuth response parameters",
+            );
+        }
+        if !parsed_origins.contains(&url.origin().ascii_serialization()) {
+            return invalid_login("every frontend redirect URI origin must be configured");
+        }
+    }
+
+    Ok(())
+}
+
+fn invalid_login<T>(message: &str) -> Result<T, SecuritySchemeError> {
+    Err(SecuritySchemeError::InvalidLoginConfiguration(
+        message.to_string(),
+    ))
+}
+
+fn has_duplicates(values: &[String]) -> bool {
+    let mut unique = std::collections::HashSet::new();
+    values.iter().any(|value| !unique.insert(value))
+}
+
+fn is_https_or_loopback_http(url: &url::Url) -> bool {
+    if url.scheme() == "https" {
+        return true;
+    }
+    if url.scheme() != "http" {
+        return false;
+    }
+    match url.host() {
+        Some(url::Host::Domain("localhost")) => true,
+        Some(url::Host::Ipv4(address)) => address.is_loopback(),
+        Some(url::Host::Ipv6(address)) => address.is_loopback(),
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod callback_url_tests {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    fn callback_url_rejects_oauth_response_parameter_collisions() {
+        for parameter in ["code", "error", "error_description", "state"] {
+            assert!(
+                validate_callback_url(&format!(
+                    "https://api.example.com/oidc/callback?{parameter}=fixed"
+                ))
+                .is_err(),
+                "callback URL containing {parameter} was accepted"
+            );
+        }
     }
 }

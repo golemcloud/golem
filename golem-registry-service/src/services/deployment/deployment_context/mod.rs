@@ -64,7 +64,9 @@ use golem_common::schema::schema_type::SchemaType;
 use golem_common::schema::tool::validation::validate_tool;
 use golem_common::schema::validation::is_equivalent_cross_graph;
 use golem_common::schema::{AgentTypeSchema, RegisteredAgentTypeSchema};
-use golem_service_base::custom_api::SecuritySchemeDetails;
+use golem_service_base::custom_api::{
+    SecuritySchemeDetails, pkce_authorization_path, pkce_token_path,
+};
 use golem_service_base::model::agent_secret::AgentSecret;
 use golem_service_base::model::component::Component;
 use golem_service_base::model::retry_policy::StoredRetryPolicy;
@@ -965,8 +967,9 @@ impl DeploymentContext {
                 &mut deployment_routes,
             );
 
-            validate_final_http_api_router(
+            validate_final_http_api_router_for_origin(
                 &deployment.domain,
+                &deployment.scheme.origin(&deployment.domain),
                 &deployment_routes,
                 security_schemes,
                 errors,
@@ -1684,13 +1687,31 @@ pub fn extract_registered_agent_types(
     Ok(agent_types)
 }
 
+#[cfg(test)]
 fn validate_final_http_api_router(
     domain: &Domain,
     compiled_routes: &[UnboundCompiledRoute],
     security_schemes: &HashMap<SecuritySchemeName, SecuritySchemeDetails>,
     errors: &mut Vec<DeployValidationError>,
 ) {
+    validate_final_http_api_router_for_origin(
+        domain,
+        &golem_common::model::http_api_deployment::HttpApiDeploymentScheme::Https.origin(domain),
+        compiled_routes,
+        security_schemes,
+        errors,
+    );
+}
+
+pub(crate) fn validate_final_http_api_router_for_origin(
+    domain: &Domain,
+    public_origin: &str,
+    compiled_routes: &[UnboundCompiledRoute],
+    security_schemes: &HashMap<SecuritySchemeName, SecuritySchemeDetails>,
+    errors: &mut Vec<DeployValidationError>,
+) {
     use golem_service_base::custom_api::{PathSegment, RouteBehaviour, RouteMatch};
+    let public_origin = url::Url::parse(public_origin).ok().map(|url| url.origin());
     let invalid =
         |path: &[PathSegment], error: &str| DeployValidationError::HttpApiDeploymentInvalidRoute {
             domain: domain.clone(),
@@ -1707,31 +1728,112 @@ fn validate_final_http_api_router(
         })
         .map(|route| (route.route_match.clone(), route.path.clone()))
         .collect::<Vec<_>>();
+    let mut add_reserved = |route_match: RouteMatch, path: Vec<PathSegment>| {
+        let overlaps = reserved.iter().any(|(existing_match, existing_path)| {
+            let same_method = match (existing_match, &route_match) {
+                (
+                    RouteMatch::Method {
+                        method: a,
+                        trailing_slash: a_slash,
+                    },
+                    RouteMatch::Method {
+                        method: b,
+                        trailing_slash: b_slash,
+                    },
+                ) => {
+                    a_slash == b_slash
+                        && super::route_compilation::render_http_method(a)
+                            == super::route_compilation::render_http_method(b)
+                }
+                _ => false,
+            };
+            same_method
+                && existing_path.len() == path.len()
+                && existing_path.iter().zip(&path).all(|(a, b)| match (a, b) {
+                    (PathSegment::Literal { value: a }, PathSegment::Literal { value: b }) => {
+                        a == b
+                    }
+                    (PathSegment::Variable { .. }, PathSegment::Variable { .. })
+                    | (PathSegment::Variable { .. }, PathSegment::Literal { .. })
+                    | (PathSegment::Literal { .. }, PathSegment::Variable { .. }) => true,
+                    _ => false,
+                })
+        });
+        reserved.push((route_match, path));
+        overlaps
+    };
     let used_schemes = compiled_routes
         .iter()
         .filter_map(UnboundCompiledRoute::security_scheme)
         .collect::<HashSet<_>>();
     for name in used_schemes {
         if let Some(scheme) = security_schemes.get(&name) {
+            if Some(scheme.redirect_url.url().origin()) != public_origin {
+                errors.push(invalid(
+                    &[],
+                    "OIDC callback origin must match the deployment public origin",
+                ));
+                continue;
+            }
             match golem_common::model::agent::http_files::HttpRequestTarget::parse(
                 scheme.redirect_url.url().path(),
             ) {
-                Ok(target) => reserved.push((
-                    RouteMatch::Method {
-                        method: golem_common::model::agent::HttpMethod::Get(
-                            golem_common::model::Empty {},
-                        ),
-                        trailing_slash: target.trailing_slash(),
-                    },
-                    target
+                Ok(target) => {
+                    let path = target
                         .segments()
                         .iter()
                         .map(|value| PathSegment::Literal {
                             value: value.clone(),
                         })
-                        .collect(),
-                )),
+                        .collect::<Vec<_>>();
+                    if add_reserved(
+                        RouteMatch::Method {
+                            method: golem_common::model::agent::HttpMethod::Get(
+                                golem_common::model::Empty {},
+                            ),
+                            trailing_slash: target.trailing_slash(),
+                        },
+                        path.clone(),
+                    ) {
+                        errors.push(invalid(
+                            &path,
+                            "Security endpoint collides with another reserved HTTP binding",
+                        ));
+                    }
+                }
                 _ => errors.push(invalid(&[], "Invalid OIDC callback path")),
+            }
+            if matches!(
+                scheme.login,
+                golem_common::model::security_scheme::SecuritySchemeLogin::AuthorizationCodePkce(_)
+            ) {
+                for (method, path) in [
+                    (
+                        golem_common::model::agent::HttpMethod::Get(golem_common::model::Empty {}),
+                        pkce_authorization_path(&scheme.id),
+                    ),
+                    (
+                        golem_common::model::agent::HttpMethod::Post(golem_common::model::Empty {}),
+                        pkce_token_path(&scheme.id),
+                    ),
+                ] {
+                    let target =
+                        golem_common::model::agent::http_files::HttpRequestTarget::parse(&path)
+                            .expect("generated PKCE endpoint path must be valid");
+                    let path = target
+                        .segments()
+                        .iter()
+                        .map(|value| PathSegment::Literal {
+                            value: value.clone(),
+                        })
+                        .collect::<Vec<_>>();
+                    if add_reserved(method.into(), path.clone()) {
+                        errors.push(invalid(
+                            &path,
+                            "Security endpoint collides with another reserved HTTP binding",
+                        ));
+                    }
+                }
             }
         }
     }

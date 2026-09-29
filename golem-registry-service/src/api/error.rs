@@ -1279,6 +1279,9 @@ impl From<SecuritySchemeError> for ApiError {
             SecuritySchemeError::InvalidRedirectUrl => {
                 Self::bad_request(api::error_code::INVALID_REDIRECT_URL, error)
             }
+            SecuritySchemeError::InvalidLoginConfiguration(_) => {
+                Self::bad_request(api::error_code::INVALID_SECURITY_SCHEME_LOGIN, error)
+            }
             SecuritySchemeError::InvalidCustomProviderIssuerUrl(_) => {
                 Self::bad_request(api::error_code::INVALID_CUSTOM_PROVIDER_ISSUER_URL, error)
             }

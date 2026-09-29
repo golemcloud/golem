@@ -120,6 +120,11 @@ pub trait DeploymentRepo: Send + Sync {
         domain: &str,
     ) -> RepoResult<Vec<DeploymentCompiledRouteWithSecuritySchemeRecord>>;
 
+    async fn list_active_domains_for_environment(
+        &self,
+        environment_id: Uuid,
+    ) -> RepoResult<Vec<String>>;
+
     async fn get_active_mcp_for_domain(
         &self,
         domain: &str,
@@ -378,6 +383,16 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
         self.repo
             .list_active_compiled_routes_for_domain(domain)
             .instrument(Self::span_domain(domain))
+            .await
+    }
+
+    async fn list_active_domains_for_environment(
+        &self,
+        environment_id: Uuid,
+    ) -> RepoResult<Vec<String>> {
+        self.repo
+            .list_active_domains_for_environment(environment_id)
+            .instrument(Self::span_env(environment_id))
             .await
     }
 
@@ -1269,6 +1284,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         (r.security_scheme IS NOT NULL AND s.security_scheme_id IS NULL) AS security_scheme_missing,
                         s.security_scheme_id,
                         s.name AS security_scheme_name,
+                        sr.revision_id AS security_scheme_revision_id,
                         sr.provider_type AS security_scheme_provider_type,
                         sr.client_id AS security_scheme_client_id,
                         sr.client_secret AS security_scheme_client_secret,
@@ -1276,6 +1292,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         sr.scopes AS security_scheme_scopes,
                         sr.custom_provider_name AS security_scheme_custom_provider_name,
                         sr.custom_issuer_url AS security_scheme_custom_issuer_url,
+                        sr.login_config AS security_scheme_login_config,
                         r.compiled_route
 
                     FROM deployment_compiled_routes r
@@ -1324,6 +1341,37 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
             .await
     }
 
+    async fn list_active_domains_for_environment(
+        &self,
+        environment_id: Uuid,
+    ) -> RepoResult<Vec<String>> {
+        let rows = self
+            .with_ro("list_active_domains_for_environment")
+            .fetch_all(
+                sqlx::query(indoc! { r#"
+                    SELECT DISTINCT r.domain
+                    FROM deployment_compiled_routes r
+                    JOIN current_deployments cd
+                      ON cd.environment_id = r.environment_id
+                    JOIN current_deployment_revisions cdr
+                      ON cdr.environment_id = cd.environment_id
+                      AND cdr.revision_id = cd.current_revision_id
+                      AND cdr.deployment_revision_id = r.deployment_revision_id
+                    JOIN domain_registrations dr
+                      ON dr.environment_id = r.environment_id
+                      AND dr.domain = r.domain
+                      AND dr.deleted_at IS NULL
+                    WHERE r.environment_id = $1
+                    ORDER BY r.domain
+                "#})
+                .bind(environment_id),
+            )
+            .await?;
+        rows.into_iter()
+            .map(|row| row.try_get("domain").map_err(RepoError::from))
+            .collect()
+    }
+
     async fn list_compiled_routes_for_domain_and_deployment(
         &self,
         environment_id: Uuid,
@@ -1343,6 +1391,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         (r.security_scheme IS NOT NULL AND s.security_scheme_id IS NULL) AS security_scheme_missing,
                         s.security_scheme_id,
                         s.name AS security_scheme_name,
+                        sr.revision_id AS security_scheme_revision_id,
                         sr.provider_type AS security_scheme_provider_type,
                         sr.client_id AS security_scheme_client_id,
                         sr.client_secret AS security_scheme_client_secret,
@@ -1350,6 +1399,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         sr.scopes AS security_scheme_scopes,
                         sr.custom_provider_name AS security_scheme_custom_provider_name,
                         sr.custom_issuer_url AS security_scheme_custom_issuer_url,
+                        sr.login_config AS security_scheme_login_config,
                         r.compiled_route
 
                     FROM deployment_compiled_routes r

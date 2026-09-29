@@ -35,6 +35,26 @@ use tracing::Level;
 
 test_r::enable!();
 
+#[derive(Clone)]
+pub struct SessionStorePair {
+    pub first: Arc<dyn SessionStore>,
+    pub second: Arc<dyn SessionStore>,
+}
+
+#[derive(Clone)]
+pub struct BearerWriteFailureStores {
+    pub healthy: Arc<dyn SessionStore>,
+    pub failing: Arc<dyn SessionStore>,
+    _sqlite_file: Option<Arc<NamedTempFile>>,
+}
+
+#[derive(Clone)]
+pub struct AuthorizationCodeWriteFailureStores {
+    pub healthy: Arc<dyn SessionStore>,
+    pub failing: Arc<dyn SessionStore>,
+    _sqlite_file: Option<Arc<NamedTempFile>>,
+}
+
 static TRACING_INIT: Once = Once::new();
 
 #[derive(Debug)]
@@ -95,6 +115,82 @@ async fn sqlite_store_default(
     Arc::new(sqlite_store(sqlite_pool, 60).await)
 }
 
+#[test_dep(scope = PerWorker, tagged_as = "sqlite_pair")]
+async fn sqlite_store_pair(_tracing: &Tracing, sqlite_pool: &SqlitePool) -> SessionStorePair {
+    SessionStorePair {
+        first: Arc::new(sqlite_store(sqlite_pool, 60).await),
+        second: Arc::new(sqlite_store(sqlite_pool, 60).await),
+    }
+}
+
+#[test_dep(scope = PerWorker, tagged_as = "sqlite_bearer_write_failure")]
+async fn sqlite_bearer_write_failure_stores(_tracing: &Tracing) -> BearerWriteFailureStores {
+    use golem_service_base::db::PoolApi;
+
+    let db_file = Arc::new(NamedTempFile::new().unwrap());
+    let pool = SqlitePool::configured(&DbSqliteConfig {
+        database: db_file.path().to_string_lossy().to_string(),
+        max_connections: 10,
+        foreign_keys: false,
+    })
+    .await
+    .unwrap();
+    let healthy: Arc<dyn SessionStore> = Arc::new(sqlite_store(&pool, 60).await);
+    let failing: Arc<dyn SessionStore> = Arc::new(sqlite_store(&pool, 60).await);
+    pool.with_rw("session_store_test", "reject_bearer_writes")
+        .execute(sqlx::query(
+            r#"
+            CREATE TRIGGER reject_oidc_pkce_bearer_insert
+            BEFORE INSERT ON oidc_pkce_bearer
+            BEGIN
+                SELECT RAISE(ABORT, 'injected bearer write failure');
+            END;
+            "#,
+        ))
+        .await
+        .unwrap();
+    BearerWriteFailureStores {
+        healthy,
+        failing,
+        _sqlite_file: Some(db_file),
+    }
+}
+
+#[test_dep(scope = PerWorker, tagged_as = "sqlite_authorization_code_write_failure")]
+async fn sqlite_authorization_code_write_failure_stores(
+    _tracing: &Tracing,
+) -> AuthorizationCodeWriteFailureStores {
+    use golem_service_base::db::PoolApi;
+
+    let db_file = Arc::new(NamedTempFile::new().unwrap());
+    let pool = SqlitePool::configured(&DbSqliteConfig {
+        database: db_file.path().to_string_lossy().to_string(),
+        max_connections: 10,
+        foreign_keys: false,
+    })
+    .await
+    .unwrap();
+    let healthy: Arc<dyn SessionStore> = Arc::new(sqlite_store(&pool, 60).await);
+    let failing: Arc<dyn SessionStore> = Arc::new(sqlite_store(&pool, 60).await);
+    pool.with_rw("session_store_test", "reject_authorization_code_writes")
+        .execute(sqlx::query(
+            r#"
+            CREATE TRIGGER reject_oidc_pkce_authorization_code_insert
+            BEFORE INSERT ON oidc_pkce_authorization_code
+            BEGIN
+                SELECT RAISE(ABORT, 'injected authorization code write failure');
+            END;
+            "#,
+        ))
+        .await
+        .unwrap();
+    AuthorizationCodeWriteFailureStores {
+        healthy,
+        failing,
+        _sqlite_file: Some(db_file),
+    }
+}
+
 #[test_dep(scope = PerWorker, tagged_as = "sqlite_fast_expiry")]
 async fn sqlite_store_fast_expiry(
     _tracing: &Tracing,
@@ -140,6 +236,88 @@ async fn default_session_store(
 #[test_dep(scope = Shared, tagged_as = "redis")]
 async fn redis_store_default(store: &Arc<dyn SessionStore>) -> Arc<dyn SessionStore> {
     store.clone()
+}
+
+#[test_dep(scope = Shared, tagged_as = "redis_pair")]
+async fn redis_store_pair(_tracing: &Tracing, redis_pool: &RedisPool) -> SessionStorePair {
+    SessionStorePair {
+        first: Arc::new(redis_store(redis_pool, 6000).await),
+        second: Arc::new(redis_store(redis_pool, 6000).await),
+    }
+}
+
+#[test_dep(scope = Shared, tagged_as = "redis_bearer_write_failure")]
+async fn redis_bearer_write_failure_stores(
+    _tracing: &Tracing,
+    redis: &Arc<dyn Redis>,
+    store: &Arc<dyn SessionStore>,
+) -> BearerWriteFailureStores {
+    const USERNAME: &str = "oidc-bearer-write-failure";
+    const PASSWORD: &str = "oidc-bearer-write-failure-password";
+
+    let mut admin = redis.get_connection(0);
+    redis::cmd("ACL")
+        .arg("SETUSER")
+        .arg(USERNAME)
+        .arg("reset")
+        .arg("on")
+        .arg(format!(">{PASSWORD}"))
+        .arg("~*")
+        .arg("+@all")
+        .arg("-set")
+        .query::<()>(&mut admin)
+        .unwrap();
+    let restricted_pool = RedisPool::configured(&RedisConfig {
+        host: redis.public_host(),
+        port: redis.public_port(),
+        username: Some(USERNAME.into()),
+        password: Some(PASSWORD.into()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    BearerWriteFailureStores {
+        healthy: store.clone(),
+        failing: Arc::new(redis_store(&restricted_pool, 6000).await),
+        _sqlite_file: None,
+    }
+}
+
+#[test_dep(scope = Shared, tagged_as = "redis_authorization_code_write_failure")]
+async fn redis_authorization_code_write_failure_stores(
+    _tracing: &Tracing,
+    redis: &Arc<dyn Redis>,
+    store: &Arc<dyn SessionStore>,
+) -> AuthorizationCodeWriteFailureStores {
+    const USERNAME: &str = "oidc-authorization-code-write-failure";
+    const PASSWORD: &str = "oidc-authorization-code-write-failure-password";
+
+    let mut admin = redis.get_connection(0);
+    redis::cmd("ACL")
+        .arg("SETUSER")
+        .arg(USERNAME)
+        .arg("reset")
+        .arg("on")
+        .arg(format!(">{PASSWORD}"))
+        .arg("~*")
+        .arg("+@all")
+        .arg("-set")
+        .query::<()>(&mut admin)
+        .unwrap();
+    let restricted_pool = RedisPool::configured(&RedisConfig {
+        host: redis.public_host(),
+        port: redis.public_port(),
+        username: Some(USERNAME.into()),
+        password: Some(PASSWORD.into()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    AuthorizationCodeWriteFailureStores {
+        healthy: store.clone(),
+        failing: Arc::new(redis_store(&restricted_pool, 6000).await),
+        _sqlite_file: None,
+    }
 }
 
 #[test_dep(scope = Shared, tagged_as = "redis_fast_expiry")]
@@ -217,4 +395,21 @@ async fn redis_tls_store(
 ) -> Arc<dyn SessionStore> {
     let expiration = fred::types::Expiration::PX(6000);
     Arc::new(RedisSessionStore::new(redis_tls_pool.clone(), expiration))
+}
+
+#[test_dep(scope = Shared, tagged_as = "redis_tls_pair")]
+async fn redis_tls_store_pair(
+    _tracing: &Tracing,
+    #[tagged_as("tls")] redis_tls_pool: &RedisPool,
+) -> SessionStorePair {
+    SessionStorePair {
+        first: Arc::new(RedisSessionStore::new(
+            redis_tls_pool.clone(),
+            fred::types::Expiration::PX(6000),
+        )),
+        second: Arc::new(RedisSessionStore::new(
+            redis_tls_pool.clone(),
+            fred::types::Expiration::PX(6000),
+        )),
+    }
 }

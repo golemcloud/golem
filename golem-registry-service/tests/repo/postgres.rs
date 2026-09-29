@@ -637,6 +637,11 @@ async fn missing_security_retains_active_route_barrier(#[dimension(postgres_vari
 }
 
 #[test]
+async fn test_security_scheme_login_persistence(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::common::test_security_scheme_login_persistence(deps).await;
+}
+
+#[test]
 async fn test_resolve_agent_type_nonexistent_revision_returns_none(
     #[dimension(postgres_variant)] deps: &Deps,
 ) {
