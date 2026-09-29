@@ -221,10 +221,10 @@ object GolemServer {
                     dir,
                     30L,
                     "secret",
-                    "update-value",
+                    "update",
                     "--id",
                     id,
-                    "--secret-value",
+                    "--value",
                     value
                   ).flatMap { result =>
                     if (result.exitCode == 0) ZIO.unit

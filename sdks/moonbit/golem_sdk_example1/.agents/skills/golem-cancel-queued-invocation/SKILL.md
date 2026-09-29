@@ -30,32 +30,32 @@ golem agent cancel-invocation <AGENT_ID> <IDEMPOTENCY_KEY>
 
 Cancel a queued invocation with a known idempotency key:
 ```shell
-golem agent cancel-invocation CounterAgent("my-counter") my-key-123
+golem agent cancel-invocation 'CounterAgent("my-counter")' my-key-123
 ```
 
 Cancel a queued invocation in a specific environment:
 ```shell
-golem agent cancel-invocation my-env/CounterAgent("my-counter") my-key-123
+golem agent cancel-invocation 'my-env/CounterAgent("my-counter")' my-key-123
 ```
 
 ## Typical Workflow
 
 1. **Trigger an invocation** with an explicit idempotency key (so you can reference it later):
    ```shell
-   golem agent invoke --trigger --idempotency-key my-batch-job CounterAgent("c1") increment
+   golem agent invoke --trigger --idempotency-key my-batch-job 'CounterAgent("c1")' increment
    ```
 
 2. **Check** that the invocation is pending (pending invocation count > 0):
    ```shell
-   golem agent get CounterAgent("c1")
+   golem agent get 'CounterAgent("c1")'
    ```
 
 3. **Cancel** the pending invocation before it starts:
    ```shell
-   golem agent cancel-invocation CounterAgent("c1") my-batch-job
+   golem agent cancel-invocation 'CounterAgent("c1")' my-batch-job
    ```
 
 4. **Verify** the invocation was canceled (pending invocation count decreased):
    ```shell
-   golem agent get CounterAgent("c1")
+   golem agent get 'CounterAgent("c1")'
    ```

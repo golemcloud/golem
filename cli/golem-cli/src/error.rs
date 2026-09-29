@@ -35,6 +35,8 @@ impl Error for PipedExitCode {}
 pub enum ShowClapHelpTarget {
     AppNew,
     ProfileNew,
+    SecretCreate,
+    SecretUpdate,
 }
 
 /// Errors that should be handled by the command handler with showing hints or error messages
@@ -286,6 +288,15 @@ pub mod service {
                 ServiceErrorKind::ErrorResponse(err) => {
                     err.is_status_code(409)
                         && err.has_code(api::error_code::AGENT_CONFIG_OLD_CONFIG_INVALID)
+                }
+                _ => false,
+            }
+        }
+
+        pub fn is_already_exists(&self, code: &str) -> bool {
+            match &self.kind {
+                ServiceErrorKind::ErrorResponse(err) => {
+                    err.is_status_code(409) && err.has_code(code)
                 }
                 _ => false,
             }

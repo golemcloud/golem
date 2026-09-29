@@ -39,9 +39,9 @@ Note that on top of the above schema there are other checks performed by `golem`
 
 ## Loading of Application Manifest documents
 
-The _Golem CLI_ commands that use _Application Manifest_ start by searching for `golem.yaml` documents in the _current_ and the _parent_ directories. Once the top level manifest document is found, more manifests are searched based on the <FieldLink path="includes"/> fields.
+The _Golem CLI_ commands that use _Application Manifest_ start by searching for `golem.yaml` documents in the _current_ and the _parent_ directories. The outermost `golem.yaml` found this way is used as the root manifest document, then more manifests are searched based on its <FieldLink path="includes"/> field.
 
-After resolving relative paths in the documents they are merged, then _component selection_ happens: this can be either explicit, by using `--component-name` CLI flags, or implicit, in which case only components defined in the directory - including subdirectories - from where the _Golem CLI_ was executed are used.
+After resolving relative paths in the documents they are merged, then _component selection_ happens: this can be either explicit, by passing component names as positional arguments to the commands that accept them (e.g. `golem build <COMPONENT_NAME>...`), or implicit, in which case only components defined in the directory - including subdirectories - from where the _Golem CLI_ was executed are used.
 
 An Application Manifest can also be selected explicitly with `--app-manifest-path` (`-A`). This chooses the root manifest instead of searching parent directories; its `includes` are still resolved. Use `--disable-app-manifest-discovery` (`-X`) to run without manifest discovery.
 
@@ -731,6 +731,9 @@ For registry-backed tools, the generator reads only the release's safe tool defi
 
     The _template name_ must be one of that are defined in <FieldLink path="componentTemplates"/>.
 
+    Templates can also inherit other templates, but every template may be inherited only through a single path:
+    e.g. using two templates that both inherit the same template is rejected.
+
     See <FieldLink path="componentTemplates"/> and [Template variable and functions](#template-variables-and-functions)
     for defining templates.
 
@@ -1348,6 +1351,18 @@ For registry-backed tools, the generator reads only the release's safe tool defi
 
   <Field
     meta={{
+      path: "componentTemplates.<template-name>.guestLanguage",
+      noSpecialization: true,
+    }}
+  >
+    ***Optional guest language*** of the components built with the template: `ts`, `effect`, `rust`, `scala` or `moonbit`.
+
+    A component's guest language comes from the templates applied to it, directly or through template inheritance. The CLI uses it for language specific features, such as dependency checks, bridge generation and the REPL. The built-in templates (e.g. `ts`, `rust`, `scala`) declare their language, so custom templates inheriting them don't need to declare it; custom templates that don't inherit a built-in template can declare it to enable these features. The templates applied to a component must not declare different languages.
+
+  </Field>
+
+  <Field
+    meta={{
       path: "componentTemplates.<template-name>.componentWasm",
     }}
   ></Field>
@@ -1568,6 +1583,9 @@ For registry-backed tools, the generator reads only the release's safe tool defi
     since: Release.R_1_5_0
   }}>
     ***Optional template name or list of template names*** which will be used for creating the agent fields.
+
+    As for components, every template may be inherited only through a single path: e.g. listing a template
+    together with another template that inherits it is rejected.
   </Field>
 
   <Field meta={{
@@ -1852,21 +1870,7 @@ For registry-backed tools, the generator reads only the release's safe tool defi
     path: "secretDefaults.<environment-name>",
     since: Release.R_1_5_0
   }}>
-    ***Optional list of secret default entries*** for the environment.
-  </Field>
-
-  <Field meta={{
-    path: "secretDefaults.<environment-name>[*].path",
-    since: Release.R_1_5_0
-  }}>
-    ***Required array of strings*** defining the path to the secret.
-  </Field>
-
-  <Field meta={{
-    path: "secretDefaults.<environment-name>[*].value",
-    since: Release.R_1_5_0
-  }}>
-    ***Required value*** of the secret default.
+    ***Optional object of secret default values*** for the environment, nested by secret path (e.g. `db: { password: ... }` for the `db.password` secret). Defaults are only applied to secrets that do not exist yet in the environment. String values can reference environment variables with `{{ VAR }}`; these are only required for secrets that get created.
   </Field>
 
   <Field meta={{

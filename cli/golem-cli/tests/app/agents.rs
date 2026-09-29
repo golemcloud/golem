@@ -71,6 +71,7 @@ async fn streaming_invocation_context() -> TestContext {
 
             componentTemplates:
               rust-streaming-test:
+                guestLanguage: rust
                 build:
                 - command: cargo build --target wasm32-wasip2 --release
                   sources:

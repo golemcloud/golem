@@ -2,6 +2,7 @@
 
 componentTemplates:
   moonbit:
+    guestLanguage: moonbit
     presets:
       debug:
         default: true

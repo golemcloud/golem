@@ -75,14 +75,15 @@ golem api security-scheme create my-oidc \
 | Facebook | `facebook` |
 | Microsoft | `microsoft` |
 | GitLab | `gitlab` |
-| Custom OIDC | `custom` (requires `--issuer-url`) |
+| Custom OIDC | `custom` (requires `--custom-provider-name` and `--custom-issuer-url`) |
 
 For a custom OIDC provider:
 
 ```shell
 golem api security-scheme create my-custom-oidc \
   --provider-type custom \
-  --issuer-url "https://auth.example.com" \
+  --custom-provider-name "My OIDC" \
+  --custom-issuer-url "https://auth.example.com" \
   --client-id "YOUR_CLIENT_ID" \
   --client-secret "YOUR_CLIENT_SECRET" \
   --redirect-url "https://app.example.com/auth/callback" \
@@ -202,7 +203,7 @@ After configuring `golem.yaml`, deploy. Always use `--yes` to avoid interactive 
 ```shell
 golem deploy --yes                     # Deploy all components and HTTP API
 golem deploy --yes --reset             # Deploy and delete all previously created agents
-golem deploy --yes --try-update-agents # Deploy and update running agents
+golem deploy --yes --update-agents auto # Deploy and update running agents
 ```
 
 ## Auto-Generated OpenAPI
