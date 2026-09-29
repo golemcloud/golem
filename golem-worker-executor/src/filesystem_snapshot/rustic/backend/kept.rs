@@ -76,15 +76,16 @@ fn want<'a>(state: &'a State, id: &Id, limit: usize) -> Want<'a> {
 enum Admit {
     /// Keeps the pack, and then keeps `bytes` in total.
     Keep { bytes: usize },
-    /// Closes the set, because the pack does not fit.
+    /// Keeps nothing, and the set is closed after it: the set was closed already, or the pack does
+    /// not fit.
     Close,
 }
 
-/// Gives what the set that keeps `kept_bytes` does with a pack of `len` bytes, with the limit of
-/// the kept bytes.
-fn admit(kept_bytes: usize, len: usize, limit: usize) -> Admit {
+/// Gives what the set that keeps `kept_bytes` and is closed when `closed` is true does with a pack
+/// of `len` bytes, with the limit of the kept bytes. A closed set keeps nothing.
+fn admit(closed: bool, kept_bytes: usize, len: usize, limit: usize) -> Admit {
     let bytes = kept_bytes.saturating_add(len);
-    if bytes <= limit {
+    if !closed && bytes <= limit {
         Admit::Keep { bytes }
     } else {
         Admit::Close
@@ -103,7 +104,8 @@ impl KeptPacks {
 
     /// Gives the kept pack, or reads it with `read`. While one thread reads a pack, the other
     /// threads that want it wait for that read, and then take the kept pack or read it again. A
-    /// pack is kept only when its read succeeds and it fits in the limit. When the set is closed and
+    /// pack is kept only when its read succeeds, the set is still open when the read ends, and the
+    /// pack fits in the limit. When the set is closed and
     /// the pack is not kept, it gives `None` and does not read, so the caller reads only its range.
     /// A failed read keeps nothing and does not close the set.
     pub(super) fn get_or_read(
@@ -160,10 +162,11 @@ struct Reading<'a> {
 }
 
 impl Reading<'_> {
-    /// Keeps the pack when it fits in the limit, and closes the set when it does not.
+    /// Keeps the pack when the set is open and the pack fits in the limit. Otherwise it keeps nothing
+    /// and closes the set, which can be closed already.
     fn keep(&self, pack: &Bytes) {
         let mut state = self.kept.state();
-        match admit(state.bytes, pack.len(), self.kept.limit) {
+        match admit(state.closed, state.bytes, pack.len(), self.kept.limit) {
             Admit::Keep { bytes } => {
                 state.bytes = bytes;
                 state.packs.insert(self.id, pack.clone());

@@ -90,12 +90,12 @@ fn a_pack_that_is_not_kept_is_read_only_while_the_set_is_open_and_below_its_limi
 fn a_pack_is_kept_when_it_fits_the_limit_and_closes_the_set_when_it_does_not() {
     assert_eq!(
         [
-            admit(0, 10, 10),
-            admit(4, 5, 10),
-            admit(4, 7, 10),
-            admit(0, 11, 10),
-            admit(usize::MAX, 1, usize::MAX),
-            admit(0, 0, 0),
+            admit(false, 0, 10, 10),
+            admit(false, 4, 5, 10),
+            admit(false, 4, 7, 10),
+            admit(false, 0, 11, 10),
+            admit(false, usize::MAX, 1, usize::MAX),
+            admit(false, 0, 0, 0),
         ],
         [
             Admit::Keep { bytes: 10 },
@@ -105,5 +105,13 @@ fn a_pack_is_kept_when_it_fits_the_limit_and_closes_the_set_when_it_does_not() {
             Admit::Keep { bytes: usize::MAX },
             Admit::Keep { bytes: 0 },
         ]
+    );
+}
+
+#[test]
+fn a_closed_set_keeps_no_pack_whether_it_fits_or_not() {
+    assert_eq!(
+        [admit(true, 0, 60, 100), admit(true, 0, 200, 100)],
+        [Admit::Close, Admit::Close]
     );
 }
