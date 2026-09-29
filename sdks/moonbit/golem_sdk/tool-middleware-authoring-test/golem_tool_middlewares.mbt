@@ -110,6 +110,7 @@ fn __golem_middleware_tool_extract_prepared(
 ) -> @tool.ToolDef {
   {
     version: def.version,
+    requires_filesystem: def.requires_filesystem,
     commands: def.commands[1:].map(node => {
       __golem_middleware_tool_rebase_node(node, -1)
     }),

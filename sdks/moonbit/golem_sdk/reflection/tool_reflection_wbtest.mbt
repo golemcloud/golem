@@ -57,6 +57,7 @@ fn sample_tool() -> ToolType raise {
   }
   let definition : @toolCommon.Tool = {
     version: "1",
+    requires_filesystem: false,
     commands: {
       nodes: [
         {
