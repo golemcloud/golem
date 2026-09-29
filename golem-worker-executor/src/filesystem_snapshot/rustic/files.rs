@@ -16,8 +16,9 @@
 //! store and of its rustic backends.
 //!
 //! The tracker of the store counts each call. A call does not start when the lease of its prune ran
-//! out or its operation is cancelled, and it ends when the lease runs out, when the operation is
-//! cancelled, or at the deadline.
+//! out or its operation is cancelled. It ends at the expiry that the lease had when the call
+//! started, when the operation is cancelled, or at the deadline. A refresh of the lease during a
+//! call does not move the end of that call.
 
 use super::fault::{LeaseExpired, OperationCancelled};
 use golem_service_base::storage::blob::{
@@ -109,7 +110,8 @@ impl SnapshotFiles {
     }
 
     /// Gives the same blobs, whose calls the lease also fences. A call does not start when the
-    /// lease has run out, and a call that runs ends when the lease runs out.
+    /// lease has run out, and a call that runs ends at the expiry that the lease had when the call
+    /// started.
     pub(super) fn leased(&self, lease: Arc<Lease>) -> Self {
         Self {
             lease: Some(lease),
