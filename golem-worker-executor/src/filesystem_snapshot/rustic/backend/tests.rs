@@ -634,9 +634,10 @@ fn a_range_that_is_not_cacheable_is_a_ranged_read_each_time() {
 fn two_threads_that_miss_one_pack_make_one_storage_read() {
     // The first read waits at the gate. The second thread signals just before it asks for the same
     // pack, and the test then waits 200 ms with the gate closed. At the end of that time, no second
-    // read reached the storage and the second thread has not returned. Only a thread that waits in
-    // the kept packs for the first read fits both. The value tests of `want` hold the rule that it
-    // waits.
+    // read reached the storage and the second thread has not returned. A thread that waits for the
+    // first read fits both. So does a thread that the OS holds off for more than 200 ms between its
+    // signal and its call, and then the checks of the hold pass without a wait. The value tests of
+    // `want` hold the rule that the second thread waits.
     let fixture = PackFixture::new(1024, |op_label, _| {
         if op_label == "read" {
             Script::WaitForGate
