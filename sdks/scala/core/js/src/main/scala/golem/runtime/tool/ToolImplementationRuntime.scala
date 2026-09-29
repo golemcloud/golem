@@ -373,6 +373,15 @@ private[golem] object ToolImplementationRuntime {
   private implicit val ec: scala.concurrent.ExecutionContext =
     ToolInvokerRuntime.executionContext
 
+  def registerWire(handle: WireToolImplementation): Unit =
+    ToolRegistry.registerWire(
+      handle,
+      (path, input, stdin, stdout, stderr, principal) =>
+        handle
+          .invoke(path, WireToolInput(input.value, stdin, stdout, stderr, principal))
+          .map(_.map(ToolInvocationResult.apply))
+    )
+
   def register(handle: ToolImplementationHandle): Unit = {
     val ctx      = new ToolBuildCtx
     val extended = handle.descriptor(ctx) match {

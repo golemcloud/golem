@@ -1233,6 +1233,7 @@ mod tests {
             lookup_name: "sample".to_string(),
             definition: Arc::new(Tool {
                 version: "1".to_string(),
+                requires_filesystem: false,
                 commands: CommandTree {
                     nodes: vec![
                         CommandNode {

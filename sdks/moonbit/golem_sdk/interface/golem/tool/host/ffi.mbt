@@ -624,6 +624,7 @@ fn wasmGolemToolHost010CreateStdinFromStreamStream0StreamCommit(
       () => close_writer_serialized(),
       () => !writer_closed.val,
       Some(cleanup_value),
+      write_window_size=64,
     )
     let relay_source = producer is None
     let run_producer = async fn() -> Unit {
@@ -1164,7 +1165,7 @@ async fn WasmGolemToolHost010MethodToolRpcInvokeAndAwaitStream0StreamSource::rea
     raise @async-core.EndpointBusy::Read
   }
   // `Stream.read` promises at most `count`; bound one canonical allocation.
-  let read_count = if count < 64 { count } else { 64 }
+  let read_count = if count < 65536 { count } else { 65536 }
   let ptr = wasmGolemToolHost010MethodToolRpcInvokeAndAwaitStream0Malloc(
     read_count,
   )
@@ -1422,7 +1423,7 @@ async fn WasmGolemToolHost010MethodToolRpcInvokeAndAwaitStream1StreamSource::rea
     raise @async-core.EndpointBusy::Read
   }
   // `Stream.read` promises at most `count`; bound one canonical allocation.
-  let read_count = if count < 64 { count } else { 64 }
+  let read_count = if count < 65536 { count } else { 65536 }
   let ptr = wasmGolemToolHost010MethodToolRpcInvokeAndAwaitStream1Malloc(
     read_count,
   )
@@ -1704,7 +1705,7 @@ async fn WasmGolemToolHost010MethodFutureInvokeResultGetStream0StreamSource::rea
     raise @async-core.EndpointBusy::Read
   }
   // `Stream.read` promises at most `count`; bound one canonical allocation.
-  let read_count = if count < 64 { count } else { 64 }
+  let read_count = if count < 65536 { count } else { 65536 }
   let ptr = wasmGolemToolHost010MethodFutureInvokeResultGetStream0Malloc(
     read_count,
   )
@@ -1962,7 +1963,7 @@ async fn WasmGolemToolHost010MethodFutureInvokeResultGetStream1StreamSource::rea
     raise @async-core.EndpointBusy::Read
   }
   // `Stream.read` promises at most `count`; bound one canonical allocation.
-  let read_count = if count < 64 { count } else { 64 }
+  let read_count = if count < 65536 { count } else { 65536 }
   let ptr = wasmGolemToolHost010MethodFutureInvokeResultGetStream1Malloc(
     read_count,
   )
@@ -2218,7 +2219,7 @@ async fn WasmGolemToolHost010GetInvokeResultsStream0StreamSource::read(
     raise @async-core.EndpointBusy::Read
   }
   // `Stream.read` promises at most `count`; bound one canonical allocation.
-  let read_count = if count < 64 { count } else { 64 }
+  let read_count = if count < 65536 { count } else { 65536 }
   let ptr = wasmGolemToolHost010GetInvokeResultsStream0Malloc(read_count)
   let mut owns_buffer = false
   defer (if !owns_buffer { mbt_ffi_free(ptr) })
@@ -2466,7 +2467,7 @@ async fn WasmGolemToolHost010GetInvokeResultsStream1StreamSource::read(
     raise @async-core.EndpointBusy::Read
   }
   // `Stream.read` promises at most `count`; bound one canonical allocation.
-  let read_count = if count < 64 { count } else { 64 }
+  let read_count = if count < 65536 { count } else { 65536 }
   let ptr = wasmGolemToolHost010GetInvokeResultsStream1Malloc(read_count)
   let mut owns_buffer = false
   defer (if !owns_buffer { mbt_ffi_free(ptr) })

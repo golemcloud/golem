@@ -47,10 +47,14 @@ private[golem] object AgentImplementation {
    *   The registered agent definition
    */
   inline def registerClass[Trait, Impl <: Trait]: AgentDefinition[Trait] = {
-    val implType      = AgentImplementationMacro.implementationTypeFromClass[Trait, Impl]
+    val implType      = AgentImplementationMacro.wireImplementationTypeFromClass[Trait, Impl]
     val metadataMode  = implType.metadata.mode.flatMap(AgentMode.fromString)
     val effectiveMode = metadataMode.getOrElse(AgentMode.Durable)
     val typeName      = AgentNameMacro.typeName[Trait]
-    registerAnyCtorType(typeName, effectiveMode, implType)
+    AgentImplementationRuntime.registerWire(
+      typeName,
+      effectiveMode,
+      implType.asInstanceOf[golem.runtime.WireAgentImplementationType[Trait, Any]]
+    )
   }
 }

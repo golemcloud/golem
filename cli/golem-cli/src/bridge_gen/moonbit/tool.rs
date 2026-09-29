@@ -123,6 +123,10 @@ impl MoonBitToolBridgeGenerator {
                 "\"golemcloud/golem_sdk/interface/golem/core/types\" @types",
             ),
             ("@model.", "\"golemcloud/golem_sdk/schema_model\" @model"),
+            (
+                "@model_host.",
+                "\"golemcloud/golem_sdk/schema_model_host\" @model_host",
+            ),
             ("@tool.", "\"golemcloud/golem_sdk/tool\""),
         ]
         .into_iter()
@@ -398,6 +402,11 @@ impl MoonBitToolBridgeGenerator {
             )
         };
         if has_output {
+            writer.line("let input = try @model.typed_schema_value_to_wit(input) catch {");
+            writer.indent();
+            writer.line("error => return Err(@tool.tool_protocol_error(\"failed to encode tool input: \" + repr(error)))");
+            writer.dedent();
+            writer.line("}");
             writer.line(format!(
                 "match self.client.start({path}, input, {stdin}, {has_stdout}, {has_stderr}, {error_decoder}) {{"
             ));
@@ -407,7 +416,7 @@ impl MoonBitToolBridgeGenerator {
                 "Ok(invocation) => @tool.typed_invocation(invocation, {has_stdout}, {has_stderr}, fn(result) {{"
             ));
             writer.indent();
-            self.result_decode(writer, body)?;
+            self.result_decode(writer, body, true)?;
             writer.dedent();
             writer.line("})");
             writer.dedent();
@@ -427,7 +436,7 @@ impl MoonBitToolBridgeGenerator {
         writer.line("Err(error) => Err(error)");
         writer.line("Ok(result) => {");
         writer.indent();
-        self.result_decode(writer, body)?;
+        self.result_decode(writer, body, false)?;
         writer.dedent();
         writer.line("}");
         writer.dedent();
@@ -437,9 +446,28 @@ impl MoonBitToolBridgeGenerator {
         Ok(())
     }
 
-    fn result_decode(&self, writer: &mut MoonBitWriter, body: &CommandBody) -> anyhow::Result<()> {
+    fn result_decode(
+        &self,
+        writer: &mut MoonBitWriter,
+        body: &CommandBody,
+        wire: bool,
+    ) -> anyhow::Result<()> {
+        if wire {
+            writer.line("let result_value = match result.result {");
+            writer.indent();
+            writer.line("None => None");
+            writer.line("Some(value) => try { Some(@model_host.typed_schema_value_from_wit(value)) } catch {");
+            writer.indent();
+            writer.line("error => return Err(@tool.tool_protocol_error(\"failed to decode tool result: \" + repr(error)))");
+            writer.dedent();
+            writer.line("}");
+            writer.dedent();
+            writer.line("}");
+        } else {
+            writer.line("let result_value = result.result");
+        }
         if let Some(result) = &body.result {
-            writer.line("let typed = match @tool.expect_value(result.result) {");
+            writer.line("let typed = match @tool.expect_value(result_value) {");
             writer.indent();
             writer.line("Ok(value) => value");
             writer.line("Err(error) => return Err(error)");
@@ -456,7 +484,7 @@ impl MoonBitToolBridgeGenerator {
             writer.line("}");
             writer.line("Ok(decoded)");
         } else {
-            writer.line("match @tool.expect_no_value(result.result) {");
+            writer.line("match @tool.expect_no_value(result_value) {");
             writer.indent();
             writer.line("Err(error) => Err(error)");
             writer.line("Ok(_) => Ok(())");
@@ -483,6 +511,7 @@ impl MoonBitToolBridgeGenerator {
                 .as_ref()
                 .context("error enum command has no body")?;
             let variants = error_variant_names(body);
+            let wire_error = body.stdout.is_some();
             writer.line("///|");
             writer.line(format!("pub(all) enum {error_name} {{"));
             writer.indent();
@@ -502,10 +531,20 @@ impl MoonBitToolBridgeGenerator {
 
             writer.line("///|");
             writer.line(format!(
-                "fn {}(name : String, value : @model.TypedSchemaValue) -> Result[{error_name}, String]? {{",
-                error_decoder_name(error_name)
+                "fn {}(name : String, value : {}.TypedSchemaValue) -> Result[{error_name}, String]? {{",
+                error_decoder_name(error_name), if wire_error { "@types" } else { "@model" }
             ));
             writer.indent();
+            if wire_error {
+                writer
+                    .line("let value = try @model_host.typed_schema_value_from_wit(value) catch {");
+                writer.indent();
+                writer.line(
+                    "error => return Some(Err(\"failed to decode tool error: \" + repr(error)))",
+                );
+                writer.dedent();
+                writer.line("}");
+            }
             writer.line("match name {");
             writer.indent();
             let mut grouped = BTreeMap::<&str, Vec<_>>::new();
@@ -1135,6 +1174,7 @@ mod tests {
 
         Tool {
             version: "1".to_string(),
+            requires_filesystem: false,
             commands: CommandTree {
                 nodes: vec![
                     root,
@@ -1203,6 +1243,7 @@ mod tests {
         });
         let tool = Tool {
             version: "1".to_string(),
+            requires_filesystem: false,
             commands: CommandTree { nodes: vec![root] },
             schema: SchemaGraph::empty(),
         };
@@ -1231,6 +1272,7 @@ mod tests {
         });
         let tool = Tool {
             version: "1".to_string(),
+            requires_filesystem: false,
             commands: CommandTree { nodes: vec![root] },
             schema: SchemaGraph::empty(),
         };
@@ -1261,6 +1303,7 @@ mod tests {
         });
         let tool = Tool {
             version: "1".to_string(),
+            requires_filesystem: false,
             commands: CommandTree { nodes: vec![root] },
             schema: SchemaGraph {
                 defs: vec![
@@ -1315,6 +1358,7 @@ mod tests {
         });
         let tool = Tool {
             version: "1".to_string(),
+            requires_filesystem: false,
             commands: CommandTree { nodes: vec![root] },
             schema: SchemaGraph {
                 defs: vec![

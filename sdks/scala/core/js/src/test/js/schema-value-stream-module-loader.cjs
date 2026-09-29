@@ -104,11 +104,11 @@ Module._load = function (request) {
   }
   if (request === "golem:tool/host@0.1.0") {
     return {
-      getAllTools: missingHostImport("getAllTools"),
-      getTool: missingHostImport("getTool"),
       createStdin: missingHostImport("createStdin"),
       createOutput: missingHostImport("createOutput"),
-      ToolRpc: { create: missingHostImport("createToolRpc") },
+      ToolRpc: Object.assign(missingHostImport("ToolRpc"), {
+        create: missingHostImport("createToolRpc"),
+      }),
       FutureInvokeResult: {},
     };
   }

@@ -18,18 +18,10 @@
 // and `toJSON()` throws so the handle can never be accidentally serialized into
 // a log line or a snapshot.
 
-import { getConfigValue } from 'golem:agent/host@2.0.0';
-import { reveal } from 'golem:secrets/reveal@0.1.0';
 import type { Secret as RawSecret } from 'golem:core/types@2.0.0';
-import { SchemaValue, schemaGraphToWit, schemaValueFromWit } from './internal/schema-model';
-import { SECRET_INTERNAL } from './internal/schema-model/secretInternal';
-import {
-  peekGuestSecretHandle,
-  releaseGuestSecretHandle,
-} from './internal/schema-model/secretHandle';
-import type { ConfigDeclaration } from './config';
 
-const declarations = new WeakMap<Secret<unknown>, ConfigDeclaration>();
+type SecretHandleProvider = <R>(use: (handle: RawSecret) => R) => R;
+const handleProviders = new WeakMap<Secret<unknown>, SecretHandleProvider>();
 
 /**
  * A lazy, log-safe handle over a `secret<inner>` config field. Obtained from
@@ -43,8 +35,11 @@ const declarations = new WeakMap<Secret<unknown>, ConfigDeclaration>();
  *   the whole config object) can never leak the plaintext.
  */
 export class Secret<T> {
-  constructor(declaration: ConfigDeclaration) {
-    declarations.set(this, declaration);
+  constructor(
+    private readonly read: () => T,
+    withHandle?: SecretHandleProvider,
+  ) {
+    if (withHandle !== undefined) handleProviders.set(this, withHandle);
   }
 
   /**
@@ -58,19 +53,7 @@ export class Secret<T> {
    * plain Node), so it is exercised at invocation time, never at import time.
    */
   get(): T {
-    const d = declarationOf(this);
-    const tree = getConfigValue(d.path, schemaGraphToWit(d.graph));
-    const sv = schemaValueFromWit(tree);
-    if (sv.tag !== 'secret') {
-      throw new Error(`Expected a secret config value at '${d.path.join('.')}', got '${sv.tag}'`);
-    }
-    const handle = (sv as Extract<SchemaValue, { tag: 'secret' }>).handle;
-    const raw = peekGuestSecretHandle(SECRET_INTERNAL, handle);
-    if (raw === undefined) {
-      throw new Error(`Secret config handle at '${d.path.join('.')}' was already transferred`);
-    }
-    const revealedTree = reveal(raw, schemaGraphToWit(d.codec.graph));
-    return d.codec.fromValue(schemaValueFromWit(revealedTree)) as T;
+    return this.read();
   }
 
   /** Refuse serialization so secrets never leak through logs / JSON / snapshots. */
@@ -81,31 +64,11 @@ export class Secret<T> {
   }
 }
 
-function declarationOf(secret: Secret<unknown>): ConfigDeclaration {
-  const declaration = declarations.get(secret);
-  if (declaration === undefined) {
-    throw new TypeError('Invalid config Secret');
-  }
-  return declaration;
-}
-
 export function withConfigSecretHandle<R>(
   secret: Secret<unknown>,
   use: (handle: RawSecret) => R,
 ): R {
-  const d = declarationOf(secret);
-  const tree = getConfigValue(d.path, schemaGraphToWit(d.graph));
-  const sv = schemaValueFromWit(tree);
-  if (sv.tag !== 'secret') {
-    throw new Error(`Expected a secret config value at '${d.path.join('.')}', got '${sv.tag}'`);
-  }
-  const raw = releaseGuestSecretHandle(SECRET_INTERNAL, sv.handle);
-  if (raw === undefined) {
-    throw new Error(`Secret config handle at '${d.path.join('.')}' was already transferred`);
-  }
-  try {
-    return use(raw);
-  } finally {
-    (raw as unknown as { [Symbol.dispose](): void })[Symbol.dispose]();
-  }
+  const provider = handleProviders.get(secret);
+  if (provider === undefined) throw new TypeError('Invalid config Secret');
+  return provider(use);
 }

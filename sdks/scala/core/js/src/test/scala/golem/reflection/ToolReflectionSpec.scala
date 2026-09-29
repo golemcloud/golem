@@ -11,6 +11,7 @@
 package golem.reflection
 
 import golem.Uuid
+import golem.host.ToolWireInterop
 import golem.schema._
 import golem.schema.SchemaTypeBody.{ListType, RecordType, RefType, S32Type, StringType}
 import golem.schema.SchemaValue._
@@ -49,6 +50,7 @@ object ToolReflectionSpec extends ZIOSpecDefault {
       "sample",
       WitTool(
         "1",
+        requiresFilesystem = true,
         WitCommandTree(
           Vector(
             WitCommandNode("sample", Nil, doc, WitGlobals(Nil, Nil), List(1), None),
@@ -62,6 +64,17 @@ object ToolReflectionSpec extends ZIOSpecDefault {
   }
 
   def spec = suite("ToolReflectionSpec")(
+    test("filesystem requirement survives reflection and JS wire conversion") {
+      val wire         = sample().definition
+      val js           = ToolWireInterop.toolToJs(wire)
+      val roundtripped = ToolWireInterop.toolFromJs(js)
+      assertTrue(
+        wire.requiresFilesystem,
+        ToolReflection.fromWire(wire).requiresFilesystem,
+        js.requiresFilesystem,
+        roundtripped.requiresFilesystem
+      )
+    },
     test("alias resolves to the canonical command path") {
       val command = sample().command(List("r")).toOption.get
       assertTrue(command.path == List("run"), command.arguments.map(_.name) == List("message"))

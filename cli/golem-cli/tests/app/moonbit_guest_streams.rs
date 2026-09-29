@@ -53,13 +53,13 @@ async fn moonbit_guest_streams_context() -> TestContext {
     )
     .unwrap();
     fs::write_str(ctx.cwd_path_join("provider/src/counter_agent.rs"), indoc! {r#"
-        use golem_rust::{agent_definition, agent_implementation, IntoSchema, FromSchema};
+        use golem_rust::{agent_definition, agent_implementation, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema};
         use golem_rust::agentic::{AgentStream, spawn_local};
 
-        #[derive(IntoSchema, FromSchema)]
+        #[derive(IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
         pub struct StreamItem { pub label: String, pub children: Vec<StreamItem> }
 
-        #[derive(IntoSchema, FromSchema)]
+        #[derive(IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
         pub struct StreamBundle {
             pub optional: Option<AgentStream<StreamItem>>,
             pub siblings: Vec<AgentStream<StreamItem>>,

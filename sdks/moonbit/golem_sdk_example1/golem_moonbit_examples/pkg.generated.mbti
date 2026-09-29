@@ -19,9 +19,59 @@ import {
 }
 
 // Values
+pub fn cabi_realloc(Int, Int, Int, Int) -> Int
+
 pub fn collect_app_config_overrides(AppConfigOverride, Array[String]) -> Array[@common.TypedAgentConfigValue] raise @common.AgentError
 
 pub fn collect_database_config_overrides(DatabaseConfigOverride, Array[String]) -> Array[@common.TypedAgentConfigValue] raise @common.AgentError
+
+pub fn wasmExportAsyncInitialize(Int, Int, Int) -> Int
+
+pub fn wasmExportAsyncInvokeGolemAgentGuest(Int, Int, Int) -> Int
+
+pub fn wasmExportAsyncInvokeGolemToolGuest(Int, Int, Int) -> Int
+
+pub fn wasmExportAsyncInvokeToolMiddleware(Int, Int, Int) -> Int
+
+pub fn wasmExportAsyncLoad(Int, Int, Int) -> Int
+
+pub fn wasmExportAsyncSave(Int, Int, Int) -> Int
+
+pub fn wasmExportDiscoverAgentTypes() -> Int
+
+pub fn wasmExportDiscoverAgentTypesPostReturn(Int) -> Unit
+
+pub fn wasmExportDiscoverToolMiddlewares() -> Int
+
+pub fn wasmExportDiscoverToolMiddlewaresPostReturn(Int) -> Unit
+
+pub fn wasmExportDiscoverTools() -> Int
+
+pub fn wasmExportDiscoverToolsPostReturn(Int) -> Unit
+
+pub fn wasmExportGetDefinition() -> Int
+
+pub fn wasmExportGetDefinitionPostReturn(Int) -> Unit
+
+pub fn wasmExportGetTool(Int, Int) -> Int
+
+pub fn wasmExportGetToolMiddleware(Int, Int) -> Int
+
+pub fn wasmExportGetToolMiddlewarePostReturn(Int) -> Unit
+
+pub fn wasmExportGetToolPostReturn(Int) -> Unit
+
+pub fn wasmExportInitialize(Int) -> Int
+
+pub fn wasmExportInvokeGolemAgentGuest(Int) -> Int
+
+pub fn wasmExportInvokeGolemToolGuest(Int) -> Int
+
+pub fn wasmExportInvokeToolMiddleware(Int) -> Int
+
+pub fn wasmExportLoad(Int, Int, Int, Int) -> Int
+
+pub fn wasmExportSave() -> Int
 
 // Errors
 
@@ -75,7 +125,10 @@ pub(all) struct AuditLogConstructor {
   name : String
 }
 pub impl @schema.FromSchema for AuditLogConstructor
+pub impl @schema.FromWire for AuditLogConstructor
 pub impl @schema.IntoSchema for AuditLogConstructor
+pub impl @schema.IntoWire for AuditLogConstructor
+pub impl @schema.WireSchema for AuditLogConstructor
 
 type CanonicalBigBound
 pub fn CanonicalBigBound::canonical_big_bound(UInt64?) -> Result[Unit, CanonicalGrepError]
@@ -98,7 +151,10 @@ pub(all) struct CanonicalCommitResult {
   deletions : UInt
 }
 pub impl @schema.FromSchema for CanonicalCommitResult
+pub impl @schema.FromWire for CanonicalCommitResult
 pub impl @schema.IntoSchema for CanonicalCommitResult
+pub impl @schema.IntoWire for CanonicalCommitResult
+pub impl @schema.WireSchema for CanonicalCommitResult
 
 type CanonicalGit
 pub fn CanonicalGit::commit(UInt, @schema.Path, Bool, Map[String, String], String, String?, Bool, Bool, Bool, CanonicalGitOutputMode) -> Result[CanonicalCommitResult, CanonicalCommitError]
@@ -123,11 +179,14 @@ pub(all) enum CanonicalGitOutputMode {
   Json
 } derive(Eq)
 pub impl @schema.FromSchema for CanonicalGitOutputMode
+pub impl @schema.FromWire for CanonicalGitOutputMode
 pub impl @schema.IntoSchema for CanonicalGitOutputMode
+pub impl @schema.IntoWire for CanonicalGitOutputMode
+pub impl @schema.WireSchema for CanonicalGitOutputMode
 
 pub(all) struct CanonicalGitRemoteClient {
   client : @tool.ToolClient
-  prefix : Array[(String, @schema_model.SchemaValue)]
+  prefix : Array[&@schema.IntoWire]
 }
 pub async fn CanonicalGitRemoteClient::add(Self, String, @schema.Url, Array[String], String?, Bool, Bool) -> Result[Unit, @tool.ToolError[CanonicalRemoteError]]
 pub fn CanonicalGitRemoteClient::drop(Self) -> Unit
@@ -136,7 +195,7 @@ pub async fn CanonicalGitRemoteClient::set_url(Self, String, @schema.Url, @schem
 
 pub(all) struct CanonicalGitStashClient {
   client : @tool.ToolClient
-  prefix : Array[(String, @schema_model.SchemaValue)]
+  prefix : Array[&@schema.IntoWire]
 }
 pub async fn CanonicalGitStashClient::apply(Self, String?, UInt?) -> Result[Unit, @tool.ToolError[CanonicalStashError]]
 pub fn CanonicalGitStashClient::drop(Self) -> Unit
@@ -154,7 +213,7 @@ pub fn CanonicalGrepClient::canonical_grep(Self, Bool, CanonicalGrepColorMode, S
 pub fn CanonicalGrepClient::drop(Self) -> Unit
 pub fn CanonicalGrepClient::new() -> Self
 pub fn CanonicalGrepClient::new_for(String) -> Self
-pub async fn CanonicalGrepClient::replace(Self, Bool, CanonicalGrepColorMode, String, String, Array[@schema.Path]) -> Result[UInt64, @tool.ToolError[CanonicalGrepError]]
+pub async fn CanonicalGrepClient::replace(Self, CanonicalGrepColorMode, Bool, String, String, Array[@schema.Path]) -> Result[UInt64, @tool.ToolError[CanonicalGrepError]]
 
 pub(all) enum CanonicalGrepColorMode {
   Always
@@ -162,7 +221,10 @@ pub(all) enum CanonicalGrepColorMode {
   Auto
 } derive(Eq)
 pub impl @schema.FromSchema for CanonicalGrepColorMode
+pub impl @schema.FromWire for CanonicalGrepColorMode
 pub impl @schema.IntoSchema for CanonicalGrepColorMode
+pub impl @schema.IntoWire for CanonicalGrepColorMode
+pub impl @schema.WireSchema for CanonicalGrepColorMode
 
 type CanonicalGrepError
 pub impl @tool-core.ToolErrorSchema for CanonicalGrepError
@@ -173,7 +235,10 @@ pub(all) struct CanonicalGrepHit {
   text : String
 }
 pub impl @schema.FromSchema for CanonicalGrepHit
+pub impl @schema.FromWire for CanonicalGrepHit
 pub impl @schema.IntoSchema for CanonicalGrepHit
+pub impl @schema.IntoWire for CanonicalGrepHit
+pub impl @schema.WireSchema for CanonicalGrepHit
 
 pub(all) struct CanonicalLogEntry {
   hash : String
@@ -182,7 +247,10 @@ pub(all) struct CanonicalLogEntry {
   message : String
 }
 pub impl @schema.FromSchema for CanonicalLogEntry
+pub impl @schema.FromWire for CanonicalLogEntry
 pub impl @schema.IntoSchema for CanonicalLogEntry
+pub impl @schema.IntoWire for CanonicalLogEntry
+pub impl @schema.WireSchema for CanonicalLogEntry
 
 type CanonicalLogError
 pub impl @tool-core.ToolErrorSchema for CanonicalLogError
@@ -397,7 +465,10 @@ pub(all) enum Priority {
   High
 } derive(Eq, ToJson, @json.FromJson)
 pub impl @schema.FromSchema for Priority
+pub impl @schema.FromWire for Priority
 pub impl @schema.IntoSchema for Priority
+pub impl @schema.IntoWire for Priority
+pub impl @schema.WireSchema for Priority
 
 type ReflectionMeters
 
@@ -443,7 +514,10 @@ pub(all) struct TaskInfo {
   description : String?
 } derive(ToJson, @json.FromJson)
 pub impl @schema.FromSchema for TaskInfo
+pub impl @schema.FromWire for TaskInfo
 pub impl @schema.IntoSchema for TaskInfo
+pub impl @schema.IntoWire for TaskInfo
+pub impl @schema.WireSchema for TaskInfo
 
 type TaskManager derive(ToJson, @json.FromJson)
 pub fn TaskManager::add_task(Self, TaskInfo) -> UInt64
@@ -480,6 +554,9 @@ pub(all) enum TextOrImage {
   Image(Bytes)
 }
 pub impl @multimodal.MultimodalModality for TextOrImage
+pub impl @schema.FromWire for TextOrImage
+pub impl @schema.IntoWire for TextOrImage
+pub impl @schema.WireSchema for TextOrImage
 
 type VisionAgent
 pub fn VisionAgent::analyze(Self, @multimodal.Multimodal[TextOrImage]) -> String

@@ -472,8 +472,11 @@ impl ToolActivationSnapshot {
                     component_revision,
                     ..
                 } = &occurrence.middleware.source;
-                let filesystem =
-                    filesystem_capability(occurrence.filesystem_access, &occurrence.provision)?;
+                let filesystem = filesystem_capability(
+                    occurrence.filesystem_access,
+                    &occurrence.provision,
+                    false,
+                )?;
                 let activation = EntityActivation::new(
                     ExecutableTarget::new(*component_id, *component_revision),
                     occurrence.middleware.deployment_revision,
@@ -564,20 +567,78 @@ impl ToolActivationSnapshot {
 }
 
 #[cfg(feature = "full")]
-fn filesystem_capability(
+pub fn filesystem_capability(
     access: ToolFilesystemAccess,
     provision: &ToolProvisionConfig,
+    requires_filesystem: bool,
 ) -> Result<FilesystemCapability, String> {
-    match (access, provision.files.is_empty()) {
-        (ToolFilesystemAccess::Allowed, _) | (ToolFilesystemAccess::Unset, false) => {
+    filesystem_capability_for(access, !provision.files.is_empty(), requires_filesystem)
+}
+
+#[cfg(feature = "full")]
+fn filesystem_capability_for(
+    access: ToolFilesystemAccess,
+    has_provisioned_files: bool,
+    requires_filesystem: bool,
+) -> Result<FilesystemCapability, String> {
+    match (access, !has_provisioned_files, requires_filesystem) {
+        (ToolFilesystemAccess::Allowed, _, _) | (ToolFilesystemAccess::Unset, false, _) => {
             Ok(FilesystemCapability::Capable)
         }
-        (ToolFilesystemAccess::Denied, false) => {
-            Err("filesystem-denied middleware cannot provision files".to_string())
+        (ToolFilesystemAccess::Denied, _, true) => Err(
+            "tool requires filesystem access but filesystemAccess is denied; set filesystemAccess: allowed"
+                .to_string(),
+        ),
+        (ToolFilesystemAccess::Denied, false, false) => {
+            Err("filesystem-denied tool cannot provision files".to_string())
         }
-        (ToolFilesystemAccess::Denied | ToolFilesystemAccess::Unset, true) => {
+        (ToolFilesystemAccess::Unset, true, true) => Err(
+            "tool requires filesystem access but no files are provisioned; set filesystemAccess: allowed"
+                .to_string(),
+        ),
+        (ToolFilesystemAccess::Denied | ToolFilesystemAccess::Unset, true, false) => {
             Ok(FilesystemCapability::Incapable)
         }
+    }
+}
+
+#[cfg(test)]
+mod filesystem_capability_tests {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    fn requiring_tool_allowed_binds_filesystem() {
+        assert_eq!(
+            filesystem_capability_for(ToolFilesystemAccess::Allowed, false, true),
+            Ok(FilesystemCapability::Capable)
+        );
+    }
+
+    #[test]
+    fn requiring_tool_unset_with_provisioned_files_binds_filesystem() {
+        assert_eq!(
+            filesystem_capability_for(ToolFilesystemAccess::Unset, true, true),
+            Ok(FilesystemCapability::Capable)
+        );
+    }
+
+    #[test]
+    fn requiring_tool_unset_without_files_is_rejected_actionably() {
+        assert!(
+            filesystem_capability_for(ToolFilesystemAccess::Unset, false, true)
+                .unwrap_err()
+                .contains("set filesystemAccess: allowed")
+        );
+    }
+
+    #[test]
+    fn requiring_tool_denied_is_rejected_even_with_files() {
+        assert!(
+            filesystem_capability_for(ToolFilesystemAccess::Denied, true, true)
+                .unwrap_err()
+                .contains("set filesystemAccess: allowed")
+        );
     }
 }
 

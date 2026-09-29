@@ -309,6 +309,7 @@ pub(all) struct CommandTree {
 /// Top level
 pub(all) struct Tool {
   version : String
+  requires_filesystem : Bool
   commands : CommandTree
   schema : @types.SchemaGraph
 } derive(Debug, Eq)

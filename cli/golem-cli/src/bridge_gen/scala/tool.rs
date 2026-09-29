@@ -1066,6 +1066,7 @@ mod tests {
         });
         Tool {
             version: "1".to_string(),
+            requires_filesystem: false,
             commands: CommandTree {
                 nodes: vec![root, replace],
             },

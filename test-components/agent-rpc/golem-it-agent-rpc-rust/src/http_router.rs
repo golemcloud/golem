@@ -1,4 +1,6 @@
-use golem_rust::agentic::{AgentStream, Config, Header, HttpRequest, HttpResponse, HttpRouter, spawn_local};
+use golem_rust::agentic::{
+    AgentStream, Config, Header, HttpRequest, HttpResponse, HttpRouter, spawn_local,
+};
 use golem_rust::http_router;
 
 struct RawHttpRouterImpl;

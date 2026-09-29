@@ -13,9 +13,13 @@ fn wasmExportAsyncSaveTaskReturn(p0 : Int, p1 : Int, p2 : Int, p3 : Int) = "[exp
 fn save_task_return(return_result : Ref[@host.Snapshot?]) -> Unit {
   match return_result.val {
     Some(return_value) => {
+      let cleanup_list : Array[Int] = []
+
       let ptr = mbt_ffi_bytes2ptr(return_value.payload)
 
       let ptr0 = mbt_ffi_str2ptr(return_value.mime_type)
+      cleanup_list.push(ptr)
+      cleanup_list.push(ptr0)
 
       wasmExportAsyncSaveTaskReturn(
         ptr,
@@ -23,6 +27,8 @@ fn save_task_return(return_result : Ref[@host.Snapshot?]) -> Unit {
         ptr0,
         return_value.mime_type.length(),
       )
+
+      cleanup_list.each(mbt_ffi_free)
 
       @async-core.task_returned()
     }
@@ -46,6 +52,18 @@ pub fn wasmExportSave() -> Int {
 #owned(bytes)
 extern "wasm" fn mbt_ffi_bytes2ptr(bytes : FixedArray[Byte]) -> Int =
   #|(func (param i32) (result i32) local.get 0)
+
+///|
+extern "wasm" fn mbt_ffi_free(position : Int) =
+  #|(func (param i32) local.get 0 call $moonbit.decref)
+
+///|
+extern "wasm" fn mbt_ffi_load32(offset : Int) -> Int =
+  #|(func (param i32) (result i32) local.get 0 i32.load)
+
+///|
+extern "wasm" fn mbt_ffi_store32(offset : Int, value : Int) =
+  #|(func (param i32) (param i32) local.get 0 local.get 1 i32.store)
 
 ///|
 #owned(str)

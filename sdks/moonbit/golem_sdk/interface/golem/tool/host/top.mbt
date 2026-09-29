@@ -118,9 +118,9 @@ pub fn get_all_tools() -> Array[RegisteredTool] {
 
     let array556 : Array[@common.CommandNode] = []
     for index557 = 0
-        index557 < mbt_ffi_load32(iter_base + 20)
+        index557 < mbt_ffi_load32(iter_base + 24)
         index557 = index557 + 1 {
-      let iter_base = mbt_ffi_load32(iter_base + 16) + index557 * 364
+      let iter_base = mbt_ffi_load32(iter_base + 20) + index557 * 364
 
       let result1 = mbt_ffi_ptr2str(
         mbt_ffi_load32(iter_base + 0),
@@ -5400,13 +5400,13 @@ pub fn get_all_tools() -> Array[RegisteredTool] {
         body: lifted555,
       })
     }
-    mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
+    mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
 
     let array754 : Array[@types.SchemaTypeNode] = []
     for index755 = 0
-        index755 < mbt_ffi_load32(iter_base + 28)
+        index755 < mbt_ffi_load32(iter_base + 32)
         index755 = index755 + 1 {
-      let iter_base = mbt_ffi_load32(iter_base + 24) + index755 * 144
+      let iter_base = mbt_ffi_load32(iter_base + 28) + index755 * 144
 
       let lifted740 = match mbt_ffi_load8_u(iter_base + 0) {
         0 => @types.SchemaTypeBody::RefType(mbt_ffi_load32(iter_base + 8))
@@ -7118,13 +7118,13 @@ pub fn get_all_tools() -> Array[RegisteredTool] {
         },
       })
     }
-    mbt_ffi_free(mbt_ffi_load32(iter_base + 24))
+    mbt_ffi_free(mbt_ffi_load32(iter_base + 28))
 
     let array759 : Array[@types.SchemaTypeDef] = []
     for index760 = 0
-        index760 < mbt_ffi_load32(iter_base + 36)
+        index760 < mbt_ffi_load32(iter_base + 40)
         index760 = index760 + 1 {
-      let iter_base = mbt_ffi_load32(iter_base + 32) + index760 * 24
+      let iter_base = mbt_ffi_load32(iter_base + 36) + index760 * 24
 
       let result756 = mbt_ffi_ptr2str(
         mbt_ffi_load32(iter_base + 0),
@@ -7150,17 +7150,18 @@ pub fn get_all_tools() -> Array[RegisteredTool] {
         body: mbt_ffi_load32(iter_base + 20),
       })
     }
-    mbt_ffi_free(mbt_ffi_load32(iter_base + 32))
+    mbt_ffi_free(mbt_ffi_load32(iter_base + 36))
 
     array761.push(RegisteredTool::{
       lookup_name: result,
       definition: @common.Tool::{
         version: result0,
+        requires_filesystem: mbt_ffi_load8_u(iter_base + 16) != 0,
         commands: @common.CommandTree::{ nodes: array556, },
         schema: @types.SchemaGraph::{
           type_nodes: array754,
           defs: array759,
-          root: mbt_ffi_load32(iter_base + 40),
+          root: mbt_ffi_load32(iter_base + 44),
         },
       },
       implemented_by: @types.ComponentId::{
@@ -7203,9 +7204,9 @@ pub fn get_tool(name : String) -> RegisteredTool? {
 
       let array556 : Array[@common.CommandNode] = []
       for index557 = 0
-          index557 < mbt_ffi_load32(return_area + 28)
+          index557 < mbt_ffi_load32(return_area + 32)
           index557 = index557 + 1 {
-        let iter_base = mbt_ffi_load32(return_area + 24) + index557 * 364
+        let iter_base = mbt_ffi_load32(return_area + 28) + index557 * 364
 
         let result1 = mbt_ffi_ptr2str(
           mbt_ffi_load32(iter_base + 0),
@@ -12597,13 +12598,13 @@ pub fn get_tool(name : String) -> RegisteredTool? {
           body: lifted555,
         })
       }
-      mbt_ffi_free(mbt_ffi_load32(return_area + 24))
+      mbt_ffi_free(mbt_ffi_load32(return_area + 28))
 
       let array754 : Array[@types.SchemaTypeNode] = []
       for index755 = 0
-          index755 < mbt_ffi_load32(return_area + 36)
+          index755 < mbt_ffi_load32(return_area + 40)
           index755 = index755 + 1 {
-        let iter_base = mbt_ffi_load32(return_area + 32) + index755 * 144
+        let iter_base = mbt_ffi_load32(return_area + 36) + index755 * 144
 
         let lifted740 = match mbt_ffi_load8_u(iter_base + 0) {
           0 => @types.SchemaTypeBody::RefType(mbt_ffi_load32(iter_base + 8))
@@ -14333,13 +14334,13 @@ pub fn get_tool(name : String) -> RegisteredTool? {
           },
         })
       }
-      mbt_ffi_free(mbt_ffi_load32(return_area + 32))
+      mbt_ffi_free(mbt_ffi_load32(return_area + 36))
 
       let array759 : Array[@types.SchemaTypeDef] = []
       for index760 = 0
-          index760 < mbt_ffi_load32(return_area + 44)
+          index760 < mbt_ffi_load32(return_area + 48)
           index760 = index760 + 1 {
-        let iter_base = mbt_ffi_load32(return_area + 40) + index760 * 24
+        let iter_base = mbt_ffi_load32(return_area + 44) + index760 * 24
 
         let result756 = mbt_ffi_ptr2str(
           mbt_ffi_load32(iter_base + 0),
@@ -14365,17 +14366,18 @@ pub fn get_tool(name : String) -> RegisteredTool? {
           body: mbt_ffi_load32(iter_base + 20),
         })
       }
-      mbt_ffi_free(mbt_ffi_load32(return_area + 40))
+      mbt_ffi_free(mbt_ffi_load32(return_area + 44))
 
       Option::Some(RegisteredTool::{
         lookup_name: result,
         definition: @common.Tool::{
           version: result0,
+          requires_filesystem: mbt_ffi_load8_u(return_area + 24) != 0,
           commands: @common.CommandTree::{ nodes: array556, },
           schema: @types.SchemaGraph::{
             type_nodes: array754,
             defs: array759,
-            root: mbt_ffi_load32(return_area + 48),
+            root: mbt_ffi_load32(return_area + 52),
           },
         },
         implemented_by: @types.ComponentId::{

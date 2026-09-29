@@ -783,6 +783,7 @@ private[macros] class ToolMacroCore(using val q: Quotes) {
     identity: String,
     toolName: String,
     version: String,
+    requiresFilesystem: Boolean,
     traitDoc: Doc,
     rootMethod: Option[MethodIR],
     childMethods: List[MethodIR]
@@ -796,11 +797,15 @@ private[macros] class ToolMacroCore(using val q: Quotes) {
     val toolDefAnns = annotationsOf(traitSym, ToolDefinitionFQN)
     if (toolDefAnns.isEmpty)
       report.errorAndAbort(s"missing @toolDefinition(...) on tool trait: ${traitSym.fullName}")
-    val toolDefValues = annotationValues(toolDefAnns.head, List("name", "version"))
+    val toolDefValues = annotationValues(toolDefAnns.head, List("name", "version", "requiresFilesystem"))
     val explicitName  =
       toolDefValues.get("name").map(constString(_, "name", toolDefAnns.head.pos)).filter(_.nonEmpty)
     val version =
       toolDefValues.get("version").map(constString(_, "version", toolDefAnns.head.pos)).getOrElse("0.0.0")
+    val requiresFilesystem = toolDefValues
+      .get("requiresFilesystem")
+      .map(constBoolean(_, "requiresFilesystem", toolDefAnns.head.pos))
+      .getOrElse(false)
     val toolName = explicitName.getOrElse(kebabCase(traitSym.name))
 
     val methodSyms = traitSym.declarations.filter { d =>
@@ -848,6 +853,7 @@ private[macros] class ToolMacroCore(using val q: Quotes) {
       identity = traitSym.fullName,
       toolName = toolName,
       version = version,
+      requiresFilesystem = requiresFilesystem,
       traitDoc = docOf(traitSym),
       rootMethod = rootCandidates.headOption,
       childMethods = children

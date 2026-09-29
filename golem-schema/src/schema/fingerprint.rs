@@ -852,9 +852,11 @@ mod tests {
         resolve_stream_element_schema_v1, schema_fingerprint_v1,
     };
     use crate::schema::{
-        MetadataEnvelope, NamedFieldType, PermissionCardSpec, Role, SchemaGraph, SchemaType,
-        SchemaTypeDef, TextRestrictions, TypeId,
+        MetadataEnvelope, NamedFieldType, PermissionCardSpec, SchemaGraph, SchemaType,
+        SchemaTypeDef, TypeId,
     };
+    #[cfg(feature = "regex")]
+    use crate::schema::{Role, TextRestrictions};
     use test_r::test;
 
     #[test]
@@ -922,7 +924,11 @@ mod tests {
                 .to_hex(),
             "3931585d2d02a2b7d5c99e3da1082ac8fe904c535e2700bd45e29a95ff2399fa"
         );
+    }
 
+    #[test]
+    #[cfg(feature = "regex")]
+    fn v1_regex_golden_vector() {
         let constrained = SchemaType::Text {
             restrictions: TextRestrictions {
                 languages: Some(vec!["fr".to_string(), "en".to_string()]),
@@ -953,7 +959,10 @@ mod tests {
             blake3::hash(&constrained_bytes).to_hex().as_str(),
             "b985cdb5445862be90e8dca06bbfa9c46b50cf40edc84ed34205bb3a214c5bb0"
         );
+    }
 
+    #[test]
+    fn v1_permission_card_golden_vector() {
         let permission_card = SchemaType::permission_card(PermissionCardSpec { polymorphic: true });
         let permission_card_bytes =
             canonical_schema_bytes_v1(&SchemaGraph::empty(), Some(&permission_card)).unwrap();

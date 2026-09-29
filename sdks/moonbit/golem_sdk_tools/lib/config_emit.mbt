@@ -27,6 +27,22 @@ pub fn generate_config_field_impls(
     }
     buf.write_string("  entries\n")
     buf.write_string("}\n\n")
+    buf.write_string(
+      "///|\nimpl @config.WireConfigField for \{name} with append_wire_entries(encoder, path) {\n",
+    )
+    buf.write_string(
+      "  let entries : Array[@common.AgentConfigDeclaration] = []\n",
+    )
+    for i, field in ct.fields {
+      let (field_name, pt) = field
+      let type_str = param_type_to_type_string(pt)
+      buf.write_string("  let fp\{i} = path.copy()\n")
+      buf.write_string("  fp\{i}.push(\"\{escape_string_lit(field_name)}\")\n")
+      buf.write_string(
+        "  entries.append(@config.append_wire_entries_with(encoder, (@schema.TypeTag::{} : @schema.TypeTag[\{type_str}]), fp\{i}))\n",
+      )
+    }
+    buf.write_string("  entries\n}\n\n")
     // Generate load impl
     buf.write_string("///|\n")
     buf.write_string("impl @config.ConfigField for \{name} with load(path) {\n")

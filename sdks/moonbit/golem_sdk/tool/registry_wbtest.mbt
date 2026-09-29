@@ -34,6 +34,7 @@ fn stdout_test_def(name : String) -> ToolDef {
   let root = command(name, None)
   {
     version: "1",
+    requires_filesystem: false,
     commands: [
       { ..root, subcommands: [1, 2], },
       command("required", Some(stream(true))),

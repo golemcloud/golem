@@ -877,6 +877,7 @@ mod tests {
 
         Tool {
             version: "1.0.0".to_string(),
+            requires_filesystem: false,
             commands: CommandTree {
                 nodes: vec![root, replace],
             },
@@ -1012,6 +1013,7 @@ mod tests {
         });
         let tool = Tool {
             version: "1.0.0".to_string(),
+            requires_filesystem: false,
             commands: CommandTree { nodes: vec![root] },
             schema: SchemaGraph::empty(),
         };
@@ -1038,6 +1040,7 @@ mod tests {
         });
         let tool = Tool {
             version: "1.0.0".to_string(),
+            requires_filesystem: false,
             commands: CommandTree { nodes: vec![root] },
             schema: SchemaGraph {
                 defs: Vec::new(),

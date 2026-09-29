@@ -196,6 +196,7 @@ impl ProjectedTool {
             })
             .transpose()?;
         let definition = Tool {
+            requires_filesystem: false,
             version: "0.0.0".into(),
             schema: graph,
             commands: CommandTree {

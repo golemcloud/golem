@@ -35,6 +35,7 @@ fn body() -> CommandBody {
 fn tool(body: CommandBody) -> Tool {
     Tool {
         version: "1.0.0".into(),
+        requires_filesystem: false,
         schema: SchemaGraph::empty(),
         commands: CommandTree {
             nodes: vec![CommandNode {

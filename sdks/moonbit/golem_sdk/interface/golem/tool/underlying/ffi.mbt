@@ -604,6 +604,7 @@ fn wasmGolemToolUnderlying010MethodUnderlyingToolInvokeStream0StreamCommit(
       () => close_writer_serialized(),
       () => !writer_closed.val,
       Some(cleanup_value),
+      write_window_size=64,
     )
     let relay_source = producer is None
     let run_producer = async fn() -> Unit {

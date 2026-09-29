@@ -40,7 +40,7 @@ private[tool] object ToolEncoding {
           }
         val encoder = new GraphEncoder(defs)
         val nodes   = tool.commands.map(encodeNode(_, encoder))
-        Right(WitTool(tool.version, WitCommandTree(nodes), encoder.finish()))
+        Right(WitTool(tool.version, tool.requiresFilesystem, WitCommandTree(nodes), encoder.finish()))
       } catch {
         case ToolBuildException(error) => Left(error)
         case e: SchemaEncodeError      => Left(ToolBuildError.EncodeError(e.getMessage))

@@ -1,0 +1,4 @@
+[
+  { "name": "component-run", "export": "run", "root": true },
+  { "name": "unused-core-export", "export": "live-export" }
+]

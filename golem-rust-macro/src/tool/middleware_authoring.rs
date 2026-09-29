@@ -448,6 +448,7 @@ fn expand_tool_middleware(
 
         #golem_rust::ctor::__support::ctor_parse!(
             #[ctor] fn #register_ident() {
+                #golem_rust::tool::install_middleware_exports();
                 #golem_rust::tool::register_tool_middleware(
                     #descriptor_ident(),
                     #invoker_ident,
@@ -639,6 +640,7 @@ fn expand_universal_tool_middleware(
 
         #golem_rust::ctor::__support::ctor_parse!(
             #[ctor] fn #register_ident() {
+                #golem_rust::tool::install_middleware_exports();
                 #golem_rust::tool::register_tool_middleware(
                     #descriptor_ident(),
                     #invoker_ident,

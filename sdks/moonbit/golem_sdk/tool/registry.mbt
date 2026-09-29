@@ -66,7 +66,17 @@ pub fn register_tool_def_invoker(
     Err(error) => raise error
   }
   @toolCore.register_tool_def(tool)
-  invokers[name] = invoker
+  invokers[name] = (path, input, stdin, stdout, stderr, principal) => {
+    if tool.command_index_by_path(path) is None {
+      @toolCore.reject_wire_invocation(
+        input,
+        stdin,
+        @types.ToolError::InvalidCommandPath(path),
+      )
+    } else {
+      invoker(path, input, stdin, stdout, stderr, principal)
+    }
+  }
 }
 
 ///|
@@ -92,6 +102,19 @@ pub fn register_wire_tool_invoker(
     Err(error) => raise error
   }
   @toolCore.register_wire_tool(tool)
+  invokers[name] = invoker
+}
+
+///|
+pub fn register_wire_subtool_invoker(
+  tool : @toolCommon.Tool,
+  invoker : ToolInvoker,
+) -> Unit raise @toolCore.ToolBuildError {
+  let name = match @toolCore.tool_name(tool) {
+    Ok(name) => name
+    Err(error) => raise error
+  }
+  @toolCore.register_wire_subtool(tool)
   invokers[name] = invoker
 }
 
@@ -133,15 +156,6 @@ pub async fn invoke_registered_tool(
       stdin,
       @types.ToolError::InvalidToolName(tool_name),
     )
-  }
-  match @toolCore.registered_tool_def(tool_name) {
-    Some(def) if def.command_index_by_path(command_path) is None =>
-      return @toolCore.reject_wire_invocation(
-        input,
-        stdin,
-        @types.ToolError::InvalidCommandPath(command_path),
-      )
-    _ => ()
   }
   invoke_invoker(
     tool_name, command_path, input, stdin, stdout, stderr, principal,

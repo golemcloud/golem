@@ -75,6 +75,7 @@ export function encodeTool(source: ExtendedToolType): Tool {
     const encodedNodes = nodes.map((node) => encodeCommand(node, indexByNode, context));
     return {
       version: tool.version,
+      requiresFilesystem: tool.requiresFilesystem,
       commands: { nodes: encodedNodes },
       schema: context.encoder.finish(),
     };

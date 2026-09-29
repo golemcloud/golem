@@ -187,6 +187,64 @@ pub(all) struct ReflectedToolCustomError {
 } derive(Debug, Eq)
 
 ///|
+fn reflected_invalid_input(
+  message : String,
+) -> @tool.ToolError[ReflectedToolCustomError] {
+  @tool.ToolError::RemoteTool(@tool.RemoteToolError::InvalidInput(message))
+}
+
+///|
+fn[E] reflected_protocol_error(message : String) -> @tool.ToolError[E] {
+  @tool.tool_protocol_error(message)
+}
+
+///|
+fn[E] encode_reflected_input(
+  input : @model.TypedSchemaValue,
+) -> Result[@types.TypedSchemaValue, @tool.ToolError[E]] {
+  try @model.typed_schema_value_to_wit(input) catch {
+    error => {
+      input.value.release_resources(@model_host.resource_drops())
+      Err(
+        reflected_protocol_error("failed to encode tool input: \{Repr(error)}"),
+      )
+    }
+  } noraise {
+    wire => Ok(wire)
+  }
+}
+
+///|
+fn[E] decode_reflected_result(
+  result : @toolCommon.InvocationResult,
+) -> Result[@tool.InvocationResult, @tool.ToolError[E]] {
+  let decoded = match result.result {
+    Some(value) => {
+      let decoded = @model_host.typed_schema_value_from_wit(value) catch {
+        error => {
+          match result.stdout {
+            Some(stdout) => stdout.drop_sync()
+            None => ()
+          }
+          match result.stderr {
+            Some(stderr) => stderr.drop_sync()
+            None => ()
+          }
+          return Err(
+            reflected_protocol_error(
+              "failed to decode tool result: \{Repr(error)}",
+            ),
+          )
+        }
+      }
+      Some(decoded)
+    }
+    None => None
+  }
+  Ok({ result: decoded, stdout: result.stdout, stderr: result.stderr, })
+}
+
+///|
 pub struct ReflectedToolInvocation {
   priv command : ToolCommand
   priv invocation : @tool.ToolInvocation[ReflectedToolCustomError]
@@ -541,13 +599,13 @@ pub fn ToolCommand::pack_json(
 ) -> Result[@model.SchemaValue, @tool.ToolError[ReflectedToolCustomError]] {
   if self.body is None {
     return Err(
-      @tool.ToolError::InvalidInput(
+      reflected_invalid_input(
         "selected command is a namespace and cannot be invoked",
       ),
     )
   }
   let value = self.input_schema.pack_json(input) catch {
-    error => return Err(@tool.ToolError::InvalidInput("\{Repr(error)}"))
+    error => return Err(reflected_invalid_input("\{Repr(error)}"))
   }
   match self.check_constraints(value) {
     Ok(_) => Ok(value)
@@ -562,13 +620,13 @@ fn ToolCommand::checked_input(
 ) -> Result[@model.TypedSchemaValue, @tool.ToolError[ReflectedToolCustomError]] {
   if self.body is None {
     return Err(
-      @tool.ToolError::InvalidInput(
+      reflected_invalid_input(
         "selected command is a namespace and cannot be invoked",
       ),
     )
   }
   self.input_schema.validate_value(input) catch {
-    error => return Err(@tool.ToolError::InvalidInput("\{Repr(error)}"))
+    error => return Err(reflected_invalid_input("\{Repr(error)}"))
   }
   match self.check_constraints(input) {
     Ok(_) => Ok({ graph: self.wire_input, value: input, })
@@ -583,21 +641,18 @@ fn ToolCommand::check_constraints(
 ) -> Result[Unit, @tool.ToolError[ReflectedToolCustomError]] {
   let fields = match value {
     Record(fields) => fields
-    _ =>
-      return Err(@tool.ToolError::InvalidInput("tool input must be a record"))
+    _ => return Err(reflected_invalid_input("tool input must be a record"))
   }
   if fields.length() != self.arguments.length() {
     return Err(
-      @tool.ToolError::InvalidInput(
-        "tool input field count differs from declaration",
-      ),
+      reflected_invalid_input("tool input field count differs from declaration"),
     )
   }
   let constraints = match self.body {
     Some(body) => body.constraints
     None =>
       return Err(
-        @tool.ToolError::InvalidInput(
+        reflected_invalid_input(
           "selected command is a namespace and cannot be invoked",
         ),
       )
@@ -632,9 +687,7 @@ fn ToolCommand::check_constraints(
         !self.constraint_refs_match(item.rhs, fields, false)
     }
     if !okay {
-      return Err(
-        @tool.ToolError::InvalidInput("tool command constraint failed"),
-      )
+      return Err(reflected_invalid_input("tool command constraint failed"))
     }
   }
   Ok(())
@@ -725,13 +778,17 @@ fn tool_value_matches(
 ///|
 fn ToolCommand::decode_result(
   self : ToolCommand,
-  outcome : @tool.InvocationResult,
+  wire_outcome : @toolCommon.InvocationResult,
 ) -> Result[@model.SchemaValue?, @tool.ToolError[ReflectedToolCustomError]] {
+  let outcome = match decode_reflected_result(wire_outcome) {
+    Ok(outcome) => outcome
+    Err(error) => return Err(error)
+  }
   match outcome.stdout {
     Some(stdout) => {
       stdout.drop_sync()
       return Err(
-        @tool.ToolError::MalformedRemoteOutput(
+        reflected_protocol_error(
           "remote tool returned an embedded stdout stream",
         ),
       )
@@ -742,7 +799,7 @@ fn ToolCommand::decode_result(
     Some(stderr) => {
       stderr.drop_sync()
       return Err(
-        @tool.ToolError::MalformedRemoteOutput(
+        reflected_protocol_error(
           "remote tool returned an embedded stderr stream",
         ),
       )
@@ -755,7 +812,7 @@ fn ToolCommand::decode_result(
       if payload.graph.root != schema.root {
         payload.value.release_resources(@model_host.resource_drops())
         return Err(
-          @tool.ToolError::MalformedRemoteOutput(
+          reflected_protocol_error(
             "remote tool result schema does not match its declaration",
           ),
         )
@@ -763,25 +820,16 @@ fn ToolCommand::decode_result(
       schema.validate_value(payload.value) catch {
         error => {
           payload.value.release_resources(@model_host.resource_drops())
-          return Err(@tool.ToolError::MalformedRemoteOutput("\{Repr(error)}"))
+          return Err(reflected_protocol_error("\{Repr(error)}"))
         }
       }
       Ok(Some(payload.value))
     }
     (_, Some(payload)) => {
       payload.value.release_resources(@model_host.resource_drops())
-      Err(
-        @tool.ToolError::MalformedRemoteOutput(
-          "remote tool returned an unexpected value",
-        ),
-      )
+      Err(reflected_protocol_error("remote tool returned an unexpected value"))
     }
-    _ =>
-      Err(
-        @tool.ToolError::MalformedRemoteOutput(
-          "remote tool omitted a declared value",
-        ),
-      )
+    _ => Err(reflected_protocol_error("remote tool omitted a declared value"))
   }
 }
 
@@ -832,13 +880,13 @@ pub fn ToolCommand::start_value(
     Some(body) => body
     None =>
       return Err(
-        @tool.ToolError::InvalidInput(
+        reflected_invalid_input(
           "selected command is a namespace and cannot be invoked",
         ),
       )
   }
   if body.stdin is Some(spec) && spec.required && stdin is None {
-    return Err(@tool.ToolError::InvalidInput("command requires stdin"))
+    return Err(reflected_invalid_input("command requires stdin"))
   }
   let input = match self.checked_input(input) {
     Ok(input) => input
@@ -846,15 +894,38 @@ pub fn ToolCommand::start_value(
   }
   let client = match @tool.ToolClient::try_new(self.tool.lookup_name) {
     Ok(client) => client
-    Err(error) => return Err(error)
+    Err(error) => {
+      input.value.release_resources(@model_host.resource_drops())
+      match stdin {
+        Some(stdin) => stdin.drop_sync()
+        None => ()
+      }
+      return Err(error)
+    }
+  }
+  let wire_input = match encode_reflected_input(input) {
+    Ok(input) => input
+    Err(error) => {
+      client.drop()
+      match stdin {
+        Some(stdin) => stdin.drop_sync()
+        None => ()
+      }
+      return Err(error)
+    }
   }
   let started = client.start(
     self.path,
-    input,
+    wire_input,
     stdin,
     body.stdout is Some(_),
     body.stderr is Some(_),
-    fn(name, payload) { self.decode_error(name, payload) },
+    fn(name, payload) {
+      let decoded = @model_host.typed_schema_value_from_wit(payload) catch {
+        error => return Some(Err("failed to decode tool error: \{Repr(error)}"))
+      }
+      self.decode_error(name, decoded)
+    },
   )
   client.drop()
   match started {
@@ -873,19 +944,19 @@ pub async fn ToolCommand::invoke_value(
     Some(body) => body
     None =>
       return Err(
-        @tool.ToolError::InvalidInput(
+        reflected_invalid_input(
           "selected command is a namespace and cannot be invoked",
         ),
       )
   }
   if body.stdout is Some(spec) && spec.required {
     return Err(
-      @tool.ToolError::InvalidInput("command requires caller-readable stdout"),
+      reflected_invalid_input("command requires caller-readable stdout"),
     )
   }
   if body.stderr is Some(spec) && spec.required {
     return Err(
-      @tool.ToolError::InvalidInput("command requires caller-readable stderr"),
+      reflected_invalid_input("command requires caller-readable stderr"),
     )
   }
   let started = match self.start_value(input, stdin~) {
@@ -922,7 +993,7 @@ pub async fn ToolCommand::invoke_json(
       let json = schema.unpack_json(value) catch {
         error => {
           value.release_resources(@model_host.resource_drops())
-          return Err(@tool.ToolError::MalformedRemoteOutput("\{Repr(error)}"))
+          return Err(reflected_protocol_error("\{Repr(error)}"))
         }
       }
       value.release_resources(@model_host.resource_drops())
@@ -942,23 +1013,23 @@ pub fn ToolCommand::trigger_value(
     Some(body) => body
     None =>
       return Err(
-        @tool.ToolError::InvalidInput(
+        reflected_invalid_input(
           "selected command is a namespace and cannot be invoked",
         ),
       )
   }
   if body.stdout is Some(spec) && spec.required {
     return Err(
-      @tool.ToolError::InvalidInput("command requires caller-readable stdout"),
+      reflected_invalid_input("command requires caller-readable stdout"),
     )
   }
   if body.stderr is Some(spec) && spec.required {
     return Err(
-      @tool.ToolError::InvalidInput("command requires caller-readable stderr"),
+      reflected_invalid_input("command requires caller-readable stderr"),
     )
   }
   if body.stdin is Some(spec) && spec.required && stdin is None {
-    return Err(@tool.ToolError::InvalidInput("command requires stdin"))
+    return Err(reflected_invalid_input("command requires stdin"))
   }
   let input = match self.checked_input(input) {
     Ok(input) => input
@@ -1076,13 +1147,34 @@ pub fn DynamicToolClient::start_value(
 ] {
   let client = match @tool.ToolClient::try_new(self.name) {
     Ok(client) => client
-    Err(error) => return Err(error)
+    Err(error) => {
+      input.value.release_resources(@model_host.resource_drops())
+      match stdin {
+        Some(stdin) => stdin.drop_sync()
+        None => ()
+      }
+      return Err(error)
+    }
   }
-  let started = client.start(path, input, stdin, stdout, stderr, fn(
+  let wire_input = match encode_reflected_input(input) {
+    Ok(input) => input
+    Err(error) => {
+      client.drop()
+      match stdin {
+        Some(stdin) => stdin.drop_sync()
+        None => ()
+      }
+      return Err(error)
+    }
+  }
+  let started = client.start(path, wire_input, stdin, stdout, stderr, fn(
     name,
     payload,
   ) {
-    Some(Ok({ name, payload, }))
+    let decoded = @model_host.typed_schema_value_from_wit(payload) catch {
+      error => return Some(Err("failed to decode tool error: \{Repr(error)}"))
+    }
+    Some(Ok({ name, payload: decoded, }))
   })
   client.drop()
   started

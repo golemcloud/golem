@@ -4,74 +4,16 @@ A library that help writing [Golem](https://golem.cloud) programs by providing h
 wrappers for Golem's runtime APIs, including functions for defining and performing operations
 transactionally.
 
-## HTTP routers and exposed files
+## Optional schema validation
 
-With `export_golem_agentic`, annotate an implementation of the SDK's `HttpRouter`
-trait. Each registration names a parameterless ephemeral agent, with snapshots
-disabled. It uses the ordinary agent configuration and dispatch machinery but
-does not generate a callable router client.
-
-```rust
-use golem_rust::http_router;
-use golem_rust::agentic::{Config, HttpRequest, HttpResponse, HttpRouter};
-
-struct Site;
-
-#[http_router(
-    name = "Site",
-    mount = "/site",
-    static_files = [("/assets/*", "/public/$1"), ("/favicon.ico", "/favicon.ico")],
-)]
-impl HttpRouter for Site {
-    type Config = ();
-
-    fn new(_: Config<()>) -> Self { Self }
-
-    async fn handle(&self, request: HttpRequest) -> HttpResponse {
-        HttpResponse { status: 200, headers: vec![], body: request.body }
-    }
-
-    async fn openapi(&self) -> String {
-        r#"{"openapi":"3.1.0","info":{"title":"Site","version":"1"},"paths":{}}"#.into()
-    }
-}
-```
-
-Only explicitly implemented `handle` and `openapi` methods are exposed. Omit
-either or both for static-only, provider-only, or empty registrations. Keep
-helper methods in an inherent `impl Site`. The mount must be literal; put `auth`
-and `cors` on `#[http_router]`, not on methods. OpenAPI providers return JSON
-strings (for example, `serde_json::to_string(&document)?` inside a helper), not
-HTTP responses. The host validates, rebases, and merges their OpenAPI 3.1.0
-documents when documentation is requested.
-
-For typed settings and secrets, replace `()` with a `#[derive(ConfigSchema)]`
-type and retain the injected `Config<Self::Config>` in the struct. Configure
-that named agent in the application manifest just like an ordinary agent.
-Manifest-declared dependencies and their generated clients also work normally;
-configuration and dependencies do not become wire constructor parameters.
-
-`HttpRequest` retains the original method, scheme, authority, full public path,
-raw optional query, and ordered `Header { name, value: Vec<u8> }` occurrences.
-Both envelopes use `AgentStream<Vec<u8>>` bodies: forward or consume them lazily,
-without collecting the body. `request.into_http()` transfers the unread body
-into an `http::Request` and retains the canonical head as an `OriginalHttpRequest`
-extension. An `http::Response<AgentStream<Vec<u8>>>` converts with `.into()`.
-Duplicate headers, especially `set-cookie`, remain separate; values need not be
-UTF-8. Adapters reject heads that Rust's `http` types cannot represent. The host
-owns framing, response validation, backpressure and disconnect cancellation.
-Body EOF or disposal is not invocation completion; never log a request body.
-
-Static mappings expose deployment initial files without constructing an agent.
-Ordinary durable agents expose their live files using
-`#[agent_definition(mount = "/files/{owner}", filesystem_bindings = [("/*", "/public/$1")])]`.
-Every identity constructor parameter must appear exactly once in that mount;
-ephemeral and phantom file owners are rejected. The normal methods and generated
-client remain available. Exact mappings and terminal `/*` to `/$1` mappings are
-checked at compilation, preserve declaration order, and allow fallback roots.
-Identical compiled pairs are rejected, but a source may map to several targets.
-Source segments are percent-decoded once; filesystem targets are never decoded.
-Deployment selects the named agents for HTTP exposure in the usual way.
+Simple guests do not include regex automata or URL/IDNA/ICU tables. Enable the
+`regex` feature for regex-constrained text and regex union discriminators, and
+`url` for URL value validation and `url::Url` conversions. `rich-validation`
+enables both. The regex dialect and WHATWG URL/IDNA behavior are unchanged;
+validation that needs a disabled feature returns an explicit error, including
+when registering a tool with regex constraints or validating URL defaults.
+Schema representation, fixed MIME/unit/identifier grammars, and non-regex union
+discriminators remain available without these features.
 
 ## Retrying user code with semantic policies
 
@@ -188,6 +130,24 @@ call a Durable Streams fork API or create independent producers. Divergent
 branches can collide on the same tuple; a later acknowledged sequence is a typed
 `ProducerDiverged` error, never automatic renumbering. Create a distinct producer
 explicitly when independent writes are required, without abandoning uncertain data.
+
+## Guest exports and binary size
+
+Enable `export_golem_agentic` for every agent, tool, or middleware component.
+All such components export the same agent, tool, middleware, and snapshot
+interfaces. There is no role-selection or no-agent feature.
+
+Implementation macros install capability-specific dispatch tables at component
+startup. `#[agent_implementation]` retains the agent and snapshot runtime,
+`#[tool_implementation]` retains tool dispatch, and `#[tool_middleware]` or
+`#[universal_tool_middleware]` retains middleware dispatch. Definition-only
+macros and unused generated clients do not install runtimes.
+
+Absent capabilities discover as empty lists. Tool and middleware lookups and
+invocations return `InvalidToolName`; agent initialization and invocation return
+`InvalidInput`. Snapshot load returns an unsupported error. Agent definition
+and snapshot save trap with an explicit unsupported message because their WIT
+signatures have no error result.
 
 ## Tool middleware
 

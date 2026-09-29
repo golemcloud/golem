@@ -31,6 +31,8 @@ pub struct ToolDefinitionIr {
     pub trait_ident: Ident,
     /// Optional `version = "..."` from the `#[tool_definition(...)]` attribute.
     pub version: Option<String>,
+    /// Whether invocation requires a filesystem binding.
+    pub requires_filesystem: bool,
     /// Doc comment on the trait.
     pub doc: DocIr,
     /// One entry per trait method, in declaration order.

@@ -65,6 +65,7 @@ fn compile(tool: &Tool) -> Result<Vec<CompiledMcpToolExport>, String> {
 fn tool(root: CommandNode) -> Tool {
     Tool {
         version: "1.0.0".to_string(),
+        requires_filesystem: false,
         commands: CommandTree { nodes: vec![root] },
         schema: SchemaGraph::empty(),
     }
@@ -169,6 +170,7 @@ fn root_aliases_paths_globs_and_normalized_collisions_are_bounded() {
     grandchild.aliases.push("d".to_string());
     let definition = Tool {
         version: "1.0.0".to_string(),
+        requires_filesystem: false,
         commands: CommandTree {
             nodes: vec![root, child, grandchild],
         },
@@ -213,6 +215,7 @@ fn root_aliases_paths_globs_and_normalized_collisions_are_bounded() {
     parent.subcommands.push(CommandIndex(3));
     let collision = Tool {
         version: "1.0.0".to_string(),
+        requires_filesystem: false,
         commands: CommandTree {
             nodes: vec![
                 collision_root,

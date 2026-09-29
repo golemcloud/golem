@@ -119,6 +119,7 @@ pub(all) struct ToolInfo {
   source_name : String
   name : String
   version : String?
+  requires_filesystem : Bool
   description : String
   examples : Array[ToolExample]
   commands : Array[ToolCommandInfo]
@@ -1417,20 +1418,23 @@ pub fn parse_tools(
               }
               let mut name : String? = None
               let mut version : String? = None
+              let mut requires_filesystem = false
               for p in props {
-                match prop_string(p) {
-                  Some((None, v)) =>
+                match (prop_string(p), prop_bool(p)) {
+                  (Some((None, v)), _) =>
                     if name is None {
                       name = Some(v)
                     } else {
                       tool_fail("Duplicate tool name")
                     }
-                  Some((Some("version"), v)) =>
+                  (Some((Some("version"), v)), _) =>
                     if version is None {
                       version = Some(v)
                     } else {
                       tool_fail("Duplicate tool version")
                     }
+                  (_, Some(("requires_filesystem", value))) =>
+                    requires_filesystem = value
                   _ =>
                     tool_fail(
                       "Malformed or unknown #derive.tool property on '" +
@@ -1458,6 +1462,7 @@ pub fn parse_tools(
                 source_name: decl.tycon,
                 name: wire,
                 version,
+                requires_filesystem,
                 description: tool_doc(decl.doc),
                 examples: parse_examples(decl.attrs, "tool " + decl.tycon),
                 commands: [],

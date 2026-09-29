@@ -705,6 +705,7 @@ describe("tool metadata WIT validation", () => {
       "target",
       {
         version: "0.1.0",
+        requiresFilesystem: false,
         commands: { nodes: [] },
         schema: { root: 0, typeNodes: [], defs: [] },
       },

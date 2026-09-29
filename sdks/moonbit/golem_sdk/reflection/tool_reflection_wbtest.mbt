@@ -58,6 +58,7 @@ fn sample_tool() -> ToolType raise {
   }
   let definition : @toolCommon.Tool = {
     version: "1",
+    requires_filesystem: false,
     commands: {
       nodes: [
         {
@@ -95,7 +96,8 @@ test "reflected tool resolves aliases and rejects input before RPC" {
   assert_eq(command.arguments[0].name, "message")
   let invalid = @model.SchemaValue::Record([@model.SchemaValue::S32(1)])
   match command.start_value(invalid) {
-    Err(@tool.ToolError::InvalidInput(_)) => ()
+    Err(@tool.ToolError::RemoteTool(@tool.RemoteToolError::InvalidInput(_))) =>
+      ()
     _ => fail("expected local tool input rejection")
   }
 }
@@ -135,8 +137,11 @@ test "reflected trigger rejects each required output before RPC" {
       },
     }
     match tool.command(["run"]).trigger_value(input) {
-      Err(@tool.ToolError::InvalidInput(message)) =>
-        assert_eq(message, expected)
+      Err(
+        @tool.ToolError::RemoteTool(
+          @tool.RemoteToolError::InvalidInput(message)
+        )
+      ) => assert_eq(message, expected)
       _ => fail("expected required output to be rejected before RPC")
     }
   }
@@ -203,8 +208,9 @@ test "namespace-only commands expose metadata and reject invocation locally" {
   assert_true(metadata.body is None)
   assert_eq(metadata.subcommands, ["run"])
   match metadata.start_value(@model.SchemaValue::Record([])) {
-    Err(@tool.ToolError::InvalidInput(message)) =>
-      assert_true(message.contains("namespace"))
+    Err(
+      @tool.ToolError::RemoteTool(@tool.RemoteToolError::InvalidInput(message))
+    ) => assert_true(message.contains("namespace"))
     _ => fail("expected namespace invocation to fail locally")
   }
 }
@@ -417,7 +423,7 @@ test "repeated reflected convenience calls release result futures on every exit"
   run_reflection_tool_async(async fn() {
     for _ in 0..<50 {
       match command.invoke_value(input) {
-        Err(@tool.ToolError::MalformedRemoteOutput(_)) => ()
+        Err(@tool.ToolError::Rpc(@tool.RpcError::Protocol(_))) => ()
         _ => fail("expected missing remote result")
       }
     }
@@ -429,7 +435,7 @@ test "repeated reflected convenience calls release result futures on every exit"
 test "reflected tool reports malformed remote result" {
   let command = sample_tool().command(["run"])
   match command.decode_result({ result: None, stdout: None, stderr: None, }) {
-    Err(@tool.ToolError::MalformedRemoteOutput(_)) => ()
+    Err(@tool.ToolError::Rpc(@tool.RpcError::Protocol(_))) => ()
     _ => fail("expected missing tool result to be malformed")
   }
 }

@@ -1392,6 +1392,7 @@ fn discovered_tool(name: &str) -> DiscoveredTool {
         lookup_name: name.to_string(),
         definition: Tool {
             version: "1.0.0".to_string(),
+            requires_filesystem: false,
             commands: CommandTree {
                 nodes: vec![CommandNode {
                     name: name.to_string(),

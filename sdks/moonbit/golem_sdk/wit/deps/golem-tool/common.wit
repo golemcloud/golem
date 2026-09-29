@@ -76,12 +76,9 @@ package golem:tool@0.1.0;
 ///     `guest.invoke(tool-name, …)` match against it. `commands.nodes`
 ///     is always non-empty.
 ///
-/// Capability scoping (WASI preopens, env masking, outbound-socket
-/// filters, subprocess-exec capability, and `golem:agent/host`'s
-/// `get-config-value` resolution) is performed by the host by inspecting
-/// the component's WIT imports — what a component *can* do is already
-/// declared structurally by which interfaces it imports — not by reading
-/// a declarative metadata record.
+/// Capability scoping is performed by the host. `requires-filesystem` declares
+/// that the tool cannot operate without a filesystem binding; it does not grant
+/// filesystem access.
 interface common {
   use golem:core/types@2.0.0.{schema-graph, type-node-index, schema-value-tree,
     typed-schema-value, tool-error};
@@ -89,6 +86,7 @@ interface common {
   // Top level
   record tool {
     version:  string,
+    requires-filesystem: bool,
     commands: command-tree,
     /// Self-contained type-node pool holding every type referenced from
     /// this tool's commands. Command bodies reference entries by

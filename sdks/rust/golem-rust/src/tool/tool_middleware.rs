@@ -35,9 +35,7 @@ pub type InputStream = wit_bindgen::StreamReader<
 /// Writable byte stream supplied to middleware for a tool output.
 #[cfg(feature = "export_golem_agentic")]
 pub type OutputStream = crate::agentic::OutputStream;
-#[cfg(all(test, not(feature = "export_golem_agentic")))]
-pub type OutputStream = crate::bindings::golem::tool::streams::ToolOutputWriter;
-#[cfg(not(any(test, feature = "export_golem_agentic")))]
+#[cfg(not(feature = "export_golem_agentic"))]
 #[doc(hidden)]
 pub struct OutputStream;
 #[cfg(feature = "export_golem_agentic")]
@@ -60,11 +58,70 @@ pub type ToolMiddlewareInvokeFutureFor<'a> = Pin<
 #[doc(hidden)]
 pub type ToolMiddlewareInvokeFuture = ToolMiddlewareInvokeFutureFor<'static>;
 
-/// A custom tool error whose name is not declared by the typed client.
-#[derive(Clone, Debug, PartialEq)]
+/// A custom tool error whose payload is decoded only on explicit inspection.
+#[derive(Clone)]
 pub struct RawCustomToolError {
     pub name: String,
-    pub payload: TypedSchemaValue,
+    payload: Rc<RawCustomToolPayload>,
+}
+
+struct RawCustomToolPayload {
+    wire: std::cell::RefCell<Option<crate::schema::wit::wire::TypedSchemaValue>>,
+    decoded: std::cell::OnceCell<Result<TypedSchemaValue, String>>,
+}
+
+impl RawCustomToolError {
+    pub fn from_payload(name: String, payload: TypedSchemaValue) -> Self {
+        Self {
+            name,
+            payload: Rc::new(RawCustomToolPayload {
+                wire: std::cell::RefCell::new(None),
+                decoded: std::cell::OnceCell::from(Ok(payload)),
+            }),
+        }
+    }
+
+    pub fn from_wire(name: String, payload: crate::schema::wit::wire::TypedSchemaValue) -> Self {
+        Self {
+            name,
+            payload: Rc::new(RawCustomToolPayload {
+                wire: std::cell::RefCell::new(Some(payload)),
+                decoded: std::cell::OnceCell::new(),
+            }),
+        }
+    }
+
+    /// Materializes the dynamic schema model for an undeclared error.
+    pub fn payload(&self) -> Result<&TypedSchemaValue, String> {
+        self.payload
+            .decoded
+            .get_or_init(|| {
+                crate::decode_typed_schema_value_owned(
+                    self.payload
+                        .wire
+                        .borrow_mut()
+                        .take()
+                        .expect("undecoded payload"),
+                )
+                .map_err(|error| error.to_string())
+            })
+            .as_ref()
+            .map_err(Clone::clone)
+    }
+}
+
+impl std::fmt::Debug for RawCustomToolError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RawCustomToolError")
+            .field("name", &self.name)
+            .finish_non_exhaustive()
+    }
+}
+
+impl PartialEq for RawCustomToolError {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name && self.payload() == other.payload()
+    }
 }
 
 /// Exact error channel shared by middleware guest dispatch and its underlying layer.
@@ -151,7 +208,7 @@ impl<E: Error + 'static> Error for ToolInvokeError<E> {
 /// The runtime is the only producer of this handle. It is intentionally not
 /// cloneable. Shared invocation permits a middleware to overlap calls to the
 /// same runtime-minted capability.
-#[cfg_attr(not(any(test, feature = "export_golem_agentic",)), allow(dead_code))]
+#[cfg_attr(not(any(test, feature = "export_golem_agentic")), allow(dead_code))]
 pub struct UnderlyingTool {
     inner: UnderlyingToolInner,
 }
@@ -160,10 +217,10 @@ pub struct UnderlyingTool {
 ///
 /// Dropping this value only stops observing the invocation. Use [`Self::cancel`]
 /// to explicitly request cancellation of this child.
-#[cfg_attr(not(any(test, feature = "export_golem_agentic",)), allow(dead_code))]
+#[cfg_attr(not(any(test, feature = "export_golem_agentic")), allow(dead_code))]
 pub struct UnderlyingInvocation {
     result: Rc<UnderlyingInvocationResult>,
-    #[cfg(any(test, feature = "export_golem_agentic",))]
+    #[cfg(any(test, feature = "export_golem_agentic"))]
     terminal: Rc<
         super::invocation_result::InvocationResultDriver<
             Result<Option<TypedSchemaValue>, ToolInvokeError<std::convert::Infallible>>,
@@ -174,7 +231,7 @@ pub struct UnderlyingInvocation {
 }
 
 /// Typed view of a started underlying invocation generated for a tool command.
-#[cfg_attr(not(any(test, feature = "export_golem_agentic",)), allow(dead_code))]
+#[cfg_attr(not(any(test, feature = "export_golem_agentic")), allow(dead_code))]
 pub struct TypedUnderlyingInvocation<T, E> {
     invocation: UnderlyingInvocation,
     pub stdout: Option<InputStream>,
@@ -183,7 +240,7 @@ pub struct TypedUnderlyingInvocation<T, E> {
     decode_error: fn(String, TypedSchemaValue) -> Result<Option<E>, String>,
 }
 
-#[cfg(any(test, feature = "export_golem_agentic",))]
+#[cfg(any(test, feature = "export_golem_agentic"))]
 impl<T, E> TypedUnderlyingInvocation<T, E> {
     #[doc(hidden)]
     pub fn new(
@@ -221,6 +278,7 @@ impl<T, E> TypedUnderlyingInvocation<T, E> {
 
     /// Waits for the structured result while forwarding the underlying stdout
     /// to the writer supplied to this middleware invocation.
+    #[cfg(feature = "export_golem_agentic")]
     pub async fn get_forwarding_stdout(
         self,
         stdout: Option<OutputStream>,
@@ -290,7 +348,7 @@ struct FakeInvocationResult {
     cancelled: Rc<std::cell::Cell<bool>>,
 }
 
-#[cfg(any(test, feature = "export_golem_agentic",))]
+#[cfg(any(test, feature = "export_golem_agentic"))]
 impl UnderlyingInvocation {
     fn new(
         result: UnderlyingInvocationResult,
@@ -347,7 +405,7 @@ impl UnderlyingInvocation {
     pub async fn get(
         &self,
     ) -> Result<Option<TypedSchemaValue>, ToolInvokeError<RawCustomToolError>> {
-        self.get_with(|name, payload| Ok(Some(RawCustomToolError { name, payload })))
+        self.get_with(|name, payload| Ok(Some(RawCustomToolError::from_payload(name, payload))))
             .await
     }
 
@@ -361,7 +419,10 @@ impl UnderlyingInvocation {
             .await
             .map_err(|error| match error {
                 ToolInvokeError::UnknownCustomError(raw) => {
-                    match decode_custom_error(raw.name.clone(), raw.payload.clone()) {
+                    match raw
+                        .payload()
+                        .and_then(|payload| decode_custom_error(raw.name.clone(), payload.clone()))
+                    {
                         Ok(Some(value)) => ToolInvokeError::Tool(value),
                         Ok(None) => ToolInvokeError::UnknownCustomError(raw),
                         Err(error) => ToolInvokeError::InvalidResult(error),
@@ -411,7 +472,7 @@ pub(crate) type FakeInvoke = Box<
     ),
 >;
 
-#[cfg(any(test, feature = "export_golem_agentic",))]
+#[cfg(any(test, feature = "export_golem_agentic"))]
 impl UnderlyingTool {
     #[cfg(feature = "export_golem_agentic")]
     #[allow(dead_code)]
@@ -460,13 +521,14 @@ impl UnderlyingTool {
         stdin: Option<InputStream>,
     ) -> Result<InvocationResult, ToolInvokeError<RawCustomToolError>> {
         self.invoke_with(command_path, input, stdin, |name, payload| {
-            Ok(Some(RawCustomToolError { name, payload }))
+            Ok(Some(RawCustomToolError::from_payload(name, payload)))
         })
         .await
     }
 
     /// Invokes the next layer while forwarding its stdout to the writer
     /// supplied to this middleware invocation.
+    #[cfg(feature = "export_golem_agentic")]
     pub async fn invoke_forwarding_stdout(
         &self,
         command_path: Vec<String>,
@@ -590,7 +652,7 @@ impl UnderlyingTool {
     }
 }
 
-#[cfg(any(test, feature = "export_golem_agentic",))]
+#[cfg(feature = "export_golem_agentic")]
 async fn forward_output<E>(
     channel: &str,
     stream: Option<InputStream>,
@@ -627,7 +689,7 @@ async fn forward_output<E>(
     }
 }
 
-#[cfg(any(test, feature = "export_golem_agentic",))]
+#[cfg(feature = "export_golem_agentic")]
 fn classify_stream_write_result<E>(
     channel: &str,
     result: Result<(), StreamWriteError>,
@@ -641,12 +703,10 @@ fn classify_stream_write_result<E>(
     }
 }
 
-#[cfg(all(test, not(feature = "export_golem_agentic")))]
-use crate::bindings::golem::tool::streams::{ByteStreamCloseCause, StreamWriteError};
 #[cfg(feature = "export_golem_agentic")]
 use crate::golem_agentic::golem::tool::streams::{ByteStreamCloseCause, StreamWriteError};
 
-#[cfg(any(test, feature = "export_golem_agentic",))]
+#[cfg(any(test, feature = "export_golem_agentic"))]
 async fn join_results<A, B>(a: A, b: B) -> (A::Output, B::Output)
 where
     A: Future,
@@ -706,7 +766,7 @@ fn decode_underlying_error<E>(
     }
 }
 
-#[cfg(any(test, feature = "export_golem_agentic",))]
+#[cfg(any(test, feature = "export_golem_agentic"))]
 fn decode_wire_error<E>(
     error: wire::ToolError,
     decode_custom_error: impl Fn(String, TypedSchemaValue) -> Result<Option<E>, String>,
@@ -726,10 +786,9 @@ fn decode_wire_error<E>(
             };
             match decode_custom_error(error.name.clone(), value.clone()) {
                 Ok(Some(error)) => ToolInvokeError::Tool(error),
-                Ok(None) => ToolInvokeError::UnknownCustomError(RawCustomToolError {
-                    name: error.name,
-                    payload: value,
-                }),
+                Ok(None) => ToolInvokeError::UnknownCustomError(RawCustomToolError::from_payload(
+                    error.name, value,
+                )),
                 Err(error) => ToolInvokeError::InvalidResult(error),
             }
         }
@@ -871,6 +930,7 @@ mod tests {
     use std::rc::Rc;
     use test_r::test;
 
+    #[cfg(feature = "export_golem_agentic")]
     #[test]
     fn stdout_write_result_classification_only_accepts_consumer_cancellation() {
         #[cfg(not(feature = "export_golem_agentic"))]

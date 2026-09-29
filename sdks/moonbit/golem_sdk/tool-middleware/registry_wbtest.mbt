@@ -7,6 +7,7 @@ fn registry_doc(summary : String) -> @toolCommon.Doc {
 fn registry_tool(name : String) -> @toolCommon.Tool {
   {
     version: "0.1.0",
+    requires_filesystem: false,
     commands: {
       nodes: [
         {
