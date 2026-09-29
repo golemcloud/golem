@@ -1873,7 +1873,7 @@ function createToolClientMethod(
   const callName = [tool.toolName, ...commandPath].join(' ');
 
   return (args: Record<string, unknown>): unknown => {
-    if (!commandBody.stdout) {
+    if (!commandBody.stdout && !commandBody.stderr) {
       return Promise.resolve().then(() => startToolClientCall());
     }
     return startToolClientCall();

@@ -45,6 +45,7 @@ interface RecordedInvocation {
 interface FakeResponse {
   readonly result?: ReturnType<typeof wireValue>;
   readonly stdout?: AsyncIterable<ByteStreamItem>;
+  readonly stderr?: AsyncIterable<ByteStreamItem>;
 }
 
 class FakeTransport implements ToolClientTransport {
@@ -57,6 +58,7 @@ class FakeTransport implements ToolClientTransport {
     input: Parameters<ToolClientTransport['start']>[1],
     stdin: ReadableStream<Uint8Array> | undefined,
     withStdout: boolean,
+    withStderr: boolean,
   ): ToolClientInvocationResult {
     const invocation = { commandPath: [...commandPath], input, stdin };
     this.invocations.push(invocation);
@@ -75,6 +77,7 @@ class FakeTransport implements ToolClientTransport {
         value: { result: response.result },
       }),
       stdout: withStdout ? (response.stdout ?? streamItems(bytes())) : undefined,
+      stderr: withStderr ? (response.stderr ?? streamItems(bytes())) : undefined,
       cancel: vi.fn(),
     };
   }
@@ -416,6 +419,28 @@ describe('tool runtime client', () => {
         ['optional-stdout']({})
         .collect(),
     ).resolves.toEqual({ result: 'value', stdout: new Uint8Array() });
+  });
+
+  it('returns a started invocation synchronously for a stderr-only command', async () => {
+    const definition = toolDefinition('stderr-only').body((body) =>
+      body.stderr({ required: true }).returns(z.string()),
+    );
+    const invocation = client(definition, {
+      transport: new FakeTransport(() => ({
+        result: wireValue(z.string(), 'value'),
+        stderr: streamItems(bytes(7, 8, 9)),
+      })),
+    })['stderr-only']({});
+
+    expect(invocation).toMatchObject({
+      stderr: expect.any(ReadableStream),
+      result: expect.any(Promise),
+      collect: expect.any(Function),
+    });
+    await expect(invocation.collect()).resolves.toEqual({
+      result: 'value',
+      stderr: new Uint8Array([7, 8, 9]),
+    });
   });
 
   it('combines stdin with structured results and stdout through the transport seam', async () => {
