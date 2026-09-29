@@ -699,8 +699,8 @@ fn pvc_base64_encode(bytes : Bytes) -> String {
 ///|
 fn pvc_base64url_encode(bytes : Bytes) -> String {
   pvc_base64_encode(bytes)
-  .replace("+", "-")
-  .replace("/", "_")
+  .replace(old="+", new="-")
+  .replace(old="/", new="_")
   .trim_end(chars="=")
   .to_owned()
 }
