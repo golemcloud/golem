@@ -848,13 +848,13 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
         let name = name.clone();
         let into: Box<Path> = into.into();
         // The index load of a restore uses rayon, so the restore runs in a pool of its own, with the
-        // reader threads of a restore.
+        // reader threads of a restore, at the normal priority of its blocking thread.
         let pool = LowPriority {
             threads: Some(self.policy.restore_reader_threads),
             ..self.low_priority
         };
         self.blocking(Operation::Restore, move || {
-            pool.run_at_normal_priority("fs-snap-restore", move || {
+            pool.in_own_pool("fs-snap-restore", move || {
                 let Some(repository) = open_existing(backend, &key)? else {
                     return Ok(Lookup::Missing);
                 };
@@ -950,10 +950,11 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
                 .await
                 .map_err(storage_failure)?;
         }
-        // The forget deletes the snapshot files with rayon, so it runs in a pool of its own.
+        // The forget deletes the snapshot files with rayon, so it runs in a pool of its own, at the
+        // normal priority of its blocking thread.
         let pool = self.low_priority;
         self.blocking(Operation::Repository, move || {
-            pool.run_at_normal_priority("fs-snap-delete", move || {
+            pool.in_own_pool("fs-snap-delete", move || {
                 repository.delete_snapshots(&ids)?;
                 Ok(())
             })

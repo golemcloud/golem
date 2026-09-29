@@ -68,7 +68,7 @@ impl LowPriority {
                         "Failed to lower the CPU priority of filesystem snapshot work, so it runs at the normal priority"
                     );
                 }
-                self.run_at_normal_priority(name, || run_taken(&slot))
+                self.in_own_pool(name, || run_taken(&slot))
             }
         });
         match spawned {
@@ -85,11 +85,11 @@ impl LowPriority {
         }
     }
 
-    /// Runs the work on the calling thread, at its priority, inside a new rayon pool with the name,
-    /// and gives its result. So the rayon work of one operation does not wait for the rayon work of
-    /// another operation on the global pool. A pool that does not build gives a warning, and the
-    /// work runs without it.
-    pub(super) fn run_at_normal_priority<T: Send>(
+    /// Runs the work on the calling thread, at the priority of that thread, inside a new rayon pool
+    /// with the name, and gives its result. So the rayon work of one operation does not wait for the
+    /// rayon work of another operation on the global pool. A pool that does not build gives a
+    /// warning, and the work runs without it.
+    pub(super) fn in_own_pool<T: Send>(
         self,
         name: &'static str,
         work: impl FnOnce() -> anyhow::Result<T> + Send,
