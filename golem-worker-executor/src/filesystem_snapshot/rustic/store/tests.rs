@@ -204,8 +204,10 @@ async fn freed<S: BlobStorage + 'static>(storage: &Arc<S>, scope: &SnapshotScope
 }
 
 /// The longest time that a test waits for an operation to reach the call that a gate holds for
-/// it, when another operation of the same storage runs next. A save or a prune runs at nice 19, so
-/// on a busy host it can take longer than [`LIMIT`] to reach that call.
+/// it, when another operation of the same storage runs next. A save, a forget or a prune runs on a
+/// blocking thread, and a save or a prune runs at nice 19, so on a busy host the first operation
+/// can take longer than [`LIMIT`] to reach its gate. Each test that waits this long has a timeout
+/// of 120 s, so the timeout covers its setup, this wait and its later steps.
 const REACH_LIMIT: Duration = Duration::from_secs(45);
 
 /// Waits until the condition holds, or until [`LIMIT`] ends. Gives whether the condition holds.
@@ -632,7 +634,7 @@ async fn two_stores_that_create_one_repository_at_the_same_time_both_save() {
 }
 
 #[test]
-#[timeout("60s")]
+#[timeout("120s")]
 async fn a_prune_during_a_save_keeps_the_packs_of_the_save() {
     // The first index write after the arm waits at the gate. That is the index write of the
     // second save, so its packs are in no index while the delete prunes. The test stops when the
@@ -1106,7 +1108,7 @@ async fn save_each(store: &RusticSnapshotStore, scope: &SnapshotScope, names: &[
 }
 
 #[test]
-#[timeout("60s")]
+#[timeout("120s")]
 async fn a_delete_that_paused_after_its_ledger_read_does_not_put_back_the_old_ledger() {
     // The gate holds the first delete after its record write and its ledger read. The second
     // delete prunes to its end. The first delete then goes on with the ledger that it read.
@@ -1521,7 +1523,7 @@ async fn a_prune_that_finds_a_snapshot_file_gone_at_each_attempt_after_refreshes
 }
 
 #[test]
-#[timeout("60s")]
+#[timeout("120s")]
 async fn a_prune_slower_than_the_grace_period_keeps_its_claim_fresh() {
     // The gate holds the prune at its listing of the packs for longer than the grace period.
     let grace = Duration::from_millis(400);
@@ -1552,7 +1554,13 @@ async fn a_prune_slower_than_the_grace_period_keeps_its_claim_fresh() {
         let scope = scope.clone();
         async move { store.delete(&scope, &name("p-1")).await }
     });
-    let prune_held = eventually(|| held.load(Ordering::SeqCst)).await;
+    // The second delete claims and lists the packs too, so the gate would hold its prune for ever
+    // when the first delete did not reach its listing first.
+    let prune_held = eventually_within(REACH_LIMIT, || held.load(Ordering::SeqCst)).await;
+    assert!(
+        prune_held,
+        "the first delete did not reach its listing of the packs"
+    );
     let first = claim_time(&storage, &scope).await.unwrap_or(u64::MAX);
     let wanted = first.saturating_add(u64::try_from(grace.as_millis()).unwrap_or(u64::MAX));
 
@@ -2752,7 +2760,7 @@ async fn a_claim_without_a_marker_does_not_unblock_a_live_holder() {
 }
 
 #[test]
-#[timeout("60s")]
+#[timeout("120s")]
 async fn two_deletes_that_read_the_same_ledger_make_one_prune() {
     // The first read after the first claim is the start of the first prune. The gate holds it,
     // so the second delete reads the ledger that the first delete read.
@@ -2811,7 +2819,7 @@ async fn two_deletes_that_read_the_same_ledger_make_one_prune() {
 }
 
 #[test]
-#[timeout("60s")]
+#[timeout("120s")]
 async fn a_delete_that_claims_after_another_prune_removed_the_claims_does_not_prune() {
     // The gate holds the first delete after its ledger read and before its listing of the claims.
     // The second delete prunes to its end, so the first delete claims in a removed directory.
