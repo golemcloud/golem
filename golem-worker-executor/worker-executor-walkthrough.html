@@ -1858,10 +1858,10 @@ fn charge_card(order: &amp;Order) -&gt; Result&lt;Receipt, PaymentError&gt; {
 <p>Snapshot save/load runs guest code in <em>snapshotting mode</em>: it neither appends nor consumes durable-call oplog entries (<code>DurableCallSession</code> created with <code>persisted: false</code>; <code>durability_is_suppressed</code> is exactly <code>snapshotting_mode</code>). A snapshot load is therefore <strong>not</strong> a fast-forwarded replay — the loaded state <em>replaces</em> skipped history from a revision-scoped baseline.</p>
 
 <h3>Which history does the new instance replay?</h3>
-<p>Decided at <code>Worker</code> construction (<code>worker/mod.rs</code>, <code>create_instance</code>, with <code>worker/snapshot_selection.rs::select_automatic_snapshot</code>):</p>
+<p>Decided at <code>Worker</code> construction (<code>worker/mod.rs</code>, <code>create_instance</code>, with <code>worker/snapshot_selection.rs::StartSelection::of</code>):</p>
 <ol class="steps">
   <li>The last <em>manual-update</em> snapshot (a <code>SnapshotBased</code> update) is the baseline; if none, <code>OplogIndex::INITIAL</code>.</li>
-  <li>An <em>automatic</em> snapshot record overrides it and skips <code>INITIAL+1 ..= snapshot_idx</code>. The status keeps two candidates: the last record, and the newest usable record before it. A record is usable when it names no filesystem snapshot, or when a <code>SnapshotConfirmed</code> entry confirms its name. The start takes the first usable candidate that has the current revision, is not in the fingerprint-scoped set of rejected indexes, and is not unavailable for this startup attempt. No automatic record is used while an update is pending.</li>
+  <li>An <em>automatic</em> snapshot record overrides it and skips <code>INITIAL+1 ..= snapshot_idx</code>. The status keeps two candidates: the last record, and the newest usable record before it. A record is usable when it names no filesystem snapshot, or when a <code>SnapshotConfirmed</code> entry confirms its name. The start takes the first usable candidate that has the current revision, is not in the fingerprint-scoped set of rejected indexes, is not unavailable for this startup attempt, and does not name a filesystem snapshot when filesystem snapshots are disabled on the executor. No automatic record is used while an update is pending.</li>
   <li>The component revision to instantiate comes from the same decision. A cursor cannot change it; only the outer loop can.</li>
 </ol>
 
