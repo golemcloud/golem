@@ -645,6 +645,7 @@ impl Admission {
 
 /// A manual-update snapshot that the store holds. The loop retains it after the update record
 /// commits. Dropped, it deletes nothing and frees the scope.
+#[must_use = "a dropped saved update runs no retention; retain it after the update record commits"]
 pub(crate) struct SavedUpdate {
     core: Arc<Core>,
     ticket: JobTicket,

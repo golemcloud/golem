@@ -427,16 +427,33 @@ pub(crate) trait UpdateSnapshotHost {
     fn terminal(&self) -> watch::Receiver<bool>;
     /// Whether the shard of the agent is lost.
     fn lost_shard(&self) -> bool;
+    /// The filesystem snapshot of the last successful manual update, which the retention of the
+    /// update snapshot keeps.
+    fn kept_baseline(&self) -> impl Future<Output = Option<FilesystemSnapshotName>> + Send;
+}
+
+/// The retention of a saved manual-update snapshot, with the snapshot that it keeps.
+#[must_use = "the retention of a manual-update snapshot runs only after the update record commits"]
+pub(crate) struct UpdateRetention {
+    saved: SavedUpdate,
+    kept: Option<FilesystemSnapshotName>,
+}
+
+impl UpdateRetention {
+    /// Applies the retention in the background. Call it after the update record commits.
+    pub(crate) fn run(self) {
+        self.saved.retain(self.kept.as_ref());
+    }
 }
 
 /// How the snapshot part of a manual update ended.
 pub(crate) enum UpdateSnapshot<Stop> {
     /// The store holds the filesystem snapshot `name`, or the tree holds only initial files and
-    /// `name` is `None`. `saved` is retained after the update record commits.
+    /// `name` is `None`. `retention` runs after the update record commits.
     Saved {
         snapshot: RawSnapshotData,
         name: Option<FilesystemSnapshotName>,
-        saved: Option<SavedUpdate>,
+        retention: Option<UpdateRetention>,
     },
     /// The update fails with the details.
     Fail(String),
@@ -478,7 +495,7 @@ pub(crate) async fn update_snapshot<Host: UpdateSnapshotHost>(
         return UpdateSnapshot::Saved {
             snapshot,
             name: None,
-            saved: None,
+            retention: None,
         };
     };
     let tree = match host.capture_whole(admission.capture_wait()).await {
@@ -491,7 +508,7 @@ pub(crate) async fn update_snapshot<Host: UpdateSnapshotHost>(
             return UpdateSnapshot::Saved {
                 snapshot,
                 name: None,
-                saved: None,
+                retention: None,
             };
         }
         Some(WholeCapture::Captured { capture, .. }) => capture,
@@ -505,7 +522,10 @@ pub(crate) async fn update_snapshot<Host: UpdateSnapshotHost>(
         Ok(saved) => UpdateSnapshot::Saved {
             snapshot,
             name: Some(name),
-            saved: Some(saved),
+            retention: Some(UpdateRetention {
+                saved,
+                kept: host.kept_baseline().await,
+            }),
         },
         Err(error) => match update_upload_failure(&error, *terminal.borrow()) {
             UpdateUploadFailure::Interrupted => {
@@ -1395,6 +1415,11 @@ mod tests {
         fn lost_shard(&self) -> bool {
             self.lost_shard
         }
+
+        async fn kept_baseline(&self) -> Option<FilesystemSnapshotName> {
+            self.call("kept_baseline".to_string());
+            None
+        }
     }
 
     fn agent_scope(name: &str) -> SnapshotScope {
@@ -1568,8 +1593,10 @@ mod tests {
 
     fn update_outcome(result: &UpdateSnapshot<&'static str>) -> String {
         match result {
-            UpdateSnapshot::Saved { name, saved, .. } => {
-                format!("Saved({}, {})", named(name.as_ref()), saved.is_some())
+            UpdateSnapshot::Saved {
+                name, retention, ..
+            } => {
+                format!("Saved({}, {})", named(name.as_ref()), retention.is_some())
             }
             UpdateSnapshot::Fail(details) => format!("Fail({details})"),
             UpdateSnapshot::WriteNothing => "WriteNothing".to_string(),

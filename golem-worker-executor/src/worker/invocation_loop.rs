@@ -3078,8 +3078,8 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             UpdateSnapshot::Saved {
                 snapshot,
                 name,
-                saved,
-            } => (snapshot, name, saved),
+                retention,
+            } => (snapshot, name, retention),
             UpdateSnapshot::Fail(details) => {
                 return self.fail_update(target_revision, details).await;
             }
@@ -3118,9 +3118,8 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     }
                     Some(Err(_)) => CommandOutcome::BreakInnerLoop(RetryDecision::Immediate),
                     Some(Ok(_)) => {
-                        if let Some(saved) = retention {
-                            let baseline = self.parent.manual_update_baseline_name().await;
-                            saved.retain(baseline.as_ref());
+                        if let Some(retention) = retention {
+                            retention.run();
                         }
                         CommandOutcome::BreakInnerLoop(RetryDecision::Immediate)
                     }
@@ -3803,6 +3802,10 @@ impl<Ctx: WorkerCtx> UpdateSnapshotHost for UpdateHost<'_, '_, Ctx> {
 
     fn lost_shard(&self) -> bool {
         self.invocation.parent.retired_for_lost_shard()
+    }
+
+    async fn kept_baseline(&self) -> Option<FilesystemSnapshotName> {
+        self.invocation.parent.manual_update_baseline_name().await
     }
 }
 

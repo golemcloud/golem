@@ -792,13 +792,15 @@ fn a_confirmed_periodic_upload_keeps_the_newest_by_kind() {
                         confirmer(confirm),
                     ),
                     SnapshotKind::Update => {
-                        admission
-                            .upload_now(
-                                capture(format!("{index}").as_bytes(), discarded),
-                                no_interrupt(),
-                            )
-                            .await
-                            .unwrap();
+                        drop(
+                            admission
+                                .upload_now(
+                                    capture(format!("{index}").as_bytes(), discarded),
+                                    no_interrupt(),
+                                )
+                                .await
+                                .unwrap(),
+                        );
                     }
                 }
                 ended(snapshots, scope).await;
@@ -1356,10 +1358,12 @@ fn at_most_the_configured_number_of_restores_run_at_the_same_time() {
         let name = {
             let admission = snapshots.admit(&scope, SnapshotKind::Update).await.unwrap();
             let name = admission.name().clone();
-            admission
-                .upload_now(capture(b"tree", &discarded), no_interrupt())
-                .await
-                .unwrap();
+            drop(
+                admission
+                    .upload_now(capture(b"tree", &discarded), no_interrupt())
+                    .await
+                    .unwrap(),
+            );
             name
         };
         let gate = Arc::new(Gate::default());
@@ -1402,10 +1406,12 @@ fn a_restore_gives_the_saved_tree() {
         let discarded = Arc::new(AtomicUsize::new(0));
         let admission = snapshots.admit(&scope, SnapshotKind::Update).await.unwrap();
         let name = admission.name().clone();
-        admission
-            .upload_now(capture(b"restored", &discarded), no_interrupt())
-            .await
-            .unwrap();
+        drop(
+            admission
+                .upload_now(capture(b"restored", &discarded), no_interrupt())
+                .await
+                .unwrap(),
+        );
         let into = tempfile::tempdir().unwrap();
 
         snapshots
