@@ -170,8 +170,8 @@ impl HasConfigExamples<ShardManagerConfig> for ShardManagerConfig {
 ///
 /// * `Postgres` / `Sqlite` - **local mode**: a single shard manager instance, with the shard
 ///   lease state and the quota state in one SQL database.
-/// * `Etcd` - **distributed mode**: the shard lease state lives in etcd behind a
-///   compare-and-swap on the key's `mod_revision`. Quota state is not durable in this mode.
+/// * `Etcd` - **distributed mode**: the shard lease state and the quota state live in etcd,
+///   each behind a compare-and-swap on a key's `mod_revision` and the leadership fence.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", content = "config")]
 pub enum PersistenceConfig {
@@ -233,7 +233,8 @@ pub struct EtcdConfig {
     pub leader_lease_ttl: Duration,
     /// How many etcd revisions of history the leader keeps behind the shard lease state; older
     /// ones are compacted after each pass of its loop. The state is rewritten on every lease
-    /// renewal, so without compaction etcd grows until its space quota makes it read-only.
+    /// renewal, and quota lease changes are revisions too, so without compaction etcd grows until
+    /// its space quota makes it read-only.
     /// Compaction is cluster-wide: `0` disables it, for an etcd cluster shared with tenants that
     /// keep their own history.
     #[serde(default = "default_etcd_compaction_retention_revisions")]
@@ -252,9 +253,11 @@ fn default_etcd_request_timeout() -> Duration {
     Duration::from_secs(5)
 }
 
-/// Generous against what anything needs: nothing reads an old revision of the state key, so the
-/// retention only has to outlast in-flight reads and the leader election's watches. At ten
-/// executors this is about half an hour of renewals, and about 50 MB of history.
+/// Generous against what anything needs: nothing reads an old revision of the state or quota
+/// keys, so the retention only has to outlast in-flight reads and the leader election's watches.
+/// At ten executors this is about half an hour of shard lease renewals, and about 50 MB of
+/// history; quota lease changes count against the same revisions, so busy quotas shorten that
+/// span.
 fn default_etcd_compaction_retention_revisions() -> u64 {
     1000
 }
