@@ -23,7 +23,8 @@ use crate::config::Config;
 use crate::context::Context;
 use crate::log::Output;
 use crate::model::agent::{
-    AgentListMode, AgentListRequest, AgentMetadataView, AgentsMetadataResponseView,
+    AgentListMode, AgentListPageCursor, AgentListRequest, AgentMetadataView,
+    AgentsMetadataResponseView,
 };
 use crate::model::app::ApplicationSourceMode;
 use crate::model::app_raw::{BuiltinServer, Server};
@@ -219,6 +220,22 @@ fn spawn_agent_auto_refresh(event_tx: TuiEventSender, stop: Arc<AtomicBool>) {
                 return;
             }
             if event_channel_closed(event_tx.try_send(TuiEvent::AgentRefreshTick)) {
+                return;
+            }
+        }
+    });
+}
+
+fn spawn_agent_refresh_spinner(generation: u64, event_tx: TuiEventSender, stop: Arc<AtomicBool>) {
+    tokio::spawn(async move {
+        while !stop.load(Ordering::Relaxed) {
+            sleep(Duration::from_millis(120)).await;
+            if stop.load(Ordering::Relaxed) {
+                return;
+            }
+            if event_channel_closed(
+                event_tx.try_send(TuiEvent::AgentRefreshSpinnerTick { generation }),
+            ) {
                 return;
             }
         }
@@ -423,6 +440,12 @@ impl TuiApp {
                 self.finish_agent_inspect_job(AgentInspectPane::Stream, exit)
             }
             TuiEvent::AgentRefreshTick => self.refresh_agents(Some(event_tx)),
+            TuiEvent::AgentRefreshSpinnerTick { generation } => {
+                if self.agents.refresh_running && generation == self.agents.refresh_generation {
+                    self.agents.refresh_spinner_frame =
+                        self.agents.refresh_spinner_frame.wrapping_add(1);
+                }
+            }
             TuiEvent::AgentRefreshFinished {
                 generation,
                 append,
@@ -457,6 +480,9 @@ impl TuiApp {
         match self.mode {
             TuiMode::Normal => self.handle_global_key(key, event_tx),
             TuiMode::LeaderNormal => self.handle_leader_key(key, event_tx, TuiMode::Normal),
+            TuiMode::LeaderAgentFilter => {
+                self.handle_leader_key(key, event_tx, TuiMode::AgentFilter)
+            }
             TuiMode::Palette => self.handle_palette_key(key, event_tx),
             TuiMode::ContextPicker => self.handle_context_picker_key(key, event_tx),
             TuiMode::ContextSwitchConfirm => self.handle_context_switch_confirm_key(key, event_tx),
@@ -511,20 +537,11 @@ impl TuiApp {
             KeyCode::Home if self.ops_view == OpsView::Metrics => self.fake_otlp.first(),
             KeyCode::End if self.ops_view == OpsView::Metrics => self.fake_otlp.last(),
             KeyCode::Up if self.agent_list_focused() => self.select_previous_agent(),
-            KeyCode::Down if self.agent_list_focused() => {
-                self.select_next_agent();
-                self.maybe_load_more_agents(event_tx);
-            }
+            KeyCode::Down if self.agent_list_focused() => self.select_next_agent(),
             KeyCode::PageUp if self.agent_list_focused() => self.select_previous_agent_page(),
-            KeyCode::PageDown if self.agent_list_focused() => {
-                self.select_next_agent_page();
-                self.maybe_load_more_agents(event_tx);
-            }
+            KeyCode::PageDown if self.agent_list_focused() => self.select_next_agent_page(),
             KeyCode::Home if self.agent_list_focused() => self.select_first_agent(),
-            KeyCode::End if self.agent_list_focused() => {
-                self.select_last_agent();
-                self.maybe_load_more_agents(event_tx);
-            }
+            KeyCode::End if self.agent_list_focused() => self.select_last_agent(),
             KeyCode::Up if self.agent_details_focused() => self.scroll_agent_details_up(1),
             KeyCode::Down if self.agent_details_focused() => self.scroll_agent_details_down(1),
             KeyCode::PageUp if self.agent_details_focused() => self.scroll_agent_details_up(10),
@@ -565,21 +582,17 @@ impl TuiApp {
                 self.should_quit = true;
             }
             KeyCode::Char('x') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.mode = TuiMode::LeaderNormal;
+                self.mode = if self.mode == TuiMode::AgentFilter {
+                    TuiMode::LeaderAgentFilter
+                } else {
+                    TuiMode::LeaderNormal
+                };
             }
             KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.open_palette();
             }
             KeyCode::Char('h') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.open_help();
-            }
-            KeyCode::Left if self.agents_focused() && key.modifiers.contains(KeyModifiers::ALT) => {
-                self.resize_agent_details(-5);
-            }
-            KeyCode::Right
-                if self.agents_focused() && key.modifiers.contains(KeyModifiers::ALT) =>
-            {
-                self.resize_agent_details(5);
             }
             KeyCode::Char('r')
                 if self.agent_list_focused() && key.modifiers.contains(KeyModifiers::CONTROL) =>
@@ -772,15 +785,24 @@ impl TuiApp {
                 self.agents.dataset_filter = None;
                 self.mode = TuiMode::Normal;
             }
+            KeyCode::Backspace => {
+                filter.query.pop();
+                filter.reset_filtered_selection();
+            }
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                filter.query.clear();
+                filter.reset_filtered_selection();
+            }
             KeyCode::Up => filter.selected = filter.selected.saturating_sub(1),
             KeyCode::Down => {
+                let choice_count = filter.filtered_indices().len();
                 filter.selected = filter
                     .selected
                     .saturating_add(1)
-                    .min(filter.choices.len().saturating_sub(1));
+                    .min(choice_count.saturating_sub(1));
             }
             KeyCode::Enter => {
-                let selected = filter.choices.get(filter.selected).cloned();
+                let selected = filter.selected_choice().cloned();
                 self.agents.dataset_filter = None;
                 self.mode = TuiMode::Normal;
                 if let Some(selected) = selected
@@ -790,6 +812,12 @@ impl TuiApp {
                     self.reset_agent_dataset();
                     self.refresh_agents(event_tx);
                 }
+            }
+            KeyCode::Char(character)
+                if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
+            {
+                filter.query.push(character);
+                filter.reset_filtered_selection();
             }
             _ => {}
         }
@@ -803,6 +831,14 @@ impl TuiApp {
     ) {
         match key.code {
             KeyCode::Esc => self.mode = return_mode,
+            KeyCode::Left if self.agent_details_open() => {
+                self.resize_agent_details(-5);
+                self.mode = return_mode;
+            }
+            KeyCode::Right if self.agent_details_open() => {
+                self.resize_agent_details(5);
+                self.mode = return_mode;
+            }
             KeyCode::Char('h') => self.open_help(),
             KeyCode::Char('p') => self.open_palette(),
             KeyCode::Char('e') => {
@@ -880,10 +916,10 @@ impl TuiApp {
         }
         match mouse.kind {
             MouseEventKind::ScrollUp => {
-                self.scroll_region_under_pointer(mouse.column, mouse.row, 3, true, event_tx)
+                self.scroll_region_under_pointer(mouse.column, mouse.row, 3, true)
             }
             MouseEventKind::ScrollDown => {
-                self.scroll_region_under_pointer(mouse.column, mouse.row, 3, false, event_tx)
+                self.scroll_region_under_pointer(mouse.column, mouse.row, 3, false)
             }
             MouseEventKind::Down(MouseButton::Left) => {
                 self.layout.dragging = self.drag_target_at(mouse.column, mouse.row);
@@ -900,14 +936,7 @@ impl TuiApp {
         }
     }
 
-    fn scroll_region_under_pointer(
-        &mut self,
-        x: u16,
-        y: u16,
-        amount: usize,
-        up: bool,
-        event_tx: Option<&TuiEventSender>,
-    ) {
+    fn scroll_region_under_pointer(&mut self, x: u16, y: u16, amount: usize, up: bool) {
         let region = self
             .layout_snapshot
             .borrow()
@@ -951,9 +980,6 @@ impl TuiApp {
             Some(RegionKind::OpsList) => {
                 self.agents.focus = AgentOverviewFocus::List;
                 self.scroll_agent_list(amount, up);
-                if !up {
-                    self.maybe_load_more_agents(event_tx);
-                }
             }
             _ => {}
         }
@@ -1005,7 +1031,7 @@ impl TuiApp {
             }
             Some(RegionKind::OpsList) => {
                 self.agents.focus = AgentOverviewFocus::List;
-                self.select_agent_at_row(y, event_tx);
+                self.select_agent_at_row(y);
             }
             Some(RegionKind::OpsDetails) => self.agents.focus = AgentOverviewFocus::Details,
             Some(RegionKind::OpsInspectPane(pane)) => self.agents.inspect.focus = pane,
@@ -1088,7 +1114,7 @@ impl TuiApp {
         }
     }
 
-    fn select_agent_at_row(&mut self, y: u16, event_tx: Option<&TuiEventSender>) {
+    fn select_agent_at_row(&mut self, y: u16) {
         let Some(list_area) = self
             .layout_snapshot
             .borrow()
@@ -1150,7 +1176,6 @@ impl TuiApp {
         self.agents.selected = selected;
         self.agents.table.selected = self.agents.selected;
         self.agents.details_scroll = 0;
-        self.maybe_load_more_agents(event_tx);
     }
 
     fn execute_action(&mut self, action: TuiActionKind, event_tx: Option<&TuiEventSender>) {
@@ -1326,7 +1351,7 @@ impl TuiApp {
                 TuiActionAvailability::Unavailable("context executor unavailable")
             }
             TuiActionId::LoadMoreAgents if !self.agents.has_more() => {
-                TuiActionAvailability::Unavailable("all available agents are loaded")
+                TuiActionAvailability::Unavailable("no additional agent batch")
             }
             TuiActionId::IncludeAgentMatches | TuiActionId::ExcludeAgentMatches
                 if self.filtered_agents().is_empty() =>
@@ -1879,6 +1904,7 @@ impl TuiApp {
         self.agents.agents.clear();
         self.agents.agent_types.clear();
         self.agents.paging.reset();
+        self.agents.stop_refresh_spinner();
         self.agents.refresh_running = false;
         self.agents.refresh_context_id = None;
         self.agents.refresh_generation += 1;
@@ -2020,13 +2046,6 @@ impl TuiApp {
             .saturating_sub(self.agents.details_viewport_height.get());
     }
 
-    fn maybe_load_more_agents(&mut self, event_tx: Option<&TuiEventSender>) {
-        let count = self.filtered_agents().len();
-        if count > 0 && self.agents.selected.saturating_add(5) >= count {
-            self.load_more_agents(event_tx);
-        }
-    }
-
     fn toggle_selected_agent(&mut self) {
         let identity = {
             let filtered = self.filtered_agents();
@@ -2076,13 +2095,20 @@ impl TuiApp {
         let generation = self.agents.refresh_generation;
         self.agents.refresh_running = true;
         self.agents.refresh_append = append;
+        self.agents.refresh_spinner_frame = 0;
+        self.agents.stop_refresh_spinner();
+        let spinner_stop = Arc::new(AtomicBool::new(false));
+        spawn_agent_refresh_spinner(generation, event_tx.clone(), spinner_stop.clone());
+        self.agents.refresh_spinner_stop = Some(spinner_stop);
         self.agents.last_error = None;
         self.agents.refresh_context_id = Some(context_executor.current_context_id());
         self.agents.refresh_context_label = Some(self.context.short_label());
         let mode = self.agents.mode;
         let environment_reference = self.selected_environment_reference.clone();
         let dataset_scope = self.agents.dataset_scope.clone();
-        let component_scan_cursors = append.then(|| self.agents.paging.cursors().clone());
+        let page_cursor = append.then(|| AgentListPageCursor {
+            components: self.agents.paging.cursors().clone(),
+        });
         let max_count = self.agents.paging.request_limit(append);
         let auth_presenter = Some(tui_auth_presenter(&event_tx));
         context_executor.spawn(
@@ -2110,16 +2136,13 @@ impl TuiApp {
                     environment_reference: environment_reference.clone(),
                     component_name,
                     agent_type_name,
-                    component_scan_cursors,
+                    page_cursor,
                     max_count: Some(max_count),
                     ..AgentListRequest::default()
                 };
                 let context = launch_context.context();
-                let agents = context
-                    .agent_handler()
-                    .list_agent_metadata(request)
-                    .await?
-                    .masked(context.masking_config())?;
+                let page = context.agent_handler().list_agent_metadata(request).await?;
+                let agents = page.response.masked(context.masking_config())?;
                 let agent_types = if append {
                     None
                 } else {
@@ -2139,6 +2162,7 @@ impl TuiApp {
                 };
                 Ok(AgentRefreshPayload {
                     agents,
+                    cursor: page.cursor,
                     agent_types,
                 })
             },
@@ -2165,6 +2189,7 @@ impl TuiApp {
             return;
         }
 
+        self.agents.stop_refresh_spinner();
         self.agents.refresh_running = false;
         match result {
             Ok(payload) => {
@@ -2172,17 +2197,7 @@ impl TuiApp {
                     .filtered_agents()
                     .get(self.agents.selected)
                     .map(|agent| agent.identity());
-                let cursors = payload
-                    .agents
-                    .cursors
-                    .iter()
-                    .filter_map(|(component, cursor)| {
-                        cursor
-                            .parse::<ScanCursor>()
-                            .ok()
-                            .map(|cursor| (component.clone(), cursor))
-                    })
-                    .collect();
+                let cursors = payload.cursor.components;
                 let mut items = agent_items_from_metadata_response(payload.agents);
                 if append {
                     let mut seen = self
@@ -2618,6 +2633,10 @@ impl TuiApp {
         self.cleanup_server();
         self.cleanup_repl();
         self.close_agent_inspect_jobs();
+        self.agents.stop_refresh_spinner();
+        if let Some(stop) = self.agents.auto_refresh_stop.take() {
+            stop.store(true, Ordering::Relaxed);
+        }
     }
 
     fn command_is_running(&self) -> bool {
@@ -3084,6 +3103,7 @@ impl TuiApp {
 pub(super) enum TuiMode {
     Normal,
     LeaderNormal,
+    LeaderAgentFilter,
     Palette,
     ContextPicker,
     ContextSwitchConfirm,
@@ -3222,10 +3242,12 @@ struct AgentsState {
     refresh_generation: u64,
     refresh_context_id: Option<TuiContextId>,
     refresh_context_label: Option<String>,
+    refresh_spinner_frame: usize,
+    refresh_spinner_stop: Option<Arc<AtomicBool>>,
     auto_refresh_stop: Option<Arc<AtomicBool>>,
     last_error: Option<String>,
     metadata_error: Option<String>,
-    paging: CursorCollectionState<ScanCursor>,
+    paging: CursorCollectionState<Option<ScanCursor>>,
     refresh_append: bool,
     agents: Vec<AgentListItem>,
     agent_types: BTreeMap<(String, String), Value>,
@@ -3259,6 +3281,8 @@ impl Default for AgentsState {
             refresh_generation: 0,
             refresh_context_id: None,
             refresh_context_label: None,
+            refresh_spinner_frame: 0,
+            refresh_spinner_stop: None,
             auto_refresh_stop: None,
             last_error: None,
             metadata_error: None,
@@ -3356,9 +3380,16 @@ impl AgentsState {
     }
 
     fn invalidate_refresh(&mut self) {
+        self.stop_refresh_spinner();
         self.refresh_running = false;
         self.refresh_context_id = None;
         self.refresh_generation = self.refresh_generation.saturating_add(1);
+    }
+
+    fn stop_refresh_spinner(&mut self) {
+        if let Some(stop) = self.refresh_spinner_stop.take() {
+            stop.store(true, Ordering::Relaxed);
+        }
     }
 }
 
@@ -3432,11 +3463,26 @@ impl AgentDatasetScope {
             }
         }
     }
+
+    fn matches_query(&self, query: &str) -> bool {
+        match self {
+            Self::All => "any".contains(query),
+            Self::Component(component) => component.to_lowercase().contains(query),
+            Self::AgentType {
+                component,
+                agent_type,
+            } => {
+                component.to_lowercase().contains(query)
+                    || agent_type.to_lowercase().contains(query)
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
 struct AgentDatasetFilterState {
     choices: Vec<AgentDatasetScope>,
+    query: String,
     selected: usize,
 }
 
@@ -3476,7 +3522,35 @@ impl AgentDatasetFilterState {
             .iter()
             .position(|choice| choice == current)
             .unwrap_or(0);
-        Self { choices, selected }
+        Self {
+            choices,
+            query: String::new(),
+            selected,
+        }
+    }
+
+    fn filtered_indices(&self) -> Vec<usize> {
+        let query = self.query.trim().to_lowercase();
+        self.choices
+            .iter()
+            .enumerate()
+            .filter_map(|(index, choice)| {
+                if query.is_empty() || choice.matches_query(&query) {
+                    Some(index)
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    fn selected_choice(&self) -> Option<&AgentDatasetScope> {
+        let index = self.filtered_indices().get(self.selected).copied()?;
+        self.choices.get(index)
+    }
+
+    fn reset_filtered_selection(&mut self) {
+        self.selected = 0;
     }
 }
 
@@ -3992,6 +4066,7 @@ fn agent_id_line_spans(agent_id: &str) -> Vec<Span<'static>> {
 
 pub(super) struct AgentRefreshPayload {
     agents: AgentsMetadataResponseView,
+    cursor: AgentListPageCursor,
     agent_types: Option<Result<Vec<DeployedRegisteredAgentType>, String>>,
 }
 
@@ -5235,6 +5310,7 @@ fn render_tree(frame: &mut Frame<'_>, app: &TuiApp) {
     match app.mode {
         TuiMode::Normal => {}
         TuiMode::LeaderNormal => render_leader_hint(frame, app, TuiMode::Normal),
+        TuiMode::LeaderAgentFilter => render_leader_hint(frame, app, TuiMode::AgentFilter),
         TuiMode::ContextPicker => render_context_picker(frame, app),
         TuiMode::ContextSwitchConfirm => render_context_switch_confirm(frame, app),
         TuiMode::AgentFilter => {}
@@ -5298,20 +5374,26 @@ fn render_ops_agents_overview(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
     let (refresh_label, refresh_tone) = if app.agents.refresh_running {
         (
             if app.agents.refresh_append {
-                "loading more"
+                format!(
+                    "{} loading next {AGENT_PAGE_SIZE}",
+                    spinner_symbol(app.agents.refresh_spinner_frame)
+                )
             } else {
-                "refreshing"
+                format!(
+                    "{} refreshing",
+                    spinner_symbol(app.agents.refresh_spinner_frame)
+                )
             },
             PaneStatusTone::Loading,
         )
     } else if app.agents.auto_refresh {
-        ("auto 5s", PaneStatusTone::Active)
+        ("auto 5s".to_string(), PaneStatusTone::Active)
     } else {
-        ("auto off", PaneStatusTone::Idle)
+        ("auto off".to_string(), PaneStatusTone::Idle)
     };
     if let Some(header) = header_layout.panes.first() {
         PaneHeaderStatus {
-            label: refresh_label,
+            label: &refresh_label,
             tone: refresh_tone,
         }
         .render(frame, *header, &theme());
@@ -5498,13 +5580,11 @@ fn render_ops_agents_overview(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
     if app.agents.last_error.is_some() && filtered.is_empty() {
     } else if app.agents.refresh_running && filtered.is_empty() {
         frame.render_widget(
-            Paragraph::new(
-                Notice {
-                    kind: NoticeKind::Loading,
-                    message: "Refreshing agents",
-                }
-                .line(&theme()),
-            )
+            Paragraph::new(Notice::animated_loading(
+                "Refreshing agents",
+                spinner_symbol(app.agents.refresh_spinner_frame),
+                &theme(),
+            ))
             .style(surface_style()),
             table_area,
         );
@@ -6002,7 +6082,7 @@ fn render_ops_footer(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
                     label: "Focus pane",
                 },
                 KeyHint {
-                    key: "alt+left/right",
+                    key: "ctrl+x ←/→",
                     label: "Resize",
                 },
                 KeyHint {
@@ -6036,7 +6116,7 @@ fn render_ops_footer(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
                         label: "Focus pane",
                     },
                     KeyHint {
-                        key: "alt+left/right",
+                        key: "ctrl+x ←/→",
                         label: "Resize",
                     },
                 ]);
@@ -6060,7 +6140,7 @@ fn render_ops_footer(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
                 },
                 KeyHint {
                     key: "ctrl+l",
-                    label: "Load more",
+                    label: "Load next 200",
                 },
                 KeyHint {
                     key: "ctrl+r",
@@ -6161,21 +6241,46 @@ fn render_agent_dataset_filter(frame: &mut Frame<'_>, app: &TuiApp) {
     let Some(filter) = app.agents.dataset_filter.as_ref() else {
         return;
     };
-    let area = adaptive_data_popup_rect(frame.area(), 48, 10);
+    let area = adaptive_data_popup_rect(frame.area(), 48, 12);
     let content = OverlayFrame::content_area(area);
-    let visible_count = content.height.saturating_sub(5).max(1) as usize;
-    let overflow = filter.choices.len() > visible_count;
+    let visible_count = content.height.saturating_sub(6).max(1) as usize;
+    let filtered_indices = filter.filtered_indices();
+    let overflow = filtered_indices.len() > visible_count;
     let table_width = content.width.saturating_sub(u16::from(overflow)) as usize;
     let widths = decision_table_widths(table_width, 50);
     let start = filter
         .selected
         .saturating_sub(visible_count.saturating_sub(1));
+    let query_text = if filter.query.is_empty() {
+        "type component or agent type"
+    } else {
+        &filter.query
+    };
     let mut lines = vec![
         Notice {
             kind: NoticeKind::Info,
             message: "Server-side filter; applied before loading agents",
         }
         .line(&theme()),
+        Line::from(vec![
+            Span::styled("Find     ", Style::default().fg(theme().text_muted)),
+            Span::styled(
+                query_text.to_string(),
+                Style::default().fg(if filter.query.is_empty() {
+                    theme().text_faint
+                } else {
+                    theme().input_text
+                }),
+            ),
+            Span::styled(
+                format!(
+                    "   {}/{} choices",
+                    filtered_indices.len(),
+                    filter.choices.len()
+                ),
+                Style::default().fg(theme().text_muted),
+            ),
+        ]),
         Line::default(),
         DecisionTableRow {
             cells: &["Component", "Agent type"],
@@ -6186,35 +6291,55 @@ fn render_agent_dataset_filter(frame: &mut Frame<'_>, app: &TuiApp) {
         }
         .line(&theme()),
     ];
-    lines.extend(
-        filter
-            .choices
-            .iter()
-            .enumerate()
-            .skip(start)
-            .take(visible_count)
-            .map(|(index, choice)| {
-                let (component, agent_type) = match choice {
-                    AgentDatasetScope::All => ("Any", "Any"),
-                    AgentDatasetScope::Component(component) => (component.as_str(), "Any"),
-                    AgentDatasetScope::AgentType {
-                        component,
-                        agent_type,
-                    } => (component.as_str(), agent_type.as_str()),
-                };
-                DecisionTableRow {
-                    cells: &[component, agent_type],
-                    widths: &widths,
-                    header: false,
-                    selectable: true,
-                    selected: index == filter.selected,
-                }
-                .line(&theme())
-            }),
-    );
+    if filtered_indices.is_empty() {
+        lines.push(
+            Notice {
+                kind: NoticeKind::Empty,
+                message: "No component or agent type matches",
+            }
+            .line(&theme()),
+        );
+    } else {
+        lines.extend(
+            filtered_indices
+                .iter()
+                .enumerate()
+                .skip(start)
+                .take(visible_count)
+                .filter_map(|(visible_index, choice_index)| {
+                    let choice = filter.choices.get(*choice_index)?;
+                    let (component, agent_type) = match choice {
+                        AgentDatasetScope::All => ("Any", "Any"),
+                        AgentDatasetScope::Component(component) => (component.as_str(), "Any"),
+                        AgentDatasetScope::AgentType {
+                            component,
+                            agent_type,
+                        } => (component.as_str(), agent_type.as_str()),
+                    };
+                    Some(
+                        DecisionTableRow {
+                            cells: &[component, agent_type],
+                            widths: &widths,
+                            header: false,
+                            selectable: true,
+                            selected: visible_index == filter.selected,
+                        }
+                        .line(&theme()),
+                    )
+                }),
+        );
+    }
     lines.push(Line::default());
     let footer = shortcut_line(
         &[
+            KeyHint {
+                key: "type",
+                label: "Find",
+            },
+            KeyHint {
+                key: "ctrl+u",
+                label: "Clear",
+            },
             KeyHint {
                 key: "↑/↓",
                 label: "Navigate",
@@ -6240,11 +6365,11 @@ fn render_agent_dataset_filter(frame: &mut Frame<'_>, app: &TuiApp) {
         render_overlay_scrollbar(
             frame,
             Rect {
-                y: content.y.saturating_add(3),
-                height: content.height.saturating_sub(5),
+                y: content.y.saturating_add(4),
+                height: content.height.saturating_sub(6),
                 ..content
             },
-            filter.choices.len(),
+            filtered_indices.len(),
             filter.selected,
         );
     }
@@ -9145,7 +9270,7 @@ fn help_lines(app: &TuiApp, width: usize) -> Vec<Line<'static>> {
         );
         push_raw_help(&mut lines, width, "enter", "Show or hide details");
         push_raw_help(&mut lines, width, "ctrl+x c", "Choose visible columns");
-        push_raw_help(&mut lines, width, "alt+left/right", "Resize details split");
+        push_raw_help(&mut lines, width, "ctrl+x ←/→", "Resize details split");
     }
 
     lines.push(Line::default());
@@ -9266,14 +9391,14 @@ fn tab_status(view: TuiWorkspace, app: &TuiApp) -> Option<Span<'static>> {
     Some(Span::styled(label, style))
 }
 
-fn render_leader_hint(frame: &mut Frame<'_>, _app: &TuiApp, _return_mode: TuiMode) {
+fn render_leader_hint(frame: &mut Frame<'_>, app: &TuiApp, _return_mode: TuiMode) {
     let area = Rect {
         x: frame.area().x,
         y: frame.area().y + frame.area().height.saturating_sub(2),
         width: frame.area().width,
         height: 1,
     };
-    let line = Line::from(vec![
+    let mut spans = vec![
         Span::styled("│ ", command_rail_style()),
         shortcut_span("e"),
         Span::raw(" Context   "),
@@ -9289,7 +9414,13 @@ fn render_leader_hint(frame: &mut Frame<'_>, _app: &TuiApp, _return_mode: TuiMod
         Span::raw(" Commands   "),
         shortcut_span("h"),
         Span::raw(" Help"),
-    ]);
+    ];
+    if app.agent_details_open() {
+        spans.push(Span::raw("   "));
+        spans.push(shortcut_span("←/→"));
+        spans.push(Span::raw(" Resize"));
+    }
+    let line = Line::from(spans);
     frame.render_widget(Paragraph::new(line).style(command_status_bg_style()), area);
 }
 
@@ -10757,8 +10888,8 @@ const ACTIONS: [TuiAction; 33] = [
     },
     TuiAction {
         id: TuiActionId::LoadMoreAgents,
-        label: "Load More Agents",
-        description: "Continue each unfinished server cursor",
+        label: "Load Next 200 Agents",
+        description: "Fetch one additional batch of up to 200 agents",
         shortcut: Some("ctrl+l"),
         category: TuiActionCategory::Ops,
         scope: TuiActionScope::Agents,
@@ -12101,6 +12232,57 @@ mod tests {
     }
 
     #[test]
+    fn agent_dataset_picker_literal_searches_components_and_agent_types() {
+        let mut app = test_app();
+        app.agents.agents = sample_agents();
+        app.handle_key(modified_key(KeyCode::Char('f'), KeyModifiers::CONTROL));
+
+        for character in "oRdErAgEnT".chars() {
+            app.handle_key(key(KeyCode::Char(character)));
+        }
+        let filter = app.agents.dataset_filter.as_ref().expect("dataset filter");
+        assert_eq!(filter.filtered_indices().len(), 1);
+        assert!(matches!(
+            filter.selected_choice(),
+            Some(AgentDatasetScope::AgentType { agent_type, .. }) if agent_type == "OrderAgent"
+        ));
+        let frame = render_app_text_at(&app, 100, 30);
+        assert!(frame.contains("1/5 choices"), "{frame}");
+        assert!(frame.contains("OrderAgent"), "{frame}");
+
+        app.handle_key(modified_key(KeyCode::Char('u'), KeyModifiers::CONTROL));
+        for character in "odrar".chars() {
+            app.handle_key(key(KeyCode::Char(character)));
+        }
+        assert!(
+            app.agents
+                .dataset_filter
+                .as_ref()
+                .expect("dataset filter")
+                .filtered_indices()
+                .is_empty()
+        );
+        let frame = render_app_text_at(&app, 100, 30);
+        assert!(
+            frame.contains("No component or agent type matches"),
+            "{frame}"
+        );
+
+        app.handle_key(modified_key(KeyCode::Char('u'), KeyModifiers::CONTROL));
+        for character in "OrderAgent".chars() {
+            app.handle_key(key(KeyCode::Char(character)));
+        }
+        app.handle_key(key(KeyCode::Enter));
+        assert_eq!(
+            app.agents.dataset_scope,
+            AgentDatasetScope::AgentType {
+                component: "orders".to_string(),
+                agent_type: "OrderAgent".to_string(),
+            }
+        );
+    }
+
+    #[test]
     fn agent_columns_offer_live_operational_fields_and_navigation_hint() {
         let mut app = test_app();
         app.agents.agents = sample_agents();
@@ -12180,7 +12362,8 @@ mod tests {
         assert!(app.agents.details_scroll > 0);
 
         let old_ratio = app.layout.ops_details_ratio;
-        app.handle_key(modified_key(KeyCode::Right, KeyModifiers::ALT));
+        app.handle_key(modified_key(KeyCode::Char('x'), KeyModifiers::CONTROL));
+        app.handle_key(key(KeyCode::Right));
         assert!(app.layout.ops_details_ratio > old_ratio);
     }
 
@@ -12193,6 +12376,12 @@ mod tests {
         app.handle_key(key(KeyCode::Char('c')));
         assert_eq!(app.mode, TuiMode::AgentFilter);
 
+        let old_ratio = app.layout.ops_details_ratio;
+        app.handle_key(modified_key(KeyCode::Char('x'), KeyModifiers::CONTROL));
+        app.handle_key(key(KeyCode::Right));
+        assert_eq!(app.mode, TuiMode::AgentFilter);
+        assert!(app.layout.ops_details_ratio > old_ratio);
+
         app.handle_key(key(KeyCode::Tab));
         assert_eq!(app.mode, TuiMode::Normal);
         assert_eq!(app.agents.focus, AgentOverviewFocus::Details);
@@ -12200,11 +12389,7 @@ mod tests {
 
         let frame = render_app_text_at(&app, 120, 30);
         assert!(frame.contains("tab / shift+tab Focus pane"), "{frame}");
-        assert!(frame.contains("alt+left/right Resize"), "{frame}");
-
-        let old_ratio = app.layout.ops_details_ratio;
-        app.handle_key(modified_key(KeyCode::Right, KeyModifiers::ALT));
-        assert!(app.layout.ops_details_ratio > old_ratio);
+        assert!(frame.contains("ctrl+x ←/→ Resize"), "{frame}");
 
         app.handle_key(key(KeyCode::BackTab));
         assert_eq!(app.agents.focus, AgentOverviewFocus::List);
@@ -13195,6 +13380,23 @@ mod tests {
     }
 
     #[test]
+    fn agent_refresh_spinner_is_generation_scoped_and_visible() {
+        let mut app = test_app();
+        let (tx, _rx) = test_event_channel();
+        app.agents.refresh_running = true;
+        app.agents.refresh_generation = 7;
+
+        app.handle_event(TuiEvent::AgentRefreshSpinnerTick { generation: 6 }, &tx);
+        assert_eq!(app.agents.refresh_spinner_frame, 0);
+        app.handle_event(TuiEvent::AgentRefreshSpinnerTick { generation: 7 }, &tx);
+        assert_eq!(app.agents.refresh_spinner_frame, 1);
+
+        let frame = render_app_text_at(&app, 120, 30);
+        assert!(frame.contains("[\\ refreshing]"), "{frame}");
+        assert!(frame.contains("[\\ Loading] Refreshing agents"), "{frame}");
+    }
+
+    #[test]
     fn full_tick_channel_is_not_treated_as_closed() {
         let (tx, _rx) = mpsc::channel(1);
         tx.try_send(TuiEvent::SpinnerTick(1)).expect("first tick");
@@ -13467,14 +13669,14 @@ mod tests {
     }
 
     #[test]
-    fn mouse_selection_near_loaded_end_requests_cursor_continuation() {
+    fn continuation_is_requested_explicitly_not_by_navigation() {
         let mut app = test_app();
         let (tx, _rx) = test_event_channel();
         app.active_workspace = TuiWorkspace::Ops;
         app.agents.agents = sample_agents();
         app.agents.paging.finish_request(
             false,
-            BTreeMap::from([("cart".to_string(), "0/42".parse().unwrap())]),
+            BTreeMap::from([("cart".to_string(), Some("0/42".parse().unwrap()))]),
         );
         render_app_text_at(&app, 120, 32);
         let list = snapshot_region(&app, RegionKind::OpsList);
@@ -13489,6 +13691,20 @@ mod tests {
         );
 
         assert_eq!(app.agents.selected, 2);
+        assert!(app.agents.last_error.is_none());
+
+        app.handle_key_with_events(key(KeyCode::End), Some(&tx));
+        assert!(app.agents.last_error.is_none());
+        app.handle_mouse(
+            mouse(MouseEventKind::ScrollDown, list.x + 4, list.y + 4),
+            Some(&tx),
+        );
+        assert!(app.agents.last_error.is_none());
+
+        app.handle_key_with_events(
+            modified_key(KeyCode::Char('l'), KeyModifiers::CONTROL),
+            Some(&tx),
+        );
         assert_eq!(
             app.agents.last_error.as_deref(),
             Some("TUI context executor is not available")
@@ -13830,6 +14046,7 @@ environments:
             TuiContextId::new(context_id),
             Ok(AgentRefreshPayload {
                 agents: response,
+                cursor: AgentListPageCursor::default(),
                 agent_types: None,
             }),
             Vec::new(),

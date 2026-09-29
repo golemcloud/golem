@@ -134,11 +134,11 @@ This is the active TUI backlog. Keep it goal-sized and synchronized with `progre
   remove the obsolete visual comparison baseline.
 - [x] Rebuild live Agents Overview with the pane table, details, column chooser,
   filtering, explicit agent inclusion, and typed refresh.
-- [x] Separate exact server dataset filtering from fuzzy loaded-row Find and
+- [x] Separate exact server dataset filtering from literal loaded-row Find and
   keep both scopes visible in the Agents collection header.
-- [x] Add cursor-backed incremental loading at 200 rows per component cursor,
-  with truthful loaded/more-available status, end-of-list continuation, and an
-  explicit Load More action.
+- [x] Add cursor-backed incremental loading at 200 rows total across the
+  selected dataset, with truthful loaded/more-available status and an explicit
+  Load Next 200 action.
 - [x] Reserve bare printable keys for focused-pane input, move commands behind
   modifiers or the `ctrl+x` leader, and let typing in Agents start loaded-row
   Find directly.
@@ -159,12 +159,12 @@ This is the active TUI backlog. Keep it goal-sized and synchronized with `progre
   `alt`+number bindings.
 - [x] Align Help and Commands into fixed-height rows and strip ANSI escapes
   from agent/server errors before semantic TUI rendering.
-- [x] Invalidate stale refreshes on dataset changes and trigger continuation
-  from both keyboard and pointer selection near the loaded boundary.
+- [x] Invalidate stale refreshes on dataset changes; keep continuation explicit
+  so keyboard, pointer selection, and mouse-wheel movement never fetch rows.
 - [x] Keep modified shortcuts available while loaded-row Find owns printable
   input, and expose details focus/resize controls in contextual footer hints.
-- [x] Route mouse-wheel input over the Agents list to row movement and
-  near-boundary continuation without stealing details-pane scrolling.
+- [x] Route mouse-wheel input over the Agents list to row movement without
+  stealing details-pane scrolling or triggering network requests.
 - [x] Migrate every reachable production popup to the accepted shared overlay,
   notice, selection, and shortcut primitives.
 - [x] Add a reachable deterministic fake OTLP Metrics explorer for UI review;

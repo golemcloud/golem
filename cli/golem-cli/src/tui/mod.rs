@@ -60,6 +60,9 @@ enum TuiEvent {
     AgentStreamOutputClosed(Option<String>),
     AgentStreamExited(CommandExit),
     AgentRefreshTick,
+    AgentRefreshSpinnerTick {
+        generation: u64,
+    },
     AgentRefreshFinished {
         generation: u64,
         append: bool,

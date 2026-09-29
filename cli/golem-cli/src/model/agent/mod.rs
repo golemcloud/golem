@@ -193,10 +193,27 @@ pub struct AgentListRequest {
     pub filters: Vec<String>,
     pub mode: AgentListMode,
     pub scan_cursor: Option<ScanCursor>,
-    pub component_scan_cursors: Option<BTreeMap<String, ScanCursor>>,
+    pub page_cursor: Option<AgentListPageCursor>,
     pub max_count: Option<u64>,
     pub precise: bool,
     pub stable_sort: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AgentListPageCursor {
+    pub components: BTreeMap<String, Option<ScanCursor>>,
+}
+
+impl AgentListPageCursor {
+    pub fn has_more(&self) -> bool {
+        !self.components.is_empty()
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct AgentListPage {
+    pub response: AgentsMetadataResponseView,
+    pub cursor: AgentListPageCursor,
 }
 
 impl Display for AgentListMode {

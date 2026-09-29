@@ -575,7 +575,7 @@ explicit review.
   The Columns chooser uses the popup-table selection grammar and exposes
   `↑/↓ Navigate` explicitly.
   Agents now distinguishes exact server-side Dataset filtering from local
-  fuzzy Find over loaded rows. Cursor loading reports only loaded count and
+  literal Find over loaded rows. Cursor loading reports only loaded count and
   `more available`, and loaded-match All/None actions are explicit. The details
   pane is focusable, scrollable, resizable, and shows structured AgentID plus
   colored agent-type and instance metadata. Auto-refresh state is visible in

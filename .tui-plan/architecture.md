@@ -169,15 +169,19 @@ cross-agent view must resolve and report unavailable selections explicitly.
 Agent collection navigation has two deliberately separate layers:
 
 - the dataset filter is server-side and exact. It selects all deployed agent
-  components, one component, or one deployed agent type before rows are loaded;
-- Find is a local fuzzy jump/filter over only the rows currently loaded. Its
-  active field and loaded-match count remain visible while it is active;
-- the first request and each component continuation request are bounded to 200
-  rows per component cursor. The UI reports the loaded count and `more
-  available`; it does not invent page numbers or a global total the API does
-  not provide;
-- reaching the end of the loaded list may continue every unfinished component
-  cursor, and `Load more` remains an explicit action;
+  components, one component, or one deployed agent type before rows are loaded.
+  Its picker has case-insensitive literal type-ahead over component and agent
+  type names, but applies the selected exact scope only on confirmation;
+- Find is a local case-insensitive literal filter over one explicit field and
+  only the rows currently loaded. Its active field and loaded-match count
+  remain visible while it is active;
+- the first request and every explicit continuation request are bounded to 200
+  rows total across the selected dataset, not 200 per component. The typed page
+  cursor retains both an unfinished component cursor and components that have
+  not been scanned yet. The UI reports the loaded count and `more available`;
+  it does not invent page numbers or a global total the API does not provide;
+- continuation is explicit through `ctrl+l` or Commands. Reaching the end by
+  keyboard, mouse selection, or mouse wheel never starts a request;
 - include-all and exclude-all operate on loaded rows matching the local Find,
   never on unloaded server results. Explicit selections hidden by a Find remain
   selected until the user changes them.
@@ -190,9 +194,9 @@ Reusable collection surfaces own query/status rows, cursor-backed table state,
 semantic table cells, pane-header status, scrollable documents, colored JSON,
 and resizable list/details splits. Product views compose these blocks and own
 their request-specific mapping rather than recreating their rendering rules.
-Cursor-backed state owns the per-source continuation cursors, configured batch
-size, and loaded depth. The view supplies typed cursors and maps typed results;
-it does not maintain a second, view-local notion of page depth.
+Cursor-backed state owns typed per-source progress, including not-yet-scanned
+sources, the configured total batch size, and loaded depth. The view maps typed
+results; it does not maintain a second, view-local notion of page depth.
 
 Metrics may aggregate the complete matched set through a backend query. Oplog
 and live activity require an explicit, bounded set of concrete agents. Limits

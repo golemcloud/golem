@@ -505,16 +505,16 @@ Optional columns are changed transactionally in a scoped Columns overlay and
 remain session-local. Enter toggles an optional 60/40 right details pane;
 selection changes update details without stealing focus. Pointer clicks or
 `tab`/`shift+tab` move focus between list and details, and
-`alt+left/right` or pointer dragging resizes their shared divider. The details
-document scrolls independently with arrows, paging keys, boundaries, and the
-mouse wheel. Its AgentID remains inline when it fits and uses the CLI's
+`ctrl+x` then left/right or pointer dragging resizes their shared divider. The
+details document scrolls independently with arrows, paging keys, boundaries,
+and the mouse wheel. Its AgentID remains inline when it fits and uses the CLI's
 structured multiline formatter otherwise. Status is semantically colored, and
 agent-type plus instance metadata use the shared colored-JSON document.
-The agent list itself accepts the mouse wheel under its pointer region, moves
-the focused selection through loaded logical rows, and follows the same
-near-end continuation rule as keyboard navigation. Split focus and resize
-shortcuts are present in contextual footer hints whenever the details pane is
-visible and in scoped Help.
+The agent list itself accepts the mouse wheel under its pointer region and moves
+the focused selection through loaded logical rows. Loading another batch is
+always explicit through `ctrl+l` or Commands; navigation never triggers it.
+Split focus and resize shortcuts are present in contextual footer hints whenever
+the details pane is visible and in scoped Help.
 Table and details panes own independent trailing-right scrollbars and preserve
 the shared pane boundary rules.
 
@@ -535,7 +535,10 @@ one-cell `│` separator and no padding around that separator. Columns has
 `Column` and `Visibility` fields, one selected row, required/shown/hidden
 states, and an explicit `↑/↓ Navigate` hint alongside bare `space` toggle,
 apply, and cancel actions. Dataset uses the same grammar for Component and
-Agent type so adjacent values can never visually concatenate.
+Agent type so adjacent values can never visually concatenate. It also accepts
+case-insensitive literal type-ahead over those two fields, keeps the match count
+visible, and uses `ctrl+u` to clear the query. Popup selection rails always use
+the accent foreground independently of the selected-row background.
 
 Agents Overview offers AgentID, Status, Type, Component, Revision, Pending, and
 Created at. AgentID and Status are required; Type and Component are shown by
@@ -552,8 +555,13 @@ scope, fuzzy subsequence matching, or relevance reordering; matching rows retain
 their loaded order. The bar reports
 the real loaded count and `more available` whenever any server cursor remains;
 it never displays a guessed total or synthetic page number. Explicit All/None
-actions affect only loaded Find matches. A pane-header status separately shows
-refreshing, loading-more, auto-refresh-active, or auto-refresh-off state.
+actions affect only loaded Find matches. Each request loads at most 200 rows
+total across every matching component, and only the explicit Load Next 200
+action advances the typed page cursor. Refresh and auto-refresh reload the
+already requested depth without discovering the next batch. A pane-header
+status separately shows refreshing, loading-next, auto-refresh-active, or
+auto-refresh-off state. Active and loading statuses use square brackets; idle
+statuses use parentheses. Refresh and loading-next states animate their spinner.
 
 Active and success use the positive green semantic family. Orange remains the
 focus/accent family and is not used to color active operational state.

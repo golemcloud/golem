@@ -1,5 +1,37 @@
 # Progress
 
+## 2026-09-28
+
+- Replaced the unreliable `alt`+arrow details resize binding with the
+  keyboard-layout-safe `ctrl+x` then left/right sequence, including operation
+  from loaded-row Find and aligned footer, leader, and Help hints.
+- Changed cursor-backed loading to a hard 200-agent total per request across
+  the selected dataset. Typed page progress now retains both unfinished
+  component cursors and components not yet scanned.
+- Made Load Next 200 entirely explicit through `ctrl+l` or Commands. Keyboard
+  navigation, pointer selection, and mouse-wheel movement no longer start
+  continuation requests; refresh and auto-refresh only reload the depth the
+  user has already requested.
+- Added case-insensitive literal type-ahead to the Dataset popup over Component
+  and Agent type, with a visible match count, `ctrl+u` clear, and the existing
+  exact server-side scope applied only on confirmation.
+- Animated agent refresh and next-batch loading, and standardized pane status
+  shapes to square brackets for active/loading and parentheses for idle.
+- Kept popup selection rails visible with an accent foreground independent of
+  the selection background.
+- Updated the architecture, task, UI-system, and review ledgers to the accepted
+  paging, resize, search, marker, and status contracts.
+
+Validation:
+
+- `cargo fmt --package golem-cli`
+- `cargo test -p golem-cli --lib --features tui-preview --config 'profile.test.package.golem-cli.debug=0' tui:: -- --report-time` (215 passed)
+- Focused global page-budget and explicit-navigation tests (passed)
+- `cargo check -p golem-cli --features tui-preview --tests`
+- `cargo make install-golem-dev-release`
+- Installed `/home/noise64/.cargo/bin/golem` reports
+  `golem v1.5.3-301-g6f0c10e4d`.
+
 ## 2026-09-26
 
 - Replaced ambiguous notice prefixes with bracketed semantic badges such as

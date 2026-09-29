@@ -46,16 +46,16 @@ use crate::model::help::{
 };
 use crate::model::invoke_result_view::InvokeResultView;
 use crate::model::text_format::{log_fuzzy_match, log_text_view};
-use anyhow::{Context as AnyhowContext, anyhow, bail};
+use anyhow::{Context as AnyhowContext, anyhow, bail, ensure};
 use chrono::{DateTime, Utc};
 use colored::Colorize;
 
 use crate::agent_id_display::SourceLanguage;
 use crate::context::GlobalEnvironmentSelector;
 use crate::model::agent::{
-    AgentActionError, AgentIdMatch, AgentListMode, AgentListRequest, AgentMetadata,
-    AgentMetadataView, AgentUpdateMode, AgentsMetadataResponseView, BulkAgentActionResult,
-    RawAgentId, RedeployAgentError,
+    AgentActionError, AgentIdMatch, AgentListMode, AgentListPage, AgentListPageCursor,
+    AgentListRequest, AgentMetadata, AgentMetadataView, AgentUpdateMode,
+    AgentsMetadataResponseView, BulkAgentActionResult, RawAgentId, RedeployAgentError,
 };
 use crate::model::environment::{
     EnvironmentReference, EnvironmentResolveMode, ResolvedEnvironmentIdentity,
@@ -88,7 +88,7 @@ use crossterm::queue;
 use crossterm::terminal::{Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen};
 use inquire::Confirm;
 use itertools::{EitherOrBoth, Itertools};
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs::File;
 use std::io::{Stdout, Write};
 use std::path::Path;
@@ -102,6 +102,31 @@ use uuid::Uuid;
 
 pub struct AgentCommandHandler {
     ctx: Arc<Context>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct AgentPageBudget {
+    remaining: u64,
+}
+
+impl AgentPageBudget {
+    fn new(limit: u64) -> Self {
+        Self { remaining: limit }
+    }
+
+    fn request_count(self) -> Option<u64> {
+        (self.remaining > 0).then_some(self.remaining)
+    }
+
+    fn consume(&mut self, count: usize) -> anyhow::Result<()> {
+        let count = u64::try_from(count).unwrap_or(u64::MAX);
+        ensure!(
+            count <= self.remaining,
+            "Agent list response exceeded the requested page size"
+        );
+        self.remaining -= count;
+        Ok(())
+    }
 }
 
 impl AgentCommandHandler {
@@ -1011,7 +1036,7 @@ impl AgentCommandHandler {
     pub async fn list_agent_metadata(
         &self,
         request: AgentListRequest,
-    ) -> anyhow::Result<AgentsMetadataResponseView> {
+    ) -> anyhow::Result<AgentListPage> {
         let mode_overlay =
             if request.mode == AgentListMode::All && !user_set_mode_filter(&request.filters) {
                 Some(all_modes_filter())
@@ -1019,7 +1044,7 @@ impl AgentCommandHandler {
                 None
             };
         let filters = apply_list_mode_filter(request.filters, request.mode);
-        let (components, filters) = self
+        let (mut components, filters) = self
             .resolve_list_components(
                 request.environment_reference.as_ref(),
                 request.agent_type_name,
@@ -1028,17 +1053,83 @@ impl AgentCommandHandler {
             )
             .await?;
 
-        self.list_agents(
-            &components,
-            &filters,
-            mode_overlay.as_ref(),
-            request.scan_cursor.as_ref(),
-            request.component_scan_cursors.as_ref(),
-            request.max_count,
-            request.precise,
-            request.stable_sort,
-        )
-        .await
+        if request.max_count.is_none() {
+            let response = self
+                .list_agents(
+                    &components,
+                    &filters,
+                    mode_overlay.as_ref(),
+                    request.scan_cursor.as_ref(),
+                    None,
+                    None,
+                    request.precise,
+                    request.stable_sort,
+                )
+                .await?;
+            return Ok(AgentListPage {
+                response,
+                cursor: AgentListPageCursor::default(),
+            });
+        }
+
+        components.sort_by(|left, right| left.component_name.cmp(&right.component_name));
+        let available_components = components
+            .iter()
+            .map(|component| component.component_name.to_string())
+            .collect::<HashSet<_>>();
+        let mut cursor = request.page_cursor.unwrap_or_else(|| AgentListPageCursor {
+            components: components
+                .iter()
+                .map(|component| (component.component_name.to_string(), None))
+                .collect(),
+        });
+        cursor
+            .components
+            .retain(|component, _| available_components.contains(component));
+
+        let mut budget = AgentPageBudget::new(request.max_count.unwrap_or_default());
+        let mut response = AgentsMetadataResponseView::default();
+        for component in components {
+            let component_name = component.component_name.to_string();
+            let Some(component_cursor) = cursor.components.get(&component_name).cloned() else {
+                continue;
+            };
+            let Some(request_count) = budget.request_count() else {
+                break;
+            };
+            let (agents, next_cursor) = self
+                .list_component_agents(
+                    &component.component_name,
+                    &component.id,
+                    Some(&filters),
+                    mode_overlay.as_ref(),
+                    component_cursor.as_ref(),
+                    Some(request_count),
+                    request.precise,
+                )
+                .await?;
+            budget.consume(agents.len())?;
+            self.append_agent_metadata_views(&mut response, agents)
+                .await?;
+            match next_cursor {
+                Some(next_cursor) => {
+                    cursor.components.insert(component_name, Some(next_cursor));
+                }
+                None => {
+                    cursor.components.remove(&component_name);
+                }
+            }
+        }
+
+        if request.stable_sort {
+            response.agents.sort_by(|left, right| {
+                left.component_name
+                    .cmp(&right.component_name)
+                    .then_with(|| left.agent_id.0.cmp(&right.agent_id.0))
+            });
+        }
+
+        Ok(AgentListPage { response, cursor })
     }
 
     async fn list_with_refresh(
@@ -1251,66 +1342,7 @@ impl AgentCommandHandler {
                 )
                 .await?;
 
-            for agent in agents {
-                let raw_agent_id = agent.agent_id.agent_id.clone();
-
-                let agent_component = self
-                    .ctx
-                    .component_handler()
-                    .get_component_revision_by_id(
-                        &agent.agent_id.component_id,
-                        agent.component_revision,
-                    )
-                    .await?;
-
-                let parsed_agent_type_name =
-                    ParsedAgentId::parse_agent_type_name(&raw_agent_id).ok();
-
-                let defaults = parsed_agent_type_name.as_ref().and_then(|agent_type_name| {
-                    agent_component
-                        .metadata
-                        .agent_type_provision_configs()
-                        .get(agent_type_name)
-                        .cloned()
-                });
-
-                let source_language = parsed_agent_type_name
-                    .as_ref()
-                    .and_then(|type_name| {
-                        agent_component
-                            .metadata
-                            .agent_types()
-                            .iter()
-                            .find(|at| &at.type_name == type_name)
-                            .map(|at| SourceLanguage::from(at.source_language.as_str()))
-                    })
-                    .unwrap_or_default();
-
-                let secret_config_paths = parsed_agent_type_name
-                    .as_ref()
-                    .map(|agent_type_name| {
-                        secret_config_paths_for_agent_type(
-                            agent_component.metadata.agent_types(),
-                            agent_type_name,
-                        )
-                    })
-                    .unwrap_or_default();
-
-                let mut agent_view = AgentMetadataView::from(agent)
-                    .with_defaults(defaults)
-                    .with_secret_config_paths(secret_config_paths);
-
-                let parsed = ParsedAgentId::parse(&raw_agent_id, &agent_component.metadata).ok();
-                agent_view.agent_id = crate::agent_id_display::render_agent_id_or_raw(
-                    parsed.as_ref(),
-                    &source_language,
-                    &raw_agent_id,
-                )
-                .into();
-
-                view.agents
-                    .push(agent_view.with_source_language(source_language));
-            }
+            self.append_agent_metadata_views(&mut view, agents).await?;
             component_scan_cursor
                 .into_iter()
                 .for_each(|component_scan_cursor| {
@@ -1330,6 +1362,65 @@ impl AgentCommandHandler {
         }
 
         Ok(view)
+    }
+
+    async fn append_agent_metadata_views(
+        &self,
+        view: &mut AgentsMetadataResponseView,
+        agents: Vec<AgentMetadata>,
+    ) -> anyhow::Result<()> {
+        for agent in agents {
+            let raw_agent_id = agent.agent_id.agent_id.clone();
+            let agent_component = self
+                .ctx
+                .component_handler()
+                .get_component_revision_by_id(
+                    &agent.agent_id.component_id,
+                    agent.component_revision,
+                )
+                .await?;
+            let parsed_agent_type_name = ParsedAgentId::parse_agent_type_name(&raw_agent_id).ok();
+            let defaults = parsed_agent_type_name.as_ref().and_then(|agent_type_name| {
+                agent_component
+                    .metadata
+                    .agent_type_provision_configs()
+                    .get(agent_type_name)
+                    .cloned()
+            });
+            let source_language = parsed_agent_type_name
+                .as_ref()
+                .and_then(|type_name| {
+                    agent_component
+                        .metadata
+                        .agent_types()
+                        .iter()
+                        .find(|agent_type| &agent_type.type_name == type_name)
+                        .map(|agent_type| SourceLanguage::from(agent_type.source_language.as_str()))
+                })
+                .unwrap_or_default();
+            let secret_config_paths = parsed_agent_type_name
+                .as_ref()
+                .map(|agent_type_name| {
+                    secret_config_paths_for_agent_type(
+                        agent_component.metadata.agent_types(),
+                        agent_type_name,
+                    )
+                })
+                .unwrap_or_default();
+            let mut agent_view = AgentMetadataView::from(agent)
+                .with_defaults(defaults)
+                .with_secret_config_paths(secret_config_paths);
+            let parsed = ParsedAgentId::parse(&raw_agent_id, &agent_component.metadata).ok();
+            agent_view.agent_id = crate::agent_id_display::render_agent_id_or_raw(
+                parsed.as_ref(),
+                &source_language,
+                &raw_agent_id,
+            )
+            .into();
+            view.agents
+                .push(agent_view.with_source_language(source_language));
+        }
+        Ok(())
     }
 
     async fn cmd_interrupt(&self, agent_id: AgentIdArgs) -> anyhow::Result<()> {
@@ -3430,9 +3521,9 @@ fn validate_public_invocation_agent_id(
 #[cfg(test)]
 mod tests {
     use super::{
-        AgentListMode, apply_list_mode_filter, build_repl_agent_id, normalize_public_agent_id,
-        parse_method_argument_schema_value, render_revert_command, split_agent_id,
-        validate_public_invocation_agent_id,
+        AgentListMode, AgentPageBudget, apply_list_mode_filter, build_repl_agent_id,
+        normalize_public_agent_id, parse_method_argument_schema_value, render_revert_command,
+        split_agent_id, validate_public_invocation_agent_id,
     };
     use crate::agent_id_display::SourceLanguage;
     use crate::context::GlobalEnvironmentSelector;
@@ -3451,6 +3542,18 @@ mod tests {
     use pretty_assertions::assert_eq;
     use test_r::test;
     use uuid::Uuid;
+
+    #[test]
+    fn agent_page_budget_caps_a_page_across_components() {
+        let mut budget = AgentPageBudget::new(200);
+
+        assert_eq!(budget.request_count(), Some(200));
+        budget.consume(125).unwrap();
+        assert_eq!(budget.request_count(), Some(75));
+        budget.consume(75).unwrap();
+        assert_eq!(budget.request_count(), None);
+        assert!(budget.consume(1).is_err());
+    }
 
     #[test]
     fn revert_command_preserves_scope_and_shell_sensitive_arguments() {

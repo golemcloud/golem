@@ -169,25 +169,43 @@ impl Notice<'_> {
             NoticeKind::Unavailable => ("Unavailable", "—", visual.text_muted),
             NoticeKind::Empty => ("Empty", "○", visual.text_muted),
         };
-        Line::from(vec![
-            Span::styled("[", Style::default().fg(visual.border_subtle)),
-            Span::styled(
-                glyph,
-                Style::default().fg(color).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                format!(" {label}"),
-                Style::default()
-                    .fg(visual.text_muted)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled("]", Style::default().fg(visual.border_subtle)),
-            Span::styled(
-                format!(" {}", self.message),
-                Style::default().fg(visual.text_secondary),
-            ),
-        ])
+        notice_line(label, glyph, color, self.message, visual)
     }
+
+    pub fn animated_loading(
+        message: &str,
+        glyph: &'static str,
+        visual: &TuiVisualStyle,
+    ) -> Line<'static> {
+        notice_line("Loading", glyph, visual.accent, message, visual)
+    }
+}
+
+fn notice_line(
+    label: &str,
+    glyph: &'static str,
+    color: Color,
+    message: &str,
+    visual: &TuiVisualStyle,
+) -> Line<'static> {
+    Line::from(vec![
+        Span::styled("[", Style::default().fg(visual.border_subtle)),
+        Span::styled(
+            glyph,
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!(" {label}"),
+            Style::default()
+                .fg(visual.text_muted)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("]", Style::default().fg(visual.border_subtle)),
+        Span::styled(
+            format!(" {message}"),
+            Style::default().fg(visual.text_secondary),
+        ),
+    ])
 }
 
 pub(super) struct ContentTableRow<'a> {
@@ -940,7 +958,11 @@ impl ContentTableRow<'_> {
         };
         let mut spans = vec![Span::styled(
             if self.selected { "▌ " } else { "  " },
-            row_style,
+            if self.selected {
+                selected_marker_style(visual)
+            } else {
+                row_style
+            },
         )];
         for (index, (cell, width)) in self.cells.iter().zip(self.widths).enumerate() {
             let color = if self.header {
@@ -1703,7 +1725,7 @@ impl CommandRow<'_> {
             muted_style
         };
         let marker_style = if self.selected {
-            selected_style
+            selected_marker_style(visual)
         } else {
             Style::default()
         };
@@ -1842,13 +1864,14 @@ impl PaneHeaderStatus<'_> {
         if area.width < 8 || area.height == 0 {
             return;
         }
-        let (glyph, color) = match self.tone {
-            PaneStatusTone::Active => ("●", visual.success),
-            PaneStatusTone::Loading => ("…", visual.accent),
-            PaneStatusTone::Idle => ("○", visual.text_muted),
+        let (opening, closing, color) = match self.tone {
+            PaneStatusTone::Active => ("[", "]", visual.success),
+            PaneStatusTone::Loading => ("[", "]", visual.accent),
+            PaneStatusTone::Idle => ("(", ")", visual.text_muted),
         };
-        let text = format!("{glyph} {}", self.label);
-        let width = (text.chars().count() as u16).min(area.width.saturating_sub(2));
+        let text = format!("{opening}{}{closing}", self.label);
+        let width =
+            (UnicodeWidthStr::width(text.as_str()) as u16).min(area.width.saturating_sub(2));
         let target = Rect {
             x: area.right().saturating_sub(width).saturating_sub(1),
             width,
@@ -2016,7 +2039,18 @@ impl SelectableRow<'_> {
         } else {
             Style::default().fg(visual.text)
         };
-        Line::from(Span::styled(format!("{marker}{label}"), style)).alignment(Alignment::Center)
+        Line::from(vec![
+            Span::styled(
+                marker,
+                if self.selected {
+                    selected_marker_style(visual)
+                } else {
+                    style
+                },
+            ),
+            Span::styled(label, style),
+        ])
+        .alignment(Alignment::Center)
     }
 }
 
@@ -2038,7 +2072,7 @@ impl DecisionTableRow<'_> {
             spans.push(Span::styled(
                 if self.selected { "▌ " } else { "  " },
                 if self.selected {
-                    selected_style
+                    selected_marker_style(visual)
                 } else {
                     Style::default()
                 },
@@ -2074,6 +2108,13 @@ impl DecisionTableRow<'_> {
         }
         Line::from(spans).alignment(Alignment::Center)
     }
+}
+
+fn selected_marker_style(visual: &TuiVisualStyle) -> Style {
+    Style::default()
+        .fg(visual.accent)
+        .bg(visual.selection_background)
+        .add_modifier(Modifier::BOLD)
 }
 
 pub(super) struct OverlayFrame<'a> {
@@ -2556,6 +2597,7 @@ mod tests {
         assert_eq!(buffer[(0, 0)].symbol(), "›");
         assert_eq!(buffer[(0, 0)].bg, visual.input_background);
         assert_eq!(buffer[(0, 1)].symbol(), "▌");
+        assert_eq!(buffer[(0, 1)].fg, visual.accent);
         assert!((0..20).all(|x| buffer[(x, 1)].bg == visual.selection_background));
     }
 
@@ -2640,16 +2682,20 @@ mod tests {
 
     #[test]
     fn cursor_collection_state_tracks_continuations_and_loaded_depth() {
-        let mut state = CursorCollectionState::new(200);
+        let mut state = CursorCollectionState::<Option<u64>>::new(200);
         assert_eq!(state.request_limit(false), 200);
         assert!(!state.has_more());
 
-        state.finish_request(false, BTreeMap::from([("cart".to_string(), 17)]));
+        state.finish_request(
+            false,
+            BTreeMap::from([("cart".to_string(), Some(17)), ("orders".to_string(), None)]),
+        );
         assert!(state.has_more());
         assert_eq!(state.request_limit(true), 200);
-        assert_eq!(state.cursors().get("cart"), Some(&17));
+        assert_eq!(state.cursors().get("cart"), Some(&Some(17)));
+        assert_eq!(state.cursors().get("orders"), Some(&None));
 
-        state.finish_request(true, BTreeMap::from([("cart".to_string(), 42)]));
+        state.finish_request(true, BTreeMap::from([("cart".to_string(), Some(42))]));
         assert_eq!(state.loaded_depth(), 2);
         assert_eq!(state.request_limit(false), 400);
 
@@ -2851,6 +2897,7 @@ mod tests {
 
         assert_eq!(buffer[(2, 0)].symbol(), "c");
         assert_eq!(buffer[(0, 1)].symbol(), "▌");
+        assert_eq!(buffer[(0, 1)].fg, visual.accent);
         assert!((0..48).all(|x| buffer[(x, 1)].bg == visual.selection_background));
     }
 
@@ -2989,7 +3036,35 @@ mod tests {
         assert!(rendered.contains('│'), "{rendered}");
         assert!(!rendered.contains("agentAny"), "{rendered}");
         assert_eq!(UnicodeWidthStr::width(rendered.as_str()), 18);
+        assert_eq!(buffer[(0, 0)].fg, visual.accent);
         assert!((0..18).all(|x| buffer[(x, 0)].bg == visual.selection_background));
+    }
+
+    #[test]
+    fn pane_header_status_uses_active_and_idle_delimiter_shapes() {
+        let visual = TuiVisualStyle::for_variant(crate::tui::visual::TuiVisualVariant::FrameBase);
+        let buffer = render(48, 3, |frame| {
+            PaneHeaderStatus {
+                label: "auto 5s",
+                tone: PaneStatusTone::Active,
+            }
+            .render(frame, Rect::new(0, 0, 48, 1), &visual);
+            PaneHeaderStatus {
+                label: "auto off",
+                tone: PaneStatusTone::Idle,
+            }
+            .render(frame, Rect::new(0, 1, 48, 1), &visual);
+            PaneHeaderStatus {
+                label: "- refreshing",
+                tone: PaneStatusTone::Loading,
+            }
+            .render(frame, Rect::new(0, 2, 48, 1), &visual);
+        });
+        let rendered = text(&buffer);
+
+        assert!(rendered.contains("[auto 5s]"), "{rendered}");
+        assert!(rendered.contains("(auto off)"), "{rendered}");
+        assert!(rendered.contains("[- refreshing]"), "{rendered}");
     }
 
     #[test]
