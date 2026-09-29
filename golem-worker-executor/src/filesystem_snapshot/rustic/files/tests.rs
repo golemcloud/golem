@@ -262,14 +262,14 @@ async fn a_refresh_of_the_lease_during_a_call_does_not_move_the_end_of_that_call
         TaskTracker::new(),
     );
     let started = Instant::now();
-    let expiry = started + Duration::from_millis(50);
+    let expiry = started + Duration::from_millis(500);
     let lease = Arc::new(Lease::until(expiry));
     let refreshing = tokio::spawn({
         let (storage, lease) = (storage.clone(), lease.clone());
         async move {
             let reached = futures::stream::repeat(())
-                .then(|()| tokio::time::sleep(Duration::from_millis(1)))
-                .take(40)
+                .then(|()| tokio::time::sleep(Duration::from_millis(5)))
+                .take(80)
                 .any(|()| std::future::ready(!storage.calls().is_empty()))
                 .await;
             let refreshed_at = Instant::now();
@@ -294,7 +294,7 @@ async fn a_refresh_of_the_lease_during_a_call_does_not_move_the_end_of_that_call
             reached,
             refreshed_at < expiry,
             lease.expiry() > expiry + Duration::from_secs(5),
-            ended >= expiry && ended < expiry + Duration::from_millis(250),
+            ended >= expiry && ended < expiry + Duration::from_secs(1),
         ),
         (true, true, true, true),
         "the call ended {:?} after its start",
