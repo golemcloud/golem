@@ -448,3 +448,24 @@ Typed underlying methods retain the convenient awaited call and add `.start(args
 The underlying is revoked when the middleware handler returns: no new calls may start, but already admitted calls are not implicitly cancelled. Releasing an invocation result observer is disposal, not cancellation; call `cancel()` explicitly when intended. The SDK disposes abandoned observers and streams.
 
 For commands declaring stdout, the guest receives a host stdout writer. The SDK forwards the middleware's selected stdout to it concurrently with the result, finishes it on clean EOF, and fails it on forwarding errors. Authors return or select the readable stdout stream and do not write to or finish the host writer directly.
+
+## Component bundling
+
+All TypeScript components use the same full `agent-guest` WIT world. The component Rollup
+configuration infers registration capabilities from the TypeScript program and generates static
+imports for agent, tool, middleware, and snapshot exports. Absent capabilities use small empty
+discovery/error implementations; no role or alternate world is selected.
+
+The application bundles the SDK's preserved runtime modules, rather than importing a complete
+SDK embedded in the wrapper. Rollup can therefore remove absent registries and agent snapshot,
+principal serialization, and lifecycle code. Unused builder registration methods are removed
+before linking because class methods cannot otherwise be tree-shaken. Opaque registration
+helpers and computed SDK access conservatively retain capabilities. Host modules remain external.
+
+After building the SDK and agent template, run `node scripts/measure-components.mjs` from this
+package to build the five capability fixtures, check their full-world ABI, and record JS,
+release/stripped, and preinitialized component sizes in `.component-measurements/sizes.json`.
+Pass a baseline full-SDK template WASM as the first argument to compare the old external-SDK
+build. The recorded timing is median end-to-end QuickJS preinitialization time (three runs),
+including Wasmtime compilation; it is not deployed invocation latency. The harness requires
+`wasm-rquickjs` and `wasm-tools` on PATH and is separate from the process-free unit suite.

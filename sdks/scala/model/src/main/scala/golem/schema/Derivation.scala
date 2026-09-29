@@ -49,13 +49,14 @@ private[golem] object Derivation {
   private final val UrlFqn      = "golem.schema.Url"
   private final val QuantityFqn = "golem.schema.Quantity"
 
-  private val ubyteTypeId: TypeId[UByte]        = TypeId.of[UByte]
-  private val ushortTypeId: TypeId[UShort]      = TypeId.of[UShort]
-  private val uintTypeId: TypeId[UInt]          = TypeId.of[UInt]
-  private val ulongTypeId: TypeId[ULong]        = TypeId.of[ULong]
-  private val uuidTypeId: TypeId[Uuid]          = TypeId.of[Uuid]
-  private val instantTypeId: TypeId[Instant]    = TypeId.of[Instant]
-  private val durationTypeId: TypeId[JDuration] = TypeId.of[JDuration]
+  private val ubyteTypeId: TypeId[UByte]           = TypeId.of[UByte]
+  private val byteArrayTypeId: TypeId[Array[Byte]] = TypeId.of[Array[Byte]]
+  private val ushortTypeId: TypeId[UShort]         = TypeId.of[UShort]
+  private val uintTypeId: TypeId[UInt]             = TypeId.of[UInt]
+  private val ulongTypeId: TypeId[ULong]           = TypeId.of[ULong]
+  private val uuidTypeId: TypeId[Uuid]             = TypeId.of[Uuid]
+  private val instantTypeId: TypeId[Instant]       = TypeId.of[Instant]
+  private val durationTypeId: TypeId[JDuration]    = TypeId.of[JDuration]
 
   // Inclusive upper bounds of the WIT unsigned ranges.
   private final val MaxU8: Long  = 0xffL
@@ -180,6 +181,9 @@ private[golem] object Derivation {
 
   private def isUuid(reflect: Reflect.Bound[?]): Boolean =
     TypeId.structurallyEqual(reflect.typeId, uuidTypeId)
+
+  private def isByteArray(reflect: Reflect.Bound[?]): Boolean =
+    TypeId.structurallyEqual(reflect.typeId, byteArrayTypeId)
 
   private def normalizedName(reflect: Reflect.Bound[?]): String =
     TypeId.normalize(reflect.typeId).fullName
@@ -372,7 +376,8 @@ private[golem] object Derivation {
           case None =>
             reflect.asSequenceUnknown match {
               case Some(seqUnknown) =>
-                t.list(reflectToSchema(seqUnknown.sequence.element.asInstanceOf[Reflect.Bound[Any]], ctx))
+                if (isByteArray(reflect)) t.list(t.u8)
+                else t.list(reflectToSchema(seqUnknown.sequence.element.asInstanceOf[Reflect.Bound[Any]], ctx))
 
               case None =>
                 reflect.asMapUnknown match {
@@ -656,7 +661,12 @@ private[golem] object Derivation {
                 d match {
                   case DV.Sequence(values) =>
                     val elemRef = seqUnknown.sequence.element.asInstanceOf[Reflect.Bound[Any]]
-                    SchemaValue.ListValue(values.toList.map(v => dynamicToSchemaValue(elemRef, v)))
+                    if (isByteArray(reflect))
+                      SchemaValue.ListValue(values.toList.map {
+                        case DV.Primitive(PrimitiveValue.Byte(value)) => SchemaValue.U8Value(value & 0xff)
+                        case other => throw SchemaEncodeError(s"expected byte value in byte array, found: $other")
+                      })
+                    else SchemaValue.ListValue(values.toList.map(v => dynamicToSchemaValue(elemRef, v)))
                   case other => throw SchemaEncodeError(s"expected sequence dynamic value, found: $other")
                 }
 
@@ -908,7 +918,13 @@ private[golem] object Derivation {
                 val elemRef = seqUnknown.sequence.element.asInstanceOf[Reflect.Bound[Any]]
                 value match {
                   case SchemaValue.ListValue(values) =>
-                    DV.Sequence(Chunk.fromIterable(values.map(v => schemaValueToDynamic(elemRef, v))))
+                    if (isByteArray(reflect))
+                      DV.Sequence(Chunk.fromIterable(values.map {
+                        case SchemaValue.U8Value(value) if value >= 0 && value <= MaxU8 =>
+                          DV.Primitive(PrimitiveValue.Byte(value.toByte))
+                        case other => throw FromSchemaError(s"expected u8 value in byte array, got $other")
+                      }))
+                    else DV.Sequence(Chunk.fromIterable(values.map(v => schemaValueToDynamic(elemRef, v))))
                   case other => throw FromSchemaError(s"expected list value for sequence, got $other")
                 }
 

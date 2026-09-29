@@ -10,56 +10,6 @@ import {
 // Values
 pub async fn audit(@tool-middleware.RawToolInvocation, @tool-middleware.UnderlyingTool) -> Result[@tool-middleware.RawInvocationResult, @tool-middleware.ToolInvokeError[@tool-middleware.RawTypedSchemaValue]]
 
-pub fn cabi_realloc(Int, Int, Int, Int) -> Int
-
-pub fn wasmExportAsyncInitialize(Int, Int, Int) -> Int
-
-pub fn wasmExportAsyncInvokeGolemAgentGuest(Int, Int, Int) -> Int
-
-pub fn wasmExportAsyncInvokeGolemToolGuest(Int, Int, Int) -> Int
-
-pub fn wasmExportAsyncInvokeToolMiddleware(Int, Int, Int) -> Int
-
-pub fn wasmExportAsyncLoad(Int, Int, Int) -> Int
-
-pub fn wasmExportAsyncSave(Int, Int, Int) -> Int
-
-pub fn wasmExportDiscoverAgentTypes() -> Int
-
-pub fn wasmExportDiscoverAgentTypesPostReturn(Int) -> Unit
-
-pub fn wasmExportDiscoverToolMiddlewares() -> Int
-
-pub fn wasmExportDiscoverToolMiddlewaresPostReturn(Int) -> Unit
-
-pub fn wasmExportDiscoverTools() -> Int
-
-pub fn wasmExportDiscoverToolsPostReturn(Int) -> Unit
-
-pub fn wasmExportGetDefinition() -> Int
-
-pub fn wasmExportGetDefinitionPostReturn(Int) -> Unit
-
-pub fn wasmExportGetTool(Int, Int) -> Int
-
-pub fn wasmExportGetToolMiddleware(Int, Int) -> Int
-
-pub fn wasmExportGetToolMiddlewarePostReturn(Int) -> Unit
-
-pub fn wasmExportGetToolPostReturn(Int) -> Unit
-
-pub fn wasmExportInitialize(Int) -> Int
-
-pub fn wasmExportInvokeGolemAgentGuest(Int) -> Int
-
-pub fn wasmExportInvokeGolemToolGuest(Int) -> Int
-
-pub fn wasmExportInvokeToolMiddleware(Int) -> Int
-
-pub fn wasmExportLoad(Int, Int, Int, Int) -> Int
-
-pub fn wasmExportSave() -> Int
-
 // Errors
 
 // Types and methods

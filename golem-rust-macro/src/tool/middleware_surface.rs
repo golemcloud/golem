@@ -1095,10 +1095,10 @@ fn encode_dispatch_result(
                         )
                         .map_err(#sdk::tool::ToolInvokeError::InvalidResult)?;
                     return ::std::result::Result::Err(
-                        #sdk::tool::ToolInvokeError::Tool(#sdk::tool::RawCustomToolError {
-                            name: #error_ident,
-                            payload: #payload_ident,
-                        })
+                        #sdk::tool::ToolInvokeError::Tool(#sdk::tool::RawCustomToolError::from_payload(
+                            #error_ident,
+                            #payload_ident,
+                        ))
                     );
                 }
                 ::std::result::Result::Err(#error_ident) => {

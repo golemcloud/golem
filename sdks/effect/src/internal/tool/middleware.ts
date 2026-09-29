@@ -4,6 +4,8 @@ import type * as StreamsWit from "golem:tool/streams@0.1.0"
 import type * as Agent from "golem:agent/common@2.0.0"
 import { Context, Effect, Exit, Layer, Schema, Scope, Stream } from "effect"
 import { AbortableStreamIterable } from "../abortableStreamIterable.js"
+import { schemaShapesMatch } from "../schema-model/model.js"
+import { schemaGraphFromWit } from "../schema-model/wit.js"
 import { type CompiledWitCodec, compile } from "../../WitCodec.js"
 import {
   type BodyModel,
@@ -550,9 +552,16 @@ const customToolError = (
   return error.tag === "custom-error" ? error : undefined
 }
 
-const sameWireGraph = (left: unknown, right: unknown): boolean =>
-  JSON.stringify(left, (_key, value) => (typeof value === "bigint" ? `${value}n` : value)) ===
-  JSON.stringify(right, (_key, value) => (typeof value === "bigint" ? `${value}n` : value))
+const sameWireGraph = (
+  left: Common.TypedSchemaValue["graph"],
+  right: Common.TypedSchemaValue["graph"],
+): boolean => {
+  try {
+    return schemaShapesMatch(schemaGraphFromWit(left), schemaGraphFromWit(right))
+  } catch {
+    return false
+  }
+}
 
 const inputStream = (source: AsyncIterable<number> | undefined) =>
   source === undefined

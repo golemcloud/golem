@@ -66,9 +66,9 @@ import {
   deepEqual,
   preflightWitTypedSchemaValue,
   schemaGraphFromWit,
+  schemaShapesMatch,
   t,
   typedSchemaValueFromWit,
-  typedSchemaValueToWit,
   type TypedSchemaValue,
 } from './internal/schema-model';
 import { ToolRegistry } from './internal/registry/toolRegistry';
@@ -79,7 +79,7 @@ import {
 } from './internal/registry/toolMiddlewareRegistry';
 import { closeAsyncIterable, isAsyncIterable } from './internal/tool/asyncIterable';
 import { compileSchema } from './schema/adapter';
-import type { SchemaCodec } from './schema/codec';
+import { directSchemaValueFromWit, type SchemaCodec } from './schema/codec';
 import type { StandardSchemaV1 } from './schema/standardSchema';
 
 export type { ToolInputStream } from './internal/tool/startedToolInvocation';
@@ -1327,12 +1327,14 @@ export class CommandBuilder<
     private readonly toolVersion: string,
     private readonly commandAnnotations?: CommandAnnotations,
     private readonly subtreeForwards: readonly SubtreeForward[] = [],
+    private readonly requiresFilesystem = false,
   ) {}
 
   static root<const Name extends string>(
     name: Name,
+    requiresFilesystem = false,
   ): CommandBuilder<Name, {}, undefined, {}, true> {
-    return new CommandBuilder(name, emptyCommand(name), '0.0.0');
+    return new CommandBuilder(name, emptyCommand(name), '0.0.0', undefined, [], requiresFilesystem);
   }
 
   /** Construct the exact typed client owned by this tool definition. */
@@ -1358,6 +1360,7 @@ export class CommandBuilder<
       version,
       this.commandAnnotations,
       this.subtreeForwards,
+      this.requiresFilesystem,
     );
   }
 
@@ -1378,6 +1381,7 @@ export class CommandBuilder<
       this.toolVersion,
       normalizeAnnotations(annotations),
       this.subtreeForwards,
+      this.requiresFilesystem,
     );
   }
 
@@ -1647,6 +1651,7 @@ export class CommandBuilder<
       this.toolVersion,
       this.commandAnnotations,
       subtreeForwards,
+      this.requiresFilesystem,
     );
   }
 
@@ -1664,7 +1669,9 @@ export class CommandBuilder<
 
   [BUILD_TOOL](this: CommandBuilder<Name, Globals, Body, Children, true>): ExtendedToolType {
     if (this.compiled) return this.compiled;
-    const tool = normalizeExtendedTool(new ExtendedToolType(this.toolVersion, this.finalizeNode()));
+    const tool = normalizeExtendedTool(
+      new ExtendedToolType(this.toolVersion, this.finalizeNode(), this.requiresFilesystem),
+    );
     validateTypeScriptProjection(tool);
     this.compiled = tool;
     return this.compiled;
@@ -1678,8 +1685,11 @@ export type ToolDefinition<
   Children = {},
 > = CommandBuilder<Name, Globals, Body, Children, true>;
 
-export function toolDefinition<const Name extends string>(name: Name): ToolDefinition<Name> {
-  return CommandBuilder.root(name);
+export function toolDefinition<const Name extends string>(
+  name: Name,
+  options: { requiresFilesystem?: boolean } = {},
+): ToolDefinition<Name> {
+  return CommandBuilder.root(name, options.requiresFilesystem ?? false);
 }
 
 export function universalToolMiddleware<
@@ -1815,7 +1825,7 @@ function createToolClientMethod(
             return [field.name, hasOwn(args, projectedName) ? args[projectedName] : undefined];
           }),
         );
-        input = typedSchemaValueToWit(inputModel.encodeTyped(canonicalInput));
+        input = inputModel.encodeWire(canonicalInput);
         stdin = commandBody.stdin ? (args.stdin as ToolInputStream | undefined) : undefined;
         if (stdin !== undefined && !isReadableStream(stdin)) {
           throw new Error('stdin must be a readable stream');
@@ -1970,7 +1980,7 @@ function createToolUnderlyingMethod(
           return [field.name, hasOwn(args, projectedName) ? args[projectedName] : undefined];
         }),
       );
-      input = typedSchemaValueToWit(inputModel.encodeTyped(canonicalInput));
+      input = inputModel.encodeWire(canonicalInput);
       stdin = body.stdin ? (args.stdin as AsyncIterable<number> | undefined) : undefined;
       if (stdin !== undefined && !isAsyncIterable(stdin)) {
         throw new Error('stdin must be an async iterable');
@@ -2106,6 +2116,15 @@ function decodeWireValue(
   wire: WireTypedSchemaValue,
   position: string,
 ): unknown {
+  if (codec.direct) {
+    try {
+      return directSchemaValueFromWit(codec, wire.value);
+    } catch (error) {
+      throw new Error(
+        `${position} does not conform to the local definition: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
   validateWireSchema(codec.graph, wire, position);
   return decodeTypedValue(codec, typedSchemaValueFromWit(wire), position);
 }
@@ -2116,7 +2135,7 @@ function validateWireSchema(
   position: string,
 ): void {
   preflightWitTypedSchemaValue(wire);
-  if (!deepEqual(schemaGraphFromWit(wire.graph), expected)) {
+  if (!schemaShapesMatch(schemaGraphFromWit(wire.graph), expected)) {
     throw new Error(`${position} schema does not match the local definition`);
   }
 }
@@ -2537,6 +2556,35 @@ function bindToolImplementation(
 
 function pathsEqual(left: readonly string[], right: readonly string[]): boolean {
   return left.length === right.length && left.every((segment, index) => segment === right[index]);
+}
+
+/** @internal Bind a compiler-emitted path without reconstructing its descriptor. */
+export function bindConcreteToolCommand(
+  implementation: object,
+  toolName: string,
+  path: readonly string[],
+  nested: boolean,
+): { handler: (input: unknown, context: unknown) => unknown; receiver: object } {
+  let receiver = implementation;
+  let value: unknown = implementation;
+  const segments = path.length ? path : [toolName];
+  for (const [index, segment] of segments.entries()) {
+    if (!isImplementationObject(value)) throw new Error(`missing implementation for ${segment}`);
+    const property = getImplementationProperty(value, segment);
+    if (!property.found) throw new Error(`missing implementation for ${segment}`);
+    receiver = property.receiver ?? value;
+    value = property.value;
+    if (index < segments.length - 1 && !isNestedCommandImplementation(value))
+      throw new Error(`tool dispatcher ${segment} requires command(...)`);
+  }
+  if (path.length && nested) {
+    if (!isNestedCommandImplementation(value))
+      throw new Error(`tool command ${path.join(' ')} requires command(...)`);
+    receiver = value[COMMAND_IMPLEMENTATION].receiver;
+    value = value[COMMAND_IMPLEMENTATION].body;
+  }
+  if (typeof value !== 'function') throw new Error(`missing handler for ${segments.join(' ')}`);
+  return { handler: value as (input: unknown, context: unknown) => unknown, receiver };
 }
 
 function isImplementationObject(value: unknown): value is Record<PropertyKey, unknown> {

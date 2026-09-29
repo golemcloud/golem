@@ -12,6 +12,7 @@ use test_r::test;
 fn tool(result: SchemaType) -> Tool {
     Tool {
         version: "1".into(),
+        requires_filesystem: false,
         schema: SchemaGraph::empty(),
         commands: CommandTree {
             nodes: vec![CommandNode {

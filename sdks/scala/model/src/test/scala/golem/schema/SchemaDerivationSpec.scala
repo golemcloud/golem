@@ -219,6 +219,21 @@ object SchemaDerivationSpec extends ZIOSpecDefault {
           rootBody[Map[String, Int]] == MapType(t.string, t.s32)
         )
       },
+      test("Array[Byte] descriptor uses list<u8> while scalar Byte uses s8") {
+        assertTrue(
+          rootBody[Array[Byte]] == ListType(t.u8),
+          rootBody[Byte] == S8Type()
+        )
+      },
+      test("Array[Byte] round-trips the full unsigned byte representation") {
+        val value   = Array[Byte](0, 127, -128, -1)
+        val encoded = IntoSchema[Array[Byte]].toValue(value)
+        val decoded = roundTrip(value)
+        assertTrue(
+          encoded == SchemaValue.ListValue(List(0, 127, 128, 255).map(SchemaValue.U8Value.apply)),
+          decoded.exists(_.sameElements(value))
+        )
+      },
       test("collection values round-trip") {
         assert(roundTrip(List(1, 2, 3)))(isRight(equalTo(List(1, 2, 3)))) &&
         assert(roundTrip(Set(1, 2, 3)))(isRight(equalTo(Set(1, 2, 3)))) &&

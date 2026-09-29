@@ -15,8 +15,8 @@ pub fn native_tool_definition_impl(
     native: &syn::Ident,
 ) -> TokenStream {
     let mut item_trait = syn::parse_macro_input!(item as ItemTrait);
-    let version = match parse_version(attrs.into()) {
-        Ok(version) => version,
+    let (version, requires_filesystem) = match parse_version(attrs.into()) {
+        Ok(options) => options,
         Err(error) => return error.to_compile_error().into(),
     };
     let canonical = syn::Ident::new("golem_native_tool", Span::call_site());
@@ -35,10 +35,11 @@ pub fn native_tool_definition_impl(
         Err(error) => return error.to_compile_error().into(),
     };
     remove_host_result_wrappers(&mut metadata_trait);
-    let ir = match build_tool_definition_ir(&metadata_trait, version) {
+    let mut ir = match build_tool_definition_ir(&metadata_trait, version) {
         Ok(ir) => ir,
         Err(error) => return error.to_compile_error().into(),
     };
+    ir.requires_filesystem = requires_filesystem;
     let mut descriptor_ir = ir.clone();
     if let Err(error) = remove_cancellation_parameters(&mut descriptor_ir) {
         return error.to_compile_error().into();

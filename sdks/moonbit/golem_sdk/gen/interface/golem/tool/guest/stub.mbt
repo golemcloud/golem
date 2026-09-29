@@ -1,17 +1,38 @@
 ///|
-/// Enumerate the tools this component exposes.
+pub(all) struct Handlers {
+  discover_tools : () -> Result[Array[@common.Tool], @types.ToolError]
+  get_tool : (String) -> Result[@common.Tool, @types.ToolError]
+  invoke : async (
+    String,
+    Array[String],
+    @types.TypedSchemaValue,
+    @async-core.Stream[Result[FixedArray[Byte], @streams.ByteStreamFailure]]?,
+    @streams.ToolStdoutWriter?,
+    @common0.Principal,
+    @async-core.TaskGroup[Unit],
+  ) -> Result[@common.InvocationResult, @types.ToolError]
+}
+
+///|
+pub let handlers : Ref[Handlers?] = Ref(None)
+
+///|
 pub fn discover_tools() -> Result[Array[@common.Tool], @types.ToolError] {
-  Ok(@tool.discover_tools())
+  match handlers.val {
+    Some(h) => (h.discover_tools)()
+    None => Ok([])
+  }
 }
 
 ///|
-/// Look up a single tool by name.
 pub fn get_tool(name : String) -> Result[@common.Tool, @types.ToolError] {
-  @tool.get_registered_tool(name)
+  match handlers.val {
+    Some(h) => (h.get_tool)(name)
+    None => Err(@types.ToolError::InvalidToolName(name))
+  }
 }
 
 ///|
-/// Invoke a command of a tool.
 pub async fn invoke(
   tool_name : String,
   command_path : Array[String],
@@ -21,40 +42,22 @@ pub async fn invoke(
   ]?,
   stdout : @streams.ToolStdoutWriter?,
   principal : @common0.Principal,
-  _background_group : @async-core.TaskGroup[Unit],
+  background_group : @async-core.TaskGroup[Unit],
 ) -> Result[@common.InvocationResult, @types.ToolError] {
-  let stdin = stdin.map(@tool.byte_stream)
-  match @tool.validate_tool_stdout(tool_name, command_path, stdout is Some(_)) {
-    Err(error) => {
+  match handlers.val {
+    Some(h) =>
+      (h.invoke)(
+        tool_name, command_path, input, stdin, stdout, principal, background_group,
+      )
+    None => {
+      @model.drop_wit_capabilities(input.value)
+      if stdin is Some(reader) {
+        reader.drop_sync()
+      }
       if stdout is Some(writer) {
         writer.drop()
       }
-      return @tool.reject_wire_invocation(input, stdin, error)
-    }
-    Ok(_) => ()
-  }
-  match stdout {
-    None =>
-      @tool.invoke_registered_tool(
-        tool_name,
-        command_path,
-        input,
-        stdin,
-        None,
-        principal,
-      )
-    Some(writer) => {
-      let stdout = @tool.provider_stdout(writer)
-      @tool.invoke_with_stdout(stdout, () => {
-        @tool.invoke_registered_tool(
-          tool_name,
-          command_path,
-          input,
-          stdin,
-          Some(stdout),
-          principal,
-        )
-      })
+      Err(@types.ToolError::InvalidToolName(tool_name))
     }
   }
 }

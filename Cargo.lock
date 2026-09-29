@@ -4144,7 +4144,6 @@ dependencies = [
  "blake3",
  "bytes",
  "chrono",
- "combine",
  "criterion",
  "desert_rust",
  "golem-api-grpc",
@@ -4155,14 +4154,12 @@ dependencies = [
  "poem",
  "poem-openapi",
  "proptest",
- "range-set-blaze",
  "regex",
  "rust_decimal",
  "serde",
  "serde_json",
  "test-r",
  "thiserror 2.0.20",
- "typed-path",
  "url",
  "uuid",
  "wasip2",
@@ -12642,7 +12639,7 @@ dependencies = [
 [[package]]
 name = "wit-bindgen"
 version = "0.59.0"
-source = "git+https://github.com/golemcloud/wit-bindgen?branch=golem-outline-lift-v0.58.0#4407232ead86d9bcbd06cbebd790a52120a4087a"
+source = "git+https://github.com/golemcloud/wit-bindgen?branch=wit-bindgen-golem-1.6#fb1fff1fa0e553b27d86691281018071282e3eab"
 dependencies = [
  "bitflags 2.13.1",
  "futures",
@@ -12663,7 +12660,7 @@ dependencies = [
 [[package]]
 name = "wit-bindgen-core"
 version = "0.59.0"
-source = "git+https://github.com/golemcloud/wit-bindgen?branch=golem-outline-lift-v0.58.0#4407232ead86d9bcbd06cbebd790a52120a4087a"
+source = "git+https://github.com/golemcloud/wit-bindgen?branch=wit-bindgen-golem-1.6#fb1fff1fa0e553b27d86691281018071282e3eab"
 dependencies = [
  "anyhow",
  "heck",
@@ -12673,7 +12670,7 @@ dependencies = [
 [[package]]
 name = "wit-bindgen-rust"
 version = "0.59.0"
-source = "git+https://github.com/golemcloud/wit-bindgen?branch=golem-outline-lift-v0.58.0#4407232ead86d9bcbd06cbebd790a52120a4087a"
+source = "git+https://github.com/golemcloud/wit-bindgen?branch=wit-bindgen-golem-1.6#fb1fff1fa0e553b27d86691281018071282e3eab"
 dependencies = [
  "anyhow",
  "heck",
@@ -12688,7 +12685,7 @@ dependencies = [
 [[package]]
 name = "wit-bindgen-rust-macro"
 version = "0.59.0"
-source = "git+https://github.com/golemcloud/wit-bindgen?branch=golem-outline-lift-v0.58.0#4407232ead86d9bcbd06cbebd790a52120a4087a"
+source = "git+https://github.com/golemcloud/wit-bindgen?branch=wit-bindgen-golem-1.6#fb1fff1fa0e553b27d86691281018071282e3eab"
 dependencies = [
  "anyhow",
  "macro-string",

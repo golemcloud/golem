@@ -43,6 +43,7 @@ fn __golem_tool_rebase_node(
 fn __golem_tool_extract_prepared(def : @tool.ToolDef) -> @tool.ToolDef {
   {
     version: def.version,
+    requires_filesystem: def.requires_filesystem,
     commands: def.commands[1:].map(node => __golem_tool_rebase_node(node, -1)),
   }
 }
@@ -67,7 +68,11 @@ fn __golem_tool_append_prepared(
   for node in child.commands {
     commands.push(__golem_tool_rebase_node(node, offset))
   }
-  { version: def.version, commands, }
+  {
+    version: def.version,
+    requires_filesystem: def.requires_filesystem,
+    commands,
+  }
 }
 
 ///|
@@ -76,6 +81,7 @@ fn __golem_tool_def_raw_Messages() -> @tool.ToolDef {
   try {
     let def : @tool.ToolDef = {
       version: "0.0.0",
+      requires_filesystem: false,
       commands: [
         {
           name: "messages",
@@ -159,6 +165,7 @@ fn __golem_tool_def_prepare_Messages(
   try {
     let carrier : @tool.ToolDef = {
       version: "0.0.0",
+      requires_filesystem: false,
       commands: [
         {
           name: "__golem_ancestry",
@@ -211,54 +218,69 @@ async fn __golem_tool_invoke_Messages(
   __golem_stdout : @tool.ProviderStdout?,
   __golem_principal : @tool.Principal,
 ) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
-  let __golem_def = __golem_tool_def_Messages()
-  let __golem_index = match
-    __golem_def.command_index_by_path(__golem_command_path) {
-    Some(__golem_index) => __golem_index
-    None =>
-      return @tool.reject_wire_invocation(
-        __golem_input,
+  if __golem_command_path.length() == 1 &&
+    ["send"].contains(__golem_command_path[0]) {
+    let __golem_reader = @schema.WireReader::new(__golem_input.value)
+    let __golem_fields = @schema.wire_record(
+      __golem_reader,
+      __golem_input.value.root,
+      1,
+      "tool messages command send",
+    ) catch {
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool messages command send: " + repr(__golem_error),
+          ),
+        )
+      }
+    }
+    if __golem_stdin is Some(_) {
+      __golem_reader.abort()
+      return @tool.reject_undecoded_invocation(
         __golem_stdin,
-        @types.ToolError::InvalidCommandPath(__golem_command_path),
+        @types.ToolError::InvalidInput("command does not accept a stdin stream"),
       )
-  }
-  let __golem_decoded = @tool.decode_canonical_input(
-    __golem_def, __golem_index, __golem_input, "tool messages invocation",
-  ) catch {
-    __golem_error =>
-      return @tool.reject_undecoded_invocation(__golem_stdin, __golem_error)
-  }
-  match __golem_index {
-    1 => {
-      if __golem_stdin is Some(_) {
-        return @tool.reject_decoded_invocation(
-          __golem_decoded,
+    }
+    if __golem_stdout is Some(_) {
+      __golem_reader.abort()
+      return @tool.reject_undecoded_invocation(
+        __golem_stdin,
+        @types.ToolError::InvalidInput(
+          "command does not accept a stdout stream",
+        ),
+      )
+    }
+    let message : String = @schema.FromWire::read_wire(
+      __golem_reader,
+      __golem_fields[0],
+    ) catch {
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
           __golem_stdin,
           @types.ToolError::InvalidInput(
-            "command does not accept a stdin stream",
+            "tool messages command send: failed decoding `message`: " +
+            repr(__golem_error),
           ),
         )
       }
-      if __golem_stdout is Some(_) {
-        return @tool.reject_decoded_invocation(
-          __golem_decoded,
+    }
+    __golem_reader.finish() catch {
+      __golem_error =>
+        return @tool.reject_undecoded_invocation(
           __golem_stdin,
           @types.ToolError::InvalidInput(
-            "command does not accept a stdout stream",
+            "tool messages command send: " + repr(__golem_error),
           ),
         )
-      }
-      let message : String = @tool.decode_canonical_field(
-        __golem_decoded, "message", "tool messages command send",
-      ) catch {
-        __golem_error =>
-          return @tool.reject_decoded_invocation(
-            __golem_decoded, __golem_stdin, __golem_error,
-          )
-      }
+    }
+    return {
       let __golem_value = Messages::send(message)
       Ok(
-        @tool.invocation_result_value(__golem_value) catch {
+        @tool.invocation_result_wire(__golem_value) catch {
           @asyncCore.Cancelled::Cancelled as error => raise error
           @types.ToolError::InvalidResult(message) =>
             return Err(@types.ToolError::InvalidResult(message))
@@ -266,13 +288,12 @@ async fn __golem_tool_invoke_Messages(
         },
       )
     }
-    _ =>
-      @tool.reject_decoded_invocation(
-        __golem_decoded,
-        __golem_stdin,
-        @types.ToolError::InvalidCommandPath(__golem_command_path),
-      )
   }
+  @tool.reject_wire_invocation(
+    __golem_input,
+    __golem_stdin,
+    @types.ToolError::InvalidCommandPath(__golem_command_path),
+  )
 }
 
 ///|
@@ -281,6 +302,7 @@ fn __golem_tool_def_raw_PublicFiles() -> @tool.ToolDef {
   try {
     let def : @tool.ToolDef = {
       version: "0.0.0",
+      requires_filesystem: false,
       commands: [
         {
           name: "public-files",
@@ -364,6 +386,7 @@ fn __golem_tool_def_prepare_PublicFiles(
   try {
     let carrier : @tool.ToolDef = {
       version: "0.0.0",
+      requires_filesystem: false,
       commands: [
         {
           name: "__golem_ancestry",
@@ -416,54 +439,69 @@ async fn __golem_tool_invoke_PublicFiles(
   __golem_stdout : @tool.ProviderStdout?,
   __golem_principal : @tool.Principal,
 ) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
-  let __golem_def = __golem_tool_def_PublicFiles()
-  let __golem_index = match
-    __golem_def.command_index_by_path(__golem_command_path) {
-    Some(__golem_index) => __golem_index
-    None =>
-      return @tool.reject_wire_invocation(
-        __golem_input,
+  if __golem_command_path.length() == 1 &&
+    ["read"].contains(__golem_command_path[0]) {
+    let __golem_reader = @schema.WireReader::new(__golem_input.value)
+    let __golem_fields = @schema.wire_record(
+      __golem_reader,
+      __golem_input.value.root,
+      1,
+      "tool public-files command read",
+    ) catch {
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool public-files command read: " + repr(__golem_error),
+          ),
+        )
+      }
+    }
+    if __golem_stdin is Some(_) {
+      __golem_reader.abort()
+      return @tool.reject_undecoded_invocation(
         __golem_stdin,
-        @types.ToolError::InvalidCommandPath(__golem_command_path),
+        @types.ToolError::InvalidInput("command does not accept a stdin stream"),
       )
-  }
-  let __golem_decoded = @tool.decode_canonical_input(
-    __golem_def, __golem_index, __golem_input, "tool public-files invocation",
-  ) catch {
-    __golem_error =>
-      return @tool.reject_undecoded_invocation(__golem_stdin, __golem_error)
-  }
-  match __golem_index {
-    1 => {
-      if __golem_stdin is Some(_) {
-        return @tool.reject_decoded_invocation(
-          __golem_decoded,
+    }
+    if __golem_stdout is Some(_) {
+      __golem_reader.abort()
+      return @tool.reject_undecoded_invocation(
+        __golem_stdin,
+        @types.ToolError::InvalidInput(
+          "command does not accept a stdout stream",
+        ),
+      )
+    }
+    let path : String = @schema.FromWire::read_wire(
+      __golem_reader,
+      __golem_fields[0],
+    ) catch {
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
           __golem_stdin,
           @types.ToolError::InvalidInput(
-            "command does not accept a stdin stream",
+            "tool public-files command read: failed decoding `path`: " +
+            repr(__golem_error),
           ),
         )
       }
-      if __golem_stdout is Some(_) {
-        return @tool.reject_decoded_invocation(
-          __golem_decoded,
+    }
+    __golem_reader.finish() catch {
+      __golem_error =>
+        return @tool.reject_undecoded_invocation(
           __golem_stdin,
           @types.ToolError::InvalidInput(
-            "command does not accept a stdout stream",
+            "tool public-files command read: " + repr(__golem_error),
           ),
         )
-      }
-      let path : String = @tool.decode_canonical_field(
-        __golem_decoded, "path", "tool public-files command read",
-      ) catch {
-        __golem_error =>
-          return @tool.reject_decoded_invocation(
-            __golem_decoded, __golem_stdin, __golem_error,
-          )
-      }
+    }
+    return {
       let __golem_value = PublicFiles::read(path)
       Ok(
-        @tool.invocation_result_value(__golem_value) catch {
+        @tool.invocation_result_wire(__golem_value) catch {
           @asyncCore.Cancelled::Cancelled as error => raise error
           @types.ToolError::InvalidResult(message) =>
             return Err(@types.ToolError::InvalidResult(message))
@@ -471,13 +509,12 @@ async fn __golem_tool_invoke_PublicFiles(
         },
       )
     }
-    _ =>
-      @tool.reject_decoded_invocation(
-        __golem_decoded,
-        __golem_stdin,
-        @types.ToolError::InvalidCommandPath(__golem_command_path),
-      )
   }
+  @tool.reject_wire_invocation(
+    __golem_input,
+    __golem_stdin,
+    @types.ToolError::InvalidCommandPath(__golem_command_path),
+  )
 }
 
 ///|
@@ -486,6 +523,7 @@ fn __golem_tool_def_raw_Storage() -> @tool.ToolDef {
   try {
     let def : @tool.ToolDef = {
       version: "0.0.0",
+      requires_filesystem: false,
       commands: [
         {
           name: "storage",
@@ -569,6 +607,7 @@ fn __golem_tool_def_prepare_Storage(
   try {
     let carrier : @tool.ToolDef = {
       version: "0.0.0",
+      requires_filesystem: false,
       commands: [
         {
           name: "__golem_ancestry",
@@ -621,54 +660,69 @@ async fn __golem_tool_invoke_Storage(
   __golem_stdout : @tool.ProviderStdout?,
   __golem_principal : @tool.Principal,
 ) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
-  let __golem_def = __golem_tool_def_Storage()
-  let __golem_index = match
-    __golem_def.command_index_by_path(__golem_command_path) {
-    Some(__golem_index) => __golem_index
-    None =>
-      return @tool.reject_wire_invocation(
-        __golem_input,
+  if __golem_command_path.length() == 1 &&
+    ["fetch"].contains(__golem_command_path[0]) {
+    let __golem_reader = @schema.WireReader::new(__golem_input.value)
+    let __golem_fields = @schema.wire_record(
+      __golem_reader,
+      __golem_input.value.root,
+      1,
+      "tool storage command fetch",
+    ) catch {
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool storage command fetch: " + repr(__golem_error),
+          ),
+        )
+      }
+    }
+    if __golem_stdin is Some(_) {
+      __golem_reader.abort()
+      return @tool.reject_undecoded_invocation(
         __golem_stdin,
-        @types.ToolError::InvalidCommandPath(__golem_command_path),
+        @types.ToolError::InvalidInput("command does not accept a stdin stream"),
       )
-  }
-  let __golem_decoded = @tool.decode_canonical_input(
-    __golem_def, __golem_index, __golem_input, "tool storage invocation",
-  ) catch {
-    __golem_error =>
-      return @tool.reject_undecoded_invocation(__golem_stdin, __golem_error)
-  }
-  match __golem_index {
-    1 => {
-      if __golem_stdin is Some(_) {
-        return @tool.reject_decoded_invocation(
-          __golem_decoded,
+    }
+    if __golem_stdout is Some(_) {
+      __golem_reader.abort()
+      return @tool.reject_undecoded_invocation(
+        __golem_stdin,
+        @types.ToolError::InvalidInput(
+          "command does not accept a stdout stream",
+        ),
+      )
+    }
+    let key : String = @schema.FromWire::read_wire(
+      __golem_reader,
+      __golem_fields[0],
+    ) catch {
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
           __golem_stdin,
           @types.ToolError::InvalidInput(
-            "command does not accept a stdin stream",
+            "tool storage command fetch: failed decoding `key`: " +
+            repr(__golem_error),
           ),
         )
       }
-      if __golem_stdout is Some(_) {
-        return @tool.reject_decoded_invocation(
-          __golem_decoded,
+    }
+    __golem_reader.finish() catch {
+      __golem_error =>
+        return @tool.reject_undecoded_invocation(
           __golem_stdin,
           @types.ToolError::InvalidInput(
-            "command does not accept a stdout stream",
+            "tool storage command fetch: " + repr(__golem_error),
           ),
         )
-      }
-      let key : String = @tool.decode_canonical_field(
-        __golem_decoded, "key", "tool storage command fetch",
-      ) catch {
-        __golem_error =>
-          return @tool.reject_decoded_invocation(
-            __golem_decoded, __golem_stdin, __golem_error,
-          )
-      }
+    }
+    return {
       let __golem_value = Storage::fetch(key)
       Ok(
-        @tool.invocation_result_value(__golem_value) catch {
+        @tool.invocation_result_wire(__golem_value) catch {
           @asyncCore.Cancelled::Cancelled as error => raise error
           @types.ToolError::InvalidResult(message) =>
             return Err(@types.ToolError::InvalidResult(message))
@@ -676,12 +730,272 @@ async fn __golem_tool_invoke_Storage(
         },
       )
     }
-    _ =>
-      @tool.reject_decoded_invocation(
-        __golem_decoded,
-        __golem_stdin,
-        @types.ToolError::InvalidCommandPath(__golem_command_path),
-      )
+  }
+  @tool.reject_wire_invocation(
+    __golem_input,
+    __golem_stdin,
+    @types.ToolError::InvalidCommandPath(__golem_command_path),
+  )
+}
+
+///|
+///
+fn __golem_tool_wire_Messages() -> @toolCommon.Tool {
+  try {
+    let __golem_schema = @schema.WireTypeEncoder::new()
+    let nodes : Array[@toolCommon.CommandNode] = [
+      {
+        name: "messages",
+        aliases: [],
+        doc: {
+          summary: "The tool shape presented by the policy middleware.",
+          description: "",
+          examples: [],
+        },
+        globals: { options: [], flags: [], },
+        subcommands: [1],
+        body: None,
+      },
+      {
+        name: "send",
+        aliases: [],
+        doc: { summary: "", description: "", examples: [], },
+        globals: { options: [], flags: [], },
+        subcommands: [],
+        body: Some({
+          positionals: {
+            fixed: [
+              {
+                name: "message",
+                doc: { summary: "", description: "", examples: [], },
+                value_name: None,
+                type_: @tool.wire_tool_type(
+                  __golem_schema,
+                  (@schema.TypeTag::{ } : @schema.TypeTag[String]),
+                ).index,
+                default: None,
+                required: true,
+                accepts_stdio: false,
+              },
+            ],
+            tail: None,
+          },
+          options: [],
+          flags: [],
+          constraints: [],
+          stdin: None,
+          stdout: None,
+          result: Some({
+            type_: @tool.wire_tool_type(
+              __golem_schema,
+              (@schema.TypeTag::{ } : @schema.TypeTag[String]),
+            ).index,
+            doc: { summary: "", description: "", examples: [], },
+            formatters: [
+              {
+                name: "default",
+                doc: { summary: "", description: "", examples: [], },
+              },
+            ],
+            default_formatter: "default",
+          }),
+          errors: [],
+          annotations: Some({
+            read_only: false,
+            destructive: true,
+            idempotent: false,
+            open_world: true,
+          }),
+        }),
+      },
+    ]
+    let root = __golem_schema.push(@types.RecordType([]))
+    {
+      version: "0.0.0",
+      requires_filesystem: false,
+      commands: { nodes, },
+      schema: {
+        type_nodes: __golem_schema.nodes,
+        defs: __golem_schema.defs,
+        root,
+      },
+    }
+  } catch {
+    error => abort("invalid generated tool descriptor: " + repr(error))
+  }
+}
+
+///|
+///
+fn __golem_tool_wire_PublicFiles() -> @toolCommon.Tool {
+  try {
+    let __golem_schema = @schema.WireTypeEncoder::new()
+    let nodes : Array[@toolCommon.CommandNode] = [
+      {
+        name: "public-files",
+        aliases: [],
+        doc: {
+          summary: "The public shape presented by the adapter.",
+          description: "",
+          examples: [],
+        },
+        globals: { options: [], flags: [], },
+        subcommands: [1],
+        body: None,
+      },
+      {
+        name: "read",
+        aliases: [],
+        doc: { summary: "", description: "", examples: [], },
+        globals: { options: [], flags: [], },
+        subcommands: [],
+        body: Some({
+          positionals: {
+            fixed: [
+              {
+                name: "path",
+                doc: { summary: "", description: "", examples: [], },
+                value_name: None,
+                type_: @tool.wire_tool_type(
+                  __golem_schema,
+                  (@schema.TypeTag::{ } : @schema.TypeTag[String]),
+                ).index,
+                default: None,
+                required: true,
+                accepts_stdio: false,
+              },
+            ],
+            tail: None,
+          },
+          options: [],
+          flags: [],
+          constraints: [],
+          stdin: None,
+          stdout: None,
+          result: Some({
+            type_: @tool.wire_tool_type(
+              __golem_schema,
+              (@schema.TypeTag::{ } : @schema.TypeTag[String]),
+            ).index,
+            doc: { summary: "", description: "", examples: [], },
+            formatters: [
+              {
+                name: "default",
+                doc: { summary: "", description: "", examples: [], },
+              },
+            ],
+            default_formatter: "default",
+          }),
+          errors: [],
+          annotations: Some({
+            read_only: false,
+            destructive: true,
+            idempotent: false,
+            open_world: true,
+          }),
+        }),
+      },
+    ]
+    let root = __golem_schema.push(@types.RecordType([]))
+    {
+      version: "0.0.0",
+      requires_filesystem: false,
+      commands: { nodes, },
+      schema: {
+        type_nodes: __golem_schema.nodes,
+        defs: __golem_schema.defs,
+        root,
+      },
+    }
+  } catch {
+    error => abort("invalid generated tool descriptor: " + repr(error))
+  }
+}
+
+///|
+///
+fn __golem_tool_wire_Storage() -> @toolCommon.Tool {
+  try {
+    let __golem_schema = @schema.WireTypeEncoder::new()
+    let nodes : Array[@toolCommon.CommandNode] = [
+      {
+        name: "storage",
+        aliases: [],
+        doc: {
+          summary: "The shape expected from the adapter's next inner layer.",
+          description: "",
+          examples: [],
+        },
+        globals: { options: [], flags: [], },
+        subcommands: [1],
+        body: None,
+      },
+      {
+        name: "fetch",
+        aliases: [],
+        doc: { summary: "", description: "", examples: [], },
+        globals: { options: [], flags: [], },
+        subcommands: [],
+        body: Some({
+          positionals: {
+            fixed: [
+              {
+                name: "key",
+                doc: { summary: "", description: "", examples: [], },
+                value_name: None,
+                type_: @tool.wire_tool_type(
+                  __golem_schema,
+                  (@schema.TypeTag::{ } : @schema.TypeTag[String]),
+                ).index,
+                default: None,
+                required: true,
+                accepts_stdio: false,
+              },
+            ],
+            tail: None,
+          },
+          options: [],
+          flags: [],
+          constraints: [],
+          stdin: None,
+          stdout: None,
+          result: Some({
+            type_: @tool.wire_tool_type(
+              __golem_schema,
+              (@schema.TypeTag::{ } : @schema.TypeTag[String]),
+            ).index,
+            doc: { summary: "", description: "", examples: [], },
+            formatters: [
+              {
+                name: "default",
+                doc: { summary: "", description: "", examples: [], },
+              },
+            ],
+            default_formatter: "default",
+          }),
+          errors: [],
+          annotations: Some({
+            read_only: false,
+            destructive: true,
+            idempotent: false,
+            open_world: true,
+          }),
+        }),
+      },
+    ]
+    let root = __golem_schema.push(@types.RecordType([]))
+    {
+      version: "0.0.0",
+      requires_filesystem: false,
+      commands: { nodes, },
+      schema: {
+        type_nodes: __golem_schema.nodes,
+        defs: __golem_schema.defs,
+        root,
+      },
+    }
+  } catch {
+    error => abort("invalid generated tool descriptor: " + repr(error))
   }
 }
 
@@ -689,16 +1003,16 @@ async fn __golem_tool_invoke_Storage(
 ///
 fn init {
   try {
-    @tool.register_tool_def_invoker(
-      __golem_tool_def_Messages(),
+    @tool.register_wire_tool_invoker(
+      __golem_tool_wire_Messages(),
       __golem_tool_invoke_Messages,
     )
-    @tool.register_tool_def_invoker(
-      __golem_tool_def_PublicFiles(),
+    @tool.register_wire_tool_invoker(
+      __golem_tool_wire_PublicFiles(),
       __golem_tool_invoke_PublicFiles,
     )
-    @tool.register_tool_def_invoker(
-      __golem_tool_def_Storage(),
+    @tool.register_wire_tool_invoker(
+      __golem_tool_wire_Storage(),
       __golem_tool_invoke_Storage,
     )
   } catch {

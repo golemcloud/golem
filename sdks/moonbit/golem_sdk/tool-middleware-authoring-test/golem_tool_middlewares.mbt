@@ -110,6 +110,7 @@ fn __golem_middleware_tool_extract_prepared(
 ) -> @tool.ToolDef {
   {
     version: def.version,
+    requires_filesystem: def.requires_filesystem,
     commands: def.commands[1:].map(node => {
       __golem_middleware_tool_rebase_node(node, -1)
     }),
@@ -136,7 +137,11 @@ fn __golem_middleware_tool_append_prepared(
   for node in child.commands {
     commands.push(__golem_middleware_tool_rebase_node(node, offset))
   }
-  { version: def.version, commands, }
+  {
+    version: def.version,
+    requires_filesystem: def.requires_filesystem,
+    commands,
+  }
 }
 
 ///|
@@ -145,6 +150,7 @@ fn __golem_middleware_tool_def_raw_Presented() -> @tool.ToolDef {
   try {
     let def : @tool.ToolDef = {
       version: "0.0.0",
+      requires_filesystem: false,
       commands: [
         {
           name: "presented",
@@ -451,6 +457,7 @@ fn __golem_middleware_tool_def_prepare_Presented(
   try {
     let carrier : @tool.ToolDef = {
       version: "0.0.0",
+      requires_filesystem: false,
       commands: [
         {
           name: "__golem_ancestry",
@@ -526,6 +533,7 @@ fn __golem_middleware_tool_def_raw_Nested() -> @tool.ToolDef {
   try {
     let def : @tool.ToolDef = {
       version: "0.0.0",
+      requires_filesystem: false,
       commands: [
         {
           name: "nested",
@@ -605,6 +613,7 @@ fn __golem_middleware_tool_def_prepare_Nested(
   try {
     let carrier : @tool.ToolDef = {
       version: "0.0.0",
+      requires_filesystem: false,
       commands: [
         {
           name: "__golem_ancestry",
@@ -653,6 +662,7 @@ fn __golem_middleware_tool_def_raw_Storage() -> @tool.ToolDef {
   try {
     let def : @tool.ToolDef = {
       version: "0.0.0",
+      requires_filesystem: false,
       commands: [
         {
           name: "storage",
@@ -732,6 +742,7 @@ fn __golem_middleware_tool_def_prepare_Storage(
   try {
     let carrier : @tool.ToolDef = {
       version: "0.0.0",
+      requires_filesystem: false,
       commands: [
         {
           name: "__golem_ancestry",

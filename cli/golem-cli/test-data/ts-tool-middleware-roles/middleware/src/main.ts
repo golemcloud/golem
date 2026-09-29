@@ -1,7 +1,6 @@
-import { toolMiddlewareGuest } from "@golemcloud/golem-ts-sdk";
-import { universalToolMiddleware } from "@golemcloud/golem-ts-sdk/middleware";
+import * as middlewareSdk from '@golemcloud/golem-ts-sdk';
 
-export const middleware = universalToolMiddleware({
+export const middleware = middlewareSdk.universalToolMiddleware({
   name: "middleware-only",
   invoke: (request, { underlying }) =>
     underlying.invokeAndAwait(
@@ -16,7 +15,7 @@ interface EmbeddedMiddlewareGuest {
   getToolMiddleware(name: string): { name: string; scope: { tag: string } };
 }
 
-const embeddedGuest = toolMiddlewareGuest as EmbeddedMiddlewareGuest;
+const embeddedGuest = middlewareSdk.toolMiddlewareGuest as EmbeddedMiddlewareGuest;
 
 if (!embeddedGuest) {
   throw new Error(

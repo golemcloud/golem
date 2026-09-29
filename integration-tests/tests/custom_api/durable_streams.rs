@@ -13,7 +13,7 @@ use golem_common::model::{AgentId, OplogIndex};
 use golem_test_framework::config::EnvBasedTestDependencies;
 use golem_test_framework::dsl::TestDsl;
 use pretty_assertions::assert_eq;
-use reqwest::header::{ALLOW, CACHE_CONTROL, CONTENT_TYPE, ETAG, IF_NONE_MATCH};
+use reqwest::header::{ALLOW, CACHE_CONTROL, CONTENT_TYPE, ETAG, IF_NONE_MATCH, RETRY_AFTER};
 use reqwest::{Method, StatusCode};
 use serde_json::Value;
 use std::time::{Duration, Instant};
@@ -116,6 +116,41 @@ fn header(response: &reqwest::Response, name: &str) -> String {
 
 async fn create(agent: &HttpTestContext, path: &str) -> anyhow::Result<reqwest::Response> {
     Ok(agent.client.put(agent.base_url.join(path)?).send().await?)
+}
+
+async fn get_with_transient_unavailable_retry(
+    agent: &HttpTestContext,
+    mode: &str,
+    path: &str,
+) -> anyhow::Result<reqwest::Response> {
+    let url = agent.base_url.join(path)?;
+    let mut attempts = 0;
+    let mut last_status = None;
+    match tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            attempts += 1;
+            let response = agent.client.get(url.clone()).send().await?;
+            last_status = Some(response.status());
+            if response.status() != StatusCode::SERVICE_UNAVAILABLE {
+                return Ok(response);
+            }
+            let retry_after = response
+                .headers()
+                .get(RETRY_AFTER)
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.parse::<u64>().ok())
+                .map(Duration::from_secs)
+                .unwrap_or(Duration::from_secs(1));
+            tokio::time::sleep(retry_after).await;
+        }
+    })
+    .await
+    {
+        Ok(result) => result,
+        Err(_) => anyhow::bail!(
+            "{mode} stream GET {url} timed out after {attempts} attempts; last status: {last_status:?}"
+        ),
+    }
 }
 
 async fn wait_for_closed(agent: &HttpTestContext, path: &str) -> anyhow::Result<()> {
@@ -2091,7 +2126,7 @@ async fn phantom_and_ephemeral_sessions_have_stable_distinct_identities(
             create(agent, &mismatch).await?.status(),
             StatusCode::CONFLICT
         );
-        let data = agent.client.get(agent.base_url.join(&path)?).send().await?;
+        let data = get_with_transient_unavailable_retry(agent, mode, &path).await?;
         assert_eq!(data.status(), StatusCode::OK);
         let first = data.json::<Vec<String>>().await?;
         assert_eq!(first.len(), 2);
@@ -2102,11 +2137,7 @@ async fn phantom_and_ephemeral_sessions_have_stable_distinct_identities(
         let generated = header(&created, "location");
         let generated_path = format!("{generated}/streams/$result");
         wait_for_closed(agent, &generated_path).await?;
-        let data = agent
-            .client
-            .get(agent.base_url.join(&generated_path)?)
-            .send()
-            .await?;
+        let data = get_with_transient_unavailable_retry(agent, mode, &generated_path).await?;
         assert_eq!(data.status(), StatusCode::OK);
         let second = data.json::<Vec<String>>().await?;
         assert_eq!(second.len(), 2);

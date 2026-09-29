@@ -26,6 +26,7 @@ use test_r::test;
 fn tool_definition() -> Tool {
     Tool {
         version: "1.0.0".to_string(),
+        requires_filesystem: false,
         commands: CommandTree { nodes: Vec::new() },
         schema: crate::schema::SchemaGraph::empty(),
     }

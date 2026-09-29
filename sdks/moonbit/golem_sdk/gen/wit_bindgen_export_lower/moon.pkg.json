@@ -1,0 +1,10 @@
+{
+  "warn-list": "-44-unused_value-declaration_unimplemented",
+  "import": [
+    { "path" : "golemcloud/golem_sdk/interface/golem/agent/common", "alias" : "common" },
+    { "path" : "golemcloud/golem_sdk/interface/golem/api/host", "alias" : "host" },
+    { "path" : "golemcloud/golem_sdk/interface/golem/core/types", "alias" : "types" },
+    { "path" : "golemcloud/golem_sdk/interface/golem/tool/common", "alias" : "common0" }
+  ],
+  "supported-targets": "+wasm"
+}

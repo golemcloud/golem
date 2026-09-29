@@ -38,6 +38,7 @@ impl From<Tool> for proto::Tool {
     fn from(value: Tool) -> Self {
         Self {
             version: value.version,
+            requires_filesystem: value.requires_filesystem,
             commands: Some(value.commands.into()),
             schema: Some(value.schema.into()),
         }
@@ -50,6 +51,7 @@ impl TryFrom<proto::Tool> for Tool {
     fn try_from(value: proto::Tool) -> Result<Self, Self::Error> {
         Ok(Self {
             version: value.version,
+            requires_filesystem: value.requires_filesystem,
             commands: required(value.commands, "Tool.commands")?.try_into()?,
             schema: required(value.schema, "Tool.schema")?.try_into()?,
         })
@@ -929,6 +931,20 @@ mod tests {
     use super::*;
     use crate::schema::graph::SchemaGraph;
     use test_r::test;
+
+    #[test]
+    fn tool_protobuf_roundtrip_preserves_filesystem_requirement() {
+        for requires_filesystem in [false, true] {
+            let tool = Tool {
+                version: "1".into(),
+                requires_filesystem,
+                commands: CommandTree { nodes: vec![] },
+                schema: SchemaGraph::empty(),
+            };
+            let proto: proto::Tool = tool.clone().into();
+            assert_eq!(Tool::try_from(proto).unwrap(), tool);
+        }
+    }
 
     #[test]
     fn tool_middleware_protobuf_roundtrip_preserves_parameter_schema() {

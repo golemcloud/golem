@@ -11,7 +11,7 @@ test "tool names, version, root, subcommand, and pure dispatcher" {
         #|pub fn HTTPAPI::http_api() -> String { "root" }
         #|pub fn HTTPAPI::list_items(limit : Int) -> Array[String] { [] }
         #|
-        #|#derive.tool("custom", version="2.0.0")
+        #|#derive.tool("custom", version="2.0.0", requires_filesystem=true)
         #|struct CustomTool {}
         #|
         #|#derive.tool
@@ -30,6 +30,7 @@ test "tool names, version, root, subcommand, and pure dispatcher" {
       #|    source_name: "HTTPAPI",
       #|    name: "httpapi",
       #|    version: None,
+      #|    requires_filesystem: false,
       #|    description: "HTTP API tool.",
       #|    examples: [],
       #|    commands: [
@@ -84,6 +85,7 @@ test "tool names, version, root, subcommand, and pure dispatcher" {
       #|    source_name: "CustomTool",
       #|    name: "custom",
       #|    version: Some("2.0.0"),
+      #|    requires_filesystem: true,
       #|    description: "",
       #|    examples: [],
       #|    commands: [],
@@ -93,6 +95,7 @@ test "tool names, version, root, subcommand, and pure dispatcher" {
       #|    source_name: "EmptyDispatcher",
       #|    name: "empty-dispatcher",
       #|    version: None,
+      #|    requires_filesystem: false,
       #|    description: "",
       #|    examples: [],
       #|    commands: [],

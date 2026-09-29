@@ -566,6 +566,7 @@ fn __golem_tool_rebase_node(node : @tool.CommandNodeDef, offset : Int) -> @tool.
 fn __golem_tool_extract_prepared(def : @tool.ToolDef) -> @tool.ToolDef {
   {
     version: def.version,
+    requires_filesystem: def.requires_filesystem,
     commands: def.commands[1:].map(node => __golem_tool_rebase_node(node, -1)),
   }
 }
@@ -587,7 +588,11 @@ fn __golem_tool_append_prepared(def : @tool.ToolDef, child : @tool.ToolDef) -> @
   for node in child.commands {
     commands.push(__golem_tool_rebase_node(node, offset))
   }
-  { version: def.version, commands }
+  {
+    version: def.version,
+    requires_filesystem: def.requires_filesystem,
+    commands,
+  }
 }
 
 ///|
@@ -596,6 +601,7 @@ fn __golem_tool_def_raw_MoonBitStreaming() -> @tool.ToolDef {
   try {
     let def :@tool.ToolDef = {
       version: "1.0.0",
+      requires_filesystem: false,
       commands: [
         {
           name: "moonbit-streaming",
@@ -693,6 +699,7 @@ fn __golem_tool_def_prepare_MoonBitStreaming(
   try {
     let carrier :@tool.ToolDef = {
       version: "1.0.0",
+      requires_filesystem: false,
       commands: [
         {
           name: "__golem_ancestry",
@@ -747,71 +754,92 @@ async fn __golem_tool_invoke_MoonBitStreaming(
   __golem_stdout : @tool.ProviderStdout?,
   __golem_principal : @tool.Principal,
 ) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
-  let __golem_def = __golem_tool_def_MoonBitStreaming()
-  let __golem_index =
-    match __golem_def.command_index_by_path(__golem_command_path) {
-      Some(__golem_index) => __golem_index
-      None => {
-        return @tool.reject_wire_invocation(
-          __golem_input,
+  if __golem_command_path.length() == 1 && ["stream"].contains(
+    __golem_command_path[0],
+  ) {
+    if __golem_stdin is None {
+      return @tool.reject_wire_invocation(
+        __golem_input,
+        __golem_stdin,
+        @types.ToolError::InvalidInput("required stdin stream is missing"),
+      )
+    }
+    if __golem_stdout is None {
+      return @tool.reject_wire_invocation(
+        __golem_input,
+        __golem_stdin,
+        @types.ToolError::InvalidInput("required stdout stream is missing"),
+      )
+    }
+    let __golem_reader = @schema.WireReader::new(__golem_input.value)
+    let __golem_fields = try {
+      @schema.wire_record(
+        __golem_reader,
+        __golem_input.value.root,
+        1,
+        "tool moonbit-streaming command stream",
+      )
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
           __golem_stdin,
-          @types.ToolError::InvalidCommandPath(__golem_command_path),
+          @types.ToolError::InvalidInput(
+            "tool moonbit-streaming command stream: " + repr(__golem_error),
+          ),
         )
       }
     }
-  let __golem_decoded = try {
-    @tool.decode_canonical_input(
-      __golem_def,
-      __golem_index,
-      __golem_input,
-      "tool moonbit-streaming invocation",
-    )
-  } catch{
-    __golem_error => {
-      return @tool.reject_undecoded_invocation(__golem_stdin, __golem_error)
-    }
-  }
-  match __golem_index {
-    1 => {
-      let mode :String = try {
-        @tool.decode_canonical_field(
-          __golem_decoded,
-          "mode",
-          "tool moonbit-streaming command stream",
+    let mode :String = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[0])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool moonbit-streaming command stream: failed decoding `mode`: " + repr(
+              __golem_error,
+            ),
+          ),
         )
-      } catch{
-        __golem_error => {
-          return @tool.reject_decoded_invocation(
-            __golem_decoded,
-            __golem_stdin,
-            __golem_error,
-          )
-        }
       }
-      let stdin = match __golem_stdin {
-        Some(__golem_stream) => __golem_stream
-        None => {
-          return @tool.reject_decoded_invocation(
-            __golem_decoded,
-            __golem_stdin,
-            @types.ToolError::InvalidInput("required stdin stream is missing"),
-          )
-        }
+    }
+    try {
+      __golem_reader.finish()
+    } catch{
+      __golem_error => {
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool moonbit-streaming command stream: " + repr(__golem_error),
+          ),
+        )
       }
-      let stdout = match __golem_stdout {
-        Some(__golem_output) => __golem_output
-        None => {
-          return @tool.reject_decoded_invocation(
-            __golem_decoded,
-            __golem_stdin,
-            @types.ToolError::InvalidInput("required stdout stream is missing"),
-          )
-        }
+    }
+    let stdin = match __golem_stdin {
+      Some(__golem_stream) => __golem_stream
+      None => {
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput("required stdin stream is missing"),
+        )
       }
+    }
+    let stdout = match __golem_stdout {
+      Some(__golem_output) => __golem_output
+      None => {
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput("required stdout stream is missing"),
+        )
+      }
+    }
+    return {
       let __golem_value = MoonBitStreaming::stream(mode, stdin, stdout)
       Ok(
         try {
-          @tool.invocation_result_value(__golem_value)
+          @tool.invocation_result_wire(__golem_value)
         } catch{
           @asyncCore.Cancelled::Cancelled as error => raise  error
           @types.ToolError::InvalidResult(message) => {
@@ -821,14 +849,12 @@ async fn __golem_tool_invoke_MoonBitStreaming(
         },
       )
     }
-    _ => {
-      @tool.reject_decoded_invocation(
-        __golem_decoded,
-        __golem_stdin,
-        @types.ToolError::InvalidCommandPath(__golem_command_path),
-      )
-    }
   }
+  @tool.reject_wire_invocation(
+    __golem_input,
+    __golem_stdin,
+    @types.ToolError::InvalidCommandPath(__golem_command_path),
+  )
 }
 
 ///|
@@ -837,6 +863,7 @@ fn __golem_tool_def_raw_CanonicalGrep() -> @tool.ToolDef {
   try {
     let def :@tool.ToolDef = {
       version: "2.0.0",
+      requires_filesystem: false,
       commands: [
         {
           name: "canonical-grep",
@@ -1202,6 +1229,7 @@ fn __golem_tool_def_prepare_CanonicalGrep(
   try {
     let carrier :@tool.ToolDef = {
       version: "2.0.0",
+      requires_filesystem: false,
       commands: [
         {
           name: "__golem_ancestry",
@@ -1256,341 +1284,404 @@ async fn __golem_tool_invoke_CanonicalGrep(
   __golem_stdout : @tool.ProviderStdout?,
   __golem_principal : @tool.Principal,
 ) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
-  let __golem_def = __golem_tool_def_CanonicalGrep()
-  let __golem_index =
-    match __golem_def.command_index_by_path(__golem_command_path) {
-      Some(__golem_index) => __golem_index
-      None => {
-        return @tool.reject_wire_invocation(
-          __golem_input,
-          __golem_stdin,
-          @types.ToolError::InvalidCommandPath(__golem_command_path),
-        )
-      }
-    }
-  let __golem_decoded = try {
-    @tool.decode_canonical_input(
-      __golem_def,
-      __golem_index,
-      __golem_input,
-      "tool canonical-grep invocation",
-    )
-  } catch{
-    __golem_error => {
-      return @tool.reject_undecoded_invocation(__golem_stdin, __golem_error)
-    }
-  }
-  match __golem_index {
-    0 => {
-      let case_sensitive :Bool = try {
-        @tool.decode_canonical_field(
-          __golem_decoded,
-          "case-sensitive",
-          "tool canonical-grep command canonical-grep",
-        )
-      } catch{
-        __golem_error => {
-          return @tool.reject_decoded_invocation(
-            __golem_decoded,
-            __golem_stdin,
-            __golem_error,
-          )
-        }
-      }
-      let color :CanonicalGrepColorMode = try {
-        @tool.decode_canonical_field(
-          __golem_decoded,
-          "color",
-          "tool canonical-grep command canonical-grep",
-        )
-      } catch{
-        __golem_error => {
-          return @tool.reject_decoded_invocation(
-            __golem_decoded,
-            __golem_stdin,
-            __golem_error,
-          )
-        }
-      }
-      let pattern :String = try {
-        @tool.decode_canonical_field(
-          __golem_decoded,
-          "pattern",
-          "tool canonical-grep command canonical-grep",
-        )
-      } catch{
-        __golem_error => {
-          return @tool.reject_decoded_invocation(
-            __golem_decoded,
-            __golem_stdin,
-            __golem_error,
-          )
-        }
-      }
-      let extra_patterns :Array[String] = try {
-        @tool.decode_canonical_field(
-          __golem_decoded,
-          "extra-patterns",
-          "tool canonical-grep command canonical-grep",
-        )
-      } catch{
-        __golem_error => {
-          return @tool.reject_decoded_invocation(
-            __golem_decoded,
-            __golem_stdin,
-            __golem_error,
-          )
-        }
-      }
-      let max_count :UInt? = try {
-        @tool.decode_canonical_field(
-          __golem_decoded,
-          "max-count",
-          "tool canonical-grep command canonical-grep",
-        )
-      } catch{
-        __golem_error => {
-          return @tool.reject_decoded_invocation(
-            __golem_decoded,
-            __golem_stdin,
-            __golem_error,
-          )
-        }
-      }
-      let files :Array[@schema.Path] = try {
-        @tool.decode_canonical_field(
-          __golem_decoded,
-          "files",
-          "tool canonical-grep command canonical-grep",
-        )
-      } catch{
-        __golem_error => {
-          return @tool.reject_decoded_invocation(
-            __golem_decoded,
-            __golem_stdin,
-            __golem_error,
-          )
-        }
-      }
-      let stdin = match __golem_stdin {
-        Some(__golem_stream) => __golem_stream
-        None => {
-          return @tool.reject_decoded_invocation(
-            __golem_decoded,
-            __golem_stdin,
-            @types.ToolError::InvalidInput("required stdin stream is missing"),
-          )
-        }
-      }
-      let stdout = match __golem_stdout {
-        Some(__golem_output) => __golem_output
-        None => {
-          return @tool.reject_decoded_invocation(
-            __golem_decoded,
-            __golem_stdin,
-            @types.ToolError::InvalidInput("required stdout stream is missing"),
-          )
-        }
-      }
-      match CanonicalGrep::canonical_grep(
-        case_sensitive,
-        color,
-        pattern,
-        extra_patterns,
-        max_count,
-        files,
-        stdin,
-        stdout,
-      ) {
-        Ok(__golem_value) => {
-          Ok(
-            try {
-              @tool.invocation_result_value(__golem_value)
-            } catch{
-              @asyncCore.Cancelled::Cancelled as error => raise  error
-              @types.ToolError::InvalidResult(message) => {
-                return Err(@types.ToolError::InvalidResult(message))
-              }
-              error => raise  error
-            },
-          )
-        }
-        Err(error) => {
-          let (__golem_error_name, payload) =
-            match CanonicalGrepError::to_error_payload_value(error) {
-              Ok(payload) => payload
-              Err(encode_error) => {
-                return Err(
-                  @types.ToolError::InvalidResult(
-                    "failed serializing custom tool error: " + encode_error,
-                  ),
-                )
-              }
-            }
-          let payload = try {
-            @tool.encode_error_payload(payload)
-          } catch{
-            @asyncCore.Cancelled::Cancelled as error => raise  error
-            @types.ToolError::InvalidResult(message) => {
-              return Err(@types.ToolError::InvalidResult(message))
-            }
-            error => raise  error
-          }
-          Err(
-            @types.ToolError::CustomError({ name: __golem_error_name, payload }),
-          )
-        }
-      }
-    }
-    1 => {
-      if __golem_stdin is Some(_) {
-        return @tool.reject_decoded_invocation(
-          __golem_decoded,
-          __golem_stdin,
-          @types.ToolError::InvalidInput(
-            "command does not accept a stdin stream",
-          ),
-        )
-      }
-      if __golem_stdout is Some(_) {
-        return @tool.reject_decoded_invocation(
-          __golem_decoded,
-          __golem_stdin,
-          @types.ToolError::InvalidInput(
-            "command does not accept a stdout stream",
-          ),
-        )
-      }
-      let case_sensitive :Bool = try {
-        @tool.decode_canonical_field(
-          __golem_decoded,
-          "case-sensitive",
-          "tool canonical-grep command replace",
-        )
-      } catch{
-        __golem_error => {
-          return @tool.reject_decoded_invocation(
-            __golem_decoded,
-            __golem_stdin,
-            __golem_error,
-          )
-        }
-      }
-      let color :CanonicalGrepColorMode = try {
-        @tool.decode_canonical_field(
-          __golem_decoded,
-          "color",
-          "tool canonical-grep command replace",
-        )
-      } catch{
-        __golem_error => {
-          return @tool.reject_decoded_invocation(
-            __golem_decoded,
-            __golem_stdin,
-            __golem_error,
-          )
-        }
-      }
-      let pattern :String = try {
-        @tool.decode_canonical_field(
-          __golem_decoded,
-          "pattern",
-          "tool canonical-grep command replace",
-        )
-      } catch{
-        __golem_error => {
-          return @tool.reject_decoded_invocation(
-            __golem_decoded,
-            __golem_stdin,
-            __golem_error,
-          )
-        }
-      }
-      let replacement :String = try {
-        @tool.decode_canonical_field(
-          __golem_decoded,
-          "replacement",
-          "tool canonical-grep command replace",
-        )
-      } catch{
-        __golem_error => {
-          return @tool.reject_decoded_invocation(
-            __golem_decoded,
-            __golem_stdin,
-            __golem_error,
-          )
-        }
-      }
-      let files :Array[@schema.Path] = try {
-        @tool.decode_canonical_field(
-          __golem_decoded,
-          "files",
-          "tool canonical-grep command replace",
-        )
-      } catch{
-        __golem_error => {
-          return @tool.reject_decoded_invocation(
-            __golem_decoded,
-            __golem_stdin,
-            __golem_error,
-          )
-        }
-      }
-      match CanonicalGrep::replace(
-        case_sensitive,
-        color,
-        pattern,
-        replacement,
-        files,
-      ) {
-        Ok(__golem_value) => {
-          Ok(
-            try {
-              @tool.invocation_result_value(__golem_value)
-            } catch{
-              @asyncCore.Cancelled::Cancelled as error => raise  error
-              @types.ToolError::InvalidResult(message) => {
-                return Err(@types.ToolError::InvalidResult(message))
-              }
-              error => raise  error
-            },
-          )
-        }
-        Err(error) => {
-          let (__golem_error_name, payload) =
-            match CanonicalGrepError::to_error_payload_value(error) {
-              Ok(payload) => payload
-              Err(encode_error) => {
-                return Err(
-                  @types.ToolError::InvalidResult(
-                    "failed serializing custom tool error: " + encode_error,
-                  ),
-                )
-              }
-            }
-          let payload = try {
-            @tool.encode_error_payload(payload)
-          } catch{
-            @asyncCore.Cancelled::Cancelled as error => raise  error
-            @types.ToolError::InvalidResult(message) => {
-              return Err(@types.ToolError::InvalidResult(message))
-            }
-            error => raise  error
-          }
-          Err(
-            @types.ToolError::CustomError({ name: __golem_error_name, payload }),
-          )
-        }
-      }
-    }
-    _ => {
-      @tool.reject_decoded_invocation(
-        __golem_decoded,
+  if __golem_command_path.length() == 0 {
+    if __golem_stdin is None {
+      return @tool.reject_wire_invocation(
+        __golem_input,
         __golem_stdin,
-        @types.ToolError::InvalidCommandPath(__golem_command_path),
+        @types.ToolError::InvalidInput("required stdin stream is missing"),
       )
     }
+    if __golem_stdout is None {
+      return @tool.reject_wire_invocation(
+        __golem_input,
+        __golem_stdin,
+        @types.ToolError::InvalidInput("required stdout stream is missing"),
+      )
+    }
+    let __golem_reader = @schema.WireReader::new(__golem_input.value)
+    let __golem_fields = try {
+      @schema.wire_record(
+        __golem_reader,
+        __golem_input.value.root,
+        6,
+        "tool canonical-grep command canonical-grep",
+      )
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool canonical-grep command canonical-grep: " + repr(__golem_error),
+          ),
+        )
+      }
+    }
+    let case_sensitive :Bool = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[1])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool canonical-grep command canonical-grep: failed decoding `case-sensitive`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    let color :CanonicalGrepColorMode = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[0])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool canonical-grep command canonical-grep: failed decoding `color`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    let pattern :String = try {
+      match @schema.wire_node(__golem_reader, __golem_fields[2]) {
+        @types.SchemaValueNode::TextValue(value) => value.text
+        _ => raise  @schema.WireError::Invalid("expected text value")
+      }
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool canonical-grep command canonical-grep: failed decoding `pattern`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    let extra_patterns :Array[String] = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[4])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool canonical-grep command canonical-grep: failed decoding `extra-patterns`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    let max_count :UInt? = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[5])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool canonical-grep command canonical-grep: failed decoding `max-count`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    let files :Array[@schema.Path] = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[3])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool canonical-grep command canonical-grep: failed decoding `files`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    try {
+      __golem_reader.finish()
+    } catch{
+      __golem_error => {
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool canonical-grep command canonical-grep: " + repr(__golem_error),
+          ),
+        )
+      }
+    }
+    let stdin = match __golem_stdin {
+      Some(__golem_stream) => __golem_stream
+      None => {
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput("required stdin stream is missing"),
+        )
+      }
+    }
+    let stdout = match __golem_stdout {
+      Some(__golem_output) => __golem_output
+      None => {
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput("required stdout stream is missing"),
+        )
+      }
+    }
+    return match CanonicalGrep::canonical_grep(
+      case_sensitive,
+      color,
+      pattern,
+      extra_patterns,
+      max_count,
+      files,
+      stdin,
+      stdout,
+    ) {
+      Ok(__golem_value) => {
+        Ok(
+          try {
+            @tool.invocation_result_wire(__golem_value)
+          } catch{
+            @asyncCore.Cancelled::Cancelled as error => raise  error
+            @types.ToolError::InvalidResult(message) => {
+              return Err(@types.ToolError::InvalidResult(message))
+            }
+            error => raise  error
+          },
+        )
+      }
+      Err(error) => {
+        match error {
+          InvalidPattern(reason~) => {
+            let payload = try {
+              @tool.encode_wire_result(reason)
+            } catch{
+              @asyncCore.Cancelled::Cancelled as error => raise  error
+              @types.ToolError::InvalidResult(message) => {
+                return Err(@types.ToolError::InvalidResult(message))
+              }
+              error => raise  error
+            }
+            Err(
+              @types.ToolError::CustomError(
+                { name: "invalid-pattern", payload }
+              ),
+            )
+          }
+          NoMatch => {
+            let payload = try {
+              @tool.encode_wire_result(())
+            } catch{
+              @asyncCore.Cancelled::Cancelled as error => raise  error
+              @types.ToolError::InvalidResult(message) => {
+                return Err(@types.ToolError::InvalidResult(message))
+              }
+              error => raise  error
+            }
+            Err(@types.ToolError::CustomError({ name: "no-match", payload }))
+          }
+        }
+      }
+    }
   }
+  if __golem_command_path.length() == 1 && ["replace"].contains(
+    __golem_command_path[0],
+  ) {
+    let __golem_reader = @schema.WireReader::new(__golem_input.value)
+    let __golem_fields = try {
+      @schema.wire_record(
+        __golem_reader,
+        __golem_input.value.root,
+        5,
+        "tool canonical-grep command replace",
+      )
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool canonical-grep command replace: " + repr(__golem_error),
+          ),
+        )
+      }
+    }
+    if __golem_stdin is Some(_) {
+      __golem_reader.abort()
+      return @tool.reject_undecoded_invocation(
+        __golem_stdin,
+        @types.ToolError::InvalidInput("command does not accept a stdin stream"),
+      )
+    }
+    if __golem_stdout is Some(_) {
+      __golem_reader.abort()
+      return @tool.reject_undecoded_invocation(
+        __golem_stdin,
+        @types.ToolError::InvalidInput(
+          "command does not accept a stdout stream",
+        ),
+      )
+    }
+    let case_sensitive :Bool = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[1])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool canonical-grep command replace: failed decoding `case-sensitive`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    let color :CanonicalGrepColorMode = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[0])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool canonical-grep command replace: failed decoding `color`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    let pattern :String = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[2])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool canonical-grep command replace: failed decoding `pattern`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    let replacement :String = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[3])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool canonical-grep command replace: failed decoding `replacement`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    let files :Array[@schema.Path] = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[4])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool canonical-grep command replace: failed decoding `files`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    try {
+      __golem_reader.finish()
+    } catch{
+      __golem_error => {
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool canonical-grep command replace: " + repr(__golem_error),
+          ),
+        )
+      }
+    }
+    return match CanonicalGrep::replace(
+      case_sensitive,
+      color,
+      pattern,
+      replacement,
+      files,
+    ) {
+      Ok(__golem_value) => {
+        Ok(
+          try {
+            @tool.invocation_result_wire(__golem_value)
+          } catch{
+            @asyncCore.Cancelled::Cancelled as error => raise  error
+            @types.ToolError::InvalidResult(message) => {
+              return Err(@types.ToolError::InvalidResult(message))
+            }
+            error => raise  error
+          },
+        )
+      }
+      Err(error) => {
+        match error {
+          InvalidPattern(reason~) => {
+            let payload = try {
+              @tool.encode_wire_result(reason)
+            } catch{
+              @asyncCore.Cancelled::Cancelled as error => raise  error
+              @types.ToolError::InvalidResult(message) => {
+                return Err(@types.ToolError::InvalidResult(message))
+              }
+              error => raise  error
+            }
+            Err(
+              @types.ToolError::CustomError(
+                { name: "invalid-pattern", payload }
+              ),
+            )
+          }
+          NoMatch => {
+            let payload = try {
+              @tool.encode_wire_result(())
+            } catch{
+              @asyncCore.Cancelled::Cancelled as error => raise  error
+              @types.ToolError::InvalidResult(message) => {
+                return Err(@types.ToolError::InvalidResult(message))
+              }
+              error => raise  error
+            }
+            Err(@types.ToolError::CustomError({ name: "no-match", payload }))
+          }
+        }
+      }
+    }
+  }
+  @tool.reject_wire_invocation(
+    __golem_input,
+    __golem_stdin,
+    @types.ToolError::InvalidCommandPath(__golem_command_path),
+  )
 }
 
 ///|
@@ -1599,6 +1690,7 @@ fn __golem_tool_def_raw_CanonicalGit() -> @tool.ToolDef {
   try {
     let def :@tool.ToolDef = {
       version: "0.0.0",
+      requires_filesystem: false,
       commands: [
         {
           name: "canonical-git",
@@ -2108,6 +2200,7 @@ fn __golem_tool_def_prepare_CanonicalGit(
   try {
     let carrier :@tool.ToolDef = {
       version: "0.0.0",
+      requires_filesystem: false,
       commands: [
         {
           name: "__golem_ancestry",
@@ -2313,37 +2406,12 @@ async fn __golem_tool_invoke_CanonicalGit(
   __golem_stdout : @tool.ProviderStdout?,
   __golem_principal : @tool.Principal,
 ) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
-  let __golem_def = __golem_tool_def_CanonicalGit()
-  let __golem_index =
-    match __golem_def.command_index_by_path(__golem_command_path) {
-      Some(__golem_index) => __golem_index
-      None => {
-        return @tool.reject_wire_invocation(
-          __golem_input,
-          __golem_stdin,
-          @types.ToolError::InvalidCommandPath(__golem_command_path),
-        )
-      }
-    }
-  let __golem_decoded = try {
-    @tool.decode_canonical_input(
-      __golem_def,
-      __golem_index,
-      __golem_input,
-      "tool canonical-git invocation",
-    )
-  } catch{
-    __golem_error => {
-      return @tool.reject_undecoded_invocation(__golem_stdin, __golem_error)
-    }
-  }
   if __golem_command_path.length() > 0 && ["remote", "rmt"].contains(
     __golem_command_path[0],
   ) {
-    return @tool.invoke_registered_subtool(
-      "remote",
+    return __golem_tool_invoke_CanonicalGit_subtree_1(
       __golem_command_path[1:].to_owned(),
-      __golem_decoded,
+      __golem_input,
       __golem_stdin,
       __golem_stdout,
       __golem_principal,
@@ -2352,466 +2420,1554 @@ async fn __golem_tool_invoke_CanonicalGit(
   if __golem_command_path.length() > 0 && ["stash"].contains(
     __golem_command_path[0],
   ) {
-    return @tool.invoke_registered_subtool(
-      "stash",
+    return __golem_tool_invoke_CanonicalGit_subtree_2(
       __golem_command_path[1:].to_owned(),
-      __golem_decoded,
+      __golem_input,
       __golem_stdin,
       __golem_stdout,
       __golem_principal,
     )
   }
-  match __golem_index {
-    1 => {
-      if __golem_stdin is Some(_) {
-        return @tool.reject_decoded_invocation(
-          __golem_decoded,
+  if __golem_command_path.length() == 1 && ["commit", "ci"].contains(
+    __golem_command_path[0],
+  ) {
+    let __golem_reader = @schema.WireReader::new(__golem_input.value)
+    let __golem_fields = try {
+      @schema.wire_record(
+        __golem_reader,
+        __golem_input.value.root,
+        10,
+        "tool canonical-git command commit",
+      )
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
           __golem_stdin,
           @types.ToolError::InvalidInput(
-            "command does not accept a stdin stream",
+            "tool canonical-git command commit: " + repr(__golem_error),
           ),
         )
-      }
-      if __golem_stdout is Some(_) {
-        return @tool.reject_decoded_invocation(
-          __golem_decoded,
-          __golem_stdin,
-          @types.ToolError::InvalidInput(
-            "command does not accept a stdout stream",
-          ),
-        )
-      }
-      let verbose :UInt = try {
-        @tool.decode_canonical_field(
-          __golem_decoded,
-          "verbose",
-          "tool canonical-git command commit",
-        )
-      } catch{
-        __golem_error => {
-          return @tool.reject_decoded_invocation(
-            __golem_decoded,
-            __golem_stdin,
-            __golem_error,
-          )
-        }
-      }
-      let git_dir :@schema.Path = try {
-        @tool.decode_canonical_field(
-          __golem_decoded,
-          "git-dir",
-          "tool canonical-git command commit",
-        )
-      } catch{
-        __golem_error => {
-          return @tool.reject_decoded_invocation(
-            __golem_decoded,
-            __golem_stdin,
-            __golem_error,
-          )
-        }
-      }
-      let paginate :Bool = try {
-        @tool.decode_canonical_field(
-          __golem_decoded,
-          "paginate",
-          "tool canonical-git command commit",
-        )
-      } catch{
-        __golem_error => {
-          return @tool.reject_decoded_invocation(
-            __golem_decoded,
-            __golem_stdin,
-            __golem_error,
-          )
-        }
-      }
-      let config :Map[String, String] = try {
-        @tool.decode_canonical_field(
-          __golem_decoded,
-          "config",
-          "tool canonical-git command commit",
-        )
-      } catch{
-        __golem_error => {
-          return @tool.reject_decoded_invocation(
-            __golem_decoded,
-            __golem_stdin,
-            __golem_error,
-          )
-        }
-      }
-      let message :String = try {
-        @tool.decode_canonical_field(
-          __golem_decoded,
-          "message",
-          "tool canonical-git command commit",
-        )
-      } catch{
-        __golem_error => {
-          return @tool.reject_decoded_invocation(
-            __golem_decoded,
-            __golem_stdin,
-            __golem_error,
-          )
-        }
-      }
-      let author :String? = try {
-        @tool.decode_canonical_field(
-          __golem_decoded,
-          "author",
-          "tool canonical-git command commit",
-        )
-      } catch{
-        __golem_error => {
-          return @tool.reject_decoded_invocation(
-            __golem_decoded,
-            __golem_stdin,
-            __golem_error,
-          )
-        }
-      }
-      let amend :Bool = try {
-        @tool.decode_canonical_field(
-          __golem_decoded,
-          "amend",
-          "tool canonical-git command commit",
-        )
-      } catch{
-        __golem_error => {
-          return @tool.reject_decoded_invocation(
-            __golem_decoded,
-            __golem_stdin,
-            __golem_error,
-          )
-        }
-      }
-      let signoff :Bool = try {
-        @tool.decode_canonical_field(
-          __golem_decoded,
-          "signoff",
-          "tool canonical-git command commit",
-        )
-      } catch{
-        __golem_error => {
-          return @tool.reject_decoded_invocation(
-            __golem_decoded,
-            __golem_stdin,
-            __golem_error,
-          )
-        }
-      }
-      let reset_author :Bool = try {
-        @tool.decode_canonical_field(
-          __golem_decoded,
-          "reset-author",
-          "tool canonical-git command commit",
-        )
-      } catch{
-        __golem_error => {
-          return @tool.reject_decoded_invocation(
-            __golem_decoded,
-            __golem_stdin,
-            __golem_error,
-          )
-        }
-      }
-      let output :CanonicalGitOutputMode = try {
-        @tool.decode_canonical_field(
-          __golem_decoded,
-          "output",
-          "tool canonical-git command commit",
-        )
-      } catch{
-        __golem_error => {
-          return @tool.reject_decoded_invocation(
-            __golem_decoded,
-            __golem_stdin,
-            __golem_error,
-          )
-        }
-      }
-      match CanonicalGit::commit(
-        verbose,
-        git_dir,
-        paginate,
-        config,
-        message,
-        author,
-        amend,
-        signoff,
-        reset_author,
-        output,
-      ) {
-        Ok(__golem_value) => {
-          Ok(
-            try {
-              @tool.invocation_result_value(__golem_value)
-            } catch{
-              @asyncCore.Cancelled::Cancelled as error => raise  error
-              @types.ToolError::InvalidResult(message) => {
-                return Err(@types.ToolError::InvalidResult(message))
-              }
-              error => raise  error
-            },
-          )
-        }
-        Err(error) => {
-          let (__golem_error_name, payload) =
-            match CanonicalCommitError::to_error_payload_value(error) {
-              Ok(payload) => payload
-              Err(encode_error) => {
-                return Err(
-                  @types.ToolError::InvalidResult(
-                    "failed serializing custom tool error: " + encode_error,
-                  ),
-                )
-              }
-            }
-          let payload = try {
-            @tool.encode_error_payload(payload)
-          } catch{
-            @asyncCore.Cancelled::Cancelled as error => raise  error
-            @types.ToolError::InvalidResult(message) => {
-              return Err(@types.ToolError::InvalidResult(message))
-            }
-            error => raise  error
-          }
-          Err(
-            @types.ToolError::CustomError({ name: __golem_error_name, payload }),
-          )
-        }
       }
     }
-    2 => {
-      if __golem_stdin is Some(_) {
-        return @tool.reject_decoded_invocation(
-          __golem_decoded,
-          __golem_stdin,
-          @types.ToolError::InvalidInput(
-            "command does not accept a stdin stream",
-          ),
-        )
-      }
-      if __golem_stdout is Some(_) {
-        return @tool.reject_decoded_invocation(
-          __golem_decoded,
-          __golem_stdin,
-          @types.ToolError::InvalidInput(
-            "command does not accept a stdout stream",
-          ),
-        )
-      }
-      let max_count :Int64? = try {
-        @tool.decode_canonical_field(
-          __golem_decoded,
-          "max-count",
-          "tool canonical-git command log",
-        )
-      } catch{
-        __golem_error => {
-          return @tool.reject_decoded_invocation(
-            __golem_decoded,
-            __golem_stdin,
-            __golem_error,
-          )
-        }
-      }
-      let since :@types.Datetime? = try {
-        @tool.decode_canonical_field(
-          __golem_decoded,
-          "since",
-          "tool canonical-git command log",
-        )
-      } catch{
-        __golem_error => {
-          return @tool.reject_decoded_invocation(
-            __golem_decoded,
-            __golem_stdin,
-            __golem_error,
-          )
-        }
-      }
-      let until :@types.Datetime? = try {
-        @tool.decode_canonical_field(
-          __golem_decoded,
-          "until",
-          "tool canonical-git command log",
-        )
-      } catch{
-        __golem_error => {
-          return @tool.reject_decoded_invocation(
-            __golem_decoded,
-            __golem_stdin,
-            __golem_error,
-          )
-        }
-      }
-      let author :Array[String] = try {
-        @tool.decode_canonical_field(
-          __golem_decoded,
-          "author",
-          "tool canonical-git command log",
-        )
-      } catch{
-        __golem_error => {
-          return @tool.reject_decoded_invocation(
-            __golem_decoded,
-            __golem_stdin,
-            __golem_error,
-          )
-        }
-      }
-      let grep :Array[String] = try {
-        @tool.decode_canonical_field(
-          __golem_decoded,
-          "grep",
-          "tool canonical-git command log",
-        )
-      } catch{
-        __golem_error => {
-          return @tool.reject_decoded_invocation(
-            __golem_decoded,
-            __golem_stdin,
-            __golem_error,
-          )
-        }
-      }
-      let all_match :Bool = try {
-        @tool.decode_canonical_field(
-          __golem_decoded,
-          "all-match",
-          "tool canonical-git command log",
-        )
-      } catch{
-        __golem_error => {
-          return @tool.reject_decoded_invocation(
-            __golem_decoded,
-            __golem_stdin,
-            __golem_error,
-          )
-        }
-      }
-      let invert_grep :Bool = try {
-        @tool.decode_canonical_field(
-          __golem_decoded,
-          "invert-grep",
-          "tool canonical-git command log",
-        )
-      } catch{
-        __golem_error => {
-          return @tool.reject_decoded_invocation(
-            __golem_decoded,
-            __golem_stdin,
-            __golem_error,
-          )
-        }
-      }
-      let oneline :Bool = try {
-        @tool.decode_canonical_field(
-          __golem_decoded,
-          "oneline",
-          "tool canonical-git command log",
-        )
-      } catch{
-        __golem_error => {
-          return @tool.reject_decoded_invocation(
-            __golem_decoded,
-            __golem_stdin,
-            __golem_error,
-          )
-        }
-      }
-      let graph :Bool = try {
-        @tool.decode_canonical_field(
-          __golem_decoded,
-          "graph",
-          "tool canonical-git command log",
-        )
-      } catch{
-        __golem_error => {
-          return @tool.reject_decoded_invocation(
-            __golem_decoded,
-            __golem_stdin,
-            __golem_error,
-          )
-        }
-      }
-      let paths :Array[@schema.Path] = try {
-        @tool.decode_canonical_field(
-          __golem_decoded,
-          "paths",
-          "tool canonical-git command log",
-        )
-      } catch{
-        __golem_error => {
-          return @tool.reject_decoded_invocation(
-            __golem_decoded,
-            __golem_stdin,
-            __golem_error,
-          )
-        }
-      }
-      match CanonicalGit::log(
-        max_count,
-        since,
-        until,
-        author,
-        grep,
-        all_match,
-        invert_grep,
-        oneline,
-        graph,
-        paths,
-      ) {
-        Ok(__golem_value) => {
-          Ok(
-            try {
-              @tool.invocation_result_value(__golem_value)
-            } catch{
-              @asyncCore.Cancelled::Cancelled as error => raise  error
-              @types.ToolError::InvalidResult(message) => {
-                return Err(@types.ToolError::InvalidResult(message))
-              }
-              error => raise  error
-            },
-          )
-        }
-        Err(error) => {
-          let (__golem_error_name, payload) =
-            match CanonicalLogError::to_error_payload_value(error) {
-              Ok(payload) => payload
-              Err(encode_error) => {
-                return Err(
-                  @types.ToolError::InvalidResult(
-                    "failed serializing custom tool error: " + encode_error,
-                  ),
-                )
-              }
-            }
-          let payload = try {
-            @tool.encode_error_payload(payload)
-          } catch{
-            @asyncCore.Cancelled::Cancelled as error => raise  error
-            @types.ToolError::InvalidResult(message) => {
-              return Err(@types.ToolError::InvalidResult(message))
-            }
-            error => raise  error
-          }
-          Err(
-            @types.ToolError::CustomError({ name: __golem_error_name, payload }),
-          )
-        }
-      }
-    }
-    _ => {
-      @tool.reject_decoded_invocation(
-        __golem_decoded,
+    if __golem_stdin is Some(_) {
+      __golem_reader.abort()
+      return @tool.reject_undecoded_invocation(
         __golem_stdin,
-        @types.ToolError::InvalidCommandPath(__golem_command_path),
+        @types.ToolError::InvalidInput("command does not accept a stdin stream"),
       )
     }
+    if __golem_stdout is Some(_) {
+      __golem_reader.abort()
+      return @tool.reject_undecoded_invocation(
+        __golem_stdin,
+        @types.ToolError::InvalidInput(
+          "command does not accept a stdout stream",
+        ),
+      )
+    }
+    let verbose :UInt = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[2])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool canonical-git command commit: failed decoding `verbose`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    let git_dir :@schema.Path = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[0])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool canonical-git command commit: failed decoding `git-dir`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    let paginate :Bool = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[3])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool canonical-git command commit: failed decoding `paginate`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    let config :Map[String, String] = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[1])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool canonical-git command commit: failed decoding `config`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    let message :String = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[4])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool canonical-git command commit: failed decoding `message`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    let author :String? = try {
+      match @schema.wire_node(__golem_reader, __golem_fields[5]) {
+        @types.SchemaValueNode::OptionValue(None) => None
+        @types.SchemaValueNode::OptionValue(Some(__golem_child)) => {
+          Some(
+            match @schema.wire_node(__golem_reader, __golem_child) {
+              @types.SchemaValueNode::TextValue(value) => value.text
+              _ => raise  @schema.WireError::Invalid("expected text value")
+            },
+          )
+        }
+        _ => raise  @schema.WireError::Invalid("expected option value")
+      }
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool canonical-git command commit: failed decoding `author`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    let amend :Bool = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[7])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool canonical-git command commit: failed decoding `amend`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    let signoff :Bool = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[8])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool canonical-git command commit: failed decoding `signoff`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    let reset_author :Bool = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[9])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool canonical-git command commit: failed decoding `reset-author`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    let output :CanonicalGitOutputMode = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[6])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool canonical-git command commit: failed decoding `output`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    try {
+      __golem_reader.finish()
+    } catch{
+      __golem_error => {
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool canonical-git command commit: " + repr(__golem_error),
+          ),
+        )
+      }
+    }
+    return match CanonicalGit::commit(
+      verbose,
+      git_dir,
+      paginate,
+      config,
+      message,
+      author,
+      amend,
+      signoff,
+      reset_author,
+      output,
+    ) {
+      Ok(__golem_value) => {
+        Ok(
+          try {
+            @tool.invocation_result_wire(__golem_value)
+          } catch{
+            @asyncCore.Cancelled::Cancelled as error => raise  error
+            @types.ToolError::InvalidResult(message) => {
+              return Err(@types.ToolError::InvalidResult(message))
+            }
+            error => raise  error
+          },
+        )
+      }
+      Err(error) => {
+        match error {
+          NothingStaged => {
+            let payload = try {
+              @tool.encode_wire_result(())
+            } catch{
+              @asyncCore.Cancelled::Cancelled as error => raise  error
+              @types.ToolError::InvalidResult(message) => {
+                return Err(@types.ToolError::InvalidResult(message))
+              }
+              error => raise  error
+            }
+            Err(
+              @types.ToolError::CustomError({ name: "nothing-staged", payload }),
+            )
+          }
+          DirtyMerge => {
+            let payload = try {
+              @tool.encode_wire_result(())
+            } catch{
+              @asyncCore.Cancelled::Cancelled as error => raise  error
+              @types.ToolError::InvalidResult(message) => {
+                return Err(@types.ToolError::InvalidResult(message))
+              }
+              error => raise  error
+            }
+            Err(@types.ToolError::CustomError({ name: "dirty-merge", payload }))
+          }
+          BadAuthorFormat(author~) => {
+            let payload = try {
+              @tool.encode_wire_result(author)
+            } catch{
+              @asyncCore.Cancelled::Cancelled as error => raise  error
+              @types.ToolError::InvalidResult(message) => {
+                return Err(@types.ToolError::InvalidResult(message))
+              }
+              error => raise  error
+            }
+            Err(
+              @types.ToolError::CustomError(
+                { name: "bad-author-format", payload }
+              ),
+            )
+          }
+        }
+      }
+    }
   }
+  if __golem_command_path.length() == 1 && ["log"].contains(
+    __golem_command_path[0],
+  ) {
+    let __golem_reader = @schema.WireReader::new(__golem_input.value)
+    let __golem_fields = try {
+      @schema.wire_record(
+        __golem_reader,
+        __golem_input.value.root,
+        10,
+        "tool canonical-git command log",
+      )
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool canonical-git command log: " + repr(__golem_error),
+          ),
+        )
+      }
+    }
+    if __golem_stdin is Some(_) {
+      __golem_reader.abort()
+      return @tool.reject_undecoded_invocation(
+        __golem_stdin,
+        @types.ToolError::InvalidInput("command does not accept a stdin stream"),
+      )
+    }
+    if __golem_stdout is Some(_) {
+      __golem_reader.abort()
+      return @tool.reject_undecoded_invocation(
+        __golem_stdin,
+        @types.ToolError::InvalidInput(
+          "command does not accept a stdout stream",
+        ),
+      )
+    }
+    let max_count :Int64? = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[1])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool canonical-git command log: failed decoding `max-count`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    let since :@types.Datetime? = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[2])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool canonical-git command log: failed decoding `since`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    let until :@types.Datetime? = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[3])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool canonical-git command log: failed decoding `until`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    let author :Array[String] = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[4])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool canonical-git command log: failed decoding `author`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    let grep :Array[String] = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[5])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool canonical-git command log: failed decoding `grep`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    let all_match :Bool = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[6])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool canonical-git command log: failed decoding `all-match`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    let invert_grep :Bool = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[7])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool canonical-git command log: failed decoding `invert-grep`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    let oneline :Bool = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[8])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool canonical-git command log: failed decoding `oneline`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    let graph :Bool = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[9])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool canonical-git command log: failed decoding `graph`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    let paths :Array[@schema.Path] = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[0])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool canonical-git command log: failed decoding `paths`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    try {
+      __golem_reader.finish()
+    } catch{
+      __golem_error => {
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool canonical-git command log: " + repr(__golem_error),
+          ),
+        )
+      }
+    }
+    return match CanonicalGit::log(
+      max_count,
+      since,
+      until,
+      author,
+      grep,
+      all_match,
+      invert_grep,
+      oneline,
+      graph,
+      paths,
+    ) {
+      Ok(__golem_value) => {
+        Ok(
+          try {
+            @tool.invocation_result_wire(__golem_value)
+          } catch{
+            @asyncCore.Cancelled::Cancelled as error => raise  error
+            @types.ToolError::InvalidResult(message) => {
+              return Err(@types.ToolError::InvalidResult(message))
+            }
+            error => raise  error
+          },
+        )
+      }
+      Err(error) => {
+        match error {
+          BadRevision => {
+            let payload = try {
+              @tool.encode_wire_result(())
+            } catch{
+              @asyncCore.Cancelled::Cancelled as error => raise  error
+              @types.ToolError::InvalidResult(message) => {
+                return Err(@types.ToolError::InvalidResult(message))
+              }
+              error => raise  error
+            }
+            Err(
+              @types.ToolError::CustomError({ name: "bad-revision", payload }),
+            )
+          }
+          NotARepository => {
+            let payload = try {
+              @tool.encode_wire_result(())
+            } catch{
+              @asyncCore.Cancelled::Cancelled as error => raise  error
+              @types.ToolError::InvalidResult(message) => {
+                return Err(@types.ToolError::InvalidResult(message))
+              }
+              error => raise  error
+            }
+            Err(
+              @types.ToolError::CustomError(
+                { name: "not-a-repository", payload }
+              ),
+            )
+          }
+        }
+      }
+    }
+  }
+  @tool.reject_wire_invocation(
+    __golem_input,
+    __golem_stdin,
+    @types.ToolError::InvalidCommandPath(__golem_command_path),
+  )
+}
+
+///|
+///
+#warnings("-alert_wit_bindgen")
+async fn __golem_tool_invoke_CanonicalGit_subtree_1(
+  __golem_command_path : Array[String],
+  __golem_input : @types.TypedSchemaValue,
+  __golem_stdin : @asyncCore.Stream[Byte]?,
+  __golem_stdout : @tool.ProviderStdout?,
+  __golem_principal : @tool.Principal,
+) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
+  if __golem_command_path.length() == 1 && ["add"].contains(
+    __golem_command_path[0],
+  ) {
+    let __golem_reader = @schema.WireReader::new(__golem_input.value)
+    let __golem_fields = try {
+      @schema.wire_record(
+        __golem_reader,
+        __golem_input.value.root,
+        10,
+        "tool remote command add",
+      )
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool remote command add: " + repr(__golem_error),
+          ),
+        )
+      }
+    }
+    if __golem_stdin is Some(_) {
+      __golem_reader.abort()
+      return @tool.reject_undecoded_invocation(
+        __golem_stdin,
+        @types.ToolError::InvalidInput("command does not accept a stdin stream"),
+      )
+    }
+    if __golem_stdout is Some(_) {
+      __golem_reader.abort()
+      return @tool.reject_undecoded_invocation(
+        __golem_stdin,
+        @types.ToolError::InvalidInput(
+          "command does not accept a stdout stream",
+        ),
+      )
+    }
+    let verbose :UInt = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[2])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool remote command add: failed decoding `verbose`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    let name :String = try {
+      match @schema.wire_node(__golem_reader, __golem_fields[4]) {
+        @types.SchemaValueNode::TextValue(value) => value.text
+        _ => raise  @schema.WireError::Invalid("expected text value")
+      }
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool remote command add: failed decoding `name`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    let url :@schema.Url = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[5])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool remote command add: failed decoding `url`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    let track :Array[String] = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[6])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool remote command add: failed decoding `track`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    let master :String? = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[7])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool remote command add: failed decoding `master`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    let tags :Bool = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[8])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool remote command add: failed decoding `tags`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    let fetch :Bool = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[9])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool remote command add: failed decoding `fetch`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    let __golem_unused_0 :@schema.Path = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[0])
+    } catch{
+      error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(repr(error)),
+        )
+      }
+    }
+    let __golem_unused_1 :Map[String, String] = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[1])
+    } catch{
+      error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(repr(error)),
+        )
+      }
+    }
+    let __golem_unused_3 :Bool = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[3])
+    } catch{
+      error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(repr(error)),
+        )
+      }
+    }
+    try {
+      __golem_reader.finish()
+    } catch{
+      __golem_error => {
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool remote command add: " + repr(__golem_error),
+          ),
+        )
+      }
+    }
+    @schema.release_wire(__golem_unused_0)
+    @schema.release_wire(__golem_unused_1)
+    @schema.release_wire(__golem_unused_3)
+    return match CanonicalRemote::add(
+      verbose,
+      name,
+      url,
+      track,
+      master,
+      tags,
+      fetch,
+    ) {
+      Ok(__golem_value) => Ok(@tool.invocation_result_empty())
+      Err(error) => {
+        match error {
+          NoSuchRemote(name~) => {
+            let payload = try {
+              @tool.encode_wire_result(name)
+            } catch{
+              @asyncCore.Cancelled::Cancelled as error => raise  error
+              @types.ToolError::InvalidResult(message) => {
+                return Err(@types.ToolError::InvalidResult(message))
+              }
+              error => raise  error
+            }
+            Err(
+              @types.ToolError::CustomError({ name: "no-such-remote", payload }),
+            )
+          }
+        }
+      }
+    }
+  }
+  if __golem_command_path.length() == 1 && ["remove", "rm"].contains(
+    __golem_command_path[0],
+  ) {
+    let __golem_reader = @schema.WireReader::new(__golem_input.value)
+    let __golem_fields = try {
+      @schema.wire_record(
+        __golem_reader,
+        __golem_input.value.root,
+        5,
+        "tool remote command remove",
+      )
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool remote command remove: " + repr(__golem_error),
+          ),
+        )
+      }
+    }
+    if __golem_stdin is Some(_) {
+      __golem_reader.abort()
+      return @tool.reject_undecoded_invocation(
+        __golem_stdin,
+        @types.ToolError::InvalidInput("command does not accept a stdin stream"),
+      )
+    }
+    if __golem_stdout is Some(_) {
+      __golem_reader.abort()
+      return @tool.reject_undecoded_invocation(
+        __golem_stdin,
+        @types.ToolError::InvalidInput(
+          "command does not accept a stdout stream",
+        ),
+      )
+    }
+    let name :String = try {
+      match @schema.wire_node(__golem_reader, __golem_fields[4]) {
+        @types.SchemaValueNode::TextValue(value) => value.text
+        _ => raise  @schema.WireError::Invalid("expected text value")
+      }
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool remote command remove: failed decoding `name`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    let __golem_unused_0 :@schema.Path = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[0])
+    } catch{
+      error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(repr(error)),
+        )
+      }
+    }
+    let __golem_unused_1 :Map[String, String] = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[1])
+    } catch{
+      error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(repr(error)),
+        )
+      }
+    }
+    let __golem_unused_2 :UInt = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[2])
+    } catch{
+      error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(repr(error)),
+        )
+      }
+    }
+    let __golem_unused_3 :Bool = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[3])
+    } catch{
+      error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(repr(error)),
+        )
+      }
+    }
+    try {
+      __golem_reader.finish()
+    } catch{
+      __golem_error => {
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool remote command remove: " + repr(__golem_error),
+          ),
+        )
+      }
+    }
+    @schema.release_wire(__golem_unused_0)
+    @schema.release_wire(__golem_unused_1)
+    @schema.release_wire(__golem_unused_2)
+    @schema.release_wire(__golem_unused_3)
+    return match CanonicalRemote::remove(name) {
+      Ok(__golem_value) => Ok(@tool.invocation_result_empty())
+      Err(error) => {
+        match error {
+          NoSuchRemote(name~) => {
+            let payload = try {
+              @tool.encode_wire_result(name)
+            } catch{
+              @asyncCore.Cancelled::Cancelled as error => raise  error
+              @types.ToolError::InvalidResult(message) => {
+                return Err(@types.ToolError::InvalidResult(message))
+              }
+              error => raise  error
+            }
+            Err(
+              @types.ToolError::CustomError({ name: "no-such-remote", payload }),
+            )
+          }
+        }
+      }
+    }
+  }
+  if __golem_command_path.length() == 1 && ["set-url"].contains(
+    __golem_command_path[0],
+  ) {
+    let __golem_reader = @schema.WireReader::new(__golem_input.value)
+    let __golem_fields = try {
+      @schema.wire_record(
+        __golem_reader,
+        __golem_input.value.root,
+        10,
+        "tool remote command set-url",
+      )
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool remote command set-url: " + repr(__golem_error),
+          ),
+        )
+      }
+    }
+    if __golem_stdin is Some(_) {
+      __golem_reader.abort()
+      return @tool.reject_undecoded_invocation(
+        __golem_stdin,
+        @types.ToolError::InvalidInput("command does not accept a stdin stream"),
+      )
+    }
+    if __golem_stdout is Some(_) {
+      __golem_reader.abort()
+      return @tool.reject_undecoded_invocation(
+        __golem_stdin,
+        @types.ToolError::InvalidInput(
+          "command does not accept a stdout stream",
+        ),
+      )
+    }
+    let name :String = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[4])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool remote command set-url: failed decoding `name`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    let newurl :@schema.Url = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[5])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool remote command set-url: failed decoding `newurl`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    let oldurl :@schema.Url? = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[6])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool remote command set-url: failed decoding `oldurl`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    let push :Bool = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[7])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool remote command set-url: failed decoding `push`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    let add :Bool = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[8])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool remote command set-url: failed decoding `add`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    let delete :Bool = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[9])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool remote command set-url: failed decoding `delete`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    let __golem_unused_0 :@schema.Path = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[0])
+    } catch{
+      error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(repr(error)),
+        )
+      }
+    }
+    let __golem_unused_1 :Map[String, String] = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[1])
+    } catch{
+      error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(repr(error)),
+        )
+      }
+    }
+    let __golem_unused_2 :UInt = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[2])
+    } catch{
+      error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(repr(error)),
+        )
+      }
+    }
+    let __golem_unused_3 :Bool = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[3])
+    } catch{
+      error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(repr(error)),
+        )
+      }
+    }
+    try {
+      __golem_reader.finish()
+    } catch{
+      __golem_error => {
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool remote command set-url: " + repr(__golem_error),
+          ),
+        )
+      }
+    }
+    @schema.release_wire(__golem_unused_0)
+    @schema.release_wire(__golem_unused_1)
+    @schema.release_wire(__golem_unused_2)
+    @schema.release_wire(__golem_unused_3)
+    return match CanonicalRemote::set_url(
+      name,
+      newurl,
+      oldurl,
+      push,
+      add,
+      delete,
+    ) {
+      Ok(__golem_value) => Ok(@tool.invocation_result_empty())
+      Err(error) => {
+        match error {
+          Failed(__golem_payload) => {
+            let payload = try {
+              @tool.encode_wire_result(__golem_payload)
+            } catch{
+              @asyncCore.Cancelled::Cancelled as error => raise  error
+              @types.ToolError::InvalidResult(message) => {
+                return Err(@types.ToolError::InvalidResult(message))
+              }
+              error => raise  error
+            }
+            Err(@types.ToolError::CustomError({ name: "failed", payload }))
+          }
+        }
+      }
+    }
+  }
+  @tool.reject_wire_invocation(
+    __golem_input,
+    __golem_stdin,
+    @types.ToolError::InvalidCommandPath(__golem_command_path),
+  )
+}
+
+///|
+///
+#warnings("-alert_wit_bindgen")
+async fn __golem_tool_invoke_CanonicalGit_subtree_2(
+  __golem_command_path : Array[String],
+  __golem_input : @types.TypedSchemaValue,
+  __golem_stdin : @asyncCore.Stream[Byte]?,
+  __golem_stdout : @tool.ProviderStdout?,
+  __golem_principal : @tool.Principal,
+) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
+  if __golem_command_path.length() == 0 {
+    let __golem_reader = @schema.WireReader::new(__golem_input.value)
+    let __golem_fields = try {
+      @schema.wire_record(
+        __golem_reader,
+        __golem_input.value.root,
+        4,
+        "tool stash command stash",
+      )
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool stash command stash: " + repr(__golem_error),
+          ),
+        )
+      }
+    }
+    if __golem_stdin is Some(_) {
+      __golem_reader.abort()
+      return @tool.reject_undecoded_invocation(
+        __golem_stdin,
+        @types.ToolError::InvalidInput("command does not accept a stdin stream"),
+      )
+    }
+    if __golem_stdout is Some(_) {
+      __golem_reader.abort()
+      return @tool.reject_undecoded_invocation(
+        __golem_stdin,
+        @types.ToolError::InvalidInput(
+          "command does not accept a stdout stream",
+        ),
+      )
+    }
+    let verbose :UInt = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[1])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool stash command stash: failed decoding `verbose`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    let message :String = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[2])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool stash command stash: failed decoding `message`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    let keep_index :Bool = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[3])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool stash command stash: failed decoding `keep-index`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    let __golem_unused_0 :@schema.Path = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[0])
+    } catch{
+      error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(repr(error)),
+        )
+      }
+    }
+    try {
+      __golem_reader.finish()
+    } catch{
+      __golem_error => {
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool stash command stash: " + repr(__golem_error),
+          ),
+        )
+      }
+    }
+    @schema.release_wire(__golem_unused_0)
+    return match CanonicalStash::stash(verbose, message, keep_index) {
+      Ok(__golem_value) => Ok(@tool.invocation_result_empty())
+      Err(error) => {
+        match error {
+          NoSuchStash(name~) => {
+            let payload = try {
+              @tool.encode_wire_result(name)
+            } catch{
+              @asyncCore.Cancelled::Cancelled as error => raise  error
+              @types.ToolError::InvalidResult(message) => {
+                return Err(@types.ToolError::InvalidResult(message))
+              }
+              error => raise  error
+            }
+            Err(
+              @types.ToolError::CustomError({ name: "no-such-stash", payload }),
+            )
+          }
+        }
+      }
+    }
+  }
+  if __golem_command_path.length() == 1 && ["pop"].contains(
+    __golem_command_path[0],
+  ) {
+    let __golem_reader = @schema.WireReader::new(__golem_input.value)
+    let __golem_fields = try {
+      @schema.wire_record(
+        __golem_reader,
+        __golem_input.value.root,
+        4,
+        "tool stash command pop",
+      )
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool stash command pop: " + repr(__golem_error),
+          ),
+        )
+      }
+    }
+    if __golem_stdin is Some(_) {
+      __golem_reader.abort()
+      return @tool.reject_undecoded_invocation(
+        __golem_stdin,
+        @types.ToolError::InvalidInput("command does not accept a stdin stream"),
+      )
+    }
+    if __golem_stdout is Some(_) {
+      __golem_reader.abort()
+      return @tool.reject_undecoded_invocation(
+        __golem_stdin,
+        @types.ToolError::InvalidInput(
+          "command does not accept a stdout stream",
+        ),
+      )
+    }
+    let name :String? = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[2])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool stash command pop: failed decoding `name`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    let index :UInt? = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[3])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool stash command pop: failed decoding `index`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    let __golem_unused_0 :@schema.Path = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[0])
+    } catch{
+      error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(repr(error)),
+        )
+      }
+    }
+    let __golem_unused_1 :UInt = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[1])
+    } catch{
+      error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(repr(error)),
+        )
+      }
+    }
+    try {
+      __golem_reader.finish()
+    } catch{
+      __golem_error => {
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool stash command pop: " + repr(__golem_error),
+          ),
+        )
+      }
+    }
+    @schema.release_wire(__golem_unused_0)
+    @schema.release_wire(__golem_unused_1)
+    return match CanonicalStash::pop(name, index) {
+      Ok(__golem_value) => Ok(@tool.invocation_result_empty())
+      Err(error) => {
+        match error {
+          NoSuchStash(name~) => {
+            let payload = try {
+              @tool.encode_wire_result(name)
+            } catch{
+              @asyncCore.Cancelled::Cancelled as error => raise  error
+              @types.ToolError::InvalidResult(message) => {
+                return Err(@types.ToolError::InvalidResult(message))
+              }
+              error => raise  error
+            }
+            Err(
+              @types.ToolError::CustomError({ name: "no-such-stash", payload }),
+            )
+          }
+        }
+      }
+    }
+  }
+  if __golem_command_path.length() == 1 && ["apply"].contains(
+    __golem_command_path[0],
+  ) {
+    let __golem_reader = @schema.WireReader::new(__golem_input.value)
+    let __golem_fields = try {
+      @schema.wire_record(
+        __golem_reader,
+        __golem_input.value.root,
+        4,
+        "tool stash command apply",
+      )
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool stash command apply: " + repr(__golem_error),
+          ),
+        )
+      }
+    }
+    if __golem_stdin is Some(_) {
+      __golem_reader.abort()
+      return @tool.reject_undecoded_invocation(
+        __golem_stdin,
+        @types.ToolError::InvalidInput("command does not accept a stdin stream"),
+      )
+    }
+    if __golem_stdout is Some(_) {
+      __golem_reader.abort()
+      return @tool.reject_undecoded_invocation(
+        __golem_stdin,
+        @types.ToolError::InvalidInput(
+          "command does not accept a stdout stream",
+        ),
+      )
+    }
+    let name :String? = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[2])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool stash command apply: failed decoding `name`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    let index :UInt? = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[3])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool stash command apply: failed decoding `index`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    let __golem_unused_0 :@schema.Path = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[0])
+    } catch{
+      error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(repr(error)),
+        )
+      }
+    }
+    let __golem_unused_1 :UInt = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[1])
+    } catch{
+      error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(repr(error)),
+        )
+      }
+    }
+    try {
+      __golem_reader.finish()
+    } catch{
+      __golem_error => {
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool stash command apply: " + repr(__golem_error),
+          ),
+        )
+      }
+    }
+    @schema.release_wire(__golem_unused_0)
+    @schema.release_wire(__golem_unused_1)
+    return match CanonicalStash::apply(name, index) {
+      Ok(__golem_value) => Ok(@tool.invocation_result_empty())
+      Err(error) => {
+        match error {
+          NoSuchStash(name~) => {
+            let payload = try {
+              @tool.encode_wire_result(name)
+            } catch{
+              @asyncCore.Cancelled::Cancelled as error => raise  error
+              @types.ToolError::InvalidResult(message) => {
+                return Err(@types.ToolError::InvalidResult(message))
+              }
+              error => raise  error
+            }
+            Err(
+              @types.ToolError::CustomError({ name: "no-such-stash", payload }),
+            )
+          }
+        }
+      }
+    }
+  }
+  @tool.reject_wire_invocation(
+    __golem_input,
+    __golem_stdin,
+    @types.ToolError::InvalidCommandPath(__golem_command_path),
+  )
 }
 
 ///|
@@ -2820,6 +3976,7 @@ fn __golem_tool_def_raw_CanonicalRemote() -> @tool.ToolDef {
   try {
     let def :@tool.ToolDef = {
       version: "0.0.0",
+      requires_filesystem: false,
       commands: [
         {
           name: "remote",
@@ -3149,6 +4306,7 @@ fn __golem_tool_def_prepare_CanonicalRemote(
   try {
     let carrier :@tool.ToolDef = {
       version: "0.0.0",
+      requires_filesystem: false,
       commands: [
         {
           name: "__golem_ancestry",
@@ -3203,393 +4361,456 @@ async fn __golem_tool_invoke_CanonicalRemote(
   __golem_stdout : @tool.ProviderStdout?,
   __golem_principal : @tool.Principal,
 ) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
-  let __golem_def = __golem_tool_def_CanonicalRemote()
-  let __golem_index =
-    match __golem_def.command_index_by_path(__golem_command_path) {
-      Some(__golem_index) => __golem_index
-      None => {
-        return @tool.reject_wire_invocation(
-          __golem_input,
+  if __golem_command_path.length() == 1 && ["add"].contains(
+    __golem_command_path[0],
+  ) {
+    let __golem_reader = @schema.WireReader::new(__golem_input.value)
+    let __golem_fields = try {
+      @schema.wire_record(
+        __golem_reader,
+        __golem_input.value.root,
+        7,
+        "tool remote command add",
+      )
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
           __golem_stdin,
-          @types.ToolError::InvalidCommandPath(__golem_command_path),
+          @types.ToolError::InvalidInput(
+            "tool remote command add: " + repr(__golem_error),
+          ),
         )
       }
     }
-  let __golem_decoded = try {
-    @tool.decode_canonical_input(
-      __golem_def,
-      __golem_index,
-      __golem_input,
-      "tool remote invocation",
-    )
-  } catch{
-    __golem_error => {
-      return @tool.reject_undecoded_invocation(__golem_stdin, __golem_error)
-    }
-  }
-  match __golem_index {
-    1 => {
-      if __golem_stdin is Some(_) {
-        return @tool.reject_decoded_invocation(
-          __golem_decoded,
-          __golem_stdin,
-          @types.ToolError::InvalidInput(
-            "command does not accept a stdin stream",
-          ),
-        )
-      }
-      if __golem_stdout is Some(_) {
-        return @tool.reject_decoded_invocation(
-          __golem_decoded,
-          __golem_stdin,
-          @types.ToolError::InvalidInput(
-            "command does not accept a stdout stream",
-          ),
-        )
-      }
-      let verbose :UInt = try {
-        @tool.decode_canonical_field(
-          __golem_decoded,
-          "verbose",
-          "tool remote command add",
-        )
-      } catch{
-        __golem_error => {
-          return @tool.reject_decoded_invocation(
-            __golem_decoded,
-            __golem_stdin,
-            __golem_error,
-          )
-        }
-      }
-      let name :String = try {
-        @tool.decode_canonical_field(
-          __golem_decoded,
-          "name",
-          "tool remote command add",
-        )
-      } catch{
-        __golem_error => {
-          return @tool.reject_decoded_invocation(
-            __golem_decoded,
-            __golem_stdin,
-            __golem_error,
-          )
-        }
-      }
-      let url :@schema.Url = try {
-        @tool.decode_canonical_field(
-          __golem_decoded,
-          "url",
-          "tool remote command add",
-        )
-      } catch{
-        __golem_error => {
-          return @tool.reject_decoded_invocation(
-            __golem_decoded,
-            __golem_stdin,
-            __golem_error,
-          )
-        }
-      }
-      let track :Array[String] = try {
-        @tool.decode_canonical_field(
-          __golem_decoded,
-          "track",
-          "tool remote command add",
-        )
-      } catch{
-        __golem_error => {
-          return @tool.reject_decoded_invocation(
-            __golem_decoded,
-            __golem_stdin,
-            __golem_error,
-          )
-        }
-      }
-      let master :String? = try {
-        @tool.decode_canonical_field(
-          __golem_decoded,
-          "master",
-          "tool remote command add",
-        )
-      } catch{
-        __golem_error => {
-          return @tool.reject_decoded_invocation(
-            __golem_decoded,
-            __golem_stdin,
-            __golem_error,
-          )
-        }
-      }
-      let tags :Bool = try {
-        @tool.decode_canonical_field(
-          __golem_decoded,
-          "tags",
-          "tool remote command add",
-        )
-      } catch{
-        __golem_error => {
-          return @tool.reject_decoded_invocation(
-            __golem_decoded,
-            __golem_stdin,
-            __golem_error,
-          )
-        }
-      }
-      let fetch :Bool = try {
-        @tool.decode_canonical_field(
-          __golem_decoded,
-          "fetch",
-          "tool remote command add",
-        )
-      } catch{
-        __golem_error => {
-          return @tool.reject_decoded_invocation(
-            __golem_decoded,
-            __golem_stdin,
-            __golem_error,
-          )
-        }
-      }
-      match CanonicalRemote::add(verbose, name, url, track, master, tags, fetch) {
-        Ok(__golem_value) => Ok(@tool.invocation_result_empty())
-        Err(error) => {
-          let (__golem_error_name, payload) =
-            match CanonicalRemoteError::to_error_payload_value(error) {
-              Ok(payload) => payload
-              Err(encode_error) => {
-                return Err(
-                  @types.ToolError::InvalidResult(
-                    "failed serializing custom tool error: " + encode_error,
-                  ),
-                )
-              }
-            }
-          let payload = try {
-            @tool.encode_error_payload(payload)
-          } catch{
-            @asyncCore.Cancelled::Cancelled as error => raise  error
-            @types.ToolError::InvalidResult(message) => {
-              return Err(@types.ToolError::InvalidResult(message))
-            }
-            error => raise  error
-          }
-          Err(
-            @types.ToolError::CustomError({ name: __golem_error_name, payload }),
-          )
-        }
-      }
-    }
-    2 => {
-      if __golem_stdin is Some(_) {
-        return @tool.reject_decoded_invocation(
-          __golem_decoded,
-          __golem_stdin,
-          @types.ToolError::InvalidInput(
-            "command does not accept a stdin stream",
-          ),
-        )
-      }
-      if __golem_stdout is Some(_) {
-        return @tool.reject_decoded_invocation(
-          __golem_decoded,
-          __golem_stdin,
-          @types.ToolError::InvalidInput(
-            "command does not accept a stdout stream",
-          ),
-        )
-      }
-      let name :String = try {
-        @tool.decode_canonical_field(
-          __golem_decoded,
-          "name",
-          "tool remote command remove",
-        )
-      } catch{
-        __golem_error => {
-          return @tool.reject_decoded_invocation(
-            __golem_decoded,
-            __golem_stdin,
-            __golem_error,
-          )
-        }
-      }
-      match CanonicalRemote::remove(name) {
-        Ok(__golem_value) => Ok(@tool.invocation_result_empty())
-        Err(error) => {
-          let (__golem_error_name, payload) =
-            match CanonicalRemoteError::to_error_payload_value(error) {
-              Ok(payload) => payload
-              Err(encode_error) => {
-                return Err(
-                  @types.ToolError::InvalidResult(
-                    "failed serializing custom tool error: " + encode_error,
-                  ),
-                )
-              }
-            }
-          let payload = try {
-            @tool.encode_error_payload(payload)
-          } catch{
-            @asyncCore.Cancelled::Cancelled as error => raise  error
-            @types.ToolError::InvalidResult(message) => {
-              return Err(@types.ToolError::InvalidResult(message))
-            }
-            error => raise  error
-          }
-          Err(
-            @types.ToolError::CustomError({ name: __golem_error_name, payload }),
-          )
-        }
-      }
-    }
-    3 => {
-      if __golem_stdin is Some(_) {
-        return @tool.reject_decoded_invocation(
-          __golem_decoded,
-          __golem_stdin,
-          @types.ToolError::InvalidInput(
-            "command does not accept a stdin stream",
-          ),
-        )
-      }
-      if __golem_stdout is Some(_) {
-        return @tool.reject_decoded_invocation(
-          __golem_decoded,
-          __golem_stdin,
-          @types.ToolError::InvalidInput(
-            "command does not accept a stdout stream",
-          ),
-        )
-      }
-      let name :String = try {
-        @tool.decode_canonical_field(
-          __golem_decoded,
-          "name",
-          "tool remote command set-url",
-        )
-      } catch{
-        __golem_error => {
-          return @tool.reject_decoded_invocation(
-            __golem_decoded,
-            __golem_stdin,
-            __golem_error,
-          )
-        }
-      }
-      let newurl :@schema.Url = try {
-        @tool.decode_canonical_field(
-          __golem_decoded,
-          "newurl",
-          "tool remote command set-url",
-        )
-      } catch{
-        __golem_error => {
-          return @tool.reject_decoded_invocation(
-            __golem_decoded,
-            __golem_stdin,
-            __golem_error,
-          )
-        }
-      }
-      let oldurl :@schema.Url? = try {
-        @tool.decode_canonical_field(
-          __golem_decoded,
-          "oldurl",
-          "tool remote command set-url",
-        )
-      } catch{
-        __golem_error => {
-          return @tool.reject_decoded_invocation(
-            __golem_decoded,
-            __golem_stdin,
-            __golem_error,
-          )
-        }
-      }
-      let push :Bool = try {
-        @tool.decode_canonical_field(
-          __golem_decoded,
-          "push",
-          "tool remote command set-url",
-        )
-      } catch{
-        __golem_error => {
-          return @tool.reject_decoded_invocation(
-            __golem_decoded,
-            __golem_stdin,
-            __golem_error,
-          )
-        }
-      }
-      let add :Bool = try {
-        @tool.decode_canonical_field(
-          __golem_decoded,
-          "add",
-          "tool remote command set-url",
-        )
-      } catch{
-        __golem_error => {
-          return @tool.reject_decoded_invocation(
-            __golem_decoded,
-            __golem_stdin,
-            __golem_error,
-          )
-        }
-      }
-      let delete :Bool = try {
-        @tool.decode_canonical_field(
-          __golem_decoded,
-          "delete",
-          "tool remote command set-url",
-        )
-      } catch{
-        __golem_error => {
-          return @tool.reject_decoded_invocation(
-            __golem_decoded,
-            __golem_stdin,
-            __golem_error,
-          )
-        }
-      }
-      match CanonicalRemote::set_url(name, newurl, oldurl, push, add, delete) {
-        Ok(__golem_value) => Ok(@tool.invocation_result_empty())
-        Err(error) => {
-          let (__golem_error_name, payload) =
-            match CanonicalSetUrlError::to_error_payload_value(error) {
-              Ok(payload) => payload
-              Err(encode_error) => {
-                return Err(
-                  @types.ToolError::InvalidResult(
-                    "failed serializing custom tool error: " + encode_error,
-                  ),
-                )
-              }
-            }
-          let payload = try {
-            @tool.encode_error_payload(payload)
-          } catch{
-            @asyncCore.Cancelled::Cancelled as error => raise  error
-            @types.ToolError::InvalidResult(message) => {
-              return Err(@types.ToolError::InvalidResult(message))
-            }
-            error => raise  error
-          }
-          Err(
-            @types.ToolError::CustomError({ name: __golem_error_name, payload }),
-          )
-        }
-      }
-    }
-    _ => {
-      @tool.reject_decoded_invocation(
-        __golem_decoded,
+    if __golem_stdin is Some(_) {
+      __golem_reader.abort()
+      return @tool.reject_undecoded_invocation(
         __golem_stdin,
-        @types.ToolError::InvalidCommandPath(__golem_command_path),
+        @types.ToolError::InvalidInput("command does not accept a stdin stream"),
       )
     }
+    if __golem_stdout is Some(_) {
+      __golem_reader.abort()
+      return @tool.reject_undecoded_invocation(
+        __golem_stdin,
+        @types.ToolError::InvalidInput(
+          "command does not accept a stdout stream",
+        ),
+      )
+    }
+    let verbose :UInt = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[0])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool remote command add: failed decoding `verbose`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    let name :String = try {
+      match @schema.wire_node(__golem_reader, __golem_fields[1]) {
+        @types.SchemaValueNode::TextValue(value) => value.text
+        _ => raise  @schema.WireError::Invalid("expected text value")
+      }
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool remote command add: failed decoding `name`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    let url :@schema.Url = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[2])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool remote command add: failed decoding `url`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    let track :Array[String] = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[3])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool remote command add: failed decoding `track`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    let master :String? = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[4])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool remote command add: failed decoding `master`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    let tags :Bool = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[5])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool remote command add: failed decoding `tags`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    let fetch :Bool = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[6])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool remote command add: failed decoding `fetch`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    try {
+      __golem_reader.finish()
+    } catch{
+      __golem_error => {
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool remote command add: " + repr(__golem_error),
+          ),
+        )
+      }
+    }
+    return match CanonicalRemote::add(
+      verbose,
+      name,
+      url,
+      track,
+      master,
+      tags,
+      fetch,
+    ) {
+      Ok(__golem_value) => Ok(@tool.invocation_result_empty())
+      Err(error) => {
+        match error {
+          NoSuchRemote(name~) => {
+            let payload = try {
+              @tool.encode_wire_result(name)
+            } catch{
+              @asyncCore.Cancelled::Cancelled as error => raise  error
+              @types.ToolError::InvalidResult(message) => {
+                return Err(@types.ToolError::InvalidResult(message))
+              }
+              error => raise  error
+            }
+            Err(
+              @types.ToolError::CustomError({ name: "no-such-remote", payload }),
+            )
+          }
+        }
+      }
+    }
   }
+  if __golem_command_path.length() == 1 && ["remove", "rm"].contains(
+    __golem_command_path[0],
+  ) {
+    let __golem_reader = @schema.WireReader::new(__golem_input.value)
+    let __golem_fields = try {
+      @schema.wire_record(
+        __golem_reader,
+        __golem_input.value.root,
+        1,
+        "tool remote command remove",
+      )
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool remote command remove: " + repr(__golem_error),
+          ),
+        )
+      }
+    }
+    if __golem_stdin is Some(_) {
+      __golem_reader.abort()
+      return @tool.reject_undecoded_invocation(
+        __golem_stdin,
+        @types.ToolError::InvalidInput("command does not accept a stdin stream"),
+      )
+    }
+    if __golem_stdout is Some(_) {
+      __golem_reader.abort()
+      return @tool.reject_undecoded_invocation(
+        __golem_stdin,
+        @types.ToolError::InvalidInput(
+          "command does not accept a stdout stream",
+        ),
+      )
+    }
+    let name :String = try {
+      match @schema.wire_node(__golem_reader, __golem_fields[0]) {
+        @types.SchemaValueNode::TextValue(value) => value.text
+        _ => raise  @schema.WireError::Invalid("expected text value")
+      }
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool remote command remove: failed decoding `name`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    try {
+      __golem_reader.finish()
+    } catch{
+      __golem_error => {
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool remote command remove: " + repr(__golem_error),
+          ),
+        )
+      }
+    }
+    return match CanonicalRemote::remove(name) {
+      Ok(__golem_value) => Ok(@tool.invocation_result_empty())
+      Err(error) => {
+        match error {
+          NoSuchRemote(name~) => {
+            let payload = try {
+              @tool.encode_wire_result(name)
+            } catch{
+              @asyncCore.Cancelled::Cancelled as error => raise  error
+              @types.ToolError::InvalidResult(message) => {
+                return Err(@types.ToolError::InvalidResult(message))
+              }
+              error => raise  error
+            }
+            Err(
+              @types.ToolError::CustomError({ name: "no-such-remote", payload }),
+            )
+          }
+        }
+      }
+    }
+  }
+  if __golem_command_path.length() == 1 && ["set-url"].contains(
+    __golem_command_path[0],
+  ) {
+    let __golem_reader = @schema.WireReader::new(__golem_input.value)
+    let __golem_fields = try {
+      @schema.wire_record(
+        __golem_reader,
+        __golem_input.value.root,
+        6,
+        "tool remote command set-url",
+      )
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool remote command set-url: " + repr(__golem_error),
+          ),
+        )
+      }
+    }
+    if __golem_stdin is Some(_) {
+      __golem_reader.abort()
+      return @tool.reject_undecoded_invocation(
+        __golem_stdin,
+        @types.ToolError::InvalidInput("command does not accept a stdin stream"),
+      )
+    }
+    if __golem_stdout is Some(_) {
+      __golem_reader.abort()
+      return @tool.reject_undecoded_invocation(
+        __golem_stdin,
+        @types.ToolError::InvalidInput(
+          "command does not accept a stdout stream",
+        ),
+      )
+    }
+    let name :String = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[0])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool remote command set-url: failed decoding `name`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    let newurl :@schema.Url = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[1])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool remote command set-url: failed decoding `newurl`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    let oldurl :@schema.Url? = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[2])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool remote command set-url: failed decoding `oldurl`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    let push :Bool = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[3])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool remote command set-url: failed decoding `push`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    let add :Bool = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[4])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool remote command set-url: failed decoding `add`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    let delete :Bool = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[5])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool remote command set-url: failed decoding `delete`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    try {
+      __golem_reader.finish()
+    } catch{
+      __golem_error => {
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool remote command set-url: " + repr(__golem_error),
+          ),
+        )
+      }
+    }
+    return match CanonicalRemote::set_url(
+      name,
+      newurl,
+      oldurl,
+      push,
+      add,
+      delete,
+    ) {
+      Ok(__golem_value) => Ok(@tool.invocation_result_empty())
+      Err(error) => {
+        match error {
+          Failed(__golem_payload) => {
+            let payload = try {
+              @tool.encode_wire_result(__golem_payload)
+            } catch{
+              @asyncCore.Cancelled::Cancelled as error => raise  error
+              @types.ToolError::InvalidResult(message) => {
+                return Err(@types.ToolError::InvalidResult(message))
+              }
+              error => raise  error
+            }
+            Err(@types.ToolError::CustomError({ name: "failed", payload }))
+          }
+        }
+      }
+    }
+  }
+  @tool.reject_wire_invocation(
+    __golem_input,
+    __golem_stdin,
+    @types.ToolError::InvalidCommandPath(__golem_command_path),
+  )
 }
 
 ///|
@@ -3598,6 +4819,7 @@ fn __golem_tool_def_raw_CanonicalStash() -> @tool.ToolDef {
   try {
     let def :@tool.ToolDef = {
       version: "0.0.0",
+      requires_filesystem: false,
       commands: [
         {
           name: "stash",
@@ -3822,6 +5044,7 @@ fn __golem_tool_def_prepare_CanonicalStash(
   try {
     let carrier :@tool.ToolDef = {
       version: "0.0.0",
+      requires_filesystem: false,
       commands: [
         {
           name: "__golem_ancestry",
@@ -3876,288 +5099,354 @@ async fn __golem_tool_invoke_CanonicalStash(
   __golem_stdout : @tool.ProviderStdout?,
   __golem_principal : @tool.Principal,
 ) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
-  let __golem_def = __golem_tool_def_CanonicalStash()
-  let __golem_index =
-    match __golem_def.command_index_by_path(__golem_command_path) {
-      Some(__golem_index) => __golem_index
-      None => {
-        return @tool.reject_wire_invocation(
-          __golem_input,
+  if __golem_command_path.length() == 0 {
+    let __golem_reader = @schema.WireReader::new(__golem_input.value)
+    let __golem_fields = try {
+      @schema.wire_record(
+        __golem_reader,
+        __golem_input.value.root,
+        3,
+        "tool stash command stash",
+      )
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
           __golem_stdin,
-          @types.ToolError::InvalidCommandPath(__golem_command_path),
+          @types.ToolError::InvalidInput(
+            "tool stash command stash: " + repr(__golem_error),
+          ),
         )
       }
     }
-  let __golem_decoded = try {
-    @tool.decode_canonical_input(
-      __golem_def,
-      __golem_index,
-      __golem_input,
-      "tool stash invocation",
-    )
-  } catch{
-    __golem_error => {
-      return @tool.reject_undecoded_invocation(__golem_stdin, __golem_error)
-    }
-  }
-  match __golem_index {
-    0 => {
-      if __golem_stdin is Some(_) {
-        return @tool.reject_decoded_invocation(
-          __golem_decoded,
-          __golem_stdin,
-          @types.ToolError::InvalidInput(
-            "command does not accept a stdin stream",
-          ),
-        )
-      }
-      if __golem_stdout is Some(_) {
-        return @tool.reject_decoded_invocation(
-          __golem_decoded,
-          __golem_stdin,
-          @types.ToolError::InvalidInput(
-            "command does not accept a stdout stream",
-          ),
-        )
-      }
-      let verbose :UInt = try {
-        @tool.decode_canonical_field(
-          __golem_decoded,
-          "verbose",
-          "tool stash command stash",
-        )
-      } catch{
-        __golem_error => {
-          return @tool.reject_decoded_invocation(
-            __golem_decoded,
-            __golem_stdin,
-            __golem_error,
-          )
-        }
-      }
-      let message :String = try {
-        @tool.decode_canonical_field(
-          __golem_decoded,
-          "message",
-          "tool stash command stash",
-        )
-      } catch{
-        __golem_error => {
-          return @tool.reject_decoded_invocation(
-            __golem_decoded,
-            __golem_stdin,
-            __golem_error,
-          )
-        }
-      }
-      let keep_index :Bool = try {
-        @tool.decode_canonical_field(
-          __golem_decoded,
-          "keep-index",
-          "tool stash command stash",
-        )
-      } catch{
-        __golem_error => {
-          return @tool.reject_decoded_invocation(
-            __golem_decoded,
-            __golem_stdin,
-            __golem_error,
-          )
-        }
-      }
-      match CanonicalStash::stash(verbose, message, keep_index) {
-        Ok(__golem_value) => Ok(@tool.invocation_result_empty())
-        Err(error) => {
-          let (__golem_error_name, payload) =
-            match CanonicalStashError::to_error_payload_value(error) {
-              Ok(payload) => payload
-              Err(encode_error) => {
-                return Err(
-                  @types.ToolError::InvalidResult(
-                    "failed serializing custom tool error: " + encode_error,
-                  ),
-                )
-              }
-            }
-          let payload = try {
-            @tool.encode_error_payload(payload)
-          } catch{
-            @asyncCore.Cancelled::Cancelled as error => raise  error
-            @types.ToolError::InvalidResult(message) => {
-              return Err(@types.ToolError::InvalidResult(message))
-            }
-            error => raise  error
-          }
-          Err(
-            @types.ToolError::CustomError({ name: __golem_error_name, payload }),
-          )
-        }
-      }
-    }
-    1 => {
-      if __golem_stdin is Some(_) {
-        return @tool.reject_decoded_invocation(
-          __golem_decoded,
-          __golem_stdin,
-          @types.ToolError::InvalidInput(
-            "command does not accept a stdin stream",
-          ),
-        )
-      }
-      if __golem_stdout is Some(_) {
-        return @tool.reject_decoded_invocation(
-          __golem_decoded,
-          __golem_stdin,
-          @types.ToolError::InvalidInput(
-            "command does not accept a stdout stream",
-          ),
-        )
-      }
-      let name :String? = try {
-        @tool.decode_canonical_field(
-          __golem_decoded,
-          "name",
-          "tool stash command pop",
-        )
-      } catch{
-        __golem_error => {
-          return @tool.reject_decoded_invocation(
-            __golem_decoded,
-            __golem_stdin,
-            __golem_error,
-          )
-        }
-      }
-      let index :UInt? = try {
-        @tool.decode_canonical_field(
-          __golem_decoded,
-          "index",
-          "tool stash command pop",
-        )
-      } catch{
-        __golem_error => {
-          return @tool.reject_decoded_invocation(
-            __golem_decoded,
-            __golem_stdin,
-            __golem_error,
-          )
-        }
-      }
-      match CanonicalStash::pop(name, index) {
-        Ok(__golem_value) => Ok(@tool.invocation_result_empty())
-        Err(error) => {
-          let (__golem_error_name, payload) =
-            match CanonicalStashError::to_error_payload_value(error) {
-              Ok(payload) => payload
-              Err(encode_error) => {
-                return Err(
-                  @types.ToolError::InvalidResult(
-                    "failed serializing custom tool error: " + encode_error,
-                  ),
-                )
-              }
-            }
-          let payload = try {
-            @tool.encode_error_payload(payload)
-          } catch{
-            @asyncCore.Cancelled::Cancelled as error => raise  error
-            @types.ToolError::InvalidResult(message) => {
-              return Err(@types.ToolError::InvalidResult(message))
-            }
-            error => raise  error
-          }
-          Err(
-            @types.ToolError::CustomError({ name: __golem_error_name, payload }),
-          )
-        }
-      }
-    }
-    2 => {
-      if __golem_stdin is Some(_) {
-        return @tool.reject_decoded_invocation(
-          __golem_decoded,
-          __golem_stdin,
-          @types.ToolError::InvalidInput(
-            "command does not accept a stdin stream",
-          ),
-        )
-      }
-      if __golem_stdout is Some(_) {
-        return @tool.reject_decoded_invocation(
-          __golem_decoded,
-          __golem_stdin,
-          @types.ToolError::InvalidInput(
-            "command does not accept a stdout stream",
-          ),
-        )
-      }
-      let name :String? = try {
-        @tool.decode_canonical_field(
-          __golem_decoded,
-          "name",
-          "tool stash command apply",
-        )
-      } catch{
-        __golem_error => {
-          return @tool.reject_decoded_invocation(
-            __golem_decoded,
-            __golem_stdin,
-            __golem_error,
-          )
-        }
-      }
-      let index :UInt? = try {
-        @tool.decode_canonical_field(
-          __golem_decoded,
-          "index",
-          "tool stash command apply",
-        )
-      } catch{
-        __golem_error => {
-          return @tool.reject_decoded_invocation(
-            __golem_decoded,
-            __golem_stdin,
-            __golem_error,
-          )
-        }
-      }
-      match CanonicalStash::apply(name, index) {
-        Ok(__golem_value) => Ok(@tool.invocation_result_empty())
-        Err(error) => {
-          let (__golem_error_name, payload) =
-            match CanonicalStashError::to_error_payload_value(error) {
-              Ok(payload) => payload
-              Err(encode_error) => {
-                return Err(
-                  @types.ToolError::InvalidResult(
-                    "failed serializing custom tool error: " + encode_error,
-                  ),
-                )
-              }
-            }
-          let payload = try {
-            @tool.encode_error_payload(payload)
-          } catch{
-            @asyncCore.Cancelled::Cancelled as error => raise  error
-            @types.ToolError::InvalidResult(message) => {
-              return Err(@types.ToolError::InvalidResult(message))
-            }
-            error => raise  error
-          }
-          Err(
-            @types.ToolError::CustomError({ name: __golem_error_name, payload }),
-          )
-        }
-      }
-    }
-    _ => {
-      @tool.reject_decoded_invocation(
-        __golem_decoded,
+    if __golem_stdin is Some(_) {
+      __golem_reader.abort()
+      return @tool.reject_undecoded_invocation(
         __golem_stdin,
-        @types.ToolError::InvalidCommandPath(__golem_command_path),
+        @types.ToolError::InvalidInput("command does not accept a stdin stream"),
       )
     }
+    if __golem_stdout is Some(_) {
+      __golem_reader.abort()
+      return @tool.reject_undecoded_invocation(
+        __golem_stdin,
+        @types.ToolError::InvalidInput(
+          "command does not accept a stdout stream",
+        ),
+      )
+    }
+    let verbose :UInt = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[0])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool stash command stash: failed decoding `verbose`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    let message :String = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[1])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool stash command stash: failed decoding `message`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    let keep_index :Bool = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[2])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool stash command stash: failed decoding `keep-index`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    try {
+      __golem_reader.finish()
+    } catch{
+      __golem_error => {
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool stash command stash: " + repr(__golem_error),
+          ),
+        )
+      }
+    }
+    return match CanonicalStash::stash(verbose, message, keep_index) {
+      Ok(__golem_value) => Ok(@tool.invocation_result_empty())
+      Err(error) => {
+        match error {
+          NoSuchStash(name~) => {
+            let payload = try {
+              @tool.encode_wire_result(name)
+            } catch{
+              @asyncCore.Cancelled::Cancelled as error => raise  error
+              @types.ToolError::InvalidResult(message) => {
+                return Err(@types.ToolError::InvalidResult(message))
+              }
+              error => raise  error
+            }
+            Err(
+              @types.ToolError::CustomError({ name: "no-such-stash", payload }),
+            )
+          }
+        }
+      }
+    }
   }
+  if __golem_command_path.length() == 1 && ["pop"].contains(
+    __golem_command_path[0],
+  ) {
+    let __golem_reader = @schema.WireReader::new(__golem_input.value)
+    let __golem_fields = try {
+      @schema.wire_record(
+        __golem_reader,
+        __golem_input.value.root,
+        3,
+        "tool stash command pop",
+      )
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool stash command pop: " + repr(__golem_error),
+          ),
+        )
+      }
+    }
+    if __golem_stdin is Some(_) {
+      __golem_reader.abort()
+      return @tool.reject_undecoded_invocation(
+        __golem_stdin,
+        @types.ToolError::InvalidInput("command does not accept a stdin stream"),
+      )
+    }
+    if __golem_stdout is Some(_) {
+      __golem_reader.abort()
+      return @tool.reject_undecoded_invocation(
+        __golem_stdin,
+        @types.ToolError::InvalidInput(
+          "command does not accept a stdout stream",
+        ),
+      )
+    }
+    let name :String? = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[1])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool stash command pop: failed decoding `name`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    let index :UInt? = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[2])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool stash command pop: failed decoding `index`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    let __golem_unused_0 :UInt = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[0])
+    } catch{
+      error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(repr(error)),
+        )
+      }
+    }
+    try {
+      __golem_reader.finish()
+    } catch{
+      __golem_error => {
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool stash command pop: " + repr(__golem_error),
+          ),
+        )
+      }
+    }
+    @schema.release_wire(__golem_unused_0)
+    return match CanonicalStash::pop(name, index) {
+      Ok(__golem_value) => Ok(@tool.invocation_result_empty())
+      Err(error) => {
+        match error {
+          NoSuchStash(name~) => {
+            let payload = try {
+              @tool.encode_wire_result(name)
+            } catch{
+              @asyncCore.Cancelled::Cancelled as error => raise  error
+              @types.ToolError::InvalidResult(message) => {
+                return Err(@types.ToolError::InvalidResult(message))
+              }
+              error => raise  error
+            }
+            Err(
+              @types.ToolError::CustomError({ name: "no-such-stash", payload }),
+            )
+          }
+        }
+      }
+    }
+  }
+  if __golem_command_path.length() == 1 && ["apply"].contains(
+    __golem_command_path[0],
+  ) {
+    let __golem_reader = @schema.WireReader::new(__golem_input.value)
+    let __golem_fields = try {
+      @schema.wire_record(
+        __golem_reader,
+        __golem_input.value.root,
+        3,
+        "tool stash command apply",
+      )
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool stash command apply: " + repr(__golem_error),
+          ),
+        )
+      }
+    }
+    if __golem_stdin is Some(_) {
+      __golem_reader.abort()
+      return @tool.reject_undecoded_invocation(
+        __golem_stdin,
+        @types.ToolError::InvalidInput("command does not accept a stdin stream"),
+      )
+    }
+    if __golem_stdout is Some(_) {
+      __golem_reader.abort()
+      return @tool.reject_undecoded_invocation(
+        __golem_stdin,
+        @types.ToolError::InvalidInput(
+          "command does not accept a stdout stream",
+        ),
+      )
+    }
+    let name :String? = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[1])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool stash command apply: failed decoding `name`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    let index :UInt? = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[2])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool stash command apply: failed decoding `index`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    let __golem_unused_0 :UInt = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[0])
+    } catch{
+      error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(repr(error)),
+        )
+      }
+    }
+    try {
+      __golem_reader.finish()
+    } catch{
+      __golem_error => {
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool stash command apply: " + repr(__golem_error),
+          ),
+        )
+      }
+    }
+    @schema.release_wire(__golem_unused_0)
+    return match CanonicalStash::apply(name, index) {
+      Ok(__golem_value) => Ok(@tool.invocation_result_empty())
+      Err(error) => {
+        match error {
+          NoSuchStash(name~) => {
+            let payload = try {
+              @tool.encode_wire_result(name)
+            } catch{
+              @asyncCore.Cancelled::Cancelled as error => raise  error
+              @types.ToolError::InvalidResult(message) => {
+                return Err(@types.ToolError::InvalidResult(message))
+              }
+              error => raise  error
+            }
+            Err(
+              @types.ToolError::CustomError({ name: "no-such-stash", payload }),
+            )
+          }
+        }
+      }
+    }
+  }
+  @tool.reject_wire_invocation(
+    __golem_input,
+    __golem_stdin,
+    @types.ToolError::InvalidCommandPath(__golem_command_path),
+  )
 }
 
 ///|
@@ -4166,6 +5455,7 @@ fn __golem_tool_def_raw_CanonicalBigBound() -> @tool.ToolDef {
   try {
     let def :@tool.ToolDef = {
       version: "0.0.0",
+      requires_filesystem: false,
       commands: [
         {
           name: "canonical-big-bound",
@@ -4242,6 +5532,7 @@ fn __golem_tool_def_prepare_CanonicalBigBound(
   try {
     let carrier :@tool.ToolDef = {
       version: "0.0.0",
+      requires_filesystem: false,
       commands: [
         {
           name: "__golem_ancestry",
@@ -4296,102 +5587,114 @@ async fn __golem_tool_invoke_CanonicalBigBound(
   __golem_stdout : @tool.ProviderStdout?,
   __golem_principal : @tool.Principal,
 ) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
-  let __golem_def = __golem_tool_def_CanonicalBigBound()
-  let __golem_index =
-    match __golem_def.command_index_by_path(__golem_command_path) {
-      Some(__golem_index) => __golem_index
-      None => {
-        return @tool.reject_wire_invocation(
-          __golem_input,
-          __golem_stdin,
-          @types.ToolError::InvalidCommandPath(__golem_command_path),
-        )
-      }
-    }
-  let __golem_decoded = try {
-    @tool.decode_canonical_input(
-      __golem_def,
-      __golem_index,
-      __golem_input,
-      "tool canonical-big-bound invocation",
-    )
-  } catch{
-    __golem_error => {
-      return @tool.reject_undecoded_invocation(__golem_stdin, __golem_error)
-    }
-  }
-  match __golem_index {
-    0 => {
-      if __golem_stdin is Some(_) {
-        return @tool.reject_decoded_invocation(
-          __golem_decoded,
+  if __golem_command_path.length() == 0 {
+    let __golem_reader = @schema.WireReader::new(__golem_input.value)
+    let __golem_fields = try {
+      @schema.wire_record(
+        __golem_reader,
+        __golem_input.value.root,
+        1,
+        "tool canonical-big-bound command canonical-big-bound",
+      )
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
           __golem_stdin,
           @types.ToolError::InvalidInput(
-            "command does not accept a stdin stream",
+            "tool canonical-big-bound command canonical-big-bound: " + repr(
+              __golem_error,
+            ),
           ),
         )
       }
-      if __golem_stdout is Some(_) {
-        return @tool.reject_decoded_invocation(
-          __golem_decoded,
-          __golem_stdin,
-          @types.ToolError::InvalidInput(
-            "command does not accept a stdout stream",
-          ),
-        )
-      }
-      let count :UInt64? = try {
-        @tool.decode_canonical_field(
-          __golem_decoded,
-          "count",
-          "tool canonical-big-bound command canonical-big-bound",
-        )
-      } catch{
-        __golem_error => {
-          return @tool.reject_decoded_invocation(
-            __golem_decoded,
-            __golem_stdin,
-            __golem_error,
-          )
-        }
-      }
-      match CanonicalBigBound::canonical_big_bound(count) {
-        Ok(__golem_value) => Ok(@tool.invocation_result_empty())
-        Err(error) => {
-          let (__golem_error_name, payload) =
-            match CanonicalGrepError::to_error_payload_value(error) {
-              Ok(payload) => payload
-              Err(encode_error) => {
-                return Err(
-                  @types.ToolError::InvalidResult(
-                    "failed serializing custom tool error: " + encode_error,
-                  ),
-                )
-              }
-            }
-          let payload = try {
-            @tool.encode_error_payload(payload)
-          } catch{
-            @asyncCore.Cancelled::Cancelled as error => raise  error
-            @types.ToolError::InvalidResult(message) => {
-              return Err(@types.ToolError::InvalidResult(message))
-            }
-            error => raise  error
-          }
-          Err(
-            @types.ToolError::CustomError({ name: __golem_error_name, payload }),
-          )
-        }
-      }
     }
-    _ => {
-      @tool.reject_decoded_invocation(
-        __golem_decoded,
+    if __golem_stdin is Some(_) {
+      __golem_reader.abort()
+      return @tool.reject_undecoded_invocation(
         __golem_stdin,
-        @types.ToolError::InvalidCommandPath(__golem_command_path),
+        @types.ToolError::InvalidInput("command does not accept a stdin stream"),
       )
     }
+    if __golem_stdout is Some(_) {
+      __golem_reader.abort()
+      return @tool.reject_undecoded_invocation(
+        __golem_stdin,
+        @types.ToolError::InvalidInput(
+          "command does not accept a stdout stream",
+        ),
+      )
+    }
+    let count :UInt64? = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[0])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool canonical-big-bound command canonical-big-bound: failed decoding `count`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    try {
+      __golem_reader.finish()
+    } catch{
+      __golem_error => {
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool canonical-big-bound command canonical-big-bound: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
+      }
+    }
+    return match CanonicalBigBound::canonical_big_bound(count) {
+      Ok(__golem_value) => Ok(@tool.invocation_result_empty())
+      Err(error) => {
+        match error {
+          InvalidPattern(reason~) => {
+            let payload = try {
+              @tool.encode_wire_result(reason)
+            } catch{
+              @asyncCore.Cancelled::Cancelled as error => raise  error
+              @types.ToolError::InvalidResult(message) => {
+                return Err(@types.ToolError::InvalidResult(message))
+              }
+              error => raise  error
+            }
+            Err(
+              @types.ToolError::CustomError(
+                { name: "invalid-pattern", payload }
+              ),
+            )
+          }
+          NoMatch => {
+            let payload = try {
+              @tool.encode_wire_result(())
+            } catch{
+              @asyncCore.Cancelled::Cancelled as error => raise  error
+              @types.ToolError::InvalidResult(message) => {
+                return Err(@types.ToolError::InvalidResult(message))
+              }
+              error => raise  error
+            }
+            Err(@types.ToolError::CustomError({ name: "no-match", payload }))
+          }
+        }
+      }
+    }
   }
+  @tool.reject_wire_invocation(
+    __golem_input,
+    __golem_stdin,
+    @types.ToolError::InvalidCommandPath(__golem_command_path),
+  )
 }
 
 ///|
@@ -4400,6 +5703,7 @@ fn __golem_tool_def_raw_MoonBitReflectionTest() -> @tool.ToolDef {
   try {
     let def :@tool.ToolDef = {
       version: "0.0.0",
+      requires_filesystem: true,
       commands: [
         {
           name: "moonbit-reflection-test",
@@ -4653,6 +5957,7 @@ fn __golem_tool_def_prepare_MoonBitReflectionTest(
   try {
     let carrier :@tool.ToolDef = {
       version: "0.0.0",
+      requires_filesystem: true,
       commands: [
         {
           name: "__golem_ancestry",
@@ -4707,69 +6012,76 @@ async fn __golem_tool_invoke_MoonBitReflectionTest(
   __golem_stdout : @tool.ProviderStdout?,
   __golem_principal : @tool.Principal,
 ) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
-  let __golem_def = __golem_tool_def_MoonBitReflectionTest()
-  let __golem_index =
-    match __golem_def.command_index_by_path(__golem_command_path) {
-      Some(__golem_index) => __golem_index
-      None => {
-        return @tool.reject_wire_invocation(
-          __golem_input,
-          __golem_stdin,
-          @types.ToolError::InvalidCommandPath(__golem_command_path),
-        )
-      }
-    }
-  let __golem_decoded = try {
-    @tool.decode_canonical_input(
-      __golem_def,
-      __golem_index,
-      __golem_input,
-      "tool moonbit-reflection-test invocation",
-    )
-  } catch{
-    __golem_error => {
-      return @tool.reject_undecoded_invocation(__golem_stdin, __golem_error)
-    }
-  }
-  match __golem_index {
-    1 => {
-      if __golem_stdin is Some(_) {
-        return @tool.reject_decoded_invocation(
-          __golem_decoded,
+  if __golem_command_path.length() == 1 && ["echo"].contains(
+    __golem_command_path[0],
+  ) {
+    let __golem_reader = @schema.WireReader::new(__golem_input.value)
+    let __golem_fields = try {
+      @schema.wire_record(
+        __golem_reader,
+        __golem_input.value.root,
+        1,
+        "tool moonbit-reflection-test command echo",
+      )
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
           __golem_stdin,
           @types.ToolError::InvalidInput(
-            "command does not accept a stdin stream",
+            "tool moonbit-reflection-test command echo: " + repr(__golem_error),
           ),
         )
       }
-      if __golem_stdout is Some(_) {
-        return @tool.reject_decoded_invocation(
-          __golem_decoded,
+    }
+    if __golem_stdin is Some(_) {
+      __golem_reader.abort()
+      return @tool.reject_undecoded_invocation(
+        __golem_stdin,
+        @types.ToolError::InvalidInput("command does not accept a stdin stream"),
+      )
+    }
+    if __golem_stdout is Some(_) {
+      __golem_reader.abort()
+      return @tool.reject_undecoded_invocation(
+        __golem_stdin,
+        @types.ToolError::InvalidInput(
+          "command does not accept a stdout stream",
+        ),
+      )
+    }
+    let label :String = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[0])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
           __golem_stdin,
           @types.ToolError::InvalidInput(
-            "command does not accept a stdout stream",
+            "tool moonbit-reflection-test command echo: failed decoding `label`: " + repr(
+              __golem_error,
+            ),
           ),
         )
       }
-      let label :String = try {
-        @tool.decode_canonical_field(
-          __golem_decoded,
-          "label",
-          "tool moonbit-reflection-test command echo",
+    }
+    try {
+      __golem_reader.finish()
+    } catch{
+      __golem_error => {
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool moonbit-reflection-test command echo: " + repr(__golem_error),
+          ),
         )
-      } catch{
-        __golem_error => {
-          return @tool.reject_decoded_invocation(
-            __golem_decoded,
-            __golem_stdin,
-            __golem_error,
-          )
-        }
       }
+    }
+    return {
       let __golem_value = MoonBitReflectionTest::echo(label)
       Ok(
         try {
-          @tool.invocation_result_value(__golem_value)
+          @tool.invocation_result_wire(__golem_value)
         } catch{
           @asyncCore.Cancelled::Cancelled as error => raise  error
           @types.ToolError::InvalidResult(message) => {
@@ -4779,44 +6091,81 @@ async fn __golem_tool_invoke_MoonBitReflectionTest(
         },
       )
     }
-    2 => {
-      if __golem_stdin is Some(_) {
-        return @tool.reject_decoded_invocation(
-          __golem_decoded,
+  }
+  if __golem_command_path.length() == 1 && ["optional"].contains(
+    __golem_command_path[0],
+  ) {
+    let __golem_reader = @schema.WireReader::new(__golem_input.value)
+    let __golem_fields = try {
+      @schema.wire_record(
+        __golem_reader,
+        __golem_input.value.root,
+        1,
+        "tool moonbit-reflection-test command optional",
+      )
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
           __golem_stdin,
           @types.ToolError::InvalidInput(
-            "command does not accept a stdin stream",
+            "tool moonbit-reflection-test command optional: " + repr(
+              __golem_error,
+            ),
           ),
         )
       }
-      if __golem_stdout is Some(_) {
-        return @tool.reject_decoded_invocation(
-          __golem_decoded,
+    }
+    if __golem_stdin is Some(_) {
+      __golem_reader.abort()
+      return @tool.reject_undecoded_invocation(
+        __golem_stdin,
+        @types.ToolError::InvalidInput("command does not accept a stdin stream"),
+      )
+    }
+    if __golem_stdout is Some(_) {
+      __golem_reader.abort()
+      return @tool.reject_undecoded_invocation(
+        __golem_stdin,
+        @types.ToolError::InvalidInput(
+          "command does not accept a stdout stream",
+        ),
+      )
+    }
+    let maybe :String? = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[0])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
           __golem_stdin,
           @types.ToolError::InvalidInput(
-            "command does not accept a stdout stream",
+            "tool moonbit-reflection-test command optional: failed decoding `maybe`: " + repr(
+              __golem_error,
+            ),
           ),
         )
       }
-      let maybe :String? = try {
-        @tool.decode_canonical_field(
-          __golem_decoded,
-          "maybe",
-          "tool moonbit-reflection-test command optional",
+    }
+    try {
+      __golem_reader.finish()
+    } catch{
+      __golem_error => {
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool moonbit-reflection-test command optional: " + repr(
+              __golem_error,
+            ),
+          ),
         )
-      } catch{
-        __golem_error => {
-          return @tool.reject_decoded_invocation(
-            __golem_decoded,
-            __golem_stdin,
-            __golem_error,
-          )
-        }
       }
+    }
+    return {
       let __golem_value = MoonBitReflectionTest::optional(maybe)
       Ok(
         try {
-          @tool.invocation_result_value(__golem_value)
+          @tool.invocation_result_wire(__golem_value)
         } catch{
           @asyncCore.Cancelled::Cancelled as error => raise  error
           @types.ToolError::InvalidResult(message) => {
@@ -4826,100 +6175,137 @@ async fn __golem_tool_invoke_MoonBitReflectionTest(
         },
       )
     }
-    3 => {
-      if __golem_stdin is Some(_) {
-        return @tool.reject_decoded_invocation(
-          __golem_decoded,
+  }
+  if __golem_command_path.length() == 1 && ["canonical-values"].contains(
+    __golem_command_path[0],
+  ) {
+    let __golem_reader = @schema.WireReader::new(__golem_input.value)
+    let __golem_fields = try {
+      @schema.wire_record(
+        __golem_reader,
+        __golem_input.value.root,
+        5,
+        "tool moonbit-reflection-test command canonical-values",
+      )
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
           __golem_stdin,
           @types.ToolError::InvalidInput(
-            "command does not accept a stdin stream",
+            "tool moonbit-reflection-test command canonical-values: " + repr(
+              __golem_error,
+            ),
           ),
         )
       }
-      if __golem_stdout is Some(_) {
-        return @tool.reject_decoded_invocation(
-          __golem_decoded,
+    }
+    if __golem_stdin is Some(_) {
+      __golem_reader.abort()
+      return @tool.reject_undecoded_invocation(
+        __golem_stdin,
+        @types.ToolError::InvalidInput("command does not accept a stdin stream"),
+      )
+    }
+    if __golem_stdout is Some(_) {
+      __golem_reader.abort()
+      return @tool.reject_undecoded_invocation(
+        __golem_stdin,
+        @types.ToolError::InvalidInput(
+          "command does not accept a stdout stream",
+        ),
+      )
+    }
+    let signed :Int64 = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[0])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
           __golem_stdin,
           @types.ToolError::InvalidInput(
-            "command does not accept a stdout stream",
+            "tool moonbit-reflection-test command canonical-values: failed decoding `signed`: " + repr(
+              __golem_error,
+            ),
           ),
         )
       }
-      let signed :Int64 = try {
-        @tool.decode_canonical_field(
-          __golem_decoded,
-          "signed",
-          "tool moonbit-reflection-test command canonical-values",
+    }
+    let unsigned :UInt64 = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[1])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool moonbit-reflection-test command canonical-values: failed decoding `unsigned`: " + repr(
+              __golem_error,
+            ),
+          ),
         )
-      } catch{
-        __golem_error => {
-          return @tool.reject_decoded_invocation(
-            __golem_decoded,
-            __golem_stdin,
-            __golem_error,
-          )
-        }
       }
-      let unsigned :UInt64 = try {
-        @tool.decode_canonical_field(
-          __golem_decoded,
-          "unsigned",
-          "tool moonbit-reflection-test command canonical-values",
+    }
+    let duration :@schema.Duration = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[2])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool moonbit-reflection-test command canonical-values: failed decoding `duration`: " + repr(
+              __golem_error,
+            ),
+          ),
         )
-      } catch{
-        __golem_error => {
-          return @tool.reject_decoded_invocation(
-            __golem_decoded,
-            __golem_stdin,
-            __golem_error,
-          )
-        }
       }
-      let duration :@schema.Duration = try {
-        @tool.decode_canonical_field(
-          __golem_decoded,
-          "duration",
-          "tool moonbit-reflection-test command canonical-values",
+    }
+    let quantity :@schema.Quantity[ReflectionMeters] = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[3])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool moonbit-reflection-test command canonical-values: failed decoding `quantity`: " + repr(
+              __golem_error,
+            ),
+          ),
         )
-      } catch{
-        __golem_error => {
-          return @tool.reject_decoded_invocation(
-            __golem_decoded,
-            __golem_stdin,
-            __golem_error,
-          )
-        }
       }
-      let quantity :@schema.Quantity[ReflectionMeters] = try {
-        @tool.decode_canonical_field(
-          __golem_decoded,
-          "quantity",
-          "tool moonbit-reflection-test command canonical-values",
+    }
+    let maybe :String? = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[4])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool moonbit-reflection-test command canonical-values: failed decoding `maybe`: " + repr(
+              __golem_error,
+            ),
+          ),
         )
-      } catch{
-        __golem_error => {
-          return @tool.reject_decoded_invocation(
-            __golem_decoded,
-            __golem_stdin,
-            __golem_error,
-          )
-        }
       }
-      let maybe :String? = try {
-        @tool.decode_canonical_field(
-          __golem_decoded,
-          "maybe",
-          "tool moonbit-reflection-test command canonical-values",
+    }
+    try {
+      __golem_reader.finish()
+    } catch{
+      __golem_error => {
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool moonbit-reflection-test command canonical-values: " + repr(
+              __golem_error,
+            ),
+          ),
         )
-      } catch{
-        __golem_error => {
-          return @tool.reject_decoded_invocation(
-            __golem_decoded,
-            __golem_stdin,
-            __golem_error,
-          )
-        }
       }
+    }
+    return {
       let __golem_value = MoonBitReflectionTest::canonical_values(
         signed,
         unsigned,
@@ -4929,7 +6315,7 @@ async fn __golem_tool_invoke_MoonBitReflectionTest(
       )
       Ok(
         try {
-          @tool.invocation_result_value(__golem_value)
+          @tool.invocation_result_wire(__golem_value)
         } catch{
           @asyncCore.Cancelled::Cancelled as error => raise  error
           @types.ToolError::InvalidResult(message) => {
@@ -4939,13 +6325,2115 @@ async fn __golem_tool_invoke_MoonBitReflectionTest(
         },
       )
     }
-    _ => {
-      @tool.reject_decoded_invocation(
-        __golem_decoded,
-        __golem_stdin,
-        @types.ToolError::InvalidCommandPath(__golem_command_path),
-      )
+  }
+  @tool.reject_wire_invocation(
+    __golem_input,
+    __golem_stdin,
+    @types.ToolError::InvalidCommandPath(__golem_command_path),
+  )
+}
+
+///|
+///
+fn __golem_tool_wire_MoonBitStreaming() -> @toolCommon.Tool {
+  try {
+    let __golem_schema = @schema.WireTypeEncoder::new()
+    let nodes :Array[@toolCommon.CommandNode] = [
+      {
+        name: "moonbit-streaming",
+        aliases: [],
+        doc: { summary: "", description: "", examples: [] },
+        globals: { options: [], flags: [] },
+        subcommands: [1],
+        body: None,
+      },
+      {
+        name: "stream",
+        aliases: [],
+        doc: { summary: "", description: "", examples: [] },
+        globals: { options: [], flags: [] },
+        subcommands: [],
+        body: Some(
+          {
+            positionals: {
+              fixed: [
+                {
+                  name: "mode",
+                  doc: { summary: "", description: "", examples: [] },
+                  value_name: None,
+                  type_: @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ).index,
+                  default: None,
+                  required: true,
+                  accepts_stdio: false,
+                },
+              ],
+              tail: None,
+            },
+            options: [],
+            flags: [],
+            constraints: [],
+            stdin: Some(
+              {
+                doc: { summary: "", description: "", examples: [] },
+                mime: [],
+                required: true,
+              },
+            ),
+            stdout: Some(
+              {
+                doc: { summary: "", description: "", examples: [] },
+                mime: [],
+                required: true,
+              },
+            ),
+            result: Some(
+              {
+                type_: @tool.wire_tool_type(
+                  __golem_schema,
+                  (@schema.TypeTag::{  } : @schema.TypeTag[UInt64]),
+                ).index,
+                doc: { summary: "", description: "", examples: [] },
+                formatters: [
+                  {
+                    name: "default",
+                    doc: { summary: "", description: "", examples: [] },
+                  },
+                ],
+                default_formatter: "default",
+              },
+            ),
+            errors: [],
+            annotations: Some(
+              {
+                read_only: false,
+                destructive: true,
+                idempotent: false,
+                open_world: true,
+              },
+            ),
+          },
+        ),
+      },
+    ]
+    let root = __golem_schema.push(@types.RecordType([]))
+    {
+      version: "1.0.0",
+      requires_filesystem: false,
+      commands: { nodes, },
+      schema: {
+        type_nodes: __golem_schema.nodes,
+        defs: __golem_schema.defs,
+        root,
+      },
     }
+  } catch{
+    error => abort("invalid generated tool descriptor: " + repr(error))
+  }
+}
+
+///|
+///
+fn __golem_tool_wire_CanonicalGrep() -> @toolCommon.Tool {
+  try {
+    let __golem_schema = @schema.WireTypeEncoder::new()
+    let nodes :Array[@toolCommon.CommandNode] = [
+      {
+        name: "canonical-grep",
+        aliases: [],
+        doc: {
+          summary: "Search files for a regular expression.",
+          description: "",
+          examples: [],
+        },
+        globals: {
+          options: [
+            {
+              long: "color",
+              short: None,
+              aliases: [],
+              doc: {
+                summary: "when to colorize matches",
+                description: "",
+                examples: [],
+              },
+              value_name: None,
+              shape: @toolCommon.OptionShape::Scalar(
+                @tool.wire_tool_type(
+                  __golem_schema,
+                  (
+                    @schema.TypeTag::{  }
+                    : @schema.TypeTag[CanonicalGrepColorMode]
+                  ),
+                ).index,
+              ),
+              default: Some(
+                @tool.wire_tool_literal(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (
+                      @schema.TypeTag::{  }
+                      : @schema.TypeTag[CanonicalGrepColorMode]
+                    ),
+                  ),
+                  @tool.ToolLiteral::Scalar("Auto"),
+                ),
+              ),
+              required: false,
+              env_var: None,
+            },
+          ],
+          flags: [
+            {
+              long: "case-sensitive",
+              short: Some('\u{69}'),
+              aliases: [],
+              doc: {
+                summary: "match case exactly",
+                description: "",
+                examples: [],
+              },
+              shape: @toolCommon.FlagShape::BoolFlag(
+                { default: false, negatable: false }
+              ),
+              env_var: None,
+            },
+          ],
+        },
+        subcommands: [1],
+        body: Some(
+          {
+            positionals: {
+              fixed: [
+                {
+                  name: "pattern",
+                  doc: {
+                    summary: "regular expression",
+                    description: "",
+                    examples: [],
+                  },
+                  value_name: None,
+                  type_: @tool.wire_refine_text(
+                    @tool.wire_tool_type(
+                      __golem_schema,
+                      (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                    ),
+                    Some("^.+$"),
+                    None,
+                    None,
+                  ).index,
+                  default: None,
+                  required: true,
+                  accepts_stdio: false,
+                },
+              ],
+              tail: Some(
+                {
+                  name: "files",
+                  doc: {
+                    summary: "files to search",
+                    description: "",
+                    examples: [],
+                  },
+                  value_name: None,
+                  item_type: @tool.wire_refine_path(
+                    @tool.wire_tool_type(
+                      __golem_schema,
+                      (@schema.TypeTag::{  } : @schema.TypeTag[@schema.Path]),
+                    ),
+                    Some(@types.PathDirection::INPUT),
+                    Some(@types.PathKind::FILE),
+                    None,
+                  ).index,
+                  min: 0U,
+                  max: None,
+                  separator: None,
+                  verbatim: false,
+                  accepts_stdio: true,
+                },
+              ),
+            },
+            options: [
+              {
+                long: "extra-patterns",
+                short: Some('\u{65}'),
+                aliases: [],
+                doc: { summary: "", description: "", examples: [] },
+                value_name: None,
+                shape: @toolCommon.OptionShape::RepeatableList(
+                  {
+                    repetition: @toolCommon.Repetition::Either('\u{2c}'),
+                    item_type: @tool.wire_tool_type(
+                      __golem_schema,
+                      (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                    ).index,
+                  },
+                ),
+                default: None,
+                required: false,
+                env_var: None,
+              },
+              {
+                long: "max-count",
+                short: Some('\u{6e}'),
+                aliases: [],
+                doc: { summary: "", description: "", examples: [] },
+                value_name: None,
+                shape: @toolCommon.OptionShape::Scalar(
+                  @tool.wire_refine_numeric(
+                    @tool.wire_tool_type(
+                      __golem_schema,
+                      (@schema.TypeTag::{  } : @schema.TypeTag[UInt]),
+                    ),
+                    Some("1"),
+                    None,
+                    None,
+                  ).index,
+                ),
+                default: None,
+                required: false,
+                env_var: None,
+              },
+            ],
+            flags: [],
+            constraints: [],
+            stdin: Some(
+              {
+                doc: { summary: "", description: "", examples: [] },
+                mime: [],
+                required: true,
+              },
+            ),
+            stdout: Some(
+              {
+                doc: { summary: "", description: "", examples: [] },
+                mime: [],
+                required: true,
+              },
+            ),
+            result: Some(
+              {
+                type_: @tool.wire_tool_type(
+                  __golem_schema,
+                  (
+                    @schema.TypeTag::{  }
+                    : @schema.TypeTag[Array[CanonicalGrepHit]]
+                  ),
+                ).index,
+                doc: {
+                  summary: "Search files for a regular expression. Bare `canonical-grep` runs this body.",
+                  description: "",
+                  examples: [],
+                },
+                formatters: [
+                  {
+                    name: "default",
+                    doc: { summary: "", description: "", examples: [] },
+                  },
+                ],
+                default_formatter: "default",
+              },
+            ),
+            errors: [
+              {
+                name: "invalid-pattern",
+                doc: {
+                  summary: "The supplied pattern is not a valid regular expression.",
+                  description: "",
+                  examples: [],
+                },
+                kind: @toolCommon.ErrorKind::USAGE_ERROR,
+                exit_code: 2,
+                payload: Some(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ).index,
+                ),
+              },
+              {
+                name: "no-match",
+                doc: {
+                  summary: "No line matched.",
+                  description: "",
+                  examples: [],
+                },
+                kind: @toolCommon.ErrorKind::RUNTIME_ERROR,
+                exit_code: 1,
+                payload: None,
+              },
+            ],
+            annotations: Some(
+              {
+                read_only: false,
+                destructive: true,
+                idempotent: false,
+                open_world: true,
+              },
+            ),
+          },
+        ),
+      },
+      {
+        name: "replace",
+        aliases: [],
+        doc: {
+          summary: "Replace matching text in place.",
+          description: "",
+          examples: [],
+        },
+        globals: { options: [], flags: [] },
+        subcommands: [],
+        body: Some(
+          {
+            positionals: {
+              fixed: [
+                {
+                  name: "pattern",
+                  doc: { summary: "", description: "", examples: [] },
+                  value_name: None,
+                  type_: @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ).index,
+                  default: None,
+                  required: true,
+                  accepts_stdio: false,
+                },
+                {
+                  name: "replacement",
+                  doc: { summary: "", description: "", examples: [] },
+                  value_name: None,
+                  type_: @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ).index,
+                  default: None,
+                  required: true,
+                  accepts_stdio: false,
+                },
+              ],
+              tail: Some(
+                {
+                  name: "files",
+                  doc: { summary: "", description: "", examples: [] },
+                  value_name: None,
+                  item_type: @tool.wire_refine_path(
+                    @tool.wire_tool_type(
+                      __golem_schema,
+                      (@schema.TypeTag::{  } : @schema.TypeTag[@schema.Path]),
+                    ),
+                    Some(@types.PathDirection::IN_OUT),
+                    Some(@types.PathKind::FILE),
+                    None,
+                  ).index,
+                  min: 0U,
+                  max: None,
+                  separator: None,
+                  verbatim: false,
+                  accepts_stdio: false,
+                },
+              ),
+            },
+            options: [],
+            flags: [],
+            constraints: [],
+            stdin: None,
+            stdout: None,
+            result: Some(
+              {
+                type_: @tool.wire_tool_type(
+                  __golem_schema,
+                  (@schema.TypeTag::{  } : @schema.TypeTag[UInt64]),
+                ).index,
+                doc: {
+                  summary: "Replace matching text in place.",
+                  description: "",
+                  examples: [],
+                },
+                formatters: [
+                  {
+                    name: "default",
+                    doc: { summary: "", description: "", examples: [] },
+                  },
+                ],
+                default_formatter: "default",
+              },
+            ),
+            errors: [
+              {
+                name: "invalid-pattern",
+                doc: {
+                  summary: "The supplied pattern is not a valid regular expression.",
+                  description: "",
+                  examples: [],
+                },
+                kind: @toolCommon.ErrorKind::USAGE_ERROR,
+                exit_code: 2,
+                payload: Some(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ).index,
+                ),
+              },
+              {
+                name: "no-match",
+                doc: {
+                  summary: "No line matched.",
+                  description: "",
+                  examples: [],
+                },
+                kind: @toolCommon.ErrorKind::RUNTIME_ERROR,
+                exit_code: 1,
+                payload: None,
+              },
+            ],
+            annotations: Some(
+              {
+                read_only: false,
+                destructive: true,
+                idempotent: false,
+                open_world: true,
+              },
+            ),
+          },
+        ),
+      },
+    ]
+    let root = __golem_schema.push(@types.RecordType([]))
+    {
+      version: "2.0.0",
+      requires_filesystem: false,
+      commands: { nodes, },
+      schema: {
+        type_nodes: __golem_schema.nodes,
+        defs: __golem_schema.defs,
+        root,
+      },
+    }
+  } catch{
+    error => abort("invalid generated tool descriptor: " + repr(error))
+  }
+}
+
+///|
+///
+fn __golem_tool_wire_CanonicalGit() -> @toolCommon.Tool {
+  try {
+    let __golem_schema = @schema.WireTypeEncoder::new()
+    let nodes :Array[@toolCommon.CommandNode] = [
+      {
+        name: "canonical-git",
+        aliases: [],
+        doc: {
+          summary: "Stupid content tracker.",
+          description: "",
+          examples: [],
+        },
+        globals: { options: [], flags: [] },
+        subcommands: [1, 2, 6, 9],
+        body: None,
+      },
+      {
+        name: "commit",
+        aliases: ["ci"],
+        doc: {
+          summary: "Record changes to the repository.",
+          description: "",
+          examples: [],
+        },
+        globals: {
+          options: [
+            {
+              long: "git-dir",
+              short: None,
+              aliases: [],
+              doc: { summary: "", description: "", examples: [] },
+              value_name: None,
+              shape: @toolCommon.OptionShape::Scalar(
+                @tool.wire_refine_path(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[@schema.Path]),
+                  ),
+                  None,
+                  Some(@types.PathKind::DIRECTORY),
+                  None,
+                ).index,
+              ),
+              default: Some(
+                @tool.wire_tool_literal(
+                  @tool.wire_refine_path(
+                    @tool.wire_tool_type(
+                      __golem_schema,
+                      (@schema.TypeTag::{  } : @schema.TypeTag[@schema.Path]),
+                    ),
+                    None,
+                    Some(@types.PathKind::DIRECTORY),
+                    None,
+                  ),
+                  @tool.ToolLiteral::Scalar(".git"),
+                ),
+              ),
+              required: false,
+              env_var: Some("GIT_DIR"),
+            },
+            {
+              long: "config",
+              short: Some('\u{63}'),
+              aliases: [],
+              doc: { summary: "", description: "", examples: [] },
+              value_name: None,
+              shape: @toolCommon.OptionShape::RepeatableMap(
+                {
+                  repetition: @toolCommon.Repetition::Repeated,
+                  map_type: @tool.wire_tool_type(
+                    __golem_schema,
+                    (
+                      @schema.TypeTag::{  }
+                      : @schema.TypeTag[Map[String, String]]
+                    ),
+                  ).index,
+                  duplicate_key_policy: @toolCommon.DuplicateKeyPolicy::REJECT,
+                },
+              ),
+              default: None,
+              required: false,
+              env_var: None,
+            },
+          ],
+          flags: [
+            {
+              long: "verbose",
+              short: Some('\u{76}'),
+              aliases: [],
+              doc: { summary: "", description: "", examples: [] },
+              shape: @toolCommon.FlagShape::CountFlag(Some(3U)),
+              env_var: None,
+            },
+            {
+              long: "paginate",
+              short: None,
+              aliases: [],
+              doc: { summary: "", description: "", examples: [] },
+              shape: @toolCommon.FlagShape::BoolFlag(
+                { default: true, negatable: true }
+              ),
+              env_var: None,
+            },
+          ],
+        },
+        subcommands: [],
+        body: Some(
+          {
+            positionals: { fixed: [], tail: None },
+            options: [
+              {
+                long: "message",
+                short: Some('\u{6d}'),
+                aliases: ["msg"],
+                doc: { summary: "", description: "", examples: [] },
+                value_name: None,
+                shape: @toolCommon.OptionShape::Scalar(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ).index,
+                ),
+                default: None,
+                required: true,
+                env_var: None,
+              },
+              {
+                long: "author",
+                short: None,
+                aliases: [],
+                doc: { summary: "", description: "", examples: [] },
+                value_name: None,
+                shape: @toolCommon.OptionShape::Scalar(
+                  @tool.wire_refine_text(
+                    @tool.wire_tool_type(
+                      __golem_schema,
+                      (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                    ),
+                    Some("^.+ <.+@.+>$"),
+                    None,
+                    None,
+                  ).index,
+                ),
+                default: None,
+                required: false,
+                env_var: Some("GIT_AUTHOR_NAME"),
+              },
+              {
+                long: "output",
+                short: None,
+                aliases: [],
+                doc: { summary: "", description: "", examples: [] },
+                value_name: None,
+                shape: @toolCommon.OptionShape::Scalar(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (
+                      @schema.TypeTag::{  }
+                      : @schema.TypeTag[CanonicalGitOutputMode]
+                    ),
+                  ).index,
+                ),
+                default: Some(
+                  @tool.wire_tool_literal(
+                    @tool.wire_tool_type(
+                      __golem_schema,
+                      (
+                        @schema.TypeTag::{  }
+                        : @schema.TypeTag[CanonicalGitOutputMode]
+                      ),
+                    ),
+                    @tool.ToolLiteral::Scalar("Human"),
+                  ),
+                ),
+                required: false,
+                env_var: None,
+              },
+            ],
+            flags: [
+              {
+                long: "amend",
+                short: None,
+                aliases: [],
+                doc: { summary: "", description: "", examples: [] },
+                shape: @toolCommon.FlagShape::BoolFlag(
+                  { default: false, negatable: true }
+                ),
+                env_var: None,
+              },
+              {
+                long: "signoff",
+                short: None,
+                aliases: [],
+                doc: { summary: "", description: "", examples: [] },
+                shape: @toolCommon.FlagShape::BoolFlag(
+                  { default: false, negatable: true }
+                ),
+                env_var: None,
+              },
+              {
+                long: "reset-author",
+                short: None,
+                aliases: [],
+                doc: { summary: "", description: "", examples: [] },
+                shape: @toolCommon.FlagShape::BoolFlag(
+                  { default: false, negatable: false }
+                ),
+                env_var: None,
+              },
+            ],
+            constraints: [
+              @toolCommon.Constraint::Implies(
+                {
+                  lhs_quant: @toolCommon.Quantifier::ALL,
+                  lhs: [@toolCommon.Ref::Present("reset-author")],
+                  rhs_quant: @toolCommon.Quantifier::ALL,
+                  rhs: [@toolCommon.Ref::Present("amend")],
+                },
+              ),
+              @toolCommon.Constraint::RequiresAll(
+                [
+                  @toolCommon.Ref::ValueIs(
+                    {
+                      name: "output",
+                      value: @tool.wire_value_is_literal(
+                        @tool.wire_tool_type(
+                          __golem_schema,
+                          (
+                            @schema.TypeTag::{  }
+                            : @schema.TypeTag[CanonicalGitOutputMode]
+                          ),
+                        ),
+                        @tool.ToolLiteral::Scalar("Json"),
+                      ),
+                    },
+                  ),
+                ],
+              ),
+            ],
+            stdin: None,
+            stdout: None,
+            result: Some(
+              {
+                type_: @tool.wire_tool_type(
+                  __golem_schema,
+                  (
+                    @schema.TypeTag::{  }
+                    : @schema.TypeTag[CanonicalCommitResult]
+                  ),
+                ).index,
+                doc: {
+                  summary: "Record changes to the repository.",
+                  description: "",
+                  examples: [],
+                },
+                formatters: [
+                  {
+                    name: "human",
+                    doc: { summary: "", description: "", examples: [] },
+                  },
+                  {
+                    name: "porcelain",
+                    doc: { summary: "", description: "", examples: [] },
+                  },
+                  {
+                    name: "json",
+                    doc: { summary: "", description: "", examples: [] },
+                  },
+                ],
+                default_formatter: "human",
+              },
+            ),
+            errors: [
+              {
+                name: "nothing-staged",
+                doc: { summary: "", description: "", examples: [] },
+                kind: @toolCommon.ErrorKind::RUNTIME_ERROR,
+                exit_code: 1,
+                payload: None,
+              },
+              {
+                name: "dirty-merge",
+                doc: { summary: "", description: "", examples: [] },
+                kind: @toolCommon.ErrorKind::RUNTIME_ERROR,
+                exit_code: 128,
+                payload: None,
+              },
+              {
+                name: "bad-author-format",
+                doc: { summary: "", description: "", examples: [] },
+                kind: @toolCommon.ErrorKind::USAGE_ERROR,
+                exit_code: 129,
+                payload: Some(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ).index,
+                ),
+              },
+            ],
+            annotations: Some(
+              {
+                read_only: false,
+                destructive: true,
+                idempotent: false,
+                open_world: true,
+              },
+            ),
+          },
+        ),
+      },
+      {
+        name: "remote",
+        aliases: ["rmt"],
+        doc: {
+          summary: "Manage the set of tracked repositories.",
+          description: "",
+          examples: [],
+        },
+        globals: {
+          options: [
+            {
+              long: "git-dir",
+              short: None,
+              aliases: [],
+              doc: { summary: "", description: "", examples: [] },
+              value_name: None,
+              shape: @toolCommon.OptionShape::Scalar(
+                @tool.wire_refine_path(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[@schema.Path]),
+                  ),
+                  None,
+                  Some(@types.PathKind::DIRECTORY),
+                  None,
+                ).index,
+              ),
+              default: Some(
+                @tool.wire_tool_literal(
+                  @tool.wire_refine_path(
+                    @tool.wire_tool_type(
+                      __golem_schema,
+                      (@schema.TypeTag::{  } : @schema.TypeTag[@schema.Path]),
+                    ),
+                    None,
+                    Some(@types.PathKind::DIRECTORY),
+                    None,
+                  ),
+                  @tool.ToolLiteral::Scalar(".git"),
+                ),
+              ),
+              required: false,
+              env_var: Some("GIT_DIR"),
+            },
+            {
+              long: "config",
+              short: Some('\u{63}'),
+              aliases: [],
+              doc: { summary: "", description: "", examples: [] },
+              value_name: None,
+              shape: @toolCommon.OptionShape::RepeatableMap(
+                {
+                  repetition: @toolCommon.Repetition::Repeated,
+                  map_type: @tool.wire_tool_type(
+                    __golem_schema,
+                    (
+                      @schema.TypeTag::{  }
+                      : @schema.TypeTag[Map[String, String]]
+                    ),
+                  ).index,
+                  duplicate_key_policy: @toolCommon.DuplicateKeyPolicy::REJECT,
+                },
+              ),
+              default: None,
+              required: false,
+              env_var: None,
+            },
+          ],
+          flags: [
+            {
+              long: "verbose",
+              short: Some('\u{76}'),
+              aliases: [],
+              doc: { summary: "", description: "", examples: [] },
+              shape: @toolCommon.FlagShape::CountFlag(Some(3U)),
+              env_var: None,
+            },
+            {
+              long: "paginate",
+              short: None,
+              aliases: [],
+              doc: { summary: "", description: "", examples: [] },
+              shape: @toolCommon.FlagShape::BoolFlag(
+                { default: true, negatable: true }
+              ),
+              env_var: None,
+            },
+          ],
+        },
+        subcommands: [3, 4, 5],
+        body: None,
+      },
+      {
+        name: "add",
+        aliases: [],
+        doc: { summary: "Add a remote.", description: "", examples: [] },
+        globals: { options: [], flags: [] },
+        subcommands: [],
+        body: Some(
+          {
+            positionals: {
+              fixed: [
+                {
+                  name: "name",
+                  doc: { summary: "", description: "", examples: [] },
+                  value_name: None,
+                  type_: @tool.wire_refine_text(
+                    @tool.wire_tool_type(
+                      __golem_schema,
+                      (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                    ),
+                    Some("^[a-zA-Z][a-zA-Z0-9_-]*$"),
+                    None,
+                    None,
+                  ).index,
+                  default: None,
+                  required: true,
+                  accepts_stdio: false,
+                },
+                {
+                  name: "url",
+                  doc: { summary: "", description: "", examples: [] },
+                  value_name: None,
+                  type_: @tool.wire_refine_url(
+                    @tool.wire_tool_type(
+                      __golem_schema,
+                      (@schema.TypeTag::{  } : @schema.TypeTag[@schema.Url]),
+                    ),
+                    Some(["https"]),
+                  ).index,
+                  default: None,
+                  required: true,
+                  accepts_stdio: false,
+                },
+              ],
+              tail: None,
+            },
+            options: [
+              {
+                long: "track",
+                short: Some('\u{74}'),
+                aliases: [],
+                doc: { summary: "", description: "", examples: [] },
+                value_name: None,
+                shape: @toolCommon.OptionShape::RepeatableList(
+                  {
+                    repetition: @toolCommon.Repetition::Repeated,
+                    item_type: @tool.wire_tool_type(
+                      __golem_schema,
+                      (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                    ).index,
+                  },
+                ),
+                default: None,
+                required: false,
+                env_var: None,
+              },
+              {
+                long: "master",
+                short: Some('\u{6d}'),
+                aliases: [],
+                doc: { summary: "", description: "", examples: [] },
+                value_name: None,
+                shape: @toolCommon.OptionShape::Scalar(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ).index,
+                ),
+                default: None,
+                required: false,
+                env_var: None,
+              },
+            ],
+            flags: [
+              {
+                long: "tags",
+                short: None,
+                aliases: [],
+                doc: { summary: "", description: "", examples: [] },
+                shape: @toolCommon.FlagShape::BoolFlag(
+                  { default: true, negatable: true }
+                ),
+                env_var: None,
+              },
+              {
+                long: "fetch",
+                short: Some('\u{66}'),
+                aliases: [],
+                doc: { summary: "", description: "", examples: [] },
+                shape: @toolCommon.FlagShape::BoolFlag(
+                  { default: false, negatable: false }
+                ),
+                env_var: None,
+              },
+            ],
+            constraints: [],
+            stdin: None,
+            stdout: None,
+            result: None,
+            errors: [
+              {
+                name: "no-such-remote",
+                doc: { summary: "", description: "", examples: [] },
+                kind: @toolCommon.ErrorKind::USAGE_ERROR,
+                exit_code: 128,
+                payload: Some(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ).index,
+                ),
+              },
+            ],
+            annotations: Some(
+              {
+                read_only: false,
+                destructive: false,
+                idempotent: false,
+                open_world: true,
+              },
+            ),
+          },
+        ),
+      },
+      {
+        name: "remove",
+        aliases: ["rm"],
+        doc: { summary: "Remove a remote.", description: "", examples: [] },
+        globals: { options: [], flags: [] },
+        subcommands: [],
+        body: Some(
+          {
+            positionals: {
+              fixed: [
+                {
+                  name: "name",
+                  doc: { summary: "", description: "", examples: [] },
+                  value_name: None,
+                  type_: @tool.wire_refine_text(
+                    @tool.wire_tool_type(
+                      __golem_schema,
+                      (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                    ),
+                    Some("^[a-zA-Z][a-zA-Z0-9_-]*$"),
+                    None,
+                    None,
+                  ).index,
+                  default: None,
+                  required: true,
+                  accepts_stdio: false,
+                },
+              ],
+              tail: None,
+            },
+            options: [],
+            flags: [],
+            constraints: [],
+            stdin: None,
+            stdout: None,
+            result: None,
+            errors: [
+              {
+                name: "no-such-remote",
+                doc: { summary: "", description: "", examples: [] },
+                kind: @toolCommon.ErrorKind::USAGE_ERROR,
+                exit_code: 128,
+                payload: Some(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ).index,
+                ),
+              },
+            ],
+            annotations: Some(
+              {
+                read_only: false,
+                destructive: true,
+                idempotent: true,
+                open_world: true,
+              },
+            ),
+          },
+        ),
+      },
+      {
+        name: "set-url",
+        aliases: [],
+        doc: { summary: "Change a remote URL.", description: "", examples: [] },
+        globals: { options: [], flags: [] },
+        subcommands: [],
+        body: Some(
+          {
+            positionals: {
+              fixed: [
+                {
+                  name: "name",
+                  doc: { summary: "", description: "", examples: [] },
+                  value_name: None,
+                  type_: @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ).index,
+                  default: None,
+                  required: true,
+                  accepts_stdio: false,
+                },
+                {
+                  name: "newurl",
+                  doc: { summary: "", description: "", examples: [] },
+                  value_name: None,
+                  type_: @tool.wire_refine_url(
+                    @tool.wire_tool_type(
+                      __golem_schema,
+                      (@schema.TypeTag::{  } : @schema.TypeTag[@schema.Url]),
+                    ),
+                    Some(["https"]),
+                  ).index,
+                  default: None,
+                  required: true,
+                  accepts_stdio: false,
+                },
+                {
+                  name: "oldurl",
+                  doc: { summary: "", description: "", examples: [] },
+                  value_name: None,
+                  type_: @tool.wire_refine_url(
+                    @tool.wire_tool_type(
+                      __golem_schema,
+                      (@schema.TypeTag::{  } : @schema.TypeTag[@schema.Url]),
+                    ),
+                    Some(["https"]),
+                  ).index,
+                  default: None,
+                  required: false,
+                  accepts_stdio: false,
+                },
+              ],
+              tail: None,
+            },
+            options: [],
+            flags: [
+              {
+                long: "push",
+                short: None,
+                aliases: [],
+                doc: { summary: "", description: "", examples: [] },
+                shape: @toolCommon.FlagShape::BoolFlag(
+                  { default: false, negatable: false }
+                ),
+                env_var: None,
+              },
+              {
+                long: "add",
+                short: None,
+                aliases: [],
+                doc: { summary: "", description: "", examples: [] },
+                shape: @toolCommon.FlagShape::BoolFlag(
+                  { default: false, negatable: false }
+                ),
+                env_var: None,
+              },
+              {
+                long: "delete",
+                short: None,
+                aliases: [],
+                doc: { summary: "", description: "", examples: [] },
+                shape: @toolCommon.FlagShape::BoolFlag(
+                  { default: false, negatable: false }
+                ),
+                env_var: None,
+              },
+            ],
+            constraints: [
+              @toolCommon.Constraint::MutexGroups(
+                [
+                  { refs: [@toolCommon.Ref::Present("add")], },
+                  { refs: [@toolCommon.Ref::Present("delete")], },
+                ],
+              ),
+            ],
+            stdin: None,
+            stdout: None,
+            result: None,
+            errors: [
+              {
+                name: "failed",
+                doc: { summary: "", description: "", examples: [] },
+                kind: @toolCommon.ErrorKind::RUNTIME_ERROR,
+                exit_code: 1,
+                payload: Some(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ).index,
+                ),
+              },
+            ],
+            annotations: Some(
+              {
+                read_only: false,
+                destructive: true,
+                idempotent: false,
+                open_world: true,
+              },
+            ),
+          },
+        ),
+      },
+      {
+        name: "stash",
+        aliases: [],
+        doc: {
+          summary: "Stash changes in a dirty working directory.",
+          description: "",
+          examples: [],
+        },
+        globals: {
+          options: [
+            {
+              long: "git-dir",
+              short: None,
+              aliases: [],
+              doc: { summary: "", description: "", examples: [] },
+              value_name: None,
+              shape: @toolCommon.OptionShape::Scalar(
+                @tool.wire_refine_path(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[@schema.Path]),
+                  ),
+                  None,
+                  Some(@types.PathKind::DIRECTORY),
+                  None,
+                ).index,
+              ),
+              default: Some(
+                @tool.wire_tool_literal(
+                  @tool.wire_refine_path(
+                    @tool.wire_tool_type(
+                      __golem_schema,
+                      (@schema.TypeTag::{  } : @schema.TypeTag[@schema.Path]),
+                    ),
+                    None,
+                    Some(@types.PathKind::DIRECTORY),
+                    None,
+                  ),
+                  @tool.ToolLiteral::Scalar(".git"),
+                ),
+              ),
+              required: false,
+              env_var: Some("GIT_DIR"),
+            },
+          ],
+          flags: [
+            {
+              long: "verbose",
+              short: Some('\u{76}'),
+              aliases: [],
+              doc: { summary: "", description: "", examples: [] },
+              shape: @toolCommon.FlagShape::CountFlag(Some(3U)),
+              env_var: None,
+            },
+          ],
+        },
+        subcommands: [7, 8],
+        body: Some(
+          {
+            positionals: { fixed: [], tail: None },
+            options: [
+              {
+                long: "message",
+                short: Some('\u{6d}'),
+                aliases: [],
+                doc: { summary: "", description: "", examples: [] },
+                value_name: None,
+                shape: @toolCommon.OptionShape::Scalar(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ).index,
+                ),
+                default: None,
+                required: true,
+                env_var: None,
+              },
+            ],
+            flags: [
+              {
+                long: "keep-index",
+                short: Some('\u{6b}'),
+                aliases: [],
+                doc: { summary: "", description: "", examples: [] },
+                shape: @toolCommon.FlagShape::BoolFlag(
+                  { default: false, negatable: false }
+                ),
+                env_var: None,
+              },
+            ],
+            constraints: [],
+            stdin: None,
+            stdout: None,
+            result: None,
+            errors: [
+              {
+                name: "no-such-stash",
+                doc: { summary: "", description: "", examples: [] },
+                kind: @toolCommon.ErrorKind::USAGE_ERROR,
+                exit_code: 128,
+                payload: Some(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ).index,
+                ),
+              },
+            ],
+            annotations: Some(
+              {
+                read_only: false,
+                destructive: true,
+                idempotent: false,
+                open_world: true,
+              },
+            ),
+          },
+        ),
+      },
+      {
+        name: "pop",
+        aliases: [],
+        doc: {
+          summary: "Remove and apply a stashed state.",
+          description: "",
+          examples: [],
+        },
+        globals: { options: [], flags: [] },
+        subcommands: [],
+        body: Some(
+          {
+            positionals: {
+              fixed: [
+                {
+                  name: "name",
+                  doc: { summary: "", description: "", examples: [] },
+                  value_name: None,
+                  type_: @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ).index,
+                  default: None,
+                  required: false,
+                  accepts_stdio: false,
+                },
+              ],
+              tail: None,
+            },
+            options: [
+              {
+                long: "index",
+                short: Some('\u{69}'),
+                aliases: [],
+                doc: { summary: "", description: "", examples: [] },
+                value_name: None,
+                shape: @toolCommon.OptionShape::Scalar(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[UInt]),
+                  ).index,
+                ),
+                default: None,
+                required: false,
+                env_var: None,
+              },
+            ],
+            flags: [],
+            constraints: [],
+            stdin: None,
+            stdout: None,
+            result: None,
+            errors: [
+              {
+                name: "no-such-stash",
+                doc: { summary: "", description: "", examples: [] },
+                kind: @toolCommon.ErrorKind::USAGE_ERROR,
+                exit_code: 128,
+                payload: Some(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ).index,
+                ),
+              },
+            ],
+            annotations: Some(
+              {
+                read_only: false,
+                destructive: true,
+                idempotent: false,
+                open_world: true,
+              },
+            ),
+          },
+        ),
+      },
+      {
+        name: "apply",
+        aliases: [],
+        doc: {
+          summary: "Apply a stashed state without removing it.",
+          description: "",
+          examples: [],
+        },
+        globals: { options: [], flags: [] },
+        subcommands: [],
+        body: Some(
+          {
+            positionals: {
+              fixed: [
+                {
+                  name: "name",
+                  doc: { summary: "", description: "", examples: [] },
+                  value_name: None,
+                  type_: @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ).index,
+                  default: None,
+                  required: false,
+                  accepts_stdio: false,
+                },
+              ],
+              tail: None,
+            },
+            options: [
+              {
+                long: "index",
+                short: Some('\u{69}'),
+                aliases: [],
+                doc: { summary: "", description: "", examples: [] },
+                value_name: None,
+                shape: @toolCommon.OptionShape::Scalar(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[UInt]),
+                  ).index,
+                ),
+                default: None,
+                required: false,
+                env_var: None,
+              },
+            ],
+            flags: [],
+            constraints: [],
+            stdin: None,
+            stdout: None,
+            result: None,
+            errors: [
+              {
+                name: "no-such-stash",
+                doc: { summary: "", description: "", examples: [] },
+                kind: @toolCommon.ErrorKind::USAGE_ERROR,
+                exit_code: 128,
+                payload: Some(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ).index,
+                ),
+              },
+            ],
+            annotations: Some(
+              {
+                read_only: false,
+                destructive: true,
+                idempotent: false,
+                open_world: true,
+              },
+            ),
+          },
+        ),
+      },
+      {
+        name: "log",
+        aliases: [],
+        doc: { summary: "Show commit logs.", description: "", examples: [] },
+        globals: { options: [], flags: [] },
+        subcommands: [],
+        body: Some(
+          {
+            positionals: {
+              fixed: [],
+              tail: Some(
+                {
+                  name: "paths",
+                  doc: { summary: "", description: "", examples: [] },
+                  value_name: None,
+                  item_type: @tool.wire_refine_path(
+                    @tool.wire_tool_type(
+                      __golem_schema,
+                      (@schema.TypeTag::{  } : @schema.TypeTag[@schema.Path]),
+                    ),
+                    Some(@types.PathDirection::INPUT),
+                    Some(@types.PathKind::FILE),
+                    None,
+                  ).index,
+                  min: 0U,
+                  max: None,
+                  separator: Some("--"),
+                  verbatim: false,
+                  accepts_stdio: false,
+                },
+              ),
+            },
+            options: [
+              {
+                long: "max-count",
+                short: Some('\u{6e}'),
+                aliases: [],
+                doc: { summary: "", description: "", examples: [] },
+                value_name: None,
+                shape: @toolCommon.OptionShape::Scalar(
+                  @tool.wire_refine_numeric(
+                    @tool.wire_tool_type(
+                      __golem_schema,
+                      (@schema.TypeTag::{  } : @schema.TypeTag[Int64]),
+                    ),
+                    Some("0"),
+                    Some("9223372036854775807"),
+                    None,
+                  ).index,
+                ),
+                default: None,
+                required: false,
+                env_var: None,
+              },
+              {
+                long: "since",
+                short: None,
+                aliases: [],
+                doc: { summary: "", description: "", examples: [] },
+                value_name: None,
+                shape: @toolCommon.OptionShape::Scalar(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[@types.Datetime]),
+                  ).index,
+                ),
+                default: None,
+                required: false,
+                env_var: None,
+              },
+              {
+                long: "until",
+                short: None,
+                aliases: [],
+                doc: { summary: "", description: "", examples: [] },
+                value_name: None,
+                shape: @toolCommon.OptionShape::Scalar(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[@types.Datetime]),
+                  ).index,
+                ),
+                default: None,
+                required: false,
+                env_var: None,
+              },
+              {
+                long: "author",
+                short: None,
+                aliases: [],
+                doc: { summary: "", description: "", examples: [] },
+                value_name: None,
+                shape: @toolCommon.OptionShape::RepeatableList(
+                  {
+                    repetition: @toolCommon.Repetition::Delimited('\u{2c}'),
+                    item_type: @tool.wire_tool_type(
+                      __golem_schema,
+                      (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                    ).index,
+                  },
+                ),
+                default: None,
+                required: false,
+                env_var: None,
+              },
+              {
+                long: "grep",
+                short: None,
+                aliases: [],
+                doc: { summary: "", description: "", examples: [] },
+                value_name: None,
+                shape: @toolCommon.OptionShape::RepeatableList(
+                  {
+                    repetition: @toolCommon.Repetition::Either('\u{2c}'),
+                    item_type: @tool.wire_tool_type(
+                      __golem_schema,
+                      (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                    ).index,
+                  },
+                ),
+                default: None,
+                required: false,
+                env_var: None,
+              },
+            ],
+            flags: [
+              {
+                long: "all-match",
+                short: None,
+                aliases: [],
+                doc: { summary: "", description: "", examples: [] },
+                shape: @toolCommon.FlagShape::BoolFlag(
+                  { default: false, negatable: false }
+                ),
+                env_var: None,
+              },
+              {
+                long: "invert-grep",
+                short: None,
+                aliases: [],
+                doc: { summary: "", description: "", examples: [] },
+                shape: @toolCommon.FlagShape::BoolFlag(
+                  { default: false, negatable: false }
+                ),
+                env_var: None,
+              },
+              {
+                long: "oneline",
+                short: None,
+                aliases: [],
+                doc: { summary: "", description: "", examples: [] },
+                shape: @toolCommon.FlagShape::BoolFlag(
+                  { default: false, negatable: false }
+                ),
+                env_var: None,
+              },
+              {
+                long: "graph",
+                short: None,
+                aliases: [],
+                doc: { summary: "", description: "", examples: [] },
+                shape: @toolCommon.FlagShape::BoolFlag(
+                  { default: false, negatable: false }
+                ),
+                env_var: None,
+              },
+            ],
+            constraints: [
+              @toolCommon.Constraint::AllOrNone(
+                [
+                  @toolCommon.Ref::Present("all-match"),
+                  @toolCommon.Ref::Present("grep"),
+                ],
+              ),
+            ],
+            stdin: None,
+            stdout: None,
+            result: Some(
+              {
+                type_: @tool.wire_tool_type(
+                  __golem_schema,
+                  (
+                    @schema.TypeTag::{  }
+                    : @schema.TypeTag[Array[CanonicalLogEntry]]
+                  ),
+                ).index,
+                doc: {
+                  summary: "Show commit logs.",
+                  description: "",
+                  examples: [],
+                },
+                formatters: [
+                  {
+                    name: "oneline",
+                    doc: { summary: "", description: "", examples: [] },
+                  },
+                  {
+                    name: "short",
+                    doc: { summary: "", description: "", examples: [] },
+                  },
+                  {
+                    name: "medium",
+                    doc: { summary: "", description: "", examples: [] },
+                  },
+                  {
+                    name: "full",
+                    doc: { summary: "", description: "", examples: [] },
+                  },
+                ],
+                default_formatter: "medium",
+              },
+            ),
+            errors: [
+              {
+                name: "bad-revision",
+                doc: { summary: "", description: "", examples: [] },
+                kind: @toolCommon.ErrorKind::USAGE_ERROR,
+                exit_code: 128,
+                payload: None,
+              },
+              {
+                name: "not-a-repository",
+                doc: { summary: "", description: "", examples: [] },
+                kind: @toolCommon.ErrorKind::USAGE_ERROR,
+                exit_code: 129,
+                payload: None,
+              },
+            ],
+            annotations: Some(
+              {
+                read_only: true,
+                destructive: true,
+                idempotent: true,
+                open_world: true,
+              },
+            ),
+          },
+        ),
+      },
+    ]
+    let root = __golem_schema.push(@types.RecordType([]))
+    {
+      version: "0.0.0",
+      requires_filesystem: false,
+      commands: { nodes, },
+      schema: {
+        type_nodes: __golem_schema.nodes,
+        defs: __golem_schema.defs,
+        root,
+      },
+    }
+  } catch{
+    error => abort("invalid generated tool descriptor: " + repr(error))
+  }
+}
+
+///|
+///
+fn __golem_tool_wire_CanonicalBigBound() -> @toolCommon.Tool {
+  try {
+    let __golem_schema = @schema.WireTypeEncoder::new()
+    let nodes :Array[@toolCommon.CommandNode] = [
+      {
+        name: "canonical-big-bound",
+        aliases: [],
+        doc: {
+          summary: "Numeric-bound parity fixture.",
+          description: "",
+          examples: [],
+        },
+        globals: { options: [], flags: [] },
+        subcommands: [],
+        body: Some(
+          {
+            positionals: { fixed: [], tail: None },
+            options: [
+              {
+                long: "count",
+                short: None,
+                aliases: [],
+                doc: { summary: "", description: "", examples: [] },
+                value_name: None,
+                shape: @toolCommon.OptionShape::Scalar(
+                  @tool.wire_refine_numeric(
+                    @tool.wire_tool_type(
+                      __golem_schema,
+                      (@schema.TypeTag::{  } : @schema.TypeTag[UInt64]),
+                    ),
+                    Some("0"),
+                    Some("18446744073709551615"),
+                    None,
+                  ).index,
+                ),
+                default: None,
+                required: false,
+                env_var: None,
+              },
+            ],
+            flags: [],
+            constraints: [],
+            stdin: None,
+            stdout: None,
+            result: None,
+            errors: [
+              {
+                name: "invalid-pattern",
+                doc: {
+                  summary: "The supplied pattern is not a valid regular expression.",
+                  description: "",
+                  examples: [],
+                },
+                kind: @toolCommon.ErrorKind::USAGE_ERROR,
+                exit_code: 2,
+                payload: Some(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ).index,
+                ),
+              },
+              {
+                name: "no-match",
+                doc: {
+                  summary: "No line matched.",
+                  description: "",
+                  examples: [],
+                },
+                kind: @toolCommon.ErrorKind::RUNTIME_ERROR,
+                exit_code: 1,
+                payload: None,
+              },
+            ],
+            annotations: Some(
+              {
+                read_only: false,
+                destructive: true,
+                idempotent: false,
+                open_world: true,
+              },
+            ),
+          },
+        ),
+      },
+    ]
+    let root = __golem_schema.push(@types.RecordType([]))
+    {
+      version: "0.0.0",
+      requires_filesystem: false,
+      commands: { nodes, },
+      schema: {
+        type_nodes: __golem_schema.nodes,
+        defs: __golem_schema.defs,
+        root,
+      },
+    }
+  } catch{
+    error => abort("invalid generated tool descriptor: " + repr(error))
+  }
+}
+
+///|
+///
+fn __golem_tool_wire_MoonBitReflectionTest() -> @toolCommon.Tool {
+  try {
+    let __golem_schema = @schema.WireTypeEncoder::new()
+    let nodes :Array[@toolCommon.CommandNode] = [
+      {
+        name: "moonbit-reflection-test",
+        aliases: [],
+        doc: { summary: "", description: "", examples: [] },
+        globals: { options: [], flags: [] },
+        subcommands: [1, 2, 3],
+        body: None,
+      },
+      {
+        name: "echo",
+        aliases: [],
+        doc: { summary: "", description: "", examples: [] },
+        globals: { options: [], flags: [] },
+        subcommands: [],
+        body: Some(
+          {
+            positionals: {
+              fixed: [
+                {
+                  name: "label",
+                  doc: { summary: "", description: "", examples: [] },
+                  value_name: None,
+                  type_: @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ).index,
+                  default: None,
+                  required: true,
+                  accepts_stdio: false,
+                },
+              ],
+              tail: None,
+            },
+            options: [],
+            flags: [],
+            constraints: [],
+            stdin: None,
+            stdout: None,
+            result: Some(
+              {
+                type_: @tool.wire_tool_type(
+                  __golem_schema,
+                  (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                ).index,
+                doc: { summary: "", description: "", examples: [] },
+                formatters: [
+                  {
+                    name: "default",
+                    doc: { summary: "", description: "", examples: [] },
+                  },
+                ],
+                default_formatter: "default",
+              },
+            ),
+            errors: [],
+            annotations: Some(
+              {
+                read_only: false,
+                destructive: true,
+                idempotent: false,
+                open_world: true,
+              },
+            ),
+          },
+        ),
+      },
+      {
+        name: "optional",
+        aliases: [],
+        doc: { summary: "", description: "", examples: [] },
+        globals: { options: [], flags: [] },
+        subcommands: [],
+        body: Some(
+          {
+            positionals: { fixed: [], tail: None },
+            options: [
+              {
+                long: "maybe",
+                short: None,
+                aliases: [],
+                doc: { summary: "", description: "", examples: [] },
+                value_name: None,
+                shape: @toolCommon.OptionShape::Scalar(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ).index,
+                ),
+                default: None,
+                required: false,
+                env_var: None,
+              },
+            ],
+            flags: [],
+            constraints: [],
+            stdin: None,
+            stdout: None,
+            result: Some(
+              {
+                type_: @tool.wire_tool_type(
+                  __golem_schema,
+                  (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                ).index,
+                doc: { summary: "", description: "", examples: [] },
+                formatters: [
+                  {
+                    name: "default",
+                    doc: { summary: "", description: "", examples: [] },
+                  },
+                ],
+                default_formatter: "default",
+              },
+            ),
+            errors: [],
+            annotations: Some(
+              {
+                read_only: false,
+                destructive: true,
+                idempotent: false,
+                open_world: true,
+              },
+            ),
+          },
+        ),
+      },
+      {
+        name: "canonical-values",
+        aliases: [],
+        doc: { summary: "", description: "", examples: [] },
+        globals: { options: [], flags: [] },
+        subcommands: [],
+        body: Some(
+          {
+            positionals: {
+              fixed: [
+                {
+                  name: "signed",
+                  doc: { summary: "", description: "", examples: [] },
+                  value_name: None,
+                  type_: @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[Int64]),
+                  ).index,
+                  default: None,
+                  required: true,
+                  accepts_stdio: false,
+                },
+                {
+                  name: "unsigned",
+                  doc: { summary: "", description: "", examples: [] },
+                  value_name: None,
+                  type_: @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[UInt64]),
+                  ).index,
+                  default: None,
+                  required: true,
+                  accepts_stdio: false,
+                },
+                {
+                  name: "duration",
+                  doc: { summary: "", description: "", examples: [] },
+                  value_name: None,
+                  type_: @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[@schema.Duration]),
+                  ).index,
+                  default: None,
+                  required: true,
+                  accepts_stdio: false,
+                },
+                {
+                  name: "quantity",
+                  doc: { summary: "", description: "", examples: [] },
+                  value_name: None,
+                  type_: @tool.wire_tool_type(
+                    __golem_schema,
+                    (
+                      @schema.TypeTag::{  }
+                      : @schema.TypeTag[@schema.Quantity[ReflectionMeters]]
+                    ),
+                  ).index,
+                  default: None,
+                  required: true,
+                  accepts_stdio: false,
+                },
+              ],
+              tail: None,
+            },
+            options: [
+              {
+                long: "maybe",
+                short: None,
+                aliases: [],
+                doc: { summary: "", description: "", examples: [] },
+                value_name: None,
+                shape: @toolCommon.OptionShape::Scalar(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ).index,
+                ),
+                default: None,
+                required: false,
+                env_var: None,
+              },
+            ],
+            flags: [],
+            constraints: [],
+            stdin: None,
+            stdout: None,
+            result: Some(
+              {
+                type_: @tool.wire_tool_type(
+                  __golem_schema,
+                  (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                ).index,
+                doc: { summary: "", description: "", examples: [] },
+                formatters: [
+                  {
+                    name: "default",
+                    doc: { summary: "", description: "", examples: [] },
+                  },
+                ],
+                default_formatter: "default",
+              },
+            ),
+            errors: [],
+            annotations: Some(
+              {
+                read_only: false,
+                destructive: true,
+                idempotent: false,
+                open_world: true,
+              },
+            ),
+          },
+        ),
+      },
+    ]
+    let root = __golem_schema.push(@types.RecordType([]))
+    {
+      version: "0.0.0",
+      requires_filesystem: true,
+      commands: { nodes, },
+      schema: {
+        type_nodes: __golem_schema.nodes,
+        defs: __golem_schema.defs,
+        root,
+      },
+    }
+  } catch{
+    error => abort("invalid generated tool descriptor: " + repr(error))
   }
 }
 
@@ -4953,32 +8441,24 @@ async fn __golem_tool_invoke_MoonBitReflectionTest(
 ///
 fn init {
   try {
-    @tool.register_tool_def_invoker(
-      __golem_tool_def_MoonBitStreaming(),
+    @tool.register_wire_tool_invoker(
+      __golem_tool_wire_MoonBitStreaming(),
       __golem_tool_invoke_MoonBitStreaming,
     )
-    @tool.register_tool_def_invoker(
-      __golem_tool_def_CanonicalGrep(),
+    @tool.register_wire_tool_invoker(
+      __golem_tool_wire_CanonicalGrep(),
       __golem_tool_invoke_CanonicalGrep,
     )
-    @tool.register_tool_def_invoker(
-      __golem_tool_def_CanonicalGit(),
+    @tool.register_wire_tool_invoker(
+      __golem_tool_wire_CanonicalGit(),
       __golem_tool_invoke_CanonicalGit,
     )
-    @tool.register_subtool_def_invoker(
-      __golem_tool_def_CanonicalRemote(),
-      __golem_tool_invoke_CanonicalRemote,
-    )
-    @tool.register_subtool_def_invoker(
-      __golem_tool_def_CanonicalStash(),
-      __golem_tool_invoke_CanonicalStash,
-    )
-    @tool.register_tool_def_invoker(
-      __golem_tool_def_CanonicalBigBound(),
+    @tool.register_wire_tool_invoker(
+      __golem_tool_wire_CanonicalBigBound(),
       __golem_tool_invoke_CanonicalBigBound,
     )
-    @tool.register_tool_def_invoker(
-      __golem_tool_def_MoonBitReflectionTest(),
+    @tool.register_wire_tool_invoker(
+      __golem_tool_wire_MoonBitReflectionTest(),
       __golem_tool_invoke_MoonBitReflectionTest,
     )
   } catch{

@@ -201,7 +201,7 @@ pub(all) struct CommandTree {
 ///|
 /// Top level
 pub(all) struct Tool {
-      version : String; commands : CommandTree; schema : @types.SchemaGraph
+      version : String; requires_filesystem : Bool; commands : CommandTree; schema : @types.SchemaGraph
 } derive(Debug, Eq)
 ///|
 pub(all) struct MonomorphicScope {

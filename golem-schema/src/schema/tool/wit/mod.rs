@@ -457,6 +457,7 @@ impl TryFrom<&Tool> for wire::Tool {
         let schema = enc.finish();
         Ok(Self {
             version: tool.version.clone(),
+            requires_filesystem: tool.requires_filesystem,
             commands,
             schema,
         })
@@ -669,6 +670,7 @@ impl TryFrom<&wire::Tool> for Tool {
         let commands = decode_command_tree(&dec, &w.commands)?;
         Ok(Self {
             version: w.version.clone(),
+            requires_filesystem: w.requires_filesystem,
             commands,
             schema,
         })

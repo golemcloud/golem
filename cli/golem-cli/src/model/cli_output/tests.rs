@@ -995,6 +995,7 @@ fn sample_component_view() -> crate::model::component::ComponentView {
             golem_common::model::tool::ToolDeploymentMetadata {
                 definition: golem_common::schema::tool::Tool {
                     version: "1.0.0".to_string(),
+                    requires_filesystem: false,
                     commands: golem_common::schema::tool::CommandTree {
                         nodes: vec![golem_common::schema::tool::CommandNode {
                             name: "grep".to_string(),
@@ -5877,6 +5878,7 @@ fn sample_tool_release() -> golem_common::model::tool_release::ToolRelease {
         },
         definition: Tool {
             version: "1.0.0".to_string(),
+            requires_filesystem: false,
             commands: CommandTree {
                 nodes: vec![CommandNode {
                     name: "search".to_string(),

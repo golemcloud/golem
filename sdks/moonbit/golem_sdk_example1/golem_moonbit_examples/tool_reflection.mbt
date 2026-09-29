@@ -1,6 +1,15 @@
 ///|
-#derive.tool("moonbit-reflection-test")
+#derive.tool("moonbit-reflection-test", requires_filesystem=true)
 struct MoonBitReflectionTest {}
+
+///|
+test "registered tool preserves requires_filesystem" {
+  let descriptor = match @tool.get_registered_tool("moonbit-reflection-test") {
+    Ok(descriptor) => descriptor
+    Err(_) => fail("generated tool was not registered")
+  }
+  assert_true(descriptor.requires_filesystem)
+}
 
 ///|
 #warnings("-struct_never_constructed")
@@ -92,11 +101,9 @@ fn reflected_tool_error(
       message
     }
     UnknownToolError(name, payload) => {
-      @model.drop_owned_capabilities(payload.value)
+      @schema.WireReader::new(payload.value).abort()
       "unknown:\{name}"
     }
-    InvalidInput(message) => "input:\{message}"
-    MalformedRemoteOutput(message) => "output:\{message}"
   }
 }
 
@@ -113,11 +120,9 @@ fn describe_dynamic_tool_error(
       message
     }
     UnknownToolError(name, payload) => {
-      @model.drop_owned_capabilities(payload.value)
+      @schema.WireReader::new(payload.value).abort()
       "unknown:\{name}"
     }
-    InvalidInput(message) => "input:\{message}"
-    MalformedRemoteOutput(message) => "output:\{message}"
   }
 }
 
@@ -179,11 +184,9 @@ fn no_tool_error(error : @tool.ToolError[@tool.NoToolError]) -> String {
 
       }
     UnknownToolError(name, payload) => {
-      @model.drop_owned_capabilities(payload.value)
+      @schema.WireReader::new(payload.value).abort()
       "unknown:\{name}"
     }
-    InvalidInput(message) => "input:\{message}"
-    MalformedRemoteOutput(message) => "output:\{message}"
   }
 }
 

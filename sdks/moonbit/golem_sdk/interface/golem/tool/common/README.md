@@ -74,9 +74,6 @@ alone does not enforce them):
     `guest.invoke(tool-name, …)` match against it. `commands.nodes`
     is always non-empty.
 
-Capability scoping (WASI preopens, env masking, outbound-socket
-filters, subprocess-exec capability, and `golem:agent/host`'s
-`get-config-value` resolution) is performed by the host by inspecting
-the component's WIT imports — what a component *can* do is already
-declared structurally by which interfaces it imports — not by reading
-a declarative metadata record.
+Capability scoping is performed by the host. `requires-filesystem` declares
+that the tool cannot operate without a filesystem binding; it does not grant
+filesystem access.
