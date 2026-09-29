@@ -25,6 +25,7 @@ use std::cmp::Reverse;
 use std::fmt::{Display, Formatter};
 use std::path::Path;
 
+mod clock;
 #[cfg(test)]
 mod contract_tests;
 mod memory;
@@ -45,6 +46,7 @@ pub(crate) struct SnapshotScope(BlobStorageNamespace);
 
 impl SnapshotScope {
     /// Gives the scope of the agent.
+    #[allow(dead_code)]
     pub(crate) fn agent(agent: &OwnedAgentId) -> Self {
         Self(BlobStorageNamespace::FilesystemSnapshots {
             environment_id: agent.environment_id,
@@ -65,6 +67,7 @@ impl SnapshotName {
     const MAX_LENGTH: usize = 64;
 
     /// Gives the name with the text `text`, or an error when the text breaks a rule of a name.
+    #[allow(dead_code)]
     pub(crate) fn new(text: &str) -> Result<Self, InvalidSnapshotName> {
         let valid = (1..=Self::MAX_LENGTH).contains(&text.len())
             && text
@@ -121,6 +124,7 @@ pub(crate) struct SnapshotInfo {
 
 /// How a save with a parent finds the files that did not change since the parent.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(dead_code)]
 pub(crate) enum ChangeDetection {
     /// Compares each file with the parent by size and modification time.
     SizeMtime,
@@ -142,6 +146,7 @@ pub(crate) enum SnapshotStoreError {
     /// The storage of the snapshots failed. `retryable` tells whether a new attempt can succeed
     /// without a change.
     Storage {
+        #[allow(dead_code)]
         retryable: bool,
         source: anyhow::Error,
     },
@@ -200,6 +205,7 @@ impl std::error::Error for SnapshotStoreError {
 /// costs the bytes that changed since the last snapshot in the scope, plus one metadata read for
 /// each file. `restore` costs the size of the tree. `stat` and `list` cost a few small reads.
 #[async_trait]
+#[allow(dead_code)]
 pub(crate) trait FilesystemSnapshotStore: Send + Sync {
     /// Saves a directory tree as a snapshot with the name, and waits until it is durable.
     ///

@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{InMemorySnapshotStore, Stored};
+use super::InMemorySnapshotStore;
+use crate::filesystem_snapshot::contract_tests::clock::TestClock;
 use crate::filesystem_snapshot::contract_tests::{self, OpenStore, new_scope};
 use crate::filesystem_snapshot::{
     FilesystemSnapshotStore, SnapshotInfo, SnapshotName, SnapshotStoreError,
@@ -20,6 +21,7 @@ use crate::filesystem_snapshot::{
 use golem_common::model::Timestamp;
 use pretty_assertions::assert_eq;
 use std::sync::Arc;
+use std::time::Duration;
 use tempfile::TempDir;
 use test_r::core::DynamicTestRegistration;
 use test_r::{test, test_gen};
@@ -34,27 +36,28 @@ fn in_memory_store_keeps_the_contract(r: &mut DynamicTestRegistration) {
     });
 }
 
-/// A snapshot that another store saved with a clock that is ahead of this clock has a time
-/// later than the time now. The next save still gets a later time, so the listing stays newest
-/// first, also when the clocks of two executors differ.
+/// A snapshot that a store saved with a clock that is ahead of the clock now has a time later than
+/// the time now. The next save still gets a later time, so the listing stays newest first, also
+/// when the clocks of two executors differ.
 #[test]
 async fn a_save_after_a_snapshot_from_a_clock_that_is_ahead_gets_a_later_time() {
-    let store = InMemorySnapshotStore::new();
+    let clock = Arc::new(TestClock::default());
+    let store = InMemorySnapshotStore::with_clock(clock.clone());
     let scope = new_scope();
-    let ahead = Timestamp::from(Timestamp::now_utc().to_millis() + 3_600_000);
-    store.scopes().insert(
-        scope.clone(),
-        Arc::from(vec![Stored {
-            name: SnapshotName::new("p-ahead").unwrap(),
-            info: SnapshotInfo {
-                created_at: ahead,
-                files: 0,
-                bytes: 0,
-            },
-            tree: Arc::from(Vec::new()),
-        }]),
-    );
     let tree = tempfile::tempdir().unwrap();
+    clock.set_ahead(Duration::from_secs(3600));
+    let ahead = store
+        .save(
+            &scope,
+            &SnapshotName::new("p-ahead").unwrap(),
+            tree.path(),
+            None,
+        )
+        .await
+        .unwrap();
+    clock.set_ahead(Duration::ZERO);
+    let later_than_now =
+        ahead.created_at.to_millis() >= Timestamp::now_utc().to_millis() + 3_600_000 - 60_000;
 
     let saved = store
         .save(
@@ -69,13 +72,14 @@ async fn a_save_after_a_snapshot_from_a_clock_that_is_ahead_gets_a_later_time() 
 
     assert_eq!(
         (
-            saved.created_at > ahead,
+            later_than_now,
+            saved.created_at > ahead.created_at,
             listed
                 .iter()
                 .map(|(name, _)| name.as_str())
                 .collect::<Vec<_>>()
         ),
-        (true, vec!["p-next", "p-ahead"])
+        (true, true, vec!["p-next", "p-ahead"])
     );
 }
 

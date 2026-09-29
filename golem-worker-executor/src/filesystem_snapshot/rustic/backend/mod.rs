@@ -19,65 +19,27 @@
 //! and each call waits for the blob storage on the runtime that the backend holds. Each call waits
 //! for at most a deadline, and a cancelled operation makes no more calls.
 
-use super::fault::{BlobCallFailed, ConfigExists, FileMissing, LeaseExpired, OperationCancelled};
-use super::files::TARGET_LABEL;
+use super::fault::{BlobCallFailed, ConfigExists, FileMissing};
+use super::files::SnapshotFiles;
 use super::publish::{SnapshotStage, StagedSnapshot};
 use bytes::Bytes;
-use golem_service_base::storage::blob::{
-    BlobRangeError, BlobStorage, BlobStorageNamespace, PutIfAbsent,
-};
+use golem_service_base::storage::blob::{BlobRangeError, PutIfAbsent};
 use kept::KeptPacks;
 use rustic_core::{
     BytesList, ErrorKind, FileType, Id, ReadBackend, RusticError, RusticResult, WriteBackend,
 };
 use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, PoisonError};
-use std::time::{Duration, Instant};
+use std::sync::Arc;
 use tokio::runtime::Handle;
-use tokio_util::sync::CancellationToken;
 use tokio_util::task::task_tracker::TaskTrackerToken;
 
 /// The path of the config file of a repository.
 pub(super) const CONFIG_PATH: &str = "config";
 
-/// The largest number of bytes of tree packs that one backend keeps in memory.
-const KEPT_PACKS_LIMIT: usize = 32 * 1024 * 1024;
-
-/// The time until which a prune may make storage calls. A prune holds its claim until the time in
-/// its newest marker plus the hold, as the other deletes see it. The lease ends before that, so a
-/// prune stops before another delete can take its claim over.
-#[derive(Debug)]
-pub(super) struct Lease {
-    expiry: Mutex<Instant>,
-}
-
-impl Lease {
-    /// Gives a lease that ends at the instant.
-    pub(super) fn until(expiry: Instant) -> Self {
-        Self {
-            expiry: Mutex::new(expiry),
-        }
-    }
-
-    /// Moves the end of the lease to `span` after `started`, the start of a marker write that
-    /// succeeded, when that is later. A write that started at or after the end of the lease does
-    /// not move it, so a lease that ran out stays out: another delete can have taken the claim over
-    /// before the marker of that write was visible. A write that started before the end and ends
-    /// late can still move it, because no other delete can take the claim over before that marker
-    /// is visible.
-    pub(super) fn extend_from(&self, started: Instant, span: Duration) {
-        let mut current = self.expiry.lock().unwrap_or_else(PoisonError::into_inner);
-        if started < *current {
-            *current = (*current).max(started + span);
-        }
-    }
-
-    /// Gives the end of the lease.
-    pub(super) fn expiry(&self) -> Instant {
-        *self.expiry.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-}
+/// The largest number of bytes of tree packs that the backend of one operation of the store keeps
+/// in memory.
+pub(super) const KEPT_PACKS_LIMIT: usize = 32 * 1024 * 1024;
 
 /// A call that the backend makes on the blob storage.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -110,8 +72,9 @@ impl StorageCall {
 /// the two digits are the start of the id. Each other file is at `<directory of the type>/<id>`.
 /// These are the paths of the restic repository format.
 ///
-/// The backend holds a handle of the async runtime and a deadline, which the caller gives when it
-/// makes the backend. Each call waits for the blob storage with `Handle::block_on` on that runtime.
+/// The backend holds a handle of the async runtime and the blobs of the scope, which the caller
+/// gives when it makes the backend. Each call goes through those blobs, with their deadline, token
+/// and lease, and waits for them with `Handle::block_on` on that runtime.
 /// Thus a thread that is not a thread of the runtime can call the backend, for example a thread of
 /// rustic. A call from a task of the runtime panics, because `Handle::block_on` panics in an async
 /// context. The executor builds with `panic = "abort"`, so that panic stops the executor. Thus the
@@ -125,70 +88,32 @@ impl StorageCall {
 /// file goes into the stage of the backend when it has one, and the backend does not write it.
 #[derive(Debug)]
 pub(super) struct BlobBackend {
-    storage: Arc<dyn BlobStorage>,
-    namespace: BlobStorageNamespace,
+    files: SnapshotFiles,
     runtime: Handle,
-    deadline: Duration,
-    cancel: CancellationToken,
     stage: Option<Arc<SnapshotStage>>,
     /// Counts the backend as work of a tracker, until the last owner drops the backend.
     _tracked: Option<TaskTrackerToken>,
     /// The packs of tree blobs that the operation of the backend read.
     kept: KeptPacks,
-    /// The lease of the prune of the backend. A backend without a lease has no limit other than
-    /// the deadline of each call.
-    lease: Option<Arc<Lease>>,
 }
 
 impl BlobBackend {
-    /// Makes a backend over the namespace of the storage. Each call waits on `runtime`, for at most
-    /// `deadline`.
-    pub(super) fn new(
-        storage: Arc<dyn BlobStorage>,
-        namespace: BlobStorageNamespace,
-        runtime: Handle,
-        deadline: Duration,
-    ) -> Self {
+    /// Makes a backend over the blobs. Each call goes through `files` and waits on `runtime`. The
+    /// backend keeps tree packs up to `kept_limit` bytes.
+    pub(super) fn new(files: SnapshotFiles, runtime: Handle, kept_limit: usize) -> Self {
         Self {
-            storage,
-            namespace,
+            files,
             runtime,
-            deadline,
-            cancel: CancellationToken::new(),
             stage: None,
             _tracked: None,
-            kept: KeptPacks::new(KEPT_PACKS_LIMIT),
-            lease: None,
+            kept: KeptPacks::new(kept_limit),
         }
-    }
-
-    /// Gives the backend with another limit of the bytes of the tree packs that it keeps.
-    pub(super) fn keeping_packs_up_to(self, limit: usize) -> Self {
-        Self {
-            kept: KeptPacks::new(limit),
-            ..self
-        }
-    }
-
-    /// Gives the backend with the token of its operation. When the token is cancelled, a call that
-    /// has not started gives an error at once, and a call that runs stops and gives an error.
-    pub(super) fn cancelled_by(self, cancel: CancellationToken) -> Self {
-        Self { cancel, ..self }
     }
 
     /// Gives the backend with a stage for the snapshot file of a save.
     pub(super) fn staging_in(self, stage: Arc<SnapshotStage>) -> Self {
         Self {
             stage: Some(stage),
-            ..self
-        }
-    }
-
-    /// Gives the backend with the lease of a prune. When the lease has run out, a call gives an
-    /// error at once, and a call that runs gives an error when the lease runs out.
-    pub(super) fn leased_by(self, lease: Arc<Lease>) -> Self {
-        Self {
-            lease: Some(lease),
             ..self
         }
     }
@@ -202,23 +127,16 @@ impl BlobBackend {
         }
     }
 
-    /// Waits for one call on the blob storage, which each call of the backend goes through. A call
-    /// without an answer within the deadline, of a cancelled operation, or of a backend whose lease
-    /// ran out, gives an error, the same as a call that failed.
+    /// Waits for one call on the blobs, which each call of the backend goes through. A failed call
+    /// gives the error of the call at the path.
     fn request<T>(
         &self,
         call: StorageCall,
         path: &Path,
         future: impl Future<Output = anyhow::Result<T>>,
     ) -> RusticResult<T> {
-        let answer = answer_or_cancel(self.deadline, &self.cancel, future);
         self.runtime
-            .block_on(async {
-                match &self.lease {
-                    None => answer.await,
-                    Some(lease) => within_lease(lease, answer).await,
-                }
-            })
+            .block_on(future)
             .map_err(|error| storage_error(call, path, error))
     }
 
@@ -227,72 +145,15 @@ impl BlobBackend {
         self.request(
             StorageCall::Write,
             path,
-            self.storage.put_raw_if_absent(
-                TARGET_LABEL,
-                StorageCall::Write.label(),
-                self.namespace.clone(),
-                path,
-                content,
-            ),
+            self.files
+                .put_if_absent(StorageCall::Write.label(), path, content),
         )
-    }
-}
-
-/// Gives the output of the future, or [`LeaseExpired`] when the lease runs out first. A call does
-/// not start when the lease has run out.
-pub(super) async fn within_lease<T>(
-    lease: &Lease,
-    future: impl Future<Output = anyhow::Result<T>>,
-) -> anyhow::Result<T> {
-    let left = lease.expiry().saturating_duration_since(Instant::now());
-    if left.is_zero() {
-        return Err(anyhow::Error::new(LeaseExpired));
-    }
-    tokio::time::timeout(left, future)
-        .await
-        .unwrap_or_else(|_| Err(anyhow::Error::new(LeaseExpired)))
-}
-
-/// Gives the output of the future, or an error when the future gives no output within the deadline.
-///
-/// The timer starts at the first poll of the returned future, in the runtime of that poll. Thus a
-/// thread without a runtime context can wait for the result with `Handle::block_on`. A future that
-/// is ready at its first poll always gives its output. At the deadline, the function drops the
-/// future and gives an error whose root cause is tokio's `Elapsed`.
-pub(super) async fn answer_within<T>(
-    deadline: Duration,
-    future: impl Future<Output = anyhow::Result<T>>,
-) -> anyhow::Result<T> {
-    tokio::time::timeout(deadline, future)
-        .await
-        .unwrap_or_else(|elapsed| {
-            Err(anyhow::Error::new(elapsed).context(format!(
-                "the blob storage gave no answer within {deadline:?}"
-            )))
-        })
-}
-
-/// Gives the output of the future within the deadline, or an error when the operation of the token
-/// is cancelled. A call of a cancelled operation does not start, and a cancel ends a call that
-/// runs.
-pub(super) async fn answer_or_cancel<T>(
-    deadline: Duration,
-    cancel: &CancellationToken,
-    future: impl Future<Output = anyhow::Result<T>>,
-) -> anyhow::Result<T> {
-    if cancel.is_cancelled() {
-        return Err(anyhow::Error::new(OperationCancelled));
-    }
-    tokio::select! {
-        biased;
-        answer = answer_within(deadline, future) => answer,
-        () = cancel.cancelled() => Err(anyhow::Error::new(OperationCancelled)),
     }
 }
 
 impl ReadBackend for BlobBackend {
     fn location(&self) -> String {
-        format!("golem-blob-storage:{:?}", self.namespace)
+        self.files.location()
     }
 
     fn list_with_size(&self, tpe: FileType) -> RusticResult<Vec<(Id, u32)>> {
@@ -302,12 +163,7 @@ impl ReadBackend for BlobBackend {
                 self.request(
                     StorageCall::Stat,
                     path,
-                    self.storage.get_metadata(
-                        TARGET_LABEL,
-                        StorageCall::Stat.label(),
-                        self.namespace.clone(),
-                        path,
-                    ),
+                    self.files.stat(StorageCall::Stat.label(), path),
                 )?
                 .map(|metadata| file_size(path, metadata.size).map(|size| (Id::default(), size)))
                 .into_iter()
@@ -318,12 +174,7 @@ impl ReadBackend for BlobBackend {
                 self.request(
                     StorageCall::List,
                     directory,
-                    self.storage.list_blobs_below(
-                        TARGET_LABEL,
-                        StorageCall::List.label(),
-                        self.namespace.clone(),
-                        directory,
-                    ),
+                    self.files.list_below(StorageCall::List.label(), directory),
                 )?
                 .iter()
                 .filter_map(|blob| {
@@ -344,12 +195,7 @@ impl ReadBackend for BlobBackend {
         self.request(
             StorageCall::Read,
             &path,
-            self.storage.get_raw(
-                TARGET_LABEL,
-                StorageCall::Read.label(),
-                self.namespace.clone(),
-                &path,
-            ),
+            self.files.get(StorageCall::Read.label(), &path),
         )?
         .map(Bytes::from)
         .ok_or_else(|| missing_file(&path))
@@ -381,10 +227,8 @@ impl ReadBackend for BlobBackend {
         self.request(
             StorageCall::ReadRange,
             &path,
-            self.storage.get_raw_slice(
-                TARGET_LABEL,
+            self.files.get_slice(
                 StorageCall::ReadRange.label(),
-                self.namespace.clone(),
                 &path,
                 start,
                 start + u64::from(last),
@@ -432,13 +276,7 @@ impl WriteBackend for BlobBackend {
             _ => self.request(
                 StorageCall::Write,
                 &path,
-                self.storage.put_raw(
-                    TARGET_LABEL,
-                    StorageCall::Write.label(),
-                    self.namespace.clone(),
-                    &path,
-                    &content,
-                ),
+                self.files.put(StorageCall::Write.label(), &path, &content),
             ),
         }
     }
@@ -448,12 +286,7 @@ impl WriteBackend for BlobBackend {
         self.request(
             StorageCall::Delete,
             &path,
-            self.storage.delete(
-                TARGET_LABEL,
-                StorageCall::Delete.label(),
-                self.namespace.clone(),
-                &path,
-            ),
+            self.files.delete(StorageCall::Delete.label(), &path),
         )
     }
 }

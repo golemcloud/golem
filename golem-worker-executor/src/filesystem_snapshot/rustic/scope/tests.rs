@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::super::files::SnapshotFiles;
+use super::super::tests::files_of;
 use super::super::tests::scripted::{Script, ScriptedBlobStorage};
 use super::{copy_scope, delete_scope};
 use golem_common::model::environment::EnvironmentId;
@@ -41,13 +42,12 @@ fn files<S: BlobStorage + 'static>(
     storage: &Arc<S>,
     namespace: &BlobStorageNamespace,
 ) -> SnapshotFiles {
-    SnapshotFiles {
-        storage: storage.clone(),
-        namespace: namespace.clone(),
-        deadline: DEADLINE,
-        cancel: tokio_util::sync::CancellationToken::new(),
-        tracker: tokio_util::task::TaskTracker::new(),
-    }
+    files_of(
+        storage.clone(),
+        namespace.clone(),
+        DEADLINE,
+        tokio_util::sync::CancellationToken::new(),
+    )
 }
 
 fn new_namespace() -> BlobStorageNamespace {

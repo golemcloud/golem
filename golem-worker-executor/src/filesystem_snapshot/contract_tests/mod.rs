@@ -37,6 +37,7 @@
 //! }
 //! ```
 
+pub(super) mod clock;
 pub(super) mod fixture;
 
 use super::{

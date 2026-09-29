@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::super::files::SnapshotFiles;
+use super::super::tests::files_of;
 use super::super::tests::holding::reached_deadline;
 use super::super::tests::scripted::{Script, ScriptedBlobStorage};
 use super::{SnapshotStage, StagedSnapshot, publish, retract};
@@ -42,49 +43,37 @@ fn staged() -> StagedSnapshot {
     }
 }
 
-/// Gives the snapshot files of a new namespace over a storage whose script for the publish is
-/// `publish` and for the delete is `retract`, and the in-memory storage below it.
+/// Gives the snapshot files of a new namespace over a scripted storage. Its script for the publish
+/// is `publish`, and its script for the delete is `retract`. It also gives the snapshot files of
+/// the same namespace over the in-memory storage below it.
 fn files(
     publish: Script,
     retract: Script,
     deadline: Duration,
-) -> (
-    SnapshotFiles,
-    Arc<ScriptedBlobStorage>,
-    Arc<InMemoryBlobStorage>,
-) {
+) -> (SnapshotFiles, Arc<ScriptedBlobStorage>, SnapshotFiles) {
     let inner = Arc::new(InMemoryBlobStorage::new());
     let storage = ScriptedBlobStorage::new(inner.clone(), move |op_label, _| match op_label {
         "publish" => publish,
         "retract" => retract,
         _ => Script::Pass,
     });
-    (
-        SnapshotFiles {
-            storage: storage.clone(),
-            namespace: BlobStorageNamespace::InitialAgentFiles {
-                environment_id: EnvironmentId(Uuid::new_v4()),
-            },
+    let namespace = BlobStorageNamespace::InitialAgentFiles {
+        environment_id: EnvironmentId(Uuid::new_v4()),
+    };
+    let over = |storage: Arc<dyn BlobStorage>| {
+        files_of(
+            storage,
+            namespace.clone(),
             deadline,
-            cancel: tokio_util::sync::CancellationToken::new(),
-            tracker: tokio_util::task::TaskTracker::new(),
-        },
-        storage,
-        inner,
-    )
+            tokio_util::sync::CancellationToken::new(),
+        )
+    };
+    (over(storage.clone()), storage, over(inner))
 }
 
-/// Gives the content of the snapshot file, when the storage holds it.
-async fn stored(files: &SnapshotFiles, inner: &InMemoryBlobStorage) -> Option<Vec<u8>> {
-    inner
-        .get_raw(
-            "test",
-            "test",
-            files.namespace.clone(),
-            Path::new(SNAPSHOT_PATH),
-        )
-        .await
-        .unwrap()
+/// Gives the content of the snapshot file, when the storage below the script holds it.
+async fn stored(inner: &SnapshotFiles) -> Option<Vec<u8>> {
+    inner.get("test", Path::new(SNAPSHOT_PATH)).await.unwrap()
 }
 
 #[test]
@@ -95,7 +84,7 @@ async fn a_publish_writes_the_staged_file() {
     let published = publish(&files, &staged(), &TaskTracker::new()).await;
 
     assert_eq!(
-        (published.is_ok(), stored(&files, &inner).await),
+        (published.is_ok(), stored(&inner).await),
         (true, Some(b"snapshot".to_vec()))
     );
 }
@@ -110,7 +99,7 @@ async fn a_publish_of_a_file_that_is_there_succeeds_and_keeps_the_file() {
     let second = publish(&files, &staged(), &tracker).await;
 
     assert_eq!(
-        (first.is_ok(), second.is_ok(), stored(&files, &inner).await),
+        (first.is_ok(), second.is_ok(), stored(&inner).await),
         (true, true, Some(b"snapshot".to_vec()))
     );
 }
@@ -126,7 +115,7 @@ async fn a_publish_whose_answer_is_lost_deletes_the_file_and_gives_the_error() {
     assert_eq!(
         (
             published.map_err(|error| error.to_string()),
-            stored(&files, &inner).await,
+            stored(&inner).await,
             storage.calls(),
         ),
         (
@@ -156,7 +145,7 @@ async fn a_publish_that_reaches_the_deadline_deletes_the_file_that_the_storage_w
             published
                 .as_ref()
                 .is_err_and(|error| reached_deadline(error.as_ref())),
-            stored(&files, &inner).await
+            stored(&inner).await
         ),
         (true, None)
     );
@@ -175,7 +164,7 @@ async fn a_publish_that_the_caller_drops_deletes_the_file_in_a_task_of_the_track
     let tracker = TaskTracker::new();
 
     let dropped = publish(&files, &staged(), &tracker).now_or_never();
-    let written_before_the_drop = stored(&files, &inner).await;
+    let written_before_the_drop = stored(&inner).await;
     storage.open_gate();
     tracker.close();
     let waited = tokio::time::timeout(LIMIT, tracker.wait()).await;
@@ -185,7 +174,7 @@ async fn a_publish_that_the_caller_drops_deletes_the_file_in_a_task_of_the_track
             dropped.is_none(),
             written_before_the_drop,
             waited.is_ok(),
-            stored(&files, &inner).await
+            stored(&inner).await
         ),
         (true, Some(b"snapshot".to_vec()), true, None)
     );
@@ -202,11 +191,7 @@ async fn a_publish_that_returns_keeps_the_file_when_the_tasks_of_the_tracker_end
     let waited = tokio::time::timeout(LIMIT, tracker.wait()).await;
 
     assert_eq!(
-        (
-            published.is_ok(),
-            waited.is_ok(),
-            stored(&files, &inner).await
-        ),
+        (published.is_ok(), waited.is_ok(), stored(&inner).await),
         (true, true, Some(b"snapshot".to_vec()))
     );
 }
