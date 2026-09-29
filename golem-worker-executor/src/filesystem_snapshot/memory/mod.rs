@@ -81,12 +81,6 @@ impl InMemorySnapshotStore {
     }
 }
 
-impl Default for InMemorySnapshotStore {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 /// Gives the snapshot with the name.
 fn found<'a>(snapshots: &'a [Stored], name: &SnapshotName) -> Option<&'a Stored> {
     snapshots.iter().find(|stored| stored.name == *name)
