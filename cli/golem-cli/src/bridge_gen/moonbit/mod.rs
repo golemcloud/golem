@@ -2929,10 +2929,10 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
             SchemaType::Url { .. } => format!("@runtime.as_url({val})"),
             SchemaType::Uuid { .. } => match self.mode {
                 MoonBitBridgeMode::ExternalRest => format!(
-                    "match {val} {{ @runtime.UuidValue(value) => value; other => raise @runtime.BridgeError(\"Expected UUID value, got \" + other.to_string()) }}"
+                    "match {val} {{ @runtime.UuidValue(value) => value; other => raise @runtime.BridgeError(\"Expected UUID value, got \" + repr(other)) }}"
                 ),
                 MoonBitBridgeMode::GuestWasmRpc => format!(
-                    "match {val} {{ Uuid(value) => value; other => raise @runtime.BridgeError(\"Expected UUID value, got \" + other.to_string()) }}"
+                    "match {val} {{ Uuid(value) => value; other => raise @runtime.BridgeError(\"Expected UUID value, got \" + repr(other)) }}"
                 ),
             },
             SchemaType::Datetime { .. } => format!("@runtime.as_datetime({val})"),
@@ -3960,6 +3960,7 @@ mod tests {
         assert!(client.contains(".encode(value))"));
         assert!(client.contains("@runtime.UuidValue(value)"));
         assert!(client.contains("@runtime.UuidValue(value) => value"));
+        assert!(client.contains("+ repr(other)"));
         assert!(!client.contains("@model."));
         assert!(!client.contains("@types."));
         assert!(!client.contains("trigger_exchange"));
