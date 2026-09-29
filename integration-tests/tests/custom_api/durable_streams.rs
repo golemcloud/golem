@@ -83,6 +83,27 @@ fn stream_path(method: &str, session: &str, slot: &str, delay_ms: u64) -> String
     )
 }
 
+fn native_string(value: impl Into<String>) -> Value {
+    serde_json::json!({"kind": "string", "value": value.into()})
+}
+
+fn native_constructor_id(value: impl Into<String>) -> Value {
+    serde_json::json!({
+        "kind": "record",
+        "value": {"fields": [native_string(value)]}
+    })
+}
+
+fn native_input_stream(provisional_ref: Uuid) -> Value {
+    serde_json::json!({
+        "kind": "record",
+        "value": {"fields": [{
+            "kind": "stream",
+            "value": {"provisionalRef": provisional_ref}
+        }]}
+    })
+}
+
 fn header(response: &reqwest::Response, name: &str) -> String {
     response
         .headers()
@@ -2274,13 +2295,11 @@ async fn websocket_input_is_readable_through_http(
             attempt_id: Uuid::new_v4(),
             config: Vec::new(),
             idempotency_key: session.clone(),
-            method_parameters: serde_json::json!({
-                "input": { "$stream": { "provisionalRef": input_reference } }
-            }),
+            method_parameters: native_input_stream(input_reference),
             selector: Box::new(InvocationSelector {
                 agent_type: "DurableStreamAgent".into(),
                 application: agent.application_name.clone(),
-                constructor_parameters: serde_json::json!({"id": format!("ds3-{session}")}),
+                constructor_parameters: native_constructor_id(format!("ds3-{session}")),
                 environment: agent.environment_name.clone(),
                 method: "echo".into(),
                 phantom_id: None,
@@ -2305,7 +2324,7 @@ async fn websocket_input_is_readable_through_http(
         &PublicClientMessage::InputStreamItem {
             channel: input_channel,
             sequence: DecimalU64(0),
-            value: serde_json::json!("ws-first"),
+            value: native_string("ws-first"),
             version: INVOCATION_SESSION_VERSION,
         },
     )
@@ -2339,7 +2358,7 @@ async fn websocket_input_is_readable_through_http(
         &PublicClientMessage::InputStreamItem {
             channel: input_channel,
             sequence: DecimalU64(1),
-            value: serde_json::json!("ws-last"),
+            value: native_string("ws-last"),
             version: INVOCATION_SESSION_VERSION,
         },
     )
@@ -2366,8 +2385,13 @@ async fn websocket_input_is_readable_through_http(
             _ => {}
         }
     }
+    let public_values = serde_json::json!([
+        native_string("ws-first"),
+        native_string("post-middle"),
+        native_string("ws-last")
+    ]);
+    assert_eq!(serde_json::json!(output), public_values);
     let values = serde_json::json!(["ws-first", "post-middle", "ws-last"]);
-    assert_eq!(serde_json::json!(output), values);
     for slot in ["input", "output"] {
         let path = stream_path("echo", &session, slot, 0);
         wait_for_closed(agent, &path).await?;
@@ -2507,13 +2531,11 @@ async fn input_slot_delete_is_guest_observable_and_tombstoned(
             attempt_id: Uuid::new_v4(),
             config: Vec::new(),
             idempotency_key: session.clone(),
-            method_parameters: serde_json::json!({
-                "input": { "$stream": { "provisionalRef": input_reference } }
-            }),
+            method_parameters: native_input_stream(input_reference),
             selector: Box::new(InvocationSelector {
                 agent_type: "DurableStreamAgent".into(),
                 application: agent.application_name.clone(),
-                constructor_parameters: serde_json::json!({"id": id}),
+                constructor_parameters: native_constructor_id(id.clone()),
                 environment: agent.environment_name.clone(),
                 method: "echo".into(),
                 phantom_id: None,
@@ -2537,7 +2559,7 @@ async fn input_slot_delete_is_guest_observable_and_tombstoned(
         &PublicClientMessage::InputStreamItem {
             channel: input_channel,
             sequence: DecimalU64(0),
-            value: serde_json::json!("kept"),
+            value: native_string("kept"),
             version: INVOCATION_SESSION_VERSION,
         },
     )

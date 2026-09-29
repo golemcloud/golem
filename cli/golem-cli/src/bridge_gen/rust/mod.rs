@@ -443,22 +443,18 @@ impl RustBridgeGenerator {
                     let __config_graph: crate::__golem_bridge_runtime::schema::SchemaGraph =
                         serde_json::from_str(#config_graph_json)
                             .map_err(|__e| crate::__golem_bridge_runtime::ClientError::InvocationFailed { message: format!("Failed to load config schema: {__e}") })?;
-                    let __public_config_json = golem_client::invocation_session::encode_generated_streamless_value(
-                        &__config_graph,
-                        &__config_value,
-                    ).map_err(|__e| crate::__golem_bridge_runtime::ClientError::InvocationFailed { message: format!("Failed to encode public config value: {__e}") })?;
-                    let __canonical_config_json = golem_common::schema::render::to_json_value(
+                    let __config_json = golem_common::schema::render::to_json_value(
                         &__config_graph,
                         &__config_graph.root,
                         &__config_value,
-                    ).map_err(|__e| crate::__golem_bridge_runtime::ClientError::InvocationFailed { message: format!("Failed to encode canonical config value: {__e}") })?;
+                    ).map_err(|__e| crate::__golem_bridge_runtime::ClientError::InvocationFailed { message: format!("Failed to render config value: {__e}") })?;
                     session_config.push(golem_common::model::invocation_session_public::PublicConfigEntry {
                         path: vec![#(#path_segments),*],
-                        value: __public_config_json,
+                        value: __config_json.clone(),
                     });
                     agent_config.push(golem_client::model::AgentConfigEntryDto {
                         path: vec![#(#path_segments),*],
-                        value: __canonical_config_json.into(),
+                        value: __config_json.into(),
                     });
                 }
             });
@@ -3913,6 +3909,11 @@ mod tests {
             Utf8PathBuf::from_path_buf(dir.path().join("alpha-agent-client")).unwrap();
         let mut agent_type = minimal_agent_type("AlphaAgent");
         agent_type.mode = AgentMode::Durable;
+        agent_type.config.push(AgentConfigDeclarationSchema {
+            source: AgentConfigSource::Local,
+            path: vec!["settings".to_string()],
+            value_type: SchemaType::option(SchemaType::string()),
+        });
         let mut generator = RustBridgeGenerator::new(agent_type, &target_path, true).unwrap();
 
         generator.generate().unwrap();
@@ -3956,6 +3957,10 @@ mod tests {
                 "missing external REST API shape {rest_shape}:\n{lib_rs}"
             );
         }
+        assert!(
+            lib_rs.contains("golem_common::schema::render::to_json_value"),
+            "external config must use the application-JSON renderer:\n{lib_rs}"
+        );
         assert!(!lib_rs.contains("golem_rust"));
     }
 

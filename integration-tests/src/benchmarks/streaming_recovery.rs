@@ -34,6 +34,8 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::{AgentId, IdempotencyKey, PromiseId};
 use golem_common::schema::FromSchema;
+#[cfg(test)]
+use golem_common::schema::{SchemaGraph, SchemaType};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::benchmark::storage_metrics::{
     StorageMetricsClient, StorageOperation, StorageSnapshot,
@@ -96,6 +98,14 @@ fn public_value<T: golem_common::schema::IntoSchema + ?Sized>(
 ) -> anyhow::Result<serde_json::Value> {
     let typed = golem_common::schema::try_into_typed_schema_value(value)?;
     encode_generated_streamless_value(typed.graph(), typed.value()).map_err(Into::into)
+}
+
+fn public_record(fields: impl IntoIterator<Item = serde_json::Value>) -> serde_json::Value {
+    serde_json::json!({"kind": "record", "value": {"fields": fields.into_iter().collect::<Vec<_>>()}})
+}
+
+fn public_u32(value: u32) -> serde_json::Value {
+    serde_json::json!({"kind": "u32", "value": value})
 }
 
 async fn phase<T>(
@@ -617,7 +627,7 @@ impl<const CASE: u8> StreamingRecovery<CASE> {
                 &iteration.environment,
                 &warm,
                 "benchmark_output",
-                serde_json::json!({ "length": 1, "domain": 17 }),
+                public_record([public_u32(1), public_u32(17)]),
                 PHASE,
             )
             .await?
@@ -636,7 +646,7 @@ impl<const CASE: u8> StreamingRecovery<CASE> {
                         &iteration.environment,
                         &agent,
                         "benchmark_output",
-                        serde_json::json!({ "length": length, "domain": 701 }),
+                        public_record([public_u32(length), public_u32(701)]),
                         PHASE,
                     )
                     .await?
@@ -673,7 +683,7 @@ impl<const CASE: u8> StreamingRecovery<CASE> {
                         &iteration.environment,
                         &agent,
                         "benchmark_output",
-                        serde_json::json!({ "length": 1, "domain": 23 }),
+                        public_record([public_u32(1), public_u32(23)]),
                         PHASE,
                     )
                     .await?
@@ -705,11 +715,11 @@ impl<const CASE: u8> StreamingRecovery<CASE> {
                         let domain = 701 + branch as u32 * 10_000;
                         (
                             "benchmark_gated_output",
-                            serde_json::json!({
-                                "length": n,
-                                "domain": domain,
-                                "gate": public_value(&left)?,
-                            }),
+                            public_record([
+                                public_u32(n),
+                                public_u32(domain),
+                                public_value(&left)?,
+                            ]),
                             vec![(domain, n)],
                         )
                     } else {
@@ -730,11 +740,11 @@ impl<const CASE: u8> StreamingRecovery<CASE> {
                             } else {
                                 "benchmark_gated_nested_siblings"
                             },
-                            serde_json::json!({
-                                "length": length,
-                                "left_gate": public_value(&left)?,
-                                "right_gate": public_value(&right)?,
-                            }),
+                            public_record([
+                                public_u32(length),
+                                public_value(&left)?,
+                                public_value(&right)?,
+                            ]),
                             vec![(1000, length), (100_000, length + 3)],
                         )
                     };
@@ -1042,7 +1052,9 @@ pub enum Topology {
 
 fn reference(value: &serde_json::Value) -> anyhow::Result<StreamId> {
     value
-        .get("$stream")
+        .as_object()
+        .filter(|value| value.get("kind").and_then(serde_json::Value::as_str) == Some("stream"))
+        .and_then(|value| value.get("value"))
         .and_then(|stream| stream.get("streamToken"))
         .and_then(serde_json::Value::as_str)
         .map(ToOwned::to_owned)
@@ -1050,12 +1062,22 @@ fn reference(value: &serde_json::Value) -> anyhow::Result<StreamId> {
 }
 
 pub fn roots(report: &SessionCheckpoint) -> anyhow::Result<Vec<StreamId>> {
-    let Some(PublicInvocationResult::Value { value }) = report.result.as_ref() else {
+    let Some(PublicInvocationResult::Value { value, .. }) = report.result.as_ref() else {
         anyhow::bail!("expected method result");
     };
-    match value {
-        serde_json::Value::Array(values) => values.iter().map(reference).collect(),
-        _ => Ok(vec![reference(value)?]),
+    if matches!(
+        value.get("kind").and_then(serde_json::Value::as_str),
+        Some("list" | "tuple")
+    ) {
+        value
+            .pointer("/value/elements")
+            .and_then(serde_json::Value::as_array)
+            .context("stream root collection omitted its elements")?
+            .iter()
+            .map(reference)
+            .collect()
+    } else {
+        Ok(vec![reference(value)?])
     }
 }
 
@@ -1082,11 +1104,18 @@ pub fn leaves(report: &SessionCheckpoint, topology: Topology) -> anyhow::Result<
                 "root must introduce exactly one labelled child"
             );
             let value = &items[0].1;
-            let actual = value.get("label").and_then(serde_json::Value::as_str);
+            let fields = value
+                .pointer("/value/fields")
+                .and_then(serde_json::Value::as_array)
+                .context("nested record omitted its fields")?;
+            let actual = fields
+                .first()
+                .and_then(|field| field.get("value"))
+                .and_then(serde_json::Value::as_str);
             ensure!(actual == Some(label), "nested branch label changed");
             reference(
-                value
-                    .get("values")
+                fields
+                    .get(1)
                     .context("nested record omitted child reference")?,
             )
         })
@@ -1108,7 +1137,7 @@ fn validate_values(
         .map(|(_, value)| value)
         .collect::<Vec<_>>();
     let expected = (0..length)
-        .map(|index| serde_json::json!(domain + 3 * index))
+        .map(|index| serde_json::json!({"kind": "u32", "value": domain + 3 * index}))
         .collect::<Vec<_>>();
     ensure!(
         values == expected.iter().collect::<Vec<_>>(),
@@ -1213,7 +1242,7 @@ mod tests {
             items: [701, 704, 707]
                 .into_iter()
                 .enumerate()
-                .map(|(sequence, value)| (sequence as u64, serde_json::json!(value)))
+                .map(|(sequence, value)| (sequence as u64, public_u32(value)))
                 .collect(),
             terminal: None,
         };
@@ -1228,14 +1257,24 @@ mod tests {
     }
 
     fn reference_value(token: &str) -> serde_json::Value {
-        serde_json::json!({ "$stream": { "streamToken": token } })
+        serde_json::json!({ "kind": "stream", "value": { "streamToken": token } })
     }
 
     #[test]
     fn nested_labels_and_stream_tokens_define_the_leaf_topology() {
         let mut report = SessionCheckpoint::default();
         report.result = Some(PublicInvocationResult::Value {
-            value: serde_json::json!([reference_value("root-left"), reference_value("root-right")]),
+            graph: SchemaGraph::anonymous(SchemaType::tuple(vec![
+                SchemaType::stream(None),
+                SchemaType::stream(None),
+            ])),
+            value: serde_json::json!({
+                "kind": "tuple",
+                "value": {"elements": [
+                    reference_value("root-left"),
+                    reference_value("root-right")
+                ]}
+            }),
         });
         for (root, child, label) in [
             ("root-left", "child-left", "left"),
@@ -1247,8 +1286,11 @@ mod tests {
                     items: vec![(
                         0,
                         serde_json::json!({
-                            "label": label,
-                            "values": reference_value(child)
+                            "kind": "record",
+                            "value": {"fields": [
+                                {"kind": "string", "value": label},
+                                reference_value(child)
+                            ]}
                         }),
                     )],
                     terminal: None,
@@ -1260,7 +1302,7 @@ mod tests {
             vec!["child-left", "child-right"]
         );
         let left = report.outputs.get_mut("root-left").unwrap();
-        left.items[0].1["label"] = serde_json::json!("right");
+        left.items[0].1["value"]["fields"][0]["value"] = serde_json::json!("right");
         assert!(leaves(&report, Topology::Nested).is_err());
     }
 }

@@ -41,6 +41,7 @@ export default {
   "golem-tools-middleware-ts": "Tool middleware in TypeScript",
   "golem-trigger-agent-ts": "Triggering a Fire-and-Forget Agent Invocation",
   "golem-add-ignite-ts": "Using Apache Ignite from a TypeScript Agent",
+  "golem-add-sqlite-ts": "Using Embedded SQLite from TypeScript",
   "golem-add-mysql-ts": "Using MySQL from a TypeScript Agent",
   "golem-add-postgres-ts": "Using PostgreSQL from a TypeScript Agent",
   "golem-add-webhook-ts": "Using Webhooks in a TypeScript Golem Agent",

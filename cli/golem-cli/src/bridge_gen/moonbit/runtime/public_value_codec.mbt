@@ -48,27 +48,31 @@ pub fn PublicValueCodec::encode(
   self : PublicValueCodec,
   value : SchemaValue,
 ) -> Json raise {
+  self.stream_elements.clear()
   let charge = Ref(0)
-  self.encode_at(
-    pvc_field(pvc_object(self.graph), "root"),
-    value,
-    0,
-    charge,
-    false,
+  ignore(
+    self.encode_at(
+      pvc_field(pvc_object(self.graph), "root"),
+      value,
+      0,
+      charge,
+      false,
+    ),
   )
+  schema_value_to_json(value)
 }
 
 ///|
-fn PublicValueCodec::encode_canonical(
+pub fn PublicValueCodec::encode_application(
   self : PublicValueCodec,
   value : SchemaValue,
 ) -> Json raise {
-  let charge = Ref(0)
+  self.stream_elements.clear()
   self.encode_at(
     pvc_field(pvc_object(self.graph), "root"),
     value,
     0,
-    charge,
+    Ref(0),
     true,
   )
 }
@@ -78,8 +82,19 @@ pub fn PublicValueCodec::decode(
   self : PublicValueCodec,
   value : Json,
 ) -> SchemaValue raise {
+  self.stream_elements.clear()
   let charge = Ref(0)
-  self.decode_at(pvc_field(pvc_object(self.graph), "root"), value, 0, charge)
+  let decoded = schema_value_from_json(value)
+  ignore(
+    self.encode_at(
+      pvc_field(pvc_object(self.graph), "root"),
+      decoded,
+      0,
+      charge,
+      false,
+    ),
+  )
+  decoded
 }
 
 ///|
@@ -121,36 +136,12 @@ fn pvc_string(value : Json) -> String raise {
 }
 
 ///|
-fn pvc_bool(value : Json) -> Bool raise {
-  match value {
-    Json::True => true
-    Json::False => false
-    _ => {
-      pvc_fail("expected a boolean")
-      false
-    }
-  }
-}
-
-///|
 fn pvc_field(object : Map[String, Json], name : String) -> Json raise {
   match object.get(name) {
     Some(value) => value
     None => {
       pvc_fail("missing field '\{name}'")
       Json::null()
-    }
-  }
-}
-
-///|
-fn pvc_exact(object : Map[String, Json], names : Array[String]) -> Unit raise {
-  if object.length() != names.length() {
-    pvc_fail("object members do not match the expected representation")
-  }
-  for name, _ in object {
-    if !names.any(fn(expected) { expected == name }) {
-      pvc_fail("unexpected object member '\{name}'")
     }
   }
 }
@@ -297,21 +288,6 @@ fn pvc_numeric_restrictions(
       pvc_fail("numeric value is outside restrictions")
     }
   }
-}
-
-///|
-fn pvc_quantity_from_json(value : Json) -> (Int64, Int, String) raise {
-  let o = pvc_object(value)
-  pvc_exact(o, ["mantissa", "scale", "unit"])
-  let mantissa = pvc_string(pvc_field(o, "mantissa"))
-  if !pvc_canonical_signed(mantissa) {
-    pvc_fail("quantity mantissa is not canonical")
-  }
-  (
-    @string.parse_int64(mantissa),
-    pvc_int(pvc_field(o, "scale"), -2147483648L, 2147483647L).to_int(),
-    pvc_string(pvc_field(o, "unit")),
-  )
 }
 
 ///|
@@ -539,6 +515,21 @@ fn pvc_datetime(value : String) -> Bool raise {
 }
 
 ///|
+fn pvc_canonical_datetime(value : String) -> String {
+  let without_z = value[0:value.length() - 1].to_owned()
+  match without_z.split(".").to_array() {
+    [whole] => whole.to_owned() + ".000000000Z"
+    [whole, fraction] =>
+      whole.to_owned() +
+      "." +
+      fraction.to_owned() +
+      "0".repeat(9 - fraction.length()) +
+      "Z"
+    _ => value
+  }
+}
+
+///|
 fn PublicValueCodec::resolved(
   self : PublicValueCodec,
   schema : Json,
@@ -627,39 +618,8 @@ fn pvc_u32(value : Json) -> UInt raise {
 }
 
 ///|
-fn pvc_float(value : Json) -> Double raise {
-  match value {
-    Json::Number(number, ..) => number
-    Json::Object(object) => {
-      pvc_exact(object, ["$float"])
-      match pvc_string(pvc_field(object, "$float")) {
-        "nan" => 0.0 / 0.0
-        "positive-infinity" => 1.0 / 0.0
-        "negative-infinity" => -1.0 / 0.0
-        _ => {
-          pvc_fail("unknown exceptional float tag")
-          0.0
-        }
-      }
-    }
-    _ => {
-      pvc_fail("expected a float")
-      0.0
-    }
-  }
-}
-
-///|
 fn pvc_encode_float(value : Double) -> Json {
-  if value.is_nan() {
-    pvc_obj([("$float", Json::string("nan"))])
-  } else if value.is_pos_inf() {
-    pvc_obj([("$float", Json::string("positive-infinity"))])
-  } else if value.is_neg_inf() {
-    pvc_obj([("$float", Json::string("negative-infinity"))])
-  } else {
-    Json::number(value, repr=value.to_string())
-  }
+  json_double(value)
 }
 
 ///|
@@ -687,63 +647,8 @@ fn pvc_mime(value : String) -> Bool {
 }
 
 ///|
-fn pvc_b64_value(c : Char) -> Int {
-  if c >= 'A' && c <= 'Z' {
-    c.to_int() - 'A'.to_int()
-  } else if c >= 'a' && c <= 'z' {
-    c.to_int() - 'a'.to_int() + 26
-  } else if c >= '0' && c <= '9' {
-    c.to_int() - '0'.to_int() + 52
-  } else if c == '-' {
-    62
-  } else if c == '_' {
-    63
-  } else {
-    -1
-  }
-}
-
-///|
-fn pvc_base64_decode(value : String) -> Bytes raise {
-  let chars = value.to_array()
-  if chars.length() % 4 == 1 {
-    pvc_fail("binary bytes are not canonical unpadded base64url")
-  }
-  let bytes : Array[Byte] = []
-  for i = 0; i < chars.length(); i = i + 4 {
-    let a = pvc_b64_value(chars[i])
-    let b = pvc_b64_value(chars[i + 1])
-    let c = if i + 2 < chars.length() {
-      pvc_b64_value(chars[i + 2])
-    } else {
-      -2
-    }
-    let d = if i + 3 < chars.length() {
-      pvc_b64_value(chars[i + 3])
-    } else {
-      -2
-    }
-    if a < 0 || b < 0 || c == -1 || d == -1 {
-      pvc_fail("binary bytes are not canonical unpadded base64url")
-    }
-    bytes.push(((a << 2) | (b >> 4)).to_byte())
-    if c >= 0 {
-      bytes.push((((b & 15) << 4) | (c >> 2)).to_byte())
-      if d >= 0 {
-        bytes.push((((c & 3) << 6) | d).to_byte())
-      }
-    }
-  }
-  let result = Bytes::from_array(bytes)
-  if pvc_base64_encode(result) != value {
-    pvc_fail("binary bytes are not canonical unpadded base64url")
-  }
-  result
-}
-
-///|
 fn pvc_base64_encode(bytes : Bytes) -> String {
-  let alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+  let alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
   let out = StringBuilder()
   for i = 0; i < bytes.length(); i = i + 3 {
     let a = bytes[i].to_int()
@@ -753,14 +658,31 @@ fn pvc_base64_encode(bytes : Bytes) -> String {
     let c = if have_c { bytes[i + 2].to_int() } else { 0 }
     out.write_char(alphabet.get_char(a >> 2).unwrap())
     out.write_char(alphabet.get_char(((a & 3) << 4) | (b >> 4)).unwrap())
-    if have_b {
-      out.write_char(alphabet.get_char(((b & 15) << 2) | (c >> 6)).unwrap())
-    }
-    if have_c {
-      out.write_char(alphabet.get_char(c & 63).unwrap())
-    }
+    out.write_char(
+      if have_b {
+        alphabet.get_char(((b & 15) << 2) | (c >> 6)).unwrap()
+      } else {
+        '='
+      },
+    )
+    out.write_char(
+      if have_c {
+        alphabet.get_char(c & 63).unwrap()
+      } else {
+        '='
+      },
+    )
   }
   out.to_string()
+}
+
+///|
+fn pvc_base64url_encode(bytes : Bytes) -> String {
+  pvc_base64_encode(bytes)
+  .replace(old="+", new="-")
+  .replace(old="/", new="_")
+  .trim_end(chars="=")
+  .to_owned()
 }
 
 ///|
@@ -800,558 +722,6 @@ fn pvc_binary_restrictions(
     }
     None => ()
   }
-}
-
-///|
-fn PublicValueCodec::decode_at(
-  self : PublicValueCodec,
-  raw_schema : Json,
-  json : Json,
-  depth : Int,
-  charge : Ref[Int],
-) -> SchemaValue raise {
-  if depth >= 64 {
-    pvc_fail("nesting exceeds 64 levels")
-  }
-  pvc_charge(charge, 1)
-  let (kind, schema) = pvc_schema(self.resolved(raw_schema))
-  match kind {
-    "bool" => {
-      pvc_charge(charge, 1)
-      BoolValue(pvc_bool(json))
-    }
-    "s8" => {
-      pvc_charge(charge, 1)
-      let v = pvc_int(json, -128L, 127L)
-      pvc_numeric_restrictions(schema, "signed", Some(v), None, None)
-      S8Value(v.to_int())
-    }
-    "s16" => {
-      pvc_charge(charge, 2)
-      let v = pvc_int(json, -32768L, 32767L)
-      pvc_numeric_restrictions(schema, "signed", Some(v), None, None)
-      S16Value(v.to_int())
-    }
-    "s32" => {
-      pvc_charge(charge, 4)
-      let v = pvc_int(json, -2147483648L, 2147483647L)
-      pvc_numeric_restrictions(schema, "signed", Some(v), None, None)
-      S32Value(v.to_int())
-    }
-    "s64" => {
-      let s = pvc_string(json)
-      if !pvc_canonical_signed(s) {
-        pvc_fail("s64 is not canonical")
-      }
-      pvc_charge(charge, 8)
-      let v = @string.parse_int64(s)
-      pvc_numeric_restrictions(schema, "signed", Some(v), None, None)
-      S64Value(v)
-    }
-    "u8" => {
-      pvc_charge(charge, 1)
-      let v = pvc_int(json, 0L, 255L)
-      pvc_numeric_restrictions(
-        schema,
-        "unsigned",
-        None,
-        Some(v.reinterpret_as_uint64()),
-        None,
-      )
-      U8Value(v.to_int())
-    }
-    "u16" => {
-      pvc_charge(charge, 2)
-      let v = pvc_int(json, 0L, 65535L)
-      pvc_numeric_restrictions(
-        schema,
-        "unsigned",
-        None,
-        Some(v.reinterpret_as_uint64()),
-        None,
-      )
-      U16Value(v.to_int())
-    }
-    "u32" => {
-      pvc_charge(charge, 4)
-      let v = pvc_u32(json)
-      pvc_numeric_restrictions(
-        schema,
-        "unsigned",
-        None,
-        Some(v.to_uint64()),
-        None,
-      )
-      U32Value(v)
-    }
-    "u64" => {
-      let s = pvc_string(json)
-      if !pvc_canonical_unsigned(s) {
-        pvc_fail("u64 is not canonical")
-      }
-      pvc_charge(charge, 8)
-      let v = @string.parse_uint64(s)
-      pvc_numeric_restrictions(schema, "unsigned", None, Some(v), None)
-      U64Value(v)
-    }
-    "f32" => {
-      let d = pvc_float(json)
-      let f = Float::from_double(d)
-      if d.is_inf() == false && f.is_inf() {
-        pvc_fail("f32 is out of range")
-      }
-      pvc_charge(charge, 4)
-      pvc_numeric_restrictions(schema, "float", None, None, Some(f.to_double()))
-      F32Value(f)
-    }
-    "f64" => {
-      pvc_charge(charge, 8)
-      let v = pvc_float(json)
-      pvc_numeric_restrictions(schema, "float", None, None, Some(v))
-      F64Value(v)
-    }
-    "char" => {
-      let s = pvc_string(json)
-      if s.char_length() != 1 {
-        pvc_fail("char must contain one Unicode scalar")
-      }
-      let c = s.get_char(0).unwrap()
-      pvc_charge(charge, pvc_utf8_len(s))
-      CharValue(c.to_int())
-    }
-    "string" => {
-      let s = pvc_string(json)
-      pvc_charge(charge, @utf8.encode(s).length())
-      StringValue(s)
-    }
-    "record" => self.decode_record(schema, json, depth, charge)
-    "variant" => self.decode_variant(schema, json, depth, charge)
-    "enum" => {
-      let name = pvc_string(json)
-      let cases = pvc_array(pvc_field(schema, "cases")).map(pvc_string)
-      let mut found = -1
-      for i, x in cases {
-        if x == name {
-          found = i
-        }
-      }
-      if found < 0 {
-        pvc_fail("unknown enum case")
-      }
-      pvc_charge(charge, @utf8.encode(name).length())
-      EnumValue(found)
-    }
-    "flags" => self.decode_flags(schema, json, charge)
-    "tuple" => self.decode_tuple(schema, json, depth, charge)
-    "list" => self.decode_list(schema, json, depth, charge, false)
-    "fixed-list" => self.decode_list(schema, json, depth, charge, true)
-    "map" => self.decode_map(schema, json, depth, charge)
-    "option" => self.decode_option(schema, json, depth, charge)
-    "result" => self.decode_result(schema, json, depth, charge)
-    "text" => {
-      let o = pvc_object(json)
-      if o.length() < 1 || o.length() > 2 {
-        pvc_fail("invalid text object")
-      }
-      let text = pvc_string(pvc_field(o, "text"))
-      let language = match o.get("language") {
-        Some(v) => {
-          let s = pvc_string(v)
-          if !pvc_language(s) {
-            pvc_fail("language is not valid BCP-47 syntax")
-          }
-          Some(s)
-        }
-        None => None
-      }
-      match language {
-        Some(_) => pvc_exact(o, ["text", "language"])
-        None => pvc_exact(o, ["text"])
-      }
-      pvc_text_restrictions(schema, text, language)
-      let extra = match language {
-        Some(x) => @utf8.encode(x).length()
-        None => 0
-      }
-      pvc_charge(charge, @utf8.encode(text).length() + extra)
-      TextValue(text, language)
-    }
-    "binary" => {
-      let o = pvc_object(json)
-      if o.length() < 1 || o.length() > 2 {
-        pvc_fail("invalid binary object")
-      }
-      for k, _ in o {
-        if k != "bytes" && k != "mimeType" {
-          pvc_fail("invalid binary member")
-        }
-      }
-      let bytes = pvc_base64_decode(pvc_string(pvc_field(o, "bytes")))
-      let mime = match o.get("mimeType") {
-        Some(v) => {
-          let s = pvc_string(v)
-          if !pvc_mime(s) {
-            pvc_fail("invalid MIME type")
-          }
-          Some(s)
-        }
-        None => None
-      }
-      pvc_binary_restrictions(schema, bytes, mime)
-      let extra = match mime {
-        Some(x) => pvc_utf8_len(x)
-        None => 0
-      }
-      pvc_charge(charge, bytes.length() + extra)
-      BinaryValue(bytes, mime)
-    }
-    "path" => {
-      let s = pvc_string(json)
-      if s.is_empty() {
-        pvc_fail("path must not be empty")
-      }
-      pvc_path_restrictions(schema, s)
-      pvc_charge(charge, @utf8.encode(s).length())
-      PathValue(s)
-    }
-    "url" => {
-      let s = pvc_string(json)
-      if s.is_empty() {
-        pvc_fail("URL must not be empty")
-      }
-      pvc_url_restrictions(schema, s)
-      pvc_charge(charge, @utf8.encode(s).length())
-      UrlValue(s)
-    }
-    "datetime" => {
-      let s = pvc_string(json)
-      if !pvc_datetime(s) {
-        pvc_fail("datetime is not canonical RFC3339 UTC")
-      }
-      pvc_charge(charge, pvc_utf8_len(s))
-      DatetimeValue(s)
-    }
-    "duration" => {
-      let o = pvc_object(json)
-      pvc_exact(o, ["nanoseconds"])
-      let s = pvc_string(pvc_field(o, "nanoseconds"))
-      if !pvc_canonical_signed(s) {
-        pvc_fail("duration is not canonical")
-      }
-      pvc_charge(charge, 8)
-      DurationValue(@string.parse_int64(s))
-    }
-    "quantity" => {
-      let (mantissa, scale, unit) = pvc_quantity_from_json(json)
-      pvc_quantity_restrictions(schema, mantissa, scale, unit)
-      pvc_charge(charge, 12 + pvc_utf8_len(unit))
-      QuantityValue(mantissa, scale, unit)
-    }
-    "union" => self.decode_union(schema, json, depth, charge)
-    "stream" => self.decode_stream(schema, json, charge)
-    "secret" | "quota-token" | "permission-card" | "future" => {
-      pvc_fail("unsupported value kind '\{kind}'")
-      BoolValue(false)
-    }
-    _ => {
-      pvc_fail("unknown schema kind '\{kind}'")
-      BoolValue(false)
-    }
-  }
-}
-
-///|
-fn PublicValueCodec::decode_record(
-  self : PublicValueCodec,
-  schema : Map[String, Json],
-  json : Json,
-  depth : Int,
-  charge : Ref[Int],
-) -> SchemaValue raise {
-  let fields = pvc_array(pvc_field(schema, "fields"))
-  let object = pvc_object(json)
-  pvc_collection(charge, object.length())
-  if object.length() != fields.length() {
-    pvc_fail("record members must exactly match schema")
-  }
-  let values : Array[SchemaValue] = []
-  for field in fields {
-    let f = pvc_object(field)
-    let name = pvc_string(pvc_field(f, "name"))
-    let value = match object.get(name) {
-      Some(v) => v
-      None => {
-        pvc_fail("missing record field '\{name}'")
-        Json::null()
-      }
-    }
-    pvc_charge(charge, @utf8.encode(name).length())
-    values.push(self.decode_at(pvc_field(f, "body"), value, depth + 1, charge))
-  }
-  for name, _ in object {
-    if !fields.any(f => pvc_string(pvc_field(pvc_object(f), "name")) == name) {
-      pvc_fail("unknown record field '\{name}'")
-    }
-  }
-  RecordValue(values)
-}
-
-///|
-fn PublicValueCodec::decode_variant(
-  self : PublicValueCodec,
-  schema : Map[String, Json],
-  json : Json,
-  depth : Int,
-  charge : Ref[Int],
-) -> SchemaValue raise {
-  let o = pvc_object(json)
-  if o.length() < 1 || o.length() > 2 {
-    pvc_fail("invalid variant object")
-  }
-  let name = pvc_string(pvc_field(o, "$case"))
-  let cases = pvc_array(pvc_field(schema, "cases"))
-  let mut index = -1
-  let mut selected = Json::null()
-  for i, c in cases {
-    let co = pvc_object(c)
-    if pvc_string(pvc_field(co, "name")) == name {
-      index = i
-      selected = c
-    }
-  }
-  if index < 0 {
-    pvc_fail("unknown variant case")
-  }
-  let case = pvc_object(selected)
-  let payload_schema = case.get("payload")
-  let payload_json = o.get("value")
-  if (payload_schema is Some(_)) != (payload_json is Some(_)) {
-    pvc_fail("variant payload presence mismatch")
-  }
-  if payload_schema is Some(_) {
-    pvc_exact(o, ["$case", "value"])
-  } else {
-    pvc_exact(o, ["$case"])
-  }
-  pvc_charge(charge, pvc_utf8_len(name))
-  VariantValue(
-    index,
-    match (payload_schema, payload_json) {
-      (Some(s), Some(v)) => Some(self.decode_at(s, v, depth + 1, charge))
-      _ => None
-    },
-  )
-}
-
-///|
-fn PublicValueCodec::decode_flags(
-  _self : PublicValueCodec,
-  schema : Map[String, Json],
-  json : Json,
-  charge : Ref[Int],
-) -> SchemaValue raise {
-  let names = pvc_array(pvc_field(schema, "flags")).map(pvc_string)
-  let selected = pvc_array(json)
-  pvc_collection(charge, selected.length())
-  let bits = names.map(fn(_) { false })
-  let mut previous = -1
-  for item in selected {
-    let name = pvc_string(item)
-    let mut index = -1
-    for i, flag in names {
-      if flag == name {
-        index = i
-      }
-    }
-    if index < 0 || index <= previous {
-      pvc_fail("flags must be unique and in declaration order")
-    }
-    bits[index] = true
-    previous = index
-    pvc_charge(charge, pvc_utf8_len(name))
-  }
-  FlagsValue(bits)
-}
-
-///|
-fn PublicValueCodec::decode_tuple(
-  self : PublicValueCodec,
-  schema : Map[String, Json],
-  json : Json,
-  depth : Int,
-  charge : Ref[Int],
-) -> SchemaValue raise {
-  let types = pvc_array(pvc_field(schema, "elements"))
-  let values = pvc_array(json)
-  pvc_collection(charge, values.length())
-  if values.length() != types.length() {
-    pvc_fail("tuple arity mismatch")
-  }
-  TupleValue(
-    values.mapi((i, v) => self.decode_at(types[i], v, depth + 1, charge)),
-  )
-}
-
-///|
-fn PublicValueCodec::decode_list(
-  self : PublicValueCodec,
-  schema : Map[String, Json],
-  json : Json,
-  depth : Int,
-  charge : Ref[Int],
-  fixed : Bool,
-) -> SchemaValue raise {
-  let values = pvc_array(json)
-  pvc_collection(charge, values.length())
-  if fixed {
-    let length = pvc_u32(pvc_field(schema, "length")).reinterpret_as_int()
-    if values.length() != length {
-      pvc_fail("fixed-list length mismatch")
-    }
-  }
-  let decoded = values.map(v => {
-    self.decode_at(pvc_field(schema, "element"), v, depth + 1, charge)
-  })
-  if fixed {
-    FixedListValue(decoded)
-  } else {
-    ListValue(decoded)
-  }
-}
-
-///|
-fn PublicValueCodec::decode_map(
-  self : PublicValueCodec,
-  schema : Map[String, Json],
-  json : Json,
-  depth : Int,
-  charge : Ref[Int],
-) -> SchemaValue raise {
-  let entries = pvc_array(json)
-  pvc_collection(charge, entries.length())
-  MapValue(
-    entries.map(entry => {
-      let pair = pvc_array(entry)
-      if pair.length() != 2 {
-        pvc_fail("map entry must have two elements")
-      }
-      {
-        key: self.decode_at(
-          pvc_field(schema, "key"),
-          pair[0],
-          depth + 1,
-          charge,
-        ),
-        value: self.decode_at(
-          pvc_field(schema, "value"),
-          pair[1],
-          depth + 1,
-          charge,
-        ),
-      }
-    }),
-  )
-}
-
-///|
-fn PublicValueCodec::decode_option(
-  self : PublicValueCodec,
-  schema : Map[String, Json],
-  json : Json,
-  depth : Int,
-  charge : Ref[Int],
-) -> SchemaValue raise {
-  let o = pvc_object(json)
-  let tag = pvc_string(pvc_field(o, "$option"))
-  match tag {
-    "none" => {
-      pvc_exact(o, ["$option"])
-      pvc_charge(charge, 4)
-      OptionValue(None)
-    }
-    "some" => {
-      pvc_exact(o, ["$option", "value"])
-      pvc_charge(charge, 4)
-      OptionValue(
-        Some(
-          self.decode_at(
-            pvc_field(schema, "inner"),
-            pvc_field(o, "value"),
-            depth + 1,
-            charge,
-          ),
-        ),
-      )
-    }
-    _ => {
-      pvc_fail("invalid option tag")
-      OptionValue(None)
-    }
-  }
-}
-
-///|
-fn PublicValueCodec::decode_result(
-  self : PublicValueCodec,
-  schema : Map[String, Json],
-  json : Json,
-  depth : Int,
-  charge : Ref[Int],
-) -> SchemaValue raise {
-  let o = pvc_object(json)
-  let tag = pvc_string(pvc_field(o, "$result"))
-  let spec = pvc_object(pvc_field(schema, "spec"))
-  let arm = match tag {
-    "ok" => spec.get("ok")
-    "err" => spec.get("err")
-    _ => {
-      pvc_fail("invalid result tag")
-      None
-    }
-  }
-  if (arm is Some(_)) != (o.get("value") is Some(_)) {
-    pvc_fail("result payload presence mismatch")
-  }
-  if o.length() != (if arm is Some(_) { 2 } else { 1 }) {
-    pvc_fail("invalid result members")
-  }
-  let value = match (arm, o.get("value")) {
-    (Some(s), Some(v)) => Some(self.decode_at(s, v, depth + 1, charge))
-    _ => None
-  }
-  pvc_charge(charge, pvc_utf8_len(tag))
-  ResultValue(if tag == "ok" { ResultOk(value) } else { ResultErr(value) })
-}
-
-///|
-fn PublicValueCodec::decode_union(
-  self : PublicValueCodec,
-  schema : Map[String, Json],
-  json : Json,
-  depth : Int,
-  charge : Ref[Int],
-) -> SchemaValue raise {
-  let o = pvc_object(json)
-  pvc_exact(o, ["$union", "value"])
-  let tag = pvc_string(pvc_field(o, "$union"))
-  let spec = pvc_object(pvc_field(schema, "spec"))
-  let branches = pvc_array(pvc_field(spec, "branches"))
-  let mut body = Json::null()
-  let mut found = false
-  for branch in branches {
-    let b = pvc_object(branch)
-    if pvc_string(pvc_field(b, "tag")) == tag {
-      body = pvc_field(b, "body")
-      found = true
-    }
-  }
-  if !found {
-    pvc_fail("unknown union branch")
-  }
-  let decoded = self.decode_at(body, pvc_field(o, "value"), depth + 1, charge)
-  pvc_discriminator(self, body, decoded, branches, tag)
-  pvc_charge(charge, pvc_utf8_len(tag))
-  UnionValue(tag, decoded)
 }
 
 ///|
@@ -1442,45 +812,6 @@ fn pvc_discriminator(
 }
 
 ///|
-fn PublicValueCodec::decode_stream(
-  self : PublicValueCodec,
-  schema : Map[String, Json],
-  json : Json,
-  charge : Ref[Int],
-) -> SchemaValue raise {
-  let outer = pvc_object(json)
-  pvc_exact(outer, ["$stream"])
-  let inner = pvc_object(pvc_field(outer, "$stream"))
-  if inner.length() != 1 {
-    pvc_fail("stream must have exactly one identity")
-  }
-  match (inner.get("provisionalRef"), inner.get("streamToken")) {
-    (Some(v), None) => {
-      let s = pvc_string(v)
-      if !pvc_uuid_v4(s) {
-        pvc_fail("invalid provisional stream reference")
-      }
-      self.stream_elements[s] = self.element_codec(pvc_field(schema, "inner"))
-      pvc_charge(charge, 16)
-      StreamReferenceValue(Some(s), None)
-    }
-    (None, Some(v)) => {
-      let s = pvc_string(v)
-      if s.is_empty() || pvc_utf8_len(s) > 8192 {
-        pvc_fail("invalid stream token length")
-      }
-      self.stream_elements[s] = self.element_codec(pvc_field(schema, "inner"))
-      pvc_charge(charge, pvc_utf8_len(s))
-      StreamReferenceValue(None, Some(s))
-    }
-    _ => {
-      pvc_fail("invalid stream identity")
-      StreamReferenceValue(None, None)
-    }
-  }
-}
-
-///|
 fn pvc_uuid_v4(value : String) -> Bool {
   if value.length() != 36 ||
     value[8] != '-' ||
@@ -1509,7 +840,7 @@ fn PublicValueCodec::encode_at(
   value : SchemaValue,
   depth : Int,
   charge : Ref[Int],
-  canonical : Bool,
+  application : Bool,
 ) -> Json raise {
   if depth >= 64 {
     pvc_fail("nesting exceeds 64 levels")
@@ -1592,16 +923,16 @@ fn PublicValueCodec::encode_at(
       Json::string(v.to_string())
     }
     ("f32", F32Value(v)) => {
-      if canonical && (v.is_nan() || v.is_inf()) {
-        pvc_fail("canonical configuration floats must be finite")
+      if application && (v.is_nan() || v.is_inf()) {
+        pvc_fail("exceptional floats have no application JSON representation")
       }
       pvc_numeric_restrictions(schema, "float", None, None, Some(v.to_double()))
       pvc_charge(charge, 4)
       pvc_encode_float(v.to_double())
     }
     ("f64", F64Value(v)) => {
-      if canonical && (v.is_nan() || v.is_inf()) {
-        pvc_fail("canonical configuration floats must be finite")
+      if application && (v.is_nan() || v.is_inf()) {
+        pvc_fail("exceptional floats have no application JSON representation")
       }
       pvc_numeric_restrictions(schema, "float", None, None, Some(v))
       pvc_charge(charge, 8)
@@ -1617,9 +948,9 @@ fn PublicValueCodec::encode_at(
       Json::string(v)
     }
     ("record", RecordValue(v)) =>
-      self.encode_record(schema, v, depth, charge, canonical)
+      self.encode_record(schema, v, depth, charge, application)
     ("variant", VariantValue(i, v)) =>
-      self.encode_variant(schema, i, v, depth, charge, canonical)
+      self.encode_variant(schema, i, v, depth, charge, application)
     ("enum", EnumValue(i)) => {
       let cases = pvc_array(pvc_field(schema, "cases"))
       if i < 0 || i >= cases.length() {
@@ -1651,7 +982,7 @@ fn PublicValueCodec::encode_at(
         v,
         depth,
         charge,
-        canonical,
+        application,
       )
     ("list", ListValue(v)) =>
       self.encode_homogeneous(
@@ -1659,7 +990,7 @@ fn PublicValueCodec::encode_at(
         v,
         depth,
         charge,
-        canonical,
+        application,
       )
     ("fixed-list", FixedListValue(v)) => {
       if v.length() != pvc_u32(pvc_field(schema, "length")).reinterpret_as_int() {
@@ -1670,7 +1001,7 @@ fn PublicValueCodec::encode_at(
         v,
         depth,
         charge,
-        canonical,
+        application,
       )
     }
     ("map", MapValue(v)) => {
@@ -1683,14 +1014,14 @@ fn PublicValueCodec::encode_at(
               e.key,
               depth + 1,
               charge,
-              canonical,
+              application,
             ),
             self.encode_at(
               pvc_field(schema, "value"),
               e.value,
               depth + 1,
               charge,
-              canonical,
+              application,
             ),
           ])
         }),
@@ -1698,38 +1029,23 @@ fn PublicValueCodec::encode_at(
     }
     ("option", OptionValue(v)) =>
       match v {
-        None if canonical => Json::null()
         None => {
           pvc_charge(charge, 4)
-          pvc_obj([("$option", Json::string("none"))])
+          Json::null()
         }
-        Some(x) if canonical =>
+        Some(x) => {
+          pvc_charge(charge, 4)
           self.encode_at(
             pvc_field(schema, "inner"),
             x,
             depth + 1,
             charge,
-            canonical,
+            application,
           )
-        Some(x) => {
-          pvc_charge(charge, 4)
-          pvc_obj([
-            ("$option", Json::string("some")),
-            (
-              "value",
-              self.encode_at(
-                pvc_field(schema, "inner"),
-                x,
-                depth + 1,
-                charge,
-                canonical,
-              ),
-            ),
-          ])
         }
       }
     ("result", ResultValue(v)) =>
-      self.encode_result(schema, v, depth, charge, canonical)
+      self.encode_result(schema, v, depth, charge, application)
     ("text", TextValue(text, language)) => {
       match language {
         Some(x) =>
@@ -1762,7 +1078,7 @@ fn PublicValueCodec::encode_at(
         None => 0
       }
       pvc_charge(charge, bytes.length() + extra)
-      let f = [("bytes", Json::string(pvc_base64_encode(bytes)))]
+      let f = [("bytes", Json::string(pvc_base64url_encode(bytes)))]
       match mime {
         Some(x) => f.push(("mimeType", Json::string(x)))
         None => ()
@@ -1790,7 +1106,7 @@ fn PublicValueCodec::encode_at(
         pvc_fail("datetime is not canonical RFC3339 UTC")
       }
       pvc_charge(charge, pvc_utf8_len(v))
-      Json::string(v)
+      Json::string(if application { pvc_canonical_datetime(v) } else { v })
     }
     ("duration", DurationValue(v)) => {
       pvc_charge(charge, 8)
@@ -1822,38 +1138,45 @@ fn PublicValueCodec::encode_at(
         pvc_fail("unknown union branch")
       }
       pvc_discriminator(self, ty, body, branches, tag)
-      let encoded = self.encode_at(ty, body, depth + 1, charge, canonical)
-      if canonical {
-        encoded
-      } else {
-        pvc_charge(charge, pvc_utf8_len(tag))
-        pvc_obj([("$union", Json::string(tag)), ("value", encoded)])
-      }
+      pvc_charge(charge, pvc_utf8_len(tag))
+      self.encode_at(ty, body, depth + 1, charge, application)
     }
     ("stream", StreamReferenceValue(provisional, token)) => {
-      if canonical {
-        pvc_fail("streams are unsupported in canonical configuration values")
+      if application {
+        pvc_fail("stream values have no application JSON representation")
       }
       match (provisional, token) {
         (Some(v), None) => {
           if !pvc_uuid_v4(v) {
             pvc_fail("invalid provisional stream reference")
           }
+          if self.stream_elements.contains(v) {
+            pvc_fail("stream reference appears more than once")
+          }
           self.stream_elements[v] = self.element_codec(
             pvc_field(schema, "inner"),
           )
           pvc_charge(charge, 16)
-          pvc_obj([("$stream", pvc_obj([("provisionalRef", Json::string(v))]))])
+          pvc_obj([
+            ("kind", Json::string("stream")),
+            ("value", pvc_obj([("provisionalRef", Json::string(v))])),
+          ])
         }
         (None, Some(v)) => {
           if v.is_empty() || pvc_utf8_len(v) > 8192 {
             pvc_fail("invalid stream token")
           }
+          if self.stream_elements.contains(v) {
+            pvc_fail("stream reference appears more than once")
+          }
           self.stream_elements[v] = self.element_codec(
             pvc_field(schema, "inner"),
           )
           pvc_charge(charge, pvc_utf8_len(v))
-          pvc_obj([("$stream", pvc_obj([("streamToken", Json::string(v))]))])
+          pvc_obj([
+            ("kind", Json::string("stream")),
+            ("value", pvc_obj([("streamToken", Json::string(v))])),
+          ])
         }
         _ => {
           pvc_fail("stream must have exactly one identity")
@@ -1879,7 +1202,7 @@ fn PublicValueCodec::encode_record(
   values : Array[SchemaValue],
   depth : Int,
   charge : Ref[Int],
-  canonical : Bool,
+  application : Bool,
 ) -> Json raise {
   let fields = pvc_array(pvc_field(schema, "fields"))
   if fields.length() != values.length() {
@@ -1896,7 +1219,7 @@ fn PublicValueCodec::encode_record(
       values[i],
       depth + 1,
       charge,
-      canonical,
+      application,
     )
   }
   Json::object(out)
@@ -1910,7 +1233,7 @@ fn PublicValueCodec::encode_variant(
   payload : SchemaValue?,
   depth : Int,
   charge : Ref[Int],
-  canonical : Bool,
+  application : Bool,
 ) -> Json raise {
   let cases = pvc_array(pvc_field(schema, "cases"))
   if index < 0 || index >= cases.length() {
@@ -1924,20 +1247,9 @@ fn PublicValueCodec::encode_variant(
     pvc_fail("variant payload mismatch")
   }
   match (ty, payload) {
-    (Some(t), Some(v)) => {
-      let encoded = self.encode_at(t, v, depth + 1, charge, canonical)
-      if canonical {
-        pvc_obj([(name, encoded)])
-      } else {
-        pvc_obj([("$case", Json::string(name)), ("value", encoded)])
-      }
-    }
-    (None, None) if canonical => Json::string(name)
-    (None, None) => pvc_obj([("$case", Json::string(name))])
-    _ => {
-      pvc_fail("variant payload mismatch")
-      Json::null()
-    }
+    (Some(t), Some(v)) =>
+      pvc_obj([(name, self.encode_at(t, v, depth + 1, charge, application))])
+    _ => Json::string(name)
   }
 }
 
@@ -1948,16 +1260,16 @@ fn PublicValueCodec::encode_sequence(
   values : Array[SchemaValue],
   depth : Int,
   charge : Ref[Int],
-  canonical : Bool,
+  application : Bool,
 ) -> Json raise {
   if types.length() != values.length() {
     pvc_fail("tuple arity mismatch")
   }
   pvc_collection(charge, values.length())
   Json::array(
-    values.mapi((i, v) =>
-      self.encode_at(types[i], v, depth + 1, charge, canonical)
-    ),
+    values.mapi((i, v) => {
+      self.encode_at(types[i], v, depth + 1, charge, application)
+    }),
   )
 }
 
@@ -1968,11 +1280,11 @@ fn PublicValueCodec::encode_homogeneous(
   values : Array[SchemaValue],
   depth : Int,
   charge : Ref[Int],
-  canonical : Bool,
+  application : Bool,
 ) -> Json raise {
   pvc_collection(charge, values.length())
   Json::array(
-    values.map(v => self.encode_at(ty, v, depth + 1, charge, canonical)),
+    values.map(v => self.encode_at(ty, v, depth + 1, charge, application)),
   )
 }
 
@@ -1983,7 +1295,7 @@ fn PublicValueCodec::encode_result(
   result : SchemaResult,
   depth : Int,
   charge : Ref[Int],
-  canonical : Bool,
+  application : Bool,
 ) -> Json raise {
   let spec = pvc_object(pvc_field(schema, "spec"))
   let (tag, value) = match result {
@@ -1996,19 +1308,8 @@ fn PublicValueCodec::encode_result(
   }
   pvc_charge(charge, pvc_utf8_len(tag))
   match (ty, value) {
-    (Some(t), Some(v)) => {
-      let encoded = self.encode_at(t, v, depth + 1, charge, canonical)
-      if canonical {
-        pvc_obj([(tag, encoded)])
-      } else {
-        pvc_obj([("$result", Json::string(tag)), ("value", encoded)])
-      }
-    }
-    (None, None) if canonical => pvc_obj([(tag, Json::null())])
-    (None, None) => pvc_obj([("$result", Json::string(tag))])
-    _ => {
-      pvc_fail("result payload mismatch")
-      Json::null()
-    }
+    (Some(t), Some(v)) =>
+      pvc_obj([(tag, self.encode_at(t, v, depth + 1, charge, application))])
+    _ => pvc_obj([(tag, Json::null())])
   }
 }

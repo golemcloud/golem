@@ -26,6 +26,7 @@ export default {
   rpc: "Agent to Agent Communication",
   "durable-stream-forks": "Durable Stream Forks",
   "agent-filesystem": "Agent Filesystem",
+  "embedded-databases": "Embedded Databases",
   ai: "Using AI Providers",
   rdbms: "Using Relational Databases",
   forking: "Forking Agents",

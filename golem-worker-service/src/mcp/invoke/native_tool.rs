@@ -104,7 +104,7 @@ pub async fn invoke(
     let key = IdempotencyKey::fresh();
     let auth = invocation_auth(deployment, export, &key);
     let input = PublicTypedValue {
-        schema: input.graph().clone(),
+        graph: input.graph().clone(),
         value: encode_public_schema_value(
             input.graph(),
             &input.graph().root,

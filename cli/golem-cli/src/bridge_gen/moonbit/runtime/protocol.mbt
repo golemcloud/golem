@@ -21,8 +21,7 @@
 /// A single agent configuration override entry of a create-agent request.
 pub(all) struct AgentConfigEntry {
   path : Array[String]
-  value : SchemaValue
-  codec : PublicValueCodec
+  value : Json
 }
 
 ///|
@@ -73,12 +72,9 @@ pub(all) struct ResolvedAgent {
 }
 
 ///|
-fn encode_config_entry(entry : AgentConfigEntry) -> Json raise {
+fn encode_config_entry(entry : AgentConfigEntry) -> Json {
   let path : Array[Json] = entry.path.map(Json::string)
-  obj([
-    ("path", Json::array(path)),
-    ("value", entry.codec.encode_canonical(entry.value)),
-  ])
+  obj([("path", Json::array(path)), ("value", entry.value)])
 }
 
 ///|
@@ -89,7 +85,7 @@ fn encode_create_agent_request(
   parameters : SchemaValue,
   phantom_id : String?,
   config : Array[AgentConfigEntry],
-) -> Json raise {
+) -> Json {
   let fields : Array[(String, Json)] = [
     ("appName", Json::string(app_name)),
     ("envName", Json::string(env_name)),
@@ -117,7 +113,7 @@ fn encode_agent_invocation_request(
   mode : String,
   schedule_at : String?,
   idempotency_key : String?,
-) -> Json raise {
+) -> Json {
   let fields : Array[(String, Json)] = [
     ("appName", Json::string(app_name)),
     ("envName", Json::string(env_name)),
@@ -166,10 +162,10 @@ fn decode_agent_invocation_result(json : Json) -> AgentInvocationResult raise {
   let result = match field_opt(m, "result") {
     Some(typed) => {
       let typed_m = expect_object(typed)
-      match field_opt(typed_m, "value") {
-        Some(value) => Some(schema_value_from_json(value))
-        None => None
-      }
+      let graph = get_field(typed_m, "graph")
+      ignore(expect_object(graph))
+      let codec = public_value_codec(graph.stringify())
+      Some(codec.decode(get_field(typed_m, "value")))
     }
     None => None
   }

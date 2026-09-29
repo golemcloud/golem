@@ -45,6 +45,7 @@ use golem_common::model::invocation_session_public::{
     PublicServerMessage, PublicStreamDirection, PublicStreamMapping, PublicTypedValue,
     decode_binary_message, decode_client_text, encode_binary_message, encode_text,
 };
+use golem_common::schema::agent::reachable_defs;
 use golem_common::schema::fingerprint::{
     SchemaFingerprintV1, resolve_stream_element_schema_v1, schema_fingerprint_v1,
 };
@@ -2161,7 +2162,11 @@ fn translate_result(
                     Ok(reference)
                 },
             )?;
-            PublicInvocationResult::Value { value }
+            let graph = SchemaGraph {
+                defs: reachable_defs(&graph, &schema),
+                root: schema,
+            };
+            PublicInvocationResult::Value { graph, value }
         }
         Some(invocation_session_result::Result::ToolResult(value)) => {
             use golem_api_grpc::proto::golem::worker::{
@@ -2195,11 +2200,8 @@ fn translate_result(
                         Ok(reference)
                     },
                 )?;
-                Ok::<_, PublicSchemaValueError>(PublicTypedValue {
-                    schema: graph,
-                    value,
-                })
-                .map_err(AdapterError::from)
+                Ok::<_, PublicSchemaValueError>(PublicTypedValue { graph, value })
+                    .map_err(AdapterError::from)
             };
             match value
                 .result
@@ -3188,7 +3190,7 @@ mod tests {
         PublicClientMessage::InputStreamItem {
             channel: 1,
             sequence: DecimalU64(sequence),
-            value: serde_json::json!(value),
+            value: serde_json::json!({"kind": "u8", "value": value}),
             version: 1,
         }
     }
@@ -4115,14 +4117,17 @@ mod tests {
         else {
             panic!("stream result translated to the wrong public message")
         };
-        let PublicInvocationResult::Value { value } = *result else {
+        let PublicInvocationResult::Value { graph, value } = *result else {
             panic!("stream result translated to the wrong public value")
         };
+        assert_eq!(graph.root, SchemaType::stream(Some(SchemaType::u8())));
+        assert!(graph.defs.is_empty());
         assert_eq!(mappings.len(), 1);
         assert_eq!(mappings[0].direction, PublicStreamDirection::Output);
         assert_eq!(mappings[0].channel, 1);
+        assert_eq!(value["kind"], "stream");
         assert_eq!(
-            value["$stream"]["streamToken"],
+            value["value"]["streamToken"],
             serde_json::Value::String(mappings[0].stream_token.clone())
         );
         assert!(matches!(

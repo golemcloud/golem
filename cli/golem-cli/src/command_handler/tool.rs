@@ -791,7 +791,10 @@ fn public_typed_value(input: Option<ExternalTypedSchemaValue>) -> anyhow::Result
         ))
         },
     )?;
-    Ok(PublicTypedValue { schema, value })
+    Ok(PublicTypedValue {
+        graph: schema,
+        value,
+    })
 }
 
 fn process_stdin_reader() -> Pin<Box<dyn AsyncRead + Send>> {
@@ -864,14 +867,20 @@ mod tests {
             },
         );
         let public = public_typed_value(Some(value.try_into().unwrap())).unwrap();
-        assert_eq!(public.schema, graph);
+        assert_eq!(public.graph, graph);
         assert_eq!(
             public.value,
-            serde_json::json!({"mode": "marker-echo", "count": "18446744073709551615"})
+            serde_json::json!({
+                "kind": "record",
+                "value": {"fields": [
+                    {"kind": "string", "value": "marker-echo"},
+                    {"kind": "u64", "value": "18446744073709551615"}
+                ]}
+            })
         );
         assert_eq!(
             public_typed_value(None).unwrap().value,
-            serde_json::json!({})
+            serde_json::json!({"kind": "record", "value": {"fields": []}})
         );
     }
 
