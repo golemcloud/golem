@@ -149,7 +149,7 @@ fn retryable(text: &str) -> SnapshotStoreError {
 impl FilesystemSnapshotStore for ScriptedStore {
     async fn save(
         &self,
-        agent: &SnapshotScope,
+        agent: &AgentSnapshots,
         name: &SnapshotName,
         tree: &Path,
         parent: Option<(&SnapshotName, ChangeDetection)>,
@@ -191,7 +191,7 @@ impl FilesystemSnapshotStore for ScriptedStore {
 
     async fn restore(
         &self,
-        agent: &SnapshotScope,
+        agent: &AgentSnapshots,
         name: &SnapshotName,
         into: &Path,
     ) -> Result<SnapshotInfo, SnapshotStoreError> {
@@ -212,7 +212,7 @@ impl FilesystemSnapshotStore for ScriptedStore {
 
     async fn stat(
         &self,
-        agent: &SnapshotScope,
+        agent: &AgentSnapshots,
         name: &SnapshotName,
     ) -> Result<Option<SnapshotInfo>, SnapshotStoreError> {
         self.memory.stat(agent, name).await
@@ -220,7 +220,7 @@ impl FilesystemSnapshotStore for ScriptedStore {
 
     async fn list(
         &self,
-        agent: &SnapshotScope,
+        agent: &AgentSnapshots,
     ) -> Result<Box<[(SnapshotName, SnapshotInfo)]>, SnapshotStoreError> {
         let times = self.times.lock().unwrap().clone();
         Ok(self
@@ -243,7 +243,7 @@ impl FilesystemSnapshotStore for ScriptedStore {
 
     async fn delete(
         &self,
-        agent: &SnapshotScope,
+        agent: &AgentSnapshots,
         name: &SnapshotName,
     ) -> Result<(), SnapshotStoreError> {
         let gate = self.delete_gate.lock().unwrap().clone();
@@ -256,19 +256,19 @@ impl FilesystemSnapshotStore for ScriptedStore {
         self.memory.delete(agent, name).await
     }
 
-    async fn delete_scope(&self, agent: &SnapshotScope) -> Result<(), SnapshotStoreError> {
+    async fn delete_all(&self, agent: &AgentSnapshots) -> Result<(), SnapshotStoreError> {
         let _count = self.enter();
         self.all_deletes.fetch_add(1, Ordering::SeqCst);
         if self.all_deletes_fail.load(Ordering::SeqCst) {
             return Err(retryable("the agent delete failed"));
         }
-        self.memory.delete_scope(agent).await
+        self.memory.delete_all(agent).await
     }
 
     async fn copy_scope(
         &self,
-        from: &SnapshotScope,
-        to: &SnapshotScope,
+        from: &AgentSnapshots,
+        to: &AgentSnapshots,
     ) -> Result<(), SnapshotStoreError> {
         self.memory.copy_scope(from, to).await
     }
@@ -351,7 +351,7 @@ impl AgentFilesystemSnapshots {
     /// Admits a job of `kind` without the wait of a manual update.
     async fn admit(
         &self,
-        agent: &SnapshotScope,
+        agent: &AgentSnapshots,
         kind: SnapshotKind,
     ) -> Result<Admission, SnapshotSkip> {
         match &self.core {
@@ -363,7 +363,7 @@ impl AgentFilesystemSnapshots {
     }
 
     /// Whether no job runs for `agent`.
-    fn is_free(&self, agent: &SnapshotScope) -> bool {
+    fn is_free(&self, agent: &AgentSnapshots) -> bool {
         self.core
             .as_ref()
             .is_none_or(|core| core.registry.read(|state| rules::is_free(state, agent)))
@@ -416,8 +416,8 @@ fn service(
     )
 }
 
-fn agent_snapshots(name: &str) -> SnapshotScope {
-    SnapshotScope::agent(&OwnedAgentId::new(
+fn agent_snapshots(name: &str) -> AgentSnapshots {
+    AgentSnapshots::agent(&OwnedAgentId::new(
         EnvironmentId::new(),
         &AgentId {
             component_id: ComponentId::new(),
@@ -444,7 +444,7 @@ async fn eventually(condition: impl Fn() -> bool) {
 }
 
 /// Waits until no job runs for `agent`, and fails the test after [`PATIENCE`].
-async fn ended(snapshots: &AgentFilesystemSnapshots, agent: &SnapshotScope) {
+async fn ended(snapshots: &AgentFilesystemSnapshots, agent: &AgentSnapshots) {
     if let Some(core) = &snapshots.core {
         assert!(
             tokio::time::timeout(PATIENCE, core.registry.until_agent_free(agent))
@@ -1079,7 +1079,7 @@ fn the_decision_of_a_job_carries_its_outcome_before_the_job_ends() {
 /// A service whose save waits at a gate, with a periodic job of `agent` that saves now. Gives the
 /// store, the service, the gate and the name of the job.
 async fn with_a_save_held(
-    agent: &SnapshotScope,
+    agent: &AgentSnapshots,
     outcome: ConfirmOutcome,
 ) -> (
     Arc<ScriptedStore>,
@@ -1663,7 +1663,7 @@ fn a_parent_reaches_the_store_with_its_detection() {
 /// uploaded first.
 async fn update_uploads_with_retention(
     snapshots: &AgentFilesystemSnapshots,
-    agent: &SnapshotScope,
+    agent: &AgentSnapshots,
 ) -> (String, Vec<String>) {
     let discarded = Arc::new(AtomicUsize::new(0));
     let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
@@ -1775,7 +1775,7 @@ async fn with_a_delete_held(
 ) -> (
     Arc<ScriptedStore>,
     AgentFilesystemSnapshots,
-    SnapshotScope,
+    AgentSnapshots,
     Arc<Gate>,
 ) {
     let store = Arc::new(ScriptedStore::default());

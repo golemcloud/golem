@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::durable_host::tool::operation::OwnerFailureWinner;
-use crate::filesystem_snapshot::SnapshotScope;
+use crate::filesystem_snapshot::AgentSnapshots;
 use crate::model::{LookupResult, TrapType};
 use crate::sandbox_filesystem::{SandboxFilesystem, SandboxFilesystemAdapter};
 use crate::services::agent_filesystem::{
@@ -3064,7 +3064,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 .await;
         }
         let snapshots = self.parent.agent_filesystem_snapshots();
-        let agent_snapshots = SnapshotScope::agent(&self.owned_agent_id);
+        let agent_snapshots = AgentSnapshots::agent(&self.owned_agent_id);
         let (snapshot, filesystem_snapshot, retention) = match update_snapshot(
             &mut UpdateHost {
                 invocation: self,
@@ -3405,7 +3405,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             return CommandOutcome::Continue;
         }
         let snapshots = self.parent.agent_filesystem_snapshots();
-        let agent_snapshots = SnapshotScope::agent(&self.owned_agent_id);
+        let agent_snapshots = AgentSnapshots::agent(&self.owned_agent_id);
         match periodic_snapshot(&mut PeriodicHost(self), &snapshots, &agent_snapshots).await {
             PeriodicResult::Continue => CommandOutcome::Continue,
             PeriodicResult::Guest(outcome) => outcome,

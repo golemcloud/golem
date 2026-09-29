@@ -14,7 +14,7 @@
 
 //! The restore that a start gives to the lifecycle.
 
-use crate::filesystem_snapshot::{FilesystemSnapshotStore, SnapshotScope, SnapshotStoreError};
+use crate::filesystem_snapshot::{AgentSnapshots, FilesystemSnapshotStore, SnapshotStoreError};
 use crate::services::agent_filesystem::{RestoreError, RestoreTree};
 use golem_common::model::oplog::FilesystemSnapshotName;
 use std::path::Path;
@@ -26,7 +26,7 @@ use tokio::sync::Semaphore;
 /// lifecycle calls it, and gives the slot back when it ends, with success or with an error.
 pub(crate) struct StoreRestore {
     store: Arc<dyn FilesystemSnapshotStore>,
-    agent: SnapshotScope,
+    agent: AgentSnapshots,
     name: FilesystemSnapshotName,
     restores: Arc<Semaphore>,
 }
@@ -34,7 +34,7 @@ pub(crate) struct StoreRestore {
 impl StoreRestore {
     pub(super) fn new(
         store: Arc<dyn FilesystemSnapshotStore>,
-        agent: SnapshotScope,
+        agent: AgentSnapshots,
         name: FilesystemSnapshotName,
         restores: Arc<Semaphore>,
     ) -> Self {

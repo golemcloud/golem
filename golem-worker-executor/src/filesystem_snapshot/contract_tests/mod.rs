@@ -40,7 +40,7 @@
 pub(super) mod fixture;
 
 use super::{
-    ChangeDetection, FilesystemSnapshotStore, SnapshotInfo, SnapshotName, SnapshotScope,
+    AgentSnapshots, ChangeDetection, FilesystemSnapshotStore, SnapshotInfo, SnapshotName,
     SnapshotStoreError,
 };
 use fixture::{
@@ -194,8 +194,8 @@ pub(crate) fn register(
 }
 
 /// Gives a scope that no other test uses.
-pub(super) fn new_scope() -> SnapshotScope {
-    SnapshotScope::agent(&OwnedAgentId::new(
+pub(super) fn new_scope() -> AgentSnapshots {
+    AgentSnapshots::agent(&OwnedAgentId::new(
         EnvironmentId(Uuid::new_v4()),
         &AgentId {
             component_id: ComponentId(Uuid::new_v4()),
@@ -219,7 +219,7 @@ fn new_tree(entries: &[(&str, Spec)]) -> Scratch {
 /// info that the restore gave.
 async fn restored(
     store: &dyn FilesystemSnapshotStore,
-    scope: &SnapshotScope,
+    scope: &AgentSnapshots,
     name: &SnapshotName,
 ) -> Result<(Vec<Listed>, SnapshotInfo), SnapshotStoreError> {
     let into = Scratch::new();
@@ -230,14 +230,14 @@ async fn restored(
 /// Gives the listing of the restored snapshot, or panics with the error of the restore.
 async fn restored_listing(
     store: &dyn FilesystemSnapshotStore,
-    scope: &SnapshotScope,
+    scope: &AgentSnapshots,
     name: &SnapshotName,
 ) -> Vec<Listed> {
     restored(store, scope, name).await.unwrap().0
 }
 
 /// Gives the names of the listing of a scope, in the order of the listing.
-async fn listed_names(store: &dyn FilesystemSnapshotStore, scope: &SnapshotScope) -> Vec<String> {
+async fn listed_names(store: &dyn FilesystemSnapshotStore, scope: &AgentSnapshots) -> Vec<String> {
     store
         .list(scope)
         .await
@@ -814,7 +814,7 @@ async fn a_deleted_scope_is_as_unused_as_before_its_first_save(open: OpenStore) 
         .await
         .unwrap();
 
-    store.delete_scope(&scope).await.unwrap();
+    store.delete_all(&scope).await.unwrap();
     let names = listed_names(&*store, &scope).await;
     let stat = store.stat(&scope, &name("p-1")).await.unwrap();
     let restore = restored(&*store, &scope, &name("p-2")).await;
@@ -849,9 +849,9 @@ async fn delete_scope_is_idempotent_and_keeps_other_scopes(open: OpenStore) {
         .unwrap();
 
     let results = [
-        store.delete_scope(&new_scope()).await.is_ok(),
-        store.delete_scope(&deleted).await.is_ok(),
-        store.delete_scope(&deleted).await.is_ok(),
+        store.delete_all(&new_scope()).await.is_ok(),
+        store.delete_all(&deleted).await.is_ok(),
+        store.delete_all(&deleted).await.is_ok(),
     ];
 
     assert_eq!(
@@ -931,7 +931,7 @@ async fn copied_scopes_are_independent(open: OpenStore) {
         .unwrap();
     let target_after_source_delete = restored_listing(&*store, &to, &name("p-1")).await;
     let source_names = listed_names(&*store, &from).await;
-    store.delete_scope(&to).await.unwrap();
+    store.delete_all(&to).await.unwrap();
 
     assert_eq!(
         (

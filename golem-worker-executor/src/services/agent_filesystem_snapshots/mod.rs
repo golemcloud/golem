@@ -33,8 +33,8 @@ mod rules;
 mod tests;
 
 use crate::filesystem_snapshot::{
-    ChangeDetection, FilesystemSnapshotStore, InvalidSnapshotName, SnapshotInfo, SnapshotName,
-    SnapshotScope, SnapshotStoreError,
+    AgentSnapshots, ChangeDetection, FilesystemSnapshotStore, InvalidSnapshotName, SnapshotInfo,
+    SnapshotName, SnapshotStoreError,
 };
 use crate::sandbox_filesystem::FilesystemVolume;
 use crate::services::agent_filesystem::FilesystemCapture;
@@ -404,7 +404,7 @@ impl AgentFilesystemSnapshots {
     /// admission frees the agent and writes nothing durable.
     pub(crate) async fn admit_periodic(
         &self,
-        agent: &SnapshotScope,
+        agent: &AgentSnapshots,
     ) -> Result<Admission, SnapshotSkip> {
         let core = self.core.as_ref().ok_or(SnapshotSkip::Disabled)?;
         Core::admit(core, agent, SnapshotKind::Periodic)
@@ -418,7 +418,7 @@ impl AgentFilesystemSnapshots {
     /// `interrupt` reports ends it with [`UpdateRefusal::Interrupted`].
     pub(crate) async fn admit_update(
         &self,
-        agent: &SnapshotScope,
+        agent: &AgentSnapshots,
         interrupt: watch::Receiver<bool>,
     ) -> Result<Admission, UpdateRefusal> {
         let core = self
@@ -454,7 +454,7 @@ impl AgentFilesystemSnapshots {
     /// slot and no lock while it waits.
     pub(crate) async fn prepare_start(
         &self,
-        agent: &SnapshotScope,
+        agent: &AgentSnapshots,
         name: &FilesystemSnapshotName,
         interrupt: watch::Receiver<bool>,
     ) -> StartCheck {
@@ -508,7 +508,7 @@ impl AgentFilesystemSnapshots {
     /// the store for nothing and waits for nothing.
     pub(crate) fn restore(
         &self,
-        agent: &SnapshotScope,
+        agent: &AgentSnapshots,
         name: &FilesystemSnapshotName,
     ) -> Result<StoreRestore, SnapshotsDisabled> {
         let core = self.core.as_ref().ok_or(SnapshotsDisabled)?;
@@ -526,7 +526,7 @@ impl AgentFilesystemSnapshots {
     #[allow(dead_code)]
     pub(crate) fn delete_snapshots(
         &self,
-        agent: &SnapshotScope,
+        agent: &AgentSnapshots,
         names: Box<[FilesystemSnapshotName]>,
     ) {
         if let Some(core) = &self.core {
@@ -542,7 +542,7 @@ impl AgentFilesystemSnapshots {
     /// Until the delete ends, with success or with an error, an admission of the agent gives
     /// [`SnapshotSkip::DeletingAllSnapshots`].
     #[allow(dead_code)]
-    pub(crate) fn delete_all_snapshots(&self, agent: &SnapshotScope) {
+    pub(crate) fn delete_all_snapshots(&self, agent: &AgentSnapshots) {
         if let Some(core) = &self.core {
             let (ticket, stop) = DeleteAllTicket::delete_all_snapshots(&core.registry, agent);
             if let Some(stop) = stop {
@@ -556,8 +556,8 @@ impl AgentFilesystemSnapshots {
     #[allow(dead_code)]
     pub(crate) async fn copy_all_snapshots(
         &self,
-        from: &SnapshotScope,
-        to: &SnapshotScope,
+        from: &AgentSnapshots,
+        to: &AgentSnapshots,
     ) -> Result<(), SnapshotStoreError> {
         match &self.core {
             Some(core) => core.store.copy_scope(from, to).await,
@@ -581,7 +581,7 @@ impl Core {
     /// for the agent.
     async fn admit(
         core: &Arc<Self>,
-        agent: &SnapshotScope,
+        agent: &AgentSnapshots,
         kind: SnapshotKind,
     ) -> Result<Admission, rules::Refusal> {
         let room = core.room.has_room().await;

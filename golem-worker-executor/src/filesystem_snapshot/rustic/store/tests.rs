@@ -35,7 +35,7 @@ use crate::filesystem_snapshot::contract_tests::fixture::{
 };
 use crate::filesystem_snapshot::contract_tests::{self, OpenStore, new_scope};
 use crate::filesystem_snapshot::{
-    ChangeDetection, FilesystemSnapshotStore, SnapshotInfo, SnapshotName, SnapshotScope,
+    AgentSnapshots, ChangeDetection, FilesystemSnapshotStore, SnapshotInfo, SnapshotName,
     SnapshotStoreError,
 };
 use crate::services::golem_config::FilesystemSnapshotStoreConfig;
@@ -126,7 +126,7 @@ fn fixture_tree() -> Scratch {
 /// Restores the name into a new directory, and gives the listing of the directory.
 async fn restored_listing(
     store: &RusticSnapshotStore,
-    scope: &SnapshotScope,
+    scope: &AgentSnapshots,
     name: &SnapshotName,
 ) -> Result<Vec<Listed>, SnapshotStoreError> {
     let into = Scratch::new();
@@ -134,7 +134,7 @@ async fn restored_listing(
     Ok(listing(into.path()))
 }
 
-async fn listed_names(store: &RusticSnapshotStore, scope: &SnapshotScope) -> Vec<String> {
+async fn listed_names(store: &RusticSnapshotStore, scope: &AgentSnapshots) -> Vec<String> {
     store
         .list(scope)
         .await
@@ -162,7 +162,7 @@ async fn blobs(
     paths
 }
 
-async fn ledger<S: BlobStorage + 'static>(storage: &Arc<S>, scope: &SnapshotScope) -> PruneLedger {
+async fn ledger<S: BlobStorage + 'static>(storage: &Arc<S>, scope: &AgentSnapshots) -> PruneLedger {
     read_ledger(&SnapshotFiles {
         storage: storage.clone(),
         namespace: scope.0.clone(),
@@ -175,7 +175,7 @@ async fn ledger<S: BlobStorage + 'static>(storage: &Arc<S>, scope: &SnapshotScop
 }
 
 /// Gives the sum of the bytes in the names of the records of freed bytes of the scope.
-async fn freed<S: BlobStorage + 'static>(storage: &Arc<S>, scope: &SnapshotScope) -> u64 {
+async fn freed<S: BlobStorage + 'static>(storage: &Arc<S>, scope: &AgentSnapshots) -> u64 {
     let listed = storage
         .list_blobs_below(
             "test",
@@ -847,7 +847,7 @@ fn data_listings(calls: &[(&'static str, String)]) -> usize {
 /// record of one freed byte.
 async fn set_last_prune<S: BlobStorage + 'static>(
     storage: &Arc<S>,
-    scope: &SnapshotScope,
+    scope: &AgentSnapshots,
     last_prune: golem_common::model::Timestamp,
 ) {
     storage
@@ -876,7 +876,7 @@ async fn set_last_prune<S: BlobStorage + 'static>(
 /// which is more than the grace period of each test and the margin for clock skew.
 async fn age_ledger<S: BlobStorage + 'static>(
     storage: &Arc<S>,
-    scope: &SnapshotScope,
+    scope: &AgentSnapshots,
     ledger: &PruneLedger,
 ) {
     let back = u64::try_from(CLOCK_SKEW_MARGIN.as_millis()).unwrap() + 2 * 3_600_000;
@@ -898,7 +898,7 @@ async fn age_ledger<S: BlobStorage + 'static>(
 /// Writes a ledger entry with the name.
 async fn put_ledger_entry<S: BlobStorage + 'static>(
     storage: &Arc<S>,
-    scope: &SnapshotScope,
+    scope: &AgentSnapshots,
     name: &str,
 ) {
     storage
@@ -1002,7 +1002,7 @@ fn prunes(calls: &[(&'static str, String)]) -> usize {
 }
 
 /// Saves a tree of one file with the content under each name.
-async fn save_each(store: &RusticSnapshotStore, scope: &SnapshotScope, names: &[&str]) {
+async fn save_each(store: &RusticSnapshotStore, scope: &AgentSnapshots, names: &[&str]) {
     futures::stream::iter(names)
         .for_each(|text| async move {
             let tree = one_file_tree(text);
@@ -1218,7 +1218,7 @@ async fn a_prune_deletes_the_older_ledger_entries_and_keeps_a_newer_one() {
 }
 
 /// Gives the time of the newest marker of the claims of the scope.
-async fn claim_time(storage: &ScriptedBlobStorage, scope: &SnapshotScope) -> Option<u64> {
+async fn claim_time(storage: &ScriptedBlobStorage, scope: &AgentSnapshots) -> Option<u64> {
     blobs(storage, &scope.0, "golem/prune-claims/")
         .await
         .iter()
@@ -1233,7 +1233,7 @@ async fn claim_time(storage: &ScriptedBlobStorage, scope: &SnapshotScope) -> Opt
 
 /// Moves each marker of the claims of the scope back by two hours and the margin, so no marker
 /// holds its ledger.
-async fn age_claims<S: BlobStorage + 'static>(storage: &Arc<S>, scope: &SnapshotScope) {
+async fn age_claims<S: BlobStorage + 'static>(storage: &Arc<S>, scope: &AgentSnapshots) {
     let stale = golem_common::model::Timestamp::now_utc()
         .to_millis()
         .saturating_sub(2 * 3_600_000 + 2 * 60_000);
@@ -1500,7 +1500,7 @@ fn is_backend_call(op_label: &str) -> bool {
 }
 
 /// Gives the entries of the claims of the scope.
-async fn claim_entries(storage: &ScriptedBlobStorage, scope: &SnapshotScope) -> Vec<ClaimEntry> {
+async fn claim_entries(storage: &ScriptedBlobStorage, scope: &AgentSnapshots) -> Vec<ClaimEntry> {
     blobs(storage, &scope.0, "golem/prune-claims/")
         .await
         .iter()
@@ -2160,7 +2160,7 @@ fn is_forget(op_label: &str, path: &Path) -> bool {
 }
 
 /// Gives the path of each record of freed bytes of the scope.
-async fn records(storage: &InMemoryBlobStorage, scope: &SnapshotScope) -> Vec<String> {
+async fn records(storage: &InMemoryBlobStorage, scope: &AgentSnapshots) -> Vec<String> {
     blobs(storage, &scope.0, "golem/prune-freed/").await
 }
 
@@ -2850,7 +2850,7 @@ fn final_markers(calls: &[(&'static str, String)]) -> usize {
 }
 
 /// Gives the number of markers of the claims of the scope.
-async fn markers(storage: &ScriptedBlobStorage, scope: &SnapshotScope) -> usize {
+async fn markers(storage: &ScriptedBlobStorage, scope: &AgentSnapshots) -> usize {
     claim_entries(storage, scope)
         .await
         .iter()
@@ -3436,7 +3436,7 @@ async fn a_deleted_scope_holds_no_blob() {
     store.delete(&scope, &name("p-1")).await.unwrap();
     let before = blobs(&*storage, &scope.0, "").await;
 
-    store.delete_scope(&scope).await.unwrap();
+    store.delete_all(&scope).await.unwrap();
 
     assert_eq!(
         (
@@ -3572,7 +3572,7 @@ async fn shut_down_waits_for_a_blob_call_of_the_store_that_is_not_polled() {
         policy(LONG_DEADLINE, NEVER, Duration::ZERO),
     );
     let scope = new_scope();
-    let deleting = store.delete_scope(&scope);
+    let deleting = store.delete_all(&scope);
     tokio::pin!(deleting);
     let pending = futures::poll!(&mut deleting).is_pending();
 
@@ -4038,7 +4038,7 @@ fn holding_index_reads(
 /// through a store that prunes at once. The prune deletes the index file of `p-2`.
 async fn scope_with_a_prune_to_come(
     shared: &Arc<InMemoryBlobStorage>,
-) -> (SnapshotScope, Arc<RusticSnapshotStore>, Scratch) {
+) -> (AgentSnapshots, Arc<RusticSnapshotStore>, Scratch) {
     let pruning = store(
         shared.clone(),
         policy(LONG_DEADLINE, ALWAYS, Duration::ZERO),
@@ -4299,7 +4299,7 @@ async fn delete_scope_and_copy_scope_after_shut_down_give_storage() {
         .unwrap();
     store.shut_down().await;
 
-    let deleted = store.delete_scope(&scope).await;
+    let deleted = store.delete_all(&scope).await;
     let copied = store.copy_scope(&scope, &other).await;
 
     assert!(
@@ -4465,7 +4465,7 @@ async fn a_dropped_operation_stops_its_blocking_work() {
 /// Gives the snapshot files of the scope that the bridge reads, on a blocking thread.
 async fn snapshot_files(
     storage: Arc<dyn BlobStorage>,
-    scope: &SnapshotScope,
+    scope: &AgentSnapshots,
 ) -> Vec<rustic_core::repofile::SnapshotFile> {
     let namespace = scope.0.clone();
     tokio::task::spawn_blocking(move || {
@@ -5461,7 +5461,7 @@ const DROP_REPEATS: usize = 300;
 const SWEEP_CASES: u32 = 1000;
 
 /// Saves the two snapshots that each case deletes, in a scope that each case copies.
-async fn prepared_scope() -> (Arc<InMemoryBlobStorage>, SnapshotScope) {
+async fn prepared_scope() -> (Arc<InMemoryBlobStorage>, AgentSnapshots) {
     let shared = Arc::new(InMemoryBlobStorage::new());
     let prepared = new_scope();
     save_each(

@@ -5381,7 +5381,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             return;
         };
         let agent_snapshots =
-            crate::filesystem_snapshot::SnapshotScope::agent(&self.owned_agent_id);
+            crate::filesystem_snapshot::AgentSnapshots::agent(&self.owned_agent_id);
         if self
             .agent_filesystem_snapshots()
             .prepare_start(&agent_snapshots, &name, self.terminal_interrupt())
@@ -11131,7 +11131,7 @@ impl RunningWorker {
         ) {
             filesystem_snapshots::BaselineStep::Ready { kind, restore } => {
                 let agent_snapshots =
-                    crate::filesystem_snapshot::SnapshotScope::agent(&parent.owned_agent_id);
+                    crate::filesystem_snapshot::AgentSnapshots::agent(&parent.owned_agent_id);
                 let restore = match restore {
                     Some(name) => Some(filesystem_snapshots::StartRestore::Store(
                         snapshots.restore(&agent_snapshots, &name).map_err(|_| {

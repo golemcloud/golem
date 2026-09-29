@@ -33,7 +33,7 @@ use crate::filesystem_snapshot::contract_tests::fixture::{
     Scratch, Spec, fixture, listing, write_tree,
 };
 use crate::filesystem_snapshot::contract_tests::new_scope;
-use crate::filesystem_snapshot::{SnapshotName, SnapshotScope};
+use crate::filesystem_snapshot::{AgentSnapshots, SnapshotName};
 use crate::services::golem_config::DEFAULT_FILESYSTEM_SNAPSHOT_STORAGE_CALL_DEADLINE as STORAGE_CALL_DEADLINE;
 use anyhow::Context;
 use async_trait::async_trait;
@@ -70,7 +70,7 @@ fn key() -> RepositoryKey {
     RepositoryKey::new(std::array::from_fn(|index| index as u8))
 }
 
-fn repository(storage: &Arc<InMemoryBlobStorage>, scope: &SnapshotScope) -> Repository {
+fn repository(storage: &Arc<InMemoryBlobStorage>, scope: &AgentSnapshots) -> Repository {
     Repository::new(storage.clone(), scope.clone(), key(), STORAGE_CALL_DEADLINE)
 }
 
@@ -82,7 +82,7 @@ fn fixture_tree() -> Scratch {
 }
 
 /// Gives the path of each blob of the scope, in the order of the paths.
-async fn stored_paths(storage: &InMemoryBlobStorage, scope: &SnapshotScope) -> Vec<String> {
+async fn stored_paths(storage: &InMemoryBlobStorage, scope: &AgentSnapshots) -> Vec<String> {
     let mut paths = storage
         .list_blobs_below("test", "test", scope.0.clone(), Path::new(""))
         .await
@@ -95,7 +95,7 @@ async fn stored_paths(storage: &InMemoryBlobStorage, scope: &SnapshotScope) -> V
 }
 
 /// Gives the path of each pack of the scope, in the order of the paths.
-async fn pack_paths(storage: &InMemoryBlobStorage, scope: &SnapshotScope) -> Vec<String> {
+async fn pack_paths(storage: &InMemoryBlobStorage, scope: &AgentSnapshots) -> Vec<String> {
     stored_paths(storage, scope)
         .await
         .into_iter()
@@ -121,7 +121,7 @@ fn one_file_tree(file: &'static str, content: &str) -> Scratch {
 }
 
 /// Gives the id in hex of each pack of data blobs in the repository of the scope.
-async fn data_packs(storage: &Arc<InMemoryBlobStorage>, scope: &SnapshotScope) -> Box<[Box<str>]> {
+async fn data_packs(storage: &Arc<InMemoryBlobStorage>, scope: &AgentSnapshots) -> Box<[Box<str>]> {
     with_existing_repository(
         storage.clone(),
         scope,
@@ -143,7 +143,7 @@ async fn data_packs(storage: &Arc<InMemoryBlobStorage>, scope: &SnapshotScope) -
 }
 
 /// Gives the id in hex of each pack of tree blobs in the repository of the scope.
-async fn tree_packs(storage: &Arc<InMemoryBlobStorage>, scope: &SnapshotScope) -> Box<[Box<str>]> {
+async fn tree_packs(storage: &Arc<InMemoryBlobStorage>, scope: &AgentSnapshots) -> Box<[Box<str>]> {
     with_existing_repository(
         storage.clone(),
         scope,
@@ -192,7 +192,7 @@ fn many_directories_tree(count: usize) -> Scratch {
 /// storage waits for at most `deadline`.
 async fn prune(
     storage: Arc<dyn BlobStorage>,
-    scope: &SnapshotScope,
+    scope: &AgentSnapshots,
     deadline: Duration,
     options: PruneOptions,
 ) -> anyhow::Result<()> {
@@ -207,7 +207,7 @@ async fn prune(
 /// thread. Each call on the storage waits for at most `deadline`.
 async fn with_existing_repository<R: Send + 'static>(
     storage: Arc<dyn BlobStorage>,
-    scope: &SnapshotScope,
+    scope: &AgentSnapshots,
     deadline: Duration,
     work: impl FnOnce(&RusticRepository<OpenStatus>) -> anyhow::Result<R> + Send + 'static,
 ) -> anyhow::Result<R> {
@@ -1165,7 +1165,7 @@ async fn a_repository_keeps_the_settings_of_its_creation_and_a_bridge_save_uses_
         .map(|index| (index % 251) as u8)
         .collect::<Vec<_>>();
     std::fs::write(tree.path().join("data"), &content).unwrap();
-    let config = async |scope: &SnapshotScope| {
+    let config = async |scope: &AgentSnapshots| {
         with_existing_repository(
             storage.clone(),
             scope,

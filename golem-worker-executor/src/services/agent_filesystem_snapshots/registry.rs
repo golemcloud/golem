@@ -20,7 +20,7 @@
 
 use super::JobDecision;
 use super::rules::{self, JobId, Refusal, State, Transition};
-use crate::filesystem_snapshot::SnapshotScope;
+use crate::filesystem_snapshot::AgentSnapshots;
 use golem_common::model::oplog::FilesystemSnapshotName;
 use std::sync::{Arc, Mutex, PoisonError};
 use tokio::sync::watch;
@@ -66,13 +66,13 @@ impl Registry {
     }
 
     /// Waits until the job `id` of `agent` is gone. Gives at once when the registry is gone.
-    pub(super) async fn until_job_gone(&self, agent: &SnapshotScope, id: JobId) {
+    pub(super) async fn until_job_gone(&self, agent: &AgentSnapshots, id: JobId) {
         self.until(|state| rules::has_ended(state, agent, id).then_some(()))
             .await;
     }
 
     /// Waits until no job runs for `agent`. Gives at once when the registry is gone.
-    pub(super) async fn until_agent_free(&self, agent: &SnapshotScope) {
+    pub(super) async fn until_agent_free(&self, agent: &AgentSnapshots) {
         self.until(|state| rules::is_free(state, agent).then_some(()))
             .await;
     }
@@ -81,7 +81,7 @@ impl Registry {
 /// The admitted job of an agent. Dropping it ends the job.
 pub(super) struct JobTicket {
     registry: Arc<Registry>,
-    agent: SnapshotScope,
+    agent: AgentSnapshots,
     id: JobId,
     stop: CancellationToken,
 }
@@ -91,7 +91,7 @@ impl JobTicket {
     /// volume has room for a capture.
     pub(super) fn admit(
         registry: &Arc<Registry>,
-        agent: &SnapshotScope,
+        agent: &AgentSnapshots,
         name: &FilesystemSnapshotName,
         stop: CancellationToken,
         room: bool,
@@ -126,7 +126,7 @@ impl JobTicket {
         &self.stop
     }
 
-    pub(super) fn agent(&self) -> &SnapshotScope {
+    pub(super) fn agent(&self) -> &AgentSnapshots {
         &self.agent
     }
 }
@@ -142,7 +142,7 @@ impl Drop for JobTicket {
 /// A queued or running delete of all snapshots of an agent. Dropping it ends the delete.
 pub(super) struct DeleteAllTicket {
     registry: Arc<Registry>,
-    agent: SnapshotScope,
+    agent: AgentSnapshots,
 }
 
 impl DeleteAllTicket {
@@ -150,7 +150,7 @@ impl DeleteAllTicket {
     /// one runs.
     pub(super) fn delete_all_snapshots(
         registry: &Arc<Registry>,
-        agent: &SnapshotScope,
+        agent: &AgentSnapshots,
     ) -> (Self, Option<CancellationToken>) {
         let stop = registry.apply(Transition::DeleteAllSnapshots, |state| {
             rules::delete_all_snapshots(state, agent)
@@ -182,7 +182,7 @@ impl Drop for DeleteAllTicket {
 /// A start that waits for the decision of a job. Dropping it ends the wait.
 pub(super) struct WaitTicket {
     registry: Arc<Registry>,
-    agent: SnapshotScope,
+    agent: AgentSnapshots,
     id: JobId,
 }
 
@@ -191,7 +191,7 @@ impl WaitTicket {
     /// the decision that the job has now otherwise.
     pub(super) fn start_wait(
         registry: &Arc<Registry>,
-        agent: &SnapshotScope,
+        agent: &AgentSnapshots,
         name: &FilesystemSnapshotName,
     ) -> Result<Self, Option<JobDecision>> {
         let id = registry.apply(Transition::StartWait, |state| {
@@ -234,7 +234,7 @@ mod tests {
     #[test]
     fn a_dropped_wait_releases_the_decision_of_the_ended_job() {
         let registry = Arc::new(Registry::default());
-        let agent = SnapshotScope::agent(&OwnedAgentId::new(
+        let agent = AgentSnapshots::agent(&OwnedAgentId::new(
             EnvironmentId::new(),
             &AgentId {
                 component_id: ComponentId::new(),

@@ -18,8 +18,8 @@
 //! The decisions are plain functions over values, so fast tests can check them.
 
 use super::Worker;
+use crate::filesystem_snapshot::AgentSnapshots;
 use crate::filesystem_snapshot::ChangeDetection as StoreChangeDetection;
-use crate::filesystem_snapshot::SnapshotScope;
 use crate::services::agent_filesystem::{
     CaptureOutcome, ChangeDetection, FilesystemCapture, InitialFilesRestore, RestoreError,
     RestoreTree, TreeMark, WholeCapture,
@@ -365,7 +365,7 @@ pub(crate) enum PeriodicResult<Stop> {
 pub(crate) async fn periodic_snapshot<Host: PeriodicSnapshotHost>(
     host: &mut Host,
     snapshots: &AgentFilesystemSnapshots,
-    agent: &SnapshotScope,
+    agent: &AgentSnapshots,
 ) -> PeriodicResult<Host::Stop> {
     let admission = match snapshots.admit_periodic(agent).await {
         Ok(admission) => Some(admission),
@@ -491,7 +491,7 @@ pub(crate) enum UpdateSnapshot<Stop> {
 pub(crate) async fn update_snapshot<Host: UpdateSnapshotHost>(
     host: &mut Host,
     snapshots: &AgentFilesystemSnapshots,
-    agent: &SnapshotScope,
+    agent: &AgentSnapshots,
 ) -> UpdateSnapshot<Host::Stop> {
     let admission = match snapshots.admit_update(agent, host.terminal()).await {
         Ok(admission) => Some(admission),
@@ -1423,8 +1423,8 @@ mod tests {
         }
     }
 
-    fn agent_snapshots(name: &str) -> SnapshotScope {
-        SnapshotScope::agent(&golem_common::model::OwnedAgentId::new(
+    fn agent_snapshots(name: &str) -> AgentSnapshots {
+        AgentSnapshots::agent(&golem_common::model::OwnedAgentId::new(
             golem_common::model::environment::EnvironmentId::new(),
             &AgentId {
                 component_id: golem_common::model::component::ComponentId::new(),
@@ -1852,7 +1852,7 @@ mod tests {
     impl crate::filesystem_snapshot::FilesystemSnapshotStore for SpacedStore {
         async fn save(
             &self,
-            agent: &SnapshotScope,
+            agent: &AgentSnapshots,
             name: &crate::filesystem_snapshot::SnapshotName,
             tree: &Path,
             parent: Option<(
@@ -1869,7 +1869,7 @@ mod tests {
 
         async fn restore(
             &self,
-            agent: &SnapshotScope,
+            agent: &AgentSnapshots,
             name: &crate::filesystem_snapshot::SnapshotName,
             into: &Path,
         ) -> Result<
@@ -1881,7 +1881,7 @@ mod tests {
 
         async fn stat(
             &self,
-            agent: &SnapshotScope,
+            agent: &AgentSnapshots,
             name: &crate::filesystem_snapshot::SnapshotName,
         ) -> Result<
             Option<crate::filesystem_snapshot::SnapshotInfo>,
@@ -1892,7 +1892,7 @@ mod tests {
 
         async fn list(
             &self,
-            agent: &SnapshotScope,
+            agent: &AgentSnapshots,
         ) -> Result<
             Box<
                 [(
@@ -1913,7 +1913,7 @@ mod tests {
 
         async fn delete(
             &self,
-            agent: &SnapshotScope,
+            agent: &AgentSnapshots,
             name: &crate::filesystem_snapshot::SnapshotName,
         ) -> Result<(), crate::filesystem_snapshot::SnapshotStoreError> {
             self.memory.delete(agent, name).await?;
@@ -1922,17 +1922,17 @@ mod tests {
             Ok(())
         }
 
-        async fn delete_scope(
+        async fn delete_all(
             &self,
-            agent: &SnapshotScope,
+            agent: &AgentSnapshots,
         ) -> Result<(), crate::filesystem_snapshot::SnapshotStoreError> {
-            self.memory.delete_scope(agent).await
+            self.memory.delete_all(agent).await
         }
 
         async fn copy_scope(
             &self,
-            from: &SnapshotScope,
-            to: &SnapshotScope,
+            from: &AgentSnapshots,
+            to: &AgentSnapshots,
         ) -> Result<(), crate::filesystem_snapshot::SnapshotStoreError> {
             self.memory.copy_scope(from, to).await
         }

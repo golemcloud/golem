@@ -17,7 +17,7 @@
 
 use super::registry::DeleteAllTicket;
 use super::{job::retrying, store_name};
-use crate::filesystem_snapshot::{FilesystemSnapshotStore, SnapshotScope};
+use crate::filesystem_snapshot::{AgentSnapshots, FilesystemSnapshotStore};
 use futures::StreamExt as _;
 use golem_common::model::RetryConfig;
 use golem_common::model::oplog::FilesystemSnapshotName;
@@ -32,13 +32,13 @@ use tokio_util::task::TaskTracker;
 enum Cleanup {
     /// Deletes some snapshots of an agent.
     Delete {
-        agent: SnapshotScope,
+        agent: AgentSnapshots,
         names: Box<[FilesystemSnapshotName]>,
     },
     /// Deletes all snapshots of an agent, after the job of the agent ended. The ticket goes away
     /// with the clean-up, on each exit.
     DeleteAll {
-        agent: SnapshotScope,
+        agent: AgentSnapshots,
         ticket: DeleteAllTicket,
     },
 }
@@ -85,11 +85,11 @@ impl CleanupQueue {
         Self { sender }
     }
 
-    pub(super) fn delete(&self, agent: SnapshotScope, names: Box<[FilesystemSnapshotName]>) {
+    pub(super) fn delete(&self, agent: AgentSnapshots, names: Box<[FilesystemSnapshotName]>) {
         self.send(Cleanup::Delete { agent, names }, "delete");
     }
 
-    pub(super) fn delete_all(&self, agent: SnapshotScope, ticket: DeleteAllTicket) {
+    pub(super) fn delete_all(&self, agent: AgentSnapshots, ticket: DeleteAllTicket) {
         self.send(Cleanup::DeleteAll { agent, ticket }, "delete_all");
     }
 
@@ -115,7 +115,7 @@ impl Cleaner {
             Cleanup::DeleteAll { agent, ticket } => {
                 ticket.until_agent_free().await;
                 let deleted = self
-                    .with_slot(|| retrying(&self.retry, || self.store.delete_scope(&agent)))
+                    .with_slot(|| retrying(&self.retry, || self.store.delete_all(&agent)))
                     .await;
                 if let Err(error) = deleted {
                     tracing::warn!(
@@ -128,7 +128,7 @@ impl Cleaner {
         }
     }
 
-    async fn delete(&self, agent: &SnapshotScope, name: &FilesystemSnapshotName) {
+    async fn delete(&self, agent: &AgentSnapshots, name: &FilesystemSnapshotName) {
         let Ok(store_name) = store_name(name) else {
             return;
         };

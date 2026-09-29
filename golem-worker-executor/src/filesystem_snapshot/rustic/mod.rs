@@ -32,7 +32,7 @@ pub(crate) use store::RusticSnapshotStore;
 #[cfg(test)]
 mod tests;
 
-use super::{SnapshotName, SnapshotScope};
+use super::{AgentSnapshots, SnapshotName};
 use crate::sandbox_filesystem::{NativeOperation, NativeStorageProfile, execute_native};
 use anyhow::Context;
 use backend::BlobBackend;
@@ -314,7 +314,7 @@ pub(super) struct PruneReport {
 /// storage has a deadline. A snapshot has its name as its label.
 pub(super) struct Repository {
     storage: Arc<dyn BlobStorage>,
-    scope: SnapshotScope,
+    scope: AgentSnapshots,
     key: RepositoryKey,
     deadline: Duration,
 }
@@ -324,7 +324,7 @@ impl Repository {
     /// storage waits for at most `deadline`, and a call without an answer fails its operation.
     pub(super) fn new(
         storage: Arc<dyn BlobStorage>,
-        scope: SnapshotScope,
+        scope: AgentSnapshots,
         key: RepositoryKey,
         deadline: Duration,
     ) -> Self {

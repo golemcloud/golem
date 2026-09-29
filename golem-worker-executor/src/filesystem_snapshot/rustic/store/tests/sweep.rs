@@ -359,7 +359,7 @@ pub(super) struct Found {
 /// the rules of the prune protocol.
 pub(super) async fn run_case(
     shared: &Arc<InMemoryBlobStorage>,
-    prepared: &SnapshotScope,
+    prepared: &AgentSnapshots,
     schedule: &Schedule,
 ) -> Result<Found, String> {
     let scope = new_scope();
@@ -602,7 +602,7 @@ fn final_markers_repeated(log: &[Step]) -> Vec<usize> {
 /// Checks the rules on the end state of a case.
 async fn check(
     shared: &Arc<InMemoryBlobStorage>,
-    scope: &SnapshotScope,
+    scope: &AgentSnapshots,
     schedule: &Schedule,
     log: &[Step],
     results: Vec<Result<Result<(), SnapshotStoreError>, tokio::task::JoinError>>,

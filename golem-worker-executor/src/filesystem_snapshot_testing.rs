@@ -19,8 +19,8 @@
 //! fail, and count the calls.
 
 use crate::filesystem_snapshot::{
-    ChangeDetection, FilesystemSnapshotStore, InMemorySnapshotStore, SnapshotInfo, SnapshotName,
-    SnapshotScope, SnapshotStoreError,
+    AgentSnapshots, ChangeDetection, FilesystemSnapshotStore, InMemorySnapshotStore, SnapshotInfo,
+    SnapshotName, SnapshotStoreError,
 };
 use crate::services::agent_filesystem_snapshots::StoreSource;
 use crate::services::golem_config::FilesystemSnapshotUploadConfig;
@@ -149,7 +149,7 @@ impl TestFilesystemSnapshotStore {
     /// The names of the snapshots of the agent, newest first.
     pub async fn snapshot_names(&self, agent: &OwnedAgentId) -> Vec<String> {
         self.inner
-            .list(&SnapshotScope::agent(agent))
+            .list(&AgentSnapshots::agent(agent))
             .await
             .map(|listing| {
                 listing
@@ -163,7 +163,10 @@ impl TestFilesystemSnapshotStore {
     /// Deletes the snapshot `name` of the agent, as a loss of storage does.
     pub async fn lose(&self, agent: &OwnedAgentId, name: &str) {
         if let Ok(name) = SnapshotName::new(name) {
-            let _ = self.inner.delete(&SnapshotScope::agent(agent), &name).await;
+            let _ = self
+                .inner
+                .delete(&AgentSnapshots::agent(agent), &name)
+                .await;
         }
     }
 
@@ -178,7 +181,7 @@ impl TestFilesystemSnapshotStore {
 impl FilesystemSnapshotStore for TestFilesystemSnapshotStore {
     async fn save(
         &self,
-        agent: &SnapshotScope,
+        agent: &AgentSnapshots,
         name: &SnapshotName,
         tree: &Path,
         parent: Option<(&SnapshotName, ChangeDetection)>,
@@ -232,7 +235,7 @@ impl FilesystemSnapshotStore for TestFilesystemSnapshotStore {
 
     async fn restore(
         &self,
-        agent: &SnapshotScope,
+        agent: &AgentSnapshots,
         name: &SnapshotName,
         into: &Path,
     ) -> Result<SnapshotInfo, SnapshotStoreError> {
@@ -258,7 +261,7 @@ impl FilesystemSnapshotStore for TestFilesystemSnapshotStore {
 
     async fn stat(
         &self,
-        agent: &SnapshotScope,
+        agent: &AgentSnapshots,
         name: &SnapshotName,
     ) -> Result<Option<SnapshotInfo>, SnapshotStoreError> {
         self.faults.stats.fetch_add(1, Ordering::SeqCst);
@@ -271,7 +274,7 @@ impl FilesystemSnapshotStore for TestFilesystemSnapshotStore {
 
     async fn list(
         &self,
-        agent: &SnapshotScope,
+        agent: &AgentSnapshots,
     ) -> Result<Box<[(SnapshotName, SnapshotInfo)]>, SnapshotStoreError> {
         Ok(self
             .inner
@@ -284,20 +287,20 @@ impl FilesystemSnapshotStore for TestFilesystemSnapshotStore {
 
     async fn delete(
         &self,
-        agent: &SnapshotScope,
+        agent: &AgentSnapshots,
         name: &SnapshotName,
     ) -> Result<(), SnapshotStoreError> {
         self.inner.delete(agent, name).await
     }
 
-    async fn delete_scope(&self, agent: &SnapshotScope) -> Result<(), SnapshotStoreError> {
-        self.inner.delete_scope(agent).await
+    async fn delete_all(&self, agent: &AgentSnapshots) -> Result<(), SnapshotStoreError> {
+        self.inner.delete_all(agent).await
     }
 
     async fn copy_scope(
         &self,
-        from: &SnapshotScope,
-        to: &SnapshotScope,
+        from: &AgentSnapshots,
+        to: &AgentSnapshots,
     ) -> Result<(), SnapshotStoreError> {
         self.inner.copy_scope(from, to).await
     }

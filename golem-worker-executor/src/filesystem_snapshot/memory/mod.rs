@@ -25,7 +25,7 @@ mod tree;
 mod tests;
 
 use super::{
-    ChangeDetection, FilesystemSnapshotStore, SnapshotInfo, SnapshotName, SnapshotScope,
+    AgentSnapshots, ChangeDetection, FilesystemSnapshotStore, SnapshotInfo, SnapshotName,
     SnapshotStoreError, newest_first, snapshot_time,
 };
 use async_trait::async_trait;
@@ -41,7 +41,7 @@ use tree::{TreeEntry, read_tree, tree_info, write_tree};
 /// platform other than unix, a save of a tree with a symlink gives `Source` and publishes nothing.
 #[derive(Clone, Default)]
 pub(crate) struct InMemorySnapshotStore {
-    scopes: Arc<Mutex<HashMap<SnapshotScope, Arc<[Stored]>>>>,
+    scopes: Arc<Mutex<HashMap<AgentSnapshots, Arc<[Stored]>>>>,
 }
 
 /// One snapshot of a scope.
@@ -60,12 +60,12 @@ impl InMemorySnapshotStore {
 
     /// Gives the snapshots of each scope. No lock is held across an await, so a panic cannot leave
     /// a change half made. The store therefore uses the map of a poisoned lock as it is.
-    fn scopes(&self) -> MutexGuard<'_, HashMap<SnapshotScope, Arc<[Stored]>>> {
+    fn scopes(&self) -> MutexGuard<'_, HashMap<AgentSnapshots, Arc<[Stored]>>> {
         self.scopes.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Gives the snapshots of the scope. A scope that holds nothing gives an empty slice.
-    fn snapshots_of(&self, scope: &SnapshotScope) -> Arc<[Stored]> {
+    fn snapshots_of(&self, scope: &AgentSnapshots) -> Arc<[Stored]> {
         self.scopes().get(scope).cloned().unwrap_or_default()
     }
 }
@@ -117,7 +117,7 @@ async fn blocking<T: Send + 'static>(
 impl FilesystemSnapshotStore for InMemorySnapshotStore {
     async fn save(
         &self,
-        scope: &SnapshotScope,
+        scope: &AgentSnapshots,
         name: &SnapshotName,
         tree: &Path,
         _parent: Option<(&SnapshotName, ChangeDetection)>,
@@ -152,7 +152,7 @@ impl FilesystemSnapshotStore for InMemorySnapshotStore {
 
     async fn restore(
         &self,
-        scope: &SnapshotScope,
+        scope: &AgentSnapshots,
         name: &SnapshotName,
         into: &Path,
     ) -> Result<SnapshotInfo, SnapshotStoreError> {
@@ -171,7 +171,7 @@ impl FilesystemSnapshotStore for InMemorySnapshotStore {
 
     async fn stat(
         &self,
-        scope: &SnapshotScope,
+        scope: &AgentSnapshots,
         name: &SnapshotName,
     ) -> Result<Option<SnapshotInfo>, SnapshotStoreError> {
         Ok(found(&self.snapshots_of(scope), name).map(|stored| stored.info))
@@ -179,7 +179,7 @@ impl FilesystemSnapshotStore for InMemorySnapshotStore {
 
     async fn list(
         &self,
-        scope: &SnapshotScope,
+        scope: &AgentSnapshots,
     ) -> Result<Box<[(SnapshotName, SnapshotInfo)]>, SnapshotStoreError> {
         Ok(newest_first(
             self.snapshots_of(scope)
@@ -190,7 +190,7 @@ impl FilesystemSnapshotStore for InMemorySnapshotStore {
 
     async fn delete(
         &self,
-        scope: &SnapshotScope,
+        scope: &AgentSnapshots,
         name: &SnapshotName,
     ) -> Result<(), SnapshotStoreError> {
         let mut scopes = self.scopes();
@@ -201,15 +201,15 @@ impl FilesystemSnapshotStore for InMemorySnapshotStore {
         Ok(())
     }
 
-    async fn delete_scope(&self, scope: &SnapshotScope) -> Result<(), SnapshotStoreError> {
+    async fn delete_all(&self, scope: &AgentSnapshots) -> Result<(), SnapshotStoreError> {
         self.scopes().remove(scope);
         Ok(())
     }
 
     async fn copy_scope(
         &self,
-        from: &SnapshotScope,
-        to: &SnapshotScope,
+        from: &AgentSnapshots,
+        to: &AgentSnapshots,
     ) -> Result<(), SnapshotStoreError> {
         // The snapshots never change, so the two scopes can hold the same slice and stay
         // independent. A change of one scope puts a new slice in that scope only.

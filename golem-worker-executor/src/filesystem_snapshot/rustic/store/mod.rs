@@ -41,7 +41,7 @@ use super::{
     prune, restore_snapshot, run_blocking,
 };
 use crate::filesystem_snapshot::{
-    ChangeDetection, FilesystemSnapshotStore, SnapshotInfo, SnapshotName, SnapshotScope,
+    AgentSnapshots, ChangeDetection, FilesystemSnapshotStore, SnapshotInfo, SnapshotName,
     SnapshotStoreError, newest_first, snapshot_time,
 };
 use crate::sandbox_filesystem::{NativeOperation, NativeStorageProfile, execute_native};
@@ -558,7 +558,7 @@ impl RusticSnapshotStore {
     /// Gives a backend over the repository of the scope for the operation with the token.
     fn backend(
         &self,
-        scope: &SnapshotScope,
+        scope: &AgentSnapshots,
         token: &CancellationToken,
     ) -> Result<BlobBackend, SnapshotStoreError> {
         #[cfg(test)]
@@ -603,7 +603,7 @@ impl RusticSnapshotStore {
     }
 
     /// Gives the blobs of the scope for the operation with the token.
-    fn files(&self, scope: &SnapshotScope, token: &CancellationToken) -> SnapshotFiles {
+    fn files(&self, scope: &AgentSnapshots, token: &CancellationToken) -> SnapshotFiles {
         SnapshotFiles {
             storage: self.storage.clone(),
             namespace: scope.0.clone(),
@@ -628,7 +628,7 @@ impl RusticSnapshotStore {
     /// between them can be shorter. A prune that succeeds deletes each claim of its ledger.
     async fn prune_when_due(
         &self,
-        scope: &SnapshotScope,
+        scope: &AgentSnapshots,
         token: &CancellationToken,
     ) -> Result<(), SnapshotStoreError> {
         let files = self.files(scope, token);
@@ -752,7 +752,7 @@ impl RusticSnapshotStore {
     /// prune ended after the claim.
     async fn prepare_prune(
         &self,
-        scope: &SnapshotScope,
+        scope: &AgentSnapshots,
         token: &CancellationToken,
         files: &SnapshotFiles,
         claim: &Claim,
@@ -836,7 +836,7 @@ impl RusticSnapshotStore {
 impl FilesystemSnapshotStore for RusticSnapshotStore {
     async fn save(
         &self,
-        scope: &SnapshotScope,
+        scope: &AgentSnapshots,
         name: &SnapshotName,
         tree: &Path,
         parent: Option<(&SnapshotName, ChangeDetection)>,
@@ -890,7 +890,7 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
 
     async fn restore(
         &self,
-        scope: &SnapshotScope,
+        scope: &AgentSnapshots,
         name: &SnapshotName,
         into: &Path,
     ) -> Result<SnapshotInfo, SnapshotStoreError> {
@@ -928,7 +928,7 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
 
     async fn stat(
         &self,
-        scope: &SnapshotScope,
+        scope: &AgentSnapshots,
         name: &SnapshotName,
     ) -> Result<Option<SnapshotInfo>, SnapshotStoreError> {
         let (token, _guard) = self.start()?;
@@ -947,7 +947,7 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
 
     async fn list(
         &self,
-        scope: &SnapshotScope,
+        scope: &AgentSnapshots,
     ) -> Result<Box<[(SnapshotName, SnapshotInfo)]>, SnapshotStoreError> {
         let (token, _guard) = self.start()?;
         let backend = Arc::new(self.backend(scope, &token)?);
@@ -963,7 +963,7 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
 
     async fn delete(
         &self,
-        scope: &SnapshotScope,
+        scope: &AgentSnapshots,
         name: &SnapshotName,
     ) -> Result<(), SnapshotStoreError> {
         let (token, _guard) = self.start()?;
@@ -1016,7 +1016,7 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
         self.prune_when_due(scope, &token).await
     }
 
-    async fn delete_scope(&self, scope: &SnapshotScope) -> Result<(), SnapshotStoreError> {
+    async fn delete_all(&self, scope: &AgentSnapshots) -> Result<(), SnapshotStoreError> {
         let (token, _guard) = self.start()?;
         delete_scope(&self.files(scope, &token))
             .await
@@ -1025,8 +1025,8 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
 
     async fn copy_scope(
         &self,
-        from: &SnapshotScope,
-        to: &SnapshotScope,
+        from: &AgentSnapshots,
+        to: &AgentSnapshots,
     ) -> Result<(), SnapshotStoreError> {
         let (token, _guard) = self.start()?;
         copy_scope(&self.files(from, &token), &self.files(to, &token))

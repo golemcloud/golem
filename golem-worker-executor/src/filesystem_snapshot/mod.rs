@@ -36,14 +36,14 @@ mod time_zone_tests;
 pub(crate) use memory::InMemorySnapshotStore;
 use rustic::RusticSnapshotStore;
 
-/// The place of the filesystem snapshots of one agent.
+/// The filesystem snapshots of one agent.
 ///
-/// Each agent has one scope. A scope is opaque outside this module.
+/// Each agent has one value. The value is opaque outside this module.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct SnapshotScope(BlobStorageNamespace);
+pub(crate) struct AgentSnapshots(BlobStorageNamespace);
 
-impl SnapshotScope {
-    /// Gives the scope of the agent.
+impl AgentSnapshots {
+    /// Gives the filesystem snapshots of the agent.
     pub(crate) fn agent(agent: &OwnedAgentId) -> Self {
         Self(BlobStorageNamespace::FilesystemSnapshots {
             environment_id: agent.environment_id,
@@ -225,7 +225,7 @@ pub(crate) trait FilesystemSnapshotStore: Send + Sync {
     /// every file.
     async fn save(
         &self,
-        scope: &SnapshotScope,
+        scope: &AgentSnapshots,
         name: &SnapshotName,
         tree: &Path,
         parent: Option<(&SnapshotName, ChangeDetection)>,
@@ -246,7 +246,7 @@ pub(crate) trait FilesystemSnapshotStore: Send + Sync {
     /// not a directory, or that is not empty gives `Destination`, and the call writes nothing.
     async fn restore(
         &self,
-        scope: &SnapshotScope,
+        scope: &AgentSnapshots,
         name: &SnapshotName,
         into: &Path,
     ) -> Result<SnapshotInfo, SnapshotStoreError>;
@@ -258,7 +258,7 @@ pub(crate) trait FilesystemSnapshotStore: Send + Sync {
     /// deleted. A snapshot whose metadata fails an integrity check gives `Corrupt`.
     async fn stat(
         &self,
-        scope: &SnapshotScope,
+        scope: &AgentSnapshots,
         name: &SnapshotName,
     ) -> Result<Option<SnapshotInfo>, SnapshotStoreError>;
 
@@ -270,7 +270,7 @@ pub(crate) trait FilesystemSnapshotStore: Send + Sync {
     /// the result shows one moment.
     async fn list(
         &self,
-        scope: &SnapshotScope,
+        scope: &AgentSnapshots,
     ) -> Result<Box<[(SnapshotName, SnapshotInfo)]>, SnapshotStoreError>;
 
     /// Deletes one snapshot.
@@ -282,7 +282,7 @@ pub(crate) trait FilesystemSnapshotStore: Send + Sync {
     /// disturbed.
     async fn delete(
         &self,
-        scope: &SnapshotScope,
+        scope: &AgentSnapshots,
         name: &SnapshotName,
     ) -> Result<(), SnapshotStoreError>;
 
@@ -291,7 +291,7 @@ pub(crate) trait FilesystemSnapshotStore: Send + Sync {
     /// After the call, the scope is as unused as it was before its first save, and a later save
     /// creates it again. The call is idempotent and needs no list of names. A save into the scope
     /// at the same time is not cancelled, and can make the scope live again.
-    async fn delete_scope(&self, scope: &SnapshotScope) -> Result<(), SnapshotStoreError>;
+    async fn delete_all(&self, scope: &AgentSnapshots) -> Result<(), SnapshotStoreError>;
 
     /// Copies every snapshot of the scope `from` into the empty scope `to`.
     ///
@@ -301,8 +301,8 @@ pub(crate) trait FilesystemSnapshotStore: Send + Sync {
     /// moves. A copy into a scope that is not empty is outside this contract.
     async fn copy_scope(
         &self,
-        from: &SnapshotScope,
-        to: &SnapshotScope,
+        from: &AgentSnapshots,
+        to: &AgentSnapshots,
     ) -> Result<(), SnapshotStoreError>;
 
     /// Stops the work of the store and waits until it ends. Each later operation fails. A store

@@ -17,7 +17,7 @@
 //! a manual update. Nothing here waits, reads a clock or calls the store.
 
 use super::{ConfirmOutcome, JobDecision, SnapshotKind, SnapshotSkip};
-use crate::filesystem_snapshot::{SnapshotInfo, SnapshotScope, SnapshotStoreError};
+use crate::filesystem_snapshot::{AgentSnapshots, SnapshotInfo, SnapshotStoreError};
 use crate::sandbox_filesystem::FilesystemSpace;
 use crate::services::golem_config::{
     FilesystemPressureConfig, FilesystemSnapshotStoreConfig, FilesystemSnapshotsConfig,
@@ -37,11 +37,11 @@ pub(super) type JobId = u64;
 /// start waits for.
 #[derive(Debug, Default)]
 pub(super) struct State {
-    jobs: HashMap<SnapshotScope, Job>,
+    jobs: HashMap<AgentSnapshots, Job>,
     /// The number of queued or running deletes of each agent.
-    deleting: HashMap<SnapshotScope, NonZeroU32>,
+    deleting: HashMap<AgentSnapshots, NonZeroU32>,
     /// The last ended job of each agent that a start still waits for.
-    ended: HashMap<SnapshotScope, Ended>,
+    ended: HashMap<AgentSnapshots, Ended>,
     /// The number of the last admitted job.
     last_job: JobId,
 }
@@ -117,7 +117,7 @@ pub(super) struct Refusal {
 /// `stop` stops the job, and `room` tells whether the volume has room for a capture.
 pub(super) fn admit(
     state: &mut State,
-    agent: &SnapshotScope,
+    agent: &AgentSnapshots,
     name: &FilesystemSnapshotName,
     stop: CancellationToken,
     room: bool,
@@ -149,7 +149,7 @@ pub(super) fn admit(
 }
 
 /// The save of the job `id` holds a slot of the uploads. The phase only moves forward.
-pub(super) fn saving(state: &mut State, agent: &SnapshotScope, id: JobId) {
+pub(super) fn saving(state: &mut State, agent: &AgentSnapshots, id: JobId) {
     if let Some(job) = live(state, agent, id)
         && job.phase == JobPhase::Admitted
     {
@@ -158,7 +158,7 @@ pub(super) fn saving(state: &mut State, agent: &SnapshotScope, id: JobId) {
 }
 
 /// The job `id` decided. The first decision stays.
-pub(super) fn decide(state: &mut State, agent: &SnapshotScope, id: JobId, decision: JobDecision) {
+pub(super) fn decide(state: &mut State, agent: &AgentSnapshots, id: JobId, decision: JobDecision) {
     if let Some(job) = live(state, agent, id)
         && !matches!(job.phase, JobPhase::Decided(_))
     {
@@ -170,7 +170,7 @@ pub(super) fn decide(state: &mut State, agent: &SnapshotScope, id: JobId, decisi
 /// runs.
 pub(super) fn delete_all_snapshots(
     state: &mut State,
-    agent: &SnapshotScope,
+    agent: &AgentSnapshots,
 ) -> Option<CancellationToken> {
     let stop = state.jobs.get(agent).map(|job| job.stop.clone());
     state
@@ -183,7 +183,7 @@ pub(super) fn delete_all_snapshots(
 
 /// A delete of all snapshots of `agent` ended. The last one frees the agent and the ended decision
 /// of the agent.
-pub(super) fn all_snapshots_deleted(state: &mut State, agent: &SnapshotScope) {
+pub(super) fn all_snapshots_deleted(state: &mut State, agent: &AgentSnapshots) {
     let left = state
         .deleting
         .get(agent)
@@ -200,12 +200,12 @@ pub(super) fn all_snapshots_deleted(state: &mut State, agent: &SnapshotScope) {
 }
 
 /// The live job `id` of `agent`.
-fn live<'a>(state: &'a mut State, agent: &SnapshotScope, id: JobId) -> Option<&'a mut Job> {
+fn live<'a>(state: &'a mut State, agent: &AgentSnapshots, id: JobId) -> Option<&'a mut Job> {
     state.jobs.get_mut(agent).filter(|job| job.id == id)
 }
 
 /// Frees the agent of the job `id`, and keeps its decision while starts wait for it.
-pub(super) fn end(state: &mut State, agent: &SnapshotScope, id: JobId) {
+pub(super) fn end(state: &mut State, agent: &AgentSnapshots, id: JobId) {
     if state.jobs.get(agent).is_some_and(|job| job.id == id)
         && let Some(job) = state.jobs.remove(agent)
         && let Some(waiters) = NonZeroU32::new(job.waiters)
@@ -230,7 +230,7 @@ pub(super) fn end(state: &mut State, agent: &SnapshotScope, id: JobId) {
 /// start that does not wait gets the decision of the job with the name, when known.
 pub(super) fn start_wait(
     state: &mut State,
-    agent: &SnapshotScope,
+    agent: &AgentSnapshots,
     name: &FilesystemSnapshotName,
 ) -> Result<JobId, Option<JobDecision>> {
     match state.jobs.get_mut(agent).filter(|job| &job.name == name) {
@@ -247,7 +247,7 @@ pub(super) fn start_wait(
 }
 
 /// Takes one waiter from the job `id`, live or ended.
-pub(super) fn unwatch(state: &mut State, agent: &SnapshotScope, id: JobId) {
+pub(super) fn unwatch(state: &mut State, agent: &AgentSnapshots, id: JobId) {
     if let Some(job) = live(state, agent, id) {
         job.waiters = job.waiters.saturating_sub(1);
         return;
@@ -272,7 +272,7 @@ pub(super) fn unwatch(state: &mut State, agent: &SnapshotScope, id: JobId) {
 
 /// The decision of the job `id` of `agent`, or `None` while it runs undecided. A job that ended
 /// without a kept decision counts as stopped.
-pub(super) fn decision_of(state: &State, agent: &SnapshotScope, id: JobId) -> Option<JobDecision> {
+pub(super) fn decision_of(state: &State, agent: &AgentSnapshots, id: JobId) -> Option<JobDecision> {
     match state.jobs.get(agent).filter(|job| job.id == id) {
         Some(job) => match job.phase {
             JobPhase::Decided(decision) => Some(decision),
@@ -289,12 +289,12 @@ pub(super) fn decision_of(state: &State, agent: &SnapshotScope, id: JobId) -> Op
 }
 
 /// Whether the job `id` of `agent` ended.
-pub(super) fn has_ended(state: &State, agent: &SnapshotScope, id: JobId) -> bool {
+pub(super) fn has_ended(state: &State, agent: &AgentSnapshots, id: JobId) -> bool {
     state.jobs.get(agent).is_none_or(|job| job.id != id)
 }
 
 /// Whether no job runs for `agent`.
-pub(super) fn is_free(state: &State, agent: &SnapshotScope) -> bool {
+pub(super) fn is_free(state: &State, agent: &AgentSnapshots) -> bool {
     !state.jobs.contains_key(agent)
 }
 
@@ -467,8 +467,8 @@ mod tests {
     use golem_common::model::{AgentId, OwnedAgentId};
     use test_r::test;
 
-    fn agent_snapshots(name: &str) -> SnapshotScope {
-        SnapshotScope::agent(&OwnedAgentId::new(
+    fn agent_snapshots(name: &str) -> AgentSnapshots {
+        AgentSnapshots::agent(&OwnedAgentId::new(
             EnvironmentId::new(),
             &AgentId {
                 component_id: ComponentId::new(),
@@ -479,14 +479,14 @@ mod tests {
 
     fn try_admit(
         state: &mut State,
-        agent: &SnapshotScope,
+        agent: &AgentSnapshots,
         name: &FilesystemSnapshotName,
         room: bool,
     ) -> Result<JobId, Refusal> {
         admit(state, agent, name, CancellationToken::new(), room)
     }
 
-    fn admitted(state: &mut State, agent: &SnapshotScope, name: &FilesystemSnapshotName) -> JobId {
+    fn admitted(state: &mut State, agent: &AgentSnapshots, name: &FilesystemSnapshotName) -> JobId {
         try_admit(state, agent, name, true).expect("admitted")
     }
 
@@ -494,13 +494,13 @@ mod tests {
         result.err().map(|refusal| (refusal.skip, refusal.running))
     }
 
-    fn end_job(state: &mut State, agent: &SnapshotScope, id: JobId) {
+    fn end_job(state: &mut State, agent: &AgentSnapshots, id: JobId) {
         end(state, agent, id);
     }
 
     fn wait(
         state: &mut State,
-        agent: &SnapshotScope,
+        agent: &AgentSnapshots,
         name: &FilesystemSnapshotName,
     ) -> Result<JobId, Option<JobDecision>> {
         start_wait(state, agent, name)
