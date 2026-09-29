@@ -3391,9 +3391,10 @@ mod tests {
             });
             state.application = Some("app".to_string());
             state.environment = Some("env".to_string());
-            let fingerprint = schema_fingerprint_v1(&SchemaGraph::empty(), Some(&SchemaType::u8()))
-                .unwrap()
-                .0;
+            let schema = SchemaType::u8();
+            let graph = SchemaGraph::anonymous(schema.clone());
+            state.graph = Some(graph.clone());
+            let fingerprint = schema_fingerprint_v1(&graph, Some(&schema)).unwrap().0;
             let accepted = translate_accepted(
                 &mut state,
                 InvocationAccepted {
