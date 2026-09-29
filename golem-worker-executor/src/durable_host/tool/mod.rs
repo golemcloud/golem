@@ -42,6 +42,7 @@ use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind};
 use crate::durable_host::durable_session::{
     DurableByteInputProducer, DurableInputEndpoint, DurableInputProducer, strip_typed_streams,
 };
+use crate::durable_host::durable_stream::SessionError;
 use crate::durable_host::entity::{
     EntityInvocationDurability, EntityInvocationKeyContext, IncompleteLiveRepairBeforeBody,
     RecordedEntityTerminal, ToolInvocationReplayOutcome, encode_tool_terminal,
@@ -3226,26 +3227,45 @@ where
             .expect("failed accepted tool operation must select an owner winner");
         let preserve_exact_trap = matches!(&winner, operation::OwnerFailureWinner::Trap(_));
         let owner_failure_cleanup = cleanup_operation.claim_owner_failure_cleanup();
-        if owner_failure_cleanup.is_some() {
-            if let Some(active_agent) = active_agent {
-                active_agent.fence_entity_bodies(winner).await;
-            } else {
-                owner_operations.close_failed_attachments();
-                owner_operations.drain_owner_failure_lanes().await;
-            }
-        }
-        if let Some(failed_resources) = failed_resources
-            && let Err(settlement_error) =
-                failed_resources.resources.settle_after_parent_end().await
-            && !preserve_exact_trap
-        {
-            *error = settlement_error.into();
-        }
-        cleanup_operation.settle().await;
         if let Some(owner_failure_cleanup) = owner_failure_cleanup {
-            owner_operations.wait_owner_settled().await;
-            owner_operations.complete_owner_failure_cleanup(owner_failure_cleanup);
-            primary.interrupt_current_execution();
+            let interrupt_signal = primary.current_execution_interrupt_signal();
+            let operations = owner_operations.clone();
+            let cleanup = owner_operations.start_owner_failure_cleanup(
+                owner_failure_cleanup,
+                async move {
+                    if let Some(active_agent) = active_agent {
+                        active_agent.fence_entity_bodies(winner).await;
+                    } else {
+                        operations.close_failed_attachments();
+                        operations.drain_owner_failure_lanes().await;
+                    }
+                    let settlement = match failed_resources {
+                        Some(resources) => resources.resources.settle_after_parent_end().await,
+                        None => Ok(()),
+                    };
+                    cleanup_operation.settle().await;
+                    settlement
+                },
+                move || {
+                    if let Some(signal) = interrupt_signal {
+                        let _ = signal.send(InterruptKind::Interrupt(
+                            golem_common::model::Timestamp::now_utc(),
+                        ));
+                    }
+                },
+            );
+            if let Err(cleanup_error) = cleanup.await {
+                *error = cleanup_error.into();
+            }
+        } else {
+            if let Some(failed_resources) = failed_resources
+                && let Err(settlement_error) =
+                    failed_resources.resources.settle_after_parent_end().await
+                && !preserve_exact_trap
+            {
+                *error = settlement_error.into();
+            }
+            cleanup_operation.settle().await;
         }
     }
     drop(reconstruction_hold);
@@ -3967,13 +3987,13 @@ where
                 || result_streams
                     .persisted_result()
                     .await
-                    .map_err(anyhow::Error::msg)?
+                    .map_err(SessionError::into_trap)?
                     .is_some()
             {
                 result_streams
                     .complete()
                     .await
-                    .map_err(anyhow::Error::msg)?;
+                    .map_err(SessionError::into_trap)?;
             }
             if (stage_attachments || stdout_completion_only)
                 && let Some(stdout) = &stdout_controller
@@ -4024,13 +4044,13 @@ where
                 || result_streams
                     .persisted_result()
                     .await
-                    .map_err(anyhow::Error::msg)?
+                    .map_err(SessionError::into_trap)?
                     .is_some()
             {
                 result_streams
                     .fail("tool invocation was cancelled".to_string())
                     .await
-                    .map_err(anyhow::Error::msg)?;
+                    .map_err(SessionError::into_trap)?;
             }
             operation.settle().await;
             if no_body {
@@ -4653,7 +4673,7 @@ impl<Ctx: WorkerCtx> AccessorTask<Ctx, HasSelf<DurableWorkerCtx<Ctx>>> for Nativ
                         SchemaType::u8(),
                     )
                     .await
-                    .map_err(anyhow::Error::msg)?;
+                    .map_err(SessionError::into_trap)?;
             }
             Ok::<_, anyhow::Error>(())
         };
@@ -4687,7 +4707,7 @@ impl<Ctx: WorkerCtx> AccessorTask<Ctx, HasSelf<DurableWorkerCtx<Ctx>>> for Nativ
                     prepared.attempt.invocation.target_component_revision,
                 )
                 .await
-                .map_err(wasmtime::Error::msg)?;
+                .map_err(|error| wasmtime::Error::from_anyhow(error.into_trap()))?;
         }
         result
             .send(response)

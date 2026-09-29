@@ -24,6 +24,19 @@ use std::collections::HashMap;
 use std::time::Duration;
 use tracing::debug;
 
+/// Whether `epoch` immediately precedes `next`, without calling `LeaseEpoch::next()` on `epoch`
+/// itself - which panics at `u64::MAX` (`checked_add(1).expect(..)`).
+///
+/// `epoch` here is the caller's claimed epoch, taken straight off the wire (a `renew_lease` /
+/// `release_lease` argument, itself `golem_common::model::quota::LeaseEpoch(request.epoch)` in
+/// `grpc.rs` with nothing upstream bounding it) - unlike `pod_lease.epoch`, which only ever
+/// advances by exactly one through this state's own `checked_next()` calls. A `u64::MAX` claim can never
+/// legitimately precede a real stored epoch, so it simply fails this check like any other stale
+/// one, rather than aborting the process.
+fn precedes(epoch: LeaseEpoch, next: LeaseEpoch) -> bool {
+    epoch.0.checked_add(1) == Some(next.0)
+}
+
 pub(super) struct AcquireLeaseResult {
     pub epoch: LeaseEpoch,
     pub allocated_amount: u64,
@@ -312,7 +325,7 @@ impl QuotaState {
         pod: Pod,
         lease_duration: Duration,
         min_executors: u64,
-    ) -> AcquireLeaseResult {
+    ) -> Result<AcquireLeaseResult, QuotaError> {
         let expired = self.housekeep();
 
         if let Some(existing) = self.leases.get(&pod) {
@@ -340,19 +353,23 @@ impl QuotaState {
 
         let pod_lease = self.leases.get_mut(&pod).expect("just inserted");
         let epoch = pod_lease.epoch;
-        pod_lease.epoch = epoch.next();
+        pod_lease.epoch = epoch.checked_next().ok_or_else(|| {
+            QuotaError::InternalError(anyhow::anyhow!(
+                "lease epoch for pod {pod} cannot advance past {epoch}"
+            ))
+        })?;
         self.remaining -= allocated_amount;
         pod_lease.allocated = allocated_amount;
         pod_lease.granted_at = now;
         pod_lease.expires_at = expires_at;
 
-        AcquireLeaseResult {
+        Ok(AcquireLeaseResult {
             epoch,
             allocated_amount,
             expires_at,
             expired,
             total_available_amount,
-        }
+        })
     }
 
     pub fn renew_lease(
@@ -367,7 +384,7 @@ impl QuotaState {
         let pod_lease = self.leases.get_mut(pod).ok_or(QuotaError::LeaseNotFound {
             resource_definition_id: self.definition.id,
         })?;
-        if epoch.next() != pod_lease.epoch {
+        if !precedes(epoch, pod_lease.epoch) {
             return Err(QuotaError::StaleEpoch {
                 resource_definition_id: self.definition.id,
                 provided: epoch,
@@ -393,7 +410,11 @@ impl QuotaState {
             .get_mut(pod)
             .expect("just validated and refreshed");
         let new_epoch = pod_lease.epoch;
-        pod_lease.epoch = new_epoch.next();
+        pod_lease.epoch = new_epoch.checked_next().ok_or_else(|| {
+            QuotaError::InternalError(anyhow::anyhow!(
+                "lease epoch for pod {pod} cannot advance past {new_epoch}"
+            ))
+        })?;
 
         let allocated_amount = self.compute_allocation(pod, min_executors);
         let total_available_amount = self.total_available_amount();
@@ -424,7 +445,7 @@ impl QuotaState {
         let pod_lease = self.leases.get(pod).ok_or(QuotaError::LeaseNotFound {
             resource_definition_id: self.definition.id,
         })?;
-        if epoch.next() != pod_lease.epoch {
+        if !precedes(epoch, pod_lease.epoch) {
             return Err(QuotaError::StaleEpoch {
                 resource_definition_id: self.definition.id,
                 provided: epoch,

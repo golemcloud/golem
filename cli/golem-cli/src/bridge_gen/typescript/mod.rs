@@ -1970,6 +1970,12 @@ impl TypeScriptBridgeGenerator {
         typ: &SchemaType,
         stream: &str,
     ) -> anyhow::Result<String> {
+        if unstructured_text_restrictions(self.type_naming.graph(), typ)?.is_some() {
+            return Ok(format!("base.UnstructuredText.toSchemaValue({value})"));
+        }
+        if unstructured_binary_restrictions(self.type_naming.graph(), typ)?.is_some() {
+            return Ok(format!("base.UnstructuredBinary.toSchemaValue({value})"));
+        }
         Ok(match typ {
             SchemaType::S64 { .. } => format!("({{ kind: 's64', value: ({value}).toString() }})"),
             SchemaType::U64 { .. } => format!("({{ kind: 'u64', value: ({value}).toString() }})"),
@@ -2138,6 +2144,19 @@ impl TypeScriptBridgeGenerator {
     }
 
     fn decode_public_value_body(&self, value: &str, typ: &SchemaType) -> anyhow::Result<String> {
+        if let Some(restrictions) = unstructured_text_restrictions(self.type_naming.graph(), typ)? {
+            return Ok(format!(
+                "base.UnstructuredText.fromSchemaValue('value', {value}, [{}])",
+                Self::text_restriction_codes(restrictions)
+            ));
+        }
+        if let Some(restrictions) = unstructured_binary_restrictions(self.type_naming.graph(), typ)?
+        {
+            return Ok(format!(
+                "base.UnstructuredBinary.fromSchemaValue('value', {value}, [{}])",
+                Self::binary_restriction_mimes(restrictions)
+            ));
+        }
         Ok(match typ {
             SchemaType::S64 { .. } | SchemaType::U64 { .. } => {
                 format!("BigInt(({value} as any).value)")
@@ -4010,6 +4029,13 @@ impl TypeScriptBridgeGenerator {
     }
 
     fn streaming_type_definition(&self, typ: &SchemaType) -> anyhow::Result<String> {
+        if let Some(restrictions) = unstructured_text_restrictions(self.type_naming.graph(), typ)? {
+            return Ok(self.unstructured_text_type(restrictions));
+        }
+        if let Some(restrictions) = unstructured_binary_restrictions(self.type_naming.graph(), typ)?
+        {
+            return Ok(self.unstructured_binary_type(restrictions));
+        }
         Ok(match self.resolve_ref(typ) {
             SchemaType::Variant { cases, .. } => cases
                 .iter()
@@ -4296,6 +4322,13 @@ impl TypeScriptBridgeGenerator {
     }
 
     fn type_definition(&self, typ: &SchemaType) -> anyhow::Result<String> {
+        if let Some(restrictions) = unstructured_text_restrictions(self.type_naming.graph(), typ)? {
+            return Ok(self.unstructured_text_type(restrictions));
+        }
+        if let Some(restrictions) = unstructured_binary_restrictions(self.type_naming.graph(), typ)?
+        {
+            return Ok(self.unstructured_binary_type(restrictions));
+        }
         // Resolve through `Ref` so the body shape drives the type definition.
         let resolved = self.resolve_ref(typ);
         match resolved {

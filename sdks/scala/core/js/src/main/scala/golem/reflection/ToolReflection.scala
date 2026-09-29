@@ -292,15 +292,9 @@ final class ToolCommand private[reflection] (
   def packJson(input: Json): Either[ToolError[Nothing], SchemaValue] =
     try
       inputSchema
-        .packJson(input)
+        .validateJson(input)
         .left
-        .map(issue => ToolError.InvalidInput(issue.message))
-        .flatMap(value =>
-          inputSchema
-            .validateValue(value)
-            .left
-            .map(issues => ToolError.InvalidInput(issues.map(_.message).mkString("; ")))
-        )
+        .map(issues => ToolError.InvalidInput(issues.map(_.message).mkString("; ")))
         .flatMap(validateConstraints)
     catch { case NonFatal(error) => Left(ToolError.InvalidInput(Option(error.getMessage).getOrElse(error.toString))) }
 

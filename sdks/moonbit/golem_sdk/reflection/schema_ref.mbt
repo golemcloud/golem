@@ -1,13 +1,151 @@
 ///|
 /// A graph-backed view of one reflected schema root.
-pub(all) struct SchemaRef {
+pub struct SchemaRef {
   graph : @model.SchemaGraph
   root : @model.SchemaType
 } derive(Debug, Eq)
 
 ///|
-pub fn SchemaRef::new(graph : @model.SchemaGraph) -> SchemaRef {
+fn SchemaRef::new(graph : @model.SchemaGraph) -> SchemaRef {
   { root: graph.root, graph, }
+}
+
+///|
+fn clone_metadata(
+  metadata : @types.MetadataEnvelope,
+) -> @types.MetadataEnvelope {
+  {
+    ..metadata,
+    aliases: metadata.aliases.copy(),
+    examples: metadata.examples.copy(),
+  }
+}
+
+///|
+fn clone_schema_type(schema : @model.SchemaType) -> @model.SchemaType {
+  let body = match schema.body {
+    Record(fields) =>
+      @model.SchemaTypeBody::Record(
+        fields.map(field => {
+          ..field,
+          body: clone_schema_type(field.body),
+          metadata: clone_metadata(field.metadata),
+        }),
+      )
+    Variant(cases) =>
+      @model.SchemaTypeBody::Variant(
+        cases.map(case => {
+          ..case,
+          payload: case.payload.map(clone_schema_type),
+          metadata: clone_metadata(case.metadata),
+        }),
+      )
+    Enum(cases) => @model.SchemaTypeBody::Enum(cases.copy())
+    Flags(names) => @model.SchemaTypeBody::Flags(names.copy())
+    Tuple(elements) =>
+      @model.SchemaTypeBody::Tuple(elements.map(clone_schema_type))
+    List(element) => @model.SchemaTypeBody::List(clone_schema_type(element))
+    FixedList(element, length) =>
+      @model.SchemaTypeBody::FixedList(clone_schema_type(element), length)
+    Map(key, value) =>
+      @model.SchemaTypeBody::Map(
+        clone_schema_type(key),
+        clone_schema_type(value),
+      )
+    Option(element) => @model.SchemaTypeBody::Option(clone_schema_type(element))
+    Result(ok, err) =>
+      @model.SchemaTypeBody::Result(
+        ok.map(clone_schema_type),
+        err.map(clone_schema_type),
+      )
+    Text(restrictions) =>
+      @model.SchemaTypeBody::Text({
+        ..restrictions,
+        languages: restrictions.languages.map(values => values.copy()),
+      })
+    Binary(restrictions) =>
+      @model.SchemaTypeBody::Binary({
+        ..restrictions,
+        mime_types: restrictions.mime_types.map(values => values.copy()),
+      })
+    Path(spec) =>
+      @model.SchemaTypeBody::Path({
+        ..spec,
+        allowed_mime_types: spec.allowed_mime_types.map(values => values.copy()),
+        allowed_extensions: spec.allowed_extensions.map(values => values.copy()),
+      })
+    Url(restrictions) =>
+      @model.SchemaTypeBody::Url({
+        allowed_schemes: restrictions.allowed_schemes.map(values => {
+          values.copy()
+        }),
+        allowed_hosts: restrictions.allowed_hosts.map(values => values.copy()),
+      })
+    Quantity(spec) =>
+      @model.SchemaTypeBody::Quantity({
+        ..spec,
+        allowed_suffixes: spec.allowed_suffixes.copy(),
+      })
+    Union(branches) =>
+      @model.SchemaTypeBody::Union(
+        branches.map(branch => {
+          ..branch,
+          body: clone_schema_type(branch.body),
+          metadata: clone_metadata(branch.metadata),
+        }),
+      )
+    Secret(spec) =>
+      @model.SchemaTypeBody::Secret({
+        ..spec,
+        inner: clone_schema_type(spec.inner),
+      })
+    Future(element) =>
+      @model.SchemaTypeBody::Future(element.map(clone_schema_type))
+    Stream(element) =>
+      @model.SchemaTypeBody::Stream(element.map(clone_schema_type))
+    other => other
+  }
+  { body, metadata: clone_metadata(schema.metadata), }
+}
+
+///|
+fn clone_schema_graph(graph : @model.SchemaGraph) -> @model.SchemaGraph {
+  {
+    defs: graph.defs.map(def => { ..def, body: clone_schema_type(def.body), }),
+    root: clone_schema_type(graph.root),
+  }
+}
+
+///|
+fn SchemaRef::owned_graph(self : SchemaRef) -> @model.SchemaGraph {
+  let closed = @model.schema_graph_closure({
+    defs: self.graph.defs,
+    root: self.root,
+  })
+  clone_schema_graph(closed)
+}
+
+///|
+/// Return a self-contained defensive copy of this schema graph.
+pub fn SchemaRef::graph(self : SchemaRef) -> @model.SchemaGraph {
+  self.owned_graph()
+}
+
+///|
+/// Return a defensive copy of this schema root.
+pub fn SchemaRef::root(self : SchemaRef) -> @model.SchemaType {
+  self.owned_graph().root
+}
+
+///|
+/// Validate a value and pair it with a self-contained defensive graph copy for
+/// fully dynamic invocation.
+pub fn SchemaRef::typed_value(
+  self : SchemaRef,
+  value : @model.SchemaValue,
+) -> @model.TypedSchemaValue raise ReflectError {
+  self.validate_value(value)
+  { graph: self.owned_graph(), value, }
 }
 
 ///|
@@ -219,11 +357,12 @@ fn SchemaRef::validate_refinements(
       }
       match r.languages {
         Some(allowed) =>
-          if !(match language {
-              Some(lang) => allowed.contains(lang)
-              None => false
-            }) {
-            raise Schema("text language is not allowed")
+          match language {
+            Some(lang) =>
+              if !allowed.contains(lang) {
+                raise Schema("text language is not allowed")
+              }
+            None => ()
           }
         None => ()
       }
@@ -256,11 +395,19 @@ fn SchemaRef::validate_refinements(
       }
       match r.mime_types {
         Some(allowed) =>
-          if !(match mime_type {
-              Some(mime) => allowed.contains(mime)
-              None => false
-            }) {
-            raise Schema("binary MIME type is not allowed")
+          match mime_type {
+            Some(mime) =>
+              if !allowed.contains(mime) {
+                raise Schema("binary MIME type is not allowed")
+              }
+            None => ()
+          }
+        None => ()
+      }
+      match mime_type {
+        Some(mime) =>
+          if !is_valid_mime_type(mime) {
+            raise Schema("invalid MIME type")
           }
         None => ()
       }
@@ -419,12 +566,26 @@ fn SchemaRef::resolve(
   self : SchemaRef,
   schema : @model.SchemaType,
 ) -> @model.SchemaType raise ReflectError {
+  self.resolve_with(schema, {})
+}
+
+///|
+fn SchemaRef::resolve_with(
+  self : SchemaRef,
+  schema : @model.SchemaType,
+  visited : Map[String, Unit],
+) -> @model.SchemaType raise ReflectError {
   match schema.body {
-    Ref(id) =>
+    Ref(id) => {
+      guard !visited.contains(id) else {
+        raise Schema("cyclic schema reference '" + id + "'")
+      }
+      visited[id] = ()
       match self.graph.defs.iter().find_first(def => def.id == id) {
-        Some(def) => self.resolve(def.body)
+        Some(def) => self.resolve_with(def.body, visited)
         None => raise Schema("dangling schema reference '" + id + "'")
       }
+    }
     _ => schema
   }
 }
@@ -454,6 +615,11 @@ fn json_string(value : Json) -> String raise ReflectError {
 }
 
 ///|
+fn is_valid_mime_type(value : String) -> Bool {
+  re"^[A-Za-z0-9!#$&^_.+\-]+/[A-Za-z0-9!#$&^_.+\-]+$".execute(value) is Some(_)
+}
+
+///|
 fn json_number(value : Json) -> Double raise ReflectError {
   match value {
     Number(value, ..) => value
@@ -475,6 +641,28 @@ fn json_integer(
     raise Json("integer is outside the supported range")
   }
   value
+}
+
+///|
+fn json_int64_string(value : Json) -> Int64 raise ReflectError {
+  let text = json_string(value)
+  guard re"^(?:0|-[1-9][0-9]*|[1-9][0-9]*)$".execute(text) is Some(_) else {
+    raise Json("expected a canonical signed integer string")
+  }
+  @string.parse_int64(text.view(), base=10) catch {
+    _ => raise Json("signed integer is outside the s64 range")
+  }
+}
+
+///|
+fn json_uint64_string(value : Json) -> UInt64 raise ReflectError {
+  let text = json_string(value)
+  guard re"^(?:0|[1-9][0-9]*)$".execute(text) is Some(_) else {
+    raise Json("expected a canonical unsigned integer string")
+  }
+  @string.parse_uint64(text.view(), base=10) catch {
+    _ => raise Json("unsigned integer is outside the u64 range")
+  }
 }
 
 ///|
@@ -622,24 +810,16 @@ fn SchemaRef::unpack(
     | (@model.SchemaTypeBody::S16(_), @model.SchemaValue::S16(value))
     | (@model.SchemaTypeBody::S32(_), @model.SchemaValue::S32(value)) =>
       Json::number(value.to_double())
-    (@model.SchemaTypeBody::S64(_), @model.SchemaValue::S64(value)) => {
-      guard value >= -9007199254740991L && value <= 9007199254740991L else {
-        raise Json("64-bit integer is outside the safe JSON range")
-      }
-      Json::number(value.to_double())
-    }
+    (@model.SchemaTypeBody::S64(_), @model.SchemaValue::S64(value)) =>
+      Json::string(value.to_string())
     (@model.SchemaTypeBody::U8(_), @model.SchemaValue::U8(value)) =>
       Json::number(value.to_int().to_double())
     (@model.SchemaTypeBody::U16(_), @model.SchemaValue::U16(value)) =>
       Json::number(value.reinterpret_as_int().to_double())
     (@model.SchemaTypeBody::U32(_), @model.SchemaValue::U32(value)) =>
       Json::number(value.to_double())
-    (@model.SchemaTypeBody::U64(_), @model.SchemaValue::U64(value)) => {
-      guard value <= 9007199254740991UL else {
-        raise Json("64-bit integer is outside the safe JSON range")
-      }
-      Json::number(value.to_double())
-    }
+    (@model.SchemaTypeBody::U64(_), @model.SchemaValue::U64(value)) =>
+      Json::string(value.to_string())
     (@model.SchemaTypeBody::F32(_), @model.SchemaValue::F32(value)) => {
       guard !value.is_nan() && !value.is_inf() else {
         raise Json("expected a finite JSON number")
@@ -795,26 +975,26 @@ fn SchemaRef::unpack(
         "bytes": Json::string(binary_to_json(bytes)),
       }
       match mime {
-        Some(mime) => fields["mimeType"] = Json::string(mime)
+        Some(mime) => {
+          if !is_valid_mime_type(mime) {
+            raise Json("invalid MIME type")
+          }
+          fields["mimeType"] = Json::string(mime)
+        }
         None => ()
       }
       Json::object(fields)
     }
-    (@model.SchemaTypeBody::Quantity(_), @model.SchemaValue::Quantity(value)) => {
-      guard value.mantissa >= -9007199254740991L &&
-        value.mantissa <= 9007199254740991L else {
-        raise Json("quantity mantissa is outside the safe JSON range")
-      }
+    (@model.SchemaTypeBody::Quantity(_), @model.SchemaValue::Quantity(value)) =>
       Json::object({
-        "mantissa": Json::number(value.mantissa.to_double()),
+        "mantissa": Json::string(value.mantissa.to_string()),
         "scale": Json::number(value.scale.to_double()),
         "unit": Json::string(value.unit),
       })
-    }
     (@model.SchemaTypeBody::Datetime, @model.SchemaValue::Datetime(value)) =>
       Json::string(datetime_to_json(value))
     (@model.SchemaTypeBody::Duration, @model.SchemaValue::Duration(value)) =>
-      Json::string(duration_to_json(value))
+      Json::object({ "nanoseconds": Json::string(value.to_string()) })
     (@model.SchemaTypeBody::Secret(_), @model.SchemaValue::Secret(_))
     | (@model.SchemaTypeBody::QuotaToken(_), @model.SchemaValue::QuotaToken(_))
     | (
@@ -846,14 +1026,11 @@ fn SchemaRef::pack(
     S8(_) => S8(json_integer(json, -128.0, 127.0).to_int())
     S16(_) => S16(json_integer(json, -32768.0, 32767.0).to_int())
     S32(_) => S32(json_integer(json, -2147483648.0, 2147483647.0).to_int())
-    S64(_) =>
-      S64(
-        json_integer(json, -9007199254740991.0, 9007199254740991.0).to_int64(),
-      )
+    S64(_) => S64(json_int64_string(json))
     U8(_) => U8(json_integer(json, 0.0, 255.0).to_uint().to_byte())
     U16(_) => U16(json_integer(json, 0.0, 65535.0).to_uint())
     U32(_) => U32(json_integer(json, 0.0, 4294967295.0).to_uint())
-    U64(_) => U64(json_integer(json, 0.0, 9007199254740991.0).to_uint64())
+    U64(_) => U64(json_uint64_string(json))
     F32(_) => {
       let value = json_number(json)
       guard !value.is_nan() && !value.is_inf() else {
@@ -889,7 +1066,15 @@ fn SchemaRef::pack(
         }
       }
       let values = expected.map(field => {
-        self.pack(self.resolve(field.body), required_field(fields, field.name))
+        let resolved = self.resolve(field.body)
+        match fields.get(field.name) {
+          Some(value) => self.pack(resolved, value)
+          None =>
+            match resolved.body {
+              Option(_) => @model.SchemaValue::Option(None)
+              _ => raise Json("missing field '" + field.name + "'")
+            }
+        }
       })
       Record(values)
     }
@@ -1023,6 +1208,10 @@ fn SchemaRef::pack(
     }
     Text(_) => {
       let fields = json_object(json)
+      guard fields.length() <= 2 &&
+        (fields.length() == 1 || fields.contains("language")) else {
+        raise Json("unexpected text JSON field")
+      }
       Text(
         json_string(required_field(fields, "text")),
         fields.get("language").map(json_string),
@@ -1048,9 +1237,17 @@ fn SchemaRef::pack(
         (fields.length() == 1 || fields.contains("mimeType")) else {
         raise Json("unexpected binary JSON field")
       }
+      let mime_type = fields.get("mimeType").map(json_string)
+      match mime_type {
+        Some(mime) =>
+          if !is_valid_mime_type(mime) {
+            raise Json("invalid MIME type")
+          }
+        None => ()
+      }
       Binary(
         binary_from_json(json_string(required_field(fields, "bytes"))),
-        fields.get("mimeType").map(json_string),
+        mime_type,
       )
     }
     Quantity(_) => {
@@ -1059,11 +1256,7 @@ fn SchemaRef::pack(
         raise Json("quantity JSON requires mantissa, scale, and unit")
       }
       Quantity({
-        mantissa: json_integer(
-          required_field(fields, "mantissa"),
-          -9007199254740991.0,
-          9007199254740991.0,
-        ).to_int64(),
+        mantissa: json_int64_string(required_field(fields, "mantissa")),
         scale: json_integer(
           required_field(fields, "scale"),
           -2147483648.0,
@@ -1073,7 +1266,13 @@ fn SchemaRef::pack(
       })
     }
     Datetime => Datetime(datetime_from_json(json_string(json)))
-    Duration => Duration(duration_from_json(json))
+    Duration => {
+      let fields = json_object(json)
+      guard fields.length() == 1 else {
+        raise Json("duration JSON requires only nanoseconds")
+      }
+      Duration(json_int64_string(required_field(fields, "nanoseconds")))
+    }
     Secret(_) | QuotaToken(_) | PermissionCard(_) =>
       raise Json("capability values cannot be constructed from JSON")
     Future(_) | Stream(_) =>

@@ -132,7 +132,7 @@ pub(crate) async fn write_guest_result(
                 span_attributes: None,
             }),
         )
-        .await;
+        .await?;
     if let Some(start_index) = copied_scope_start {
         oplog
             .add(OplogEntry::End {
@@ -143,7 +143,7 @@ pub(crate) async fn write_guest_result(
                 span_finished: None,
                 span_attributes: None,
             })
-            .await;
+            .await?;
     }
     Ok(())
 }
@@ -293,8 +293,9 @@ mod tests {
                     instance_id: fingerprint.0,
                 },
             )))
-            .await;
-        stage.add(OplogEntry::suspend()).await;
+            .await
+            .unwrap();
+        stage.add(OplogEntry::suspend()).await.unwrap();
         let record = StreamSessionRecord::ForkCut(StreamForkCutRecord {
             format_version: 1,
             request_hash: hash.to_vec(),
@@ -314,13 +315,14 @@ mod tests {
                 record,
                 summary: None,
             })
-            .await;
+            .await
+            .unwrap();
         write_guest_result(stage.as_ref(), None, phantom)
             .await
             .unwrap();
         // Extra entries after creation must not affect retry recognition.
-        stage.add(OplogEntry::suspend()).await;
-        stage.commit(CommitLevel::Always).await;
+        stage.add(OplogEntry::suspend()).await.unwrap();
+        stage.commit(CommitLevel::Always).await.unwrap();
         let last = stage.current_oplog_index().await;
         drop(stage);
         assert!(!existing_fork(&service, &target, cut, hash).await.unwrap());

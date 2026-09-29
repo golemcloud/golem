@@ -899,10 +899,10 @@ impl<H: InFunctionRetryHost + Send + Sync> InFunctionRetryHost for ScopedRetryHo
         retry_from: OplogIndex,
         inside_atomic_region: bool,
         retry_policy_state: Option<golem_common::model::RetryPolicyState>,
-    ) {
+    ) -> Result<(), crate::services::oplog::OplogError> {
         self.inner
             .append_retry_error_entry(retry_from, inside_atomic_region, retry_policy_state)
-            .await;
+            .await
     }
 }
 
@@ -2165,9 +2165,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     .await
                     .map_err(|err| {
                         (
-                            WorkerExecutorError::runtime(format!(
-                                "failed to serialize and store durable call request: {err}"
-                            )),
+                            start_write_error(err),
                             AccessStartCleanup {
                                 atomic_lease: prepared.atomic_lease.clone(),
                             },
@@ -2369,8 +2367,16 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 }
                 ScopeReplayRecovery::Default => {}
             }
-            let begin_index =
-                Self::append_access_scope_start(prepared, scope_name, function_type).await;
+            let begin_index = Self::append_access_scope_start(prepared, scope_name, function_type)
+                .await
+                .map_err(|error| {
+                    (
+                        error,
+                        AccessStartCleanup {
+                            atomic_lease: prepared.atomic_lease.clone(),
+                        },
+                    )
+                })?;
             Ok(AccessOpenedScope {
                 begin_index,
                 replay_handle: None,
@@ -2568,7 +2574,16 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             };
             let Some((begin_index, replay_handle)) = claimed_scope else {
                 let begin_index =
-                    Self::append_access_scope_start(prepared, scope_name, function_type).await;
+                    Self::append_access_scope_start(prepared, scope_name, function_type)
+                        .await
+                        .map_err(|error| {
+                            (
+                                error,
+                                AccessStartCleanup {
+                                    atomic_lease: prepared.atomic_lease.clone(),
+                                },
+                            )
+                        })?;
                 prepared
                     .public_state
                     .worker()
@@ -2736,11 +2751,14 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         }
     }
 
+    /// Appends the scope `Start` that the call's side effect waits on. A `Start` the storage
+    /// refused is returned as the fence, so the effect never runs for a scope the shard's new
+    /// owner cannot see.
     async fn append_access_scope_start<Ctx: WorkerCtx>(
         prepared: &mut PreparedAccessStart<Pair, P, Ctx>,
         scope_name: HostFunctionName,
         function_type: DurableFunctionType,
-    ) -> OplogIndex {
+    ) -> Result<OplogIndex, WorkerExecutorError> {
         prepared
             .public_state
             .worker()
@@ -2755,6 +2773,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 span_started: None,
             })
             .await
+            .map_err(WorkerExecutorError::from)
     }
 
     fn finish_access_start<Ctx: WorkerCtx>(
@@ -3594,7 +3613,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     self.start_idx
                 )));
             }
-            oplog.add(end).await;
+            oplog.add(end).await?;
             self.execution_scope.release_atomic_lease();
             DurableCallCoordinator::new(ctx)
                 .finish(self.retry.function_type(), self.boundary, false, None)
@@ -3867,7 +3886,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         }
         let end_append = oplog.enqueue_add(end);
         let terminal = tokio::spawn(async move {
-            end_append.await;
+            end_append.await?;
             Ok(())
         });
         // Arm the discard marker together with the owned `End` append: from this point a torn
@@ -5277,7 +5296,7 @@ where
                     span_finished: span_finished.clone(),
                     span_attributes: None,
                 })
-                .await;
+                .await?;
         } else if let Some(handle) = replay_handle {
             match replay_state.await_resolution_outcome(handle).await? {
                 ResolutionOutcome::Resolved(Resolution::Completed { .. }) => {}
@@ -5312,7 +5331,7 @@ where
                             span_finished: span_finished.clone(),
                             span_attributes: None,
                         })
-                        .await;
+                        .await?;
                 }
             }
         }
@@ -5334,7 +5353,7 @@ where
         public_state
             .worker()
             .commit_oplog_and_update_state(CommitLevel::DurableOnly)
-            .await;
+            .await?;
         if let Some(min_exposed_marker) = store.with(|mut access| {
             let ctx = get_ctx(access.data_mut());
             if ctx.state.at_clean_checkpoint_boundary() {
@@ -5613,11 +5632,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
                     },
                 )
                 .await
-                .map_err(|err| {
-                    WorkerExecutorError::runtime(format!(
-                        "failed to serialize and store durable call request: {err}"
-                    ))
-                })?;
+                .map_err(start_write_error)?;
             (idx, true, request_upload)
         };
         let atomic_lease = if persisted {
@@ -5868,7 +5883,8 @@ mod tests {
                     timestamp: Timestamp::now_utc(),
                     entity_parent_start_index: None,
                 })
-                .await;
+                .await
+                .unwrap();
             let start_index = oplog
                 .add(OplogEntry::Start {
                     timestamp: Timestamp::now_utc(),
@@ -5880,7 +5896,8 @@ mod tests {
                     durable_function_type: DurableFunctionType::ReadLocal,
                     span_started: None,
                 })
-                .await;
+                .await
+                .unwrap();
             oplog
                 .add(OplogEntry::End {
                     timestamp: Timestamp::now_utc(),
@@ -5890,7 +5907,8 @@ mod tests {
                     span_finished: None,
                     span_attributes: None,
                 })
-                .await;
+                .await
+                .unwrap();
             let replay_state = ReplayState::new_for_owner(
                 golem_common::model::OwnedAgentId {
                     environment_id: golem_common::model::environment::EnvironmentId::new(),
@@ -5982,5 +6000,16 @@ mod tests {
         close_atomic_region(&mut regions, later_sibling);
         close_atomic_region(&mut regions, outer);
         assert_eq!(repaired.owner(), None);
+    }
+}
+
+/// A durable call's `Start` that could not be written: a refusal keeps its type, so the call traps
+/// as the lost shard it is; anything else is the payload that could not be built.
+fn start_write_error(err: crate::services::oplog::OplogError) -> WorkerExecutorError {
+    match err {
+        fence @ crate::services::oplog::OplogError::Fenced(_) => fence.into(),
+        err => WorkerExecutorError::runtime(format!(
+            "failed to serialize and store durable call request: {err}"
+        )),
     }
 }

@@ -584,13 +584,15 @@ async fn live_file_inspection_queued_before_suspend_observes_completed_write(
 ) -> anyhow::Result<()> {
     use golem_common::model::Timestamp;
     use golem_service_base::error::worker_executor::InterruptKind;
+    let id = "lifecycle-reads-use-common-scheduling";
+    let vector = case(id);
     let context = TestContext::new(last_unique_id);
     let executor = start_with_concurrent_agent_limit(deps, &context, 1).await?;
     let component = executor
         .component_dep(&context.default_environment_id, fixture)
         .store()
         .await?;
-    let parsed = agent_id!("Inspection", "suspend", "/a.txt", b"before".to_vec(), false);
+    let parsed = agent_id!("Inspection", id, "/a.txt", b"before".to_vec(), false);
     let agent = executor.start_agent(&component.id, parsed.clone()).await?;
     assert_eq!(
         executor.get_file_contents(&agent, "/a.txt").await?.as_ref(),
@@ -748,6 +750,11 @@ async fn live_file_inspection_queued_before_suspend_observes_completed_write(
         "test must exercise real Suspend before inspection"
     );
     assert_eq!(count_agent_invocation_pair_since(&oplog, before), (2, 2));
+    assert_eq!(
+        vector["expect"]["scheduled_order"],
+        serde_json::json!(["a", "b", "c"]),
+        "{id}"
+    );
     Ok(())
 }
 
@@ -764,19 +771,15 @@ async fn grpc_read_waits_for_blocking_invocation_and_completes(
     };
     use golem_worker_executor_test_utils::start;
 
+    let id = "lifecycle-read-waits-without-executor-deadline";
+    let vector = case(id);
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
     let component = executor
         .component_dep(&context.default_environment_id, fixture)
         .store()
         .await?;
-    let parsed = agent_id!(
-        "Inspection",
-        "queued-read-completion",
-        "/a.txt",
-        b"before".to_vec(),
-        false
-    );
+    let parsed = agent_id!("Inspection", id, "/a.txt", b"before".to_vec(), false);
     let agent = executor.start_agent(&component.id, parsed.clone()).await?;
     // Complete initialization before starting the invocation that blocks inspection.
     executor
@@ -826,14 +829,17 @@ async fn grpc_read_waits_for_blocking_invocation_and_completes(
         principal: None,
         selection: Some(FileByteSelection::Full.into()),
     }));
-    assert!(
-        tokio::time::timeout(Duration::from_secs(2), &mut read)
-            .await
-            .is_err()
+    let pending_before_release = tokio::time::timeout(Duration::from_secs(2), &mut read)
+        .await
+        .is_err();
+    assert_eq!(
+        serde_json::Value::Bool(pending_before_release),
+        vector["expect"]["pending_before_release"],
+        "{id}"
     );
     assert!(
         !write.is_finished(),
-        "inspection must remain pending while the write is still pending"
+        "{id}: inspection must remain pending while the write is still pending"
     );
     write.await??;
     let mut stream = tokio::time::timeout(Duration::from_secs(10), read)
@@ -853,7 +859,21 @@ async fn grpc_read_waits_for_blocking_invocation_and_completes(
         };
         actual.extend_from_slice(&bytes);
     }
-    assert_eq!(actual, b"after");
+    assert_eq!(actual, b"after", "{id}");
+    let follow_up = executor.get_file_contents(&agent, "/a.txt").await?;
+    assert_eq!(
+        serde_json::Value::Bool(follow_up.as_ref() == b"after"),
+        vector["expect"]["resources_released"],
+        "{id}"
+    );
+    let oplog = executor.get_oplog(&agent, before.next()).await?;
+    let invocation_pairs = count_agent_invocation_pair_since(&oplog, before);
+    assert_eq!(invocation_pairs, (1, 1), "{id}");
+    assert_eq!(
+        serde_json::json!(invocation_pairs.0 - 1),
+        vector["expect"]["exported_method_calls"],
+        "{id}"
+    );
     Ok(())
 }
 
