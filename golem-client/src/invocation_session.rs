@@ -2774,6 +2774,27 @@ fn send_generated_result<T>(
     }
 }
 
+fn decode_generated_result_value(
+    result_graph: &SchemaGraph,
+    value: &serde_json::Value,
+    expected_graph: &SchemaGraph,
+) -> Result<SchemaValue, SessionTransportError> {
+    let value = decode_public_schema_value(
+        result_graph,
+        &result_graph.root,
+        value,
+        PublicStreamReferencePolicy::Stable,
+        |reference, _| Ok(SchemaValueStream::from_host_endpoint(reference)),
+    )
+    .map_err(|error| SessionTransportError::Protocol(error.to_string()))?;
+    validate_value(expected_graph, &expected_graph.root, &value).map_err(|errors| {
+        SessionTransportError::Protocol(format!(
+            "invocation result failed expected schema validation: {errors:?}"
+        ))
+    })?;
+    Ok(value)
+}
+
 async fn handle_generated_frame<T>(
     frame: ReceivedFrame,
     session: &mut InvocationSession,
@@ -2805,18 +2826,13 @@ where
         ServerFrame::Message(PublicServerMessage::InvocationResult { result, .. }) => {
             let value = match result.as_ref() {
                 PublicInvocationResult::None => None,
-                PublicInvocationResult::Value { value } => {
-                    let graph = output_graph.ok_or_else(|| {
+                PublicInvocationResult::Value { graph, value } => {
+                    let expected_graph = output_graph.ok_or_else(|| {
                         SessionTransportError::Protocol(
                             "server returned a value for a unit method".to_string(),
                         )
                     })?;
-                    let context = output_context.expect("output graph has a decode context");
-                    Some(
-                        context
-                            .decode_value(&graph.root, value)
-                            .map_err(|error| SessionTransportError::Protocol(error.to_string()))?,
-                    )
+                    Some(decode_generated_result_value(graph, value, expected_graph)?)
                 }
                 PublicInvocationResult::ToolSuccess { .. }
                 | PublicInvocationResult::ToolFailure { .. } => {
@@ -3541,6 +3557,41 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn generated_result_uses_returned_graph_and_validates_expected_type() {
+        let type_id = golem_common::schema::metadata::TypeId::new("ReturnedText");
+        let result_graph = SchemaGraph {
+            defs: vec![golem_common::schema::SchemaTypeDef {
+                id: type_id.clone(),
+                name: Some("ReturnedText".to_string()),
+                body: SchemaType::string(),
+            }],
+            root: SchemaType::ref_to(type_id),
+        };
+        let value = serde_json::json!({"kind":"string","value":"done"});
+
+        assert_eq!(
+            decode_generated_result_value(
+                &result_graph,
+                &value,
+                &SchemaGraph::anonymous(SchemaType::string()),
+            )
+            .unwrap(),
+            SchemaValue::String("done".to_string())
+        );
+        assert!(
+            decode_generated_result_value(
+                &result_graph,
+                &value,
+                &SchemaGraph::anonymous(SchemaType::u64()),
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("expected schema validation")
+        );
+    }
+
     use golem_common::model::invocation_session_public::{
         DecimalU64, InvocationSelector, PublicAttachmentRevokedReason, PublicByteStreamRole,
         PublicErrorCode, PublicInputHighWater, PublicInvocationOutcome, PublicInvocationResult,
@@ -3594,8 +3645,8 @@ mod tests {
                 component_id: uuid::Uuid::new_v4(),
             },
             input: Box::new(PublicTypedValue {
-                schema: SchemaGraph::anonymous(SchemaType::u8()),
-                value: serde_json::json!(7),
+                graph: SchemaGraph::anonymous(SchemaType::u8()),
+                value: serde_json::json!({"kind": "u8", "value": 7}),
             }),
             stdin: true,
             stdout: true,
@@ -3638,8 +3689,11 @@ mod tests {
         let structured_result = if result_before_stdout_end {
             PublicInvocationResult::ToolSuccess {
                 result: Some(PublicTypedValue {
-                    schema: SchemaGraph::anonymous(SchemaType::string()),
-                    value: serde_json::json!("structured-result"),
+                    graph: SchemaGraph::anonymous(SchemaType::string()),
+                    value: serde_json::json!({
+                        "kind": "string",
+                        "value": "structured-result"
+                    }),
                 }),
             }
         } else {
@@ -3647,8 +3701,8 @@ mod tests {
                 code: "custom-code".to_string(),
                 message: Some("structured failure".to_string()),
                 custom_error: Some(PublicTypedValue {
-                    schema: SchemaGraph::anonymous(SchemaType::u8()),
-                    value: serde_json::json!(255),
+                    graph: SchemaGraph::anonymous(SchemaType::u8()),
+                    value: serde_json::json!({"kind": "u8", "value": 255}),
                 }),
             }
         };
@@ -4516,7 +4570,7 @@ mod tests {
             cursor_token: "cursor-one".to_string(),
             mappings: Vec::new(),
             sequence: DecimalU64(0),
-            value: serde_json::json!("seven"),
+            value: serde_json::json!({"kind": "string", "value": "seven"}),
             version: 1,
         });
         let frame = ReceivedFrame {

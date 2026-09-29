@@ -257,7 +257,7 @@ pub enum PublicNativeToolTarget {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct PublicTypedValue {
-    pub schema: SchemaGraph,
+    pub graph: SchemaGraph,
     pub value: Value,
 }
 
@@ -406,6 +406,7 @@ pub enum PublicClientMessage {
 pub enum PublicInvocationResult {
     None,
     Value {
+        graph: SchemaGraph,
         value: Value,
     },
     ToolSuccess {
@@ -1326,9 +1327,9 @@ mod tests {
     use super::new_durable_stream_session_id;
     use super::{
         BinaryMessageKind, MAX_WEBSOCKET_MESSAGE_SIZE, PublicClientMessage, PublicErrorCode,
-        PublicNativeToolTarget, PublicServerMessage, PublicTypedValue, decode_binary_message,
-        decode_client_text, decode_server_text, encode_text, validate_durable_stream_session_id,
-        validate_message_size,
+        PublicInvocationResult, PublicNativeToolTarget, PublicServerMessage, PublicTypedValue,
+        decode_binary_message, decode_client_text, decode_server_text, encode_text,
+        validate_durable_stream_session_id, validate_message_size,
     };
     use crate::schema::{SchemaGraph, SchemaType};
     use serde::Deserialize;
@@ -1390,6 +1391,28 @@ mod tests {
         assert_eq!(
             decode_client_text(bytes).unwrap_err().code,
             PublicErrorCode::UnsupportedVersion
+        );
+    }
+
+    #[test]
+    fn malformed_fixture_invalid_attempt_uuid_has_the_frozen_error_code() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../golem-client/tests/fixtures/stream-session-v1/malformed.json"
+        )))
+        .unwrap();
+        let vector = fixture["vectors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|vector| vector["name"] == "invalid-attempt-uuid")
+            .unwrap();
+        assert_eq!(vector["expectedCode"], "validation-error");
+        assert_eq!(
+            decode_client_text(vector["input"].as_str().unwrap().as_bytes())
+                .unwrap_err()
+                .code,
+            PublicErrorCode::ValidationError
         );
     }
 
@@ -1468,8 +1491,8 @@ mod tests {
                 component_id: uuid::Uuid::new_v4(),
             },
             input: Box::new(PublicTypedValue {
-                schema: SchemaGraph::anonymous(SchemaType::u8()),
-                value: serde_json::json!(7),
+                graph: SchemaGraph::anonymous(SchemaType::u8()),
+                value: serde_json::json!({"kind":"u8","value":7}),
             }),
             stdin: true,
             stdout: true,
@@ -1478,10 +1501,29 @@ mod tests {
         let encoded = encode_text(&message).unwrap();
         assert!(encoded.contains("\"commandPath\""));
         assert!(encoded.contains("\"componentId\""));
+        assert!(encoded.contains("\"graph\""));
+        assert!(!encoded.contains("\"schema\""));
         assert!(matches!(
             decode_client_text(encoded.as_bytes()).unwrap(),
             PublicClientMessage::ToolStart { command_path, .. } if command_path.is_empty()
         ));
+    }
+
+    #[test]
+    fn method_result_carries_a_graph_and_value_envelope() {
+        let message = PublicServerMessage::InvocationResult {
+            mappings: Vec::new(),
+            result: Box::new(PublicInvocationResult::Value {
+                graph: SchemaGraph::anonymous(SchemaType::string()),
+                value: serde_json::json!({"kind":"string","value":"done"}),
+            }),
+            version: 1,
+        };
+
+        let encoded = encode_text(&message).unwrap();
+        assert!(encoded.contains("\"graph\""));
+        assert!(!encoded.contains("\"schema\""));
+        assert_eq!(decode_server_text(encoded.as_bytes()).unwrap(), message);
     }
 
     #[test]

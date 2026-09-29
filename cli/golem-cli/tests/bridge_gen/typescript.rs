@@ -981,6 +981,230 @@ fn external_generation_keeps_rest_runtime_and_name() {
 }
 
 #[test]
+fn external_rest_generation_uses_native_null_float_and_local_result_validation() {
+    let dir = TempDir::new().unwrap();
+    let target = Utf8Path::from_path(dir.path()).unwrap();
+    let unit_result = SchemaType::result(ResultSpec {
+        ok: None,
+        err: None,
+    });
+    generate_and_compile(
+        agent(
+            "NativeValueAgent",
+            "typescript",
+            vec![],
+            vec![
+                method(
+                    "encode",
+                    vec![
+                        field("optional", SchemaType::option(SchemaType::string())),
+                        field("float", SchemaType::f64()),
+                        field("result", unit_result.clone()),
+                    ],
+                    Some(unit_result),
+                ),
+                method("float", vec![], Some(SchemaType::f64())),
+            ],
+            vec![],
+            AgentMode::Durable,
+        ),
+        target,
+    );
+    let source = std::fs::read_to_string(
+        generated_package_dir(target, "native-value-agent").join("native-value-agent-client.ts"),
+    )
+    .unwrap();
+    assert!(source.contains("base.encodeOption("));
+    assert!(source.contains("{ tag: 'ok', value: null }"));
+    assert!(source.contains("{ tag: 'err', value: null }"));
+    for tag in ["nan", "positive-infinity", "negative-infinity"] {
+        assert!(source.contains(&format!("$float: '{tag}'")), "{source}");
+    }
+    assert!(source.contains("Number.NaN"));
+    assert!(source.contains("Number.POSITIVE_INFINITY"));
+    assert!(source.contains("Number.NEGATIVE_INFINITY"));
+    assert!(source.contains(".validate(__out.value, 'none')"));
+}
+
+#[test]
+fn external_streaming_multimodal_constructor_and_method_compile() {
+    let dir = TempDir::new().unwrap();
+    let target = Utf8Path::from_path(dir.path()).unwrap();
+    let constructor_parts = multimodal(vec![variant_case("text", Some(SchemaType::string()))]);
+    let method_parts = multimodal(vec![
+        variant_case("text", Some(SchemaType::string())),
+        variant_case("bytes", Some(SchemaType::stream(Some(SchemaType::u8())))),
+    ]);
+    generate_and_compile(
+        agent(
+            "MultimodalStreamAgent",
+            "typescript",
+            vec![field("parts", constructor_parts)],
+            vec![
+                method(
+                    "exchange",
+                    vec![field("parts", method_parts.clone())],
+                    Some(method_parts),
+                ),
+                method(
+                    "empty-check",
+                    vec![field("input", SchemaType::stream(Some(SchemaType::u8())))],
+                    Some(SchemaType::tuple(vec![])),
+                ),
+            ],
+            vec![],
+            AgentMode::Durable,
+        ),
+        target,
+    );
+    let source = std::fs::read_to_string(
+        generated_package_dir(target, "multimodal-stream-agent")
+            .join("multimodal-stream-agent-client.ts"),
+    )
+    .unwrap();
+    assert!(
+        source.contains("(multimodalInput).map((v: any)"),
+        "{source}"
+    );
+    assert!(
+        source.contains("(__multimodalInput).map((v: any)"),
+        "{source}"
+    );
+    assert!(source.contains("v.type === \"text\""), "{source}");
+    assert!(source.contains("v.value"), "{source}");
+    assert!(
+        source.contains("return { type: \"text\" as const, value:"),
+        "{source}"
+    );
+    assert!(
+        source.contains("const __validatedResult =") && source.contains("return [];"),
+        "empty tuple streaming results must validate before decoding: {source}"
+    );
+    assert_eq!(
+        source.matches(".validate((value as any).value").count(),
+        2,
+        "each streaming result must perform one local validation: {source}"
+    );
+    assert!(
+        source.contains("const __validatedItem =")
+            && source.matches(".validate(item,").count() == 1,
+        "stream-item validation must be evaluated once before decoding: {source}"
+    );
+
+    let package = generated_package_dir(target, "multimodal-stream-agent");
+    std::fs::write(
+        package.join("runtime-test.mjs"),
+        r#"import assert from 'node:assert/strict';
+import { WebSocketServer } from 'ws';
+import { agentStream } from '@golemcloud/golem-ts-bridge';
+import { MultimodalStreamAgent, configure } from './multimodal-stream-agent-client.js';
+
+const wss = new WebSocketServer({ port: 0 });
+await new Promise((resolve) => wss.once('listening', resolve));
+const port = wss.address().port;
+let connection = 0;
+const accepted = (start, mappings = []) => ({
+  version: 1, type: 'invocationAccepted', attemptId: start.attemptId,
+  idempotencyKey: start.idempotencyKey, sessionToken: 'session', mappings,
+});
+const finish = (socket) => socket.send(JSON.stringify({
+  version: 1, type: 'invocationFinished', outcome: { kind: 'success' },
+}));
+const provisionalRef = (value) => {
+  if (value && typeof value === 'object') {
+    if (typeof value.provisionalRef === 'string') return value.provisionalRef;
+    for (const nested of Object.values(value)) {
+      const found = provisionalRef(nested);
+      if (found) return found;
+    }
+  }
+};
+wss.on('connection', (socket) => socket.once('message', (raw) => {
+  const start = JSON.parse(raw);
+  connection += 1;
+  if (connection === 1) {
+    socket.send(JSON.stringify(accepted(start, [
+      { channel: 2, direction: 'output', streamToken: 'output' },
+    ])));
+    socket.send(JSON.stringify({
+      version: 1, type: 'invocationResult', mappings: [],
+      result: {
+        kind: 'value',
+        graph: { root: { kind: 'list', value: { element: { kind: 'variant', value: { cases: [
+          { name: 'text', payload: { kind: 'string', value: {} } },
+          { name: 'bytes', payload: { kind: 'stream', value: { inner: { kind: 'u8', value: {} } } } },
+        ] } } } } },
+        value: { kind: 'list', value: { elements: [
+          { kind: 'variant', value: { case: 1, payload: { kind: 'stream', value: { streamToken: 'output' } } } },
+        ] } },
+      },
+    }));
+    socket.send(JSON.stringify({
+      version: 1, type: 'outputStreamEnd', channel: 2, sequence: '0',
+      cursorToken: 'cursor-end', outcome: { kind: 'ok' },
+    }));
+    finish(socket);
+  } else {
+    const provisional = provisionalRef(start.methodParameters);
+    socket.send(JSON.stringify(accepted(start, [{
+      channel: 1, direction: 'input', streamToken: 'input', provisionalRef: provisional,
+      inputHighWater: { sequence: '0', terminal: false },
+    }])));
+    socket.send(JSON.stringify({
+      version: 1, type: 'invocationResult', mappings: [],
+      result: { kind: 'value', graph: { root: { kind: 'u32', value: {} } }, value: { kind: 'u32', value: 7 } },
+    }));
+    finish(socket);
+  }
+}));
+
+configure({
+  server: { type: 'custom', url: `http://127.0.0.1:${port}`, token: 'test' },
+  application: 'app', environment: 'env',
+});
+const constructorValue = { kind: 'record', value: { fields: [
+  { kind: 'list', value: { elements: [
+    { kind: 'variant', value: { case: 0, payload: { kind: 'string', value: 'constructor' } } },
+  ] } },
+] } };
+const remote = new MultimodalStreamAgent(
+  constructorValue, undefined, { componentId: 'component', agentId: 'agent' },
+  constructorValue, [],
+);
+const output = await remote.exchange([{ type: 'text', value: 'request' }]);
+assert.equal(output[0].type, 'bytes');
+assert.equal(typeof output[0].value[Symbol.asyncIterator], 'function');
+await assert.rejects(
+  remote.empty_check(agentStream((async function* () {})())),
+  /tuple/i,
+);
+for (const client of wss.clients) client.terminate();
+await new Promise((resolve) => wss.close(resolve));
+"#,
+    )
+    .unwrap();
+    assert!(
+        std::process::Command::new("npm")
+            .args(["install", "--no-save", "ws"])
+            .current_dir(&package)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let output = std::process::Command::new("node")
+        .arg("runtime-test.mjs")
+        .current_dir(&package)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "generated multimodal runtime test failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn external_streaming_generation_compiles_recursive_streams() {
     let dir = TempDir::new().unwrap();
     let target_dir = Utf8Path::from_path(dir.path()).unwrap();
@@ -1057,6 +1281,24 @@ fn external_streaming_generation_compiles_recursive_streams() {
     assert!(source.contains("amount: base.QuantityValue"));
     assert!(source.contains("configLimitsMaximum?: bigint"));
     assert!(source.contains("base.publicValueCodec"));
+    for method_name in [
+        "getWithConfig",
+        "getPhantomWithConfig",
+        "newPhantomWithConfig",
+    ] {
+        let method_source = source
+            .split_once(&format!("static async {method_name}("))
+            .unwrap()
+            .1
+            .split("\n  static async ")
+            .next()
+            .unwrap();
+        assert_eq!(
+            method_source.matches(".application(").count(),
+            1,
+            "{method_name} must project each supplied config value exactly once"
+        );
+    }
     assert!(source.contains(".validate(") && source.contains("'none'"));
     assert!(source.contains("'provisional'"));
     assert!(source.contains("\"stable\""));

@@ -264,6 +264,8 @@ export interface BinaryValuePayload {
   mimeType?: string;
 }
 
+export type SchemaFloat = number | { $float: 'nan' | 'positive-infinity' | 'negative-infinity' };
+
 /**
  * Schema-native value, mirroring the server's Rust `SchemaValue`. The wire
  * form is the serde derive of `enum SchemaValue` with `tag = "kind"` /
@@ -276,13 +278,13 @@ export type SchemaValue =
   | { kind: 's8'; value: number }
   | { kind: 's16'; value: number }
   | { kind: 's32'; value: number }
-  | { kind: 's64'; value: bigint }
+  | { kind: 's64'; value: string }
   | { kind: 'u8'; value: number }
   | { kind: 'u16'; value: number }
   | { kind: 'u32'; value: number }
-  | { kind: 'u64'; value: bigint }
-  | { kind: 'f32'; value: number }
-  | { kind: 'f64'; value: number }
+  | { kind: 'u64'; value: string }
+  | { kind: 'f32'; value: SchemaFloat }
+  | { kind: 'f64'; value: SchemaFloat }
   | { kind: 'char'; value: string }
   | { kind: 'string'; value: string }
   | { kind: 'record'; value: { fields: SchemaValue[] } }
@@ -293,21 +295,21 @@ export type SchemaValue =
   | { kind: 'list'; value: { elements: SchemaValue[] } }
   | { kind: 'fixed-list'; value: { elements: SchemaValue[] } }
   | { kind: 'map'; value: { entries: [SchemaValue, SchemaValue][] } }
-  | { kind: 'option'; value: { inner?: SchemaValue } }
-  | { kind: 'result'; value: { tag: 'ok' | 'err'; value?: SchemaValue } }
+  | { kind: 'option'; value: { inner: SchemaValue | null } }
+  | { kind: 'result'; value: { tag: 'ok' | 'err'; value: SchemaValue | null } }
   | { kind: 'text'; value: TextValuePayload }
   | { kind: 'binary'; value: BinaryValuePayload }
   | { kind: 'path'; value: { path: string } }
   | { kind: 'url'; value: { url: string } }
   | { kind: 'datetime'; value: { value: string } }
-  | { kind: 'duration'; value: { nanoseconds: number | bigint } }
-  | { kind: 'quantity'; value: QuantityValue }
+  | { kind: 'duration'; value: { nanoseconds: string } }
+  | { kind: 'quantity'; value: { mantissa: string; scale: number; unit: string } }
   | { kind: 'union'; value: { tag: string; body: SchemaValue } };
 
 /**
  * A self-contained schema graph paired with a value (the server's Rust
- * `TypedSchemaValue`). Generated clients decode `value` guided by their static
- * schema and do not need to interpret `graph`.
+ * `TypedSchemaValue`). Generated clients first validate `value` against this
+ * returned graph and then against their locally generated expected schema.
  */
 export interface TypedSchemaValue {
   graph: unknown;
@@ -353,7 +355,7 @@ export interface InvocationReceipt {
 
 export interface AgentConfigEntry {
   path: string[];
-  value: SchemaValue;
+  value: PublicValue;
 }
 
 export interface CreateAgentRequest {
@@ -639,17 +641,39 @@ function jsonIntegerToken(token: JsonNumberToken, kind: 's64' | 'u64'): bigint {
   return result;
 }
 
-function restoreJsonIntegers(value: unknown, integerKind?: 's64' | 'u64'): unknown {
+function restoreJsonIntegers(
+  value: unknown,
+  integerKind?: 's64' | 'u64' | 'quantity' | 'duration',
+): unknown {
   if (value instanceof JsonNumberToken)
-    return integerKind ? jsonIntegerToken(value, integerKind) : Number(value.lexeme);
+    return integerKind === 's64' || integerKind === 'u64'
+      ? jsonIntegerToken(value, integerKind)
+      : Number(value.lexeme);
   if (Array.isArray(value)) return value.map((item) => restoreJsonIntegers(item));
   if (!isRecord(value)) return value;
 
   const valueKind = value.kind === 's64' || value.kind === 'u64' ? value.kind : undefined;
+  const boundKind =
+    value.kind === 'signed'
+      ? 's64'
+      : value.kind === 'unsigned' || value.kind === 'float-bits'
+        ? 'u64'
+        : undefined;
   return Object.fromEntries(
     Object.entries(value).map(([key, item]) => [
       key,
-      restoreJsonIntegers(item, key === 'value' ? valueKind : undefined),
+      restoreJsonIntegers(
+        item,
+        key === 'value'
+          ? (valueKind ??
+              boundKind ??
+              (value.kind === 'quantity' || value.kind === 'duration' ? value.kind : undefined))
+          : key === 'mantissa'
+            ? 's64'
+            : key === 'nanoseconds'
+              ? 's64'
+              : undefined,
+      ),
     ]),
   );
 }
@@ -765,7 +789,11 @@ export async function invokeAgent(
       await throwGolemServiceError('invokeAgent', rawResponse);
     }
 
-    let response = parseInvocationResultJson(await rawResponse.text());
+    const response = parseInvocationResultJson(await rawResponse.text());
+    if (response.result !== undefined) {
+      const returnedGraph = schemaGraphFromWire(response.result.graph);
+      new PublicValueValidator(returnedGraph, 'none').validate(response.result.value);
+    }
 
     if (aroundInvokeHook) {
       await aroundInvokeHook.afterInvoke(request, { ok: response });
@@ -1270,7 +1298,7 @@ export const UnstructuredBinary = {
 /** Encodes an optional value into a schema-native `option` value. */
 export function encodeOption<T>(value: T | undefined, encode: (v: T) => SchemaValue): SchemaValue {
   if (value === undefined || value === null) {
-    return { kind: 'option', value: {} };
+    return { kind: 'option', value: { inner: null } };
   } else {
     return { kind: 'option', value: { inner: encode(value) } };
   }
@@ -1354,6 +1382,12 @@ export class PublicValueCodec {
     new PublicValueValidator(this.graph, streamPolicy).validate(value);
     return value as PublicValue;
   }
+
+  application(value: unknown): PublicValue {
+    const validator = new PublicValueValidator(this.graph, 'none');
+    validator.validate(value);
+    return validator.application(value) as PublicValue;
+  }
 }
 
 export function publicValueCodec(graph: SchemaGraph): PublicValueCodec {
@@ -1373,104 +1407,233 @@ class PublicValueValidator {
     this.value(this.graph.root, value, 0);
   }
 
+  application(value: unknown): unknown {
+    return this.applicationValue(this.graph.root, value);
+  }
+
+  private applicationValue(type: SchemaType, value: unknown): unknown {
+    const body = this.resolve(type);
+    const payload = publicObject(value, `${body.tag} value`).value;
+    switch (body.tag) {
+      case 'bool':
+      case 's8':
+      case 's16':
+      case 's32':
+      case 'u8':
+      case 'u16':
+      case 'u32':
+      case 's64':
+      case 'u64':
+      case 'char':
+      case 'string':
+        return payload;
+      case 'f32':
+        if (typeof payload !== 'number')
+          this.fail(
+            'unsupported-value',
+            'exceptional floats have no application JSON representation',
+          );
+        return Math.fround(payload);
+      case 'f64':
+        if (typeof payload !== 'number')
+          this.fail(
+            'unsupported-value',
+            'exceptional floats have no application JSON representation',
+          );
+        return payload;
+      case 'record': {
+        const fields = publicArray(publicObject(payload, 'record payload').fields, 'record fields');
+        return Object.fromEntries(
+          body.fields.map((field, index) => [
+            field.name,
+            this.applicationValue(field.body, fields[index]),
+          ]),
+        );
+      }
+      case 'variant': {
+        const variant = publicObject(payload, 'variant payload');
+        const selected = body.cases[variant.case as number];
+        return selected.payload
+          ? { [selected.name]: this.applicationValue(selected.payload, variant.payload) }
+          : selected.name;
+      }
+      case 'enum':
+        return body.cases[(payload as { case: number }).case];
+      case 'flags':
+        return body.names.filter((_, index) => (payload as { bits: boolean[] }).bits[index]);
+      case 'tuple':
+        return body.elements.map((element, index) =>
+          this.applicationValue(element, (payload as { elements: unknown[] }).elements[index]),
+        );
+      case 'list':
+      case 'fixed-list':
+        return (payload as { elements: unknown[] }).elements.map((item) =>
+          this.applicationValue(body.element, item),
+        );
+      case 'map':
+        return (payload as { entries: [unknown, unknown][] }).entries.map(([key, item]) => [
+          this.applicationValue(body.key, key),
+          this.applicationValue(body.value, item),
+        ]);
+      case 'option': {
+        const inner = (payload as { inner: unknown }).inner;
+        return inner === null ? null : this.applicationValue(body.element, inner);
+      }
+      case 'result': {
+        const result = payload as { tag: 'ok' | 'err'; value: unknown };
+        const resultType = result.tag === 'ok' ? body.ok : body.err;
+        return {
+          [result.tag]: resultType ? this.applicationValue(resultType, result.value) : null,
+        };
+      }
+      case 'text':
+        return payload;
+      case 'binary': {
+        const binary = payload as { bytes: number[]; mimeType?: string };
+        return {
+          bytes: Buffer.from(binary.bytes).toString('base64url'),
+          ...(binary.mimeType === undefined ? {} : { mimeType: binary.mimeType }),
+        };
+      }
+      case 'path':
+        return (payload as { path: string }).path;
+      case 'url':
+        return (payload as { url: string }).url;
+      case 'datetime':
+        return canonicalApplicationDatetime((payload as { value: string }).value);
+      case 'duration':
+      case 'quantity':
+        return payload;
+      case 'union': {
+        const union = payload as { tag: string; body: unknown };
+        const branch = body.branches.find((item) => item.tag === union.tag)!;
+        return this.applicationValue(branch.body, union.body);
+      }
+      case 'stream':
+      case 'future':
+      case 'secret':
+      case 'quota-token':
+      case 'permission-card':
+      case 'ref':
+        return this.fail(
+          'unsupported-value',
+          `schema type '${body.tag}' has no application JSON representation`,
+        );
+    }
+  }
+
   private value(type: SchemaType, value: unknown, depth: number): void {
     if (depth >= 64) this.fail('resource-exhausted', 'schema value nesting exceeds 64 levels');
     this.add(1);
     const body = this.resolve(type);
+    if (
+      body.tag === 'secret' ||
+      body.tag === 'quota-token' ||
+      body.tag === 'permission-card' ||
+      body.tag === 'future'
+    )
+      this.fail('unsupported-value', `schema type '${body.tag}' cannot cross the public boundary`);
+    const payload = this.node(body.tag, value);
     switch (body.tag) {
       case 'bool':
-        if (typeof value !== 'boolean') this.mismatch('boolean');
+        if (typeof payload !== 'boolean') this.mismatch('boolean');
         this.add(1);
         return;
       case 's8':
-        this.integer(body, value, -128, 127, 1, 'signed');
+        this.integer(body, payload, -128, 127, 1, 'signed');
         return;
       case 's16':
-        this.integer(body, value, -32768, 32767, 2, 'signed');
+        this.integer(body, payload, -32768, 32767, 2, 'signed');
         return;
       case 's32':
-        this.integer(body, value, -2147483648, 2147483647, 4, 'signed');
+        this.integer(body, payload, -2147483648, 2147483647, 4, 'signed');
         return;
       case 'u8':
-        this.integer(body, value, 0, 255, 1, 'unsigned');
+        this.integer(body, payload, 0, 255, 1, 'unsigned');
         return;
       case 'u16':
-        this.integer(body, value, 0, 65535, 2, 'unsigned');
+        this.integer(body, payload, 0, 65535, 2, 'unsigned');
         return;
       case 'u32':
-        this.integer(body, value, 0, 4294967295, 4, 'unsigned');
+        this.integer(body, payload, 0, 4294967295, 4, 'unsigned');
         return;
       case 's64':
-        this.decimalInteger(body, value, true);
+        this.decimalInteger(body, payload, true);
         return;
       case 'u64':
-        this.decimalInteger(body, value, false);
+        this.decimalInteger(body, payload, false);
         return;
       case 'f32':
-        this.float(body, value, true);
+        this.float(body, payload, true);
         return;
       case 'f64':
-        this.float(body, value, false);
+        this.float(body, payload, false);
         return;
       case 'char': {
-        if (typeof value !== 'string' || [...value].length !== 1) this.mismatch('Unicode scalar');
-        const point = value.codePointAt(0) as number;
+        if (typeof payload !== 'string' || [...payload].length !== 1)
+          this.mismatch('Unicode scalar');
+        const point = payload.codePointAt(0) as number;
         if (point >= 0xd800 && point <= 0xdfff) this.mismatch('Unicode scalar');
-        this.string(value);
+        this.string(payload);
         return;
       }
       case 'string':
-        if (typeof value !== 'string') this.mismatch('string');
-        this.string(value);
+        if (typeof payload !== 'string') this.mismatch('string');
+        this.string(payload);
         return;
       case 'record': {
-        const input = publicObject(value, 'record');
-        const expected = new Set(body.fields.map((field) => field.name));
-        publicExactMembers(input, expected, 'record');
+        const input = publicObject(payload, 'record payload');
+        if (Object.keys(input).length !== 1 || input.fields === undefined)
+          this.fail('malformed-message', 'invalid members in record payload');
+        const fields = publicArray(input.fields, 'record fields');
+        if (fields.length !== body.fields.length)
+          this.fail('validation-error', 'record arity does not match schema');
         this.collection(body.fields.length);
-        for (const field of body.fields) {
-          this.string(field.name);
-          this.value(field.body, input[field.name], depth + 1);
-        }
+        body.fields.forEach((field, index) => this.value(field.body, fields[index], depth + 1));
         return;
       }
       case 'variant': {
-        const input = publicObject(value, 'variant');
-        const name = publicString(input.$case, 'variant case');
-        const selected = body.cases.find((item) => item.name === name);
-        if (!selected) this.fail('validation-error', `unknown variant case '${name}'`);
+        const input = publicObject(payload, 'variant payload');
+        const caseIndex = input.case;
+        if (
+          !Number.isInteger(caseIndex) ||
+          (caseIndex as number) < 0 ||
+          (caseIndex as number) >= body.cases.length
+        )
+          this.fail('validation-error', 'variant case is out of range');
+        const selected = body.cases[caseIndex as number];
         publicExactMembers(
           input,
-          new Set(selected.payload ? ['$case', 'value'] : ['$case']),
-          'variant',
+          new Set(selected.payload ? ['case', 'payload'] : ['case']),
+          'variant payload',
         );
-        this.string(name);
-        if (selected.payload) this.value(selected.payload, input.value, depth + 1);
+        if (selected.payload) this.value(selected.payload, input.payload, depth + 1);
         return;
       }
       case 'enum': {
-        const name = publicString(value, 'enum');
-        if (!body.cases.includes(name))
-          this.fail('validation-error', `unknown enum case '${name}'`);
-        this.string(name);
+        const input = publicObject(payload, 'enum payload');
+        publicExactMembers(input, new Set(['case']), 'enum payload');
+        if (
+          !Number.isInteger(input.case) ||
+          (input.case as number) < 0 ||
+          (input.case as number) >= body.cases.length
+        )
+          this.fail('validation-error', 'enum case is out of range');
         return;
       }
       case 'flags': {
-        const values = publicArray(value, 'flags');
+        const input = publicObject(payload, 'flags payload');
+        publicExactMembers(input, new Set(['bits']), 'flags payload');
+        const values = publicArray(input.bits, 'flag bits');
+        if (values.length !== body.names.length || values.some((item) => typeof item !== 'boolean'))
+          this.fail('validation-error', 'flags must contain one boolean per declared flag');
         this.collection(values.length);
-        let previous = -1;
-        for (const item of values) {
-          const name = publicString(item, 'flag');
-          const index = body.names.indexOf(name);
-          if (index <= previous)
-            this.fail('validation-error', 'flags must be unique and in declaration order');
-          previous = index;
-          this.string(name);
-        }
         return;
       }
       case 'tuple': {
-        const values = publicArray(value, 'tuple');
+        const input = publicObject(payload, 'tuple payload');
+        publicExactMembers(input, new Set(['elements']), 'tuple payload');
+        const values = publicArray(input.elements, 'tuple elements');
         if (values.length !== body.elements.length)
           this.fail('validation-error', 'tuple arity does not match schema');
         this.collection(values.length);
@@ -1478,13 +1641,15 @@ class PublicValueValidator {
         return;
       }
       case 'list':
-        this.repeated(body.element, value, depth, undefined);
+        this.repeated(body.element, payload, depth, undefined);
         return;
       case 'fixed-list':
-        this.repeated(body.element, value, depth, body.length);
+        this.repeated(body.element, payload, depth, body.length);
         return;
       case 'map': {
-        const entries = publicArray(value, 'map');
+        const input = publicObject(payload, 'map payload');
+        publicExactMembers(input, new Set(['entries']), 'map payload');
+        const entries = publicArray(input.entries, 'map entries');
         this.collection(entries.length);
         for (const entry of entries) {
           const pair = publicArray(entry, 'map entry');
@@ -1496,35 +1661,39 @@ class PublicValueValidator {
         return;
       }
       case 'option': {
-        const input = publicObject(value, 'option');
-        const tag = publicString(input.$option, 'option tag');
-        if (tag === 'none') publicExactMembers(input, new Set(['$option']), 'option');
-        else if (tag === 'some') {
-          publicExactMembers(input, new Set(['$option', 'value']), 'option');
-          this.value(body.element, input.value, depth + 1);
-        } else this.fail('validation-error', `invalid option tag '${tag}'`);
-        this.string(tag);
+        const input = publicObject(payload, 'option payload');
+        if (Object.keys(input).length !== 1 || input.inner === undefined)
+          this.fail('malformed-message', 'invalid members in option payload');
+        if (input.inner !== null) this.value(body.element, input.inner, depth + 1);
         return;
       }
       case 'result': {
-        const input = publicObject(value, 'result');
-        const tag = publicString(input.$result, 'result tag');
-        const payload = tag === 'ok' ? body.ok : tag === 'err' ? body.err : undefined;
+        const input = publicObject(payload, 'result payload');
+        const tag = publicString(input.tag, 'result tag');
+        const resultPayload = tag === 'ok' ? body.ok : tag === 'err' ? body.err : undefined;
         if (tag !== 'ok' && tag !== 'err')
           this.fail('validation-error', `invalid result tag '${tag}'`);
-        publicExactMembers(input, new Set(payload ? ['$result', 'value'] : ['$result']), 'result');
+        publicExactMembers(input, new Set(['tag', 'value']), 'result payload');
         this.string(tag);
-        if (payload) this.value(payload, input.value, depth + 1);
+        if (resultPayload) {
+          if (input.value === null)
+            this.fail('validation-error', 'result payload is unexpectedly absent');
+          this.value(resultPayload, input.value, depth + 1);
+        } else if (input.value !== null) {
+          this.fail('validation-error', 'result payload is unexpectedly present');
+        }
         return;
       }
       case 'text':
-        this.text(body.restrictions, value);
+        this.text(body.restrictions, payload);
         return;
       case 'binary':
-        this.binary(body.restrictions, value);
+        this.binary(body.restrictions, payload);
         return;
       case 'path': {
-        const path = publicString(value, 'path');
+        const input = publicObject(payload, 'path payload');
+        publicExactMembers(input, new Set(['path']), 'path payload');
+        const path = publicString(input.path, 'path');
         if (path.length === 0) this.fail('validation-error', 'path must be non-empty');
         const parts = path.split('/');
         const name = parts[parts.length - 1] ?? path;
@@ -1538,51 +1707,99 @@ class PublicValueValidator {
         return;
       }
       case 'url':
-        this.url(body.restrictions, value);
+        {
+          const input = publicObject(payload, 'URL payload');
+          publicExactMembers(input, new Set(['url']), 'URL payload');
+          this.url(body.restrictions, input.url);
+        }
         return;
       case 'datetime': {
-        const datetime = publicString(value, 'datetime');
+        const input = publicObject(payload, 'datetime payload');
+        publicExactMembers(input, new Set(['value']), 'datetime payload');
+        const datetime = publicString(input.value, 'datetime');
         if (!validPublicDatetime(datetime))
           this.fail('validation-error', 'datetime must be canonical RFC 3339 UTC');
         this.string(datetime);
         return;
       }
       case 'duration': {
-        const input = publicObject(value, 'duration');
+        const input = publicObject(payload, 'duration');
         publicExactMembers(input, new Set(['nanoseconds']), 'duration');
         publicDecimal(input.nanoseconds, true, -(1n << 63n), (1n << 63n) - 1n);
         this.add(8);
         return;
       }
       case 'quantity':
-        this.quantity(body.spec, value);
+        this.quantity(body.spec, payload);
         return;
       case 'union': {
-        const input = publicObject(value, 'union');
-        publicExactMembers(input, new Set(['$union', 'value']), 'union');
-        const tag = publicString(input.$union, 'union tag');
+        const input = publicObject(payload, 'union');
+        publicExactMembers(input, new Set(['tag', 'body']), 'union');
+        const tag = publicString(input.tag, 'union tag');
         const branch = body.branches.find((item) => item.tag === tag);
         if (!branch) this.fail('validation-error', `unknown union branch '${tag}'`);
-        this.value(branch.body, input.value, depth + 1);
-        if (!publicDiscriminatorMatches(branch.discriminator, input.value))
+        this.value(branch.body, input.body, depth + 1);
+        if (!this.discriminatorMatches(branch.discriminator, input.body, branch.body))
           this.fail('validation-error', 'union body does not satisfy its discriminator');
         this.string(tag);
         return;
       }
       case 'stream':
-        this.stream(value);
-        return;
-      case 'secret':
-      case 'quota-token':
-      case 'permission-card':
-      case 'future':
-        this.fail(
-          'unsupported-value',
-          `schema type '${body.tag}' cannot cross the public boundary`,
-        );
+        this.stream(payload);
         return;
       case 'ref':
         this.fail('validation-error', 'unresolved schema reference');
+    }
+  }
+
+  private node(expectedKind: string, value: unknown): unknown {
+    const node = publicObject(value, `${expectedKind} value`);
+    publicExactMembers(node, new Set(['kind', 'value']), `${expectedKind} value`);
+    if (node.kind !== expectedKind)
+      this.fail('validation-error', `expected '${expectedKind}' value`);
+    return node.value;
+  }
+
+  private discriminatorMatches(rule: DiscriminatorRule, value: unknown, type: SchemaType): boolean {
+    const node = isRecord(value) ? value : undefined;
+    const scalar = node?.value;
+    const stringValue = (candidate: unknown): string | undefined => {
+      if (!isRecord(candidate) || typeof candidate.kind !== 'string') return undefined;
+      if (candidate.kind === 'string')
+        return typeof candidate.value === 'string' ? candidate.value : undefined;
+      if (!isRecord(candidate.value)) return undefined;
+      if (candidate.kind === 'text')
+        return typeof candidate.value.text === 'string' ? candidate.value.text : undefined;
+      if (candidate.kind === 'url')
+        return typeof candidate.value.url === 'string' ? candidate.value.url : undefined;
+      if (candidate.kind === 'path')
+        return typeof candidate.value.path === 'string' ? candidate.value.path : undefined;
+      return undefined;
+    };
+    if (rule.tag === 'field-equals') {
+      const body = this.resolve(type);
+      if (body.tag !== 'record' || !isRecord(scalar) || !Array.isArray(scalar.fields)) return false;
+      const index = body.fields.findIndex((field) => field.name === rule.val.fieldName);
+      if (index < 0) return false;
+      return (
+        rule.val.literal === undefined || stringValue(scalar.fields[index]) === rule.val.literal
+      );
+    }
+    if (rule.tag === 'field-absent') {
+      const body = this.resolve(type);
+      return body.tag === 'record' && body.fields.every((field) => field.name !== rule.val);
+    }
+    const string = stringValue(value);
+    if (string === undefined) return false;
+    switch (rule.tag) {
+      case 'prefix':
+        return string.startsWith(rule.val);
+      case 'suffix':
+        return string.endsWith(rule.val);
+      case 'contains':
+        return string.includes(rule.val);
+      case 'regex':
+        return new RegExp(rule.val, 'u').test(string);
     }
   }
 
@@ -1601,7 +1818,12 @@ class PublicValueValidator {
   }
 
   private repeated(type: SchemaType, value: unknown, depth: number, length?: number): void {
-    const values = publicArray(value, length === undefined ? 'list' : 'fixed-list');
+    const input = publicObject(value, 'list payload');
+    publicExactMembers(input, new Set(['elements']), 'list payload');
+    const values = publicArray(
+      input.elements,
+      length === undefined ? 'list elements' : 'fixed-list elements',
+    );
     if (length !== undefined && values.length !== length)
       this.fail('validation-error', 'fixed-list length does not match schema');
     this.collection(values.length);
@@ -1627,6 +1849,8 @@ class PublicValueValidator {
     value: unknown,
     signed: boolean,
   ): void {
+    if (typeof value !== 'string')
+      this.fail('malformed-message', '64-bit integer payload must be a decimal string');
     const parsed = publicDecimal(
       value,
       signed,
@@ -1650,14 +1874,14 @@ class PublicValueValidator {
       const input = publicObject(value, 'exceptional float');
       publicExactMembers(input, new Set(['$float']), 'exceptional float');
       const tag = publicString(input.$float, 'exceptional float tag');
+      if (!['nan', 'positive-infinity', 'negative-infinity'].includes(tag))
+        this.fail('malformed-message', `invalid exceptional float tag '${tag}'`);
       number =
         tag === 'nan'
           ? Number.NaN
           : tag === 'positive-infinity'
             ? Number.POSITIVE_INFINITY
-            : tag === 'negative-infinity'
-              ? Number.NEGATIVE_INFINITY
-              : this.fail('validation-error', `invalid exceptional float tag '${tag}'`);
+            : Number.NEGATIVE_INFINITY;
     }
     if (Number.isFinite(number)) this.numeric(body.restrictions, 'float', number);
     else if (body.restrictions?.min || body.restrictions?.max)
@@ -1719,15 +1943,13 @@ class PublicValueValidator {
   private binary(restrictions: BinaryRestrictions, value: unknown): void {
     const input = publicObject(value, 'binary');
     publicExactOptionalMembers(input, new Set(['bytes']), new Set(['mimeType']), 'binary');
-    const encoded = publicString(input.bytes, 'binary bytes');
+    const bytes = publicArray(input.bytes, 'binary bytes');
     if (
-      encoded.length % 4 !== 0 ||
-      !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(encoded)
+      bytes.some(
+        (byte) => !Number.isInteger(byte) || (byte as number) < 0 || (byte as number) > 255,
+      )
     )
-      this.fail('malformed-message', 'binary bytes are not canonical padded base64');
-    const bytes = Buffer.from(encoded, 'base64');
-    if (bytes.toString('base64') !== encoded)
-      this.fail('malformed-message', 'binary bytes are not canonical padded base64');
+      this.fail('validation-error', 'binary bytes must be u8 integers');
     const mime =
       input.mimeType === undefined ? undefined : publicString(input.mimeType, 'MIME type');
     if (mime !== undefined && !/^[A-Za-z0-9!#$&^_.+\-]+\/[A-Za-z0-9!#$&^_.+\-]+$/u.test(mime))
@@ -1797,9 +2019,7 @@ class PublicValueValidator {
   private stream(value: unknown): void {
     if (this.streamPolicy === 'none')
       this.fail('unsupported-value', 'stream references are not allowed in this value');
-    const outer = publicObject(value, 'stream reference');
-    publicExactMembers(outer, new Set(['$stream']), 'stream reference');
-    const identity = publicObject(outer.$stream, 'stream identity');
+    const identity = publicObject(value, 'stream identity');
     const expected = this.streamPolicy === 'provisional' ? 'provisionalRef' : 'streamToken';
     publicExactMembers(identity, new Set([expected]), 'stream identity');
     const reference = publicString(identity[expected], 'stream identity');
@@ -1908,6 +2128,563 @@ function publicExactOptionalMembers(
     );
 }
 
+/** Parses the serde JSON representation of a native `SchemaGraph`. */
+export function schemaGraphFromWire(value: unknown): SchemaGraph {
+  const graph = publicObject(value, 'schema graph');
+  publicExactOptionalMembers(graph, new Set(['root']), new Set(['defs']), 'schema graph');
+  const definitions = graph.defs === undefined ? [] : publicArray(graph.defs, 'schema definitions');
+  const defs = new Map<string, SchemaTypeDef>();
+  for (const definition of definitions) {
+    const input = publicObject(definition, 'schema definition');
+    publicExactOptionalMembers(
+      input,
+      new Set(['id', 'body']),
+      new Set(['name']),
+      'schema definition',
+    );
+    const id = publicString(input.id, 'schema definition id');
+    if (defs.has(id))
+      throw new StreamingProtocolError('validation-error', `duplicate schema definition '${id}'`);
+    const name = input.name === undefined ? undefined : publicString(input.name, 'schema name');
+    defs.set(id, { name, body: schemaTypeFromWire(input.body) });
+  }
+  const result = { defs, root: schemaTypeFromWire(graph.root) };
+  const checkReferences = (type: SchemaType, seen: Set<SchemaType>): void => {
+    if (seen.has(type)) return;
+    seen.add(type);
+    const body = type.body;
+    if (body.tag === 'ref') {
+      if (!defs.has(body.id))
+        throw new StreamingProtocolError(
+          'validation-error',
+          `unresolved schema reference '${body.id}'`,
+        );
+      return;
+    }
+    switch (body.tag) {
+      case 'record':
+        body.fields.forEach((field) => checkReferences(field.body, seen));
+        break;
+      case 'variant':
+        body.cases.forEach((item) => item.payload && checkReferences(item.payload, seen));
+        break;
+      case 'tuple':
+        body.elements.forEach((item) => checkReferences(item, seen));
+        break;
+      case 'list':
+      case 'fixed-list':
+      case 'option':
+        checkReferences(body.element, seen);
+        break;
+      case 'map':
+        checkReferences(body.key, seen);
+        checkReferences(body.value, seen);
+        break;
+      case 'result':
+        if (body.ok) checkReferences(body.ok, seen);
+        if (body.err) checkReferences(body.err, seen);
+        break;
+      case 'union':
+        body.branches.forEach((branch) => checkReferences(branch.body, seen));
+        break;
+      case 'secret':
+        checkReferences(body.inner, seen);
+        break;
+      case 'future':
+      case 'stream':
+        if (body.element) checkReferences(body.element, seen);
+        break;
+    }
+  };
+  checkReferences(result.root, new Set());
+  for (const definition of defs.values()) checkReferences(definition.body, new Set());
+  return result;
+}
+
+function schemaTypeFromWire(value: unknown): SchemaType {
+  const outer = publicObject(value, 'schema type');
+  publicExactMembers(outer, new Set(['kind', 'value']), 'schema type');
+  const kind = publicString(outer.kind, 'schema type kind');
+  const payload = publicObject(outer.value, `${kind} schema type`);
+  const metadata = schemaMetadataFromWire(payload.metadata);
+  const exact = (required: string[], optional: string[] = []): void =>
+    publicExactOptionalMembers(
+      payload,
+      new Set(required),
+      new Set([...optional, 'metadata']),
+      `${kind} schema type`,
+    );
+  const nested = (input: unknown): SchemaType => schemaTypeFromWire(input);
+  let body: SchemaTypeBody;
+  switch (kind) {
+    case 'ref':
+      exact(['id']);
+      body = { tag: 'ref', id: publicString(payload.id, 'schema reference') };
+      break;
+    case 'bool':
+    case 'char':
+    case 'string':
+    case 'datetime':
+    case 'duration':
+      exact([]);
+      body = { tag: kind };
+      break;
+    case 's8':
+    case 's16':
+    case 's32':
+    case 's64':
+    case 'u8':
+    case 'u16':
+    case 'u32':
+    case 'u64':
+    case 'f32':
+    case 'f64':
+      exact([], ['restrictions']);
+      body = {
+        tag: kind,
+        restrictions:
+          payload.restrictions === undefined
+            ? undefined
+            : numericRestrictionsFromWire(payload.restrictions),
+      };
+      break;
+    case 'record':
+      exact(['fields']);
+      body = {
+        tag: 'record',
+        fields: publicArray(payload.fields, 'record fields').map((field) => {
+          const input = publicObject(field, 'record field');
+          publicExactOptionalMembers(
+            input,
+            new Set(['name', 'body']),
+            new Set(['metadata']),
+            'record field',
+          );
+          return {
+            name: publicString(input.name, 'record field name'),
+            body: nested(input.body),
+            metadata: schemaMetadataFromWire(input.metadata),
+          };
+        }),
+      };
+      break;
+    case 'variant':
+      exact(['cases']);
+      body = {
+        tag: 'variant',
+        cases: publicArray(payload.cases, 'variant cases').map((item) => {
+          const input = publicObject(item, 'variant case');
+          publicExactOptionalMembers(
+            input,
+            new Set(['name']),
+            new Set(['payload', 'metadata']),
+            'variant case',
+          );
+          return {
+            name: publicString(input.name, 'variant case name'),
+            payload: input.payload === undefined ? undefined : nested(input.payload),
+            metadata: schemaMetadataFromWire(input.metadata),
+          };
+        }),
+      };
+      break;
+    case 'enum':
+      exact(['cases']);
+      body = { tag: 'enum', cases: schemaStrings(payload.cases, 'enum cases') };
+      break;
+    case 'flags':
+      exact(['flags']);
+      body = { tag: 'flags', names: schemaStrings(payload.flags, 'flag names') };
+      break;
+    case 'tuple':
+      exact(['elements']);
+      body = {
+        tag: 'tuple',
+        elements: publicArray(payload.elements, 'tuple elements').map(nested),
+      };
+      break;
+    case 'list':
+      exact(['element']);
+      body = { tag: 'list', element: nested(payload.element) };
+      break;
+    case 'fixed-list':
+      exact(['element', 'length']);
+      body = {
+        tag: 'fixed-list',
+        element: nested(payload.element),
+        length: schemaU32(payload.length, 'fixed-list length'),
+      };
+      break;
+    case 'map':
+      exact(['key', 'value']);
+      body = { tag: 'map', key: nested(payload.key), value: nested(payload.value) };
+      break;
+    case 'option':
+      exact(['inner']);
+      body = { tag: 'option', element: nested(payload.inner) };
+      break;
+    case 'result': {
+      exact(['spec']);
+      const spec = publicObject(payload.spec, 'result specification');
+      publicExactOptionalMembers(spec, new Set(), new Set(['ok', 'err']), 'result specification');
+      body = {
+        tag: 'result',
+        ok: spec.ok === undefined ? undefined : nested(spec.ok),
+        err: spec.err === undefined ? undefined : nested(spec.err),
+      };
+      break;
+    }
+    case 'text':
+      exact(['restrictions']);
+      body = { tag: 'text', restrictions: textRestrictionsFromWire(payload.restrictions) };
+      break;
+    case 'binary':
+      exact(['restrictions']);
+      body = { tag: 'binary', restrictions: binaryRestrictionsFromWire(payload.restrictions) };
+      break;
+    case 'path': {
+      exact(['spec']);
+      const spec = publicObject(payload.spec, 'path specification');
+      publicExactOptionalMembers(
+        spec,
+        new Set(['direction', 'kind']),
+        new Set(['allowedMimeTypes', 'allowedExtensions']),
+        'path specification',
+      );
+      const direction = publicString(spec.direction, 'path direction');
+      const pathKind = publicString(spec.kind, 'path kind');
+      if (
+        !['input', 'output', 'in-out'].includes(direction) ||
+        !['file', 'directory', 'any'].includes(pathKind)
+      )
+        throw new StreamingProtocolError('validation-error', 'invalid path specification');
+      body = {
+        tag: 'path',
+        spec: {
+          direction: direction as PathSpec['direction'],
+          kind: pathKind as PathSpec['kind'],
+          allowedMimeTypes: schemaOptionalStrings(spec.allowedMimeTypes, 'allowed MIME types'),
+          allowedExtensions: schemaOptionalStrings(spec.allowedExtensions, 'allowed extensions'),
+        },
+      };
+      break;
+    }
+    case 'url': {
+      exact(['restrictions']);
+      const restrictions = publicObject(payload.restrictions, 'URL restrictions');
+      publicExactOptionalMembers(
+        restrictions,
+        new Set(),
+        new Set(['allowedSchemes', 'allowedHosts']),
+        'URL restrictions',
+      );
+      body = {
+        tag: 'url',
+        restrictions: {
+          allowedSchemes: schemaOptionalStrings(restrictions.allowedSchemes, 'allowed schemes'),
+          allowedHosts: schemaOptionalStrings(restrictions.allowedHosts, 'allowed hosts'),
+        },
+      };
+      break;
+    }
+    case 'quantity':
+      exact(['spec']);
+      body = { tag: 'quantity', spec: quantitySpecFromWire(payload.spec) };
+      break;
+    case 'union': {
+      exact(['spec']);
+      const spec = publicObject(payload.spec, 'union specification');
+      publicExactMembers(spec, new Set(['branches']), 'union specification');
+      body = {
+        tag: 'union',
+        branches: publicArray(spec.branches, 'union branches').map((item) => {
+          const branch = publicObject(item, 'union branch');
+          publicExactOptionalMembers(
+            branch,
+            new Set(['tag', 'body', 'discriminator']),
+            new Set(['metadata']),
+            'union branch',
+          );
+          return {
+            tag: publicString(branch.tag, 'union tag'),
+            body: nested(branch.body),
+            discriminator: discriminatorFromWire(branch.discriminator),
+            metadata: schemaMetadataFromWire(branch.metadata),
+          };
+        }),
+      };
+      break;
+    }
+    case 'secret': {
+      exact(['spec']);
+      const spec = publicObject(payload.spec, 'secret specification');
+      publicExactOptionalMembers(
+        spec,
+        new Set(),
+        new Set(['inner', 'category']),
+        'secret specification',
+      );
+      body = {
+        tag: 'secret',
+        spec: {
+          category:
+            spec.category === undefined
+              ? undefined
+              : publicString(spec.category, 'secret category'),
+        },
+        inner: spec.inner === undefined ? schemaType({ tag: 'string' }) : nested(spec.inner),
+      };
+      break;
+    }
+    case 'quota-token': {
+      exact(['spec']);
+      const spec = publicObject(payload.spec, 'quota-token specification');
+      publicExactOptionalMembers(
+        spec,
+        new Set(),
+        new Set(['resourceName']),
+        'quota-token specification',
+      );
+      body = {
+        tag: 'quota-token',
+        spec: {
+          resourceName:
+            spec.resourceName === undefined
+              ? undefined
+              : publicString(spec.resourceName, 'quota-token resource name'),
+        },
+      };
+      break;
+    }
+    case 'permission-card': {
+      exact(['spec']);
+      const spec = publicObject(payload.spec, 'permission-card specification');
+      publicExactMembers(spec, new Set(['polymorphic']), 'permission-card specification');
+      if (typeof spec.polymorphic !== 'boolean')
+        throw new StreamingProtocolError(
+          'validation-error',
+          'invalid permission-card specification',
+        );
+      body = { tag: 'permission-card', spec: { polymorphic: spec.polymorphic } };
+      break;
+    }
+    case 'future':
+    case 'stream':
+      exact(['inner']);
+      body = { tag: kind, element: payload.inner === null ? undefined : nested(payload.inner) };
+      break;
+    default:
+      throw new StreamingProtocolError('validation-error', `unknown schema type '${kind}'`);
+  }
+  return schemaType(body, metadata);
+}
+
+function schemaMetadataFromWire(value: unknown): MetadataEnvelope {
+  if (value === undefined) return { aliases: [], examples: [] };
+  const input = publicObject(value, 'schema metadata');
+  publicExactOptionalMembers(
+    input,
+    new Set(),
+    new Set(['doc', 'aliases', 'examples', 'deprecated', 'role']),
+    'schema metadata',
+  );
+  let role: MetadataEnvelope['role'];
+  if (input.role !== undefined) {
+    const wire = publicObject(input.role, 'schema role');
+    const tag = publicString(wire.tag, 'schema role tag');
+    publicExactOptionalMembers(
+      wire,
+      new Set(['tag']),
+      new Set(tag === 'other' ? ['value'] : []),
+      'schema role',
+    );
+    if (tag === 'multimodal' || tag === 'unstructured-text' || tag === 'unstructured-binary')
+      role = { tag };
+    else if (tag === 'other') role = { tag, val: publicString(wire.value, 'schema role value') };
+    else throw new StreamingProtocolError('validation-error', `unknown schema role '${tag}'`);
+  }
+  return {
+    doc: input.doc === undefined ? undefined : publicString(input.doc, 'schema documentation'),
+    aliases: input.aliases === undefined ? [] : schemaStrings(input.aliases, 'schema aliases'),
+    examples: input.examples === undefined ? [] : schemaStrings(input.examples, 'schema examples'),
+    deprecated:
+      input.deprecated === undefined
+        ? undefined
+        : publicString(input.deprecated, 'schema deprecation'),
+    role,
+  };
+}
+
+function schemaStrings(value: unknown, what: string): string[] {
+  return publicArray(value, what).map((item) => publicString(item, what));
+}
+
+function schemaOptionalStrings(value: unknown, what: string): string[] | undefined {
+  return value === undefined ? undefined : schemaStrings(value, what);
+}
+
+function schemaU32(value: unknown, what: string): number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > 0xffff_ffff)
+    throw new StreamingProtocolError('validation-error', `${what} is out of range`);
+  return value;
+}
+
+function schemaI32(value: unknown, what: string): number {
+  if (
+    typeof value !== 'number' ||
+    !Number.isInteger(value) ||
+    value < -0x8000_0000 ||
+    value > 0x7fff_ffff
+  )
+    throw new StreamingProtocolError('validation-error', `${what} is out of range`);
+  return value;
+}
+
+function schemaBigInt(value: unknown, signed: boolean, what: string): bigint {
+  const parsed =
+    typeof value === 'bigint'
+      ? value
+      : typeof value === 'number' && Number.isSafeInteger(value)
+        ? BigInt(value)
+        : undefined;
+  const max = signed ? (1n << 63n) - 1n : U64_MAX;
+  const min = signed ? -(1n << 63n) : 0n;
+  if (parsed === undefined || parsed < min || parsed > max)
+    throw new StreamingProtocolError('validation-error', `${what} is out of range`);
+  return parsed;
+}
+
+function numericBoundFromWire(value: unknown): NumericBound {
+  const input = publicObject(value, 'numeric bound');
+  publicExactMembers(input, new Set(['kind', 'value']), 'numeric bound');
+  const kind = publicString(input.kind, 'numeric bound kind');
+  if (kind !== 'signed' && kind !== 'unsigned' && kind !== 'float-bits')
+    throw new StreamingProtocolError('validation-error', `unknown numeric bound '${kind}'`);
+  return {
+    tag: kind,
+    val: schemaBigInt(input.value, kind === 'signed', 'numeric bound'),
+  } as NumericBound;
+}
+
+function numericRestrictionsFromWire(value: unknown): NumericRestrictions {
+  const input = publicObject(value, 'numeric restrictions');
+  publicExactOptionalMembers(
+    input,
+    new Set(),
+    new Set(['min', 'max', 'unit']),
+    'numeric restrictions',
+  );
+  return {
+    min: input.min === undefined ? undefined : numericBoundFromWire(input.min),
+    max: input.max === undefined ? undefined : numericBoundFromWire(input.max),
+    unit: input.unit === undefined ? undefined : publicString(input.unit, 'numeric unit'),
+  };
+}
+
+function textRestrictionsFromWire(value: unknown): TextRestrictions {
+  const input = publicObject(value, 'text restrictions');
+  publicExactOptionalMembers(
+    input,
+    new Set(),
+    new Set(['languages', 'minLength', 'maxLength', 'regex']),
+    'text restrictions',
+  );
+  return {
+    languages: schemaOptionalStrings(input.languages, 'text languages'),
+    minLength:
+      input.minLength === undefined ? undefined : schemaU32(input.minLength, 'minimum text length'),
+    maxLength:
+      input.maxLength === undefined ? undefined : schemaU32(input.maxLength, 'maximum text length'),
+    regex: input.regex === undefined ? undefined : publicString(input.regex, 'text regex'),
+  };
+}
+
+function binaryRestrictionsFromWire(value: unknown): BinaryRestrictions {
+  const input = publicObject(value, 'binary restrictions');
+  publicExactOptionalMembers(
+    input,
+    new Set(),
+    new Set(['mimeTypes', 'minBytes', 'maxBytes']),
+    'binary restrictions',
+  );
+  return {
+    mimeTypes: schemaOptionalStrings(input.mimeTypes, 'binary MIME types'),
+    minBytes:
+      input.minBytes === undefined ? undefined : schemaU32(input.minBytes, 'minimum binary length'),
+    maxBytes:
+      input.maxBytes === undefined ? undefined : schemaU32(input.maxBytes, 'maximum binary length'),
+  };
+}
+
+function quantityValueFromWire(value: unknown): QuantityValue {
+  const input = publicObject(value, 'quantity value');
+  publicExactMembers(input, new Set(['mantissa', 'scale', 'unit']), 'quantity value');
+  return {
+    mantissa: schemaBigInt(input.mantissa, true, 'quantity mantissa'),
+    scale: schemaI32(input.scale, 'quantity scale'),
+    unit: publicString(input.unit, 'quantity unit'),
+  };
+}
+
+function quantitySpecFromWire(value: unknown): QuantitySpec {
+  const input = publicObject(value, 'quantity specification');
+  publicExactOptionalMembers(
+    input,
+    new Set(['baseUnit']),
+    new Set(['allowedSuffixes', 'min', 'max']),
+    'quantity specification',
+  );
+  return {
+    baseUnit: publicString(input.baseUnit, 'quantity base unit'),
+    allowedSuffixes:
+      input.allowedSuffixes === undefined
+        ? []
+        : schemaStrings(input.allowedSuffixes, 'quantity suffixes'),
+    min: input.min === undefined ? undefined : quantityValueFromWire(input.min),
+    max: input.max === undefined ? undefined : quantityValueFromWire(input.max),
+  };
+}
+
+function discriminatorFromWire(value: unknown): DiscriminatorRule {
+  const input = publicObject(value, 'union discriminator');
+  publicExactMembers(input, new Set(['rule', 'value']), 'union discriminator');
+  const rule = publicString(input.rule, 'union discriminator rule');
+  const payload = publicObject(input.value, 'union discriminator value');
+  switch (rule) {
+    case 'prefix':
+    case 'suffix':
+    case 'regex': {
+      publicExactMembers(payload, new Set([rule]), 'union discriminator value');
+      return { tag: rule, val: publicString(payload[rule], `union ${rule}`) };
+    }
+    case 'contains':
+      publicExactMembers(payload, new Set(['substring']), 'union discriminator value');
+      return { tag: 'contains', val: publicString(payload.substring, 'union substring') };
+    case 'field-equals':
+      publicExactOptionalMembers(
+        payload,
+        new Set(['fieldName']),
+        new Set(['literal']),
+        'union field discriminator',
+      );
+      return {
+        tag: 'field-equals',
+        val: {
+          fieldName: publicString(payload.fieldName, 'union field name'),
+          literal:
+            payload.literal === undefined
+              ? undefined
+              : publicString(payload.literal, 'union field literal'),
+        },
+      };
+    case 'field-absent':
+      publicExactMembers(payload, new Set(['fieldName']), 'union field discriminator');
+      return { tag: 'field-absent', val: publicString(payload.fieldName, 'union field name') };
+    default:
+      throw new StreamingProtocolError('validation-error', `unknown union discriminator '${rule}'`);
+  }
+}
+
 function publicDecimal(value: unknown, signed: boolean, min: bigint, max: bigint): bigint {
   if (
     typeof value !== 'string' ||
@@ -1924,42 +2701,6 @@ function publicDecimal(value: unknown, signed: boolean, min: bigint, max: bigint
       'Public value codec: decimal integer is out of range',
     );
   return parsed;
-}
-
-function publicDiscriminatorMatches(rule: DiscriminatorRule, value: unknown): boolean {
-  const string =
-    typeof value === 'string'
-      ? value
-      : isRecord(value) && typeof value.text === 'string'
-        ? value.text
-        : undefined;
-  switch (rule.tag) {
-    case 'prefix':
-      return string?.startsWith(rule.val) === true;
-    case 'suffix':
-      return string?.endsWith(rule.val) === true;
-    case 'contains':
-      return string?.includes(rule.val) === true;
-    case 'regex':
-      return string !== undefined && new RegExp(rule.val, 'u').test(string);
-    case 'field-equals':
-      return (
-        isRecord(value) &&
-        Object.prototype.hasOwnProperty.call(value, rule.val.fieldName) &&
-        (rule.val.literal === undefined ||
-          publicDiscriminatorString(value[rule.val.fieldName]) === rule.val.literal)
-      );
-    case 'field-absent':
-      return isRecord(value) && !Object.prototype.hasOwnProperty.call(value, rule.val);
-  }
-}
-
-function publicDiscriminatorString(value: unknown): string | undefined {
-  return typeof value === 'string'
-    ? value
-    : isRecord(value) && typeof value.text === 'string'
-      ? value.text
-      : undefined;
 }
 
 function publicQuantityLe(left: QuantityValue, right: QuantityValue): boolean {
@@ -1997,6 +2738,13 @@ function validPublicDatetime(value: string): boolean {
   const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
   const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
   return day >= 1 && day <= days[month - 1];
+}
+
+function canonicalApplicationDatetime(value: string): string {
+  return value.replace(
+    /(?:\.(\d{1,9}))?Z$/u,
+    (_, fraction: string | undefined) => `.${(fraction ?? '').padEnd(9, '0')}Z`,
+  );
 }
 
 type OutputResolver = (
@@ -2155,7 +2903,6 @@ function parseJson(
   enforceStreamingBudgets = false,
 ): unknown {
   let offset = 0;
-  let collectionItems = 0;
   const whitespace = () => {
     while (/[ \t\r\n]/u.test(text[offset] ?? '')) offset += 1;
   };
@@ -2184,7 +2931,7 @@ function parseJson(
       whitespace();
       if (text[offset] === ']') return ((offset += 1), result);
       for (;;) {
-        if (enforceStreamingBudgets && (collectionItems += 1) > 100_000) throw new Error();
+        if (enforceStreamingBudgets && result.length >= 100_000) throw new Error();
         result.push(value(depth + 1));
         whitespace();
         if (text[offset++] === ']') return result;
@@ -2203,7 +2950,7 @@ function parseJson(
         const key = string();
         if (keys.has(key)) throw new Error();
         keys.add(key);
-        if (enforceStreamingBudgets && (collectionItems += 1) > 100_000) throw new Error();
+        if (enforceStreamingBudgets && keys.size > 100_000) throw new Error();
         whitespace();
         if (text[offset++] !== ':') throw new Error();
         result[key] = value(depth + 1);
@@ -2229,7 +2976,7 @@ function parseJson(
 
 function parseStrictJson(text: string): unknown {
   try {
-    return parseJson(text, false, true);
+    return restoreJsonIntegers(parseJson(text, true, true));
   } catch {
     throw new StreamingProtocolError('malformed-message', 'invalid JSON');
   }
@@ -2450,7 +3197,7 @@ class OutputStream<T> implements AgentStream<T> {
         this.queued(-item.bytes);
       }
       return {
-        value,
+        value: { kind: 'u8', value },
         cursor: final ? item.cursor : undefined,
         deliveredSequence: final ? item.deliveredSequence : undefined,
         bytes: 0,
@@ -2558,7 +3305,7 @@ class StreamingSession {
           terminal: false,
           wireKind,
         });
-        return { $stream: { provisionalRef } };
+        return { kind: 'stream', value: { provisionalRef } };
       });
       for (const [name, value] of [
         ['application', this.descriptor.application],
@@ -2820,11 +3567,18 @@ class StreamingSession {
           throw new StreamingProtocolError('protocol-error', 'duplicate invocation result');
         object(message, ['version', 'type', 'mappings', 'result']);
         this.install(message.mappings);
-        object(message.result, message.result.kind === 'value' ? ['kind', 'value'] : ['kind']);
-        if (message.result.kind !== 'none' && message.result.kind !== 'value')
+        const result = object(
+          message.result,
+          message.result.kind === 'value' ? ['kind', 'graph', 'value'] : ['kind'],
+        );
+        if (result.kind !== 'none' && result.kind !== 'value')
           throw new StreamingProtocolError('malformed-message', 'invalid invocation result');
+        if (result.kind === 'value') {
+          const returnedGraph = schemaGraphFromWire(result.graph);
+          new PublicValueValidator(returnedGraph, 'stable').validate(result.value);
+        }
         this.resultSeen = true;
-        this.resultResolve?.(message.result.kind === 'none' ? undefined : message.result.value);
+        this.resultResolve?.(result.kind === 'none' ? undefined : result);
         break;
       case 'inputStreamAck':
         object(message, [
@@ -3003,7 +3757,13 @@ class StreamingSession {
         throw new StreamingProtocolError('malformed-message', 'invalid binary item metadata');
       const deliveredSequence = output.stream.accept(sequence, 1n, 'binary');
       output.stream.push(
-        { bytes: payload.toString('base64'), mimeType: metadata.mimeType },
+        {
+          kind: 'binary',
+          value: {
+            bytes: [...payload],
+            ...(metadata.mimeType === undefined ? {} : { mimeType: metadata.mimeType }),
+          },
+        },
         { token: metadata.cursorToken, sequence },
         payload.length + (metadata.mimeType ? Buffer.byteLength(metadata.mimeType) : 0),
         deliveredSequence,
@@ -3255,30 +4015,25 @@ class StreamingSession {
 
   private binaryInput(input: InputState, value: unknown): PendingInput {
     const encoded = input.encode(value) as any;
-    if (!isRecord(encoded) || (!('bytes' in encoded) && encoded.bytes === undefined))
+    if (
+      !isRecord(encoded) ||
+      encoded.kind !== 'binary' ||
+      !isRecord(encoded.value) ||
+      !Array.isArray(encoded.value.bytes)
+    )
       throw new StreamingProtocolError('schema-mismatch', 'invalid binary stream item');
-    let payload: Buffer;
-    if (typeof encoded.bytes === 'string') {
-      if (
-        encoded.bytes.length % 4 !== 0 ||
-        !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(encoded.bytes)
+    if (
+      encoded.value.bytes.some(
+        (byte: unknown) =>
+          !Number.isInteger(byte) || (byte as number) < 0 || (byte as number) > 255,
       )
-        throw new StreamingProtocolError(
-          'schema-mismatch',
-          'binary bytes are not canonical base64',
-        );
-      payload = Buffer.from(encoded.bytes, 'base64');
-      if (payload.toString('base64') !== encoded.bytes)
-        throw new StreamingProtocolError(
-          'schema-mismatch',
-          'binary bytes are not canonical base64',
-        );
-    } else if (encoded.bytes instanceof Uint8Array) payload = Buffer.from(encoded.bytes);
-    else throw new StreamingProtocolError('schema-mismatch', 'invalid binary stream bytes');
+    )
+      throw new StreamingProtocolError('schema-mismatch', 'invalid binary stream bytes');
+    const payload = Buffer.from(encoded.value.bytes);
     if (payload.length > MAX_LOGICAL_VALUE_BYTES)
       throw new StreamingProtocolError('resource-exhausted', 'binary stream item exceeds 16 MiB');
     const sequence = input.sequence;
-    const mimeType = encoded.mimeType;
+    const mimeType = encoded.value.mimeType;
     if (
       mimeType !== undefined &&
       (typeof mimeType !== 'string' ||
@@ -3296,7 +4051,7 @@ class StreamingSession {
   }
 
   private async packedU8Input(input: InputState, first: unknown): Promise<PendingInput> {
-    const bytes = [this.u8(input.encode(first))];
+    const bytes = [this.nativeU8(input.encode(first))];
     while (bytes.length < 1024 * 1024) {
       const pull = input.source.next();
       const next = await Promise.race([
@@ -3313,7 +4068,7 @@ class StreamingSession {
         input.naturalEnd = true;
         break;
       }
-      bytes.push(this.u8(input.encode(next.value.value)));
+      bytes.push(this.nativeU8(input.encode(next.value.value)));
     }
     return this.packedU8Range(input.sequence, Buffer.from(bytes));
   }
@@ -3366,10 +4121,16 @@ class StreamingSession {
     return encodeStreamSessionBinaryEnvelope(metadata, payload);
   }
 
-  private u8(value: unknown): number {
-    if (!Number.isInteger(value) || (value as number) < 0 || (value as number) > 255)
+  private nativeU8(value: unknown): number {
+    if (
+      !isRecord(value) ||
+      value.kind !== 'u8' ||
+      !Number.isInteger(value.value) ||
+      (value.value as number) < 0 ||
+      (value.value as number) > 255
+    )
       throw new StreamingProtocolError('schema-mismatch', 'u8 stream item is out of range');
-    return value as number;
+    return value.value as number;
   }
 
   private validateInputReconcile(input: InputState, highWater: bigint, terminal: boolean): void {

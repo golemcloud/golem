@@ -1983,7 +1983,7 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
             let codec = self.public_codec(&config.value_type)?;
             writer.line(format!("let cfg{idx} = {enc}"));
             writer.line(format!(
-                "agent_config.push(@runtime.AgentConfigEntry::{{ path: [{path_lits}], value: cfg{idx}, codec: {codec} }})"
+                "agent_config.push(@runtime.AgentConfigEntry::{{ path: [{path_lits}], value: {codec}.encode_application(cfg{idx}) }})"
             ));
             writer.dedent();
             writer.line("}");
@@ -2096,6 +2096,15 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
                 );
                 writer.dedent();
                 writer.line("}");
+                if !uses_streams {
+                    let expected_codec = self.public_codec(
+                        method
+                            .output_schema
+                            .schema()
+                            .expect("decoded output always has a schema"),
+                    )?;
+                    writer.line(format!("ignore({expected_codec}.encode(value))"));
+                }
                 if self.agent_type.mode == AgentMode::Ephemeral {
                     writer.line(format!("let decoded = {decode_block}"));
                     writer.line("@runtime.InvocationResponse::{ agent_id: result.agent_id, idempotency_key: result.idempotency_key, value: decoded, component_revision: result.component_revision }");
@@ -3829,18 +3838,29 @@ mod tests {
                 prompt_hint: None,
                 input_schema: InputSchema::parameters(vec![]),
             },
-            methods: vec![AgentMethodSchema {
-                name: "exchange".to_string(),
-                description: String::new(),
-                prompt_hint: None,
-                input_schema: InputSchema::parameters(vec![NamedField::user_supplied(
-                    "lanes",
-                    nested_input,
-                )]),
-                output_schema: OutputSchema::Single(Box::new(nested_output)),
-                http_endpoint: vec![],
-                read_only: None,
-            }],
+            methods: vec![
+                AgentMethodSchema {
+                    name: "exchange".to_string(),
+                    description: String::new(),
+                    prompt_hint: None,
+                    input_schema: InputSchema::parameters(vec![NamedField::user_supplied(
+                        "lanes",
+                        nested_input,
+                    )]),
+                    output_schema: OutputSchema::Single(Box::new(nested_output)),
+                    http_endpoint: vec![],
+                    read_only: None,
+                },
+                AgentMethodSchema {
+                    name: "status".to_string(),
+                    description: String::new(),
+                    prompt_hint: None,
+                    input_schema: InputSchema::parameters(vec![]),
+                    output_schema: OutputSchema::Single(Box::new(SchemaType::string())),
+                    http_endpoint: vec![],
+                    read_only: None,
+                },
+            ],
             dependencies: vec![],
             mode: AgentMode::Durable,
             http_mount: None,
@@ -3856,6 +3876,7 @@ mod tests {
         assert!(client.contains("Array[@runtime.AgentStream[@runtime.AgentBinary]]"));
         assert!(client.contains("@runtime.AgentStream[Array[String]]?"));
         assert!(client.contains("@runtime.invoke_streaming_agent"));
+        assert!(client.contains(".encode(value))"));
         assert!(!client.contains("trigger_exchange"));
         assert!(!client.contains("schedule_exchange"));
         let manifest = std::fs::read_to_string(target.join("moon.mod.json")).unwrap();

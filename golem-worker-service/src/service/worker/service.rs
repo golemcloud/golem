@@ -2447,7 +2447,7 @@ impl WorkerService {
             }
             Some(metadata.fingerprint.0.into())
         };
-        let input_schema = start.input.schema;
+        let input_schema = start.input.graph;
         let input = decode_public_json_schema_value(
             &input_schema,
             &input_schema.root,
@@ -4886,12 +4886,18 @@ mod tests {
                     application: "weather-app".to_string(),
                     environment: "prod".to_string(),
                     agent_type: self.agent_type_name.0.clone(),
-                    constructor_parameters: serde_json::json!({}),
+                    constructor_parameters: serde_json::json!({
+                        "kind": "record",
+                        "value": {"fields": []}
+                    }),
                     method: "run".to_string(),
                     phantom_id: None,
                 },
                 config: vec![],
-                method_parameters: serde_json::json!({}),
+                method_parameters: serde_json::json!({
+                    "kind": "record",
+                    "value": {"fields": []}
+                }),
                 idempotency_key: idempotency_key.value,
                 attempt_id: Uuid::new_v4(),
             }
@@ -5764,7 +5770,11 @@ mod tests {
         let mut start = harness.public_invocation_start(IdempotencyKey::fresh());
         let provisional_ref = Uuid::new_v4();
         start.method_parameters = serde_json::json!({
-            "input": {"$stream": {"provisionalRef": provisional_ref}}
+            "kind": "record",
+            "value": {"fields": [{
+                "kind": "stream",
+                "value": {"provisionalRef": provisional_ref}
+            }]}
         });
 
         let _responses = harness

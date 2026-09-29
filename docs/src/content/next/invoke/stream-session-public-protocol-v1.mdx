@@ -81,35 +81,45 @@ non-empty UTF-8 string of at most 1 KiB.
 
 ## 3. Public SchemaValue JSON codec
 
-SchemaValue encoding is schema-directed. A decoder always has the exact
-`SchemaGraph` and the expected `SchemaType`; values do not carry arbitrary
-type names. A named reference is resolved through the pinned schema and then
-uses the representation of its resolved body.
+Invocation sessions use the same native `SchemaValue` JSON representation as
+the non-streaming public API. Every value is an object with exactly `kind` and
+`value` members. The `kind` identifies a schema value node; `value` contains
+that node's payload. Nested values repeat this representation recursively.
+
+A decoder also has the exact `SchemaGraph` and expected `SchemaType`. It MUST
+validate every native node against that schema, including its kind,
+restrictions, arity, and case indexes. A named reference is resolved through
+the pinned graph; its value uses the native representation of the resolved
+body and does not carry the reference name.
 
 ### 3.1 Scalar and rich values
 
 | Schema type | JSON representation |
 | --- | --- |
-| `bool` | JSON boolean |
-| `s8`, `s16`, `s32` | in-range JSON integer |
-| `u8`, `u16`, `u32` | in-range JSON integer |
-| `s64`, `u64` | canonical decimal string |
-| finite `f32`, `f64` | shortest round-tripping JSON number; negative zero is `-0` |
-| exceptional float | `{"$float":"nan"}`, `{"$float":"positive-infinity"}`, or `{"$float":"negative-infinity"}` |
-| `char` | JSON string containing exactly one Unicode scalar value |
-| `string` | JSON string |
-| `text` | `{"text":"..."}` with optional non-empty `"language":"<BCP-47>"` |
-| `binary` | `{"bytes":"<base64>"}` with optional `"mimeType":"type/subtype"` |
-| `path` | non-empty JSON string |
-| `url` | non-empty JSON string |
-| `datetime` | RFC 3339 UTC string with four-digit year and nanosecond precision |
-| `duration` | `{"nanoseconds":"<canonical s64>"}` |
-| `quantity` | `{"mantissa":"<canonical s64>","scale":<s32>,"unit":"..."}` |
+| `bool` | `{"kind":"bool","value":true}` |
+| `s8` | `{"kind":"s8","value":-128}` |
+| `s16` | `{"kind":"s16","value":-42}` |
+| `s32` | `{"kind":"s32","value":-42}` |
+| `u8` | `{"kind":"u8","value":255}` |
+| `u16` | `{"kind":"u16","value":42}` |
+| `u32` | `{"kind":"u32","value":4294967295}` |
+| `s64` | `{"kind":"s64","value":"-9223372036854775808"}` with a canonical signed decimal string |
+| `u64` | `{"kind":"u64","value":"18446744073709551615"}` with a canonical unsigned decimal string |
+| finite `f32` | `{"kind":"f32","value":1.5}`; negative zero is `-0` |
+| finite `f64` | `{"kind":"f64","value":1.5}`; negative zero is `-0` |
+| exceptional `f32`, `f64` | The matching `kind` with `value` set to `{"$float":"nan"}`, `{"$float":"positive-infinity"}`, or `{"$float":"negative-infinity"}` |
+| `char` | `{"kind":"char","value":"λ"}` containing exactly one Unicode scalar value |
+| `string` | `{"kind":"string","value":"..."}` |
+| `text` | `{"kind":"text","value":{"text":"...","language":"<BCP-47>"}}`; `language` is optional |
+| `binary` | `{"kind":"binary","value":{"bytes":[0,255],"mimeType":"type/subtype"}}`; `mimeType` is optional |
+| `path` | `{"kind":"path","value":{"path":"/tmp/input"}}` |
+| `url` | `{"kind":"url","value":{"url":"https://example.com"}}` |
+| `datetime` | `{"kind":"datetime","value":{"value":"2026-08-28T12:34:56.123456789Z"}}` |
+| `duration` | `{"kind":"duration","value":{"nanoseconds":"<canonical s64>"}}` |
+| `quantity` | `{"kind":"quantity","value":{"mantissa":"<canonical s64>","scale":<s32>,"unit":"..."}}` |
 
-Binary `bytes` uses canonical padded RFC 4648 base64 with the standard `+/`
-alphabet. Padding is REQUIRED exactly when RFC 4648 requires it. Whitespace,
-URL-safe alphabet characters, omitted padding, and non-zero unused trailing
-bits are invalid. MIME types are ASCII and match
+Binary `bytes` is an array of JSON integers from 0 through 255. MIME types are
+ASCII and match
 `^[A-Za-z0-9!#$&^_.+\-]+/[A-Za-z0-9!#$&^_.+\-]+$`.
 
 The decoder applies all restrictions from the expected schema after decoding,
@@ -121,26 +131,25 @@ quantity restrictions.
 
 | Schema type | JSON representation |
 | --- | --- |
-| record | object whose members exactly equal the schema field names |
-| tuple | JSON array with exact schema arity |
-| list | JSON array |
-| fixed list | JSON array with exact schema length |
-| map | JSON array of two-element `[key,value]` arrays; order and duplicate-key semantics follow the schema model |
-| enum | exact schema case name as a JSON string |
-| flags | array of unique schema flag names in schema declaration order |
-| variant without payload | `{"$case":"case-name"}` |
-| variant with payload | `{"$case":"case-name","value":<value>}` |
-| none option | `{"$option":"none"}` |
-| some option | `{"$option":"some","value":<value>}` |
-| unit `ok` result | `{"$result":"ok"}` |
-| value `ok` result | `{"$result":"ok","value":<value>}` |
-| unit `err` result | `{"$result":"err"}` |
-| value `err` result | `{"$result":"err","value":<value>}` |
-| union | `{"$union":"branch-tag","value":<branch-body>}` |
+| record | `{"kind":"record","value":{"fields":[<value>,...]}}` in schema field order |
+| tuple | `{"kind":"tuple","value":{"elements":[<value>,...]}}` with exact schema arity |
+| list | `{"kind":"list","value":{"elements":[<value>,...]}}` |
+| fixed list | `{"kind":"fixed-list","value":{"elements":[<value>,...]}}` with exact schema length |
+| map | `{"kind":"map","value":{"entries":[[<key>,<value>],...]}}` |
+| enum | `{"kind":"enum","value":{"case":<zero-based case index>}}` |
+| flags | `{"kind":"flags","value":{"bits":[true,false,...]}}` in schema declaration order |
+| variant without payload | `{"kind":"variant","value":{"case":<index>}}` |
+| variant with payload | `{"kind":"variant","value":{"case":<index>,"payload":<value>}}` |
+| none option | `{"kind":"option","value":{"inner":null}}` |
+| some option | `{"kind":"option","value":{"inner":<value>}}` |
+| unit result | `{"kind":"result","value":{"tag":"ok","value":null}}` (or `err`) |
+| value result | `{"kind":"result","value":{"tag":"ok","value":<value>}}` (or `err`) |
+| union | `{"kind":"union","value":{"tag":"branch-tag","body":<value>}}` |
 
-The presence or absence of `value` for variants and results MUST agree with
-the schema. A union decoder MUST verify that the named branch exists and that
-the decoded body satisfies that branch's discriminator.
+The presence or absence of `payload` for variants and the nullability of a
+result's `value` MUST agree with the schema. A union decoder MUST verify that
+the named branch exists and that the decoded body satisfies that branch's
+discriminator.
 
 Host-managed capability values (`secret`, `quota-token`, and
 `permission-card`) and `future` values cannot cross this public boundary and
@@ -150,20 +159,36 @@ follows.
 Before acceptance, an input stream is a provisional reference:
 
 ```json
-{"$stream":{"provisionalRef":"0dff1c71-f12f-4bb1-996c-23d693bdc825"}}
+{"kind":"stream","value":{"provisionalRef":"0dff1c71-f12f-4bb1-996c-23d693bdc825"}}
 ```
 
 After acceptance, every stream exposed by the server is a stable opaque
 reference:
 
 ```json
-{"$stream":{"streamToken":"<opaque-token>"}}
+{"kind":"stream","value":{"streamToken":"<opaque-token>"}}
 ```
 
 The two forms are mutually exclusive. A client MUST reuse provisional
 references only for an exact retry of the same frozen start or input item. A
 stream object occurring at two structural coordinates is an affine ownership
 violation and is rejected with `stream-already-consumed`.
+
+### 3.3 Schema placement and application JSON
+
+Constructor parameters and method parameters are bare native `SchemaValue`
+nodes. Stream items are also bare native nodes and are validated against the
+element schema pinned to their channel; no graph is repeated per item.
+
+Method value results carry the returned self-contained graph alongside the
+bare value as `{"graph":<SchemaGraph>,"value":<SchemaValue>}` inside the
+`result` envelope. Dynamic native-tool values use the same typed pair.
+
+Agent configuration is intentionally different: each configuration entry's
+`value` remains application JSON under the existing configuration contract.
+It is not wrapped in `kind`/`value`. Custom HTTP bodies, reflection payloads,
+and the standard Durable Streams APIs likewise keep their own application
+JSON contracts; session framing does not reinterpret them as native values.
 
 ## 4. Shared message structures
 
@@ -175,7 +200,7 @@ An invocation selector is:
 {
   "agentType":"counter",
   "application":"shopping",
-  "constructorParameters":{"name":"cart-1"},
+  "constructorParameters":{"kind":"record","value":{"fields":[{"kind":"string","value":"cart-1"}]}},
   "environment":"prod",
   "method":"ingest",
   "phantomId":"994df72a-ebc7-40e0-a8ef-c9ce258f3da7"
@@ -236,11 +261,11 @@ direction, element schema, producer, or structural coordinate.
   "attemptId":"ca7e5a82-2064-4c18-8359-806145c1562f",
   "config":[],
   "idempotencyKey":"upload-42",
-  "methodParameters":{"source":{"$stream":{"provisionalRef":"0dff1c71-f12f-4bb1-996c-23d693bdc825"}}},
+  "methodParameters":{"kind":"record","value":{"fields":[{"kind":"stream","value":{"provisionalRef":"0dff1c71-f12f-4bb1-996c-23d693bdc825"}}]}},
   "selector":{
     "agentType":"media",
     "application":"demo",
-    "constructorParameters":{"name":"encoder"},
+    "constructorParameters":{"kind":"record","value":{"fields":[{"kind":"string","value":"encoder"}]}},
     "environment":"default",
     "method":"transcode"
   },
@@ -280,7 +305,7 @@ The complete message is frozen for uncertain retry.
   "channel":1,
   "sequence":"0",
   "type":"inputStreamItem",
-  "value":{"event":"ready"},
+  "value":{"kind":"record","value":{"fields":[{"kind":"string","value":"ready"}]}},
   "version":1
 }
 ```
@@ -364,15 +389,21 @@ A value result is:
 ```json
 {
   "mappings":[],
-  "result":{"kind":"value","value":{"accepted":true}},
+  "result":{
+    "graph":{"root":{"kind":"bool","value":{}}},
+    "kind":"value",
+    "value":{"kind":"bool","value":true}
+  },
   "type":"invocationResult",
   "version":1
 }
 ```
 
-A method with no result uses `{"kind":"none"}`. `mappings` announces every
-new stream reference first exposed by `value`; it is required and may be
-empty. This message occurs at most once and before `invocationFinished`.
+A method with no result uses `{"kind":"none"}`. A value result includes the
+self-contained graph rooted at the method's selected output type. `mappings`
+announces every new stream reference first exposed by `value`; it is required
+and may be empty. This message occurs at most once and before
+`invocationFinished`.
 
 ### 6.4 `outputStreamItem`
 
@@ -383,7 +414,7 @@ empty. This message occurs at most once and before `invocationFinished`.
   "mappings":[],
   "sequence":"0",
   "type":"outputStreamItem",
-  "value":{"event":"ready"},
+  "value":{"kind":"record","value":{"fields":[{"kind":"string","value":"ready"}]}},
   "version":1
 }
 ```
@@ -751,18 +782,22 @@ value and later silently discard it.
 One MiB is 1,048,576 bytes. A decoded SchemaValue's language-independent byte
 charge is computed recursively with checked `u64` addition:
 
-- every value node costs one byte plus its payload below;
+- every value node, including the root, costs one byte plus its payload below;
 - booleans cost one byte; integer and finite/exceptional float payloads cost
   their schema width (1, 2, 4, or 8 bytes); duration costs 8 bytes;
 - a char, string, path, URL, datetime, text body/language, MIME type, quantity
-  unit, field/case/tag name, or opaque token costs its UTF-8 byte length;
-- binary costs its decoded raw byte length, not its base64 length; quantity
-  additionally costs 12 bytes for mantissa and scale;
-- a collection costs four bytes for its element count plus the charges of all
-  children; records additionally include schema field-name byte lengths and
-  maps include both key and value charges;
-- an option, result, variant, or union costs its selected discriminator UTF-8
-  length plus its optional child charge;
+  unit, result/union tag, or opaque token costs its UTF-8 byte length;
+- binary costs its raw byte length; quantity additionally costs 12 bytes for
+  mantissa and scale;
+- a record, tuple, list, fixed list, or map costs four bytes for its element
+  count plus the charges of all children; a map includes both key and value
+  charges, while record field names are not charged;
+- an enum or variant case index costs four bytes; a variant also includes its
+  optional child charge;
+- flags cost four bytes for the bit count plus one byte per bit;
+- an option adds only its optional child charge; a result adds its `ok` or
+  `err` tag length plus its optional child charge; a union adds its tag length
+  plus its body charge;
 - a provisional stream reference costs 16 payload bytes; a stable stream
   reference costs its opaque token's UTF-8 length.
 

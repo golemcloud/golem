@@ -1982,6 +1982,10 @@ fn generates_client_surface(#[tagged_as("multi_agent_1")] pkg: &GeneratedPackage
             .contains("@runtime.invoke_agent(self.resolved, \"f1\", parameters, \"await\", None)")
     );
     assert!(client.contains("decode_Location(value)"));
+    assert!(
+        client.contains(".encode(value))"),
+        "generated REST result must be validated against its local expected schema:\n{client}"
+    );
     assert!(client.contains("pub async fn Agent1::trigger_f1(self : Agent1) -> Unit raise {"));
     assert!(
         client.contains(
@@ -2218,6 +2222,7 @@ fn config_constructors_are_generated() {
     // Config entries are built from Some values, preserving the original path.
     assert!(client.contains("let agent_config : Array[@runtime.AgentConfigEntry] = []"));
     assert!(client.contains("agent_config.push(@runtime.AgentConfigEntry::{ path: [\"api-key\"]"));
+    assert!(client.contains(".encode_application(cfg0)"));
     assert!(client.contains("path: [\"max\", \"retries\"]"));
     assert!(client.contains("None => ()"));
     // create_agent receives the built config array.
@@ -2505,7 +2510,7 @@ fn external_recursive_stream_client_compiles() {
         pkg.module_dir().join("binary-messages.json"),
     )
     .unwrap();
-    for fixture in ["json-messages.json", "malformed.json"] {
+    for fixture in ["json-messages.json", "malformed.json", "schema-values.json"] {
         std::fs::copy(
             workspace_root()
                 .unwrap()
@@ -2527,6 +2532,125 @@ fn external_recursive_stream_client_compiles() {
     std::fs::write(
         pkg.module_dir().join("runtime/frozen_fixture_wbtest.mbt"),
         r#"///|
+fn fixture_type(input : Json) -> Json raise {
+  let object = expect_object(input)
+  let kind = expect_string(get_field(object, "kind"))
+  let value = match kind {
+    "ref" => pvc_obj([("id", get_field(object, "name"))])
+    "text" => pvc_obj([("restrictions", pvc_obj([]))])
+    "binary" => {
+      let restrictions : Array[(String, Json)] = []
+      for name in ["mimeTypes", "minBytes", "maxBytes"] {
+        match object.get(name) {
+          Some(value) => restrictions.push((name, value))
+          None => ()
+        }
+      }
+      pvc_obj([("restrictions", pvc_obj(restrictions))])
+    }
+    "path" => pvc_obj([("spec", pvc_obj([]))])
+    "url" => pvc_obj([("restrictions", pvc_obj([]))])
+    "quantity" => pvc_obj([
+      ("spec", pvc_obj([
+        ("baseUnit", Json::string("kg")),
+        ("allowedSuffixes", Json::array([])),
+      ])),
+    ])
+    "record" => pvc_obj([
+      ("fields", Json::array(expect_array(get_field(object, "fields")).map(field => {
+        let field = expect_object(field)
+        pvc_obj([
+          ("name", get_field(field, "name")),
+          ("body", fixture_type(get_field(field, "type"))),
+        ])
+      }))),
+    ])
+    "tuple" => pvc_obj([
+      ("elements", Json::array(expect_array(get_field(object, "elements")).map(fixture_type))),
+    ])
+    "list" => pvc_obj([("element", fixture_type(get_field(object, "element")))])
+    "fixed-list" => pvc_obj([
+      ("element", fixture_type(get_field(object, "element"))),
+      ("length", get_field(object, "length")),
+    ])
+    "map" => pvc_obj([
+      ("key", fixture_type(get_field(object, "key"))),
+      ("value", fixture_type(get_field(object, "value"))),
+    ])
+    "enum" => pvc_obj([("cases", get_field(object, "cases"))])
+    "flags" => pvc_obj([("flags", get_field(object, "flags"))])
+    "variant" => pvc_obj([
+      ("cases", Json::array(expect_array(get_field(object, "cases")).map(case => {
+        let case = expect_object(case)
+        let fields = [("name", get_field(case, "name"))]
+        match case.get("type") {
+          Some(value) => fields.push(("payload", fixture_type(value)))
+          None => ()
+        }
+        pvc_obj(fields)
+      }))),
+    ])
+    "option" => pvc_obj([("inner", fixture_type(get_field(object, "inner")))])
+    "result" => {
+      let spec : Array[(String, Json)] = []
+      for name in ["ok", "err"] {
+        match object.get(name) {
+          Some(Json::Null) | None => ()
+          Some(value) => spec.push((name, fixture_type(value)))
+        }
+      }
+      pvc_obj([("spec", pvc_obj(spec))])
+    }
+    "union" => pvc_obj([
+      ("spec", pvc_obj([
+        ("branches", Json::array(expect_array(get_field(object, "branches")).map(branch => {
+          let branch = expect_object(branch)
+          let discriminator = expect_object(get_field(branch, "discriminator"))
+          pvc_obj([
+            ("tag", get_field(branch, "name")),
+            ("body", fixture_type(get_field(branch, "type"))),
+            ("discriminator", pvc_obj([
+              ("rule", Json::string("prefix")),
+              ("value", pvc_obj([("prefix", get_field(discriminator, "prefix"))])),
+            ])),
+          ])
+        }))),
+      ])),
+    ])
+    "stream" => {
+      let fields : Array[(String, Json)] = []
+      match object.get("inner") {
+        Some(Json::Null) | None => ()
+        Some(value) => fields.push(("inner", fixture_type(value)))
+      }
+      pvc_obj(fields)
+    }
+    _ => pvc_obj([])
+  }
+  pvc_obj([("kind", Json::string(kind)), ("value", value)])
+}
+
+///|
+fn fixture_graph(vector : Map[String, Json]) -> Json raise {
+  let defs : Array[Json] = []
+  match vector.get("definitions") {
+    Some(Json::Object(values)) =>
+      for id, body in values {
+        defs.push(pvc_obj([
+          ("id", Json::string(id)),
+          ("name", Json::string(id)),
+          ("body", fixture_type(body)),
+        ]))
+      }
+    _ => ()
+  }
+  pvc_obj([
+    ("defs", Json::array(defs)),
+    ("root", fixture_type(get_field(vector, "schema"))),
+  ])
+}
+
+///|
 test "binary codec matches every frozen public v1 frame" {
   let fixture = expect_object(parse_strict_json(@fs.read_file_to_string("binary-messages.json")))
   let vectors = expect_array(get_field(fixture, "vectors"))
@@ -2541,6 +2665,32 @@ test "binary codec matches every frozen public v1 frame" {
     })
     let actual = pvc_base64_encode(encode_binary_envelope(metadata, payload))
     assert_true(actual == expect_string(get_field(object, "frameBase64")))
+  }
+}
+
+///|
+test "native value codec directly consumes the frozen schema-value fixtures" {
+  let fixture = expect_object(parse_strict_json(@fs.read_file_to_string("schema-values.json")))
+  for vector in expect_array(get_field(fixture, "vectors")) {
+    let vector = expect_object(vector)
+    let canonical = expect_string(get_field(vector, "canonical"))
+    let codec = public_value_codec(fixture_graph(vector).stringify())
+    let encoded = codec.encode(codec.decode(parse_strict_json(canonical))).stringify()
+    assert_eq(encoded, canonical)
+  }
+}
+
+///|
+test "native value codec directly rejects the frozen malformed schema-value fixtures" {
+  let fixture = expect_object(parse_strict_json(@fs.read_file_to_string("malformed.json")))
+  for vector in expect_array(get_field(fixture, "vectors")) {
+    let vector = expect_object(vector)
+    if expect_string(get_field(vector, "lane")) == "schema-value" {
+      let codec = public_value_codec(fixture_graph(vector).stringify())
+      assert_true(raises(() => {
+        ignore(codec.decode(parse_strict_json(expect_string(get_field(vector, "input")))))
+      }))
+    }
   }
 }
 
