@@ -517,17 +517,31 @@ struct PackFixture {
 
 impl PackFixture {
     fn new(limit: usize, rule: impl Fn(&str, &Path) -> Script + Send + Sync + 'static) -> Self {
+        Self::with_packs(
+            limit,
+            &[("ab", pack_content()), ("cd", pack_content())],
+            rule,
+        )
+    }
+
+    /// Gives the fixture whose storage holds each pack at the path of the id whose digits repeat
+    /// the two digits of the pack.
+    fn with_packs(
+        limit: usize,
+        packs: &[(&str, Vec<u8>)],
+        rule: impl Fn(&str, &Path) -> Script + Send + Sync + 'static,
+    ) -> Self {
         let runtime = Runtime::new().unwrap();
         let inner = Arc::new(InMemoryBlobStorage::new());
         let namespace = new_namespace();
-        ["ab", "cd"].iter().for_each(|pack| {
+        packs.iter().for_each(|(pack, content)| {
             runtime
                 .block_on(inner.put_raw(
                     "test",
                     "test",
                     namespace.clone(),
                     Path::new(&format!("data/{pack}/{}", pack.repeat(32))),
-                    &pack_content(),
+                    content,
                 ))
                 .unwrap();
         });
@@ -670,6 +684,64 @@ fn two_threads_that_miss_one_pack_make_one_storage_read() {
             Some(Bytes::from_iter(0..10)),
             Some(Bytes::from_iter(50..60)),
             vec!["read"]
+        )
+    );
+}
+
+#[test]
+fn a_whole_read_that_ends_after_another_read_closed_the_set_keeps_nothing() {
+    // The gate holds the whole read of the pack `ab`, which fits the limit of 150 bytes. The pack
+    // `ef` of 200 bytes does not fit, so its whole read closes the set meanwhile. When the gate
+    // opens, the read of `ab` ends in a closed set, so a later range of `ab` is a ranged read.
+    let ab = format!("data/ab/{}", "ab".repeat(32));
+    let fixture = PackFixture::with_packs(
+        150,
+        &[("ab", pack_content()), ("ef", (0..200).collect())],
+        move |op_label, path| {
+            if op_label == "read" && path == Path::new(&ab) {
+                Script::WaitForGate
+            } else {
+                Script::Pass
+            }
+        },
+    );
+    let first = on_own_thread({
+        let backend = fixture.backend.clone();
+        move || tree_range(&backend, 0, 10).ok()
+    });
+    let first_read_started = (0..1000).any(|_| {
+        std::thread::sleep(Duration::from_millis(10));
+        !fixture.pack_calls().is_empty()
+    });
+    let closing = within_limit({
+        let backend = fixture.backend.clone();
+        move || {
+            backend
+                .read_partial(FileType::Pack, &id("ef"), true, 150, 10)
+                .ok()
+        }
+    });
+    fixture.storage.open_gate();
+    let first = first.recv_timeout(LIMIT).ok().flatten();
+    let later = within_limit({
+        let backend = fixture.backend.clone();
+        move || tree_range(&backend, 20, 10).ok()
+    });
+
+    assert_eq!(
+        (
+            first_read_started,
+            closing,
+            first,
+            later,
+            fixture.pack_calls()
+        ),
+        (
+            true,
+            Some(Some(Bytes::from_iter(150..160))),
+            Some(Bytes::from_iter(0..10)),
+            Some(Some(Bytes::from_iter(20..30))),
+            vec!["read", "read", "read_range"]
         )
     );
 }
