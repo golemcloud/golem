@@ -62,6 +62,9 @@ type ToolSpec struct {
 	Description string
 	// Aliases are additional names the root command answers to.
 	Aliases []string
+	// RequiresFilesystem declares that the tool cannot work without a
+	// filesystem binding. It does not grant filesystem access.
+	RequiresFilesystem bool
 }
 
 // toolEntry is one tool: defined here and exported, or declared for calling.
@@ -800,9 +803,10 @@ func (d *definitions) buildTool(e *toolEntry) (toolCommon.Tool, bool) {
 		ok = false
 	}
 	tool := toolCommon.Tool{
-		Version:  e.spec.Version,
-		Commands: toolCommon.CommandTree{Nodes: nodes},
-		Schema:   g.build(),
+		Version:            e.spec.Version,
+		RequiresFilesystem: e.spec.RequiresFilesystem,
+		Commands:           toolCommon.CommandTree{Nodes: nodes},
+		Schema:             g.build(),
 	}
 	e.built, e.builtOK = &tool, ok
 	return tool, ok

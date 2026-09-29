@@ -512,12 +512,12 @@ func GetAllTools() []RegisteredTool {
 	wasm_import_get_all_tools(returnArea)
 	result613 := make([]RegisteredTool, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4)))
 	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))); index++ {
-		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0)))), index*(24+10*4))
+		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0)))), index*(16+12*4))
 		value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 		value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))))
-		result432 := make([]golem_tool_common.CommandNode, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
-		for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4)))); index++ {
-			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))))), index*(24+75*4))
+		result432 := make([]golem_tool_common.CommandNode, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (6 * 4))))
+		for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (6 * 4)))); index++ {
+			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))), index*(24+75*4))
 			value1 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 			result := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))))
 			for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4)))); index++ {
@@ -4441,9 +4441,9 @@ func GetAllTools() []RegisteredTool {
 			result432 = append(result432, golem_tool_common.CommandNode{Name: value1, Aliases: result, Doc: golem_tool_common.Doc{Summary: value3, Description: value4, Examples: result7}, Globals: golem_tool_common.Globals{Options: result47, Flags: result61}, Subcommands: result62, Body: option431})
 		}
 
-		result608 := make([]golem_core_types.SchemaTypeNode, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4))))
-		for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4)))); index++ {
-			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (6 * 4))))), index*(56+22*4))
+		result608 := make([]golem_core_types.SchemaTypeNode, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 * 4))))
+		for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 * 4)))); index++ {
+			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4))))), index*(56+22*4))
 			var variant596 golem_core_types.SchemaTypeBody
 			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))) {
 			case 0:
@@ -6047,9 +6047,9 @@ func GetAllTools() []RegisteredTool {
 			result608 = append(result608, golem_core_types.SchemaTypeNode{Body: variant596, Metadata: golem_core_types.MetadataEnvelope{Doc: option598, Aliases: result600, Examples: result602, Deprecated: option604, Role: option607}})
 		}
 
-		result612 := make([]golem_core_types.SchemaTypeDef, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (9 * 4))))
-		for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (9 * 4)))); index++ {
-			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 * 4))))), index*(6*4))
+		result612 := make([]golem_core_types.SchemaTypeDef, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (10 * 4))))
+		for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (10 * 4)))); index++ {
+			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (9 * 4))))), index*(6*4))
 			value609 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 			var option611 witTypes.Option[string]
 			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))) {
@@ -6067,7 +6067,7 @@ func GetAllTools() []RegisteredTool {
 			result612 = append(result612, golem_core_types.SchemaTypeDef{Id: value609, Name: option611, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (5 * 4)))})
 		}
 
-		result613 = append(result613, RegisteredTool{LookupName: value, Definition: golem_tool_common.Tool{Version: value0, Commands: golem_tool_common.CommandTree{Nodes: result432}, Schema: golem_core_types.SchemaGraph{TypeNodes: result608, Defs: result612, Root: *(*int32)(unsafe.Add(unsafe.Pointer(base), (10 * 4)))}}, ImplementedBy: golem_core_types.ComponentId{Uuid: golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), (8 + 10*4)))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), (16 + 10*4))))}}})
+		result613 = append(result613, RegisteredTool{LookupName: value, Definition: golem_tool_common.Tool{Version: value0, RequiresFilesystem: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4)))) != 0), Commands: golem_tool_common.CommandTree{Nodes: result432}, Schema: golem_core_types.SchemaGraph{TypeNodes: result608, Defs: result612, Root: *(*int32)(unsafe.Add(unsafe.Pointer(base), (11 * 4)))}}, ImplementedBy: golem_core_types.ComponentId{Uuid: golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), (12 * 4)))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), (8 + 12*4))))}}})
 	}
 
 	result614 := result613
@@ -6082,7 +6082,7 @@ func GetTool(name string) witTypes.Option[RegisteredTool] {
 	pinner := &runtime.Pinner{}
 	defer pinner.Unpin()
 
-	returnArea := uintptr(witRuntime.Allocate(pinner, (32 + 10*4), 8))
+	returnArea := uintptr(witRuntime.Allocate(pinner, (24 + 12*4), 8))
 	utf8 := unsafe.Pointer(unsafe.StringData(name))
 	pinner.Pin(utf8)
 	wasm_import_get_tool(uintptr(utf8), uint32(len(name)), returnArea)
@@ -6094,9 +6094,9 @@ func GetTool(name string) witTypes.Option[RegisteredTool] {
 	case 1:
 		value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 1*4))))
 		value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 2*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 3*4))))
-		result432 := make([]golem_tool_common.CommandNode, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 5*4))))
-		for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 5*4)))); index++ {
-			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 4*4))))), index*(24+75*4))
+		result432 := make([]golem_tool_common.CommandNode, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 6*4))))
+		for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 6*4)))); index++ {
+			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 5*4))))), index*(24+75*4))
 			value1 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 			result := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))))
 			for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4)))); index++ {
@@ -10020,9 +10020,9 @@ func GetTool(name string) witTypes.Option[RegisteredTool] {
 			result432 = append(result432, golem_tool_common.CommandNode{Name: value1, Aliases: result, Doc: golem_tool_common.Doc{Summary: value3, Description: value4, Examples: result7}, Globals: golem_tool_common.Globals{Options: result47, Flags: result61}, Subcommands: result62, Body: option431})
 		}
 
-		result608 := make([]golem_core_types.SchemaTypeNode, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 7*4))))
-		for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 7*4)))); index++ {
-			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 6*4))))), index*(56+22*4))
+		result608 := make([]golem_core_types.SchemaTypeNode, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 8*4))))
+		for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 8*4)))); index++ {
+			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 7*4))))), index*(56+22*4))
 			var variant596 golem_core_types.SchemaTypeBody
 			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))) {
 			case 0:
@@ -11626,9 +11626,9 @@ func GetTool(name string) witTypes.Option[RegisteredTool] {
 			result608 = append(result608, golem_core_types.SchemaTypeNode{Body: variant596, Metadata: golem_core_types.MetadataEnvelope{Doc: option598, Aliases: result600, Examples: result602, Deprecated: option604, Role: option607}})
 		}
 
-		result612 := make([]golem_core_types.SchemaTypeDef, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 9*4))))
-		for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 9*4)))); index++ {
-			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 8*4))))), index*(6*4))
+		result612 := make([]golem_core_types.SchemaTypeDef, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 10*4))))
+		for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 10*4)))); index++ {
+			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 9*4))))), index*(6*4))
 			value609 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 			var option611 witTypes.Option[string]
 			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))) {
@@ -11646,7 +11646,7 @@ func GetTool(name string) witTypes.Option[RegisteredTool] {
 			result612 = append(result612, golem_core_types.SchemaTypeDef{Id: value609, Name: option611, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (5 * 4)))})
 		}
 
-		option613 = witTypes.Some[RegisteredTool](RegisteredTool{LookupName: value, Definition: golem_tool_common.Tool{Version: value0, Commands: golem_tool_common.CommandTree{Nodes: result432}, Schema: golem_core_types.SchemaGraph{TypeNodes: result608, Defs: result612, Root: *(*int32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 10*4)))}}, ImplementedBy: golem_core_types.ComponentId{Uuid: golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), (16 + 10*4)))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), (24 + 10*4))))}}})
+		option613 = witTypes.Some[RegisteredTool](RegisteredTool{LookupName: value, Definition: golem_tool_common.Tool{Version: value0, RequiresFilesystem: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 4*4)))) != 0), Commands: golem_tool_common.CommandTree{Nodes: result432}, Schema: golem_core_types.SchemaGraph{TypeNodes: result608, Defs: result612, Root: *(*int32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 11*4)))}}, ImplementedBy: golem_core_types.ComponentId{Uuid: golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 12*4)))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), (16 + 12*4))))}}})
 	default:
 		panic("unreachable")
 	}

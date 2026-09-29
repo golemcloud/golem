@@ -80,7 +80,7 @@ type vcsTool struct {
 
 func declareVcs(r *toolRegistry, d *definitions) *vcsTool {
 	v := &vcsTool{}
-	v.tool = defineToolInto(r, d, "vcs", ToolSpec{Version: "1.2.0", Summary: "A tiny version control tool"}, false)
+	v.tool = defineToolInto(r, d, "vcs", ToolSpec{Version: "1.2.0", Summary: "A tiny version control tool", RequiresFilesystem: true}, false)
 	v.tool.Globals[VcsGlobals](func(g *VcsGlobals, s *ToolGlobalsSpec) {
 		s.Option(&g.Dir).Short('C').Default(".").Doc("working directory")
 		s.CountFlag(&g.Verbose).Short('v').Max(3)
@@ -260,6 +260,9 @@ func TestToolMetadataDescribesTheCommandTree(t *testing.T) {
 	tool, _ := d.buildTool(e)
 	nodes := tool.Commands.Nodes
 
+	if !tool.RequiresFilesystem {
+		t.Error("the tool lost RequiresFilesystem")
+	}
 	root := nodes[0]
 	if root.Name != "vcs" || root.Doc.Summary != "A tiny version control tool" || root.Body.IsSome() {
 		t.Errorf("root node: %+v", root)

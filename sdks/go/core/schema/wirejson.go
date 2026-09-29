@@ -17,6 +17,8 @@ package schema
 import (
 	"encoding/json"
 	"fmt"
+	"math"
+	"strconv"
 	"time"
 )
 
@@ -33,8 +35,10 @@ import (
 // author would write by hand: a record becomes an object with named fields, a
 // s64 becomes a base-10 string, binary becomes base64url. The wire form is
 // structural and schema-free: a record is a positional list of nodes, each
-// still carrying its own kind, a s64 is a JSON number, and binary is an array
-// of byte numbers. Marshal*/Unmarshal* here, Pack*/Unpack* there.
+// still carrying its own kind, and binary is an array of byte numbers. The
+// 64-bit integers travel as canonical decimal strings, so no JSON number
+// precision is lost, and a non-finite float as {"$float": "nan"} and its
+// infinities. Marshal*/Unmarshal* here, Pack*/Unpack* there.
 //
 // Values travel both ways; a type graph only ever arrives, since a caller
 // reads a schema it was given rather than inventing one.
@@ -97,7 +101,7 @@ func valueToWire(v SchemaValue) (wireNode, error) {
 	case S32Value:
 		return wireScalar("s32", n.Value)
 	case S64Value:
-		return wireScalar("s64", n.Value)
+		return wireScalar("s64", strconv.FormatInt(n.Value, 10))
 	case U8Value:
 		return wireScalar("u8", n.Value)
 	case U16Value:
@@ -105,11 +109,17 @@ func valueToWire(v SchemaValue) (wireNode, error) {
 	case U32Value:
 		return wireScalar("u32", n.Value)
 	case U64Value:
-		return wireScalar("u64", n.Value)
+		return wireScalar("u64", strconv.FormatUint(n.Value, 10))
 	case F32Value:
-		return wireScalar("f32", n.Value)
+		if isFinite(float64(n.Value)) {
+			return wireScalar("f32", n.Value)
+		}
+		return wireScalar("f32", exceptionalFloat(float64(n.Value)))
 	case F64Value:
-		return wireScalar("f64", n.Value)
+		if isFinite(n.Value) {
+			return wireScalar("f64", n.Value)
+		}
+		return wireScalar("f64", exceptionalFloat(n.Value))
 	case CharValue:
 		if !validCodePoint(n.Value) {
 			return wireNode{}, fmt.Errorf("golem: char %d is not a Unicode scalar value", n.Value)
@@ -171,7 +181,7 @@ func valueToWire(v SchemaValue) (wireNode, error) {
 		}
 		return wireScalar("map", map[string]any{"entries": entries})
 	case OptionValue:
-		payload := map[string]any{}
+		payload := map[string]any{"inner": nil}
 		if n.Value != nil {
 			inner, err := valueToWire(*n.Value)
 			if err != nil {
@@ -185,7 +195,7 @@ func valueToWire(v SchemaValue) (wireNode, error) {
 		if n.IsErr {
 			tag = "err"
 		}
-		payload := map[string]any{"tag": tag}
+		payload := map[string]any{"tag": tag, "value": nil}
 		if n.Value != nil {
 			inner, err := valueToWire(*n.Value)
 			if err != nil {
@@ -215,10 +225,10 @@ func valueToWire(v SchemaValue) (wireNode, error) {
 		instant := time.Unix(n.Seconds, int64(n.Nanoseconds)).UTC()
 		return wireScalar("datetime", map[string]any{"value": instant.Format(time.RFC3339Nano)})
 	case DurationValue:
-		return wireScalar("duration", map[string]any{"nanoseconds": n.Nanoseconds})
+		return wireScalar("duration", map[string]any{"nanoseconds": strconv.FormatInt(n.Nanoseconds, 10)})
 	case QuantityValueNode:
 		return wireScalar("quantity", map[string]any{
-			"mantissa": n.Value.Mantissa,
+			"mantissa": strconv.FormatInt(n.Value.Mantissa, 10),
 			"scale":    n.Value.Scale,
 			"unit":     n.Value.Unit,
 		})
@@ -269,7 +279,10 @@ func wireToValue(node wireNode) (SchemaValue, error) {
 	case "s32":
 		return readWire(node, func(v int32) SchemaValue { return S32Value{Value: v} })
 	case "s64":
-		return readWire(node, func(v int64) SchemaValue { return S64Value{Value: v} })
+		return readWireErr(node, func(v string) (SchemaValue, error) {
+			n, err := parseWireInt(v, "s64")
+			return S64Value{Value: n}, err
+		})
 	case "u8":
 		return readWire(node, func(v uint8) SchemaValue { return U8Value{Value: v} })
 	case "u16":
@@ -277,11 +290,26 @@ func wireToValue(node wireNode) (SchemaValue, error) {
 	case "u32":
 		return readWire(node, func(v uint32) SchemaValue { return U32Value{Value: v} })
 	case "u64":
-		return readWire(node, func(v uint64) SchemaValue { return U64Value{Value: v} })
+		return readWireErr(node, func(v string) (SchemaValue, error) {
+			if !canonicalUnsigned(v) {
+				return nil, fmt.Errorf("golem: u64 must be a canonical decimal string, got %q", v)
+			}
+			n, err := strconv.ParseUint(v, 10, 64)
+			if err != nil {
+				return nil, fmt.Errorf("golem: u64 %q is out of range", v)
+			}
+			return U64Value{Value: n}, nil
+		})
 	case "f32":
-		return readWire(node, func(v float32) SchemaValue { return F32Value{Value: v} })
+		return readWireErr(node, func(v wireFloat) (SchemaValue, error) {
+			narrowed := float32(v)
+			if math.IsInf(float64(narrowed), 0) && isFinite(float64(v)) {
+				return nil, fmt.Errorf("golem: f32 %v is out of range", float64(v))
+			}
+			return F32Value{Value: narrowed}, nil
+		})
 	case "f64":
-		return readWire(node, func(v float64) SchemaValue { return F64Value{Value: v} })
+		return readWire(node, func(v wireFloat) SchemaValue { return F64Value{Value: float64(v)} })
 	case "string":
 		return readWire(node, func(v string) SchemaValue { return StringValue{Value: v} })
 
@@ -382,10 +410,14 @@ func wireToValue(node wireNode) (SchemaValue, error) {
 			}, nil
 		})
 	case "duration":
-		return readWire(node, func(p wireDurationValue) SchemaValue { return DurationValue(p) })
+		return readWireErr(node, func(p wireDurationValue) (SchemaValue, error) {
+			n, err := parseWireInt(p.Nanoseconds, "duration nanoseconds")
+			return DurationValue{Nanoseconds: n}, err
+		})
 	case "quantity":
-		return readWire(node, func(p wireQuantityValue) SchemaValue {
-			return QuantityValueNode{Value: QuantityValue(p)}
+		return readWireErr(node, func(p wireQuantityValue) (SchemaValue, error) {
+			mantissa, err := parseWireInt(p.Mantissa, "quantity mantissa")
+			return QuantityValueNode{Value: QuantityValue{Mantissa: mantissa, Scale: p.Scale, Unit: p.Unit}}, err
 		})
 	case "union":
 		return readWireErr(node, func(p wireUnionValue) (SchemaValue, error) {
@@ -429,9 +461,8 @@ func wireToValues(nodes []wireNode) ([]SchemaValue, error) {
 	return out, nil
 }
 
-// wireToOptionalValue treats an omitted field and an explicit null the same, so
-// the server's serde output (which renders an empty payload as null) reads back
-// as the omitted form other SDKs send.
+// wireToOptionalValue reads an optional payload, which the wire form spells as
+// null when it is empty.
 func wireToOptionalValue(node *wireNode) (*SchemaValue, error) {
 	if node == nil || node.Kind == "" {
 		return nil, nil
@@ -515,11 +546,11 @@ type wireDatetimeValue struct {
 }
 
 type wireDurationValue struct {
-	Nanoseconds int64 `json:"nanoseconds"`
+	Nanoseconds string `json:"nanoseconds"`
 }
 
 type wireQuantityValue struct {
-	Mantissa int64  `json:"mantissa"`
+	Mantissa string `json:"mantissa"`
 	Scale    int32  `json:"scale"`
 	Unit     string `json:"unit"`
 }
@@ -549,4 +580,77 @@ func nonNilBools(v []bool) []bool {
 
 func validCodePoint(r rune) bool {
 	return r >= 0 && r <= 0x10ffff && (r < 0xd800 || r > 0xdfff)
+}
+
+// exceptionalFloatKey marks a float JSON cannot spell as a number.
+const exceptionalFloatKey = "$float"
+
+func isFinite(f float64) bool { return !math.IsNaN(f) && !math.IsInf(f, 0) }
+
+func exceptionalFloat(f float64) map[string]string {
+	switch {
+	case math.IsNaN(f):
+		return map[string]string{exceptionalFloatKey: "nan"}
+	case math.IsInf(f, 1):
+		return map[string]string{exceptionalFloatKey: "positive-infinity"}
+	default:
+		return map[string]string{exceptionalFloatKey: "negative-infinity"}
+	}
+}
+
+// wireFloat reads a float: a JSON number, or the exceptional-float object.
+type wireFloat float64
+
+func (f *wireFloat) UnmarshalJSON(data []byte) error {
+	var number float64
+	if err := json.Unmarshal(data, &number); err == nil {
+		*f = wireFloat(number)
+		return nil
+	}
+	var exceptional map[string]string
+	if err := json.Unmarshal(data, &exceptional); err != nil || len(exceptional) != 1 {
+		return fmt.Errorf("golem: a float must be a number or {%q: ...}, got %s", exceptionalFloatKey, data)
+	}
+	switch exceptional[exceptionalFloatKey] {
+	case "nan":
+		*f = wireFloat(math.NaN())
+	case "positive-infinity":
+		*f = wireFloat(math.Inf(1))
+	case "negative-infinity":
+		*f = wireFloat(math.Inf(-1))
+	default:
+		return fmt.Errorf("golem: unknown exceptional float %s", data)
+	}
+	return nil
+}
+
+func canonicalUnsigned(s string) bool {
+	if s == "" || (len(s) > 1 && s[0] == '0') {
+		return false
+	}
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// parseWireInt reads a 64-bit signed integer from its canonical decimal string.
+func parseWireInt(s, what string) (int64, error) {
+	digits := s
+	if len(s) > 1 && s[0] == '-' {
+		digits = s[1:]
+		if digits == "0" {
+			return 0, fmt.Errorf("golem: %s must be a canonical decimal string, got %q", what, s)
+		}
+	}
+	if !canonicalUnsigned(digits) {
+		return 0, fmt.Errorf("golem: %s must be a canonical decimal string, got %q", what, s)
+	}
+	n, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("golem: %s %q is out of range", what, s)
+	}
+	return n, nil
 }

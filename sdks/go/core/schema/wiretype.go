@@ -578,8 +578,16 @@ type wirePathType struct {
 type wireQuantitySpec struct {
 	BaseUnit        string             `json:"baseUnit"`
 	AllowedSuffixes []string           `json:"allowedSuffixes"`
-	Min             *wireQuantityValue `json:"min"`
-	Max             *wireQuantityValue `json:"max"`
+	Min             *wireQuantityBound `json:"min"`
+	Max             *wireQuantityBound `json:"max"`
+}
+
+// wireQuantityBound is a quantity inside a type graph, whose serde form keeps
+// the mantissa a JSON number, unlike a quantity value's.
+type wireQuantityBound struct {
+	Mantissa int64  `json:"mantissa"`
+	Scale    int32  `json:"scale"`
+	Unit     string `json:"unit"`
 }
 
 func (q wireQuantitySpec) model() QuantitySpec {

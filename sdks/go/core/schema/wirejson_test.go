@@ -16,6 +16,7 @@ package schema
 
 import (
 	"encoding/json"
+	"math"
 	"reflect"
 	"strings"
 	"testing"
@@ -117,15 +118,19 @@ func TestWireShapesMatchTheServer(t *testing.T) {
 		value SchemaValue
 		want  string
 	}{
-		{"s64 is a number, not a canonical string", S64Value{Value: -5}, `{"kind":"s64","value":-5}`},
-		{"u64 keeps its full range", U64Value{Value: 18446744073709551615},
-			`{"kind":"u64","value":18446744073709551615}`},
+		{"s64 is a canonical decimal string", S64Value{Value: -5}, `{"kind":"s64","value":"-5"}`},
+		{"u64 keeps its full range as a string", U64Value{Value: 18446744073709551615},
+			`{"kind":"u64","value":"18446744073709551615"}`},
+		{"a finite float is a number", F64Value{Value: 1.5}, `{"kind":"f64","value":1.5}`},
+		{"NaN is spelled out", F64Value{Value: math.NaN()}, `{"kind":"f64","value":{"$float":"nan"}}`},
+		{"an infinity is spelled out", F32Value{Value: float32(math.Inf(-1))},
+			`{"kind":"f32","value":{"$float":"negative-infinity"}}`},
 		{"a record is positional", RecordValue{Fields: []SchemaValue{BoolValue{Value: true}}},
 			`{"kind":"record","value":{"fields":[{"kind":"bool","value":true}]}}`},
-		{"an absent option omits inner", OptionValue{},
-			`{"kind":"option","value":{}}`},
-		{"a unit ok omits value", ResultValue{},
-			`{"kind":"result","value":{"tag":"ok"}}`},
+		{"an absent option has a null inner", OptionValue{},
+			`{"kind":"option","value":{"inner":null}}`},
+		{"a unit ok has a null value", ResultValue{},
+			`{"kind":"result","value":{"tag":"ok","value":null}}`},
 		{"flags are positional bits", FlagsValue{Set: []bool{true, false}},
 			`{"kind":"flags","value":{"bits":[true,false]}}`},
 		{"a map is a list of pairs", MapValue{Entries: []MapEntry{{
@@ -138,11 +143,11 @@ func TestWireShapesMatchTheServer(t *testing.T) {
 		{"binary names its mime type in camel case",
 			BinaryValue{Bytes: []byte{}, MimeType: ptr("image/png")},
 			`{"kind":"binary","value":{"bytes":[],"mimeType":"image/png"}}`},
-		{"a duration is a number of nanoseconds", DurationValue{Nanoseconds: 1500},
-			`{"kind":"duration","value":{"nanoseconds":1500}}`},
-		{"a quantity carries its parts as numbers",
+		{"a duration's nanoseconds are a decimal string", DurationValue{Nanoseconds: 1500},
+			`{"kind":"duration","value":{"nanoseconds":"1500"}}`},
+		{"a quantity's mantissa is a decimal string",
 			QuantityValueNode{Value: QuantityValue{Mantissa: 5, Scale: 2, Unit: "m"}},
-			`{"kind":"quantity","value":{"mantissa":5,"scale":2,"unit":"m"}}`},
+			`{"kind":"quantity","value":{"mantissa":"5","scale":2,"unit":"m"}}`},
 		{"a char is a one-character string", CharValue{Value: 'ß'},
 			`{"kind":"char","value":"ß"}`},
 		{"a datetime is RFC 3339 in UTC",
@@ -177,20 +182,14 @@ func canonicalize(t *testing.T, data []byte) string {
 	return string(out)
 }
 
-func TestAnExplicitNullReadsAsAnAbsentPayload(t *testing.T) {
-	// The server's serde output renders an empty optional payload as null,
-	// while other SDKs omit the field. Both must mean the same thing.
-	for _, data := range []string{
-		`{"kind":"option","value":{"inner":null}}`,
-		`{"kind":"option","value":{}}`,
-	} {
-		v, err := UnmarshalWireValue([]byte(data))
-		if err != nil {
-			t.Fatalf("%s: %v", data, err)
-		}
-		if opt, ok := v.(OptionValue); !ok || opt.Value != nil {
-			t.Fatalf("%s decoded to %#v, want an absent option", data, v)
-		}
+func TestExceptionalFloatsReadBack(t *testing.T) {
+	v, err := UnmarshalWireValue([]byte(`{"kind":"f64","value":{"$float":"nan"}}`))
+	if err != nil || !math.IsNaN(v.(F64Value).Value) {
+		t.Fatalf("NaN read back as %#v, %v", v, err)
+	}
+	v, err = UnmarshalWireValue([]byte(`{"kind":"f32","value":{"$float":"positive-infinity"}}`))
+	if err != nil || !math.IsInf(float64(v.(F32Value).Value), 1) {
+		t.Fatalf("+Inf read back as %#v, %v", v, err)
 	}
 }
 
@@ -213,6 +212,11 @@ func TestMalformedValuesAreRejected(t *testing.T) {
 		`{"kind":"map","value":{"entries":[[]]}}`:       "[key, value] pair",
 		`{"kind":"datetime","value":{"value":"today"}}`: "datetime",
 		`{"kind":"s8","value":"not a number"}`:          "s8 value",
+		`{"kind":"s64","value":5}`:                      "s64 value",
+		`{"kind":"s64","value":"05"}`:                   "canonical decimal string",
+		`{"kind":"u64","value":"-1"}`:                   "canonical decimal string",
+		`{"kind":"f32","value":1e300}`:                  "out of range",
+		`{"kind":"f64","value":{"$float":"huge"}}`:      "exceptional float",
 	}
 	for data, want := range cases {
 		_, err := UnmarshalWireValue([]byte(data))

@@ -519,8 +519,9 @@ type CommandTree struct {
 
 // Top level
 type Tool struct {
-	Version  string
-	Commands CommandTree
+	Version            string
+	RequiresFilesystem bool
+	Commands           CommandTree
 	// Self-contained type-node pool holding every type referenced from
 	// this tool's commands. Command bodies reference entries by
 	// `type-node-index`. `schema.root` is a structurally-required

@@ -57,6 +57,8 @@ The wire name is the field name in kebab case (`Times` → `times`, `GitDir` →
 | `io.Reader` | `Stdin` | The command's standard input; `.Optional()`, `.Mime(…)` |
 | `golem.Principal` | — | Filled by the host with who invoked the command |
 
+A tool that cannot work without a filesystem binding says so with `ToolSpec{RequiresFilesystem: true}`; that declares the need, it does not grant access.
+
 Every exported field must be bound, or be the principal; a mistake — an unbound field, a field bound twice, a pointer into another struct — is a definition error, reported by `golem.DefinitionErrors()` and at deploy.
 
 Other command settings: `s.Description`, `s.Example`, `s.Aliases`, `s.ResultDoc`, `s.Formatter("json", "summary")` / `s.Formatters(…)` / `s.DefaultFormatter`, and the annotations `s.ReadOnly()`, `s.Destructive()`, `s.Idempotent()`, `s.OpenWorld()`.
