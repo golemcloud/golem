@@ -145,6 +145,21 @@ impl FilesystemCapture {
     }
 }
 
+#[cfg(test)]
+impl FilesystemCapture {
+    /// A capture of an empty directory in `scratch`.
+    pub(crate) async fn empty_in(scratch: &HostDirectory) -> Self {
+        Self {
+            directory: HostDirectory::create_in(
+                scratch.path(),
+                OsStr::new(&uuid::Uuid::new_v4().to_string()),
+            )
+            .await
+            .expect("the capture directory is made"),
+        }
+    }
+}
+
 /// How a save of a capture can find the files that did not change since the tree of the mark
 /// that the capture compared with.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

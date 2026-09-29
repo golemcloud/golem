@@ -1742,4 +1742,79 @@ mod tests {
         assert_eq!(after_other, Some(restored));
         assert_eq!(after_own, Some(confirmed(&confirmed_now, later)));
     }
+
+    #[test]
+    async fn a_baseline_restored_the_name_of_its_record() {
+        let name = FilesystemSnapshotName::periodic();
+        let update = FilesystemSnapshotName::update();
+        let periodic = |name: Option<&FilesystemSnapshotName>| BaselineKind::Periodic {
+            index: OplogIndex::from_u64(10),
+            name: name.cloned(),
+        };
+
+        assert_eq!(
+            [
+                BaselineKind::InitialFiles.restored(),
+                periodic(Some(&name)).restored(),
+                periodic(None).restored(),
+                manual_kind(Some(&update), false).restored(),
+                manual_kind(None, true).restored(),
+            ],
+            [
+                None,
+                Some((name, ConfirmedBaseline::Periodic)),
+                None,
+                Some((
+                    update,
+                    ConfirmedBaseline::ManualUpdate(OplogIndex::from_u64(7))
+                )),
+                None,
+            ]
+        );
+    }
+
+    #[test]
+    async fn a_start_restore_of_a_snapshot_that_the_store_does_not_hold_fails() {
+        let (snapshots, _shutdown) = enabled_service();
+        let scope = agent_scope("restore-missing");
+        let restore = StartRestore::Store(
+            snapshots
+                .restore(&scope, &FilesystemSnapshotName::periodic())
+                .unwrap(),
+        );
+        let into = tempfile::tempdir().unwrap();
+
+        assert!(restore.restore(into.path()).await.is_err());
+    }
+
+    #[test]
+    async fn only_a_service_with_a_store_is_enabled() {
+        let (enabled, _enabled_shutdown) = enabled_service();
+        let (disabled, _disabled_shutdown) = disabled_service();
+
+        assert_eq!((enabled.is_enabled(), disabled.is_enabled()), (true, false));
+    }
+
+    #[test]
+    async fn a_written_periodic_record_that_uploads_its_capture_asks_for_its_confirmation() {
+        let (mark, _) = marks();
+        let (snapshots, _shutdown) = enabled_service();
+        let scope = agent_scope("periodic-upload");
+        let scratch = crate::services::agent_filesystem::scratch_directory().await;
+        let mut host = ScriptedHost {
+            capture: std::sync::Mutex::new(Some(CaptureOutcome::Captured {
+                capture: FilesystemCapture::empty_in(&scratch).await,
+                mark,
+                detection: ChangeDetection::Full,
+            })),
+            ..ScriptedHost::new()
+        };
+
+        let result = outcome(&periodic_snapshot(&mut host, &snapshots, &scope).await);
+
+        assert_eq!(
+            (result, host.calls().last().cloned()),
+            ("Continue".to_string(), Some("confirm".to_string()))
+        );
+    }
 }

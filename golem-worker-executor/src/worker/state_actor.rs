@@ -1641,6 +1641,55 @@ mod tests {
     }
 
     #[test]
+    #[timeout("10s")]
+    async fn a_confirmation_gives_the_reply_of_the_status_task() {
+        use super::{ConfirmOutcome, WorkerInstance};
+        use golem_common::model::oplog::FilesystemSnapshotName;
+        let owned_agent_id = OwnedAgentId::new(
+            EnvironmentId::new(),
+            &AgentId {
+                component_id: ComponentId::new(),
+                agent_id: "replying-status".into(),
+            },
+        );
+        let (status_jobs, mut status_rx) = mpsc::unbounded_channel();
+        let (lifecycle_jobs, _lifecycle_rx) = mpsc::unbounded_channel();
+        let stop = WorkerStateActorStop::new(
+            || {},
+            tokio::spawn(std::future::pending()),
+            status_jobs.clone(),
+            tokio::spawn(async {}),
+            async {},
+        );
+        let actor = WorkerStateActor::<Context> {
+            commit: Arc::new(OwnerCommitController {
+                status_jobs,
+                owned_agent_id: owned_agent_id.clone(),
+            }),
+            lifecycle_jobs,
+            notification_queued: Arc::new(AtomicBool::new(false)),
+            stop,
+            owned_agent_id,
+        };
+        let status_task = tokio::spawn(async move {
+            if let Some(StatusJob::ConfirmFilesystemSnapshot { done, .. }) = status_rx.recv().await
+            {
+                let _ = done.send(ConfirmOutcome::Superseded);
+            }
+        });
+        let guard = Arc::new(tokio::sync::Mutex::new(WorkerInstance::Unresolved))
+            .lock_owned()
+            .await;
+
+        let reply = actor
+            .append_confirmation(FilesystemSnapshotName::periodic(), guard, Box::new(|_| {}))
+            .await;
+        status_task.await.unwrap();
+
+        assert_eq!(reply, ConfirmOutcome::Superseded);
+    }
+
+    #[test]
     fn invocation_admission_ignores_unrelated_oplog_and_pending_changes() {
         let key = IdempotencyKey::fresh();
         let mut status = AgentStatusRecord {

@@ -3799,11 +3799,11 @@ mod tests {
         CommandOutcome, ConcurrentAgentPermitState, InvocationLoop, PeriodicFailure,
         PeriodicSnapshotAction, ResidentAgentOwnership, ResidentWakeup,
         catch_invocation_loop_panic, close_usage_before_delete, coalesce_filesystem_limit_update,
-        failed_agent_invocation_outcome, finish_filesystem_limit_unload, periodic_failure_outcome,
-        periodic_snapshot_failure_outcome, publish_unload_outcome, run_invocation_loop_task,
-        snapshot_action_at, snapshot_baseline_timestamp, spawn_module_owned_unload,
-        successful_agent_invocation_outcome, unload_resident_agent_ownership,
-        wait_for_resident_wakeup,
+        failed_agent_invocation_outcome, finish_filesystem_limit_unload, measured_capture,
+        periodic_failure_outcome, periodic_snapshot_failure_outcome, publish_unload_outcome,
+        run_invocation_loop_task, snapshot_action_at, snapshot_baseline_timestamp,
+        spawn_module_owned_unload, successful_agent_invocation_outcome,
+        unload_resident_agent_ownership, wait_for_resident_wakeup,
     };
     use crate::sandbox_filesystem::ScriptedSandboxFilesystem;
     use crate::services::active_agents::stop_loaded_idle_if_eligible;
@@ -3832,6 +3832,19 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
     use test_r::{test, timeout};
+
+    #[test]
+    async fn a_measured_capture_gives_the_outcome_of_a_capture_and_nothing_for_a_failed_one() {
+        let label = |_: &u8| "captured";
+        let captured = measured_capture(|| async { Ok(7) }, label).await;
+        let failed = measured_capture(
+            || async { Err(crate::services::agent_filesystem::CaptureError::Busy) },
+            label,
+        )
+        .await;
+
+        assert_eq!((captured, failed), (Some(7), None));
+    }
 
     #[test]
     fn a_periodic_record_that_did_not_reach_the_oplog_skips_stops_or_retries() {

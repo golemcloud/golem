@@ -163,6 +163,20 @@ mod tests {
     }
 
     #[test]
+    async fn a_receiver_wakes_only_when_whether_a_terminal_request_waits_changes() {
+        let interrupts = Interrupts::default();
+        let terminal = interrupts.terminal();
+
+        interrupts.try_queue(interrupt(InterruptKind::Restart));
+        let after_restart = terminal.has_changed().unwrap();
+        interrupts.take().await;
+        interrupts.try_queue(interrupt(InterruptKind::Suspend(Timestamp::now_utc())));
+        let after_suspend = terminal.has_changed().unwrap();
+
+        assert_eq!((after_restart, after_suspend), (false, true));
+    }
+
+    #[test]
     async fn a_queue_while_the_lock_is_held_gives_none_and_changes_nothing() {
         let interrupts = Interrupts::default();
         let held = interrupts.state.lock().await;
