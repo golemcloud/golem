@@ -826,16 +826,10 @@ impl TestWorkerExecutor {
         use futures::StreamExt as _;
         let released = self.leak_detector();
         if let Some(services) = &self.services {
-            let agents = services.active_agents();
-            let workers = agents.snapshot().await;
-            futures::stream::iter(workers)
-                .for_each(|(_, worker)| {
-                    let agents = &agents;
-                    async move {
-                        agents.remove_worker(&worker, false).await;
-                    }
-                })
-                .await;
+            remove_cached_agents(&services.active_agents()).await?;
+        }
+        if let Some(active_agents) = &self.production_active_agents {
+            remove_cached_agents(active_agents).await?;
         }
         drop(self);
         let gone = futures::stream::repeat(())
@@ -2164,6 +2158,24 @@ fn apply_redis_storage_config(
         IndexedStorageConfig::KVStoreRedis(IndexedStorageKVStoreRedisConfig {});
     config.scheduler_storage =
         SchedulerStorageConfig::Sqlite(scheduler_sqlite_storage_config(deps, context));
+}
+
+/// Removes every cached agent of `agents`, so that no cached agent keeps the service graph of
+/// the executor. Fails at once, and names the agent, when the cache refuses a removal.
+async fn remove_cached_agents<Ctx: WorkerCtx>(agents: &ActiveAgents<Ctx>) -> anyhow::Result<()> {
+    use futures::{StreamExt as _, TryStreamExt as _};
+    futures::stream::iter(agents.snapshot().await)
+        .map(Ok)
+        .try_for_each(|(agent_id, worker)| async move {
+            if agents.remove_worker(&worker, false).await {
+                Ok(())
+            } else {
+                Err(anyhow!(
+                    "the cached agent {agent_id} was not removed from the released executor"
+                ))
+            }
+        })
+        .await
 }
 
 async fn start_executor_with_config(
