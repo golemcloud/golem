@@ -241,6 +241,20 @@ async fn prune(
     .await
 }
 
+/// Gives a backend over the repository of the scope in the storage, on the current runtime, whose
+/// calls wait for at most `deadline`.
+fn backend_of(
+    storage: Arc<dyn BlobStorage>,
+    scope: &SnapshotScope,
+    deadline: Duration,
+) -> Arc<BlobBackend> {
+    Arc::new(BlobBackend::new(
+        files_of(storage, scope.0.clone(), deadline, CancellationToken::new()),
+        Handle::current(),
+        KEPT_PACKS_LIMIT,
+    ))
+}
+
 /// Prunes the repository of the scope with the settings through the prune of the store, on a
 /// blocking thread.
 async fn prune_with(
@@ -248,16 +262,7 @@ async fn prune_with(
     scope: &SnapshotScope,
     settings: PruneSettings,
 ) -> anyhow::Result<Option<PruneReport>> {
-    let backend = Arc::new(BlobBackend::new(
-        files_of(
-            storage,
-            scope.0.clone(),
-            STORAGE_CALL_DEADLINE,
-            CancellationToken::new(),
-        ),
-        Handle::current(),
-        KEPT_PACKS_LIMIT,
-    ));
+    let backend = backend_of(storage, scope, STORAGE_CALL_DEADLINE);
     run_blocking(move || super::prune(backend, &key(), &settings)).await
 }
 
@@ -270,16 +275,7 @@ async fn restore_named(
     into: &Path,
     options: RestoreOptions,
 ) -> anyhow::Result<()> {
-    let backend = Arc::new(BlobBackend::new(
-        files_of(
-            storage,
-            scope.0.clone(),
-            STORAGE_CALL_DEADLINE,
-            CancellationToken::new(),
-        ),
-        Handle::current(),
-        KEPT_PACKS_LIMIT,
-    ));
+    let backend = backend_of(storage, scope, STORAGE_CALL_DEADLINE);
     let (name, into) = (name.clone(), into.to_path_buf());
     run_blocking(move || {
         let repository = open_existing(backend, &key())?.context("the scope has no repository")?;
@@ -298,11 +294,7 @@ async fn with_existing_repository<R: Send + 'static>(
     deadline: Duration,
     work: impl FnOnce(&RusticRepository<OpenStatus>) -> anyhow::Result<R> + Send + 'static,
 ) -> anyhow::Result<R> {
-    let backend = Arc::new(BlobBackend::new(
-        files_of(storage, scope.0.clone(), deadline, CancellationToken::new()),
-        Handle::current(),
-        KEPT_PACKS_LIMIT,
-    ));
+    let backend = backend_of(storage, scope, deadline);
     run_blocking(move || {
         let repository = open_existing(backend, &key())?.context("the scope has no repository")?;
         work(&repository)
@@ -463,18 +455,8 @@ async fn a_create_whose_config_write_finds_the_config_of_another_writer_opens_th
             Script::Pass
         }
     });
-    let backend = |storage: Arc<dyn BlobStorage>| {
-        Arc::new(BlobBackend::new(
-            files_of(
-                storage,
-                scope.0.clone(),
-                STORAGE_CALL_DEADLINE,
-                CancellationToken::new(),
-            ),
-            Handle::current(),
-            KEPT_PACKS_LIMIT,
-        ))
-    };
+    let backend =
+        |storage: Arc<dyn BlobStorage>| backend_of(storage, &scope, STORAGE_CALL_DEADLINE);
     let loser = backend(losing.clone());
     let lost = tokio::task::spawn_blocking(move || {
         open_or_create(loser, &key()).map(|repository| repository.config().id)
