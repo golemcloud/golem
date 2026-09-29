@@ -5456,6 +5456,41 @@ fn arb_deployment_diff() -> BoxedStrategy<golem_common::model::diff::DeploymentD
                     ),
                     filesystem_access: golem_common::model::tool::ToolFilesystemAccess::Allowed,
                 };
+                let middleware_binding =
+                    golem_common::model::diff::ToolMiddlewareBindingInput {
+                        config_keys_readable: golem_common::model::tool::ConfigKeyScope::All,
+                        secret_keys_readable: golem_common::model::tool::SecretKeyScope::All,
+                        secret_keys_revealable:
+                            golem_common::model::tool::SecretKeyScope::Keys(BTreeSet::new()),
+                        middleware: Some(vec![
+                            golem_common::model::tool_middleware::ToolMiddlewareInstallation {
+                                name: "audit".try_into().expect("valid middleware name"),
+                                version: Some("1.0.0".to_string()),
+                                parameters:
+                                    golem_common::model::json::NormalizedJsonValue::new(json!({
+                                        "level": "full"
+                                    })),
+                                account: Some(
+                                    golem_common::model::account::AccountEmail::new(
+                                        "middleware@example.com",
+                                    ),
+                                ),
+                                secret_keys_readable: Some(
+                                    golem_common::model::tool::SecretKeyScope::All,
+                                ),
+                                secret_keys_revealable: Some(
+                                    golem_common::model::tool::SecretKeyScope::Keys(
+                                        BTreeSet::new(),
+                                    ),
+                                ),
+                                filesystem_access:
+                                    golem_common::model::tool::ToolFilesystemAccess::Denied,
+                            },
+                        ]),
+                        middleware_merge_mode: Some(
+                            golem_common::model::tool_middleware::ToolMiddlewareMergeMode::Replace,
+                        ),
+                    };
                 current.remote_tools.insert(
                     remote_tool_key.clone(),
                     golem_common::model::diff::HashOf::form_value(
@@ -5486,7 +5521,7 @@ fn arb_deployment_diff() -> BoxedStrategy<golem_common::model::diff::DeploymentD
                                 golem_common::model::agent::AgentTypeName("agent".to_string()),
                                 binding.clone(),
                             )]),
-                            environment_middleware_binding: None,
+                            environment_middleware_binding: Some(middleware_binding.clone()),
                             component_middleware_bindings: BTreeMap::new(),
                             agent_middleware_bindings: BTreeMap::new(),
                         },
@@ -5522,9 +5557,17 @@ fn arb_deployment_diff() -> BoxedStrategy<golem_common::model::diff::DeploymentD
                                 golem_common::model::agent::AgentTypeName("agent".to_string()),
                                 binding,
                             )]),
-                            environment_middleware_binding: None,
-                            component_middleware_bindings: BTreeMap::new(),
-                            agent_middleware_bindings: BTreeMap::new(),
+                            environment_middleware_binding: Some(middleware_binding.clone()),
+                            component_middleware_bindings: BTreeMap::from([(
+                                "component".to_string(),
+                                middleware_binding.clone(),
+                            )]),
+                            agent_middleware_bindings: BTreeMap::from([(
+                                golem_common::model::agent::AgentTypeName(
+                                    "agent".to_string(),
+                                ),
+                                middleware_binding,
+                            )]),
                         },
                     ),
                 );

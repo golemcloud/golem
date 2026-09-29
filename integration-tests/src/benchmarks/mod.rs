@@ -106,6 +106,7 @@ fn failure_message(message: String) -> String {
 #[derive(Debug)]
 pub struct InvokeResult {
     pub value: Vec<SchemaValue>,
+    pub agent_id: Option<AgentId>,
     pub retries: usize,
     pub timeouts: usize,
     pub accumulated_time: Duration,
@@ -195,12 +196,14 @@ pub async fn invoke_and_await_agent(
             match result {
                 Ok(Ok(data_value)) => {
                     accumulated_time += duration;
+                    let agent_id = data_value.agent_id().clone();
                     let value = data_value
                         .into_return_value()
                         .map(|v| vec![v])
                         .unwrap_or_default();
                     break InvokeResult {
                         value,
+                        agent_id: Some(agent_id),
                         retries,
                         timeouts,
                         accumulated_time,
@@ -284,6 +287,7 @@ pub async fn invoke_and_await_http(client: Client, request: impl Fn() -> Request
 
                         break InvokeResult {
                             value: vec![SchemaValue::String(body)],
+                            agent_id: None,
                             retries,
                             timeouts,
                             accumulated_time,
@@ -367,6 +371,7 @@ mod tests {
     fn result(failures: Vec<String>) -> InvokeResult {
         InvokeResult {
             value: vec![],
+            agent_id: None,
             retries: failures.len(),
             timeouts: 0,
             accumulated_time: Duration::from_millis(7),
