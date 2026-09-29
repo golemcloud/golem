@@ -2948,13 +2948,8 @@ async fn get_workers_opaque_cursor_replays_after_restart(
         .await?
         .into_return_value()
         .ok_or_else(|| anyhow!("expected promise id"))?;
-    let component_id_value = {
-        let (high, low) = component.id.0.as_u64_pair();
-        SchemaValue::Record {
-            fields: vec![SchemaValue::Record {
-                fields: vec![SchemaValue::U64(high), SchemaValue::U64(low)],
-            }],
-        }
+    let component_id_value = SchemaValue::Record {
+        fields: vec![SchemaValue::Uuid(component.id.0)],
     };
     let params = crate::raw_params(vec![component_id_value, promise_id_value.clone()]);
     let resumed_params = params.clone();
