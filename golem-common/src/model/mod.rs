@@ -2086,6 +2086,9 @@ pub struct FailedUpdateRecord {
 pub struct SuccessfulUpdateRecord {
     pub timestamp: Timestamp,
     pub target_revision: ComponentRevision,
+    /// The index of the `SuccessfulUpdate` entry. It orders the update against other entries,
+    /// which the timestamps of different executors cannot do.
+    pub oplog_index: OplogIndex,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]

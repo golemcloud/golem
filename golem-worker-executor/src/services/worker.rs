@@ -3221,6 +3221,7 @@ mod tests {
         status.successful_updates.push(SuccessfulUpdateRecord {
             timestamp: Timestamp::from(1_700_000_001_000u64),
             target_revision: ComponentRevision::new(3).unwrap(),
+            oplog_index: OplogIndex::from_u64(6),
         });
         status
     }

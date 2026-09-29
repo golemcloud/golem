@@ -35,7 +35,7 @@ use golem_common::model::oplog::{
     FilesystemSnapshotName, OplogIndex, TimestampedUpdateDescription, UpdateDescription,
 };
 use golem_common::model::oplog::{OplogEntry, RawSnapshotData};
-use golem_common::model::{AgentId, Timestamp, UsableAutomaticSnapshot};
+use golem_common::model::{AgentId, UsableAutomaticSnapshot};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::future::Future;
 use std::path::Path;
@@ -625,8 +625,22 @@ impl BaselineKind {
 pub(crate) enum SourceRevision {
     /// The current revision, while the update is pending.
     Current,
-    /// The revision of the agent just before the update at this time.
-    Before(Timestamp),
+    /// The revision of the agent just before the update record at this oplog index.
+    Before(OplogIndex),
+}
+
+/// The target of the last successful update in `successful_updates` whose entry comes before the
+/// oplog index `before`, or `None` when no update comes before it. The order is the order of the
+/// oplog, not of the timestamps, which different executors give with their own clocks.
+pub(crate) fn revision_before(
+    successful_updates: &[golem_common::model::SuccessfulUpdateRecord],
+    before: OplogIndex,
+) -> Option<ComponentRevision> {
+    successful_updates
+        .iter()
+        .filter(|update| update.oplog_index < before)
+        .max_by_key(|update| update.oplog_index)
+        .map(|update| update.target_revision)
 }
 
 /// What a start does to get its baseline.
@@ -671,7 +685,7 @@ pub(crate) fn plan_start_baseline(
     match manual {
         Some((
             TimestampedUpdateDescription {
-                timestamp,
+                timestamp: _,
                 oplog_index,
                 description:
                     UpdateDescription::SnapshotBased {
@@ -695,7 +709,7 @@ pub(crate) fn plan_start_baseline(
                     source: if pending {
                         SourceRevision::Current
                     } else {
-                        SourceRevision::Before(timestamp)
+                        SourceRevision::Before(oplog_index)
                     },
                 },
             }
@@ -857,6 +871,7 @@ pub(crate) fn owner_gate(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use golem_common::model::Timestamp;
     use std::sync::Arc;
     use test_r::test;
 
@@ -1058,6 +1073,35 @@ mod tests {
     }
 
     #[test]
+    async fn the_revision_before_an_update_record_follows_the_oplog_order_and_not_the_clocks() {
+        let update =
+            |millis: u64, revision: u64, index: u64| golem_common::model::SuccessfulUpdateRecord {
+                timestamp: Timestamp::from(millis),
+                target_revision: ComponentRevision::new(revision).unwrap(),
+                oplog_index: OplogIndex::from_u64(index),
+            };
+        // The update to revision 3 applies the pending record at index 7 on an executor whose
+        // clock is behind: its timestamp is earlier than the pending record, and its index is
+        // later.
+        let updates = [update(1_000, 2, 3), update(4_000, 3, 9)];
+
+        assert_eq!(
+            [
+                revision_before(&updates, OplogIndex::from_u64(7)),
+                revision_before(&updates, OplogIndex::from_u64(10)),
+                revision_before(&updates, OplogIndex::from_u64(3)),
+                revision_before(&[], OplogIndex::from_u64(7)),
+            ],
+            [
+                Some(ComponentRevision::new(2).unwrap()),
+                Some(ComponentRevision::new(3).unwrap()),
+                None,
+                None,
+            ]
+        );
+    }
+
+    #[test]
     async fn a_start_plans_its_baseline_from_the_automatic_record_then_the_manual_update() {
         let name = FilesystemSnapshotName::periodic();
         let update = FilesystemSnapshotName::update();
@@ -1122,7 +1166,7 @@ mod tests {
                 },
                 BaselineStep::NeedsSourceFiles {
                     kind: manual_kind(None, false),
-                    source: SourceRevision::Before(Timestamp::from(1_000)),
+                    source: SourceRevision::Before(OplogIndex::from_u64(7)),
                 },
                 BaselineStep::Ready {
                     kind: BaselineKind::InitialFiles,

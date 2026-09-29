@@ -11158,8 +11158,8 @@ impl RunningWorker {
             filesystem_snapshots::BaselineStep::NeedsSourceFiles { kind, source } => {
                 let source_revision = match source {
                     filesystem_snapshots::SourceRevision::Current => status.component_revision,
-                    filesystem_snapshots::SourceRevision::Before(timestamp) => {
-                        Self::revision_before(parent, status, timestamp).await
+                    filesystem_snapshots::SourceRevision::Before(index) => {
+                        Self::revision_before(parent, status, index).await
                     }
                 };
                 let source_files = Self::initial_files_of(parent, source_revision).await?;
@@ -11174,19 +11174,15 @@ impl RunningWorker {
         }
     }
 
-    /// Gives the component revision of the agent just before `timestamp`: the target of the last
-    /// successful update before it, or the revision of the `Create` entry.
+    /// Gives the component revision of the agent just before the oplog index `before`: the target
+    /// of the last successful update before it, or the revision of the `Create` entry.
     async fn revision_before<Ctx: WorkerCtx>(
         parent: &Arc<Worker<Ctx>>,
         status: &AgentStatusRecord,
-        timestamp: Timestamp,
+        before: OplogIndex,
     ) -> ComponentRevision {
-        match status
-            .successful_updates
-            .iter()
-            .rfind(|update| update.timestamp < timestamp)
-        {
-            Some(update) => update.target_revision,
+        match filesystem_snapshots::revision_before(&status.successful_updates, before) {
+            Some(revision) => revision,
             None => match parent.oplog.read(OplogIndex::INITIAL).await {
                 OplogEntry::Create { parameters, .. } => parameters.component_revision,
                 _ => status.component_revision_for_replay,

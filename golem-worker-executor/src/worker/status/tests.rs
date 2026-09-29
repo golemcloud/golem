@@ -3156,6 +3156,7 @@ impl TestCaseBuilder {
             status.successful_updates.push(SuccessfulUpdateRecord {
                 timestamp: entry.timestamp(),
                 target_revision: *update_description.target_revision(),
+                oplog_index: status.oplog_idx,
             });
             status.component_size = new_component_size;
             status.component_revision = *update_description.target_revision();

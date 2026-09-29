@@ -1607,6 +1607,7 @@ fn calculate_update_fields(
                 successful_updates.push(SuccessfulUpdateRecord {
                     timestamp: *timestamp,
                     target_revision: *target_revision,
+                    oplog_index: *oplog_idx,
                 });
                 revision = *target_revision;
                 size = *new_component_size;
