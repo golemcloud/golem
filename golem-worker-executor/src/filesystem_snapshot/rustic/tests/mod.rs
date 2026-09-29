@@ -29,8 +29,8 @@ use super::files::SnapshotFiles;
 use super::prune::Percent;
 use super::store::{RusticSnapshotStore, StorePolicy, named};
 use super::{
-    PruneReport, PruneSettings, RepositoryKey, backup_options, open_existing, prune_options,
-    repository_options, restore_snapshot, run_blocking,
+    PruneReport, PruneSettings, RepositoryKey, backup_options, open_existing, open_or_create,
+    prune_options, repository_options, restore_snapshot, run_blocking,
 };
 use crate::filesystem_snapshot::clock::SystemClock;
 use crate::filesystem_snapshot::contract_tests::fixture::{
@@ -44,6 +44,7 @@ use crate::filesystem_snapshot::{
 use crate::services::golem_config::DEFAULT_FILESYSTEM_SNAPSHOT_STORAGE_CALL_DEADLINE as STORAGE_CALL_DEADLINE;
 use anyhow::Context;
 use async_trait::async_trait;
+use futures::StreamExt;
 use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
 use golem_service_base::storage::blob::{
     BlobMetadata, BlobStorage, BlobStorageBackend, BlobStorageNamespace, ExistsResult, ListedBlob,
@@ -446,6 +447,62 @@ async fn a_restore_reads_data_on_at_most_its_reader_threads() {
         (one_thread, default_threads),
         ((1, listing(tree.path())), (2, listing(tree.path())))
     );
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_create_whose_config_write_finds_the_config_of_another_writer_opens_that_repository() {
+    // The gate holds the config write of the losing create after both of its checks found no
+    // config. The winning create writes the config meanwhile, so the held write finds it.
+    let shared = Arc::new(InMemoryBlobStorage::new());
+    let scope = new_scope();
+    let losing = ScriptedBlobStorage::new(shared.clone(), |op_label, path| {
+        if op_label == "write" && path == Path::new("config") {
+            Script::WaitForGate
+        } else {
+            Script::Pass
+        }
+    });
+    let backend = |storage: Arc<dyn BlobStorage>| {
+        Arc::new(BlobBackend::new(
+            files_of(
+                storage,
+                scope.0.clone(),
+                STORAGE_CALL_DEADLINE,
+                CancellationToken::new(),
+            ),
+            Handle::current(),
+            KEPT_PACKS_LIMIT,
+        ))
+    };
+    let loser = backend(losing.clone());
+    let lost = tokio::task::spawn_blocking(move || {
+        open_or_create(loser, &key()).map(|repository| repository.config().id)
+    });
+    let held = futures::stream::repeat(())
+        .then(|()| tokio::time::sleep(Duration::from_millis(5)))
+        .take(2000)
+        .any(|()| {
+            std::future::ready(
+                losing
+                    .calls()
+                    .iter()
+                    .any(|(op_label, path)| *op_label == "write" && path == "config"),
+            )
+        })
+        .await;
+
+    let winner = backend(shared.clone());
+    let won = run_blocking(move || Ok(open_or_create(winner, &key())?.config().id)).await;
+    losing.open_gate();
+    let lost = tokio::time::timeout(LIMIT, lost).await;
+
+    let won = won.unwrap();
+    let lost = lost
+        .ok()
+        .and_then(Result::ok)
+        .map(|opened| opened.map_err(|error| error.to_string()));
+    assert_eq!((held, lost), (true, Some(Ok(won))));
 }
 
 #[test]
