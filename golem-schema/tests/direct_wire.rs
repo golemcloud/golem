@@ -255,6 +255,7 @@ fn wire_schema_derive_builds_recursive_flat_arena() {
 #[schema(named = "example.Shared")]
 struct SharedFirst {
     value: u32,
+    uuid: uuid::Uuid,
 }
 
 #[allow(dead_code)]
@@ -262,6 +263,7 @@ struct SharedFirst {
 #[schema(named = "example.Shared")]
 struct SharedIdentical {
     value: u32,
+    uuid: uuid::Uuid,
 }
 
 #[allow(dead_code)]

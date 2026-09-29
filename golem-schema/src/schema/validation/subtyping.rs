@@ -378,6 +378,7 @@ fn equivalent(
         (SchemaType::Bool { .. }, SchemaType::Bool { .. })
         | (SchemaType::Char { .. }, SchemaType::Char { .. })
         | (SchemaType::String { .. }, SchemaType::String { .. })
+        | (SchemaType::Uuid { .. }, SchemaType::Uuid { .. })
         | (SchemaType::Datetime { .. }, SchemaType::Datetime { .. })
         | (SchemaType::Duration { .. }, SchemaType::Duration { .. }) => true,
 
