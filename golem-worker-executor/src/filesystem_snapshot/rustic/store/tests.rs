@@ -291,6 +291,36 @@ fn the_policy_takes_the_configured_values_and_the_options_are_strict() {
 }
 
 #[test]
+fn a_size_and_mtime_save_names_its_parent_and_ignores_the_change_time_and_a_full_save_forces_a_read()
+ {
+    let policy = StorePolicy::from_config(&config());
+    let parent = SnapshotId::default();
+    let modes = [
+        Some((parent, ChangeDetection::SizeMtime)),
+        Some((parent, ChangeDetection::Full)),
+        None,
+    ]
+    .map(|mode| {
+        let options = store_backup_options(&policy, mode).parent_opts;
+        (
+            options.parents,
+            options.ignore_ctime,
+            options.ignore_inode,
+            options.force,
+        )
+    });
+
+    assert_eq!(
+        modes,
+        [
+            (vec![parent.to_hex().to_string()], true, false, false),
+            (Vec::new(), false, false, true),
+            (Vec::new(), false, false, true),
+        ]
+    );
+}
+
+#[test]
 fn a_save_time_is_the_first_whole_millisecond_that_is_not_before_the_call() {
     let now = golem_common::model::Timestamp::now_utc();
     let whole = golem_common::model::Timestamp::from(5_000);

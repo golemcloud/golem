@@ -29,8 +29,8 @@ use super::files::SnapshotFiles;
 use super::prune::Percent;
 use super::store::{RusticSnapshotStore, StorePolicy};
 use super::{
-    ChangeDetection, PruneReport, PruneSettings, RepositoryKey, SaveSettings, backup_options,
-    open_existing, prune_options, repository_options, restore_snapshot, run_blocking,
+    PruneReport, PruneSettings, RepositoryKey, backup_options, open_existing, prune_options,
+    repository_options, restore_snapshot, run_blocking,
 };
 use crate::filesystem_snapshot::clock::SystemClock;
 use crate::filesystem_snapshot::contract_tests::fixture::{
@@ -973,10 +973,7 @@ fn seconds(span: rustic_core::jiff::Span) -> f64 {
 
 #[test]
 fn the_off_side_of_each_save_and_prune_setting_goes_into_its_rustic_option() {
-    let backup = backup_options(&SaveSettings {
-        threads: None,
-        detection: ChangeDetection::Ctime,
-    });
+    let backup = backup_options(None);
     let prune = prune_options(&PruneSettings {
         fast_repack: false,
         keep_delete: Duration::from_secs(23 * 3600),
@@ -986,21 +983,16 @@ fn the_off_side_of_each_save_and_prune_setting_goes_into_its_rustic_option() {
     assert_eq!(
         (
             backup.threads,
-            backup.parent_opts.ignore_ctime,
-            backup.parent_opts.ignore_inode,
             prune.fast_repack,
-            seconds(prune.keep_delete),
+            seconds(prune.keep_delete)
         ),
-        (None, false, false, false, 82_800.0)
+        (None, false, 82_800.0)
     );
 }
 
 #[test]
 fn each_setting_goes_into_its_rustic_option() {
-    let backup = backup_options(&SaveSettings {
-        threads: NonZeroUsize::new(2),
-        detection: ChangeDetection::SizeMtime,
-    });
+    let backup = backup_options(NonZeroUsize::new(2));
     let prune = prune_options(&PruneSettings {
         fast_repack: true,
         keep_delete: Duration::ZERO,
@@ -1010,8 +1002,6 @@ fn each_setting_goes_into_its_rustic_option() {
     assert_eq!(
         (
             backup.threads,
-            backup.parent_opts.ignore_ctime,
-            backup.parent_opts.ignore_inode,
             backup.parent_opts.group_by.is_some(),
             backup.as_path,
             prune.fast_repack,
@@ -1020,8 +1010,6 @@ fn each_setting_goes_into_its_rustic_option() {
         ),
         (
             NonZeroUsize::new(2),
-            true,
-            false,
             true,
             Some(PathBuf::from("/")),
             true,

@@ -79,28 +79,6 @@ impl Debug for RepositoryKey {
     }
 }
 
-/// How a save finds the files that did not change since its parent.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum ChangeDetection {
-    /// A file is unchanged when its type, size, modification time and change time equal those in
-    /// the parent. A copy of a tree gives each file a new change time, so a save of a copy reads
-    /// every file.
-    Ctime,
-    /// A file is unchanged when its type, size and modification time equal those in the parent.
-    /// A save does not see a change that keeps the size and gives the file its old modification
-    /// time again.
-    SizeMtime,
-}
-
-/// The settings of one save.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct SaveSettings {
-    /// The number of threads of each parallel stage of the save. `None` is the number of CPUs
-    /// that the process can use.
-    pub(super) threads: Option<NonZeroUsize>,
-    pub(super) detection: ChangeDetection,
-}
-
 /// The settings of one prune. Each prune also has the limits [`MAX_UNUSED`] and [`MAX_REPACK`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct PruneSettings {
@@ -250,19 +228,14 @@ fn config_options() -> ConfigOptions {
         .set_extra_verify(EXTRA_VERIFY)
 }
 
-/// The options of a save.
-///
-/// A snapshot keeps the paths relative to the saved tree. The group of the parent has no
-/// criterion.
-fn backup_options(settings: &SaveSettings) -> BackupOptions {
+/// The options that each save shares: the snapshot keeps the paths relative to the saved tree, the
+/// group of the parent has no criterion, and each parallel stage of the save has `threads`
+/// threads. `None` is the number of CPUs that the process can use.
+fn backup_options(threads: Option<NonZeroUsize>) -> BackupOptions {
     BackupOptions::default()
         .as_path(PathBuf::from("/"))
-        .parent_opts(
-            ParentOptions::default()
-                .group_by(SnapshotGroupCriterion::new())
-                .ignore_ctime(settings.detection == ChangeDetection::SizeMtime),
-        )
-        .threads(settings.threads)
+        .parent_opts(ParentOptions::default().group_by(SnapshotGroupCriterion::new()))
+        .threads(threads)
 }
 
 /// The options of a prune.

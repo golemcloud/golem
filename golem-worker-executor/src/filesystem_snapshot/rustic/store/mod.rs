@@ -36,9 +36,8 @@ use super::prune::{
 use super::publish::{SnapshotStage, StagedSnapshot, publish};
 use super::scope::{copy_scope, delete_scope};
 use super::{
-    ChangeDetection as RusticChangeDetection, PruneReport, PruneSettings, RepositoryKey,
-    SaveSettings, backup_options, open_existing, open_or_create, prune, restore_snapshot,
-    run_blocking,
+    PruneReport, PruneSettings, RepositoryKey, backup_options, open_existing, open_or_create,
+    prune, restore_snapshot, run_blocking,
 };
 use crate::filesystem_snapshot::clock::{Clock, SystemClock};
 use crate::filesystem_snapshot::{
@@ -121,35 +120,27 @@ impl StorePolicy {
 }
 
 /// The options of a save of the store: a failed read of an entry fails the save, and no device id
-/// is kept. `SizeMtime` compares with the parent that the id names, and each other case reads
-/// every file.
+/// is kept. `SizeMtime` compares each file with the parent that the id names by its type, size and
+/// modification time, and not by its change time or its inode. `Full`, and a save without a
+/// parent, use no parent, so they read every file.
 fn store_backup_options(
     policy: &StorePolicy,
     parent: Option<(SnapshotId, ChangeDetection)>,
 ) -> BackupOptions {
-    let base = |detection| {
-        backup_options(&SaveSettings {
-            threads: policy.save_threads,
-            detection,
-        })
+    let base = backup_options(policy.save_threads)
         .fail_on_read_error(true)
-        .ignore_save_opts(LocalSourceSaveOptions::default().set_devid(DevIdOption::No))
+        .ignore_save_opts(LocalSourceSaveOptions::default().set_devid(DevIdOption::No));
+    let parent_opts = match parent {
+        // rustic compares the inodes only when `ignore_inode` is true.
+        Some((id, ChangeDetection::SizeMtime)) => base
+            .parent_opts
+            .clone()
+            .parents(vec![id.to_hex().to_string()])
+            .ignore_ctime(true)
+            .ignore_inode(false),
+        None | Some((_, ChangeDetection::Full)) => base.parent_opts.clone().force(true),
     };
-    match parent {
-        Some((id, ChangeDetection::SizeMtime)) => {
-            let options = base(RusticChangeDetection::SizeMtime);
-            let parent_opts = options
-                .parent_opts
-                .clone()
-                .parents(vec![id.to_hex().to_string()]);
-            options.parent_opts(parent_opts)
-        }
-        None | Some((_, ChangeDetection::Full)) => {
-            let options = base(RusticChangeDetection::Ctime);
-            let parent_opts = options.parent_opts.clone().force(true);
-            options.parent_opts(parent_opts)
-        }
-    }
+    base.parent_opts(parent_opts)
 }
 
 /// The options of a restore of the store. A metadata error fails the restore. The restore does not
