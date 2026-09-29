@@ -123,6 +123,14 @@ impl PostgresIndexedStorage {
                 let mode = super::agent_mode_prefix(agent_mode);
                 format!("{mode}-worker-c{level}-oplog")
             }
+            IndexedStorageNamespace::BlobOplogManifest {
+                agent_id: _,
+                agent_mode,
+                level,
+            } => {
+                let mode = super::agent_mode_prefix(agent_mode);
+                format!("{mode}-worker-b{level}-oplog")
+            }
         }
     }
 
@@ -135,6 +143,10 @@ impl PostgresIndexedStorage {
             IndexedStorageMetaNamespace::CompressedOplog { agent_mode, level } => {
                 let mode = super::agent_mode_prefix(agent_mode);
                 format!("{mode}-worker-c{level}-oplog")
+            }
+            IndexedStorageMetaNamespace::BlobOplogManifest { agent_mode, level } => {
+                let mode = super::agent_mode_prefix(agent_mode);
+                format!("{mode}-worker-b{level}-oplog")
             }
         }
     }
@@ -826,7 +838,11 @@ impl IndexedStorage for PostgresIndexedStorage {
         expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
         let _permit = self.acquire_permit().await;
-        let delete_if_empty = matches!(&namespace, IndexedStorageNamespace::CompressedOpLog { .. });
+        let delete_if_empty = matches!(
+            &namespace,
+            IndexedStorageNamespace::CompressedOpLog { .. }
+                | IndexedStorageNamespace::BlobOplogManifest { .. }
+        );
         let namespace = Self::namespace(namespace);
         let key = key.to_string();
         let last_dropped_id = Self::to_i64(last_dropped_id, "last_dropped_id")?;
