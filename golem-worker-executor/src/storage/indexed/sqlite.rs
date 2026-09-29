@@ -102,6 +102,14 @@ impl SqliteIndexedStorage {
                 let mode = super::agent_mode_prefix(agent_mode);
                 format!("{mode}-worker-c{level}-oplog")
             }
+            IndexedStorageNamespace::BlobOplogManifest {
+                agent_id: _,
+                agent_mode,
+                level,
+            } => {
+                let mode = super::agent_mode_prefix(agent_mode);
+                format!("{mode}-worker-b{level}-oplog")
+            }
         }
     }
 
@@ -114,6 +122,10 @@ impl SqliteIndexedStorage {
             IndexedStorageMetaNamespace::CompressedOplog { agent_mode, level } => {
                 let mode = super::agent_mode_prefix(agent_mode);
                 format!("{mode}-worker-c{level}-oplog")
+            }
+            IndexedStorageMetaNamespace::BlobOplogManifest { agent_mode, level } => {
+                let mode = super::agent_mode_prefix(agent_mode);
+                format!("{mode}-worker-b{level}-oplog")
             }
         }
     }
@@ -777,7 +789,11 @@ impl IndexedStorage for SqliteIndexedStorage {
         last_dropped_id: u64,
         expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
-        let delete_if_empty = matches!(&namespace, IndexedStorageNamespace::CompressedOpLog { .. });
+        let delete_if_empty = matches!(
+            &namespace,
+            IndexedStorageNamespace::CompressedOpLog { .. }
+                | IndexedStorageNamespace::BlobOplogManifest { .. }
+        );
         let namespace = Self::namespace(namespace);
         let key = key.to_string();
         self.pool

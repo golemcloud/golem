@@ -149,6 +149,18 @@ impl InMemoryIndexedStorage {
                 let mode = super::agent_mode_prefix(agent_mode);
                 format!("{mode}/compressed-oplog/{level}/{component_id}/{agent_name}/{key}")
             }
+            IndexedStorageNamespace::BlobOplogManifest {
+                agent_id:
+                    AgentId {
+                        component_id,
+                        agent_id: agent_name,
+                    },
+                agent_mode,
+                level,
+            } => {
+                let mode = super::agent_mode_prefix(agent_mode);
+                format!("{mode}/blob-oplog/{level}/{component_id}/{agent_name}/{key}")
+            }
         }
     }
 
@@ -177,6 +189,20 @@ impl InMemoryIndexedStorage {
                 let mode = super::agent_mode_prefix(agent_mode);
                 let pattern: String = format!(
                     r"^{mode}/compressed-oplog/{level}/([^/]+)/([^/]+)/({}.*)$",
+                    regex::escape(prefix)
+                );
+                let regex = Regex::new(&pattern).unwrap();
+
+                Box::new(move |key| {
+                    regex
+                        .captures(key)
+                        .map(|caps| caps.get(3).unwrap().as_str().to_string())
+                })
+            }
+            IndexedStorageMetaNamespace::BlobOplogManifest { agent_mode, level } => {
+                let mode = super::agent_mode_prefix(agent_mode);
+                let pattern: String = format!(
+                    r"^{mode}/blob-oplog/{level}/([^/]+)/([^/]+)/({}.*)$",
                     regex::escape(prefix)
                 );
                 let regex = Regex::new(&pattern).unwrap();
@@ -561,7 +587,11 @@ impl IndexedStorage for InMemoryIndexedStorage {
         last_dropped_id: u64,
         expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
-        let delete_if_empty = matches!(&namespace, IndexedStorageNamespace::CompressedOpLog { .. });
+        let delete_if_empty = matches!(
+            &namespace,
+            IndexedStorageNamespace::CompressedOpLog { .. }
+                | IndexedStorageNamespace::BlobOplogManifest { .. }
+        );
         let composite_key = Self::composite_key(namespace, key);
         // The record's guard is held across the trim, in the order an append takes them, so
         // nobody can record a new generation between the check and the trim.

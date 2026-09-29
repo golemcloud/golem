@@ -169,6 +169,14 @@ return 1
                 let mode = super::agent_mode_prefix(agent_mode);
                 format!("worker:{mode}:c{level}-oplog-epoch:{key}")
             }
+            IndexedStorageNamespace::BlobOplogManifest {
+                agent_id: _,
+                agent_mode,
+                level,
+            } => {
+                let mode = super::agent_mode_prefix(agent_mode);
+                format!("worker:{mode}:b{level}-oplog-epoch:{key}")
+            }
             // A stage is hidden and has one writer, so it never asserts an epoch; the key exists
             // only to keep this total.
             IndexedStorageNamespace::StagedOpLog {
@@ -276,6 +284,14 @@ return 1
                 let mode = super::agent_mode_prefix(agent_mode);
                 format!("worker:{mode}:c{level}-oplog:{key}")
             }
+            IndexedStorageNamespace::BlobOplogManifest {
+                agent_id: _,
+                agent_mode,
+                level,
+            } => {
+                let mode = super::agent_mode_prefix(agent_mode);
+                format!("worker:{mode}:b{level}-oplog:{key}")
+            }
         }
     }
 
@@ -288,6 +304,10 @@ return 1
             IndexedStorageMetaNamespace::CompressedOplog { agent_mode, level } => {
                 let mode = super::agent_mode_prefix(agent_mode);
                 format!("worker:{mode}:c{level}-oplog:{key}")
+            }
+            IndexedStorageMetaNamespace::BlobOplogManifest { agent_mode, level } => {
+                let mode = super::agent_mode_prefix(agent_mode);
+                format!("worker:{mode}:b{level}-oplog:{key}")
             }
         }
     }
@@ -784,7 +804,11 @@ impl IndexedStorage for RedisIndexedStorage {
         last_dropped_id: u64,
         expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
-        let delete_if_empty = matches!(&namespace, IndexedStorageNamespace::CompressedOpLog { .. });
+        let delete_if_empty = matches!(
+            &namespace,
+            IndexedStorageNamespace::CompressedOpLog { .. }
+                | IndexedStorageNamespace::BlobOplogManifest { .. }
+        );
         let Some(expected) = expected_epoch else {
             let composite_key = Self::composite_key(namespace, key);
             if delete_if_empty {

@@ -67,6 +67,7 @@ use tokio::sync::{Mutex, OwnedMutexGuard};
 mod blob;
 mod compressed;
 mod ephemeral;
+mod fenced_stream;
 mod multilayer;
 pub mod plugin;
 mod primary;
@@ -536,6 +537,7 @@ pub(crate) async fn record_owning_epoch(
 ) -> Option<OplogFence> {
     let (svc_name, metric_op) = match namespace {
         IndexedStorageNamespace::CompressedOpLog { .. } => ("compressed_oplog", "archive_record"),
+        IndexedStorageNamespace::BlobOplogManifest { .. } => ("blob_oplog", "archive_record"),
         _ => ("oplog", "record"),
     };
     let outcome = retry_storage_op_fenceable(retry_config, "set_key_epoch", key, || {
