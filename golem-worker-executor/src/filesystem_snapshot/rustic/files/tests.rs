@@ -200,3 +200,22 @@ fn a_marker_write_that_starts_at_the_end_of_the_lease_does_not_move_it_and_one_t
         (end, end - Duration::from_nanos(1) + span)
     );
 }
+
+#[test]
+fn the_location_of_the_files_names_their_namespace() {
+    let namespace = BlobStorageNamespace::InitialAgentFiles {
+        environment_id: EnvironmentId(Uuid::new_v4()),
+    };
+    let files = SnapshotFiles::new(
+        passing(),
+        namespace.clone(),
+        DEADLINE,
+        CancellationToken::new(),
+        TaskTracker::new(),
+    );
+
+    assert_eq!(
+        files.location(),
+        format!("golem-blob-storage:{namespace:?}")
+    );
+}

@@ -1227,3 +1227,18 @@ impl BlobStorageBackend for FailingBlobStorage {
         Err(broken())
     }
 }
+
+#[test]
+fn the_location_of_a_backend_is_the_location_of_its_files() {
+    let runtime = Runtime::new().unwrap();
+    let files = files_of(
+        Arc::new(InMemoryBlobStorage::new()),
+        new_namespace(),
+        STORAGE_CALL_DEADLINE,
+        CancellationToken::new(),
+    );
+    let expected = files.location();
+    let backend = BlobBackend::new(files, runtime.handle().clone(), KEPT_PACKS_LIMIT);
+
+    assert_eq!(backend.location(), expected);
+}
