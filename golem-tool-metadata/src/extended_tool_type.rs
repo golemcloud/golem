@@ -4311,6 +4311,7 @@ mod tests {
     fn sample_tool() -> ExtendedToolType {
         ExtendedToolType {
             version: "0.1.0".to_string(),
+            requires_filesystem: false,
             commands: vec![
                 ExtendedCommandNode {
                     name: "root".to_string(),
@@ -4865,6 +4866,7 @@ mod tests {
     ) -> ExtendedToolType {
         ExtendedToolType {
             version: "0.1.0".to_string(),
+            requires_filesystem: false,
             commands: vec![
                 ExtendedCommandNode {
                     name: "root".to_string(),
@@ -4974,6 +4976,7 @@ mod tests {
     fn dispatcher_child() -> ExtendedToolType {
         ExtendedToolType {
             version: "x".into(),
+            requires_filesystem: false,
             commands: vec![
                 ExtendedCommandNode {
                     name: "child".into(),
@@ -5084,6 +5087,7 @@ mod tests {
     fn leaf_tool_with_globals(globals: ExtendedGlobals) -> ExtendedToolType {
         ExtendedToolType {
             version: "0.1.0".to_string(),
+            requires_filesystem: false,
             commands: vec![ExtendedCommandNode {
                 name: "t".to_string(),
                 aliases: vec![],
@@ -5367,6 +5371,7 @@ mod tests {
     fn leaf_tool_with_body(body: ExtendedCommandBody) -> ExtendedToolType {
         ExtendedToolType {
             version: "0.1.0".to_string(),
+            requires_filesystem: false,
             commands: vec![ExtendedCommandNode {
                 name: "t".to_string(),
                 aliases: vec![],
@@ -5623,6 +5628,7 @@ mod tests {
     fn tool_with_nodes(nodes: Vec<ExtendedCommandNode>) -> ExtendedToolType {
         ExtendedToolType {
             version: "0.1.0".into(),
+            requires_filesystem: false,
             commands: nodes,
         }
     }
