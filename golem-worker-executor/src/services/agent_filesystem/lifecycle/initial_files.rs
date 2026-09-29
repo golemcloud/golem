@@ -254,6 +254,15 @@ impl InitialFileConflict {
     pub(crate) fn path(&self) -> &Path {
         &self.path
     }
+
+    /// A conflict with another object at `path`.
+    #[cfg(test)]
+    pub(crate) fn occupied(path: &Path) -> Self {
+        Self {
+            path: path.into(),
+            cause: ConflictCause::Occupied,
+        }
+    }
 }
 
 impl Display for InitialFileConflict {

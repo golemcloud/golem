@@ -76,10 +76,23 @@ pub(crate) struct InitialFilesRestore {
 }
 
 impl InitialFilesRestore {
+    #[cfg(test)]
     pub(crate) fn new(files: impl IntoIterator<Item = InitialAgentFile>) -> Self {
         Self {
             files: files.into_iter().collect(),
         }
+    }
+
+    /// The restore of `files` when they are all read-only. Only a tree of read-only initial files
+    /// gives a record without a name. A record without a name and with other declarations comes
+    /// from an executor without filesystem snapshots, and its start seeds the initial files of
+    /// the target revision, so it gets `None`.
+    pub(crate) fn of_read_only(files: Box<[InitialAgentFile]>) -> Option<Self> {
+        (!files.is_empty()
+            && files.iter().all(|file| {
+                file.permissions == golem_common::model::component::AgentFilePermissions::ReadOnly
+            }))
+        .then_some(Self { files })
     }
 }
 

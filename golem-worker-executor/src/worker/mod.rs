@@ -10854,54 +10854,6 @@ struct RunningAgentRuntime<Ctx: WorkerCtx> {
 
 type WorkerRunningAgent<Ctx> = RunningAgent<RunningAgentRuntime<Ctx>>;
 
-/// The baseline that a start selected, with its restore.
-struct StartBaseline {
-    kind: BaselineKind,
-    restore: Option<filesystem_snapshots::StartRestore>,
-}
-
-/// The record that the baseline of a start comes from.
-#[derive(Clone, Debug)]
-enum BaselineKind {
-    /// No snapshot record: the initial files of the replay revision.
-    InitialFiles,
-    /// The automatic snapshot record at `index`.
-    Periodic {
-        index: OplogIndex,
-        name: Option<FilesystemSnapshotName>,
-    },
-    /// The manual-update record at `index`, which is still pending when `pending` is true.
-    ManualUpdate {
-        index: OplogIndex,
-        target_revision: ComponentRevision,
-        pending: bool,
-        name: Option<FilesystemSnapshotName>,
-    },
-}
-
-impl BaselineKind {
-    /// The named filesystem snapshot that the baseline restored.
-    fn restored(
-        &self,
-    ) -> Option<(
-        FilesystemSnapshotName,
-        filesystem_snapshots::ConfirmedBaseline,
-    )> {
-        match self {
-            Self::InitialFiles => None,
-            Self::Periodic { name, .. } => name
-                .clone()
-                .map(|name| (name, filesystem_snapshots::ConfirmedBaseline::Periodic)),
-            Self::ManualUpdate { index, name, .. } => name.clone().map(|name| {
-                (
-                    name,
-                    filesystem_snapshots::ConfirmedBaseline::ManualUpdate(*index),
-                )
-            }),
-        }
-    }
-}
-
 pub(crate) struct CreateWorkerInstanceError {
     pub(crate) error: WorkerExecutorError,
     pub(crate) filesystem_cleanup_failure: Option<UnloadCleanupFailure>,
@@ -11065,36 +11017,18 @@ impl RunningWorker {
         self.handle.take().unwrap()
     }
 
-    /// Gives the baseline of a start: the restore of the selected automatic snapshot record, or of
-    /// the manual-update record, when the record names a filesystem snapshot. A manual-update
-    /// record without a name restores the initial files of its source revision, so the
-    /// initial-file rule then gives what the update gave. A record that names a filesystem
-    /// snapshot on an executor without filesystem snapshots fails the start with a visible cause.
+    /// Gives the baseline of a start, as [`filesystem_snapshots::plan_start_baseline`] plans it:
+    /// the restore of the selected automatic snapshot record, or of the manual-update record,
+    /// when the record names a filesystem snapshot. A manual-update record without a name
+    /// restores the initial files of its source revision when they are all read-only. A record
+    /// that names a filesystem snapshot on an executor without filesystem snapshots fails the
+    /// start with a visible cause.
     async fn start_baseline<Ctx: WorkerCtx>(
         parent: &Arc<Worker<Ctx>>,
         status: &AgentStatusRecord,
         automatic_snapshot: Option<&golem_common::model::UsableAutomaticSnapshot>,
         pending_update: Option<&TimestampedUpdateDescription>,
-    ) -> Result<StartBaseline, WorkerExecutorError> {
-        let scope = crate::filesystem_snapshot::SnapshotScope::agent(&parent.owned_agent_id);
-        let snapshots = parent.agent_filesystem_snapshots();
-        if let Some(snapshot) = automatic_snapshot {
-            let restore = match &snapshot.filesystem_snapshot {
-                Some(name) => Some(filesystem_snapshots::StartRestore::Store(
-                    snapshots
-                        .restore(&scope, name)
-                        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?,
-                )),
-                None => None,
-            };
-            return Ok(StartBaseline {
-                kind: BaselineKind::Periodic {
-                    index: snapshot.index,
-                    name: snapshot.filesystem_snapshot.clone(),
-                },
-                restore,
-            });
-        }
+    ) -> Result<filesystem_snapshots::StartBaseline, WorkerExecutorError> {
         let manual_update = match pending_update.filter(|pending| {
             matches!(pending.description, UpdateDescription::SnapshotBased { .. })
         }) {
@@ -11118,64 +11052,51 @@ impl RunningWorker {
                 None => None,
             },
         };
-        let Some((
-            TimestampedUpdateDescription {
-                timestamp,
-                oplog_index,
-                description:
-                    UpdateDescription::SnapshotBased {
-                        target_revision,
-                        filesystem_snapshot,
-                        ..
-                    },
-            },
-            pending,
-        )) = manual_update
-        else {
-            return Ok(StartBaseline {
-                kind: BaselineKind::InitialFiles,
-                restore: None,
-            });
-        };
-        let kind = BaselineKind::ManualUpdate {
-            index: oplog_index,
-            target_revision,
-            pending,
-            name: filesystem_snapshot.clone(),
-        };
-        let restore = match filesystem_snapshot {
-            Some(name) => Some(filesystem_snapshots::StartRestore::Store(
-                snapshots.restore(&scope, &name).map_err(|error| {
-                    WorkerExecutorError::failed_to_resume_worker(
-                        parent.owned_agent_id.agent_id.clone(),
-                        WorkerExecutorError::invalid_request(error.to_string()),
-                    )
-                })?,
-            )),
-            None => {
-                let source_revision = if pending {
-                    status.component_revision
-                } else {
-                    Self::revision_before(parent, status, timestamp).await
+        let snapshots = parent.agent_filesystem_snapshots();
+        match filesystem_snapshots::plan_start_baseline(
+            automatic_snapshot,
+            manual_update,
+            snapshots.is_enabled(),
+        ) {
+            filesystem_snapshots::BaselineStep::Ready { kind, restore } => {
+                let scope =
+                    crate::filesystem_snapshot::SnapshotScope::agent(&parent.owned_agent_id);
+                let restore = match restore {
+                    Some(name) => Some(filesystem_snapshots::StartRestore::Store(
+                        snapshots.restore(&scope, &name).map_err(|_| {
+                            filesystem_snapshots::baseline_disabled_error(
+                                &kind,
+                                &parent.owned_agent_id.agent_id,
+                            )
+                        })?,
+                    )),
+                    None => None,
+                };
+                Ok(filesystem_snapshots::StartBaseline { kind, restore })
+            }
+            filesystem_snapshots::BaselineStep::Disabled { kind } => {
+                Err(filesystem_snapshots::baseline_disabled_error(
+                    &kind,
+                    &parent.owned_agent_id.agent_id,
+                ))
+            }
+            filesystem_snapshots::BaselineStep::NeedsSourceFiles { kind, source } => {
+                let source_revision = match source {
+                    filesystem_snapshots::SourceRevision::Current => status.component_revision,
+                    filesystem_snapshots::SourceRevision::Before(timestamp) => {
+                        Self::revision_before(parent, status, timestamp).await
+                    }
                 };
                 let source_files = Self::initial_files_of(parent, source_revision).await?;
-                // Only a tree of read-only initial files gives a record without a name. A record
-                // without a name and with other declarations comes from an executor without
-                // filesystem snapshots, and its start seeds the initial files of the target
-                // revision.
-                (!source_files.is_empty()
-                    && source_files.iter().all(|file| {
-                        file.permissions
-                            == golem_common::model::component::AgentFilePermissions::ReadOnly
-                    }))
-                .then(|| {
-                    filesystem_snapshots::StartRestore::InitialFiles(
-                        crate::services::agent_filesystem::InitialFilesRestore::new(source_files),
+                Ok(filesystem_snapshots::StartBaseline {
+                    kind,
+                    restore: crate::services::agent_filesystem::InitialFilesRestore::of_read_only(
+                        source_files,
                     )
+                    .map(filesystem_snapshots::StartRestore::InitialFiles),
                 })
             }
-        };
-        Ok(StartBaseline { kind, restore })
+        }
     }
 
     /// Gives the component revision of the agent just before `timestamp`: the target of the last
@@ -11220,7 +11141,8 @@ impl RunningWorker {
             .unwrap_or_default())
     }
 
-    /// Gives the error of a start whose baseline failed.
+    /// Gives the error of a start whose baseline failed, as
+    /// [`filesystem_snapshots::classify_baseline_failure`] decides.
     ///
     /// A filesystem snapshot of an automatic snapshot record that does not restore makes the
     /// start skip that record: the start ends with a restart, and the next start selects the
@@ -11231,15 +11153,18 @@ impl RunningWorker {
     /// new start can retry when the store error allows it.
     async fn baseline_failure<Ctx: WorkerCtx>(
         parent: &Arc<Worker<Ctx>>,
-        kind: BaselineKind,
+        kind: filesystem_snapshots::BaselineKind,
         error: crate::services::agent_filesystem::Error,
     ) -> WorkerExecutorError {
-        use crate::services::agent_filesystem::Error;
         let restart = WorkerExecutorError::Interrupted {
             kind: InterruptKind::Restart,
         };
-        match (kind, error) {
-            (BaselineKind::Periodic { index, .. }, Error::Baseline(error)) => {
+        match filesystem_snapshots::classify_baseline_failure(
+            &kind,
+            &error,
+            parent.retired_for_lost_shard(),
+        ) {
+            filesystem_snapshots::BaselineFailure::SkipPeriodic(index) => {
                 warn!(
                     snapshot_index = %index,
                     error = %error,
@@ -11248,44 +11173,34 @@ impl RunningWorker {
                 parent.with_exclusions(|exclusions| exclusions.mark_unavailable(index));
                 restart
             }
-            (
-                BaselineKind::ManualUpdate {
-                    target_revision,
-                    pending: true,
-                    ..
-                },
-                Error::InitialFileConflict(conflict),
-            ) => {
-                // On a lost shard nothing is written, and the update stays pending for the
-                // shard's new owner.
-                if parent.retired_for_lost_shard() {
-                    return WorkerExecutorError::Interrupted {
-                        kind: InterruptKind::ShardLost,
-                    };
-                }
+            // On a lost shard nothing is written, and the update stays pending for the shard's
+            // new owner.
+            filesystem_snapshots::BaselineFailure::ShardLost => WorkerExecutorError::Interrupted {
+                kind: InterruptKind::ShardLost,
+            },
+            filesystem_snapshots::BaselineFailure::RecordFailedUpdate { target, message } => {
                 warn!(
-                    "Manual update to revision {target_revision} failed with a conflict of the initial files: {conflict}"
+                    "Manual update to revision {target} failed with a conflict of the initial files: {message}"
                 );
                 // A write that fails ends the start with its error. A fenced write has already
                 // retired the agent, and the update stays pending for the shard's new owner.
                 match parent
-                    .add_and_commit_oplog(OplogEntry::failed_update(
-                        target_revision,
-                        Some(conflict.to_string()),
-                    ))
+                    .add_and_commit_oplog(OplogEntry::failed_update(target, Some(message)))
                     .await
                 {
                     Ok(_) => restart,
                     Err(error) => error.into(),
                 }
             }
-            (BaselineKind::ManualUpdate { .. }, Error::Baseline(error)) if !error.retryable => {
+            filesystem_snapshots::BaselineFailure::FailVisibly(message) => {
                 WorkerExecutorError::failed_to_resume_worker(
                     parent.owned_agent_id.agent_id.clone(),
-                    WorkerExecutorError::invalid_request(error.to_string()),
+                    WorkerExecutorError::invalid_request(message),
                 )
             }
-            (_, error) => reconstruction_startup_error(error),
+            filesystem_snapshots::BaselineFailure::Reconstruction => {
+                reconstruction_startup_error(error)
+            }
         }
     }
 
@@ -11590,7 +11505,7 @@ impl RunningWorker {
                 .await);
             }
         };
-        let StartBaseline {
+        let filesystem_snapshots::StartBaseline {
             restore,
             kind: baseline_kind,
         } = start_baseline;

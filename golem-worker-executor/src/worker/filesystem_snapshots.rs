@@ -23,12 +23,17 @@ use crate::services::agent_filesystem::{
     CaptureOutcome, ChangeDetection, FilesystemCapture, InitialFilesRestore, RestoreError,
     RestoreTree, TreeMark,
 };
+use crate::services::agent_filesystem_snapshots::SnapshotsDisabled;
 use crate::services::agent_filesystem_snapshots::{
     Admission, Confirm, ConfirmOutcome, SnapshotSkip, StoreRestore, UploadNowError,
 };
 use crate::workerctx::WorkerCtx;
-use golem_common::model::UsableAutomaticSnapshot;
-use golem_common::model::oplog::{FilesystemSnapshotName, OplogIndex};
+use golem_common::model::component::ComponentRevision;
+use golem_common::model::oplog::{
+    FilesystemSnapshotName, OplogIndex, TimestampedUpdateDescription, UpdateDescription,
+};
+use golem_common::model::{AgentId, Timestamp, UsableAutomaticSnapshot};
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::Weak;
@@ -343,6 +348,207 @@ pub(crate) fn update_refused(skip: SnapshotSkip) -> String {
     format!("cannot take a filesystem snapshot for the update: {skip}")
 }
 
+/// The baseline that a start selected, with its restore.
+pub(crate) struct StartBaseline {
+    pub(crate) kind: BaselineKind,
+    pub(crate) restore: Option<StartRestore>,
+}
+
+/// The record that the baseline of a start comes from.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum BaselineKind {
+    /// No snapshot record: the initial files of the replay revision.
+    InitialFiles,
+    /// The automatic snapshot record at `index`.
+    Periodic {
+        index: OplogIndex,
+        name: Option<FilesystemSnapshotName>,
+    },
+    /// The manual-update record at `index`, which is still pending when `pending` is true.
+    ManualUpdate {
+        index: OplogIndex,
+        target_revision: ComponentRevision,
+        pending: bool,
+        name: Option<FilesystemSnapshotName>,
+    },
+}
+
+impl BaselineKind {
+    /// The named filesystem snapshot that the baseline restored.
+    pub(crate) fn restored(&self) -> Option<(FilesystemSnapshotName, ConfirmedBaseline)> {
+        match self {
+            Self::InitialFiles => None,
+            Self::Periodic { name, .. } => {
+                name.clone().map(|name| (name, ConfirmedBaseline::Periodic))
+            }
+            Self::ManualUpdate { index, name, .. } => name
+                .clone()
+                .map(|name| (name, ConfirmedBaseline::ManualUpdate(*index))),
+        }
+    }
+}
+
+/// The component revision whose initial files a manual-update baseline without a name seeds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SourceRevision {
+    /// The current revision, while the update is pending.
+    Current,
+    /// The revision of the agent just before the update at this time.
+    Before(Timestamp),
+}
+
+/// What a start does to get its baseline.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum BaselineStep {
+    /// The baseline is known. `restore` names the filesystem snapshot that the start restores
+    /// from the store.
+    Ready {
+        kind: BaselineKind,
+        restore: Option<FilesystemSnapshotName>,
+    },
+    /// A manual-update record without a name: the start needs the initial files of `source`.
+    NeedsSourceFiles {
+        kind: BaselineKind,
+        source: SourceRevision,
+    },
+    /// The record names a filesystem snapshot, and this executor keeps none.
+    Disabled { kind: BaselineKind },
+}
+
+/// Plans the baseline of a start from the selected automatic snapshot record, else from the
+/// manual-update record with whether it is still pending, else from the initial files. `enabled`
+/// tells whether this executor keeps filesystem snapshots.
+pub(crate) fn plan_start_baseline(
+    automatic: Option<&UsableAutomaticSnapshot>,
+    manual: Option<(TimestampedUpdateDescription, bool)>,
+    enabled: bool,
+) -> BaselineStep {
+    let named = |kind: BaselineKind, name: Option<FilesystemSnapshotName>| match name {
+        Some(_) if !enabled => BaselineStep::Disabled { kind },
+        restore => BaselineStep::Ready { kind, restore },
+    };
+    if let Some(snapshot) = automatic {
+        return named(
+            BaselineKind::Periodic {
+                index: snapshot.index,
+                name: snapshot.filesystem_snapshot.clone(),
+            },
+            snapshot.filesystem_snapshot.clone(),
+        );
+    }
+    match manual {
+        Some((
+            TimestampedUpdateDescription {
+                timestamp,
+                oplog_index,
+                description:
+                    UpdateDescription::SnapshotBased {
+                        target_revision,
+                        filesystem_snapshot,
+                        ..
+                    },
+            },
+            pending,
+        )) => {
+            let kind = BaselineKind::ManualUpdate {
+                index: oplog_index,
+                target_revision,
+                pending,
+                name: filesystem_snapshot.clone(),
+            };
+            match filesystem_snapshot {
+                Some(name) => named(kind, Some(name)),
+                None => BaselineStep::NeedsSourceFiles {
+                    kind,
+                    source: if pending {
+                        SourceRevision::Current
+                    } else {
+                        SourceRevision::Before(timestamp)
+                    },
+                },
+            }
+        }
+        _ => BaselineStep::Ready {
+            kind: BaselineKind::InitialFiles,
+            restore: None,
+        },
+    }
+}
+
+/// The error of a start whose baseline names a filesystem snapshot on an executor that keeps
+/// none. A manual-update baseline fails the start with a visible cause.
+pub(crate) fn baseline_disabled_error(
+    kind: &BaselineKind,
+    agent_id: &AgentId,
+) -> WorkerExecutorError {
+    match kind {
+        BaselineKind::ManualUpdate { .. } => WorkerExecutorError::failed_to_resume_worker(
+            agent_id.clone(),
+            WorkerExecutorError::invalid_request(SnapshotsDisabled.to_string()),
+        ),
+        BaselineKind::InitialFiles | BaselineKind::Periodic { .. } => {
+            WorkerExecutorError::runtime(SnapshotsDisabled.to_string())
+        }
+    }
+}
+
+/// What a start does when its baseline failed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum BaselineFailure {
+    /// The filesystem snapshot of the automatic snapshot record at the index does not restore.
+    /// The start skips the record and restarts.
+    SkipPeriodic(OplogIndex),
+    /// A conflict of the initial-file rule at the start of a pending manual update. The start
+    /// records a failed update with the message and restarts on the current revision.
+    RecordFailedUpdate {
+        target: ComponentRevision,
+        message: String,
+    },
+    /// The same conflict on a lost shard. Nothing is written.
+    ShardLost,
+    /// A manual-update baseline that does not restore, and whose error allows no retry. The
+    /// start fails with the message as a visible cause.
+    FailVisibly(String),
+    /// Any other failure of the reconstruction.
+    Reconstruction,
+}
+
+/// Classifies the failure `error` of the baseline `kind`. `lost_shard` tells whether the shard
+/// of the agent is lost.
+pub(crate) fn classify_baseline_failure(
+    kind: &BaselineKind,
+    error: &crate::services::agent_filesystem::Error,
+    lost_shard: bool,
+) -> BaselineFailure {
+    use crate::services::agent_filesystem::Error;
+    match (kind, error) {
+        (BaselineKind::Periodic { index, .. }, Error::Baseline(_)) => {
+            BaselineFailure::SkipPeriodic(*index)
+        }
+        (
+            BaselineKind::ManualUpdate {
+                target_revision,
+                pending: true,
+                ..
+            },
+            Error::InitialFileConflict(conflict),
+        ) => {
+            if lost_shard {
+                BaselineFailure::ShardLost
+            } else {
+                BaselineFailure::RecordFailedUpdate {
+                    target: *target_revision,
+                    message: conflict.to_string(),
+                }
+            }
+        }
+        (BaselineKind::ManualUpdate { .. }, Error::Baseline(error)) if !error.retryable => {
+            BaselineFailure::FailVisibly(error.to_string())
+        }
+        _ => BaselineFailure::Reconstruction,
+    }
+}
+
 /// The restore of a start: a filesystem snapshot of the store, or the initial files of the
 /// source revision of a manual update without a name.
 pub(crate) enum StartRestore {
@@ -588,6 +794,211 @@ mod tests {
             true
         });
         assert!(!asked);
+    }
+
+    fn manual(
+        name: Option<&FilesystemSnapshotName>,
+        pending: bool,
+    ) -> (TimestampedUpdateDescription, bool) {
+        (
+            TimestampedUpdateDescription {
+                timestamp: Timestamp::from(1_000),
+                oplog_index: OplogIndex::from_u64(7),
+                description: UpdateDescription::SnapshotBased {
+                    target_revision: ComponentRevision::new(3).unwrap(),
+                    payload: golem_common::model::oplog::OplogPayload::Inline(Box::new(vec![])),
+                    mime_type: "application/octet-stream".to_string(),
+                    filesystem_snapshot: name.cloned(),
+                },
+            },
+            pending,
+        )
+    }
+
+    fn manual_kind(name: Option<&FilesystemSnapshotName>, pending: bool) -> BaselineKind {
+        BaselineKind::ManualUpdate {
+            index: OplogIndex::from_u64(7),
+            target_revision: ComponentRevision::new(3).unwrap(),
+            pending,
+            name: name.cloned(),
+        }
+    }
+
+    #[test]
+    async fn a_start_plans_its_baseline_from_the_automatic_record_then_the_manual_update() {
+        let name = FilesystemSnapshotName::periodic();
+        let update = FilesystemSnapshotName::update();
+        let periodic = BaselineKind::Periodic {
+            index: OplogIndex::from_u64(10),
+            name: Some(name.clone()),
+        };
+        let automatic = selected(Some(&name));
+        let automatic_kind = BaselineKind::Periodic {
+            index: OplogIndex::from_u64(10),
+            name: Some(name.clone()),
+        };
+        let automatic_without_name = selected(None);
+        let not_snapshot_based = (
+            TimestampedUpdateDescription {
+                timestamp: Timestamp::from(1_000),
+                oplog_index: OplogIndex::from_u64(7),
+                description: UpdateDescription::Automatic {
+                    target_revision: ComponentRevision::new(3).unwrap(),
+                },
+            },
+            true,
+        );
+
+        assert_eq!(
+            [
+                plan_start_baseline(Some(&automatic), Some(manual(Some(&update), true)), true),
+                plan_start_baseline(Some(&automatic), None, false),
+                plan_start_baseline(Some(&automatic_without_name), None, false),
+                plan_start_baseline(None, Some(manual(Some(&update), false)), true),
+                plan_start_baseline(None, Some(manual(Some(&update), true)), false),
+                plan_start_baseline(None, Some(manual(None, true)), false),
+                plan_start_baseline(None, Some(manual(None, false)), true),
+                plan_start_baseline(None, Some(not_snapshot_based), true),
+                plan_start_baseline(None, None, true),
+            ],
+            [
+                BaselineStep::Ready {
+                    kind: periodic.clone(),
+                    restore: Some(name.clone()),
+                },
+                BaselineStep::Disabled {
+                    kind: automatic_kind
+                },
+                BaselineStep::Ready {
+                    kind: BaselineKind::Periodic {
+                        index: OplogIndex::from_u64(10),
+                        name: None
+                    },
+                    restore: None,
+                },
+                BaselineStep::Ready {
+                    kind: manual_kind(Some(&update), false),
+                    restore: Some(update.clone()),
+                },
+                BaselineStep::Disabled {
+                    kind: manual_kind(Some(&update), true)
+                },
+                BaselineStep::NeedsSourceFiles {
+                    kind: manual_kind(None, true),
+                    source: SourceRevision::Current,
+                },
+                BaselineStep::NeedsSourceFiles {
+                    kind: manual_kind(None, false),
+                    source: SourceRevision::Before(Timestamp::from(1_000)),
+                },
+                BaselineStep::Ready {
+                    kind: BaselineKind::InitialFiles,
+                    restore: None
+                },
+                BaselineStep::Ready {
+                    kind: BaselineKind::InitialFiles,
+                    restore: None
+                },
+            ]
+        );
+    }
+
+    #[test]
+    async fn a_baseline_on_an_executor_without_snapshots_fails_visibly_only_for_a_manual_update() {
+        let agent_id = AgentId {
+            component_id: golem_common::model::component::ComponentId::new(),
+            agent_id: "disabled".to_string(),
+        };
+        let periodic = baseline_disabled_error(
+            &BaselineKind::Periodic {
+                index: OplogIndex::from_u64(10),
+                name: None,
+            },
+            &agent_id,
+        );
+        let manual = baseline_disabled_error(&manual_kind(None, true), &agent_id);
+
+        assert_eq!(
+            periodic,
+            WorkerExecutorError::runtime(SnapshotsDisabled.to_string())
+        );
+        assert_eq!(
+            manual,
+            WorkerExecutorError::failed_to_resume_worker(
+                agent_id,
+                WorkerExecutorError::invalid_request(SnapshotsDisabled.to_string())
+            )
+        );
+    }
+
+    #[test]
+    async fn a_failed_baseline_skips_a_periodic_record_or_fails_or_records_a_manual_update() {
+        use crate::services::agent_filesystem::{Error, InitialFileConflict, RestoreError};
+        let restore = |retryable| {
+            Error::Baseline(Box::new(RestoreError {
+                retryable,
+                source: anyhow::anyhow!("restore failed"),
+            }))
+        };
+        let conflict = InitialFileConflict::occupied(Path::new("e/f"));
+        let conflicting = || Error::InitialFileConflict(Box::new(conflict.clone()));
+        let periodic = BaselineKind::Periodic {
+            index: OplogIndex::from_u64(10),
+            name: None,
+        };
+
+        assert_eq!(
+            [
+                classify_baseline_failure(&periodic, &restore(true), false),
+                classify_baseline_failure(&periodic, &conflicting(), false),
+                classify_baseline_failure(&manual_kind(None, true), &conflicting(), false),
+                classify_baseline_failure(&manual_kind(None, true), &conflicting(), true),
+                classify_baseline_failure(&manual_kind(None, false), &conflicting(), false),
+                classify_baseline_failure(&manual_kind(None, true), &restore(false), false),
+                classify_baseline_failure(&manual_kind(None, true), &restore(true), false),
+                classify_baseline_failure(&BaselineKind::InitialFiles, &restore(false), false),
+            ],
+            [
+                BaselineFailure::SkipPeriodic(OplogIndex::from_u64(10)),
+                BaselineFailure::Reconstruction,
+                BaselineFailure::RecordFailedUpdate {
+                    target: ComponentRevision::new(3).unwrap(),
+                    message: conflict.to_string(),
+                },
+                BaselineFailure::ShardLost,
+                BaselineFailure::Reconstruction,
+                BaselineFailure::FailVisibly(restore(false).to_string()),
+                BaselineFailure::Reconstruction,
+                BaselineFailure::Reconstruction,
+            ]
+        );
+    }
+
+    #[test]
+    async fn only_a_non_empty_set_of_read_only_initial_files_restores() {
+        use golem_common::model::agent::AgentFileContentHash;
+        use golem_common::model::component::{
+            AgentFilePath, AgentFilePermissions, InitialAgentFile,
+        };
+        let file = |permissions| InitialAgentFile {
+            content_hash: AgentFileContentHash(golem_common::model::diff::Hash::empty()),
+            path: AgentFilePath::from_abs_str("/file").unwrap(),
+            permissions,
+            size: 1,
+        };
+        assert_eq!(
+            [
+                InitialFilesRestore::of_read_only(Box::new([])).is_some(),
+                InitialFilesRestore::of_read_only(Box::new([file(AgentFilePermissions::ReadOnly)]))
+                    .is_some(),
+                InitialFilesRestore::of_read_only(Box::new([
+                    file(AgentFilePermissions::ReadOnly),
+                    file(AgentFilePermissions::ReadWrite),
+                ]))
+                .is_some(),
+            ],
+            [false, true, false]
+        );
     }
 
     #[test]
