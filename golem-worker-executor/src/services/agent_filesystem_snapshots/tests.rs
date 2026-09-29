@@ -357,7 +357,7 @@ impl AgentFilesystemSnapshots {
         match &self.core {
             Some(core) => Core::admit(core, scope, kind)
                 .await
-                .map_err(|(skip, _)| skip),
+                .map_err(|refusal| refusal.skip),
             None => Err(SnapshotSkip::Disabled),
         }
     }
@@ -447,13 +447,9 @@ async fn eventually(condition: impl Fn() -> bool) {
 async fn ended(snapshots: &AgentFilesystemSnapshots, scope: &SnapshotScope) {
     if let Some(core) = &snapshots.core {
         assert!(
-            tokio::time::timeout(
-                PATIENCE,
-                core.registry
-                    .until(|scopes| rules::is_free(scopes, scope).then_some(()))
-            )
-            .await
-            .is_ok(),
+            tokio::time::timeout(PATIENCE, core.registry.until_scope_free(scope))
+                .await
+                .is_ok(),
             "the job did not end in time"
         );
     }
@@ -1729,8 +1725,7 @@ fn forget_scope_ends_a_delete_of_a_superseded_snapshot_at_once() {
         snapshots.forget_scope(&scope);
         let ended = tokio::time::timeout(
             Duration::from_secs(2),
-            core.registry
-                .until(|scopes| rules::is_free(scopes, &scope).then_some(())),
+            core.registry.until_scope_free(&scope),
         )
         .await;
 

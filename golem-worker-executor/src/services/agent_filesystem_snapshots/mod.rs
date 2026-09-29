@@ -407,7 +407,7 @@ impl AgentFilesystemSnapshots {
         let core = self.core.as_ref().ok_or(SnapshotSkip::Disabled)?;
         Core::admit(core, scope, SnapshotKind::Periodic)
             .await
-            .map_err(|(skip, _)| skip)
+            .map_err(|refusal| refusal.skip)
     }
 
     /// Asks for an upload of a manual-update snapshot of the agent of `scope`. When an upload of
@@ -423,22 +423,22 @@ impl AgentFilesystemSnapshots {
             .core
             .as_ref()
             .ok_or(UpdateRefusal::Skip(SnapshotSkip::Disabled))?;
-        let (skip, running) = match Core::admit(core, scope, SnapshotKind::Update).await {
+        let refusal = match Core::admit(core, scope, SnapshotKind::Update).await {
             Ok(admission) => return Ok(admission),
             Err(refusal) => refusal,
         };
-        let rules::UpdateAdmit::WaitForEnd(id) = rules::update_admission(skip, running) else {
-            return Err(UpdateRefusal::Skip(skip));
+        let rules::UpdateAdmit::WaitForEnd(id) = rules::update_admission(refusal) else {
+            return Err(UpdateRefusal::Skip(refusal.skip));
         };
         tokio::select! {
-            () = registry::job_ended(&core.registry, scope, id) => {}
+            () = core.registry.until_job_gone(scope, id) => {}
             () = tokio::time::sleep(core.settings.confirmation_wait()) => {}
             () = core.shutdown.cancelled() => {}
             () = job::raised(interrupt) => return Err(UpdateRefusal::Interrupted),
         }
         Core::admit(core, scope, SnapshotKind::Update)
             .await
-            .map_err(|(skip, _)| UpdateRefusal::Skip(skip))
+            .map_err(|refusal| UpdateRefusal::Skip(refusal.skip))
     }
 
     /// Tells whether the store holds the whole snapshot `name` of `scope`, before a start
@@ -576,7 +576,7 @@ impl Core {
         core: &Arc<Self>,
         scope: &SnapshotScope,
         kind: SnapshotKind,
-    ) -> Result<Admission, (SnapshotSkip, Option<rules::JobId>)> {
+    ) -> Result<Admission, rules::Refusal> {
         let room = core.room.has_room().await;
         let name = match kind {
             SnapshotKind::Periodic => FilesystemSnapshotName::periodic(),

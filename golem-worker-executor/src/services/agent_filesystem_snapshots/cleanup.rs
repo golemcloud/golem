@@ -113,7 +113,7 @@ impl Cleaner {
                     .await
             }
             Cleanup::DeleteScope { scope, ticket } => {
-                ticket.jobs_ended().await;
+                ticket.until_scope_free().await;
                 let deleted = self
                     .with_slot(|| retrying(&self.retry, || self.store.delete_scope(&scope)))
                     .await;

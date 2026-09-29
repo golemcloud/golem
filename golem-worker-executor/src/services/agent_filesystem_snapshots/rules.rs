@@ -77,153 +77,57 @@ pub(super) enum JobPhase {
     Decided(JobDecision),
 }
 
-/// A transition of [`Scopes`].
-#[derive(Debug)]
-pub(super) enum Request {
-    /// Admits a job with `name` for `scope`. `room` tells whether the volume has room for a
-    /// capture.
-    Admit {
-        scope: SnapshotScope,
-        name: FilesystemSnapshotName,
-        stop: CancellationToken,
-        room: bool,
-    },
-    /// The save of the job holds a slot of the uploads.
-    Saving { scope: SnapshotScope, id: JobId },
-    /// The job decided. The first decision stays.
-    Decide {
-        scope: SnapshotScope,
-        id: JobId,
-        decision: JobDecision,
-    },
-    /// The job ended.
-    End { scope: SnapshotScope, id: JobId },
-    /// A start asks whether it waits for the job of `scope` with `name`, and registers as a
-    /// waiter when it does.
-    StartWait {
-        scope: SnapshotScope,
-        name: FilesystemSnapshotName,
-    },
-    /// A start that waited for the job `id` no longer waits.
-    Unwatch { scope: SnapshotScope, id: JobId },
-    /// A delete of `scope` is queued.
-    ForgetScope { scope: SnapshotScope },
-    /// A delete of `scope` ended.
-    ScopeDeleted { scope: SnapshotScope },
+/// A transition of [`Scopes`]. The registry wakes its waiters after a transition when
+/// [`wakes`] says so.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Transition {
+    Admit,
+    Saving,
+    Decide,
+    End,
+    StartWait,
+    Unwatch,
+    ForgetScope,
+    ScopeDeleted,
 }
 
-/// The answer of a transition.
-#[derive(Debug)]
-pub(super) enum Answer {
-    /// The job is admitted with this number.
-    Admitted(JobId),
-    /// The admission is refused. `running` is the job of the scope, when one runs.
-    Refused {
-        skip: SnapshotSkip,
-        running: Option<JobId>,
-    },
-    /// The start waits for the job with this number.
-    Wait(JobId),
-    /// The start does not wait. It gives the decision of the job with the name, when known.
-    NoWait(Option<JobDecision>),
-    /// The stop of the job of the scope, when one runs.
-    Stop(Option<CancellationToken>),
-    /// The transition has no answer.
-    Done,
-}
-
-/// Applies `request` to `scopes`.
-pub(super) fn step(scopes: &mut Scopes, request: Request) -> Answer {
-    match request {
-        Request::Admit {
-            scope,
-            name,
-            stop,
-            room,
-        } => admit(scopes, scope, name, stop, room),
-        Request::Saving { scope, id } => {
-            if let Some(job) = live(scopes, &scope, id)
-                && job.phase == JobPhase::Admitted
-            {
-                job.phase = JobPhase::Saving;
-            }
-            Answer::Done
-        }
-        Request::Decide {
-            scope,
-            id,
-            decision,
-        } => {
-            if let Some(job) = live(scopes, &scope, id)
-                && !matches!(job.phase, JobPhase::Decided(_))
-            {
-                job.phase = JobPhase::Decided(decision);
-            }
-            Answer::Done
-        }
-        Request::End { scope, id } => {
-            end(scopes, scope, id);
-            Answer::Done
-        }
-        Request::StartWait { scope, name } => start_wait(scopes, &scope, &name),
-        Request::Unwatch { scope, id } => {
-            unwatch(scopes, scope, id);
-            Answer::Done
-        }
-        Request::ForgetScope { scope } => {
-            let stop = scopes.jobs.get(&scope).map(|job| job.stop.clone());
-            scopes
-                .deleting
-                .entry(scope)
-                .and_modify(|count| *count = count.saturating_add(1))
-                .or_insert(NonZeroU32::MIN);
-            Answer::Stop(stop)
-        }
-        Request::ScopeDeleted { scope } => {
-            let left = scopes
-                .deleting
-                .get(&scope)
-                .and_then(|count| NonZeroU32::new(count.get() - 1));
-            match left {
-                Some(left) => {
-                    scopes.deleting.insert(scope.clone(), left);
-                }
-                None => {
-                    scopes.deleting.remove(&scope);
-                }
-            }
-            scopes.ended.remove(&scope);
-            Answer::Done
+/// Whether the waiters of the registry must see `transition`. A waiter waits for a decision, for
+/// the end of a job, or for the end of a scope delete.
+pub(super) fn wakes(transition: Transition) -> bool {
+    match transition {
+        Transition::Decide
+        | Transition::End
+        | Transition::ForgetScope
+        | Transition::ScopeDeleted => true,
+        Transition::Admit | Transition::Saving | Transition::StartWait | Transition::Unwatch => {
+            false
         }
     }
 }
 
-/// Whether the waiters of the registry must see the transition of `request`. A waiter waits for
-/// a decision, for the end of a job, or for the end of a scope delete.
-pub(super) fn wakes(request: &Request) -> bool {
-    matches!(
-        request,
-        Request::Decide { .. }
-            | Request::End { .. }
-            | Request::ForgetScope { .. }
-            | Request::ScopeDeleted { .. }
-    )
+/// Why an admission gives no job.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct Refusal {
+    pub(super) skip: SnapshotSkip,
+    /// The job that runs for the scope, when one runs.
+    pub(super) running: Option<JobId>,
 }
 
-/// Admits a job, in the order room, scope delete, running job.
-fn admit(
+/// Admits a job with `name` for `scope`, in the order room, scope delete, running job. `stop`
+/// stops the job, and `room` tells whether the volume has room for a capture.
+pub(super) fn admit(
     scopes: &mut Scopes,
-    scope: SnapshotScope,
-    name: FilesystemSnapshotName,
+    scope: &SnapshotScope,
+    name: &FilesystemSnapshotName,
     stop: CancellationToken,
     room: bool,
-) -> Answer {
-    let running = scopes.jobs.get(&scope).map(|job| job.id);
-    let refused = |skip| Answer::Refused { skip, running };
+) -> Result<JobId, Refusal> {
+    let running = scopes.jobs.get(scope).map(|job| job.id);
+    let refused = |skip| Err(Refusal { skip, running });
     if !room {
         return refused(SnapshotSkip::VolumeUnderPressure);
     }
-    if scopes.deleting.contains_key(&scope) {
+    if scopes.deleting.contains_key(scope) {
         return refused(SnapshotSkip::ScopeDeleting);
     }
     if running.is_some() {
@@ -232,16 +136,65 @@ fn admit(
     scopes.last_job += 1;
     let id = scopes.last_job;
     scopes.jobs.insert(
-        scope,
+        scope.clone(),
         Job {
             id,
-            name,
+            name: name.clone(),
             phase: JobPhase::Admitted,
             stop,
             waiters: 0,
         },
     );
-    Answer::Admitted(id)
+    Ok(id)
+}
+
+/// The save of the job `id` holds a slot of the uploads. The phase only moves forward.
+pub(super) fn saving(scopes: &mut Scopes, scope: &SnapshotScope, id: JobId) {
+    if let Some(job) = live(scopes, scope, id)
+        && job.phase == JobPhase::Admitted
+    {
+        job.phase = JobPhase::Saving;
+    }
+}
+
+/// The job `id` decided. The first decision stays.
+pub(super) fn decide(scopes: &mut Scopes, scope: &SnapshotScope, id: JobId, decision: JobDecision) {
+    if let Some(job) = live(scopes, scope, id)
+        && !matches!(job.phase, JobPhase::Decided(_))
+    {
+        job.phase = JobPhase::Decided(decision);
+    }
+}
+
+/// A delete of `scope` is queued. Gives the stop of the job of the scope, when one runs.
+pub(super) fn forget_scope(
+    scopes: &mut Scopes,
+    scope: &SnapshotScope,
+) -> Option<CancellationToken> {
+    let stop = scopes.jobs.get(scope).map(|job| job.stop.clone());
+    scopes
+        .deleting
+        .entry(scope.clone())
+        .and_modify(|count| *count = count.saturating_add(1))
+        .or_insert(NonZeroU32::MIN);
+    stop
+}
+
+/// A delete of `scope` ended. The last one frees the scope and the ended decision of the scope.
+pub(super) fn scope_deleted(scopes: &mut Scopes, scope: &SnapshotScope) {
+    let left = scopes
+        .deleting
+        .get(scope)
+        .and_then(|count| NonZeroU32::new(count.get() - 1));
+    match left {
+        Some(left) => {
+            scopes.deleting.insert(scope.clone(), left);
+        }
+        None => {
+            scopes.deleting.remove(scope);
+        }
+    }
+    scopes.ended.remove(scope);
 }
 
 /// The live job `id` of `scope`.
@@ -250,9 +203,9 @@ fn live<'a>(scopes: &'a mut Scopes, scope: &SnapshotScope, id: JobId) -> Option<
 }
 
 /// Frees the scope of the job `id`, and keeps its decision while starts wait for it.
-fn end(scopes: &mut Scopes, scope: SnapshotScope, id: JobId) {
-    if scopes.jobs.get(&scope).is_some_and(|job| job.id == id)
-        && let Some(job) = scopes.jobs.remove(&scope)
+pub(super) fn end(scopes: &mut Scopes, scope: &SnapshotScope, id: JobId) {
+    if scopes.jobs.get(scope).is_some_and(|job| job.id == id)
+        && let Some(job) = scopes.jobs.remove(scope)
         && let Some(waiters) = NonZeroU32::new(job.waiters)
     {
         let decision = match job.phase {
@@ -260,7 +213,7 @@ fn end(scopes: &mut Scopes, scope: SnapshotScope, id: JobId) {
             JobPhase::Admitted | JobPhase::Saving => JobDecision::Stopped,
         };
         scopes.ended.insert(
-            scope,
+            scope.clone(),
             Ended {
                 id,
                 decision,
@@ -271,40 +224,45 @@ fn end(scopes: &mut Scopes, scope: SnapshotScope, id: JobId) {
 }
 
 /// A start waits only for a job of the scope with the name that holds a slot of the uploads and
-/// has not decided. It then registers as a waiter in the same transition.
-fn start_wait(scopes: &mut Scopes, scope: &SnapshotScope, name: &FilesystemSnapshotName) -> Answer {
+/// has not decided. It then registers as a waiter in the same transition and gets the job. A
+/// start that does not wait gets the decision of the job with the name, when known.
+pub(super) fn start_wait(
+    scopes: &mut Scopes,
+    scope: &SnapshotScope,
+    name: &FilesystemSnapshotName,
+) -> Result<JobId, Option<JobDecision>> {
     match scopes.jobs.get_mut(scope).filter(|job| &job.name == name) {
         Some(job) => match job.phase {
             JobPhase::Saving => {
                 job.waiters += 1;
-                Answer::Wait(job.id)
+                Ok(job.id)
             }
-            JobPhase::Decided(decision) => Answer::NoWait(Some(decision)),
-            JobPhase::Admitted => Answer::NoWait(None),
+            JobPhase::Decided(decision) => Err(Some(decision)),
+            JobPhase::Admitted => Err(None),
         },
-        None => Answer::NoWait(None),
+        None => Err(None),
     }
 }
 
 /// Takes one waiter from the job `id`, live or ended.
-fn unwatch(scopes: &mut Scopes, scope: SnapshotScope, id: JobId) {
-    if let Some(job) = live(scopes, &scope, id) {
+pub(super) fn unwatch(scopes: &mut Scopes, scope: &SnapshotScope, id: JobId) {
+    if let Some(job) = live(scopes, scope, id) {
         job.waiters = job.waiters.saturating_sub(1);
         return;
     }
     let left = scopes
         .ended
-        .get(&scope)
+        .get(scope)
         .filter(|ended| ended.id == id)
         .map(|ended| NonZeroU32::new(ended.waiters.get() - 1));
     match left {
         Some(Some(waiters)) => {
-            if let Some(ended) = scopes.ended.get_mut(&scope) {
+            if let Some(ended) = scopes.ended.get_mut(scope) {
                 ended.waiters = waiters;
             }
         }
         Some(None) => {
-            scopes.ended.remove(&scope);
+            scopes.ended.remove(scope);
         }
         None => {}
     }
@@ -448,11 +406,11 @@ pub(super) enum UpdateAdmit {
     WaitForEnd(JobId),
 }
 
-/// What a manual update does after its first admission gave `skip`, with the job `running` of
-/// the scope. Only an upload that runs makes it wait. The admission after the wait fails with its
-/// refusal, so the update waits at most once.
-pub(super) fn update_admission(skip: SnapshotSkip, running: Option<JobId>) -> UpdateAdmit {
-    match (skip, running) {
+/// What a manual update does after its first admission gave `refusal`. Only an upload that runs
+/// makes it wait. The admission after the wait fails with its refusal, so the update waits at
+/// most once.
+pub(super) fn update_admission(refusal: Refusal) -> UpdateAdmit {
+    match (refusal.skip, refusal.running) {
         (SnapshotSkip::UploadInFlight, Some(id)) => UpdateAdmit::WaitForEnd(id),
         _ => UpdateAdmit::Refuse,
     }
@@ -521,13 +479,13 @@ mod tests {
         ))
     }
 
-    fn admit_request(scope: &SnapshotScope, name: &FilesystemSnapshotName, room: bool) -> Request {
-        Request::Admit {
-            scope: scope.clone(),
-            name: name.clone(),
-            stop: CancellationToken::new(),
-            room,
-        }
+    fn try_admit(
+        scopes: &mut Scopes,
+        scope: &SnapshotScope,
+        name: &FilesystemSnapshotName,
+        room: bool,
+    ) -> Result<JobId, Refusal> {
+        admit(scopes, scope, name, CancellationToken::new(), room)
     }
 
     fn admitted(
@@ -535,58 +493,23 @@ mod tests {
         scope: &SnapshotScope,
         name: &FilesystemSnapshotName,
     ) -> JobId {
-        match step(scopes, admit_request(scope, name, true)) {
-            Answer::Admitted(id) => id,
-            other => panic!("not admitted: {other:?}"),
-        }
+        try_admit(scopes, scope, name, true).expect("admitted")
     }
 
-    fn refusal(answer: Answer) -> Option<(SnapshotSkip, Option<JobId>)> {
-        match answer {
-            Answer::Refused { skip, running } => Some((skip, running)),
-            _ => None,
-        }
-    }
-
-    fn saving(scopes: &mut Scopes, scope: &SnapshotScope, id: JobId) {
-        step(
-            scopes,
-            Request::Saving {
-                scope: scope.clone(),
-                id,
-            },
-        );
-    }
-
-    fn decide(scopes: &mut Scopes, scope: &SnapshotScope, id: JobId, decision: JobDecision) {
-        step(
-            scopes,
-            Request::Decide {
-                scope: scope.clone(),
-                id,
-                decision,
-            },
-        );
+    fn refusal(result: Result<JobId, Refusal>) -> Option<(SnapshotSkip, Option<JobId>)> {
+        result.err().map(|refusal| (refusal.skip, refusal.running))
     }
 
     fn end_job(scopes: &mut Scopes, scope: &SnapshotScope, id: JobId) {
-        step(
-            scopes,
-            Request::End {
-                scope: scope.clone(),
-                id,
-            },
-        );
+        end(scopes, scope, id);
     }
 
-    fn wait(scopes: &mut Scopes, scope: &SnapshotScope, name: &FilesystemSnapshotName) -> Answer {
-        step(
-            scopes,
-            Request::StartWait {
-                scope: scope.clone(),
-                name: name.clone(),
-            },
-        )
+    fn wait(
+        scopes: &mut Scopes,
+        scope: &SnapshotScope,
+        name: &FilesystemSnapshotName,
+    ) -> Result<JobId, Option<JobDecision>> {
+        start_wait(scopes, scope, name)
     }
 
     #[test]
@@ -596,17 +519,12 @@ mod tests {
         let other = self::scope("other");
         let name = FilesystemSnapshotName::periodic();
 
-        step(
-            &mut scopes,
-            Request::ForgetScope {
-                scope: scope.clone(),
-            },
-        );
-        let deleting_without_room = refusal(step(&mut scopes, admit_request(&scope, &name, false)));
-        let deleting = refusal(step(&mut scopes, admit_request(&scope, &name, true)));
+        forget_scope(&mut scopes, &scope);
+        let deleting_without_room = refusal(try_admit(&mut scopes, &scope, &name, false));
+        let deleting = refusal(try_admit(&mut scopes, &scope, &name, true));
         let first = admitted(&mut scopes, &other, &name);
-        let running = refusal(step(&mut scopes, admit_request(&other, &name, true)));
-        let running_without_room = refusal(step(&mut scopes, admit_request(&other, &name, false)));
+        let running = refusal(try_admit(&mut scopes, &other, &name, true));
+        let running_without_room = refusal(try_admit(&mut scopes, &other, &name, false));
 
         assert_eq!(
             deleting_without_room,
@@ -693,15 +611,15 @@ mod tests {
         );
         let decided = wait(&mut scopes, &scope, &name);
 
-        assert!(matches!(no_job, Answer::NoWait(None)));
-        assert!(matches!(while_admitted, Answer::NoWait(None)));
-        assert!(matches!(other_name, Answer::NoWait(None)));
-        assert!(matches!(while_saving, Answer::Wait(waited) if waited == id));
+        assert_eq!(no_job, Err(None));
+        assert_eq!(while_admitted, Err(None));
+        assert_eq!(other_name, Err(None));
+        assert_eq!(while_saving, Ok(id));
         assert_eq!(waiters, Some(1));
-        assert!(matches!(
+        assert_eq!(
             decided,
-            Answer::NoWait(Some(JobDecision::Confirmed(ConfirmOutcome::Deferred)))
-        ));
+            Err(Some(JobDecision::Confirmed(ConfirmOutcome::Deferred)))
+        );
     }
 
     #[test]
@@ -723,8 +641,8 @@ mod tests {
 
         let watched = admitted(&mut scopes, &scope, &name);
         saving(&mut scopes, &scope, watched);
-        wait(&mut scopes, &scope, &name);
-        wait(&mut scopes, &scope, &name);
+        assert!(wait(&mut scopes, &scope, &name).is_ok());
+        assert!(wait(&mut scopes, &scope, &name).is_ok());
         decide(
             &mut scopes,
             &scope,
@@ -733,28 +651,10 @@ mod tests {
         );
         end_job(&mut scopes, &scope, watched);
         let kept = decision_of(&scopes, &scope, watched);
-        step(
-            &mut scopes,
-            Request::Unwatch {
-                scope: scope.clone(),
-                id: unwatched,
-            },
-        );
-        step(
-            &mut scopes,
-            Request::Unwatch {
-                scope: scope.clone(),
-                id: watched,
-            },
-        );
+        unwatch(&mut scopes, &scope, unwatched);
+        unwatch(&mut scopes, &scope, watched);
         let after_one = scopes.ended.len();
-        step(
-            &mut scopes,
-            Request::Unwatch {
-                scope: scope.clone(),
-                id: watched,
-            },
-        );
+        unwatch(&mut scopes, &scope, watched);
 
         assert_eq!(without_waiter, (0, Some(JobDecision::Stopped)));
         assert_eq!(
@@ -772,7 +672,7 @@ mod tests {
         let name = FilesystemSnapshotName::periodic();
         let id = admitted(&mut scopes, &scope, &name);
         saving(&mut scopes, &scope, id);
-        wait(&mut scopes, &scope, &name);
+        assert!(wait(&mut scopes, &scope, &name).is_ok());
 
         end_job(&mut scopes, &scope, id);
 
@@ -789,24 +689,12 @@ mod tests {
         let name = FilesystemSnapshotName::periodic();
         let id = admitted(&mut scopes, &scope, &name);
         saving(&mut scopes, &scope, id);
-        wait(&mut scopes, &scope, &name);
-        wait(&mut scopes, &scope, &name);
+        assert!(wait(&mut scopes, &scope, &name).is_ok());
+        assert!(wait(&mut scopes, &scope, &name).is_ok());
 
-        step(
-            &mut scopes,
-            Request::Unwatch {
-                scope: scope.clone(),
-                id: id + 1,
-            },
-        );
+        unwatch(&mut scopes, &scope, id + 1);
         let after_stale = scopes.jobs.get(&scope).map(|job| job.waiters);
-        step(
-            &mut scopes,
-            Request::Unwatch {
-                scope: scope.clone(),
-                id,
-            },
-        );
+        unwatch(&mut scopes, &scope, id);
 
         assert_eq!(after_stale, Some(2));
         assert_eq!(scopes.jobs.get(&scope).map(|job| job.waiters), Some(1));
@@ -819,39 +707,23 @@ mod tests {
         let name = FilesystemSnapshotName::periodic();
         let id = admitted(&mut scopes, &scope, &name);
         saving(&mut scopes, &scope, id);
-        wait(&mut scopes, &scope, &name);
+        assert!(wait(&mut scopes, &scope, &name).is_ok());
         let stop = scopes.jobs.get(&scope).map(|job| job.stop.clone());
 
-        let first = step(
-            &mut scopes,
-            Request::ForgetScope {
-                scope: scope.clone(),
-            },
-        );
+        let first = forget_scope(&mut scopes, &scope);
         end_job(&mut scopes, &scope, id);
-        let second = step(
-            &mut scopes,
-            Request::ForgetScope {
-                scope: scope.clone(),
-            },
-        );
-        let deleted = || Request::ScopeDeleted {
-            scope: scope.clone(),
-        };
-        step(&mut scopes, deleted());
+        let second = forget_scope(&mut scopes, &scope);
+        scope_deleted(&mut scopes, &scope);
         let after_one = (
-            refusal(step(&mut scopes, admit_request(&scope, &name, true))),
+            refusal(try_admit(&mut scopes, &scope, &name, true)),
             scopes.ended.len(),
         );
-        step(&mut scopes, deleted());
-        step(&mut scopes, deleted());
-        let after_all = matches!(
-            step(&mut scopes, admit_request(&scope, &name, true)),
-            Answer::Admitted(_)
-        );
+        scope_deleted(&mut scopes, &scope);
+        scope_deleted(&mut scopes, &scope);
+        let after_all = try_admit(&mut scopes, &scope, &name, true).is_ok();
 
-        assert!(matches!(first, Answer::Stop(Some(token)) if Some(&token) == stop.as_ref()));
-        assert!(matches!(second, Answer::Stop(None)));
+        assert!(first.is_some_and(|token| Some(&token) == stop.as_ref()));
+        assert!(second.is_none());
         assert_eq!(after_one, (Some((SnapshotSkip::ScopeDeleting, None)), 0));
         assert!(after_all);
         assert!(scopes.deleting.is_empty());
@@ -859,40 +731,17 @@ mod tests {
 
     #[test]
     fn only_decisions_ends_and_scope_deletes_wake_the_waiters() {
-        let scope = scope("wakes");
-        let name = FilesystemSnapshotName::periodic();
         assert_eq!(
             [
-                admit_request(&scope, &name, true),
-                Request::Saving {
-                    scope: scope.clone(),
-                    id: 1
-                },
-                Request::Decide {
-                    scope: scope.clone(),
-                    id: 1,
-                    decision: JobDecision::SaveFailed
-                },
-                Request::End {
-                    scope: scope.clone(),
-                    id: 1
-                },
-                Request::StartWait {
-                    scope: scope.clone(),
-                    name: name.clone()
-                },
-                Request::Unwatch {
-                    scope: scope.clone(),
-                    id: 1
-                },
-                Request::ForgetScope {
-                    scope: scope.clone()
-                },
-                Request::ScopeDeleted {
-                    scope: scope.clone()
-                },
+                Transition::Admit,
+                Transition::Saving,
+                Transition::Decide,
+                Transition::End,
+                Transition::StartWait,
+                Transition::Unwatch,
+                Transition::ForgetScope,
+                Transition::ScopeDeleted,
             ]
-            .each_ref()
             .map(wakes),
             [false, false, true, true, false, false, true, true]
         );
@@ -1008,11 +857,26 @@ mod tests {
     fn a_manual_update_waits_only_for_a_running_upload() {
         assert_eq!(
             [
-                update_admission(SnapshotSkip::UploadInFlight, Some(4)),
-                update_admission(SnapshotSkip::ScopeDeleting, Some(4)),
-                update_admission(SnapshotSkip::VolumeUnderPressure, Some(4)),
-                update_admission(SnapshotSkip::Disabled, None),
-                update_admission(SnapshotSkip::UploadInFlight, None),
+                update_admission(Refusal {
+                    skip: SnapshotSkip::UploadInFlight,
+                    running: Some(4)
+                }),
+                update_admission(Refusal {
+                    skip: SnapshotSkip::ScopeDeleting,
+                    running: Some(4)
+                }),
+                update_admission(Refusal {
+                    skip: SnapshotSkip::VolumeUnderPressure,
+                    running: Some(4)
+                }),
+                update_admission(Refusal {
+                    skip: SnapshotSkip::Disabled,
+                    running: None
+                }),
+                update_admission(Refusal {
+                    skip: SnapshotSkip::UploadInFlight,
+                    running: None
+                }),
             ],
             [
                 UpdateAdmit::WaitForEnd(4),
