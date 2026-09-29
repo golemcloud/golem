@@ -17,12 +17,23 @@
   and geometry assertions.
 - Kept `UX-024` awaiting manual terminal acceptance; this cleanup does not mark
   the current visual review complete.
+- Consolidated selected context identity, nested-CLI arguments, environment
+  reference, and Server identity into one `SelectedTarget`. Async switches now
+  carry immutable request material through completion rather than consulting
+  mutable picker state.
+- Bound supervised Server sessions to their launch Server identity. Same-Server
+  app/environment switches preserve the session; different-Server switches
+  require confirmation, graceful stop, and the existing five-second
+  force-stop gate before the switch continues.
+- Recomputed context-picker `current` markers from the complete selected target
+  after every successful switch, including Server identity when two Servers
+  expose the same application/environment names.
 
 Validation:
 
 - `cargo fmt --package golem-cli`
 - `cargo test -p golem-cli --lib --features tui-preview -- tui:: --report-time`
-  (233 passed)
+  (236 passed)
 - `cargo check -p golem-cli --features tui-preview`
 - `git diff --check`
 

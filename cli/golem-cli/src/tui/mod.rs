@@ -26,14 +26,11 @@ pub(crate) mod terminal_screen;
 mod visual;
 mod widgets;
 
-use crate::context::Context;
-use crate::model::environment::EnvironmentReference;
-use app::{AgentRefreshPayload, OpsEnvironmentSnapshot};
+use app::{AgentRefreshPayload, ContextSwitchResult, OpsEnvironmentSnapshot};
 use context_executor::TuiContextTaskResult;
 use crossterm::event::Event;
 use golem_client::model::EnvironmentWithDetails;
 use nested_cli::{NestedCliEvent, NestedCliTarget};
-use std::sync::Arc;
 use tokio::sync::oneshot;
 
 pub use app::run;
@@ -65,7 +62,7 @@ enum TuiEvent {
     },
     ContextSwitchFinished {
         generation: u64,
-        result: TuiContextTaskResult<(Arc<Context>, Option<EnvironmentReference>)>,
+        result: TuiContextTaskResult<ContextSwitchResult>,
     },
     ContextEnvironmentListFinished {
         generation: u64,

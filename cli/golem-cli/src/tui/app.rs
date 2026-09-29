@@ -350,10 +350,8 @@ struct TuiApp {
     agents: AgentsState,
     ops_environment: OpsEnvironmentState,
     next_command_id: u64,
-    context: TuiContextInfo,
+    selected_target: SelectedTarget,
     context_switcher: ContextSwitcherState,
-    context_cli_args: Vec<String>,
-    selected_environment_reference: Option<EnvironmentReference>,
     context_executor: Option<Arc<TuiContextExecutor>>,
     auth_prompt: Option<AuthPromptState>,
     layout: TuiLayoutState,
@@ -364,15 +362,16 @@ struct TuiApp {
 
 impl TuiApp {
     fn from_launch(launch: TuiLaunchConfig) -> Self {
-        let context = TuiContextInfo::from_context(launch.initial_context.as_ref());
-        let active_workspace = if context.dev_eligible && context.uses_local_server {
-            Workspace::Dev
-        } else {
-            Workspace::Ops
-        };
-        let context_cli_args = context_args_from_flags(&launch.base_flags);
+        let selected_target =
+            SelectedTarget::from_context(launch.initial_context.as_ref(), &launch.base_flags);
+        let active_workspace =
+            if selected_target.context.dev_eligible && selected_target.context.uses_local_server {
+                Workspace::Dev
+            } else {
+                Workspace::Ops
+            };
         let server = LocalServerService::from_launch(&launch);
-        let preferences_path = tui_preferences_path(&context.config_dir);
+        let preferences_path = tui_preferences_path(&selected_target.context.config_dir);
         let (preferences, preferences_error) = load_tui_preferences(&preferences_path);
         let mut layout = TuiLayoutState::default();
         let mut agents = AgentsState::default();
@@ -413,10 +412,8 @@ impl TuiApp {
             agents,
             ops_environment: OpsEnvironmentState::default(),
             next_command_id: 1,
-            context,
+            selected_target,
             context_switcher: ContextSwitcherState::new(targets),
-            context_cli_args,
-            selected_environment_reference: None,
             context_executor: None,
             auth_prompt: None,
             layout,
@@ -1406,12 +1403,15 @@ impl TuiApp {
     fn action_availability(&self, action: &ActionDefinition) -> ActionAvailability {
         match action.id {
             ActionId::Plan | ActionId::Build | ActionId::Deploy | ActionId::Clean
-                if let Err(reason) = self.context.capability(DevView::BuildDeploy) =>
+                if let Err(reason) = self
+                    .selected_target
+                    .context
+                    .capability(DevView::BuildDeploy) =>
             {
                 ActionAvailability::Unavailable(reason)
             }
             ActionId::StartOrFocusRepl | ActionId::RestartRepl
-                if let Err(reason) = self.context.capability(DevView::Repl) =>
+                if let Err(reason) = self.selected_target.context.capability(DevView::Repl) =>
             {
                 ActionAvailability::Unavailable(reason)
             }
@@ -1440,7 +1440,12 @@ impl TuiApp {
                 ActionAvailability::Unavailable("context switch already running")
             }
             ActionId::ToggleServer | ActionId::RestartServer | ActionId::CleanRestartServer
-                if !self.server.available || self.context.capability(DevView::Server).is_err() =>
+                if !self.server.available
+                    || self
+                        .selected_target
+                        .context
+                        .capability(DevView::Server)
+                        .is_err() =>
             {
                 ActionAvailability::Unavailable("requires an available local server target")
             }
@@ -1453,9 +1458,11 @@ impl TuiApp {
             ActionTarget::Interface => "TUI session".to_string(),
             ActionTarget::ApplicationEnvironment => format!(
                 "{}/{}/{}",
-                self.context.application, self.context.environment, self.context.server
+                self.selected_target.context.application,
+                self.selected_target.context.environment,
+                self.selected_target.context.server
             ),
-            ActionTarget::LocalServer => self.context.server.clone(),
+            ActionTarget::LocalServer => self.selected_target.context.server.clone(),
             ActionTarget::LoadedAgents => {
                 format!("{} loaded agents", self.filtered_agents().len())
             }
@@ -1849,7 +1856,10 @@ impl TuiApp {
         }
     }
 
-    fn context_switch_dev_blockers(&self) -> Vec<&'static str> {
+    fn context_switch_dev_blockers(
+        &self,
+        action: &PendingContextSwitchAction,
+    ) -> Vec<&'static str> {
         let mut blockers = Vec::new();
         if self.command_is_running() {
             blockers.push("command");
@@ -1857,19 +1867,43 @@ impl TuiApp {
         if self.repl.is_running() {
             blockers.push("repl");
         }
+        if self.context_switch_stops_server(action) {
+            blockers.push("server");
+        }
         blockers
     }
 
     fn context_switch_dev_blocker_message(&self) -> Option<String> {
-        let blockers = self.context_switch_dev_blockers();
+        let blockers = self
+            .context_switcher
+            .pending_action
+            .as_ref()
+            .map(|action| self.context_switch_dev_blockers(action))
+            .unwrap_or_default();
         if blockers.is_empty() {
             None
         } else {
             Some(format!(
-                "Switching context will stop running dev jobs: {}",
+                "Switching context will stop context-bound work: {}",
                 blockers.join(", ")
             ))
         }
+    }
+
+    fn context_switch_stops_server(&self, action: &PendingContextSwitchAction) -> bool {
+        let PendingContextSwitchAction::Switch(request) = action else {
+            return false;
+        };
+        if !self.server.run.is_running() {
+            return false;
+        }
+        let running_identity = self
+            .server
+            .run
+            .server_identity
+            .as_ref()
+            .unwrap_or(&self.selected_target.server_identity);
+        running_identity != &request.server_identity
     }
 
     fn context_switch_busy(&self) -> bool {
@@ -1908,10 +1942,12 @@ impl TuiApp {
         match &target.kind {
             TuiContextTargetKind::ManifestAppContext { .. } => {
                 self.request_context_switch_action(
-                    PendingContextSwitchAction::Switch {
+                    PendingContextSwitchAction::Switch(ContextSwitchRequest {
                         global_flags: target.global_flags.clone(),
                         environment_reference: None,
-                    },
+                        server_identity: target.server_identity.clone(),
+                        dev_eligible: true,
+                    }),
                     event_tx,
                 );
             }
@@ -1937,12 +1973,18 @@ impl TuiApp {
             self.context_switcher.last_error = Some(error.clone());
             return;
         }
+        if target.is_current {
+            self.context_switcher.last_error = None;
+            return;
+        }
 
         self.request_context_switch_action(
-            PendingContextSwitchAction::Switch {
+            PendingContextSwitchAction::Switch(ContextSwitchRequest {
                 global_flags: target.server_flags.clone(),
                 environment_reference: target.environment_reference.clone(),
-            },
+                server_identity: target.server_identity.clone(),
+                dev_eligible: target.dev_eligible,
+            }),
             event_tx,
         );
     }
@@ -1954,7 +1996,7 @@ impl TuiApp {
     ) {
         self.close_ops_for_context_switch();
         self.context_switcher.last_error = None;
-        if self.context_switch_dev_blockers().is_empty() {
+        if self.context_switch_dev_blockers(&action).is_empty() {
             self.start_context_switch_action(action, event_tx);
         } else {
             self.context_switcher.pending_action = Some(action);
@@ -1969,7 +2011,13 @@ impl TuiApp {
             return;
         }
         self.close_ops_for_context_switch();
-        self.request_dev_stop_for_context_switch();
+        let action = self
+            .context_switcher
+            .pending_action
+            .as_ref()
+            .expect("pending context switch")
+            .clone();
+        self.request_dev_stop_for_context_switch(&action);
         self.context_switcher.waiting_for_dev_stop = true;
         self.resume_pending_context_switch_if_ready(event_tx);
     }
@@ -1980,10 +2028,9 @@ impl TuiApp {
         event_tx: Option<&TuiEventSender>,
     ) {
         match action {
-            PendingContextSwitchAction::Switch {
-                global_flags,
-                environment_reference,
-            } => self.start_context_switch(global_flags, environment_reference, event_tx),
+            PendingContextSwitchAction::Switch(request) => {
+                self.start_context_switch(request, event_tx)
+            }
             PendingContextSwitchAction::LoadEnvironments { target } => {
                 self.start_context_environment_list(target, event_tx)
             }
@@ -1991,9 +2038,12 @@ impl TuiApp {
     }
 
     fn resume_pending_context_switch_if_ready(&mut self, event_tx: Option<&TuiEventSender>) {
-        if !self.context_switcher.waiting_for_dev_stop
-            || !self.context_switch_dev_blockers().is_empty()
-        {
+        let blockers_remain = self
+            .context_switcher
+            .pending_action
+            .as_ref()
+            .is_some_and(|action| !self.context_switch_dev_blockers(action).is_empty());
+        if !self.context_switcher.waiting_for_dev_stop || blockers_remain {
             return;
         }
         self.context_switcher.waiting_for_dev_stop = false;
@@ -2011,12 +2061,15 @@ impl TuiApp {
         self.agents.refresh_generation += 1;
     }
 
-    fn request_dev_stop_for_context_switch(&mut self) {
+    fn request_dev_stop_for_context_switch(&mut self, action: &PendingContextSwitchAction) {
         if self.command_is_running() {
             self.cancel_or_force_kill_command();
         }
         if self.repl.is_running() {
             self.stop_repl();
+        }
+        if self.context_switch_stops_server(action) {
+            self.stop_server();
         }
     }
 
@@ -2042,8 +2095,7 @@ impl TuiApp {
 
     fn start_context_switch(
         &mut self,
-        global_flags: GolemCliGlobalFlags,
-        environment_reference: Option<EnvironmentReference>,
+        request: ContextSwitchRequest,
         event_tx: Option<&TuiEventSender>,
     ) {
         let Some(event_tx) = event_tx.cloned() else {
@@ -2057,7 +2109,8 @@ impl TuiApp {
 
         self.context_switcher.generation += 1;
         self.context_switcher.switch_running = true;
-        self.context_switcher.pending_key = environment_reference
+        self.context_switcher.pending_key = request
+            .environment_reference
             .as_ref()
             .map(ToString::to_string)
             .or_else(|| Some("context".to_string()));
@@ -2068,9 +2121,12 @@ impl TuiApp {
             event_tx,
             auth_presenter,
             move |_launch_context| async move {
-                Context::new(global_flags.clone(), Some(Output::Captured))
+                Context::new(request.global_flags.clone(), Some(Output::Captured))
                     .await
-                    .map(|context| (Arc::new(context), environment_reference))
+                    .map(|context| ContextSwitchResult {
+                        context: Arc::new(context),
+                        request,
+                    })
             },
             move |result| TuiEvent::ContextSwitchFinished { generation, result },
         );
@@ -2125,7 +2181,7 @@ impl TuiApp {
     fn finish_context_switch(
         &mut self,
         generation: u64,
-        result: TuiContextTaskResult<(Arc<Context>, Option<EnvironmentReference>)>,
+        result: TuiContextTaskResult<ContextSwitchResult>,
         event_tx: &TuiEventSender,
     ) {
         if generation != self.context_switcher.generation {
@@ -2134,21 +2190,25 @@ impl TuiApp {
         self.context_switcher.switch_running = false;
         let (_, result, logs) = result.into_parts();
         match result {
-            Ok((context, environment_reference)) => {
+            Ok(result) => {
                 let Some(context_executor) = self.context_executor.as_ref() else {
                     self.context_switcher.last_error =
                         Some("TUI context executor is not available".to_string());
                     return;
                 };
-                context_executor.select_context(context.clone());
-                let dev_eligible = self.selected_switch_dev_eligible(&environment_reference);
-                self.context = TuiContextInfo::from_selected(
-                    context.as_ref(),
-                    environment_reference.as_ref(),
-                    dev_eligible,
+                context_executor.select_context(result.context.clone());
+                let context = TuiContextInfo::from_selected(
+                    result.context.as_ref(),
+                    result.request.environment_reference.as_ref(),
+                    result.request.dev_eligible,
                 );
-                self.context_cli_args = self.selected_switch_context_args();
-                self.selected_environment_reference = environment_reference;
+                self.selected_target = SelectedTarget {
+                    context,
+                    cli_args: context_args_from_flags(&result.request.global_flags),
+                    environment_reference: result.request.environment_reference,
+                    server_identity: result.request.server_identity,
+                };
+                self.refresh_context_target_markers();
                 self.reset_agents_for_context_switch();
                 self.invalidate_ops_environment();
                 self.context_switcher.last_error = None;
@@ -2197,7 +2257,8 @@ impl TuiApp {
                 let app_environments = app_environment_targets_from_details(
                     &server_target,
                     environments,
-                    &self.context,
+                    &self.selected_target.context,
+                    &self.selected_target.server_identity,
                 );
                 self.context_switcher
                     .show_app_environments(server_key, app_environments);
@@ -2206,42 +2267,6 @@ impl TuiApp {
             Err(error) => {
                 self.context_switcher.last_error = Some(agent_refresh_error(error, logs));
             }
-        }
-    }
-
-    fn selected_switch_dev_eligible(
-        &self,
-        environment_reference: &Option<EnvironmentReference>,
-    ) -> bool {
-        match self.context_switcher.mode {
-            ContextPickerStep::Targets => {
-                self.context_switcher
-                    .selected_target()
-                    .is_some_and(|target| {
-                        matches!(target.kind, TuiContextTargetKind::ManifestAppContext { .. })
-                    })
-            }
-            ContextPickerStep::AppEnvironments => {
-                self.context_switcher
-                    .selected_app_environment()
-                    .is_some_and(|target| target.dev_eligible)
-                    || environment_reference.is_none()
-            }
-        }
-    }
-
-    fn selected_switch_context_args(&self) -> Vec<String> {
-        match self.context_switcher.mode {
-            ContextPickerStep::Targets => self
-                .context_switcher
-                .selected_target()
-                .map(|target| context_args_from_flags(&target.global_flags))
-                .unwrap_or_default(),
-            ContextPickerStep::AppEnvironments => self
-                .context_switcher
-                .selected_app_environment()
-                .map(|target| context_args_from_flags(&target.server_flags))
-                .unwrap_or_default(),
         }
     }
 
@@ -2265,12 +2290,25 @@ impl TuiApp {
         self.agents.refresh_generation += 1;
     }
 
+    fn refresh_context_target_markers(&mut self) {
+        let context = self.selected_target.context.clone();
+        let server_identity = self.selected_target.server_identity.clone();
+        for target in &mut self.context_switcher.targets {
+            target.is_current = target_matches_selected_context(target, &context, &server_identity);
+        }
+        for target in &mut self.context_switcher.app_environments {
+            target.is_current = target.app.as_deref() == Some(context.application.as_str())
+                && target.environment.as_deref() == Some(context.environment.as_str())
+                && target.server_identity == server_identity;
+        }
+    }
+
     fn local_server_unavailable(&self) -> bool {
         !self.server.available
     }
 
     fn dev_context_unavailable(&self) -> bool {
-        !self.context.dev_eligible
+        !self.selected_target.context.dev_eligible
     }
 
     fn select_next_agent(&mut self) {
@@ -2449,9 +2487,9 @@ impl TuiApp {
         self.agents.refresh_spinner_stop = Some(spinner_stop);
         self.agents.last_error = None;
         self.agents.refresh_context_id = Some(context_executor.current_context_id());
-        self.agents.refresh_context_label = Some(self.context.short_label());
+        self.agents.refresh_context_label = Some(self.selected_target.context.short_label());
         let mode = self.agents.mode;
-        let environment_reference = self.selected_environment_reference.clone();
+        let environment_reference = self.selected_target.environment_reference.clone();
         let dataset_scope = self.agents.dataset_scope.clone();
         let page_cursor = append.then(|| AgentListPageCursor {
             components: self.agents.paging.cursors().clone(),
@@ -2621,7 +2659,7 @@ impl TuiApp {
         self.ops_environment.context_id = Some(context_executor.current_context_id());
         self.ops_environment.loading = true;
         self.ops_environment.error = None;
-        let environment_reference = self.selected_environment_reference.clone();
+        let environment_reference = self.selected_target.environment_reference.clone();
         let auth_presenter = Some(tui_auth_presenter(&event_tx));
         context_executor.spawn(
             event_tx,
@@ -2727,7 +2765,7 @@ impl TuiApp {
 
     fn open_command_form(&mut self, kind: CommandKind) {
         self.open_dev_workspace(DevView::BuildDeploy);
-        let key = self.context.short_label();
+        let key = self.selected_target.context.short_label();
         let values = self
             .command_form_memory
             .get(&key)
@@ -2807,7 +2845,7 @@ impl TuiApp {
         let mut remembered = values.clone();
         remembered.yes = false;
         self.command_form_memory
-            .insert(self.context.short_label(), remembered);
+            .insert(self.selected_target.context.short_label(), remembered);
         self.mode.replace(InteractionMode::Normal);
         self.start_command_with_values(kind, values, event_tx);
     }
@@ -2844,7 +2882,7 @@ impl TuiApp {
                 kind,
                 self.command_args(kind, &values),
                 self.command_options,
-                self.context.short_label(),
+                self.selected_target.context.short_label(),
             ));
             self.next_command_id += 1;
             self.append_local_command_line("selected context is ops-only");
@@ -2861,7 +2899,7 @@ impl TuiApp {
             kind,
             args.clone(),
             self.command_options,
-            self.context.short_label(),
+            self.selected_target.context.short_label(),
         ));
         if let Some((cols, rows)) = self.dev_pty_size(DevView::BuildDeploy)
             && let Some(run) = self.command_run.as_mut()
@@ -3215,12 +3253,12 @@ impl TuiApp {
 
     fn open_server_form(&mut self, restart: bool, clean: bool) {
         self.open_dev_workspace(DevView::Server);
-        let key = self.context.short_label();
+        let key = self.selected_target.context.short_label();
         let mut values = self
             .server_form_memory
             .get(&key)
             .cloned()
-            .unwrap_or_else(|| ServerFormValues::new(&self.context.config_dir));
+            .unwrap_or_else(|| ServerFormValues::new(&self.selected_target.context.config_dir));
         values.clean |= clean;
         values.yes = false;
         self.session_form = Some(SessionReviewForm::Server {
@@ -3235,7 +3273,7 @@ impl TuiApp {
 
     fn open_repl_form(&mut self, restart: bool) {
         self.open_dev_workspace(DevView::Repl);
-        let key = self.context.short_label();
+        let key = self.selected_target.context.short_label();
         let mut values = self.repl_form_memory.get(&key).cloned().unwrap_or_default();
         values.yes = false;
         self.session_form = Some(SessionReviewForm::Repl {
@@ -3334,7 +3372,7 @@ impl TuiApp {
                 let mut remembered = values.clone();
                 remembered.yes = false;
                 self.server_form_memory
-                    .insert(self.context.short_label(), remembered);
+                    .insert(self.selected_target.context.short_label(), remembered);
                 self.mode.replace(InteractionMode::Normal);
                 if *restart && self.server.run.is_running() {
                     self.pending_server_restart = Some(values);
@@ -3350,7 +3388,7 @@ impl TuiApp {
                 let mut remembered = values.clone();
                 remembered.yes = false;
                 self.repl_form_memory
-                    .insert(self.context.short_label(), remembered);
+                    .insert(self.selected_target.context.short_label(), remembered);
                 self.mode.replace(InteractionMode::Normal);
                 if *restart && self.repl.is_running() {
                     self.pending_repl_restart = Some(values);
@@ -3397,6 +3435,7 @@ impl TuiApp {
             clean,
             args.clone(),
             self.server.launch_label.clone(),
+            self.selected_target.server_identity.clone(),
             ports_file,
             ports_file_before_modified,
         );
@@ -3588,7 +3627,7 @@ impl TuiApp {
             args.clone(),
             screen_rows,
             screen_cols,
-            self.context.short_label(),
+            self.selected_target.context.short_label(),
         );
         self.mode.replace(InteractionMode::Repl);
         self.repl
@@ -3629,7 +3668,7 @@ impl TuiApp {
     }
 
     fn nested_cli_spec(&self, args: Vec<String>) -> anyhow::Result<NestedCliSpec> {
-        self.nested_cli_spec_with_context_args(args, &self.context_cli_args)
+        self.nested_cli_spec_with_context_args(args, &self.selected_target.cli_args)
     }
 
     fn nested_cli_spec_with_context_args(
@@ -4901,6 +4940,7 @@ struct ServerRun {
     clean: bool,
     args: Vec<String>,
     launch_context: String,
+    server_identity: Option<ServerIdentity>,
     terminal: TerminalScreen,
     runtime: Option<NestedCliRuntime>,
     spinner_frame: usize,
@@ -4920,6 +4960,7 @@ impl Default for ServerRun {
             clean: false,
             args: server_args(false),
             launch_context: String::new(),
+            server_identity: None,
             terminal: TerminalScreen::new(20, 80),
             runtime: None,
             spinner_frame: 0,
@@ -4939,6 +4980,7 @@ impl ServerRun {
         clean: bool,
         args: Vec<String>,
         launch_context: String,
+        server_identity: ServerIdentity,
         ports_file: Option<PathBuf>,
         ports_file_before_modified: Option<SystemTime>,
     ) -> Self {
@@ -4948,6 +4990,7 @@ impl ServerRun {
             clean,
             args,
             launch_context,
+            server_identity: Some(server_identity),
             terminal: TerminalScreen::new(20, 80),
             runtime: None,
             spinner_frame: 0,
@@ -5644,13 +5687,21 @@ impl ContextSwitcherState {
 
 #[derive(Debug, Clone)]
 enum PendingContextSwitchAction {
-    Switch {
-        global_flags: GolemCliGlobalFlags,
-        environment_reference: Option<EnvironmentReference>,
-    },
-    LoadEnvironments {
-        target: TuiContextTarget,
-    },
+    Switch(ContextSwitchRequest),
+    LoadEnvironments { target: TuiContextTarget },
+}
+
+#[derive(Debug, Clone)]
+struct ContextSwitchRequest {
+    global_flags: GolemCliGlobalFlags,
+    environment_reference: Option<EnvironmentReference>,
+    server_identity: ServerIdentity,
+    dev_eligible: bool,
+}
+
+pub(super) struct ContextSwitchResult {
+    context: Arc<Context>,
+    request: ContextSwitchRequest,
 }
 
 #[derive(Debug, Clone)]
@@ -5661,6 +5712,7 @@ struct AuthPromptState {
 #[derive(Debug, Clone)]
 struct TuiContextTarget {
     key: String,
+    server_identity: ServerIdentity,
     label: String,
     detail: String,
     kind: TuiContextTargetKind,
@@ -5673,6 +5725,7 @@ impl TuiContextTarget {
     fn error(error: String) -> Self {
         Self {
             key: "error".to_string(),
+            server_identity: ServerIdentity::Unavailable,
             label: "Context discovery error".to_string(),
             detail: String::new(),
             kind: TuiContextTargetKind::Error,
@@ -5743,6 +5796,7 @@ fn context_target_group(target: &TuiContextTarget) -> TuiContextTargetGroup {
 struct TuiAppEnvironmentTarget {
     label: String,
     detail: String,
+    server_identity: ServerIdentity,
     server_label: String,
     server_flags: GolemCliGlobalFlags,
     environment_reference: Option<EnvironmentReference>,
@@ -5750,6 +5804,55 @@ struct TuiAppEnvironmentTarget {
     environment: Option<String>,
     dev_eligible: bool,
     error: Option<String>,
+    is_current: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ServerIdentity {
+    Local,
+    Named(String),
+    Unavailable,
+}
+
+impl ServerIdentity {
+    fn from_context(context: &TuiContextInfo) -> Self {
+        if context.uses_local_server {
+            Self::Local
+        } else if context.server == "cloud" || context.server.contains("golem.cloud") {
+            Self::Named("cloud".to_string())
+        } else {
+            Self::Named(context.server.clone())
+        }
+    }
+
+    fn from_server(server: Option<&Server>) -> Self {
+        match server {
+            None | Some(Server::Builtin(BuiltinServer::Local)) => Self::Local,
+            Some(Server::Builtin(BuiltinServer::Cloud)) => Self::Named("cloud".to_string()),
+            Some(Server::Custom(custom)) => Self::Named(custom.url.to_string()),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct SelectedTarget {
+    context: TuiContextInfo,
+    cli_args: Vec<String>,
+    environment_reference: Option<EnvironmentReference>,
+    server_identity: ServerIdentity,
+}
+
+impl SelectedTarget {
+    fn from_context(context: &Context, flags: &GolemCliGlobalFlags) -> Self {
+        let context = TuiContextInfo::from_context(context);
+        let server_identity = ServerIdentity::from_context(&context);
+        Self {
+            context,
+            cli_args: context_args_from_flags(flags),
+            environment_reference: None,
+            server_identity,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -5882,7 +5985,9 @@ fn context_target_marker(target: &TuiContextTarget) -> Option<String> {
 }
 
 fn app_environment_marker(target: &TuiAppEnvironmentTarget) -> Option<String> {
-    if target.error.is_some() {
+    if target.is_current {
+        Some("current".to_string())
+    } else if target.error.is_some() {
         Some("error".to_string())
     } else if !target.dev_eligible {
         Some("ops-only".to_string())
@@ -5912,6 +6017,7 @@ fn context_targets_from_launch(launch: &TuiLaunchConfig) -> anyhow::Result<Vec<T
     if let Some(application) = preload.application_preload {
         let application_name = application.application_name.value.0.clone();
         for (environment_name, environment) in application.environments {
+            let server_identity = ServerIdentity::from_server(environment.server.as_ref());
             let mut flags = context_flags_base(&launch.base_flags);
             flags.environment = Some(EnvironmentReference::Environment {
                 environment_name: environment_name.clone(),
@@ -5922,6 +6028,7 @@ fn context_targets_from_launch(launch: &TuiLaunchConfig) -> anyhow::Result<Vec<T
                 mark_current_context_target(
                     TuiContextTarget {
                         key: format!("manifest:{}", environment_name.0),
+                        server_identity: server_identity.clone(),
                         label: format!("{}/{}", application_name, environment_name.0),
                         detail: format!(
                             "server: {}",
@@ -5962,6 +6069,7 @@ fn context_targets_from_launch(launch: &TuiLaunchConfig) -> anyhow::Result<Vec<T
                                 "server:manifest:{}:{}",
                                 environment_name.0, server_detail
                             ),
+                            server_identity: server_identity.clone(),
                             label: format!("Manifest {} server", environment_name.0),
                             detail: server_detail,
                             kind: TuiContextTargetKind::ServerTarget {
@@ -5986,6 +6094,7 @@ fn context_targets_from_launch(launch: &TuiLaunchConfig) -> anyhow::Result<Vec<T
         mark_current_context_target(
             TuiContextTarget {
                 key: "server:builtin:local".to_string(),
+                server_identity: ServerIdentity::Local,
                 label: "Built-in local".to_string(),
                 detail: "server".to_string(),
                 kind: TuiContextTargetKind::ServerTarget {
@@ -6007,6 +6116,7 @@ fn context_targets_from_launch(launch: &TuiLaunchConfig) -> anyhow::Result<Vec<T
         mark_current_context_target(
             TuiContextTarget {
                 key: "server:builtin:cloud".to_string(),
+                server_identity: ServerIdentity::Named("cloud".to_string()),
                 label: "Built-in cloud".to_string(),
                 detail: "server".to_string(),
                 kind: TuiContextTargetKind::ServerTarget {
@@ -6035,6 +6145,7 @@ fn context_targets_from_launch(launch: &TuiLaunchConfig) -> anyhow::Result<Vec<T
             mark_current_context_target(
                 TuiContextTarget {
                     key: format!("server:profile:{}", profile_name.0),
+                    server_identity: ServerIdentity::Named(format!("profile:{}", profile_name.0)),
                     label: format!("Profile {}", profile_name.0),
                     detail: "configured".to_string(),
                     kind: TuiContextTargetKind::ServerTarget {
@@ -6060,6 +6171,7 @@ fn context_targets_from_launch(launch: &TuiLaunchConfig) -> anyhow::Result<Vec<T
             mark_current_context_target(
                 TuiContextTarget {
                     key: "server:launch".to_string(),
+                    server_identity: ServerIdentity::from_context(&current_context),
                     label: "Launch selector server".to_string(),
                     detail: "resolved launch flags and environment overrides".to_string(),
                     kind: TuiContextTargetKind::ServerTarget {
@@ -6081,34 +6193,28 @@ fn mark_current_context_target(
     mut target: TuiContextTarget,
     current_context: &TuiContextInfo,
 ) -> TuiContextTarget {
-    target.is_current = target_matches_current_context(&target, current_context);
+    target.is_current = target_matches_selected_context(
+        &target,
+        current_context,
+        &ServerIdentity::from_context(current_context),
+    );
     target
 }
 
-fn target_matches_current_context(
+fn target_matches_selected_context(
     target: &TuiContextTarget,
     current_context: &TuiContextInfo,
+    server_identity: &ServerIdentity,
 ) -> bool {
     match &target.kind {
         TuiContextTargetKind::ManifestAppContext { app, environment } => {
-            current_context.application == *app && current_context.environment == *environment
+            current_context.application == *app
+                && current_context.environment == *environment
+                && &target.server_identity == server_identity
         }
-        TuiContextTargetKind::ServerTarget { source } => {
+        TuiContextTargetKind::ServerTarget { .. } => {
             current_context.application == "no application manifest"
-                && match source {
-                    TuiServerTargetSource::Builtin => {
-                        target.key.ends_with(":local") && current_context.uses_local_server
-                            || target.key.ends_with(":cloud")
-                                && current_context.server.contains("golem.cloud")
-                    }
-                    TuiServerTargetSource::Profile => {
-                        target.key.ends_with(":local") && current_context.uses_local_server
-                            || target.key.ends_with(":cloud")
-                                && current_context.server.contains("golem.cloud")
-                    }
-                    TuiServerTargetSource::LaunchSelector => true,
-                    TuiServerTargetSource::ManifestEnvironment => false,
-                }
+                && &target.server_identity == server_identity
         }
         TuiContextTargetKind::Error => false,
     }
@@ -6128,6 +6234,7 @@ fn app_environment_targets_from_details(
     server_target: &TuiContextTarget,
     environments: Vec<EnvironmentWithDetails>,
     current_context: &TuiContextInfo,
+    current_server_identity: &ServerIdentity,
 ) -> Vec<TuiAppEnvironmentTarget> {
     let mut targets = Vec::new();
     let mut seen = HashSet::new();
@@ -6141,9 +6248,10 @@ fn app_environment_targets_from_details(
         if !seen.insert(key.clone()) {
             continue;
         }
-        let dev_eligible = current_context.dev_eligible
-            && current_context.application == application_name.0
-            && current_context.environment == environment_name.0;
+        let is_current = current_context.application == application_name.0
+            && current_context.environment == environment_name.0
+            && &server_target.server_identity == current_server_identity;
+        let dev_eligible = current_context.dev_eligible && is_current;
         let deployment = environment
             .environment
             .current_deployment
@@ -6159,6 +6267,7 @@ fn app_environment_targets_from_details(
         targets.push(TuiAppEnvironmentTarget {
             label: format!("{}/{}", application_name.0, environment_name.0),
             detail: format!("{} via {}", deployment, server_target.label),
+            server_identity: server_target.server_identity.clone(),
             server_label: server_target.label.clone(),
             server_flags: server_target.global_flags.clone(),
             environment_reference: Some(EnvironmentReference::ApplicationEnvironment {
@@ -6169,12 +6278,14 @@ fn app_environment_targets_from_details(
             environment: Some(environment_name.0),
             dev_eligible,
             error: None,
+            is_current,
         });
     }
     if targets.is_empty() {
         targets.push(TuiAppEnvironmentTarget {
             label: "No visible app environments".to_string(),
             detail: "This server returned no environments for the active credentials".to_string(),
+            server_identity: server_target.server_identity.clone(),
             server_label: server_target.label.clone(),
             server_flags: server_target.global_flags.clone(),
             environment_reference: None,
@@ -6182,6 +6293,7 @@ fn app_environment_targets_from_details(
             environment: None,
             dev_eligible: false,
             error: Some("no visible app environments".to_string()),
+            is_current: false,
         });
     }
     targets
@@ -6524,8 +6636,8 @@ fn render_ops_environment_overview(frame: &mut Frame<'_>, area: Rect, app: &TuiA
 }
 
 fn render_ops_server_overview(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
-    let stable_id = app.context.stable_id();
-    let provenance = app.context.provenance();
+    let stable_id = app.selected_target.context.stable_id();
+    let provenance = app.selected_target.context.provenance();
     let process = app.server.run.status.title();
     let bound_ports = app.server.run.bound_ports.as_ref().map_or_else(
         || "not observed".to_string(),
@@ -6545,7 +6657,7 @@ fn render_ops_server_overview(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
     ];
     for (label, value) in [
         ("Target ID", stable_id.as_str()),
-        ("Endpoint", app.context.server.as_str()),
+        ("Endpoint", app.selected_target.context.server.as_str()),
         ("Provenance", provenance),
         ("Local process", process),
         ("Bound ports", bound_ports.as_str()),
@@ -7287,15 +7399,15 @@ fn render_shell_header(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
         pairs: &[
             ContextPair {
                 label: "app",
-                value: &app.context.application,
+                value: &app.selected_target.context.application,
             },
             ContextPair {
                 label: "env",
-                value: &app.context.environment,
+                value: &app.selected_target.context.environment,
             },
             ContextPair {
                 label: "server",
-                value: &app.context.server,
+                value: &app.selected_target.context.server,
             },
         ],
     }
@@ -10564,7 +10676,7 @@ fn render_context_picker(frame: &mut Frame<'_>, app: &TuiApp) {
     let (title, subtitle) = match app.context_switcher.mode {
         ContextPickerStep::Targets => (
             "Switch Context",
-            format!("Current: {}", app.context.short_label()),
+            format!("Current: {}", app.selected_target.context.short_label()),
         ),
         ContextPickerStep::AppEnvironments => (
             "Select App Environment",
@@ -10705,9 +10817,12 @@ fn render_context_switch_confirm(frame: &mut Frame<'_>, app: &TuiApp) {
     let area = centered_rect_fixed(72, 11, frame.area());
     let message = app
         .context_switch_dev_blocker_message()
-        .unwrap_or_else(|| "Switching context will stop running dev jobs.".to_string());
+        .unwrap_or_else(|| "Switching context will stop context-bound work.".to_string());
     let (status_kind, status) = if app.context_switcher.waiting_for_dev_stop {
-        (NoticeKind::Loading, "Waiting for dev jobs to stop...")
+        (
+            NoticeKind::Loading,
+            "Waiting for work to stop; enter again after five seconds to force stop.",
+        )
     } else {
         (
             NoticeKind::Info,
@@ -10731,7 +10846,11 @@ fn render_context_switch_confirm(frame: &mut Frame<'_>, app: &TuiApp) {
             &[
                 KeyHint {
                     key: "enter",
-                    label: "Confirm",
+                    label: if app.context_switcher.waiting_for_dev_stop {
+                        "Force stop when ready"
+                    } else {
+                        "Confirm"
+                    },
                 },
                 KeyHint {
                     key: "esc",
@@ -12194,16 +12313,22 @@ fn preview_production_app() -> TuiApp {
         agents: AgentsState::default(),
         ops_environment: OpsEnvironmentState::default(),
         next_command_id: 1,
-        context: TuiContextInfo {
-            application: "preview-app".into(),
-            environment: "local".into(),
-            server: "local".into(),
-            config_dir: "/preview/config".into(),
-            uses_local_server: true,
-            dev_eligible: true,
+        selected_target: SelectedTarget {
+            context: TuiContextInfo {
+                application: "preview-app".into(),
+                environment: "local".into(),
+                server: "local".into(),
+                config_dir: "/preview/config".into(),
+                uses_local_server: true,
+                dev_eligible: true,
+            },
+            cli_args: Vec::new(),
+            environment_reference: None,
+            server_identity: ServerIdentity::Local,
         },
         context_switcher: ContextSwitcherState::new(vec![TuiContextTarget {
             key: "manifest:local".into(),
+            server_identity: ServerIdentity::Local,
             label: "preview-app/local".into(),
             detail: "server: local".into(),
             kind: TuiContextTargetKind::ManifestAppContext {
@@ -12214,8 +12339,6 @@ fn preview_production_app() -> TuiApp {
             error: None,
             is_current: true,
         }]),
-        context_cli_args: Vec::new(),
-        selected_environment_reference: None,
         context_executor: None,
         auth_prompt: None,
         layout: TuiLayoutState::default(),
@@ -12764,7 +12887,7 @@ mod tests {
     #[test]
     fn remote_dev_mutations_are_discoverable_but_unavailable() {
         let mut app = test_app();
-        app.context.uses_local_server = false;
+        app.selected_target.context.uses_local_server = false;
 
         assert_eq!(
             app.action_availability(action(ActionId::Build)),
@@ -13131,6 +13254,7 @@ mod tests {
             vec![TuiAppEnvironmentTarget {
                 label: "large-application/prod".to_string(),
                 detail: "deployment r42 v2026.07.01-production-release".to_string(),
+                server_identity: ServerIdentity::Named("profile:prod".to_string()),
                 server_label: "Profile production with long descriptive name".to_string(),
                 server_flags: GolemCliGlobalFlags::default(),
                 environment_reference: None,
@@ -13138,6 +13262,7 @@ mod tests {
                 environment: Some("prod".to_string()),
                 dev_eligible: false,
                 error: None,
+                is_current: false,
             }],
         );
         let rows = context_picker_rows(&state);
@@ -13194,7 +13319,7 @@ mod tests {
         let frame = render_app_text(&app);
         assert_eq!(
             frame
-                .matches("Switching context will stop running dev jobs")
+                .matches("Switching context will stop context-bound work")
                 .count(),
             1
         );
@@ -13229,7 +13354,7 @@ mod tests {
     }
 
     #[test]
-    fn context_switch_confirmation_leaves_global_server_running() {
+    fn context_switch_confirmation_stops_a_server_bound_to_another_target() {
         let mut app = test_app();
         app.command_run = Some(CommandRun::new(
             1,
@@ -13254,7 +13379,33 @@ mod tests {
             app.command_run.as_ref().map(|run| run.status),
             Some(CommandStatus::Cancelling)
         );
-        assert_eq!(app.server.run.status, ServerStatus::Running);
+        assert_eq!(app.server.run.status, ServerStatus::Stopping);
+        assert!(app.context_switcher.waiting_for_dev_stop);
+    }
+
+    #[test]
+    fn context_switch_confirmation_can_force_stop_a_different_server_after_five_seconds() {
+        let mut app = test_app();
+        app.server.run.status = ServerStatus::Running;
+        app.server.run.server_identity = Some(ServerIdentity::Local);
+        let (tx, _rx) = test_event_channel();
+
+        app.open_context_picker();
+        app.context_switcher
+            .targets
+            .push(test_manifest_context_target("prod"));
+        app.context_switcher.show_targets();
+        app.handle_key(key(KeyCode::Down));
+        app.handle_key_with_events(key(KeyCode::Enter), Some(&tx));
+        app.handle_key_with_events(key(KeyCode::Enter), Some(&tx));
+
+        assert_eq!(app.server.run.status, ServerStatus::Stopping);
+        app.server.run.stop_requested_at = Some(Instant::now() - std::time::Duration::from_secs(5));
+        app.handle_key_with_events(key(KeyCode::Enter), Some(&tx));
+
+        assert_eq!(app.server.run.status, ServerStatus::Stopped);
+        assert!(!app.context_switcher.waiting_for_dev_stop);
+        assert!(app.context_switcher.pending_action.is_none());
     }
 
     #[test]
@@ -13307,8 +13458,8 @@ mod tests {
     #[test]
     fn non_local_context_does_not_expose_server_shortcut() {
         let mut app = test_app();
-        app.context.uses_local_server = false;
-        app.context.dev_eligible = false;
+        app.selected_target.context.uses_local_server = false;
+        app.selected_target.context.dev_eligible = false;
 
         assert_eq!(
             app.action_availability(action(ActionId::ToggleServer)),
@@ -13322,12 +13473,33 @@ mod tests {
     }
 
     #[test]
-    fn context_picker_switch_does_not_stop_global_server() {
+    fn context_picker_requires_confirmation_for_a_different_server() {
         let mut app = test_app();
         app.context_switcher = ContextSwitcherState::new(vec![
             test_current_context_target(),
             test_manifest_context_target("prod"),
         ]);
+        app.server.run.status = ServerStatus::Running;
+
+        app.open_context_picker();
+        app.handle_key(key(KeyCode::Down));
+        app.handle_key(key(KeyCode::Enter));
+
+        assert_eq!(app.mode, InteractionMode::ContextSwitchConfirm);
+        assert_eq!(app.server.run.status, ServerStatus::Running);
+        assert!(app.context_switcher.pending_action.is_some());
+        let frame = render_app_text(&app);
+        assert!(frame.contains("server"), "{frame}");
+    }
+
+    #[test]
+    fn context_picker_keeps_a_server_bound_to_the_same_target() {
+        let mut app = test_app();
+        let mut other_local = test_manifest_context_target("other-local");
+        other_local.server_identity = ServerIdentity::Local;
+        other_local.detail = "server: local".to_string();
+        app.context_switcher =
+            ContextSwitcherState::new(vec![test_current_context_target(), other_local]);
         app.server.run.status = ServerStatus::Running;
 
         app.open_context_picker();
@@ -13343,9 +13515,10 @@ mod tests {
     fn app_environment_details_map_to_picker_targets() {
         let app = test_app();
         let server_target = TuiContextTarget {
-            key: "server:cloud".to_string(),
-            label: "Built-in cloud server".to_string(),
-            detail: "cloud".to_string(),
+            key: "server:local".to_string(),
+            server_identity: ServerIdentity::Local,
+            label: "Built-in local server".to_string(),
+            detail: "local".to_string(),
             kind: TuiContextTargetKind::ServerTarget {
                 source: TuiServerTargetSource::Builtin,
             },
@@ -13357,12 +13530,14 @@ mod tests {
         let targets = app_environment_targets_from_details(
             &server_target,
             vec![sample_environment_with_details("sample-app", "local")],
-            &app.context,
+            &app.selected_target.context,
+            &app.selected_target.server_identity,
         );
 
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0].label, "sample-app/local");
         assert!(targets[0].dev_eligible);
+        assert!(targets[0].is_current);
         assert!(matches!(
             targets[0].environment_reference,
             Some(EnvironmentReference::ApplicationEnvironment { .. })
@@ -13370,9 +13545,63 @@ mod tests {
     }
 
     #[test]
+    fn context_markers_follow_application_environment_and_server() {
+        let mut app = test_app();
+        let local = test_current_context_target();
+        let mut cloud = test_current_context_target();
+        cloud.key = "manifest:local:cloud".to_string();
+        cloud.server_identity = ServerIdentity::Named("cloud".to_string());
+        cloud.detail = "server: cloud".to_string();
+        cloud.is_current = false;
+        app.context_switcher.targets = vec![local, cloud];
+        app.context_switcher.app_environments = vec![
+            TuiAppEnvironmentTarget {
+                label: "sample-app/local".to_string(),
+                detail: "local".to_string(),
+                server_identity: ServerIdentity::Local,
+                server_label: "Built-in local server".to_string(),
+                server_flags: GolemCliGlobalFlags::default(),
+                environment_reference: None,
+                app: Some("sample-app".to_string()),
+                environment: Some("local".to_string()),
+                dev_eligible: true,
+                error: None,
+                is_current: true,
+            },
+            TuiAppEnvironmentTarget {
+                label: "sample-app/local".to_string(),
+                detail: "cloud".to_string(),
+                server_identity: ServerIdentity::Named("cloud".to_string()),
+                server_label: "Built-in cloud server".to_string(),
+                server_flags: GolemCliGlobalFlags::default(),
+                environment_reference: None,
+                app: Some("sample-app".to_string()),
+                environment: Some("local".to_string()),
+                dev_eligible: false,
+                error: None,
+                is_current: false,
+            },
+        ];
+
+        app.selected_target.context.server = "cloud".to_string();
+        app.selected_target.context.uses_local_server = false;
+        app.selected_target.server_identity = ServerIdentity::Named("cloud".to_string());
+        app.refresh_context_target_markers();
+
+        assert!(!app.context_switcher.targets[0].is_current);
+        assert!(app.context_switcher.targets[1].is_current);
+        assert!(!app.context_switcher.app_environments[0].is_current);
+        assert!(app.context_switcher.app_environments[1].is_current);
+        assert_eq!(
+            app_environment_marker(&app.context_switcher.app_environments[1]).as_deref(),
+            Some("current")
+        );
+    }
+
+    #[test]
     fn ops_only_context_disables_dev_actions() {
         let mut app = test_app();
-        app.context.dev_eligible = false;
+        app.selected_target.context.dev_eligible = false;
 
         assert_eq!(
             app.action_availability(action(ActionId::Build)),
@@ -13394,6 +13623,7 @@ mod tests {
             vec![TuiAppEnvironmentTarget {
                 label: "sample-app/local".to_string(),
                 detail: "deployment r1 v1".to_string(),
+                server_identity: ServerIdentity::Local,
                 server_label: "Current launch context".to_string(),
                 server_flags: GolemCliGlobalFlags::default(),
                 environment_reference: None,
@@ -13401,6 +13631,7 @@ mod tests {
                 environment: Some("local".to_string()),
                 dev_eligible: true,
                 error: None,
+                is_current: true,
             }],
         );
 
@@ -13413,7 +13644,7 @@ mod tests {
     #[test]
     fn selected_context_args_prefix_nested_cli_specs() {
         let mut app = test_app();
-        app.context_cli_args = vec![
+        app.selected_target.cli_args = vec![
             "--config-dir".to_string(),
             "/tmp/golem-config".to_string(),
             "--local".to_string(),
@@ -13438,7 +13669,7 @@ mod tests {
     #[test]
     fn local_server_spec_uses_launch_scoped_args_not_selected_context_args() {
         let mut app = test_app();
-        app.context_cli_args = vec![
+        app.selected_target.cli_args = vec![
             "--config-dir".to_string(),
             "/tmp/selected-config".to_string(),
             "--cloud".to_string(),
@@ -14785,7 +15016,7 @@ mod tests {
     #[test]
     fn server_form_clean_is_applied_to_the_reviewed_command() {
         let app = test_app();
-        let mut values = ServerFormValues::new(&app.context.config_dir);
+        let mut values = ServerFormValues::new(&app.selected_target.context.config_dir);
         values.clean = true;
         let args = server_args_from_values(&values);
 
@@ -14951,7 +15182,7 @@ mod tests {
         assert_eq!(remembered.post_deploy, PostDeployPolicy::Reset);
         assert!(!remembered.yes);
 
-        app.context.environment = "other".to_string();
+        app.selected_target.context.environment = "other".to_string();
         app.open_command_form(CommandKind::Deploy);
         let other_context = &app
             .command_form
@@ -14966,7 +15197,8 @@ mod tests {
     #[test]
     fn reviewed_session_forms_remember_values_but_not_yes() {
         let mut server_app = test_app();
-        let mut server_values = ServerFormValues::new(&server_app.context.config_dir);
+        let mut server_values =
+            ServerFormValues::new(&server_app.selected_target.context.config_dir);
         server_values.data_dir = "./data".to_string();
         server_values.clean = true;
         server_values.yes = true;
@@ -15291,10 +15523,13 @@ mod tests {
             CommandOptions::default(),
             "sample-app:local".to_string(),
         ));
-        confirm_app.context_switcher.pending_action = Some(PendingContextSwitchAction::Switch {
-            global_flags: GolemCliGlobalFlags::default(),
-            environment_reference: None,
-        });
+        confirm_app.context_switcher.pending_action =
+            Some(PendingContextSwitchAction::Switch(ContextSwitchRequest {
+                global_flags: GolemCliGlobalFlags::default(),
+                environment_reference: None,
+                server_identity: ServerIdentity::Named("other".to_string()),
+                dev_eligible: false,
+            }));
         render_app_text_at(&confirm_app, 120, 32);
         let confirm = snapshot_region(&confirm_app, RegionKind::ContextConfirm);
 
@@ -15313,10 +15548,13 @@ mod tests {
         cancel_app
             .mode
             .replace(InteractionMode::ContextSwitchConfirm);
-        cancel_app.context_switcher.pending_action = Some(PendingContextSwitchAction::Switch {
-            global_flags: GolemCliGlobalFlags::default(),
-            environment_reference: None,
-        });
+        cancel_app.context_switcher.pending_action =
+            Some(PendingContextSwitchAction::Switch(ContextSwitchRequest {
+                global_flags: GolemCliGlobalFlags::default(),
+                environment_reference: None,
+                server_identity: ServerIdentity::Named("other".to_string()),
+                dev_eligible: false,
+            }));
         render_app_text_at(&cancel_app, 120, 32);
         let cancel = snapshot_region(&cancel_app, RegionKind::ContextCancel);
 
@@ -15447,16 +15685,22 @@ mod tests {
             agents: AgentsState::default(),
             ops_environment: OpsEnvironmentState::default(),
             next_command_id: 1,
-            context: TuiContextInfo {
-                application: "sample-app".to_string(),
-                environment: "local".to_string(),
-                server: "local".to_string(),
-                config_dir: "/tmp/golem-config".to_string(),
-                uses_local_server: true,
-                dev_eligible: true,
+            selected_target: SelectedTarget {
+                context: TuiContextInfo {
+                    application: "sample-app".to_string(),
+                    environment: "local".to_string(),
+                    server: "local".to_string(),
+                    config_dir: "/tmp/golem-config".to_string(),
+                    uses_local_server: true,
+                    dev_eligible: true,
+                },
+                cli_args: Vec::new(),
+                environment_reference: None,
+                server_identity: ServerIdentity::Local,
             },
             context_switcher: ContextSwitcherState::new(vec![TuiContextTarget {
                 key: "manifest:local".to_string(),
+                server_identity: ServerIdentity::Local,
                 label: "sample-app/local".to_string(),
                 detail: "server: local".to_string(),
                 kind: TuiContextTargetKind::ManifestAppContext {
@@ -15467,8 +15711,6 @@ mod tests {
                 error: None,
                 is_current: true,
             }]),
-            context_cli_args: Vec::new(),
-            selected_environment_reference: None,
             context_executor: None,
             auth_prompt: None,
             layout: TuiLayoutState::default(),
@@ -15562,6 +15804,7 @@ environments:
     fn test_current_context_target() -> TuiContextTarget {
         TuiContextTarget {
             key: "manifest:local".to_string(),
+            server_identity: ServerIdentity::Local,
             label: "sample-app/local".to_string(),
             detail: "server: local".to_string(),
             kind: TuiContextTargetKind::ManifestAppContext {
@@ -15577,6 +15820,7 @@ environments:
     fn test_manifest_context_target(environment: &str) -> TuiContextTarget {
         TuiContextTarget {
             key: format!("manifest:{environment}"),
+            server_identity: ServerIdentity::Named("cloud".to_string()),
             label: format!("sample-app/{environment}"),
             detail: "server: cloud".to_string(),
             kind: TuiContextTargetKind::ManifestAppContext {
@@ -15592,6 +15836,7 @@ environments:
     fn test_server_context_target(key: &str, label: &str, detail: &str) -> TuiContextTarget {
         TuiContextTarget {
             key: key.to_string(),
+            server_identity: ServerIdentity::Named(key.to_string()),
             label: label.to_string(),
             detail: detail.to_string(),
             kind: TuiContextTargetKind::ServerTarget {

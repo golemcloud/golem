@@ -110,10 +110,10 @@ gate for later Ops actions.
   state that can accept future workspaces.
 - [x] Add explicit Dev view, Ops subject/view, breadcrumb, primary/subview,
   placement, focused-pane, and palette-scope state.
-- [~] Introduce a selected target descriptor with stable identity, provenance,
-  local/remote classification, and per-view capability reasons. Identity and
-  capability behavior are live; launch flags and environment references still
-  need to converge into that single descriptor.
+- [x] Introduce a selected target descriptor with stable identity, provenance,
+  local/remote classification, per-view capability reasons, nested-CLI launch
+  arguments, and environment reference. Candidate discovery may retain
+  resolved CLI flags until neutral target materializers exist.
 - [x] Extend action metadata with hierarchical leader path, palette relevance,
   risk class, target resolution, review requirement, and availability reason.
 - [x] Make global and contextual palettes filters over the same action registry;
@@ -187,8 +187,8 @@ conservative quit blocking only.
 - [ ] Resolve and display bulk target counts, consequences, and available plans
   or diffs before execution.
 - [~] Implement context-switch and quit handling for every Job/session state.
-  Dev Job and REPL handling plus conservative quit blocking are live; Server
-  target changes and the later Live session still need their final policy.
+  Dev Job, REPL, and cross-Server handling plus conservative quit blocking are
+  live; the later Live session and final quit policy remain open.
 - [~] Test local/remote availability, unlock expiry, typed confirmation,
   concurrent-mutation rejection, cancellation, masking, and stale completions.
   Accepted-slice availability, forms, cancellation, and stale results are

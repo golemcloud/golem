@@ -740,9 +740,11 @@ data remains preview/test-only; production Metrics truthfully reports that no
 provider is configured.
 
 Activity/Live, real Metrics providers, remote unlock, generalized Ops
-mutations, selected-target consolidation, and cross-Server context-switch
-enforcement remain gated follow-up work. Agent oplog and stream acquisition
-must follow the direct typed or streaming provider rules when Activity is
+mutations, and neutral target materializers beyond resolved CLI flags remain
+gated follow-up work. Selected-target launch material is consolidated and
+cross-Server switching now stops the supervised Server while same-Server
+app/environment switches preserve it. Agent oplog and stream acquisition must
+follow the direct typed or streaming provider rules when Activity is
 implemented.
 
 ## Review Status

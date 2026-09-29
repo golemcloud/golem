@@ -13,11 +13,11 @@ collection, individual Agent Overview, and current Deployment, Environment, and
 Server overviews. Activity, real Metrics providers, resource catalogs, and Ops
 mutations remain later work.
 
-Two implementation follow-ups remain visible rather than being treated as
-compatibility paths: selected-target launch material still needs to converge
-into one descriptor, and a context switch to a different Server target must
-require stopping the supervised Server or cancelling the switch. Final manual
-terminal acceptance also remains outstanding.
+Selected-target identity, launch arguments, environment reference, and Server
+identity now move together, and a context switch to a different Server target
+requires stopping the supervised Server or cancelling the switch. Candidate
+discovery still uses resolved CLI flags where the current CLI has no neutral
+target materializer. Final manual terminal acceptance also remains outstanding.
 
 The metrics acquisition backend and any companion Docker or web UI are
 deliberately undecided. They will be planned only after the provider-independent

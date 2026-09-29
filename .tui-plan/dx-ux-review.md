@@ -39,8 +39,8 @@ a separate explicit decision and never creates a user-selectable theme.
   reviewed command forms, PTY focus/scrollback, right/bottom subviews,
   four-direction resize, context switching, Jobs, read-only Ops documents, and
   truthful Metrics unavailability.
-- Queued next: after acceptance, plan the unresolved target-descriptor and
-  cross-Server context-switch follow-ups, then choose the next product gate.
+- Queued next: after acceptance, choose the next product gate; neutral target
+  materializers beyond resolved CLI flags remain architectural follow-up work.
 - Exit: terminal review is accepted, required fixes are implemented, and the
   dev-release playground smoke test passes.
 

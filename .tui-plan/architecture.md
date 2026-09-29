@@ -70,9 +70,13 @@ launch context. Context switching never changes an existing launch target.
 Switching either stops context-bound work after confirmation or preserves a
 Server session only when the server target is identical.
 
-The current GolemCliGlobalFlags-based switching foundation may remain while the
-target descriptor is introduced, but the final state has one target
-representation. Do not add fallback parsing or parallel legacy contracts.
+The selected target owns its display identity, nested-CLI arguments,
+environment reference, and stable Server identity as one value. Context-switch
+requests capture that material immutably, so completion never re-reads a picker
+selection that may have changed. Candidate discovery may still use resolved
+`GolemCliGlobalFlags` until neutral target materializers exist, but those flags
+must be converted into the selected-target value at the switch boundary. Do not
+add fallback parsing or parallel selected-target contracts.
 
 ## Scoped Logging And Context Execution
 
