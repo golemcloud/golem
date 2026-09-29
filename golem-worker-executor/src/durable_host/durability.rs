@@ -27,7 +27,7 @@ use crate::model::ExecutionStatus;
 use crate::preview2::golem::durability::durability;
 use crate::services::environment_state::EnvironmentStateService;
 use crate::services::linear_memory::LinearMemoryTracker;
-use crate::services::oplog::OplogOps;
+use crate::services::oplog::{OplogError, OplogOps};
 use crate::services::{HasOplog, HasWorker};
 use crate::workerctx::WorkerCtx;
 use anyhow::Error;
@@ -203,7 +203,7 @@ type CustomBeginCoordinator =
     tokio::task::JoinHandle<Result<Option<OplogIndex>, WorkerExecutorError>>;
 
 pub struct CustomBeginLifecycle {
-    start_result: Mutex<Option<Result<OplogIndex, String>>>,
+    start_result: Mutex<Option<Result<OplogIndex, WorkerExecutorError>>>,
     start_ready: Notify,
     verdict: std::sync::Mutex<Option<oneshot::Sender<CustomBeginVerdict>>>,
     coordinator: std::sync::Mutex<Option<CustomBeginCoordinator>>,
@@ -241,12 +241,12 @@ impl CustomBeginLifecycle {
         *self.coordinator.lock().unwrap() = Some(coordinator);
     }
 
-    async fn complete_start(&self, result: Result<OplogIndex, String>) {
+    async fn complete_start(&self, result: Result<OplogIndex, WorkerExecutorError>) {
         *self.start_result.lock().await = Some(result);
         self.start_ready.notify_waiters();
     }
 
-    async fn wait_start(&self) -> Result<OplogIndex, String> {
+    async fn wait_start(&self) -> Result<OplogIndex, WorkerExecutorError> {
         loop {
             let notified = self.start_ready.notified();
             if let Some(result) = self.start_result.lock().await.clone() {
@@ -775,12 +775,14 @@ pub trait InFunctionRetryHost {
     }
 
     /// Writes an `OplogEntry::Error` entry for an in-function retry attempt, and commits.
+    ///
+    /// A refusal is returned: the retry must not run again for an attempt that was never recorded.
     async fn append_retry_error_entry(
         &mut self,
         retry_from: OplogIndex,
         inside_atomic_region: bool,
         retry_policy_state: Option<RetryPolicyState>,
-    );
+    ) -> Result<(), OplogError>;
 }
 
 pub(crate) fn collect_named_retry_policies(
@@ -1116,8 +1118,15 @@ impl InFunctionRetryState {
         }
 
         let inside_atomic_region = ctx.retry_context_atomic_region_had_side_effects();
-        ctx.append_retry_error_entry(retry_point, inside_atomic_region, retry_policy_state)
-            .await;
+        // Refused, the shard has a new owner: the failure is returned instead of retried, and the
+        // trap it becomes is classified as the lost shard.
+        if ctx
+            .append_retry_error_entry(retry_point, inside_atomic_region, retry_policy_state)
+            .await
+            .is_err()
+        {
+            return AsyncRetryDecision::FallBackToTrap(None);
+        }
         self.retry_count += 1;
 
         debug!(
@@ -1168,6 +1177,13 @@ pub trait DurabilityHost: InFunctionRetryHost {
         host_function: &str,
     ) -> Result<OplogIndex, WorkerExecutorError>;
 
+    async fn begin_durable_function_with_span(
+        &mut self,
+        function_type: &DurableFunctionType,
+        host_function: &str,
+        span_started: golem_common::model::oplog::SpanStarted,
+    ) -> Result<(OplogIndex, golem_common::model::oplog::SpanStarted), WorkerExecutorError>;
+
     /// Marks the end of a durable function
     ///
     /// This is a pair of `begin_durable_function` and should be called after the durable function
@@ -1178,6 +1194,14 @@ pub trait DurabilityHost: InFunctionRetryHost {
         function_type: &DurableFunctionType,
         begin_index: OplogIndex,
         forced_commit: bool,
+    ) -> Result<(), WorkerExecutorError>;
+
+    async fn end_durable_function_with_span(
+        &mut self,
+        function_type: &DurableFunctionType,
+        begin_index: OplogIndex,
+        forced_commit: bool,
+        span_finished: golem_common::model::oplog::SpanFinished,
     ) -> Result<(), WorkerExecutorError>;
 
     /// Writes a record to the worker's oplog representing a durable function invocation
@@ -1646,8 +1670,10 @@ impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostLiveCustomDurableInvocat
                 start_index,
                 response: Some(response),
                 forced_commit,
+                span_finished: None,
+                span_attributes: None,
             })
-            .await;
+            .await?;
         let checkpoint = accessor.with(|mut access| {
             let ctx = access.get();
             ctx.state.active_custom_invocations.remove(&start_index);
@@ -1872,30 +1898,38 @@ impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostWithStore<U>
             let start_function_type = function_type.clone();
             let start_invocation_id = invocation_id;
             let start = tokio::spawn(async move {
-                let persisted_request = oplog
-                    .upload_payload_owned(request)
+                let persisted_request =
+                    oplog.upload_payload_owned(request).await.map_err(|err| {
+                        WorkerExecutorError::runtime(format!(
+                            "Failed to store durable function request: {err}"
+                        ))
+                    })?;
+                // A refused `Start` fails the begin: the guest must not perform a side effect the
+                // shard's new owner, finding no `Start`, would perform again.
+                worker
+                    .add_and_commit_oplog(OplogEntry::Start {
+                        timestamp: Timestamp::now_utc(),
+                        parent_start_index,
+                        function_name,
+                        invocation_id: Some(start_invocation_id),
+                        observational_owner: None,
+                        request: Some(persisted_request),
+                        durable_function_type: start_function_type,
+                        span_started: None,
+                    })
                     .await
-                    .map_err(|err| format!("Failed to store durable function request: {err}"))?;
-                Ok::<_, String>(
-                    worker
-                        .add_and_commit_oplog(OplogEntry::Start {
-                            timestamp: Timestamp::now_utc(),
-                            parent_start_index,
-                            function_name,
-                            invocation_id: Some(start_invocation_id),
-                            observational_owner: None,
-                            request: Some(persisted_request),
-                            durable_function_type: start_function_type,
-                        })
-                        .await,
-                )
+                    .map_err(WorkerExecutorError::from)
             });
             let cancellation_worker =
                 accessor.with(|mut access| access.get().public_state.worker());
             let coordinator = tokio::spawn(async move {
                 let start_result = start
                     .await
-                    .map_err(|err| format!("custom invocation Start recorder task failed: {err}"))
+                    .map_err(|err| {
+                        WorkerExecutorError::runtime(format!(
+                            "custom invocation Start recorder task failed: {err}"
+                        ))
+                    })
                     .and_then(|result| result);
                 coordinator_lifecycle
                     .complete_start(start_result.clone())
@@ -1908,13 +1942,12 @@ impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostWithStore<U>
                                 timestamp: Timestamp::now_utc(),
                                 start_index,
                                 partial: None,
+                                span_finished: None,
                             })
-                            .await;
+                            .await?;
                         Ok(Some(start_index))
                     }
-                    (_, Err(err)) if matches!(verdict, CustomBeginVerdict::Cancelled) => {
-                        Err(WorkerExecutorError::runtime(err))
-                    }
+                    (_, Err(err)) if matches!(verdict, CustomBeginVerdict::Cancelled) => Err(err),
                     _ => Ok(None),
                 }
             });
@@ -1929,7 +1962,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostWithStore<U>
                 .map_err(|err| {
                     anyhow::anyhow!("failed to observe custom invocation begin delivery: {err}")
                 })?;
-            let start_index = lifecycle.wait_start().await.map_err(anyhow::Error::msg)?;
+            let start_index = lifecycle.wait_start().await?;
             accessor.with(|mut access| {
                 access.get().state.active_custom_invocations.insert(
                     start_index,
@@ -2072,9 +2105,9 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for DurableWorkerCtx<Ctx> {
         retry_from: OplogIndex,
         inside_atomic_region: bool,
         retry_policy_state: Option<RetryPolicyState>,
-    ) {
+    ) -> Result<(), OplogError> {
         if self.state.durability_is_suppressed() {
-            return;
+            return Ok(());
         }
 
         use golem_common::model::oplog::AgentError;
@@ -2086,7 +2119,11 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for DurableWorkerCtx<Ctx> {
             inside_atomic_region,
             retry_policy_state,
         );
-        self.public_state.worker().add_and_commit_oplog(entry).await;
+        self.public_state
+            .worker()
+            .add_and_commit_oplog(entry)
+            .await?;
+        Ok(())
     }
 }
 
@@ -2107,6 +2144,21 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
             .map(DurableCallBoundary::begin_index)
     }
 
+    async fn begin_durable_function_with_span(
+        &mut self,
+        function_type: &DurableFunctionType,
+        host_function: &str,
+        span_started: golem_common::model::oplog::SpanStarted,
+    ) -> Result<(OplogIndex, golem_common::model::oplog::SpanStarted), WorkerExecutorError> {
+        DurableCallCoordinator::new(self)
+            .admit_with_span(
+                DurableCallAdmission::new(function_type, host_function),
+                span_started,
+            )
+            .await
+            .map(|(boundary, span)| (boundary.begin_index(), span))
+    }
+
     async fn end_durable_function(
         &mut self,
         function_type: &DurableFunctionType,
@@ -2118,6 +2170,24 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
                 function_type,
                 DurableCallBoundary::from_begin_index(begin_index),
                 forced_commit,
+                None,
+            )
+            .await
+    }
+
+    async fn end_durable_function_with_span(
+        &mut self,
+        function_type: &DurableFunctionType,
+        begin_index: OplogIndex,
+        forced_commit: bool,
+        span_finished: golem_common::model::oplog::SpanFinished,
+    ) -> Result<(), WorkerExecutorError> {
+        DurableCallCoordinator::new(self)
+            .finish(
+                function_type,
+                DurableCallBoundary::from_begin_index(begin_index),
+                forced_commit,
+                Some(span_finished),
             )
             .await
     }
@@ -2238,33 +2308,21 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
     }
 
     fn create_interrupt_signal(&self) -> Pin<Box<dyn Future<Output = InterruptKind> + Send>> {
-        // Synthetic deadline broadcasts only reach subscribers that already exist, so a signal
-        // is created before checking the latches. That closes the check-before-subscribe race: a
-        // deadline either sets its latch first or broadcasts to this subscription. A real external
-        // interrupt keeps precedence over either synthetic deadline.
-        let interrupt_signal = {
-            let status = self.execution_status.read().unwrap();
-            status.create_await_interrupt_signal()
-        };
-        let entity_cancellation = self.entity_cancellation();
-        if self
-            .state
-            .invocation_deadline_exceeded
-            .load(std::sync::atomic::Ordering::Acquire)
-            || self
-                .state
-                .tail_work_deadline_exceeded
+        let interrupt_signal = subscribe_interrupt_with_latch(&self.execution_status, || {
+            self.state
+                .invocation_deadline_exceeded
                 .load(std::sync::atomic::Ordering::Acquire)
-        {
-            let status = self.execution_status.read().unwrap();
-            if matches!(&*status, ExecutionStatus::Interrupting { .. }) {
-                return status.create_await_interrupt_signal();
-            }
-            return Box::pin(std::future::ready(InterruptKind::Interrupt(
-                Timestamp::now_utc(),
-            )));
-        }
-        match entity_cancellation {
+                || self
+                    .state
+                    .tail_work_deadline_exceeded
+                    .load(std::sync::atomic::Ordering::Acquire)
+                || self
+                    .owner_execution
+                    .tool_operations()
+                    .interruptible_owner_failure()
+                    .is_some()
+        });
+        match self.entity_cancellation() {
             Some(cancellation) => Box::pin(async move {
                 tokio::select! {
                     biased;
@@ -2281,6 +2339,27 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
     fn check_read_only_allows(&self, host_function: &str) -> Result<(), GolemSpecificWasmTrap> {
         DurableWorkerCtx::check_read_only_allows(self, host_function)
     }
+}
+
+fn subscribe_interrupt_with_latch(
+    execution_status: &std::sync::RwLock<ExecutionStatus>,
+    interrupted: impl FnOnce() -> bool,
+) -> Pin<Box<dyn Future<Output = InterruptKind> + Send>> {
+    // Subscribe before checking synthetic interrupts: either the latch or the broadcast wins.
+    let interrupt_signal = execution_status
+        .read()
+        .unwrap()
+        .create_await_interrupt_signal();
+    if interrupted() {
+        let status = execution_status.read().unwrap();
+        if matches!(&*status, ExecutionStatus::Interrupting { .. }) {
+            return status.create_await_interrupt_signal();
+        }
+        return Box::pin(std::future::ready(InterruptKind::Interrupt(
+            Timestamp::now_utc(),
+        )));
+    }
+    interrupt_signal
 }
 
 #[derive(Debug)]
@@ -2598,7 +2677,7 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for TaskRetryContext<Ctx> {
         retry_from: OplogIndex,
         inside_atomic_region: bool,
         retry_policy_state: Option<RetryPolicyState>,
-    ) {
+    ) -> Result<(), OplogError> {
         use golem_common::model::oplog::AgentError;
         let entry = OplogEntry::error(
             self.entity_parent_start_index,
@@ -2608,9 +2687,10 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for TaskRetryContext<Ctx> {
             inside_atomic_region,
             retry_policy_state.clone(),
         );
-        self.worker.add_and_commit_oplog(entry).await;
+        self.worker.add_and_commit_oplog(entry).await?;
 
         self.current_retry_policy_state = retry_policy_state;
+        Ok(())
     }
 }
 
@@ -2696,6 +2776,40 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use test_r::test;
+
+    #[test]
+    async fn synthetic_interrupt_latch_covers_late_and_concurrent_subscribers() {
+        use futures::FutureExt;
+        let signal = Arc::new(tokio::sync::broadcast::channel(1).0);
+        let status = std::sync::RwLock::new(ExecutionStatus::Running {
+            agent_mode: golem_common::model::agent::AgentMode::Durable,
+            timestamp: Timestamp::now_utc(),
+            interrupt_signal: signal.clone(),
+        });
+        assert!(signal.send(InterruptKind::Restart).is_err());
+        assert!(matches!(
+            subscribe_interrupt_with_latch(&status, || true).now_or_never(),
+            Some(InterruptKind::Interrupt(_))
+        ));
+        let concurrent = subscribe_interrupt_with_latch(&status, || {
+            signal.send(InterruptKind::Restart).unwrap();
+            false
+        });
+        assert!(matches!(
+            concurrent.now_or_never(),
+            Some(InterruptKind::Restart)
+        ));
+        *status.write().unwrap() = ExecutionStatus::Interrupting {
+            interrupt_kind: InterruptKind::ShardLost,
+            await_interruption: Arc::new(tokio::sync::broadcast::channel(1).0),
+            agent_mode: golem_common::model::agent::AgentMode::Durable,
+            timestamp: Timestamp::now_utc(),
+        };
+        assert!(matches!(
+            subscribe_interrupt_with_latch(&status, || true).now_or_never(),
+            Some(InterruptKind::ShardLost)
+        ));
+    }
 
     #[test]
     fn custom_invocation_ids_are_stable_and_unique_within_the_root_namespace() {
@@ -2907,9 +3021,10 @@ mod tests {
             _retry_from: OplogIndex,
             _inside_atomic_region: bool,
             retry_policy_state: Option<RetryPolicyState>,
-        ) {
+        ) -> Result<(), OplogError> {
             self.retry_entries_appended += 1;
             self.current_retry_policy_state = retry_policy_state;
+            Ok(())
         }
     }
 
@@ -2938,6 +3053,19 @@ mod tests {
             Ok(OplogIndex::from_u64(1))
         }
 
+        async fn begin_durable_function_with_span(
+            &mut self,
+            function_type: &DurableFunctionType,
+            host_function: &str,
+            span_started: golem_common::model::oplog::SpanStarted,
+        ) -> Result<(OplogIndex, golem_common::model::oplog::SpanStarted), WorkerExecutorError>
+        {
+            let index = self
+                .begin_durable_function(function_type, host_function)
+                .await?;
+            Ok((index, span_started))
+        }
+
         async fn end_durable_function(
             &mut self,
             _function_type: &DurableFunctionType,
@@ -2945,6 +3073,17 @@ mod tests {
             _forced_commit: bool,
         ) -> Result<(), WorkerExecutorError> {
             Ok(())
+        }
+
+        async fn end_durable_function_with_span(
+            &mut self,
+            function_type: &DurableFunctionType,
+            begin_index: OplogIndex,
+            forced_commit: bool,
+            _span_finished: golem_common::model::oplog::SpanFinished,
+        ) -> Result<(), WorkerExecutorError> {
+            self.end_durable_function(function_type, begin_index, forced_commit)
+                .await
         }
 
         async fn persist_durable_function_invocation(

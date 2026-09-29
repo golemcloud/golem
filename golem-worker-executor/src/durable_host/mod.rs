@@ -114,6 +114,9 @@ pub(crate) async fn without_entity_cancellation<F: Future>(future: F) -> F::Outp
 /// attempt the cursor still retains is dropped so the live re-execution neither claims it nor is
 /// blamed for leaving it unconsumed. Worker status is recomputed because the folded deleted
 /// regions changed.
+///
+/// A `Jump` the fence refuses returns before the cursor registers anything: the abandoned attempt
+/// is left for the shard's new owner to replay, and the caller must not re-execute it.
 pub(crate) async fn commit_replay_jumps<Ctx: WorkerCtx>(
     worker: &Worker<Ctx>,
     replay_state: &ReplayState,
@@ -123,7 +126,7 @@ pub(crate) async fn commit_replay_jumps<Ctx: WorkerCtx>(
     for region in &deleted_regions {
         worker
             .add_and_commit_oplog(OplogEntry::jump(entity_parent_start_index, region.clone()))
-            .await;
+            .await?;
     }
     replay_state.register_replay_jump(deleted_regions).await?;
     worker.reattach_worker_status().await;
@@ -159,7 +162,7 @@ use crate::services::key_value::KeyValueService;
 use crate::services::linear_memory::{
     LinearMemoryTracker, SHARED_LINEAR_MEMORY_ERROR, UnsharedMemoryGrowth,
 };
-use crate::services::oplog::{CommitLevel, Oplog, OplogOps, OplogService};
+use crate::services::oplog::{CommitLevel, Oplog, OplogError, OplogOps, OplogService};
 use crate::services::promise::PromiseService;
 use crate::services::quota::QuotaService;
 use crate::services::rdbms::RdbmsService;
@@ -219,7 +222,7 @@ use golem_common::model::entity::{
 #[cfg(test)]
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::{
-    AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
+    InvocationContextSpan, InvocationContextStack, SpanId,
 };
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{
@@ -785,7 +788,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.public_state
             .worker()
             .commit_oplog_and_update_state(CommitLevel::Always)
-            .await;
+            .await
+            .expect("test oplog commit was refused");
     }
 
     #[cfg(feature = "test-utils")]
@@ -1452,6 +1456,26 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             )),
             _ => {
                 if let Some(scope) = &scope {
+                    if let Some(started) = scope.span_started() {
+                        let span = InvocationContextSpan::local()
+                            .with_span_id(started.span_id.clone())
+                            .with_start(started.started_at)
+                            .parent(started.parent_span_id.as_ref().map(|span_id| {
+                                InvocationContextSpan::external_parent(span_id.clone())
+                            }))
+                            .with_attributes(started.attributes.0.clone())
+                            .build();
+                        let stack = InvocationContextStack::new(
+                            started.trace_id.clone(),
+                            span,
+                            started.trace_states.clone(),
+                        )
+                        .limit_depth(self.state.config.limits.max_invocation_context_stack_depth);
+                        let (context, current_span_id) = InvocationContext::from_stack(stack)
+                            .map_err(WorkerExecutorError::runtime)?;
+                        self.state.invocation_context.switch_to(context);
+                        self.state.current_span_id = current_span_id;
+                    }
                     self.state
                         .set_current_idempotency_key(scope.idempotency_key().clone());
                     self.state.assume_idempotence = scope.assume_idempotence();
@@ -2311,7 +2335,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         card_id,
                         reason,
                     ))
-                    .await;
+                    .await?;
             }
             Ok(Err(reason))
         } else {
@@ -2323,7 +2347,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     Box::new(card),
                     self.state.wallet_generation,
                 ))
-                .await;
+                .await?;
             Ok(Ok(()))
         }
     }
@@ -2346,7 +2370,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     card_id,
                     reason,
                 ))
-                .await;
+                .await?;
             return Ok(Err(reason));
         }
 
@@ -2363,7 +2387,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 Box::new(card),
                 self.state.wallet_generation,
             ))
-            .await;
+            .await?;
         Ok(Ok(()))
     }
 
@@ -2395,7 +2419,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     card_id,
                     self.state.wallet_generation,
                 ))
-                .await;
+                .await?;
         }
 
         Ok(())
@@ -2441,9 +2465,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             local_wallet_generation: self.state.wallet_generation,
         };
         if commit_immediately {
-            self.public_state.worker().add_and_commit_oplog(entry).await;
+            self.public_state
+                .worker()
+                .add_and_commit_oplog(entry)
+                .await?;
         } else {
-            self.public_state.worker().add_to_oplog(entry).await;
+            self.public_state.worker().add_to_oplog(entry).await?;
         }
 
         Ok(())
@@ -2482,7 +2509,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     card_id,
                     wallet_generation,
                 ))
-                .await;
+                .await?;
         }
         Ok(())
     }
@@ -2874,6 +2901,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             TrapType::Interrupt(InterruptKind::Suspend(ts)) => Some(RetryDecision::TryStop(*ts)),
             TrapType::Interrupt(InterruptKind::Restart) => Some(RetryDecision::Immediate),
             TrapType::Interrupt(InterruptKind::Jump) => Some(RetryDecision::Immediate),
+            // Never retried here: a retry in place would reopen the oplog with the same stale
+            // epoch. The worker service resumes the agent on the shard's owner.
+            TrapType::Interrupt(InterruptKind::ShardLost) => Some(RetryDecision::None),
             TrapType::Exit => Some(RetryDecision::None),
             TrapType::Error {
                 error: AgentError::OutOfMemory,
@@ -3138,6 +3168,16 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     async fn emit_log_event(&self, event: InternalWorkerEvent) {
+        let trace_context = self
+            .state
+            .invocation_context
+            .span_origin(&self.state.current_span_id)
+            .map(
+                |(trace_id, _)| golem_common::model::oplog::LogTraceContext {
+                    trace_id,
+                    span_id: self.state.current_span_id.clone(),
+                },
+            );
         logging::policy::emit_log_event_with_state::<Ctx>(
             event,
             self.owner_component_metadata()
@@ -3149,6 +3189,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             &self.state.oplog,
             self.state.is_live(),
             self.entity_parent_start_index(),
+            trace_context,
         )
         .await;
     }
@@ -3157,10 +3198,38 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &mut self,
         function_type: &DurableFunctionType,
     ) -> Result<OplogIndex, WorkerExecutorError> {
+        self.begin_function_impl(function_type, None)
+            .await
+            .map(|(index, _)| index)
+    }
+
+    pub async fn begin_function_with_span(
+        &mut self,
+        function_type: &DurableFunctionType,
+        span_started: golem_common::model::oplog::SpanStarted,
+    ) -> Result<(OplogIndex, golem_common::model::oplog::SpanStarted), WorkerExecutorError> {
+        let (index, recorded) = self
+            .begin_function_impl(function_type, Some(span_started))
+            .await?;
+        let recorded = recorded.ok_or_else(|| {
+            WorkerExecutorError::unexpected_oplog_entry(
+                "durable scope Start carrying span_started",
+                format!("durable scope Start at {index} without span metadata"),
+            )
+        })?;
+        Ok((index, recorded))
+    }
+
+    async fn begin_function_impl(
+        &mut self,
+        function_type: &DurableFunctionType,
+        span_started: Option<golem_common::model::oplog::SpanStarted>,
+    ) -> Result<(OplogIndex, Option<golem_common::model::oplog::SpanStarted>), WorkerExecutorError>
+    {
         if self.state.durability_is_suppressed() {
             let begin_index = self.state.current_oplog_index().await;
             self.state.current_retry_point = begin_index;
-            return Ok(begin_index);
+            return Ok((begin_index, span_started));
         }
 
         if self.state.opens_durable_scope(function_type) {
@@ -3180,7 +3249,20 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 self.claim_durable_scope_start(&scope_name, function_type)
                     .await?
             };
+            let mut recorded_span_started = span_started.clone();
             let result = if let Some((begin_index, scope_handle)) = claimed_scope {
+                // The recorded span metadata is authoritative on replay: the owning host path
+                // restores `SpanStarted` from the claimed scope `Start` rather than from the
+                // live caller's value.
+                recorded_span_started = match self.state.oplog.read(begin_index).await {
+                    OplogEntry::Start { span_started, .. } => span_started.map(|span| *span),
+                    other => {
+                        return Err(WorkerExecutorError::unexpected_oplog_entry(
+                            "durable scope Start",
+                            format!("{other:?}"),
+                        ));
+                    }
+                };
                 // The begin-side completion / legality probe stays a non-consuming forward scan: it
                 // decides whether the scope is safe to continue replaying or must be retried *before*
                 // the scope body is replayed. Only the `End` *consumption* moves to the resolver.
@@ -3295,8 +3377,17 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     observational_owner: None,
                     request: None,
                     durable_function_type: function_type.clone(),
+                    span_started: span_started.map(Box::new),
                 };
-                let begin_index = self.public_state.worker().add_and_commit_oplog(entry).await;
+                // The scope's side effect runs as soon as this returns. A `Start` the storage
+                // refused has to stop it here: the shard's new owner has no record of the scope,
+                // so nothing would stop it running the effect a second time.
+                let begin_index = self
+                    .public_state
+                    .worker()
+                    .add_and_commit_oplog(entry)
+                    .await
+                    .map_err(WorkerExecutorError::from)?;
                 Ok(begin_index)
             }?;
 
@@ -3317,8 +3408,27 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             // The effective retry point now derives from the open scope; keep the global fallback
             // pointing at the scope `Start` so it survives the scope being closed.
             self.state.current_retry_point = result;
-            Ok(result)
+            Ok((result, recorded_span_started))
         } else {
+            // No scope opens, so nothing is written before the side effect runs and a fence
+            // already latched would only surface at the commit after it - by which time the
+            // effect has happened and the shard's new owner, having no record of it, runs it
+            // again. Reading the latch costs no storage round trip, so a write whose effect is
+            // about to run is refused here instead. It does not close the window where the shard
+            // moves *during* the call: that one needs a round trip per call, which is exactly what
+            // an idempotent write is declared to avoid.
+            if self.state.is_live()
+                && matches!(
+                    function_type,
+                    DurableFunctionType::WriteRemote
+                        | DurableFunctionType::WriteRemoteBatched(_)
+                        | DurableFunctionType::WriteRemoteTransaction(_)
+                )
+                && let Some(fence) = self.state.oplog.fence()
+            {
+                return Err(WorkerExecutorError::from(OplogError::Fenced(fence)));
+            }
+
             // When there is no scope `Start` entry, the current retry point can only
             // point to the last written non-hint entry. Hint entries must be ignored
             // because they are nondeterministic.
@@ -3344,7 +3454,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             };
             self.state.current_retry_point = new_retry_point;
 
-            Ok(begin_index)
+            Ok((begin_index, span_started))
         }
     }
 
@@ -3352,6 +3462,16 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &mut self,
         function_type: &DurableFunctionType,
         begin_index: OplogIndex,
+    ) -> Result<(), WorkerExecutorError> {
+        self.end_function_impl(function_type, begin_index, None)
+            .await
+    }
+
+    async fn end_function_impl(
+        &mut self,
+        function_type: &DurableFunctionType,
+        begin_index: OplogIndex,
+        span_finished: Option<golem_common::model::oplog::SpanFinished>,
     ) -> Result<(), WorkerExecutorError> {
         if self.state.durability_is_suppressed() {
             return Ok(());
@@ -3363,15 +3483,18 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 // through the resolver (never positionally, which under overlap could steal a
                 // concurrently-replaying sibling call's terminal). This also repairs a
                 // crash-induced half-pair and closes the in-memory scope.
-                self.close_durable_scope_replay(begin_index).await?;
+                self.close_durable_scope_replay(begin_index, span_finished)
+                    .await?;
             } else {
                 let entry = OplogEntry::End {
                     timestamp: Timestamp::now_utc(),
                     start_index: begin_index,
                     response: None,
                     forced_commit: true,
+                    span_finished,
+                    span_attributes: None,
                 };
-                self.state.oplog.add(entry).await;
+                self.state.oplog.add(entry).await?;
                 // The durable scope opened in `begin_function` is now closed.
                 self.state.remove_durable_scope(begin_index)?;
             }
@@ -3441,6 +3564,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     async fn close_durable_scope_replay(
         &mut self,
         begin_index: OplogIndex,
+        span_finished: Option<golem_common::model::oplog::SpanFinished>,
     ) -> Result<(), WorkerExecutorError> {
         match self.state.take_durable_scope_replay_handle(begin_index) {
             Some(handle) => {
@@ -3489,8 +3613,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                 start_index: begin_index,
                                 response: None,
                                 forced_commit: true,
+                                span_finished,
+                                span_attributes: None,
                             })
-                            .await;
+                            .await?;
                     }
                 }
             }
@@ -3559,6 +3685,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 observational_owner: None,
                 request: None,
                 durable_function_type: DurableFunctionType::WriteRemoteTransaction(None),
+                span_started: None,
             };
             let (begin_index, _) = self
                 .public_state
@@ -3568,11 +3695,16 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     scope_start,
                     Box::new(move |_start_index| OplogEntry::begin_remote_transaction(tx_id, None)),
                 )
-                .await;
+                .await
+                .map_err(WorkerExecutorError::from)?;
+            // The pair is only buffered until this commit. If the storage refused it, the
+            // transaction must not be handed out, so `tx` is dropped here before any statement
+            // has run through it.
             self.public_state
                 .worker()
                 .commit_oplog_and_update_state(CommitLevel::Always)
-                .await;
+                .await
+                .map_err(WorkerExecutorError::from)?;
 
             // The transaction scope is now open until commit/rollback; block checkpoints. Opened
             // live, so there is no recorded scope `End` to await on close.
@@ -3732,14 +3864,16 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 self.finish_switch_to_live(pending).await?.require_live()?;
 
                 let (tx_id, tx) = handler.create_new().await?;
-                let _ = self
-                    .public_state
+                // The restarted transaction runs its statements once this returns, so a
+                // refused begin has to stop it; `tx` is dropped unused.
+                self.public_state
                     .worker()
                     .add_and_commit_oplog(OplogEntry::begin_remote_transaction(
                         tx_id,
                         Some(original_begin_index),
                     ))
-                    .await;
+                    .await
+                    .map_err(WorkerExecutorError::from)?;
 
                 // Restarted live (jump + fresh `BeginRemoteTransaction`): the scope `End` will
                 // be appended live by the transaction terminal, so do not store the (now
@@ -3770,14 +3904,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             // make sure to write to the local oplog handle, but still commit to the parent for status consistency.
             self.state
                 .oplog
-                .fallible_add(OplogEntry::pre_commit_remote_transaction(begin_index))
-                .await
-                .map_err(WorkerExecutorError::runtime)?;
+                .add(OplogEntry::pre_commit_remote_transaction(begin_index))
+                .await?;
 
             self.public_state
                 .worker()
                 .commit_oplog_and_update_state(CommitLevel::Always)
-                .await;
+                .await?;
             Ok(())
         } else {
             let (_, _) = crate::get_oplog_entry!(self, OplogEntry::PreCommitRemoteTransaction)?;
@@ -3796,14 +3929,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             // make sure to write to the local oplog handle, but still commit to the parent for status consistency.
             self.state
                 .oplog
-                .fallible_add(OplogEntry::pre_rollback_remote_transaction(begin_index))
-                .await
-                .map_err(WorkerExecutorError::runtime)?;
+                .add(OplogEntry::pre_rollback_remote_transaction(begin_index))
+                .await?;
 
             self.public_state
                 .worker()
                 .commit_oplog_and_update_state(CommitLevel::Always)
-                .await;
+                .await?;
             Ok(())
         } else {
             let (_, _) = crate::get_oplog_entry!(self, OplogEntry::PreRollbackRemoteTransaction)?;
@@ -3832,7 +3964,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             if marker.is_some() {
                 // The scope `End` was folded into the resolver at scope-open, so await it (the
                 // terminal marker stays positional). Also closes the in-memory scope.
-                self.close_durable_scope_replay(begin_index).await?;
+                self.close_durable_scope_replay(begin_index, None).await?;
             } else if self.state.replay_state.is_live() {
                 // The external commit succeeded, but the process crashed before persisting the
                 // marker pair. The preceding pre-commit marker exhausted replay, so repair the
@@ -3877,7 +4009,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             if marker.is_some() {
                 // The scope `End` was folded into the resolver at scope-open, so await it (the
                 // terminal marker stays positional). Also closes the in-memory scope.
-                self.close_durable_scope_replay(begin_index).await?;
+                self.close_durable_scope_replay(begin_index, None).await?;
             } else if self.state.replay_state.is_live() {
                 // The external rollback succeeded, but the process crashed before persisting the
                 // marker pair. Repair the missing local terminal without issuing the rollback again.
@@ -3911,21 +4043,22 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         // successful append can never leave one without the other.
         self.state
             .oplog
-            .fallible_add_pair(
+            .add_pair(
                 marker,
-                OplogEntry::End {
+                Box::new(move |_| OplogEntry::End {
                     timestamp: Timestamp::now_utc(),
                     start_index: begin_index,
                     response: None,
                     forced_commit: true,
-                },
+                    span_finished: None,
+                    span_attributes: None,
+                }),
             )
-            .await
-            .map_err(WorkerExecutorError::runtime)?;
+            .await?;
         self.public_state
             .worker()
             .commit_oplog_and_update_state(CommitLevel::Always)
-            .await;
+            .await?;
         self.state.remove_durable_scope(begin_index)?;
         Ok(())
     }
@@ -4001,7 +4134,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                         None,
                                         None,
                                     )
-                                    .await;
+                                    .await?;
                                 return Ok(Some(RetryDecision::Immediate));
                             }
                         };
@@ -4026,7 +4159,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                     None,
                                     None,
                                 )
-                                .await;
+                                .await?;
                             return Ok(Some(RetryDecision::Immediate));
                         }
 
@@ -4096,7 +4229,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                 .as_context_mut()
                                 .data_mut()
                                 .on_worker_update_failed(target_revision, Some(error), None, None)
-                                .await;
+                                .await?;
                             Ok(Some(RetryDecision::Immediate))
                         } else {
                             let component_metadata =
@@ -4123,7 +4256,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                     ),
                                     None,
                                 )
-                                .await;
+                                .await?;
                             Ok(None)
                         }
                     }
@@ -4137,7 +4270,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                 None,
                                 None,
                             )
-                            .await;
+                            .await?;
                         Ok(Some(RetryDecision::Immediate))
                     }
                     Err(error) => {
@@ -4145,7 +4278,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             .as_context_mut()
                             .data_mut()
                             .on_worker_update_failed(target_revision, Some(error), None, None)
-                            .await;
+                            .await?;
                         Ok(Some(RetryDecision::Immediate))
                     }
                 }
@@ -4944,7 +5077,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                             None,
                                             None,
                                         )
-                                        .await;
+                                        .await?;
                                         return Err(error);
                                     }
                                 }
@@ -4973,7 +5106,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                         .map(failed_snapshot_assisted_update_details),
                                     None,
                                 )
-                                .await;
+                                .await?;
 
                                 Err(error)?
                             };
@@ -4994,7 +5127,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                 }),
                                 snapshot_assisted_details,
                             )
-                            .await;
+                            .await?;
 
                             debug!("Finalizing automatic update to revision {target_revision}");
                         }
@@ -5036,7 +5169,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.public_state
             .worker()
             .queue_card_revocations_locked(&revoked_card_ids)
-            .await;
+            .await?;
 
         Ok(())
     }
@@ -5280,7 +5413,7 @@ impl<Ctx: WorkerCtx> StatusManagement for DurableWorkerCtx<Ctx> {
 impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
     async fn on_agent_invocation_started(
         &mut self,
-        mut invocation: AgentInvocation,
+        invocation: AgentInvocation,
     ) -> Result<(), WorkerExecutorError> {
         if !self.state.durability_is_suppressed() {
             let stack = self.get_current_invocation_context().await;
@@ -5315,29 +5448,13 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 return Err(WorkerExecutorError::permission_denied("permission denied"));
             }
 
-            match &mut invocation {
-                AgentInvocation::AgentInitialization {
-                    invocation_context, ..
-                } => {
-                    *invocation_context = stack;
-                }
-                AgentInvocation::AgentMethod {
-                    invocation_context, ..
-                }
-                | AgentInvocation::ExternalTool {
-                    invocation_context, ..
-                } => {
-                    *invocation_context = stack;
-                }
-                _ => {}
-            }
-
             let start_index = self
                 .public_state
                 .worker()
                 .oplog()
                 .add_agent_invocation_started_with_index(
                     invocation,
+                    stack,
                     InvocationWalletPin {
                         wallet_token: WalletVersionToken {
                             wallet_id_hash: self.state.wallet_id_hash,
@@ -5348,18 +5465,24 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                     },
                 )
                 .await
-                .unwrap_or_else(|err| {
-                    panic!(
+                .map_err(|err| match err {
+                    OplogError::Fenced(fence) => self.public_state.worker().retired_by(fence),
+                    err => panic!(
                         "could not encode agent invocation on {}: {err}",
                         self.agent_id()
-                    )
-                });
+                    ),
+                })?;
             self.primary_invocation_start_index = Some(start_index);
+
+            #[cfg(feature = "test-utils")]
+            self.owner_execution
+                .test_after_invocation_started_buffered()
+                .await;
 
             self.public_state
                 .worker()
                 .commit_oplog_and_update_state(CommitLevel::Always)
-                .await;
+                .await?;
         }
         Ok(())
     }
@@ -5375,11 +5498,31 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
     ) -> RetryDecision {
         let current_idempotency_key = self.get_current_idempotency_key().await;
 
+        // Deliberately above the dropped-call drain: that drain appends `Cancelled` entries, and a
+        // lost shard's oplog belongs to another executor now. Like `Restart` and `Jump`, a
+        // `ShardLost` trap records nothing - not the drain, not an entry, not a status change - and
+        // the shard's new owner replays the invocation and records its outcome itself.
+        if let TrapType::Interrupt(kind) = trap_type
+            && self
+                .public_state
+                .worker()
+                .retire_if_shard_lost(&WorkerExecutorError::Interrupted { kind: *kind })
+        {
+            return RetryDecision::None;
+        }
+
         if self.state.is_live()
             && !self.state.snapshotting_mode
             && let Err(err) = concurrent::drain_queued_dropped_call_events(self).await
         {
-            error!("failed to drain dropped durable calls before invocation failure entry: {err}");
+            error!(
+                error = %err,
+                "Failed to drain dropped durable calls before the invocation failure entry"
+            );
+            // A `Cancelled` refused by a fence latched during the drain gives the agent up, so
+            // the stop that follows drops this generation instead of leaving it cached to be
+            // restarted in place.
+            self.public_state.worker().retire_if_shard_lost(&err.source);
             return RetryDecision::None;
         }
 
@@ -5427,7 +5570,8 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             },
         ) = (&current_idempotency_key, trap_type)
         {
-            self.state
+            let denial_persisted = self
+                .state
                 .oplog
                 .add_pair(
                     OplogEntry::cancel_pending_invocation(idempotency_key.clone()),
@@ -5449,10 +5593,30 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                     }),
                 )
                 .await;
-            self.public_state
+            match denial_persisted {
+                Ok(_) => {}
+                Err(crate::services::oplog::OplogError::Fenced(fence)) => {
+                    // The shard moved while this failure was being recorded. Retire the agent
+                    // exactly as the `ShardLost` arm above does: nothing further may be written
+                    // to an oplog that belongs to another executor now.
+                    self.public_state.worker().record_retirement(
+                        InterruptKind::ShardLost,
+                        crate::worker::RetirementReason::Fenced(Some(fence)),
+                    );
+                    return RetryDecision::None;
+                }
+                Err(error) => panic!("oplog write: {error}"),
+            }
+            // Refused, like the add above: the shard is lost.
+            if self
+                .public_state
                 .worker()
                 .commit_oplog_and_update_state(CommitLevel::Always)
-                .await;
+                .await
+                .is_err()
+            {
+                return RetryDecision::None;
+            }
             true
         } else {
             false
@@ -5463,6 +5627,8 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             TrapType::Interrupt(InterruptKind::Suspend(_)) => Some(OplogEntry::suspend()),
             TrapType::Interrupt(InterruptKind::Jump) => None,
             TrapType::Interrupt(InterruptKind::Restart) => None,
+            // The oplog is the new owner's; a stale writer must leave no trace in it.
+            TrapType::Interrupt(InterruptKind::ShardLost) => None,
             TrapType::Exit => Some(OplogEntry::exited()),
             TrapType::Error {
                 error: AgentError::PermissionDenied(_),
@@ -5486,8 +5652,17 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             )),
         };
 
-        if let Some(entry) = oplog_entry {
-            self.public_state.worker().add_and_commit_oplog(entry).await;
+        // Refused, the shard is lost: no failure is published for its invocation, which
+        // the shard's new owner runs.
+        if let Some(entry) = oplog_entry
+            && self
+                .public_state
+                .worker()
+                .add_and_commit_oplog(entry)
+                .await
+                .is_err()
+        {
+            return RetryDecision::None;
         };
 
         let latest_status = self
@@ -5577,8 +5752,8 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
 
         if !is_live {
             // Mirror the live-path drain: events enqueued from synchronous drops during replay
-            // (e.g. `DropEvent::FinishSpan` for a p3 HTTP response dropped unconsumed) must consume
-            // their positional entries (recorded by the live drain at this same point) before the
+            // (e.g. cleanup for a p3 HTTP response dropped unconsumed) must settle
+            // their durable operations before the
             // `AgentInvocationFinished` entry is read.
             concurrent::drain_queued_dropped_call_events(self)
                 .await
@@ -5665,9 +5840,12 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                     component_revision,
                 )
                 .await
-                .unwrap_or_else(|err| {
-                    panic!("could not encode function result for {full_function_name}: {err}")
-                });
+                .map_err(|err| match err {
+                    OplogError::Fenced(fence) => self.public_state.worker().retired_by(fence),
+                    err => {
+                        panic!("could not encode function result for {full_function_name}: {err}")
+                    }
+                })?;
 
             let commit_level = match self.public_state.worker().agent_mode() {
                 AgentMode::Durable => CommitLevel::Always,
@@ -5676,7 +5854,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             self.public_state
                 .worker()
                 .commit_oplog_before_status_update(commit_level)
-                .await;
+                .await?;
 
             // Bump the read-only cache epoch after the
             // `AgentInvocationFinished` entry is committed, but *before*
@@ -5748,7 +5926,10 @@ impl<Ctx: WorkerCtx> ResourceStore for DurableWorkerCtx<Ctx> {
                 resource_id,
                 name.clone(),
             );
-            self.public_state.worker().add_to_oplog(entry).await;
+            self.public_state
+                .worker()
+                .add_to_oplog_or_retire(entry)
+                .await;
         }
         id
     }
@@ -5763,7 +5944,10 @@ impl<Ctx: WorkerCtx> ResourceStore for DurableWorkerCtx<Ctx> {
                     id,
                     resource_type_id.clone(),
                 );
-                self.public_state.worker().add_to_oplog(entry).await;
+                self.public_state
+                    .worker()
+                    .add_to_oplog_or_retire(entry)
+                    .await;
             }
         }
         result
@@ -5807,20 +5991,22 @@ impl<Ctx: WorkerCtx> UpdateManagement for DurableWorkerCtx<Ctx> {
         details: Option<String>,
         snapshot_assisted_details: Option<FailedSnapshotAssistedUpdateDetails>,
         update_attempt_index: Option<OplogIndex>,
-    ) {
+    ) -> Result<(), WorkerExecutorError> {
         let entry = OplogEntry::failed_update(
             target_revision,
             details.clone(),
             snapshot_assisted_details,
             update_attempt_index,
         );
-        self.public_state.worker().add_and_commit_oplog(entry).await;
+        let worker = self.public_state.worker();
+        worker.add_and_commit_oplog(entry).await?;
 
         warn!(
             "Worker failed to update to {}: {}, update attempt aborted",
             target_revision,
             details.unwrap_or_else(|| "?".to_string())
         );
+        Ok(())
     }
 
     async fn on_worker_update_succeeded(
@@ -5831,7 +6017,7 @@ impl<Ctx: WorkerCtx> UpdateManagement for DurableWorkerCtx<Ctx> {
             golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId,
         >,
         snapshot_assisted_details: Option<SnapshotAssistedUpdateDetails>,
-    ) {
+    ) -> Result<(), WorkerExecutorError> {
         info!("Worker update to {} finished successfully", target_revision);
         let worker = self.public_state.worker();
         worker
@@ -5842,107 +6028,13 @@ impl<Ctx: WorkerCtx> UpdateManagement for DurableWorkerCtx<Ctx> {
                 new_active_plugins,
                 snapshot_assisted_details,
             )
-            .await;
+            .await?;
+        Ok(())
     }
 }
 
 #[async_trait]
 impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
-    async fn start_span(
-        &mut self,
-        initial_attributes: &[(String, AttributeValue)],
-        activate: bool,
-    ) -> Result<Arc<InvocationContextSpan>, WorkerExecutorError> {
-        let span_id = self.state.current_span_id.clone();
-        let span = self.start_child_span(&span_id, initial_attributes).await?;
-        if activate {
-            self.state.current_span_id = span.span_id().clone();
-        }
-        Ok(span)
-    }
-
-    async fn start_child_span(
-        &mut self,
-        parent: &SpanId,
-        initial_attributes: &[(String, AttributeValue)],
-    ) -> Result<Arc<InvocationContextSpan>, WorkerExecutorError> {
-        let current_span_id = self.state.current_span_id.clone();
-
-        let replay_entry = self.get_oplog_entry_or_continue_live("StartSpan").await?;
-        let continued_live = replay_entry.is_none();
-
-        let span = if continued_live {
-            self.state
-                .invocation_context
-                .start_span(parent, None)
-                .map_err(WorkerExecutorError::runtime)?
-        } else {
-            let (_, entry) = replay_entry.expect("replay entry was checked above");
-
-            let (timestamp, span_id) = match entry {
-                OplogEntry::StartSpan {
-                    timestamp, span_id, ..
-                } => (timestamp, span_id),
-                other => {
-                    return Err(WorkerExecutorError::unexpected_oplog_entry(
-                        "StartSpan",
-                        format!("{other:?}"),
-                    ));
-                }
-            };
-
-            let parent_span = self.state.invocation_context.get(parent).map_err(|err| {
-                WorkerExecutorError::runtime(format!(
-                    "parent span {parent} missing during StartSpan replay: {err}"
-                ))
-            })?;
-            let span = InvocationContextSpan::local()
-                .with_span_id(span_id)
-                .with_start(timestamp)
-                .with_parent(parent_span)
-                .build();
-            self.state.invocation_context.add_span(span.clone());
-            span
-        };
-
-        if &current_span_id != parent
-            && !self
-                .state
-                .invocation_context
-                .has_in_stack(&current_span_id, parent)
-        {
-            // The parent span is not in the current invocation stack. This can happen if it was created in a previous
-            // invocation and stored in some global state.
-            // To preserve the current invocation context stack but also have the information from the desired parent
-            // span, we add a _link_ to the newly created span.
-
-            self.state
-                .invocation_context
-                .add_link(span.span_id(), parent)
-                .map_err(WorkerExecutorError::runtime)?;
-        };
-
-        for (name, value) in initial_attributes {
-            span.set_attribute(name.clone(), value.clone());
-        }
-
-        if continued_live {
-            self.public_state
-                .worker()
-                .add_to_oplog(OplogEntry::StartSpan {
-                    timestamp: span.start().unwrap_or(Timestamp::now_utc()),
-                    parent_start_index: self.entity_parent_start_index(),
-                    span_id: span.span_id().clone(),
-                    parent: Some(parent.clone()),
-                    linked_context_id: span.linked_context().map(|link| link.span_id().clone()),
-                    attributes: HashMap::from_iter(initial_attributes.iter().cloned()).into(),
-                })
-                .await;
-        }
-
-        Ok(span)
-    }
-
     fn remove_span(&mut self, span_id: &SpanId) -> Result<(), WorkerExecutorError> {
         if &self.state.current_span_id == span_id {
             // Walk up to the parent if it still exists in the invocation context;
@@ -5963,77 +6055,6 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
             .invocation_context
             .finish_span(span_id)
             .map_err(WorkerExecutorError::runtime);
-        Ok(())
-    }
-
-    async fn finish_span(&mut self, span_id: &SpanId) -> Result<(), WorkerExecutorError> {
-        if let Some((_, entry)) = self.get_oplog_entry_or_continue_live("FinishSpan").await? {
-            if !matches!(entry, OplogEntry::FinishSpan { .. }) {
-                return Err(WorkerExecutorError::unexpected_oplog_entry(
-                    "FinishSpan",
-                    format!("{entry:?}"),
-                ));
-            }
-        } else {
-            self.public_state
-                .worker()
-                .add_to_oplog(OplogEntry::finish_span(
-                    self.entity_parent_start_index(),
-                    span_id.clone(),
-                ))
-                .await;
-        }
-
-        if &self.state.current_span_id == span_id {
-            let span = self.state.invocation_context.get(span_id).map_err(|err| {
-                WorkerExecutorError::runtime(format!(
-                    "span {span_id} missing during finish_span replay: {err}"
-                ))
-            })?;
-            self.state.current_span_id = span
-                .parent()
-                .map(|p| p.span_id().clone())
-                .unwrap_or_else(|| self.state.invocation_context.root.span_id().clone());
-        }
-        let _ = self
-            .state
-            .invocation_context
-            .finish_span(span_id)
-            .map_err(WorkerExecutorError::runtime);
-        Ok(())
-    }
-
-    async fn set_span_attribute(
-        &mut self,
-        span_id: &SpanId,
-        key: &str,
-        value: AttributeValue,
-    ) -> Result<(), WorkerExecutorError> {
-        self.state
-            .invocation_context
-            .set_attribute(span_id, key.to_string(), value.clone())
-            .map_err(WorkerExecutorError::runtime)?;
-        if let Some((_, entry)) = self
-            .get_oplog_entry_or_continue_live("SetSpanAttribute")
-            .await?
-        {
-            if !matches!(entry, OplogEntry::SetSpanAttribute { .. }) {
-                return Err(WorkerExecutorError::unexpected_oplog_entry(
-                    "SetSpanAttribute",
-                    format!("{entry:?}"),
-                ));
-            }
-        } else {
-            self.public_state
-                .worker()
-                .add_to_oplog(OplogEntry::set_span_attribute(
-                    self.entity_parent_start_index(),
-                    span_id.clone(),
-                    key.to_string(),
-                    value,
-                ))
-                .await;
-        }
         Ok(())
     }
 
@@ -6262,10 +6283,8 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                         .instrument(span)
                         .await;
 
-                        // We are removing the spans introduced by the invocation. Not calling `finish_span` here,
-                        // as it would add FinishSpan oplog entries without corresponding StartSpan ones. Instead,
-                        // the oplog processor should assume that spans implicitly created by AgentInvocationStarted
-                        // are finished at AgentInvocationFinished.
+                        // Invocation-owned spans are closed by AgentInvocationFinished in the
+                        // oplog processor; removing their resident context records no transition.
                         for span_id in local_span_ids {
                             store.as_context_mut().data_mut().remove_span(&span_id)?;
                         }
@@ -6345,7 +6364,8 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                             store.as_context().data().agent_mode(),
                                         ))
                                     }
-                                };
+                                }
+;
                                 let decision = match trap_type {
                                     // A recorded invocation that fails while its entries are still
                                     // being replayed after an automatic snapshot load most likely
@@ -6387,7 +6407,14 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                                 error,
                                                 stderr: store.as_context().data().get_public_state().event_service().get_last_invocation_errors(),
                                             }),
-                                            TrapType::Interrupt(kind) => Self::fixed_decision_for_trap_type(&TrapType::Interrupt(kind)),
+                                            TrapType::Interrupt(kind) => {
+                                                // `on_invocation_failure` is skipped on this path,
+                                                // so a lost shard is recorded here: its `None`
+                                                // decision alone would stop the agent as an
+                                                // ordinary one, left cached to restart in place.
+                                                worker.retire_if_shard_lost(&WorkerExecutorError::Interrupted { kind });
+                                                Self::fixed_decision_for_trap_type(&TrapType::Interrupt(kind))
+                                            }
                                             TrapType::Exit => break Err(WorkerExecutorError::runtime("Process exited during snapshot replay")),
                                         }
                                     }
@@ -6404,16 +6431,29 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                             // interrupted by a crash and cannot be retried.
                                             // A fresh interrupt is authoritative even before live
                                             // publication; already-finished sessions stay unchanged.
+                                            // Not for a lost shard, however the loss
+                                            // reached the trap: the shard's new owner resumes that
+                                            // invocation.
+                                            let shard_lost = matches!(
+                                                trap_type,
+                                                TrapType::Interrupt(InterruptKind::ShardLost)
+                                            );
                                             if uses_streams
+                                                && !shard_lost
                                                 && (matches!(trap_type, TrapType::Interrupt(_))
                                                     || store.as_context().data().durable_ctx().is_live())
                                             {
-                                                let _ = worker
+                                                // A refused write means the shard has moved:
+                                                // record it before the startup result is published.
+                                                if let Err(error) = worker
                                                     .fail_durable_streaming_session(
                                                         &idempotency_key,
                                                         details,
                                                     )
-                                                    .await;
+                                                    .await
+                                                {
+                                                    worker.retire_if_shard_lost(&error);
+                                                }
                                             }
                                             // Cannot retry so we need to fail
                                             match trap_type {
@@ -6528,7 +6568,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                     .get_public_state()
                     .oplog()
                     .add(OplogEntry::restart())
-                    .await;
+                    .await?;
 
                 Ok(None)
             } else {
@@ -6611,7 +6651,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                                     None,
                                                     None,
                                                 )
-                                                .await;
+                                                .await?;
 
                                             debug!(
                                                 "Retrying prepare_instance after failed update attempt"
@@ -6709,7 +6749,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                                     }),
                                                     None,
                                                 )
-                                                .await;
+                                                .await?;
                                             Ok(Some(RetryDecision::Immediate))
                                         }
                                         None => Err(error),
@@ -6871,11 +6911,8 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                             "failed to restart {owned_agent_id} during shard-assignment recovery: {error}"
                         ));
                     }
-                    Err(error) => {
-                        return Err(anyhow!(
-                            "failed to restart {owned_agent_id} during shard-assignment recovery: {error}"
-                        ));
-                    }
+                    // A shard that left the assignment mid-recovery is skipped, not fatal.
+                    Err(error) => recovered_restart(&owned_agent_id, Err::<(), _>(error))?,
                 }
             }
         }
@@ -7281,6 +7318,31 @@ fn recovered_status(
         }
         Err(error) => Err(anyhow!(
             "failed to calculate the status of {owned_agent_id} during shard-assignment recovery, so it cannot be resumed: {error}"
+        )),
+    }
+}
+
+/// The outcome of restarting one recovered agent, drawing the same line as [`recovered_status`].
+///
+/// `ShardingNotReady` means the agent's shard left this executor's assignment while recovery was
+/// running: a later delivery revoked it, and the worker was refused an epoch rather than opened
+/// unfenced. `OplogFenced` means another executor claimed the agent's oplog at a newer epoch
+/// before this one wrote to it. Either way the agent belongs to the shard's new owner, which
+/// recovers it there. This is a skip, like an oplog that is gone. Failing the whole assignment for
+/// it would stop every other agent in the scan from being resumed. Any other restart failure still
+/// fails the assignment.
+fn recovered_restart<W>(
+    owned_agent_id: &OwnedAgentId,
+    restarted: Result<W, WorkerExecutorError>,
+) -> Result<(), anyhow::Error> {
+    match restarted {
+        Ok(_) => Ok(()),
+        Err(WorkerExecutorError::ShardingNotReady | WorkerExecutorError::OplogFenced { .. }) => {
+            debug!(agent_id = %owned_agent_id, "Worker's shard left the assignment during shard-assignment recovery; skipping agent");
+            Ok(())
+        }
+        Err(error) => Err(anyhow!(
+            "failed to restart {owned_agent_id} during shard-assignment recovery: {error}"
         )),
     }
 }
@@ -9318,6 +9380,43 @@ mod tests {
         );
     }
 
+    /// A revoke that races recovery refuses the worker an epoch. That agent is skipped, so the rest
+    /// of the scan is still resumed. Any other restart failure still fails the assignment.
+    #[test]
+    fn shard_assignment_recovery_skips_a_worker_whose_shard_left_the_assignment() {
+        assert!(recovered_restart(&recovered_agent(), Ok(())).is_ok());
+        assert!(
+            recovered_restart::<()>(
+                &recovered_agent(),
+                Err(WorkerExecutorError::ShardingNotReady)
+            )
+            .is_ok()
+        );
+        let agent = recovered_agent();
+        assert!(
+            recovered_restart::<()>(
+                &agent,
+                Err(WorkerExecutorError::oplog_fenced(
+                    agent.agent_id.clone(),
+                    2,
+                    Some(3)
+                ))
+            )
+            .is_ok()
+        );
+
+        let error = recovered_restart::<()>(
+            &recovered_agent(),
+            Err(WorkerExecutorError::runtime("instance failed to start")),
+        )
+        .expect_err("a restart failure other than a lost shard was skipped");
+        assert!(
+            error.to_string().contains("failed to restart")
+                && error.to_string().contains("instance failed to start"),
+            "{error}"
+        );
+    }
+
     fn open_region(regions: &mut Vec<ActiveAtomicRegion>, begin: u64) -> OplogIndex {
         let begin_index = OplogIndex::from_u64(begin);
         regions.push(ActiveAtomicRegion::new(begin_index, begin_index.next()));
@@ -10006,7 +10105,9 @@ pub(crate) struct HttpRequestSession {
 struct HttpRequestSessionInner {
     begin_index: OplogIndex,
     span_id: SpanId,
+    persisted: bool,
     phase: AtomicU8,
+    outcome: Mutex<golem_common::model::oplog::SpanOutcome>,
     drop_sink: Option<tokio::sync::mpsc::UnboundedSender<concurrent::DropEvent>>,
 }
 
@@ -10018,13 +10119,16 @@ impl HttpRequestSession {
     pub(crate) fn new(
         begin_index: OplogIndex,
         span_id: SpanId,
+        persisted: bool,
         drop_sink: Option<tokio::sync::mpsc::UnboundedSender<concurrent::DropEvent>>,
     ) -> Self {
         Self {
             inner: Arc::new(HttpRequestSessionInner {
                 begin_index,
                 span_id,
+                persisted,
                 phase: AtomicU8::new(HTTP_REQUEST_OPEN),
+                outcome: Mutex::new(golem_common::model::oplog::SpanOutcome::Cancelled),
                 drop_sink,
             }),
         }
@@ -10036,6 +10140,22 @@ impl HttpRequestSession {
 
     pub(crate) fn span_id(&self) -> &SpanId {
         &self.inner.span_id
+    }
+
+    pub(crate) fn persisted(&self) -> bool {
+        self.inner.persisted
+    }
+
+    pub(crate) fn outcome(&self) -> golem_common::model::oplog::SpanOutcome {
+        self.inner.outcome.lock().unwrap().clone()
+    }
+
+    pub(crate) fn record_outcome(&self, outcome: golem_common::model::oplog::SpanOutcome) {
+        let mut current = self.inner.outcome.lock().unwrap();
+        // A later EOF must not erase an error already exposed to the guest.
+        if *current != golem_common::model::oplog::SpanOutcome::Failed {
+            *current = outcome;
+        }
     }
 
     pub(crate) fn mark_closed(&self) {
@@ -10063,15 +10183,22 @@ impl HttpRequestSessionInner {
         let phase = self.phase.swap(HTTP_REQUEST_CLOSED, Ordering::AcqRel);
         if let Some(sink) = &self.drop_sink {
             let event = match phase {
-                HTTP_REQUEST_OPEN => Some(concurrent::DropEvent::CloseDurableScope {
-                    function_type: DurableFunctionType::WriteRemoteBatched(None),
-                    begin_index: self.begin_index,
-                    span_id: Some(self.span_id.clone()),
-                }),
-                HTTP_REQUEST_SCOPE_CLOSED => Some(concurrent::DropEvent::FinishSpan {
-                    span_id: self.span_id.clone(),
-                    durable: true,
-                }),
+                HTTP_REQUEST_OPEN if self.persisted => {
+                    Some(concurrent::DropEvent::CloseDurableScope {
+                        function_type: DurableFunctionType::WriteRemoteBatched(None),
+                        begin_index: self.begin_index,
+                        span_finished: Some(golem_common::model::oplog::SpanFinished {
+                            span_id: self.span_id.clone(),
+                            finished_at: Timestamp::now_utc(),
+                            outcome: self.outcome.lock().unwrap().clone(),
+                        }),
+                    })
+                }
+                HTTP_REQUEST_OPEN | HTTP_REQUEST_SCOPE_CLOSED => {
+                    Some(concurrent::DropEvent::FinishSpan {
+                        span_id: self.span_id.clone(),
+                    })
+                }
                 _ => None,
             };
             if let Some(event) = event {

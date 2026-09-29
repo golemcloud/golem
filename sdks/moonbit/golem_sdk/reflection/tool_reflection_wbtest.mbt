@@ -285,6 +285,44 @@ test "reflected optional tool inputs share the canonical wire schema" {
 }
 
 ///|
+test "tool snapshot accessors cannot mutate later command lookup" {
+  let tool = sample_tool()
+  let command = tool.command(["r"])
+  let path = command.path()
+  path[0] = "mutated"
+  let arguments = command.arguments()
+  let aliases = arguments[0].aliases()
+  aliases.push("mutated")
+  arguments[0] = arguments[1]
+  let graph = command.input_schema().graph()
+  guard graph.root.body is Record(fields) else {
+    fail("expected reflected record input")
+  }
+  fields[0] = { ..fields[0], name: "mutated", }
+  fields[1].metadata.aliases.push("mutated")
+
+  let fresh = tool.command(["r"])
+  assert_eq(fresh.path(), ["run"])
+  assert_eq(fresh.arguments()[0].name(), "message")
+  assert_eq(fresh.arguments()[0].aliases(), [])
+  let fresh_graph = fresh.input_schema().graph()
+  guard fresh_graph.root.body is Record(fresh_fields) else {
+    fail("expected reflected record input")
+  }
+  assert_eq(fresh_fields[0].name, "message")
+  assert_eq(fresh_fields[1].metadata.aliases, [])
+  fresh
+  .input_schema()
+  .validate_value(
+    @model.SchemaValue::Record([
+      @model.SchemaValue::String("message"),
+      @model.SchemaValue::Option(None),
+      @model.SchemaValue::Option(None),
+    ]),
+  )
+}
+
+///|
 extern "wasm" fn set_reflection_tool_host_mode(mode : Int) = "golem:test" "set-tool-host-mode"
 
 ///|

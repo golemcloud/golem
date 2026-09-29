@@ -64,7 +64,9 @@ use golem_common::model::agent::{AgentMode, OwnerKind};
 use golem_common::model::card::{AgentCardHolder, CardHolder};
 use golem_common::model::durable_stream::StreamSessionRecord;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::oplog::{OplogEntry, OplogIndex, OplogIndexRange};
+use golem_common::model::oplog::{
+    DurableStreamEventSummary, OplogEntry, OplogIndex, OplogIndexRange,
+};
 use golem_common::model::{AgentFingerprint, AgentMetadata, Timestamp};
 use golem_common::model::{AgentId, IdempotencyKey, OwnedAgentId};
 use golem_common::read_only_lock;
@@ -664,6 +666,8 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                         timestamp: Timestamp::now_utc(),
                     },
                 ))),
+                // The source is read, never written, so this handle asserts no epoch.
+                None,
             )
             .await;
         let source_oplog = Ctx::wrap_oplog(
@@ -761,7 +765,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             )
             .await
             .map_err(WorkerExecutorError::runtime)?;
-        new_oplog.add(target_initial_oplog_entry).await;
+        new_oplog.add(target_initial_oplog_entry).await?;
 
         let oplog_range = OplogIndexRange::new(OplogIndex::INITIAL.next(), oplog_index_cut_off);
 
@@ -830,7 +834,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                     *cached = Some(Arc::new(value));
                 }
             }
-            new_oplog.add(entry.clone()).await;
+            new_oplog.add(entry.clone()).await?;
 
             if let OplogEntry::Revert { dropped_region, .. } = &entry {
                 deleted_regions_builder.add(dropped_region.clone());
@@ -899,13 +903,16 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             .upload_payload(&StreamSessionRecord::ForkCut(fork_cut.clone()))
             .await
             .map_err(WorkerExecutorError::runtime)?;
+        let summary =
+            DurableStreamEventSummary::session(&StreamSessionRecord::ForkCut(fork_cut.clone()));
         new_oplog
             .add(OplogEntry::StreamSession {
                 timestamp: now,
                 entity_parent_start_index: None,
                 record,
+                summary,
             })
-            .await;
+            .await?;
 
         for (idempotency_key, pending_index) in pending_invocation_keys {
             if let Some(candidate) = export {
@@ -931,7 +938,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                     timestamp: now,
                     idempotency_key,
                 })
-                .await;
+                .await?;
         }
 
         for (target_revision, update_attempt_index) in pending_updates {
@@ -946,7 +953,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                     snapshot_assisted_details: None,
                     update_attempt_index: Some(update_attempt_index),
                 })
-                .await;
+                .await?;
         }
 
         if let Some(candidate) = export
@@ -1049,7 +1056,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                 if let Some((scope, phantom)) = guest_result {
                     publication::write_guest_result(oplog.as_ref(), scope, phantom).await?;
                 }
-                oplog.commit(CommitLevel::Always).await;
+                oplog.commit(CommitLevel::Always).await?;
                 let last = oplog.current_oplog_index().await;
                 drop(oplog);
                 let target_lifecycle = self.oplog_service.lock_lifecycle(&target.agent_id).await;

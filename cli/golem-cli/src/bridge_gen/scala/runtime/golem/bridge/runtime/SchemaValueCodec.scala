@@ -108,7 +108,7 @@ object SchemaValueCodec {
         "bytes" -> Json.arr(bytes.map(b => Json.fromInt(b & 0xff)))
       )
       val withMime = mimeType match {
-        case Some(m) => base :+ ("mime_type" -> Json.string(m))
+        case Some(m) => base :+ ("mimeType" -> Json.string(m))
         case None    => base
       }
       node("binary", Json.obj(withMime))
@@ -451,7 +451,7 @@ object SchemaValueCodec {
     case "binary" =>
       for {
         bytes    <- field(value, "bytes").flatMap(Json.asArray).flatMap(decodeBytes)
-        mimeType <- optionalStringField(value, "mime_type")
+        mimeType <- optionalStringField(value, "mimeType")
       } yield BinaryValue(bytes, mimeType)
     case "path"     => field(value, "path").flatMap(Json.asString).map(PathValue(_))
     case "url"      => field(value, "url").flatMap(Json.asString).map(UrlValue(_))

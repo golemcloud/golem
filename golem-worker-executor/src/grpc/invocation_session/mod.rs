@@ -16,12 +16,13 @@ use super::{WorkerExecutorImpl, extract_owned_agent_id};
 use crate::durable_host::durable_session::{
     StreamSession, durable_stream_mapping_from_proto, durable_stream_mapping_to_proto,
 };
-use crate::durable_host::durable_stream::ProducerRegistrationRequest;
+use crate::durable_host::durable_stream::{ProducerRegistrationRequest, SessionError};
 use crate::durable_host::stream_session::{
     decode_recursive_stream_value, decode_recursive_stream_value_with_schema,
     encode_recursive_stream_value_with_schema,
 };
 use crate::grpc::invocation::{CanStartWorker, from_proto_invocation_context};
+use crate::services::oplog::OplogError;
 use crate::services::{HasAll, HasComponentService, HasSchedulerService, UsesAllDeps};
 use crate::worker::invocation::validate_agent_method_invocation;
 use crate::worker::{DurableStreamingInvocationRequest, Worker};
@@ -237,7 +238,7 @@ async fn persisted_invocation_result(
         invocation_session_result::Result,
         Vec<golem_api_grpc::proto::golem::worker::DurableStreamMapping>,
     )>,
-    String,
+    SessionError,
 > {
     let Some(result) = streams.persisted_result().await? else {
         return Ok(None);
@@ -276,13 +277,13 @@ async fn until_response_closed<T>(
     }
 }
 
-fn is_attachment_termination(error: &str) -> bool {
+fn is_attachment_termination(error: &SessionError) -> bool {
     error.contains("response stream closed") || error.starts_with("StaleEpoch:")
 }
 
 async fn send_attachment_revocation(
     responses: &mpsc::Sender<InvocationResponse>,
-    revocation: Result<(), String>,
+    revocation: Result<(), SessionError>,
 ) {
     match revocation {
         Ok(()) => {
@@ -663,7 +664,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         streams
                             .recover_nested_input_mappings()
                             .await
-                            .map_err(WorkerExecutorError::runtime)?;
+                            .map_err(|error| {
+                                error.into_worker_executor_error(WorkerExecutorError::runtime)
+                            })?;
                     }
                     worker.await_enqueued_invocation(ik.clone()).await?
                 } else {
@@ -1043,10 +1046,19 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             match durable_streams.input_high_waters().await {
                 Ok(high_waters) => high_waters,
                 Err(error) => {
-                    send_rejection(
+                    // A refused write is rejected as the worker error it is, which the worker
+                    // service reads as a routing miss.
+                    let worker_error = match &error {
+                        SessionError::Fenced(fence) => Some(
+                            WorkerExecutorError::from(OplogError::Fenced(fence.clone())).into(),
+                        ),
+                        SessionError::Failed(_) => None,
+                    };
+                    send_rejection_with_worker_error(
                         &responses,
                         InvocationRejectionReason::Internal,
-                        error,
+                        error.to_string(),
+                        worker_error,
                         &start,
                     )
                     .await;
@@ -1128,28 +1140,28 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             let observe = async {
                 let mut completed = early_output;
                 let result = loop {
-                    if let Some(result) = streams.persisted_result().await.map_err(WorkerExecutorError::runtime)? {
+                    if let Some(result) = streams.persisted_result().await.map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))? {
                         break result;
                     }
-                    if let Some(outcome) = streams.persisted_finished().await.map_err(WorkerExecutorError::runtime)? {
+                    if let Some(outcome) = streams.persisted_finished().await.map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))? {
                         // A result can be committed between the two reads. Its handles must
                         // precede the terminal even when the invocation subsequently failed.
-                        if let Some(result) = streams.persisted_result().await.map_err(WorkerExecutorError::runtime)? {
+                        if let Some(result) = streams.persisted_result().await.map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))? {
                             break result;
                         }
                         outcome.map_err(|details| WorkerExecutorError::runtime(String::from_utf8_lossy(&details).into_owned()))?;
                         return Err(WorkerExecutorError::runtime("session finished successfully without a persisted result"));
                     }
                     if let Some(output) = completed.take() {
-                        if let Some(result) = streams.persisted_result().await.map_err(WorkerExecutorError::runtime)? {
+                        if let Some(result) = streams.persisted_result().await.map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))? {
                             break result;
                         }
                         output?;
                         return Err(WorkerExecutorError::runtime("invocation finished without a persisted result"));
                     }
                     tokio::select! {
-                        result = streams.wait_persisted_result() => { result.map_err(WorkerExecutorError::runtime)?; },
-                        outcome = streams.wait_persisted_finished() => { outcome.map_err(WorkerExecutorError::runtime)?.ok(); },
+                        result = streams.wait_persisted_result() => { result.map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?; },
+                        outcome = streams.wait_persisted_finished() => { outcome.map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?.ok(); },
                         output = &mut invocation => completed = Some(output),
                     }
                 };
@@ -1168,7 +1180,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     return Ok::<_, WorkerExecutorError>(());
                 }
                 let outcome = streams.wait_persisted_finished().await
-                    .map_err(WorkerExecutorError::runtime)?;
+                    .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
                 match outcome {
                     Ok(()) => {
                         let _ = responses.send(InvocationResponse {
@@ -1190,7 +1202,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 match next {
                     Ok(None) => std::future::pending::<()>().await,
                     Ok(Some(_)) | Err(_) => {
-                        send_protocol_failure(&responses, "an invocation observer cannot send stream controls".into()).await;
+                        send_protocol_failure(&responses, "an invocation observer cannot send stream controls".to_string()).await;
                     }
                 }
             };
@@ -1231,7 +1243,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                                 .await
                         {
                             if let Err(finish_error) =
-                                durable_streams.fail_protocol(details.clone()).await
+                                durable_streams.fail_protocol(details.to_string()).await
                             {
                                 send_protocol_failure(&responses, finish_error).await;
                                 return;
@@ -1272,7 +1284,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             tokio::pin!(changed);
                             changed.as_mut().enable();
                             let persisted = persisted_invocation_result(durable_streams, native_tool).await?;
-                            if let Some(result) = persisted { break Ok(result); }
+                            if let Some(result) = persisted { break Ok::<_, SessionError>(result); }
                             changed.await;
                         }
                     });
@@ -1281,7 +1293,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             biased;
                             pumped = output_pump.join_next(), if !output_pump.is_empty() => {
                                 let result = pumped.expect("output pump is not empty")
-                                    .map_err(|error| format!("durable output pump task failed: {error}"))
+                                    .map_err(|error| SessionError::from(format!("durable output pump task failed: {error}")))
                                     .and_then(|result| result);
                                 if let Err(error) = result {
                                     if !is_attachment_termination(&error) {
@@ -1330,7 +1342,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                                         request,
                                     ).await {
                                         if let Err(finish_error) =
-                                            durable_streams.fail_protocol(details.clone()).await
+                                            durable_streams.fail_protocol(details.to_string()).await
                                         {
                                             send_protocol_failure(&responses, finish_error).await;
                                             return;
@@ -1445,8 +1457,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             Some(Ok(result)) => result,
                             Some(Err(error)) => Err(format!(
                                 "durable output pump task failed: {error}"
-                            )),
-                            None => Err("durable output pump task stopped unexpectedly".to_string()),
+                            ).into()),
+                            None => Err("durable output pump task stopped unexpectedly".to_string().into()),
                         };
                         match result {
                             Ok(()) => {
@@ -1457,7 +1469,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             }
                             Err(error) => {
                                 if let Err(finish_error) = durable_streams
-                                    .fail_protocol(error.clone())
+                                    .fail_protocol(error.to_string())
                                     .await
                                 {
                                     send_protocol_failure(&responses, finish_error).await;
@@ -1481,7 +1493,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                                 request,
                             ).await {
                                 if let Err(finish_error) =
-                                    durable_streams.fail_protocol(details.clone()).await
+                                    durable_streams.fail_protocol(details.to_string()).await
                                 {
                                     send_protocol_failure(&responses, finish_error).await;
                                     return;
@@ -1537,7 +1549,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                                 request,
                             ).await {
                                 if let Err(finish_error) =
-                                    durable_streams.fail_protocol(details.clone()).await
+                                    durable_streams.fail_protocol(details.to_string()).await
                                 {
                                     send_protocol_failure(&responses, finish_error).await;
                                     return;
@@ -1807,7 +1819,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     .streams
                     .terminal_output_cursor_stream_ids(&cursor_map)
                     .await
-                    .map_err(WorkerExecutorError::invalid_request)?;
+                    .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::invalid_request))?;
                 let mut terminal_cursor_stream_ids = terminal_cursor_stream_ids.into_iter().collect::<Vec<_>>();
                 terminal_cursor_stream_ids.sort();
                 Ok::<_, WorkerExecutorError>((acceptance, cursor_map, terminal_cursor_stream_ids))
@@ -2000,7 +2012,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 () = &mut changed => {}
                 pumped = output_pump.join_next(), if !output_pump.is_empty() => {
                     let result = pumped.expect("output pump is not empty")
-                        .map_err(|error| format!("durable output pump task failed: {error}"))
+                        .map_err(|error| SessionError::from(format!("durable output pump task failed: {error}")))
                         .and_then(|result| result);
                     if let Err(error) = result {
                         if !is_attachment_termination(&error) {
@@ -2085,8 +2097,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             Some(Ok(result)) => result,
                             Some(Err(error)) => Err(format!(
                                 "durable output pump task failed: {error}"
-                            )),
-                            None => Err("durable output pump task stopped unexpectedly".to_string()),
+                            ).into()),
+                            None => Err("durable output pump task stopped unexpectedly".to_string().into()),
                         };
                         if let Err(error) = result
                             && !is_attachment_termination(&error)
@@ -2911,7 +2923,9 @@ fn stream_element_schema<'a>(
                     .ok_or_else(|| "stream union path is out of range".to_string())?
                     .body
             }
-            _ => return Err("stream value path does not match the pinned input schema".to_string()),
+            _ => {
+                return Err("stream value path does not match the pinned input schema".to_string());
+            }
         };
     }
     match graph
@@ -3158,15 +3172,32 @@ async fn send_failure(
         .await;
 }
 
-async fn send_protocol_failure(responses: &mpsc::Sender<InvocationResponse>, details: String) {
-    send_failure(
-        responses,
-        InvocationFailureKind::Protocol,
-        "protocol",
-        details,
-        None,
-    )
-    .await;
+/// Finishes the session on a failure the protocol reports as text. A refused oplog write is not
+/// one: it goes out as the worker error it is, which the worker service reads as a routing miss
+/// and retries on the shard's new owner.
+async fn send_protocol_failure(
+    responses: &mpsc::Sender<InvocationResponse>,
+    error: impl Into<SessionError>,
+) {
+    match error.into() {
+        SessionError::Fenced(fence) => {
+            send_worker_failure(
+                responses,
+                WorkerExecutorError::from(OplogError::Fenced(fence)),
+            )
+            .await
+        }
+        SessionError::Failed(details) => {
+            send_failure(
+                responses,
+                InvocationFailureKind::Protocol,
+                "protocol",
+                details,
+                None,
+            )
+            .await
+        }
+    }
 }
 
 async fn send_worker_failure(
@@ -3189,7 +3220,7 @@ async fn route_durable_request(
     responses: &mpsc::Sender<InvocationResponse>,
     state: &Arc<tokio::sync::Mutex<InvocationSessionState>>,
     request: InvocationRequest,
-) -> Result<(), String> {
+) -> Result<(), SessionError> {
     state
         .lock()
         .await
@@ -3216,7 +3247,7 @@ async fn route_durable_request(
                         bytes,
                     ),
                 ) => StreamItemsPayload::PackedU8(bytes),
-                None => return Err("durable input item has no payload".to_string()),
+                None => return Err("durable input item has no payload".to_string().into()),
             };
             streams
                 .write_input(None, item.transport_stream_id, item.sequence, payload)
@@ -3280,12 +3311,14 @@ async fn route_durable_request(
                     (StreamCancelRole::OutputConsumer, SessionStreamRole::Output)
                 }
                 golem_api_grpc::proto::golem::worker::StreamCancelRole::System => {
-                    return Err(
-                        "system-authored durable stream cancellation is internal".to_string()
-                    );
+                    return Err("system-authored durable stream cancellation is internal"
+                        .to_string()
+                        .into());
                 }
                 golem_api_grpc::proto::golem::worker::StreamCancelRole::Unspecified => {
-                    return Err("durable stream cancel role is unspecified".to_string());
+                    return Err("durable stream cancel role is unspecified"
+                        .to_string()
+                        .into());
                 }
             };
             streams
@@ -3309,7 +3342,8 @@ async fn route_durable_request(
                 golem_api_grpc::proto::golem::worker::StreamCancelReason::Transport => {
                     return Err(
                         "transport loss detaches a durable session and cannot cancel a stream"
-                            .to_string(),
+                            .to_string()
+                            .into(),
                     );
                 }
                 golem_api_grpc::proto::golem::worker::StreamCancelReason::SourceUnavailable
@@ -3322,11 +3356,14 @@ async fn route_durable_request(
                 | golem_api_grpc::proto::golem::worker::StreamCancelReason::InvocationFailed => {
                     return Err(
                         "system-authored durable stream cancellation reason is internal"
-                            .to_string(),
+                            .to_string()
+                            .into(),
                     );
                 }
                 golem_api_grpc::proto::golem::worker::StreamCancelReason::Unspecified => {
-                    return Err("durable stream cancel reason is unspecified".to_string());
+                    return Err("durable stream cancel reason is unspecified"
+                        .to_string()
+                        .into());
                 }
             };
             streams
@@ -3341,7 +3378,9 @@ async fn route_durable_request(
             None
         }
         invocation_request::Request::Start(_) | invocation_request::Request::ResumeAttach(_) => {
-            return Err("unexpected message on durable invocation request stream".to_string());
+            return Err("unexpected message on durable invocation request stream"
+                .to_string()
+                .into());
         }
     };
     if let Some(ack) = ack {
@@ -4333,11 +4372,19 @@ mod freshness_tests {
     #[test]
     fn output_pump_distinguishes_attachment_termination_from_protocol_failure() {
         assert!(is_attachment_termination(
-            "invocation response stream closed"
+            &crate::durable_host::durable_stream::SessionError::from(
+                "invocation response stream closed"
+            )
         ));
-        assert!(is_attachment_termination("StaleEpoch: attachment fenced"));
+        assert!(is_attachment_termination(
+            &crate::durable_host::durable_stream::SessionError::from(
+                "StaleEpoch: attachment fenced"
+            )
+        ));
         assert!(!is_attachment_termination(
-            "durable output journal is corrupt"
+            &crate::durable_host::durable_stream::SessionError::from(
+                "durable output journal is corrupt"
+            )
         ));
     }
 

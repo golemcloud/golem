@@ -51,9 +51,7 @@ use golem_common::model::entity::{
     EntityInvocationScope, FilesystemCapability, InvocationExecutionMode, OwnerRuntime,
 };
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::invocation_context::{
-    AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
-};
+use golem_common::model::invocation_context::{InvocationContextStack, SpanId};
 use golem_common::model::oplog::{
     AgentError, FailedSnapshotAssistedUpdateDetails, HostResponse, HostResponseEntityInvocation,
     HostResponseP3HttpClientConsumeBodyChunk, OplogEntry, OplogPayload, PayloadId, RawOplogPayload,
@@ -161,6 +159,8 @@ use golem_worker_executor::services::worker_proxy::{RemoteWorkerProxy, WorkerPro
 use golem_worker_executor::services::{
     HasActiveAgents, HasAll, HasWorkerService, NoAdditionalDeps, rdbms,
 };
+use golem_worker_executor::storage::indexed::sqlite::SqliteIndexedStorage;
+use golem_worker_executor::storage::indexed::{IndexedStorage, IndexedStorageNamespace};
 use golem_worker_executor::storage::keyvalue::KeyValueStorage;
 use golem_worker_executor::worker::{RetryDecision, Worker, WorkerDeletionHook};
 pub use golem_worker_executor::workerctx::ReplayAdmissionStage;
@@ -170,7 +170,9 @@ use golem_worker_executor::workerctx::{
     InvocationManagement, LogEventEmitBehaviour, P3HttpBodyProducerHook, StatusManagement,
     UpdateManagement, WorkerCtx, WorkerFilesystemContext,
 };
-use golem_worker_executor::{Bootstrap, RunDetails, bootstrap_and_run_worker_executor};
+use golem_worker_executor::{
+    Bootstrap, RunDetails, bootstrap_and_run_worker_executor, derive_disjoint_sqlite_config,
+};
 use prometheus::Registry;
 use regex::Regex;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -959,7 +961,8 @@ impl TestWorkerExecutor {
             .ok_or_else(|| anyhow!("worker is not loaded: {owned_agent_id}"))?;
         golem_worker_executor::services::HasOplog::oplog(worker.as_ref())
             .commit(CommitLevel::Always)
-            .await;
+            .await
+            .map_err(|error| anyhow!("oplog commit failed: {error}"))?;
         Ok(())
     }
 
@@ -995,8 +998,8 @@ impl TestWorkerExecutor {
             .await
             .ok_or_else(|| anyhow!("worker is not loaded: {owned_agent_id}"))?;
         let oplog = golem_worker_executor::services::HasOplog::oplog(worker.as_ref());
-        let oplog_index = oplog.add(entry).await;
-        oplog.commit(CommitLevel::Always).await;
+        let oplog_index = oplog.add(entry).await?;
+        oplog.commit(CommitLevel::Always).await?;
         Ok(oplog_index)
     }
 
@@ -1011,7 +1014,7 @@ impl TestWorkerExecutor {
             .try_get_worker(&owned_agent_id)
             .await
             .ok_or_else(|| anyhow!("worker is not loaded: {owned_agent_id}"))?;
-        worker.queue_card_revocation(card_id).await;
+        worker.queue_card_revocation(card_id).await?;
         Ok(())
     }
 
@@ -1033,7 +1036,7 @@ impl TestWorkerExecutor {
                     card_id,
                 )),
             ))
-            .await)
+            .await?)
     }
 
     pub async fn queue_card_install(
@@ -1054,7 +1057,7 @@ impl TestWorkerExecutor {
                     card,
                 )),
             ))
-            .await;
+            .await?;
         Ok(())
     }
 
@@ -1244,6 +1247,17 @@ impl TestWorkerExecutor {
             .await
     }
 
+    /// Pauses the invocation loop inside its enqueue of the next manual update, immediately before
+    /// the `PendingUpdate` entry is appended, with the worker lifecycle lock held.
+    pub async fn gate_next_pending_update_enqueue(
+        &self,
+        agent_id: &AgentId,
+    ) -> AgentInitializationEnqueueGateHandle {
+        self.additional_test_deps
+            .gate_next_pending_update_enqueue(agent_id.clone())
+            .await
+    }
+
     /// Arms a one-shot gate immediately before the next discriminated p3 HTTP consume-body scope
     /// `Start` is appended for `agent_id`.
     pub async fn gate_next_consume_body_scope_start(
@@ -1356,6 +1370,20 @@ impl TestWorkerExecutor {
         Ok(worker
             .owner_execution()
             .test_gate_next_monotonic_clock_start())
+    }
+
+    /// Pauses the next invocation once its `AgentInvocationStarted` is buffered and before it is
+    /// committed, so the entry sits in the buffer while the test acts.
+    pub async fn gate_next_invocation_started(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> anyhow::Result<golem_worker_executor::worker::instance::ClockNowGateHandle> {
+        let worker = self
+            .additional_test_deps
+            .try_get_worker(owned_agent_id)
+            .await
+            .ok_or_else(|| anyhow!("worker {owned_agent_id} is not currently in ActiveAgents"))?;
+        Ok(worker.owner_execution().test_gate_next_invocation_started())
     }
 
     /// Pauses the next exclusive wall-clock `now` call before it starts durability.
@@ -1965,6 +1993,67 @@ pub fn scheduler_sqlite_storage_config(
     }
 }
 
+/// Raises the owning epoch stored for `owned_agent_id`'s oplog to `epoch`, as a newer owner
+/// opening it on another executor would. The executor's own shard assignment is left alone, so
+/// its next oplog write is refused: this is the zombie side of a shard move.
+///
+/// Reaches the storage of executors started with the SQLite storage config (`start`,
+/// `start_with_overrides`, `start_customized`), whose indexed storage lives in its own file next to
+/// the key-value one.
+pub async fn take_agent_oplog_over_at_epoch(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    owned_agent_id: &OwnedAgentId,
+    epoch: u64,
+) -> anyhow::Result<()> {
+    let storage = SqliteIndexedStorage::configured(&derive_disjoint_sqlite_config(
+        &sqlite_storage_config(deps, context),
+        "indexed",
+    ))
+    .await
+    .map_err(|err| anyhow!(err))?;
+    // The namespace and key the executor's own open records its epoch under.
+    storage
+        .set_key_epoch(
+            "oplog",
+            "test_take_over",
+            IndexedStorageNamespace::OpLog {
+                agent_id: owned_agent_id.agent_id(),
+                agent_mode: AgentMode::Durable,
+            },
+            &owned_agent_id.agent_id.to_redis_key(),
+            ShardEpoch(epoch),
+        )
+        .await?;
+    Ok(())
+}
+
+/// How many entries the agent's durable oplog holds in storage, read without going through any
+/// executor - the same storage [`take_agent_oplog_over_at_epoch`] writes to.
+pub async fn agent_oplog_length(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    owned_agent_id: &OwnedAgentId,
+) -> anyhow::Result<u64> {
+    let storage = SqliteIndexedStorage::configured(&derive_disjoint_sqlite_config(
+        &sqlite_storage_config(deps, context),
+        "indexed",
+    ))
+    .await
+    .map_err(|err| anyhow!(err))?;
+    Ok(storage
+        .length(
+            "oplog",
+            "test_length",
+            IndexedStorageNamespace::OpLog {
+                agent_id: owned_agent_id.agent_id(),
+                agent_mode: AgentMode::Durable,
+            },
+            &owned_agent_id.agent_id.to_redis_key(),
+        )
+        .await?)
+}
+
 fn apply_sqlite_storage_config(
     config: &mut GolemConfig,
     deps: &WorkerExecutorTestDependencies,
@@ -2530,7 +2619,7 @@ impl UpdateManagement for TestWorkerCtx {
         details: Option<String>,
         snapshot_assisted_details: Option<FailedSnapshotAssistedUpdateDetails>,
         update_attempt_index: Option<OplogIndex>,
-    ) {
+    ) -> Result<(), WorkerExecutorError> {
         self.durable_ctx
             .on_worker_update_failed(
                 target_revision,
@@ -2547,7 +2636,7 @@ impl UpdateManagement for TestWorkerCtx {
         new_component_size: u64,
         new_active_plugins: HashSet<EnvironmentPluginGrantId>,
         snapshot_assisted_details: Option<SnapshotAssistedUpdateDetails>,
-    ) {
+    ) -> Result<(), WorkerExecutorError> {
         self.durable_ctx
             .on_worker_update_succeeded(
                 target_revision,
@@ -3011,43 +3100,8 @@ impl HostFutureInvokeResult for TestWorkerCtx {
 
 #[async_trait]
 impl InvocationContextManagement for TestWorkerCtx {
-    async fn start_span(
-        &mut self,
-        initial_attributes: &[(String, AttributeValue)],
-        activate: bool,
-    ) -> Result<Arc<InvocationContextSpan>, WorkerExecutorError> {
-        self.durable_ctx
-            .start_span(initial_attributes, activate)
-            .await
-    }
-
-    async fn start_child_span(
-        &mut self,
-        parent: &SpanId,
-        initial_attributes: &[(String, AttributeValue)],
-    ) -> Result<Arc<InvocationContextSpan>, WorkerExecutorError> {
-        self.durable_ctx
-            .start_child_span(parent, initial_attributes)
-            .await
-    }
-
     fn remove_span(&mut self, span_id: &SpanId) -> Result<(), WorkerExecutorError> {
         self.durable_ctx.remove_span(span_id)
-    }
-
-    async fn finish_span(&mut self, span_id: &SpanId) -> Result<(), WorkerExecutorError> {
-        self.durable_ctx.finish_span(span_id).await
-    }
-
-    async fn set_span_attribute(
-        &mut self,
-        span_id: &SpanId,
-        key: &str,
-        value: AttributeValue,
-    ) -> Result<(), WorkerExecutorError> {
-        self.durable_ctx
-            .set_span_attribute(span_id, key, value)
-            .await
     }
 
     fn clone_as_inherited_stack(&self, current_span_id: &SpanId) -> InvocationContextStack {
@@ -4222,9 +4276,10 @@ impl TestOplog {
                 self.rpc_starts.lock().unwrap().insert(index);
                 Some(RpcCheckpoint::Start)
             }
-            OplogEntry::StartSpan { .. } if !self.rpc_starts.lock().unwrap().is_empty() => {
-                Some(RpcCheckpoint::StartSpan)
-            }
+            OplogEntry::Start {
+                span_started: Some(_),
+                ..
+            } if !self.rpc_starts.lock().unwrap().is_empty() => Some(RpcCheckpoint::StartSpan),
             OplogEntry::End { start_index, .. }
                 if self.rpc_starts.lock().unwrap().contains(start_index) =>
             {
@@ -4238,7 +4293,10 @@ impl TestOplog {
                 .has_rpc_commit_gate(&self.owned_agent_id.agent_id, checkpoint)
                 .await
         {
-            self.oplog.commit(CommitLevel::Always).await;
+            self.oplog
+                .commit(CommitLevel::Always)
+                .await
+                .expect("oplog commit failed at the fire-and-forget RPC gate");
             self.additional_test_deps
                 .pause_after_rpc_commit(&self.owned_agent_id.agent_id, checkpoint)
                 .await;
@@ -4290,15 +4348,6 @@ impl TestOplog {
     }
 
     async fn pause_before_agent_initialization_enqueue(&self, entry: &OplogEntry) {
-        let OplogEntry::PendingAgentInvocation {
-            idempotency_key, ..
-        } = entry
-        else {
-            return;
-        };
-        if !idempotency_key.value.starts_with("init-") {
-            return;
-        }
         let Some(gate) = self
             .additional_test_deps
             .agent_initialization_enqueue_gate(&self.owned_agent_id.agent_id)
@@ -4306,6 +4355,9 @@ impl TestOplog {
         else {
             return;
         };
+        if !(gate.matches)(entry) {
+            return;
+        }
         if !gate.armed.swap(false, Ordering::SeqCst) {
             return;
         }
@@ -4457,8 +4509,17 @@ impl Oplog for TestOplog {
         self.oplog.task_owner()
     }
 
-    async fn add(&self, entry: OplogEntry) -> OplogIndex {
+    async fn add(
+        &self,
+        entry: OplogEntry,
+    ) -> Result<OplogIndex, golem_worker_executor::services::oplog::OplogError> {
         self.pause_before_agent_initialization_enqueue(&entry).await;
+        // Tests inject write failures by entry name.
+        if let Err(details) = self.check_oplog_add(&entry).await {
+            return Err(golem_worker_executor::services::oplog::OplogError::Payload(
+                details,
+            ));
+        }
         if Self::is_consume_body_scope_start(&entry)
             && self.pause_before_consume_body_scope_start().await
         {
@@ -4479,7 +4540,9 @@ impl Oplog for TestOplog {
             OplogEntry::CompletionDelivered { start_index, .. } => Some(*start_index),
             _ => None,
         };
-        let index = self.oplog.add(entry.clone()).await;
+        // A refused write never reaches storage, so the boundaries below stay unarmed and the
+        // error propagates to the fence handling instead.
+        let index = self.oplog.add(entry.clone()).await?;
         if let Some(start_index) = ended_start {
             self.observe_rpc_memory_end(start_index);
         }
@@ -4499,7 +4562,7 @@ impl Oplog for TestOplog {
         if gated {
             self.pause_at_consume_body_chunk_end_gate().await;
         }
-        index
+        Ok(index)
     }
 
     fn enqueue_add(&self, entry: OplogEntry) -> OplogAddReceipt {
@@ -4520,47 +4583,52 @@ impl Oplog for TestOplog {
         }
         let this = self.clone();
         Box::pin(async move {
-            let index = pending.await;
+            // A refused receipt means the entry never landed, so the end boundary stays unarmed.
+            let index = pending.await?;
             if let Some(start_index) = ended_start {
                 this.observe_rpc_memory_end(start_index);
             }
             if gated {
                 this.pause_at_consume_body_chunk_end_gate().await;
             }
-            index
+            Ok(index)
         })
     }
 
     async fn add_durable_stream_batch(
         &self,
         make_batch: DurableStreamBatchBuilder,
-    ) -> Result<Vec<(OplogIndex, OplogEntry)>, String> {
+    ) -> Result<Vec<(OplogIndex, OplogEntry)>, golem_worker_executor::services::oplog::OplogError>
+    {
         self.oplog.add_durable_stream_batch(make_batch).await
-    }
-
-    async fn fallible_add(&self, entry: OplogEntry) -> Result<(), String> {
-        self.check_oplog_add(&entry).await?;
-        self.oplog.fallible_add(entry).await
-    }
-
-    async fn fallible_add_pair(
-        &self,
-        first: OplogEntry,
-        second: OplogEntry,
-    ) -> Result<(OplogIndex, OplogIndex), String> {
-        self.check_oplog_add(&first).await?;
-        self.check_oplog_add(&second).await?;
-        self.oplog.fallible_add_pair(first, second).await
     }
 
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> u64 {
         self.oplog.drop_prefix(last_dropped_id).await
     }
 
-    async fn commit(&self, level: CommitLevel) -> BTreeMap<OplogIndex, OplogEntry> {
+    async fn commit(
+        &self,
+        level: CommitLevel,
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, golem_worker_executor::services::oplog::OplogError>
+    {
         self.additional_test_deps
             .record_oplog_call(&self.owned_agent_id, "commit");
         let committed = self.oplog.commit(level).await;
+        if committed.as_ref().is_ok_and(|committed| {
+            committed.values().any(|entry| {
+                matches!(
+                    entry,
+                    OplogEntry::End {
+                        span_finished: Some(_),
+                        ..
+                    }
+                )
+            })
+        }) {
+            self.additional_test_deps
+                .record_oplog_call(&self.owned_agent_id, "commit-span-finish");
+        }
         let append = self
             .additional_test_deps
             .append_after_commit
@@ -4568,11 +4636,14 @@ impl Oplog for TestOplog {
             .unwrap()
             .remove(&self.owned_agent_id.agent_id);
         if append {
+            // The injected entry is the point of the hook, so a refusal fails the test rather
+            // than letting it pass against an oplog that never received it.
             self.oplog
                 .add(OplogEntry::Suspend {
                     timestamp: golem_common::model::Timestamp::now_utc(),
                 })
-                .await;
+                .await
+                .expect("append_after_next_oplog_commit was refused by the oplog");
         }
         committed
     }
@@ -4594,7 +4665,11 @@ impl Oplog for TestOplog {
         self.oplog.last_added_non_hint_entry().await
     }
 
-    async fn wait_for_replicas(&self, replicas: u8, timeout: Duration) -> bool {
+    async fn wait_for_replicas(
+        &self,
+        replicas: u8,
+        timeout: Duration,
+    ) -> Result<bool, golem_worker_executor::services::oplog::OplogError> {
         self.oplog.wait_for_replicas(replicas, timeout).await
     }
 
@@ -4720,7 +4795,7 @@ impl Oplog for TestOplog {
         &self,
         serialized_request: Vec<u8>,
         build_start: Box<dyn FnOnce(RawOplogPayload) -> Result<OplogEntry, String> + Send>,
-    ) -> Result<OrderedOplogStart, String> {
+    ) -> Result<OrderedOplogStart, golem_worker_executor::services::oplog::OplogError> {
         let ordered = self
             .oplog
             .add_start_with_reserved_raw_payload(serialized_request, build_start)
@@ -4751,7 +4826,7 @@ impl Oplog for TestOplog {
     async fn add_start_with_indexed_reserved_raw_payload(
         &self,
         build_request: IndexedReservedStartBuilder,
-    ) -> Result<OrderedOplogStart, String> {
+    ) -> Result<OrderedOplogStart, golem_worker_executor::services::oplog::OplogError> {
         let ordered = self
             .oplog
             .add_start_with_indexed_reserved_raw_payload(build_request)
@@ -4779,11 +4854,26 @@ impl Oplog for TestOplog {
         Ok(ordered)
     }
 
+    fn enqueue_add_pair(
+        &self,
+        start: OplogEntry,
+        make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
+    ) -> golem_worker_executor::services::oplog::OplogAddPairReceipt {
+        self.oplog.enqueue_add_pair(start, make_second)
+    }
+
     async fn add_pair(
         &self,
         start: OplogEntry,
         make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
-    ) -> (OplogIndex, OplogIndex) {
+    ) -> Result<(OplogIndex, OplogIndex), golem_worker_executor::services::oplog::OplogError> {
+        // The second entry is only built once the first has its index, so the injected failure
+        // check covers the pair through the first entry alone.
+        if let Err(details) = self.check_oplog_add(&start).await {
+            return Err(golem_worker_executor::services::oplog::OplogError::Payload(
+                details,
+            ));
+        }
         self.oplog.add_pair(start, make_second).await
     }
 
@@ -5377,9 +5467,36 @@ impl AdditionalTestDeps {
         &self,
         agent_id: AgentId,
     ) -> AgentInitializationEnqueueGateHandle {
+        fn is_initialization_enqueue(entry: &OplogEntry) -> bool {
+            matches!(entry, OplogEntry::PendingAgentInvocation { idempotency_key, .. }
+                if idempotency_key.value.starts_with("init-"))
+        }
+        self.gate_next_append(agent_id, is_initialization_enqueue)
+            .await
+    }
+
+    /// Arms a one-shot gate immediately before the next `PendingUpdate` is appended for
+    /// `agent_id`: the invocation loop's own enqueue of a manual update, taken under the worker
+    /// lifecycle lock.
+    pub async fn gate_next_pending_update_enqueue(
+        &self,
+        agent_id: AgentId,
+    ) -> AgentInitializationEnqueueGateHandle {
+        fn is_pending_update(entry: &OplogEntry) -> bool {
+            matches!(entry, OplogEntry::PendingUpdate { .. })
+        }
+        self.gate_next_append(agent_id, is_pending_update).await
+    }
+
+    async fn gate_next_append(
+        &self,
+        agent_id: AgentId,
+        matches: fn(&OplogEntry) -> bool,
+    ) -> AgentInitializationEnqueueGateHandle {
         let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
         let gate = Arc::new(AgentInitializationEnqueueGate {
             armed: AtomicBool::new(true),
+            matches,
             entered_tx: std::sync::Mutex::new(Some(entered_tx)),
             release: tokio::sync::Semaphore::new(0),
         });
@@ -5675,6 +5792,8 @@ struct ConsumeBodyChunkEndGate {
 
 struct AgentInitializationEnqueueGate {
     armed: AtomicBool,
+    /// The entry the gate fires on; the initialization enqueue unless a test arms it otherwise.
+    matches: fn(&OplogEntry) -> bool,
     entered_tx: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
     release: tokio::sync::Semaphore,
 }
@@ -6218,6 +6337,11 @@ struct FakeOwnershipState {
     /// arrived yet fails, with the `Unknown` that `sharding_not_ready_error`
     /// produces. That must never be read as "the agent moved".
     assignment_missing: AtomicBool,
+    /// Report every check the way an executor whose shard has moved away reports
+    /// it, without a revoke ever arriving. A revoke gives the agent up here and
+    /// answers its callers directly, so it is the wrong instrument for a test
+    /// aimed at the periodic ownership re-check.
+    agent_moved: AtomicBool,
     /// Make the next check announce itself, wait, and only then report that the
     /// agent is not ours.
     hold_next_check: AtomicBool,
@@ -6248,6 +6372,16 @@ impl ShardService for FakeOwnership {
             return Err(WorkerExecutorError::Unknown {
                 details: "Sharding is not ready".to_string(),
             });
+        }
+
+        if self.state.agent_moved.load(Ordering::SeqCst) {
+            self.state
+                .agent_moved_reports
+                .fetch_add(1, Ordering::SeqCst);
+            return Err(WorkerExecutorError::invalid_shard_id(
+                ShardId::new(0),
+                HashSet::new(),
+            ));
         }
 
         // Taken, not read, so concurrent checks from other calls fall straight
@@ -6316,6 +6450,15 @@ impl ShardService for FakeOwnership {
             .register(number_of_shards, shard_epochs, expires_at, revision)
     }
 
+    fn install_unexpiring(
+        &self,
+        number_of_shards: usize,
+        shard_epochs: &HashMap<ShardId, ShardEpoch>,
+    ) -> ShardDeliveryOutcome {
+        self.inner
+            .install_unexpiring(number_of_shards, shard_epochs)
+    }
+
     fn revoke_shards(
         &self,
         shard_ids: &HashSet<ShardId>,
@@ -6361,8 +6504,15 @@ impl OwnershipControls {
         self.state.assignment_missing.store(true, Ordering::SeqCst);
     }
 
+    /// Report every ownership check the way an executor whose shard has moved
+    /// away reports it. Lasts until [`Self::stop_pretending`].
+    pub fn pretend_the_agent_moved(&self) {
+        self.state.agent_moved.store(true, Ordering::SeqCst);
+    }
+
     pub fn stop_pretending(&self) {
         self.state.assignment_missing.store(false, Ordering::SeqCst);
+        self.state.agent_moved.store(false, Ordering::SeqCst);
     }
 
     /// Hold the next ownership check open, and return once one has arrived.
@@ -6405,6 +6555,7 @@ pub fn fake_ownership() -> (TestExecutorOverrides, OwnershipControls) {
 
     let state = Arc::new(FakeOwnershipState {
         assignment_missing: AtomicBool::new(false),
+        agent_moved: AtomicBool::new(false),
         hold_next_check: AtomicBool::new(false),
         assignment_missing_reports: AtomicUsize::new(0),
         agent_moved_reports: AtomicUsize::new(0),

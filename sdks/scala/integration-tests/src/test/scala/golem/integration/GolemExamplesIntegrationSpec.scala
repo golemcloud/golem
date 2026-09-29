@@ -309,7 +309,7 @@ object GolemServer {
                      file
                    }
         process <- ZIO.acquireRelease(
-                     Cmd("golem", "-vvv", "server", "run", "--clean", "--disable-app-manifest-discovery")
+                     Cmd("golem", "--yes", "-vvv", "server", "run", "--clean", "--disable-app-manifest-discovery")
                        .workingDirectory(examplesDir)
                        .env(buildEnv)
                        .redirectErrorStream(true)
@@ -623,6 +623,11 @@ object GolemExamplesIntegrationSpec extends ZIOSpec[GolemServer] {
       "principal",
       "samples/principal/principal.ts",
       Contains("was created by:")
+    ),
+    Sample(
+      "reflection-canonical-json",
+      "samples/reflection/repl-reflection-canonical.ts",
+      Contains("scala-canonical-ok", "omitted", "supplied")
     ),
 
     // --- Database (requires external DB) ---

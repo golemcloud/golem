@@ -1239,6 +1239,13 @@ pub fn worker_error_message(error: &WorkerExecutorError) -> String {
     match error {
         WorkerExecutorError::InvalidRequest { details } => details.clone(),
         WorkerExecutorError::PermissionDenied { details } => details.clone(),
+        WorkerExecutorError::OplogFenced {
+            agent_id,
+            expected_epoch,
+            actual_epoch,
+        } => format!(
+            "Oplog write for {agent_id:?} fenced: asserted epoch {expected_epoch}, stored {actual_epoch:?}"
+        ),
         WorkerExecutorError::AgentAlreadyExists { agent_id } => {
             format!("Worker already exists: {:?}", agent_id)
         }

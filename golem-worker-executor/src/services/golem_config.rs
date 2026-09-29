@@ -2129,7 +2129,11 @@ impl KeyValueStorageConfig {
 
 impl Default for IndexedStorageConfig {
     fn default() -> Self {
-        Self::KVStoreRedis(IndexedStorageKVStoreRedisConfig {})
+        Self::Sqlite(DbSqliteConfig {
+            database: "../data/worker-executor-indexed-storage.db".to_string(),
+            max_connections: 10,
+            foreign_keys: false,
+        })
     }
 }
 
