@@ -106,8 +106,7 @@ use crate::worker::invocation_loop::{
     ConcurrentAgentPermitState, InvocationLoop, UnloadCleanupFailure, run_invocation_loop_task,
 };
 use crate::worker::snapshot_selection::{
-    AutomaticSnapshotFilter, component_revision_for_replay, select_automatic_snapshot,
-    selects_the_last_record_once_confirmed,
+    SnapshotExclusions, component_revision_for_replay, select_automatic_snapshot, start_candidate,
 };
 use crate::worker::status::{
     calculate_last_known_status_with_checkpoint, calculate_revert_validation_regions,
@@ -692,13 +691,8 @@ pub struct ResolvedWorkerData<Ctx: WorkerCtx> {
     snapshot_policy: SnapshotPolicy,
 
     last_resume_request: Mutex<Timestamp>,
-    /// The automatic snapshot entries whose application snapshot did not load or whose replay
-    /// diverged. A start never selects them. The start that rejects one persists it for the
-    /// incarnation after its fallback succeeds.
-    pub(crate) rejected_periodic_snapshots: StdMutex<HashSet<OplogIndex>>,
-    /// The automatic snapshot entries whose payload or filesystem snapshot the current start
-    /// attempt could not get. A start skips them, and a new start attempt clears them.
-    pub(crate) unavailable_periodic_snapshots: StdMutex<HashSet<OplogIndex>>,
+    /// The automatic snapshot entries that the starts of the agent exclude.
+    snapshot_exclusions: StdMutex<SnapshotExclusions>,
     startup_linear_memory_bytes: AtomicU64,
     memory_growth: StdMutex<Arc<PendingMemoryGrowth>>,
     memory_limit_interrupt_queued: AtomicBool,
@@ -1208,6 +1202,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Whether this executor restores filesystem snapshots.
     fn filesystem_snapshots_enabled(&self) -> bool {
         self.agent_filesystem_snapshots().is_enabled()
+    }
+
+    /// Runs `f` on the automatic snapshot entries that the starts of the agent exclude, under
+    /// their lock.
+    pub(crate) fn with_exclusions<T>(&self, f: impl FnOnce(&mut SnapshotExclusions) -> T) -> T {
+        f(&mut self
+            .snapshot_exclusions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner))
     }
 
     pub(crate) async fn ensure_not_failed<T: HasAll<Ctx> + Send + Sync>(
@@ -2458,8 +2461,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             status_flusher,
             status_checkpointer,
             last_resume_request: Mutex::new(Timestamp::now_utc()),
-            rejected_periodic_snapshots: StdMutex::new(HashSet::new()),
-            unavailable_periodic_snapshots: StdMutex::new(HashSet::new()),
+            snapshot_exclusions: StdMutex::new(SnapshotExclusions::default()),
             startup_linear_memory_bytes: AtomicU64::new(0),
             memory_growth: StdMutex::new(Arc::new(PendingMemoryGrowth::default())),
             memory_limit_interrupt_queued: AtomicBool::new(false),
@@ -2802,10 +2804,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 let start_attempt =
                     existing_start_attempt.or_else(|| this.startup_attempt.pending());
                 if start_attempt.is_none() {
-                    this.unavailable_periodic_snapshots
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner)
-                        .clear();
+                    this.with_exclusions(SnapshotExclusions::clear_unavailable);
                 }
                 let memory_requirement = match this.memory_requirement().await {
                     Ok(memory_requirement) => memory_requirement,
@@ -5378,33 +5377,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             return;
         };
         let status = self.last_known_status.load_full();
-        let Some(name) = status.last_automatic_snapshot_filesystem_snapshot.clone() else {
+        let Some(name) = self.with_exclusions(|exclusions| {
+            start_candidate(
+                &status,
+                exclusions.filter(!status.pending_updates.is_empty(), true),
+            )
+        }) else {
             return;
         };
-        if status.last_automatic_snapshot_confirmed {
-            return;
-        }
-        let rejected = self
-            .rejected_periodic_snapshots
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone();
-        let unavailable = self
-            .unavailable_periodic_snapshots
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone();
-        if !selects_the_last_record_once_confirmed(
-            &status,
-            AutomaticSnapshotFilter {
-                has_pending_update: !status.pending_updates.is_empty(),
-                rejected: &rejected,
-                unavailable: &unavailable,
-                filesystem_snapshots_enabled: true,
-            },
-        ) {
-            return;
-        }
         let scope = crate::filesystem_snapshot::SnapshotScope::agent(&self.owned_agent_id);
         let started = std::time::Instant::now();
         let interrupted = Arc::clone(self).terminal_interrupt_queued();
@@ -5509,25 +5489,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
     ) -> Option<filesystem_snapshots::ConfirmedFilesystemSnapshot> {
         let status = self.last_known_status.load();
-        let rejected = self
-            .rejected_periodic_snapshots
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone();
-        let unavailable = self
-            .unavailable_periodic_snapshots
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone();
-        let selected = select_automatic_snapshot(
-            &status,
-            AutomaticSnapshotFilter {
-                has_pending_update: !status.pending_updates.is_empty(),
-                rejected: &rejected,
-                unavailable: &unavailable,
-                filesystem_snapshots_enabled: self.filesystem_snapshots_enabled(),
-            },
-        );
+        let enabled = self.filesystem_snapshots_enabled();
+        let selected = self.with_exclusions(|exclusions| {
+            select_automatic_snapshot(
+                &status,
+                exclusions.filter(!status.pending_updates.is_empty(), enabled),
+            )
+        });
         let slot = self
             .filesystem_snapshot_slot
             .lock()
@@ -9138,25 +9106,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 self.initial_worker_metadata.fingerprint,
             )
             .await?;
-        self.rejected_periodic_snapshots
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .extend(rejected);
-        let rejected_periodic_snapshots = self
-            .rejected_periodic_snapshots
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone();
-
-        let replay_revision = component_revision_for_replay(
-            status,
-            AutomaticSnapshotFilter {
-                has_pending_update: pending_update.is_some(),
-                rejected: &rejected_periodic_snapshots,
-                unavailable: &HashSet::new(),
-                filesystem_snapshots_enabled: self.filesystem_snapshots_enabled(),
-            },
-        );
+        let enabled = self.filesystem_snapshots_enabled();
+        let replay_revision = self.with_exclusions(|exclusions| {
+            exclusions.add_persisted(rejected);
+            component_revision_for_replay(
+                status,
+                exclusions.replay_filter(pending_update.is_some(), enabled),
+            )
+        });
         let replay_component = if active_component.revision == replay_revision {
             active_component.clone()
         } else {
@@ -11362,11 +11319,7 @@ impl RunningWorker {
                     error = %error,
                     "The filesystem snapshot of an automatic snapshot record does not restore; the start uses the usable record before it"
                 );
-                parent
-                    .unavailable_periodic_snapshots
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .insert(index);
+                parent.with_exclusions(|exclusions| exclusions.mark_unavailable(index));
                 restart
             }
             (
@@ -11521,36 +11474,16 @@ impl RunningWorker {
                 parent.initial_worker_metadata.fingerprint,
             )
             .await?;
-        parent
-            .rejected_periodic_snapshots
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .extend(rejected);
-        let rejected_periodic_snapshots = parent
-            .rejected_periodic_snapshots
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone();
-
-        let unavailable_periodic_snapshots = parent
-            .unavailable_periodic_snapshots
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone();
-        let automatic_snapshot_filter = AutomaticSnapshotFilter {
-            has_pending_update: pending_update.is_some(),
-            rejected: &rejected_periodic_snapshots,
-            unavailable: &unavailable_periodic_snapshots,
-            filesystem_snapshots_enabled: parent.filesystem_snapshots_enabled(),
-        };
-        let automatic_snapshot = select_automatic_snapshot(
-            &worker_metadata.last_known_status,
-            automatic_snapshot_filter,
-        );
-        let component_version_for_replay = component_revision_for_replay(
-            &worker_metadata.last_known_status,
-            automatic_snapshot_filter,
-        );
+        let enabled = parent.filesystem_snapshots_enabled();
+        let (automatic_snapshot, component_version_for_replay) =
+            parent.with_exclusions(|exclusions| {
+                exclusions.add_persisted(rejected);
+                let filter = exclusions.filter(pending_update.is_some(), enabled);
+                (
+                    select_automatic_snapshot(&worker_metadata.last_known_status, filter),
+                    component_revision_for_replay(&worker_metadata.last_known_status, filter),
+                )
+            });
 
         let component_metadata_for_replay =
             if component_metadata.revision == component_version_for_replay {
@@ -12843,21 +12776,19 @@ mod tests {
             ..Default::default()
         };
 
-        let unavailable = HashSet::new();
-        let rejected = HashSet::from([snapshot_index]);
-        let other = HashSet::from([OplogIndex::from_u64(9)]);
-        let filter = |rejected| AutomaticSnapshotFilter {
-            has_pending_update: false,
-            rejected,
-            unavailable: &unavailable,
-            filesystem_snapshots_enabled: false,
+        let rejecting = |index| {
+            let mut exclusions = SnapshotExclusions::default();
+            exclusions.reject(index);
+            exclusions
         };
+        let rejected = rejecting(snapshot_index);
+        let other = rejecting(OplogIndex::from_u64(9));
         assert_eq!(
-            component_revision_for_replay(&status, filter(&rejected)),
+            component_revision_for_replay(&status, rejected.filter(false, false)),
             replay_revision
         );
         assert_eq!(
-            component_revision_for_replay(&status, filter(&other)),
+            component_revision_for_replay(&status, other.filter(false, false)),
             active_revision
         );
     }

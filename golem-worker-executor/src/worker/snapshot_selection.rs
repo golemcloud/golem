@@ -22,22 +22,98 @@
 //! full replay.
 
 use golem_common::model::component::ComponentRevision;
-use golem_common::model::oplog::OplogIndex;
+use golem_common::model::oplog::{FilesystemSnapshotName, OplogIndex};
 use golem_common::model::{AgentStatusRecord, PendingUpdateKind, UsableAutomaticSnapshot};
 use std::collections::HashSet;
+
+/// The automatic snapshot entries that the starts of one agent exclude.
+#[derive(Debug, Default)]
+pub(crate) struct SnapshotExclusions {
+    /// The entries whose application snapshot did not load or whose replay diverged. A start
+    /// never selects them. The start that rejects one persists it for the incarnation after its
+    /// fallback succeeds.
+    rejected: HashSet<OplogIndex>,
+    /// The entries whose payload or filesystem snapshot the current start attempt could not get.
+    /// A start skips them, and a new start attempt clears them.
+    unavailable: HashSet<OplogIndex>,
+}
+
+impl SnapshotExclusions {
+    /// Rejects the entry at `index`.
+    pub(crate) fn reject(&mut self, index: OplogIndex) {
+        self.rejected.insert(index);
+    }
+
+    /// Adds the rejected entries that storage keeps for the incarnation.
+    pub(crate) fn add_persisted(&mut self, persisted: impl IntoIterator<Item = OplogIndex>) {
+        self.rejected.extend(persisted);
+    }
+
+    /// Marks the entry at `index` unavailable for the current start attempt.
+    pub(crate) fn mark_unavailable(&mut self, index: OplogIndex) {
+        self.unavailable.insert(index);
+    }
+
+    /// Clears the unavailable entries, for a new start attempt.
+    pub(crate) fn clear_unavailable(&mut self) {
+        self.unavailable.clear();
+    }
+
+    /// The rejected entries to persist, or `None` when no entry is rejected.
+    pub(crate) fn persisted_rejections(&self) -> Option<HashSet<OplogIndex>> {
+        (!self.rejected.is_empty()).then(|| self.rejected.clone())
+    }
+
+    /// The filter of a start: it excludes the rejected and the unavailable entries.
+    pub(crate) fn filter(
+        &self,
+        has_pending_update: bool,
+        filesystem_snapshots_enabled: bool,
+    ) -> AutomaticSnapshotFilter<'_> {
+        AutomaticSnapshotFilter {
+            has_pending_update,
+            rejected: &self.rejected,
+            unavailable: Some(&self.unavailable),
+            filesystem_snapshots_enabled,
+        }
+    }
+
+    /// The filter that finds the component revision of a replay before a start attempt: it
+    /// excludes only the rejected entries.
+    pub(crate) fn replay_filter(
+        &self,
+        has_pending_update: bool,
+        filesystem_snapshots_enabled: bool,
+    ) -> AutomaticSnapshotFilter<'_> {
+        AutomaticSnapshotFilter {
+            unavailable: None,
+            ..self.filter(has_pending_update, filesystem_snapshots_enabled)
+        }
+    }
+}
 
 /// What a start excludes when it selects an automatic snapshot entry.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct AutomaticSnapshotFilter<'a> {
     /// Whether an update is pending. A pending update ignores the automatic snapshot entries.
-    pub(crate) has_pending_update: bool,
+    has_pending_update: bool,
     /// The entries whose application snapshot did not load or whose replay diverged.
-    pub(crate) rejected: &'a HashSet<OplogIndex>,
-    /// The entries whose payload or filesystem snapshot this start could not get.
-    pub(crate) unavailable: &'a HashSet<OplogIndex>,
+    rejected: &'a HashSet<OplogIndex>,
+    /// The entries whose payload or filesystem snapshot this start could not get, when the filter
+    /// excludes them.
+    unavailable: Option<&'a HashSet<OplogIndex>>,
     /// Whether this executor restores filesystem snapshots. Without it, an entry with a
     /// filesystem snapshot name is not usable.
-    pub(crate) filesystem_snapshots_enabled: bool,
+    filesystem_snapshots_enabled: bool,
+}
+
+/// Whether an automatic snapshot entry with the filesystem snapshot `filesystem_snapshot` can be
+/// a baseline: a `SnapshotConfirmed` entry confirms its filesystem snapshot, or it has none.
+pub(crate) fn usable(
+    filesystem_snapshot: Option<&FilesystemSnapshotName>,
+    confirmed: bool,
+) -> bool {
+    confirmed || filesystem_snapshot.is_none()
 }
 
 /// Gives the automatic snapshot entry that a start uses as its baseline, or `None` when the start
@@ -50,8 +126,10 @@ pub(crate) fn select_automatic_snapshot(
         .last_automatic_snapshot_index
         .zip(status.last_automatic_snapshot_component_revision)
         .filter(|_| {
-            status.last_automatic_snapshot_confirmed
-                || status.last_automatic_snapshot_filesystem_snapshot.is_none()
+            usable(
+                status.last_automatic_snapshot_filesystem_snapshot.as_ref(),
+                status.last_automatic_snapshot_confirmed,
+            )
         })
         .map(|(index, component_revision)| UsableAutomaticSnapshot {
             index,
@@ -71,9 +149,25 @@ pub(crate) fn select_automatic_snapshot(
         })
 }
 
+/// Gives the filesystem snapshot name of the last automatic snapshot record when the record is
+/// not confirmed and a start would select it if a confirmation record confirmed it. A start can
+/// confirm that name itself when the snapshot is whole in the store.
+pub(crate) fn start_candidate(
+    status: &AgentStatusRecord,
+    filter: AutomaticSnapshotFilter<'_>,
+) -> Option<FilesystemSnapshotName> {
+    status
+        .last_automatic_snapshot_filesystem_snapshot
+        .clone()
+        .filter(|_| {
+            !status.last_automatic_snapshot_confirmed
+                && selects_the_last_record_once_confirmed(status, filter)
+        })
+}
+
 /// Whether a start would select the last automatic snapshot record if a confirmation record
 /// confirmed it.
-pub(crate) fn selects_the_last_record_once_confirmed(
+fn selects_the_last_record_once_confirmed(
     status: &AgentStatusRecord,
     filter: AutomaticSnapshotFilter<'_>,
 ) -> bool {
@@ -102,7 +196,9 @@ fn passes(
     !filter.has_pending_update
         && component_revision == status.component_revision
         && !filter.rejected.contains(&index)
-        && !filter.unavailable.contains(&index)
+        && !filter
+            .unavailable
+            .is_some_and(|unavailable| unavailable.contains(&index))
         && (filter.filesystem_snapshots_enabled || !has_filesystem_snapshot)
 }
 
@@ -173,7 +269,7 @@ mod tests {
         AutomaticSnapshotFilter {
             has_pending_update: false,
             rejected: &NONE_REJECTED,
-            unavailable,
+            unavailable: Some(unavailable),
             filesystem_snapshots_enabled: true,
         }
     }
@@ -370,6 +466,83 @@ mod tests {
                 }
             ),
             revision(4)
+        );
+    }
+
+    #[test]
+    fn a_start_candidate_is_the_unconfirmed_named_last_entry_that_a_start_would_select() {
+        let name = FilesystemSnapshotName::periodic();
+        let unconfirmed = status(Some(name.clone()), false, Some(None));
+        let confirmed = status(Some(name.clone()), true, Some(None));
+        let nameless = status(None, false, Some(None));
+        let unavailable = HashSet::from([OplogIndex::from_u64(10)]);
+
+        assert_eq!(
+            [
+                start_candidate(&unconfirmed, filter(&HashSet::new())),
+                start_candidate(&confirmed, filter(&HashSet::new())),
+                start_candidate(&nameless, filter(&HashSet::new())),
+                start_candidate(&unconfirmed, filter(&unavailable)),
+            ],
+            [Some(name), None, None, None]
+        );
+    }
+
+    #[test]
+    fn an_entry_is_usable_when_confirmed_or_without_a_name() {
+        let name = FilesystemSnapshotName::periodic();
+        assert_eq!(
+            [
+                usable(None, false),
+                usable(None, true),
+                usable(Some(&name), true),
+                usable(Some(&name), false),
+            ],
+            [true, true, true, false]
+        );
+    }
+
+    #[test]
+    fn the_exclusions_filter_a_start_and_a_replay_revision_apart() {
+        let status = status(
+            Some(FilesystemSnapshotName::periodic()),
+            true,
+            Some(Some(FilesystemSnapshotName::periodic())),
+        );
+        let mut exclusions = SnapshotExclusions::default();
+        assert_eq!(exclusions.persisted_rejections(), None);
+
+        exclusions.mark_unavailable(OplogIndex::from_u64(10));
+        let unavailable = (
+            selected_index(&status, exclusions.filter(false, true)),
+            selected_index(&status, exclusions.replay_filter(false, true)),
+        );
+        exclusions.clear_unavailable();
+        let cleared = selected_index(&status, exclusions.filter(false, true));
+        exclusions.reject(OplogIndex::from_u64(10));
+        exclusions.add_persisted([OplogIndex::from_u64(5)]);
+        let rejected = (
+            selected_index(&status, exclusions.filter(false, true)),
+            selected_index(&status, exclusions.replay_filter(false, true)),
+        );
+
+        assert_eq!(unavailable, (Some(5), Some(10)));
+        assert_eq!(cleared, Some(10));
+        assert_eq!(rejected, (None, None));
+        assert_eq!(
+            exclusions.persisted_rejections(),
+            Some(HashSet::from([
+                OplogIndex::from_u64(10),
+                OplogIndex::from_u64(5)
+            ]))
+        );
+        assert_eq!(
+            selected_index(&status, SnapshotExclusions::default().filter(true, true)),
+            None
+        );
+        assert_eq!(
+            selected_index(&status, SnapshotExclusions::default().filter(false, false)),
+            None
         );
     }
 }

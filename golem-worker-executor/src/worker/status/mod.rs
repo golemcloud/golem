@@ -1,5 +1,6 @@
 use crate::services::oplog::OplogServiceOps;
 use crate::services::{HasComponentService, HasConfig, HasOplogService, HasWorkerService};
+use crate::worker::snapshot_selection::usable;
 use golem_common::base_model::OplogIndex;
 use golem_common::base_model::durable_stream::StreamSessionRecord;
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
@@ -1641,8 +1642,10 @@ fn calculate_update_fields(
                     last_automatic_snapshot_index,
                     last_automatic_snapshot_component_revision,
                 ) && !reuses_name
-                    && (last_automatic_snapshot_confirmed
-                        || last_automatic_snapshot_filesystem_snapshot.is_none())
+                    && usable(
+                        last_automatic_snapshot_filesystem_snapshot.as_ref(),
+                        last_automatic_snapshot_confirmed,
+                    )
                 {
                     previous_usable_automatic_snapshot = Some(UsableAutomaticSnapshot {
                         index,

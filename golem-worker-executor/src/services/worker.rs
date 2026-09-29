@@ -64,6 +64,22 @@ const STATUS_RECEIVED_CARD_TRANSFER_PREFIX: &str = "tr:";
 const INVOCATION_RESULT_INDEX_METADATA_FIELD: &str = "metadata";
 const INVOCATION_RESULT_INDEX_FIELD_PREFIX: &str = "ir:";
 
+/// The stored rejected automatic snapshot entries after `new` joins `current`, in index order, or
+/// `None` when `current` holds each entry of `new`.
+fn merged(current: Vec<OplogIndex>, new: &HashSet<OplogIndex>) -> Option<Vec<OplogIndex>> {
+    let current = current
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>();
+    (!new.iter().all(|index| current.contains(index))).then(|| {
+        current
+            .into_iter()
+            .chain(new.iter().copied())
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    })
+}
+
 fn status_received_card_transfer_field(transfer_id: &uuid::Uuid) -> String {
     format!("{STATUS_RECEIVED_CARD_TRANSFER_PREFIX}{transfer_id}")
 }
@@ -1811,25 +1827,15 @@ impl WorkerService for DefaultWorkerService {
                 .get_raw(namespace.clone(), &field)
                 .await
                 .map_err(WorkerExecutorError::runtime)?;
-            let current_indexes: std::collections::BTreeSet<OplogIndex> = match &current {
-                Some(current) => deserialize::<Vec<OplogIndex>>(current)
-                    .map_err(WorkerExecutorError::runtime)?
-                    .into_iter()
-                    .collect(),
-                None => std::collections::BTreeSet::new(),
+            let current_indexes = match &current {
+                Some(current) => {
+                    deserialize::<Vec<OplogIndex>>(current).map_err(WorkerExecutorError::runtime)?
+                }
+                None => Vec::new(),
             };
-            if oplog_indexes
-                .iter()
-                .all(|index| current_indexes.contains(index))
-            {
+            let Some(merged) = merged(current_indexes, oplog_indexes) else {
                 return Ok(());
-            }
-            let merged = current_indexes
-                .into_iter()
-                .chain(oplog_indexes.iter().copied())
-                .collect::<std::collections::BTreeSet<_>>()
-                .into_iter()
-                .collect::<Vec<_>>();
+            };
             let encoded = serialize(&merged).map_err(WorkerExecutorError::runtime)?;
             let updated = self
                 .key_value_storage
@@ -2793,6 +2799,28 @@ mod tests {
             Arc::new(IndexTestComponentService),
             Arc::new(config),
         ))
+    }
+
+    #[test]
+    fn merged_rejections_are_in_index_order_and_nothing_when_each_is_stored() {
+        let index = OplogIndex::from_u64;
+        assert_eq!(
+            [
+                merged(vec![index(7), index(3)], &HashSet::from([index(5)])),
+                merged(
+                    vec![index(3), index(7)],
+                    &HashSet::from([index(7), index(3)])
+                ),
+                merged(Vec::new(), &HashSet::new()),
+                merged(Vec::new(), &HashSet::from([index(2), index(1)])),
+            ],
+            [
+                Some(vec![index(3), index(5), index(7)]),
+                None,
+                None,
+                Some(vec![index(1), index(2)]),
+            ]
+        );
     }
 
     #[test]

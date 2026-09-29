@@ -187,6 +187,7 @@ use crate::worker::invocation::{
     materialize_streaming_result,
 };
 use crate::worker::owner_lane::{OwnerInvocationId, OwnerInvocationPermit};
+use crate::worker::snapshot_selection::SnapshotExclusions;
 use crate::worker::status::{
     calculate_last_known_status_with_checkpoint, calculate_pending_card_events,
 };
@@ -4353,10 +4354,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         .data()
                         .get_public_state()
                         .worker()
-                        .unavailable_periodic_snapshots
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner)
-                        .insert(snapshot_index);
+                        .with_exclusions(|exclusions| exclusions.mark_unavailable(snapshot_index));
                     return SnapshotRecoveryResult::Retry(RetryDecision::Immediate);
                 }
                 return SnapshotRecoveryResult::Unavailable(WorkerExecutorError::runtime(error));
@@ -4548,10 +4546,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .data()
             .get_public_state()
             .worker()
-            .rejected_periodic_snapshots
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(snapshot_index);
+            .with_exclusions(|exclusions| exclusions.reject(snapshot_index));
         RetryDecision::Immediate
     }
 
@@ -6570,12 +6565,9 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
         match prepare_result {
             Ok(None) => {
                 let worker = store.as_context().data().get_public_state().worker();
-                let rejected = worker
-                    .rejected_periodic_snapshots
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .clone();
-                if !rejected.is_empty() {
+                if let Some(rejected) =
+                    worker.with_exclusions(|exclusions| exclusions.persisted_rejections())
+                {
                     let metadata = worker.get_initial_worker_metadata();
                     worker
                         .worker_service()
@@ -6586,11 +6578,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                         )
                         .await?;
                 }
-                worker
-                    .unavailable_periodic_snapshots
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .clear();
+                worker.with_exclusions(SnapshotExclusions::clear_unavailable);
                 store.as_context_mut().data_mut().set_suspended();
                 Ok(None)
             }
