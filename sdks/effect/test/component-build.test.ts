@@ -48,7 +48,20 @@ const sourcePlugin = () => ({
         compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
       }).outputText
     if (!id.startsWith(sdk + "/")) return null
-    if (id.startsWith(resolve(sdk, "internal/component") + "/")) return null
+    const component = resolve(sdk, "internal/component")
+    if (id === resolve(component, "index.js") || id === resolve(component, "HttpRouter.js")) {
+      const name = id.endsWith("/index.js") ? "index" : "HttpRouter"
+      let output = ts.transpileModule(readFileSync(resolve(root, `src/${name}.ts`), "utf8"), {
+        compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
+      }).outputText
+      if (name === "index")
+        output = output.replace(
+          /^export \{ (?:guest as golemAgent200Guest|toolGuest as golemTool010Guest|toolMiddlewareGuest)[^\n]*\n/gm,
+          "",
+        )
+      return output.replace(/from "\.\/(?!HttpRouter\.js")/g, 'from "../../')
+    }
+    if (id.startsWith(component + "/")) return null
     const source = id.replace(sdk, resolve(root, "src")).replace(/\.js$/, ".ts")
     if (!existsSync(source)) return null
     return ts.transpileModule(readFileSync(source, "utf8"), {
