@@ -512,7 +512,7 @@ export function staticContracts(runtime, publicEntries) {
       const field = { text: "text", binary: "bytes", duration: "nanoseconds" }[body.tag]
       read = `return n.val.${field};`
       write = `return w.add({tag:${literal(tag)},val:{${field}:v}});`
-    } else if (["path", "url", "datetime", "quantity"].includes(body.tag)) {
+    } else if (["path", "url", "uuid", "datetime", "quantity"].includes(body.tag)) {
       read = "return n.val;"
       write = `return w.add({tag:${literal(tag)},val:v});`
     } else if (
