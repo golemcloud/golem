@@ -13,7 +13,10 @@
 // limitations under the License.
 
 use super::{Entry, InMemoryBlobStorage, Key};
-use crate::storage::blob::{BlobMetadata, BlobStorageNamespace, ExistsResult, ListedBlob};
+use crate::storage::blob::{
+    BlobMetadata, BlobStorageNamespace, ExistsResult, ListedBlob, NormalizedBlobPath,
+    normalized_blob_path,
+};
 use golem_common::model::Timestamp;
 use golem_common::model::environment::EnvironmentId;
 use pretty_assertions::assert_eq;
@@ -86,6 +89,11 @@ fn storage() -> BTreeMap<Key, Entry> {
     ])
 }
 
+/// The one form of the path, as the storage gives it to a backend.
+fn at(path: &'static str) -> NormalizedBlobPath<'static> {
+    normalized_blob_path(Path::new(path)).unwrap()
+}
+
 fn sorted<T: Ord>(mut items: Vec<T>) -> Vec<T> {
     items.sort();
     items
@@ -102,14 +110,8 @@ fn listed(path: &str, size: u64) -> ListedBlob {
 fn the_listing_gives_blobs_in_the_directory_and_created_directories_at_any_depth_once() {
     let data = storage();
 
-    let listings = [("a", "a"), ("", "")].map(|(dir, path)| {
-        sorted(InMemoryBlobStorage::listing(
-            &data,
-            &namespace(),
-            dir,
-            Path::new(path),
-        ))
-    });
+    let listings = ["a", ""]
+        .map(|path| sorted(InMemoryBlobStorage::listing(&data, &namespace(), &at(path)).unwrap()));
 
     assert_eq!(
         listings,
@@ -132,8 +134,13 @@ fn the_listing_gives_blobs_in_the_directory_and_created_directories_at_any_depth
 fn blobs_below_give_each_blob_at_any_depth_and_no_directory() {
     let data = storage();
 
-    let below = ["a", "", "a/c", "missing"]
-        .map(|dir| sorted(InMemoryBlobStorage::blobs_below(&data, &namespace(), dir).into_vec()));
+    let below = ["a", "", "a/c", "missing"].map(|path| {
+        sorted(
+            InMemoryBlobStorage::blobs_below(&data, &namespace(), &at(path))
+                .unwrap()
+                .into_vec(),
+        )
+    });
 
     assert_eq!(
         below,
@@ -156,9 +163,8 @@ fn blobs_below_give_each_blob_at_any_depth_and_no_directory() {
 fn a_blob_at_the_path_wins_over_a_directory_and_keys_below_make_a_directory() {
     let data = storage();
 
-    let answers = ["a/b", "a/b/y", "a/c", "a/c/d", "ab", "a/m", "b"].map(|path| {
-        InMemoryBlobStorage::existence(&data, &namespace(), &blob(namespace(), path), path)
-    });
+    let answers = ["a/b", "a/b/y", "a/c", "a/c/d", "ab", "a/m", "b"]
+        .map(|path| InMemoryBlobStorage::existence(&data, &namespace(), &at(path)).unwrap());
 
     assert_eq!(
         answers,
@@ -179,12 +185,9 @@ fn metadata_gives_the_blob_and_else_a_created_directory_with_a_size_of_zero() {
     let data = storage();
 
     let answers = ["a/b", "a/c/d", "a/c", "missing"].map(|path| {
-        InMemoryBlobStorage::metadata(
-            &data,
-            &blob(namespace(), path),
-            &directory(namespace(), path),
-        )
-        .map(|metadata| (metadata.size, metadata.last_modified_at))
+        InMemoryBlobStorage::metadata(&data, &namespace(), &at(path))
+            .unwrap()
+            .map(|metadata| (metadata.size, metadata.last_modified_at))
     });
 
     assert_eq!(
