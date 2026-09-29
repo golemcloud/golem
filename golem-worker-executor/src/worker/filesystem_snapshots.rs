@@ -1444,7 +1444,25 @@ mod tests {
                 Arc::new(crate::filesystem_snapshot::InMemorySnapshotStore::default()),
                 crate::services::golem_config::FilesystemSnapshotUploadConfig::default(),
             ),
-            crate::services::agent_filesystem_snapshots::VolumeRoom::Unlimited,
+            false,
+            &shutdown,
+        )
+        .unwrap();
+        (snapshots, shutdown)
+    }
+
+    /// A service that keeps no filesystem snapshots, with the shutdown that keeps it running.
+    fn disabled_service() -> (
+        Arc<AgentFilesystemSnapshots>,
+        crate::services::shutdown::Shutdown,
+    ) {
+        let shutdown = crate::services::shutdown::Shutdown::new();
+        let snapshots = AgentFilesystemSnapshots::bind(
+            &crate::services::golem_config::FilesystemSnapshotsConfig::default(),
+            crate::services::agent_filesystem_snapshots::StoreSource::configured(
+                Arc::new(golem_service_base::storage::blob::memory::InMemoryBlobStorage::new()),
+                crate::services::agent_filesystem_snapshots::VolumeRoom::Unlimited,
+            ),
             false,
             &shutdown,
         )
@@ -1458,10 +1476,10 @@ mod tests {
 
     #[test]
     async fn a_periodic_snapshot_without_snapshots_writes_a_record_without_a_name() {
-        let disabled = AgentFilesystemSnapshots::disabled();
+        let (disabled, _disabled_shutdown) = disabled_service();
         let scope = agent_scope("periodic-disabled");
         let run = |host: ScriptedHost| {
-            let disabled = &disabled;
+            let disabled = disabled.as_ref();
             let scope = &scope;
             async move {
                 let mut host = host;
@@ -1606,7 +1624,7 @@ mod tests {
 
     #[test]
     async fn a_manual_update_snapshot_saves_the_guest_then_captures_the_whole_tree() {
-        let disabled = AgentFilesystemSnapshots::disabled();
+        let (disabled, _disabled_shutdown) = disabled_service();
         let (snapshots, _shutdown) = enabled_service();
         let scope = agent_scope("update");
 

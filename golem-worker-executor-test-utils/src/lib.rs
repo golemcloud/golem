@@ -3290,16 +3290,11 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
 
     fn filesystem_snapshot_store(
         &self,
-        blob_storage: Arc<dyn golem_service_base::storage::blob::BlobStorage>,
-    ) -> golem_worker_executor::services::agent_filesystem_snapshots::StoreSource {
-        match &self.overrides.filesystem_snapshot_store {
-            Some((store, uploads)) => store.source(uploads.clone()),
-            None => {
-                golem_worker_executor::services::agent_filesystem_snapshots::StoreSource::configured(
-                    blob_storage,
-                )
-            }
-        }
+    ) -> Option<golem_worker_executor::services::agent_filesystem_snapshots::StoreSource> {
+        self.overrides
+            .filesystem_snapshot_store
+            .as_ref()
+            .map(|(store, uploads)| store.source(uploads.clone()))
     }
 
     fn create_environment_state_service(

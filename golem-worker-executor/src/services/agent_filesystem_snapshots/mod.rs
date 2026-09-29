@@ -257,8 +257,12 @@ pub(crate) fn store_name(
 pub struct StoreSource(Source);
 
 enum Source {
-    /// The store that the configuration names, on the blob storage of the executor.
-    Configured(Arc<dyn golem_service_base::storage::blob::BlobStorage>),
+    /// The store that the configuration names, on the blob storage of the executor, with the
+    /// volume whose room decides the admissions.
+    Configured(
+        Arc<dyn golem_service_base::storage::blob::BlobStorage>,
+        VolumeRoom,
+    ),
     /// A store that a test gives, with its upload settings. It bypasses the configuration, and
     /// its volume always has room.
     #[cfg(feature = "test-utils")]
@@ -269,11 +273,13 @@ enum Source {
 }
 
 impl StoreSource {
-    /// The store that the configuration names, on `blob_storage`.
-    pub fn configured(
+    /// The store that the configuration names, on `blob_storage`. `room` is the volume of the
+    /// agent filesystems, which must have room for an admission.
+    pub(crate) fn configured(
         blob_storage: Arc<dyn golem_service_base::storage::blob::BlobStorage>,
+        room: VolumeRoom,
     ) -> Self {
-        Self(Source::Configured(blob_storage))
+        Self(Source::Configured(blob_storage, room))
     }
 
     /// `store` with `settings`, on any storage mode and whatever the configuration says.
@@ -315,23 +321,25 @@ impl AgentFilesystemSnapshots {
     /// Makes the service that the configuration asks for, as [`rules::binding`] says, with the
     /// store of `source`. `managed_storage` tells whether the sandbox provisioning uses managed
     /// XFS storage. When `shutdown` ends, the service stops its jobs and shuts the store down.
+    /// This is the only constructor of the service.
     pub(crate) fn bind(
         config: &FilesystemSnapshotsConfig,
         source: StoreSource,
-        room: VolumeRoom,
         managed_storage: bool,
         shutdown: &crate::services::shutdown::Shutdown,
     ) -> Result<Arc<Self>, String> {
         let snapshots = Arc::new(match source.0 {
-            Source::Configured(blob_storage) => match rules::binding(config, managed_storage)? {
-                rules::Binding::Disabled => Self::disabled(),
-                rules::Binding::Managed(config) => Self::enabled(
-                    crate::filesystem_snapshot::managed_store(blob_storage, config),
-                    config.uploads().clone(),
-                    room,
-                    shutdown.token(),
-                ),
-            },
+            Source::Configured(blob_storage, room) => {
+                match rules::binding(config, managed_storage)? {
+                    rules::Binding::Disabled => Self::disabled(),
+                    rules::Binding::Managed(config) => Self::enabled(
+                        crate::filesystem_snapshot::managed_store(blob_storage, config),
+                        config.uploads().clone(),
+                        room,
+                        shutdown.token(),
+                    ),
+                }
+            }
             #[cfg(feature = "test-utils")]
             Source::Given(store, settings) => {
                 Self::enabled(store, settings, VolumeRoom::Unlimited, shutdown.token())
@@ -347,7 +355,7 @@ impl AgentFilesystemSnapshots {
     }
 
     /// Makes a service that keeps no filesystem snapshots.
-    pub(crate) fn disabled() -> Self {
+    fn disabled() -> Self {
         Self { core: None }
     }
 

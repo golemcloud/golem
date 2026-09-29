@@ -188,22 +188,29 @@ impl Drop for RunDetails {
     }
 }
 
-/// Binds the service of the filesystem snapshots to the configuration, with the store of
-/// `source`. The service stops its jobs and its store when the executor shuts down.
+/// Binds the service of the filesystem snapshots to the configuration, with the store `given`
+/// when a bootstrap gives one, and otherwise the configured store on `blob_storage`. The service
+/// stops its jobs and its store when the executor shuts down.
 fn bind_agent_filesystem_snapshots<Ctx: WorkerCtx>(
     golem_config: &GolemConfig,
-    source: StoreSource,
+    given: Option<StoreSource>,
+    blob_storage: Arc<dyn BlobStorage>,
     active_agents: &Arc<ActiveAgents<Ctx>>,
     shutdown: &services::shutdown::Shutdown,
 ) -> anyhow::Result<Arc<AgentFilesystemSnapshots>> {
     let filesystems = active_agents.agent_filesystems();
+    let source = given.unwrap_or_else(|| {
+        StoreSource::configured(
+            blob_storage,
+            VolumeRoom::Pressure {
+                volume: filesystems.volume().clone(),
+                pressure: filesystems.pressure_policy().clone(),
+            },
+        )
+    });
     AgentFilesystemSnapshots::bind(
         &golem_config.filesystem_snapshots,
         source,
-        VolumeRoom::Pressure {
-            volume: filesystems.volume().clone(),
-            pressure: filesystems.pressure_policy().clone(),
-        },
         filesystems.provisioning().uses_managed_storage(),
         shutdown,
     )
@@ -395,10 +402,10 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         rpc
     }
 
-    /// Gives the store of the filesystem snapshots. The default is the store that the
-    /// configuration names, on `blob_storage`.
-    fn filesystem_snapshot_store(&self, blob_storage: Arc<dyn BlobStorage>) -> StoreSource {
-        StoreSource::configured(blob_storage)
+    /// Gives a store of the filesystem snapshots that replaces the store that the configuration
+    /// names. The default gives none.
+    fn filesystem_snapshot_store(&self) -> Option<StoreSource> {
+        None
     }
 
     fn wrap_worker_enumeration_service(
@@ -1099,7 +1106,8 @@ pub async fn create_worker_executor_impl<
 
     let agent_filesystem_snapshots = bind_agent_filesystem_snapshots(
         &golem_config,
-        bootstrap.filesystem_snapshot_store(blob_storage.clone()),
+        bootstrap.filesystem_snapshot_store(),
+        blob_storage.clone(),
         &active_agents,
         &shutdown,
     )?;
