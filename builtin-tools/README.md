@@ -31,3 +31,35 @@ manifest must select the exact release under `tools.<name>.release` **and** bind
 under `agents.<agent>.tools`. Native tools compiled into the host use separate registry/executor
 startup inventories and are ambient, so they have no top-level release declaration. See
 `golem-native-tool/README.md` for that path.
+
+For example, this selects the built-in `read-file` release and makes it available to an agent:
+
+```yaml
+manifestVersion: 1.6.0
+
+app: filesystem-reader
+
+components:
+  example:filesystem-reader:
+    templates: rust
+    dir: .
+
+tools:
+  read-file:
+    release:
+      account: builtin-tool-owner@golem.cloud
+      name: read-file
+      version: 0.2.0
+
+agents:
+  FileReader:
+    tools:
+      read-file:
+        filesystemAccess: allowed
+```
+
+This assumes the component exports the `FileReader` agent. The built-in filesystem tools require
+filesystem access but provision no files of their own. This example explicitly grants
+`filesystemAccess: allowed` on the agent binding; if it is omitted and no grant is inherited,
+deployment fails with an error requesting that permission. This fails closed rather than exposing
+the agent's filesystem.
