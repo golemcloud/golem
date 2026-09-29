@@ -1316,6 +1316,20 @@ impl TestWorkerExecutor {
             .gate_next_completed_entity_reconstruction(agent_id.clone())
     }
 
+    /// Reports destruction of this agent's entity Store contexts, keyed by durable Start.
+    pub fn probe_entity_store_disposal(
+        &self,
+        agent_id: &AgentId,
+    ) -> tokio::sync::mpsc::UnboundedReceiver<OplogIndex> {
+        let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+        self.additional_test_deps
+            .entity_store_disposal_probes
+            .lock()
+            .unwrap()
+            .insert(agent_id.clone(), sender);
+        receiver
+    }
+
     /// Pauses the next live entity body after its guest export returns but before its durable
     /// terminal is selected.
     pub fn gate_next_live_entity_body_completion(
@@ -2235,6 +2249,19 @@ pub struct TestWorkerCtx {
     durable_ctx: DurableWorkerCtx<TestWorkerCtx>,
     additional_test_deps: AdditionalTestDeps,
     agent_id: AgentId,
+    // Last so the durable context and its resources are destroyed before the receipt is sent.
+    entity_disposal: EntityDisposalReceipt,
+}
+
+#[derive(Default)]
+struct EntityDisposalReceipt(Option<(tokio::sync::mpsc::UnboundedSender<OplogIndex>, OplogIndex)>);
+
+impl Drop for EntityDisposalReceipt {
+    fn drop(&mut self) {
+        if let Some((sender, start)) = self.0.take() {
+            let _ = sender.send(start);
+        }
+    }
 }
 
 #[golem_native_tool::tool_definition(version = "1.0.0")]
@@ -2807,6 +2834,7 @@ impl WorkerCtx for TestWorkerCtx {
             durable_ctx,
             additional_test_deps: extra_deps,
             agent_id: worker_agent_id,
+            entity_disposal: EntityDisposalReceipt::default(),
         })
     }
 
@@ -2902,7 +2930,21 @@ impl EntityInvocationManagement for TestWorkerCtx {
         &mut self,
         scope: Option<EntityInvocationScope>,
     ) -> Result<(), WorkerExecutorError> {
-        self.durable_ctx.set_entity_invocation_scope(scope)
+        let start = scope
+            .as_ref()
+            .map(|scope| scope.invocation_id().start_index());
+        self.durable_ctx.set_entity_invocation_scope(scope)?;
+        if let Some(start) = start {
+            self.entity_disposal.0 = self
+                .additional_test_deps
+                .entity_store_disposal_probes
+                .lock()
+                .unwrap()
+                .get(&self.agent_id)
+                .cloned()
+                .map(|sender| (sender, start));
+        }
+        Ok(())
     }
 
     fn entity_invocation_scope(&self) -> Option<&EntityInvocationScope> {
@@ -5144,6 +5186,8 @@ pub struct AdditionalTestDeps {
         Arc<std::sync::Mutex<HashMap<AgentId, Arc<EntityReconstructionBodyGate>>>>,
     entity_body_start_gates:
         Arc<std::sync::Mutex<HashMap<AgentId, Arc<EntityReconstructionBodyGate>>>>,
+    entity_store_disposal_probes:
+        Arc<std::sync::Mutex<HashMap<AgentId, tokio::sync::mpsc::UnboundedSender<OplogIndex>>>>,
     divergent_entity_reconstructions: Arc<std::sync::Mutex<HashSet<AgentId>>>,
     entity_reconstruction_claim_gates:
         Arc<std::sync::Mutex<HashMap<AgentId, Arc<EntityReconstructionClaimGate>>>>,
@@ -5196,6 +5240,7 @@ impl AdditionalTestDeps {
             consume_body_reply_defer_gates: Arc::new(scc::HashMap::new()),
             entity_reconstruction_body_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
             entity_body_start_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            entity_store_disposal_probes: Arc::new(std::sync::Mutex::new(HashMap::new())),
             divergent_entity_reconstructions: Arc::new(std::sync::Mutex::new(HashSet::new())),
             entity_reconstruction_claim_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
             replay_admission_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),

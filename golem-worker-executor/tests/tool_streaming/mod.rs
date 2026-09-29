@@ -4841,10 +4841,45 @@ async fn guest_trap_fences_a_blocked_sibling_and_drains_the_owner_group(
         )),
     );
 
+    // Observe Store context destruction without re-entering a poisoned guest event loop.
+    let healthy_agent = agent_id!("ToolStreamingCaller", "settlement-eof-control");
+    let healthy_worker = executor
+        .start_agent(&caller_component.id, healthy_agent.clone())
+        .await?;
+    let mut healthy_probe = executor.probe_entity_store_disposal(&healthy_worker);
+    let healthy: StreamEvidence = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &healthy_agent,
+            "marker_before_eof",
+            data_value!(b"first".to_vec(), b"second".to_vec()),
+        )
+        .await?
+        .into_typed()?;
+    assert_evidence(&healthy, b"marker:firstsecond", 2, 11);
+    let healthy_start =
+        tokio::time::timeout(std::time::Duration::from_secs(30), healthy_probe.recv())
+            .await?
+            .expect("healthy Store context destruction receipt");
+    let healthy_oplog = executor
+        .get_oplog(&healthy_worker, OplogIndex::INITIAL)
+        .await?;
+    assert!(healthy_oplog.iter().any(|entry| {
+        entry.oplog_index == healthy_start
+            && matches!(&entry.entry, PublicOplogEntry::Start(params)
+                if params.function_name == "golem::entity::invoke")
+    }));
+    assert!(healthy_oplog.iter().any(|entry| {
+        matches!(&entry.entry, PublicOplogEntry::End(params)
+            if params.start_index == healthy_start)
+    }));
+    eprintln!("EOF control Start {healthy_start}: Store context destroyed");
+
     let agent_id = agent_id!("ToolStreamingCaller", "trap-with-blocked-sibling");
     let worker_id = executor
         .start_agent(&caller_component.id, agent_id.clone())
         .await?;
+    let mut disposal_probe = executor.probe_entity_store_disposal(&worker_id);
     let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(30),
@@ -4871,6 +4906,23 @@ async fn guest_trap_fences_a_blocked_sibling_and_drains_the_owner_group(
             .to_string()
             .contains("deterministic streaming tool trap"),
         "the original guest-trap provenance must survive owner-group fencing: {error:?}"
+    );
+
+    // Failure notification must follow destruction of both original contexts, not just fencing.
+    let mut destroyed = Vec::new();
+    for _ in 0..2 {
+        let start = disposal_probe
+            .try_recv()
+            .expect("entity Store context must be destroyed before owner failure is returned");
+        eprintln!(
+            "trap scenario Start {start}: Store context destroyed before failure notification"
+        );
+        destroyed.push(start);
+    }
+    destroyed.sort();
+    assert!(
+        disposal_probe.try_recv().is_err(),
+        "duplicate Store receipt"
     );
 
     let cleanup = tokio::time::timeout(std::time::Duration::from_secs(30), async {
@@ -4916,11 +4968,23 @@ async fn guest_trap_fences_a_blocked_sibling_and_drains_the_owner_group(
                         && params.function_name == "golem::entity::invoke"
             )
         })
-        .count();
+        .map(|entry| entry.oplog_index)
+        .collect::<Vec<_>>();
     assert_eq!(
-        entity_starts, 2,
+        entity_starts.len(),
+        2,
         "the trapped operation and its already-running blocked sibling must both be durable"
     );
+    assert!(
+        oplog.iter().all(|entry| {
+            !matches!(&entry.entry, PublicOplogEntry::End(params)
+            if entity_starts.contains(&params.start_index))
+                && !matches!(&entry.entry, PublicOplogEntry::Cancelled(params)
+                if entity_starts.contains(&params.start_index))
+        }),
+        "owner fencing must not fabricate entity terminals"
+    );
+    assert_eq!(destroyed, entity_starts);
     assert_eq!(
         oplog
             .iter()
