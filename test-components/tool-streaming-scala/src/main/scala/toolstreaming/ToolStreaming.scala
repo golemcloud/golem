@@ -5,7 +5,11 @@ import golem.runtime.annotations.*
 import golem.runtime.tool.client.ToolRpcClient
 import golem.schema.IntoSchema
 import golem.tool.{ByteStreamFailure, ToolError, ToolInputStream, ToolInvokeError, ToolOutputStream, ToolRpcFailure}
+import zio.blocks.async.*
 import zio.blocks.schema.Schema
+import zio.blocks.streams.{JvmType, Stream}
+import zio.blocks.streams.io.Reader
+import zio.blocks.streams.internal.StreamError
 
 import scala.concurrent.{ExecutionContext, Future, Promise}
 
@@ -63,18 +67,20 @@ final class ScalaStreamingToolImpl extends ScalaStreamingTool {
       stdin: ToolInputStream,
       stdout: ToolOutputStream
   ): Future[Long] = {
-    def read(bytesRead: Long): Future[Long] =
-      stdin.read().flatMap {
-        case Right(Some(bytes)) =>
-          stdout.write(bytes).flatMap(requireWrite).flatMap(_ => read(bytesRead + bytes.length))
-        case Right(None) => Future.successful(bytesRead)
-        case Left(error) => Future.failed(new IllegalStateException(s"stream input failed: $error"))
+    val copied = stdin.stream
+      .runFoldAsync(0L) { (bytesRead, byte) =>
+        Async.fromFuture(stdout.write(Array(byte)).flatMap(requireWrite)).map(_ => bytesRead + 1L)
+      }
+      .toFuture
+      .flatMap {
+        case Right(bytesRead) => Future.successful(bytesRead)
+        case Left(error)      => Future.failed(new IllegalStateException(s"stream input failed: $error"))
       }
 
     val marker =
       if (mode == "marker-echo") stdout.write("scala-marker:".getBytes("UTF-8")).flatMap(requireWrite)
       else Future.successful(())
-    marker.flatMap(_ => read(0L))
+    marker.flatMap(_ => copied)
   }
 }
 
@@ -110,14 +116,7 @@ final class ScalaToolStreamingCallerImpl(name: String) extends ScalaToolStreamin
     ScalaStreamingToolClient().declaredOutput() match {
       case Left(error) => Future.failed(new IllegalStateException(s"failed to start declared-output tool: $error"))
       case Right(invocation) =>
-        def drain(bytes: List[Int]): Future[(List[Int], String)] =
-          invocation.stdout.read().flatMap {
-            case Right(Some(chunk)) => drain(bytes ++ chunk.map(_ & 0xff).toList)
-            case Right(None)        => Future.successful((bytes, "finished"))
-            case Left(error)        => Future.successful((bytes, s"failed:$error"))
-          }
-
-        invocation.result.zip(drain(Nil)).map {
+        invocation.result.zip(drain(invocation.stdout)).map {
           case (Left(ToolError.Tool(ScalaStreamingError.Expected(message))), (bytes, terminal)) =>
             ScalaOutputEvidence(bytes, terminal, s"declared:$message")
           case (other, (bytes, terminal)) =>
@@ -138,18 +137,10 @@ final class ScalaToolStreamingCallerImpl(name: String) extends ScalaToolStreamin
           (invocation.stdout, invocation.result.map(_.map(_ => "unit"))))
         else client.output(mode).map(invocation => (invocation.stdout, invocation.result))
 
-      def drain(stream: ToolInputStream, bytes: List[Int]): Future[(List[Int], String)] =
-        stream.read().flatMap {
-          case Right(Some(chunk)) => drain(stream, bytes ++ chunk.map(_ & 0xff).toList)
-          case Right(None) => Future.successful((bytes, "finished"))
-          case Left(ByteStreamFailure.Failed(message)) => Future.successful((bytes, s"failed:$message"))
-          case Left(error) => Future.failed(new IllegalStateException(s"unexpected stdout failure: $error"))
-        }
-
       started match {
         case Left(error) => Future.failed(new IllegalStateException(s"failed to start output tool: $error"))
         case Right((stdout, result)) =>
-          result.zip(drain(stdout, Nil)).map {
+          result.zip(drain(stdout)).map {
             case (Right(value), (bytes, terminal)) => ScalaOutputEvidence(bytes, terminal, value)
             case (Left(error), _) => throw new IllegalStateException(s"output tool failed: $error")
           }
@@ -161,16 +152,11 @@ final class ScalaToolStreamingCallerImpl(name: String) extends ScalaToolStreamin
     val release = Promise[Unit]()
     val payloadBytes = payload.getBytes("UTF-8")
     val stdin = new ToolInputStream {
-      private var sent = false
-
-      override def read(): Future[Either[ByteStreamFailure, Option[Array[Byte]]]] =
-        release.future.map { _ =>
-          if (sent) Right(None)
-          else {
-            sent = true
-            Right(Some(payloadBytes))
-          }
-        }
+      override val stream: Stream[ByteStreamFailure, Byte] = Stream
+        .unfoldAsync(false) { sent =>
+          Async.fromFuture(release.future).map(_ => if (sent) None else Some(payloadBytes -> true))
+        }(using JvmType.Infer.boxed[Array[Byte]])
+        .flatMap(Stream.fromArray)
 
       override def cancel(): Future[Unit] = Future.successful(())
     }
@@ -178,31 +164,36 @@ final class ScalaToolStreamingCallerImpl(name: String) extends ScalaToolStreamin
     ScalaStreamingToolClient().stream("marker-echo", stdin) match {
       case Left(error) => Future.failed(new IllegalStateException(s"failed to start Scala streaming tool: $error"))
       case Right(invocation) =>
-        invocation.stdout.read().flatMap {
-          case Right(Some(marker)) if marker.sameElements("scala-marker:".getBytes("UTF-8")) =>
+        invocation.stdout.stream.startAsync.toFuture.flatMap { reader =>
+          readN(reader, "scala-marker:".length).flatMap {
+            case marker if marker.sameElements("scala-marker:".getBytes("UTF-8")) =>
             release.success(())
-            val output = readAll(invocation.stdout, Vector(marker))
+            val output = readAll(reader, Vector(marker))
             invocation.result.zip(output).flatMap {
               case (Right(bytesRead), bytes) =>
                 Future.successful(ScalaStreamEvidence(new String(bytes, "UTF-8"), bytesRead))
               case (Left(error), _) => Future.failed(new IllegalStateException(s"Scala tool failed: $error"))
             }
-          case other =>
-            Future.failed(new IllegalStateException(s"expected live Scala marker before stdin EOF, got $other"))
+            case other =>
+              Future.failed(new IllegalStateException(s"expected live Scala marker before stdin EOF, got ${other.toSeq}"))
+          }
         }
     }
   }
 
   override def invalidCommandPathCleanup(): Future[ScalaCleanupEvidence] = {
-    val sourceCompletion = Promise[Either[ByteStreamFailure, Option[Array[Byte]]]]()
+    val sourceCompletion = Promise[Unit]()
     val sourceCancelled = Promise[Unit]()
     val stdin = new ToolInputStream {
-      override def read(): Future[Either[ByteStreamFailure, Option[Array[Byte]]]] =
-        sourceCompletion.future
+      override val stream: Stream[ByteStreamFailure, Byte] = Stream
+        .unfoldAsync(false) { emitted =>
+          if (emitted) Async.succeed(None)
+          else Async.fromFuture(sourceCompletion.future).map(_ => None)
+        }(using JvmType.Infer.byte)
 
       override def cancel(): Future[Unit] = {
         sourceCancelled.trySuccess(())
-        sourceCompletion.trySuccess(Right(None))
+        sourceCompletion.trySuccess(())
         Future.successful(())
       }
     }
@@ -222,7 +213,7 @@ final class ScalaToolStreamingCallerImpl(name: String) extends ScalaToolStreamin
           case Some(stdout) =>
             for {
               result <- invocation.result
-              terminal <- stdout.read()
+              terminal <- readTerminal(stdout)
               _ <- sourceCancelled.future
             } yield {
               val error = result match {
@@ -230,28 +221,64 @@ final class ScalaToolStreamingCallerImpl(name: String) extends ScalaToolStreamin
                   s"invalid-command-path:${path.mkString("/")}"
                 case other => s"unexpected:$other"
               }
-              val stdoutTerminal = terminal match {
-                case Right(None)                               => "closed"
-                case Right(Some(bytes))                        => s"unexpected-chunk:${bytes.length}"
-                case Left(ByteStreamFailure.Cancelled)         => "cancelled"
-                case Left(ByteStreamFailure.Abandoned)         => "abandoned"
-                case Left(ByteStreamFailure.ResourceExhausted) => "resource-exhausted"
-                case Left(ByteStreamFailure.Failed(_))         => "failed"
-              }
               ScalaCleanupEvidence(
                 error,
                 stdinCancelled = true,
-                stdoutTerminal
+                terminal
               )
             }
         }
     }
   }
 
-  private def readAll(stream: ToolInputStream, chunks: Vector[Array[Byte]]): Future[Array[Byte]] =
-    stream.read().flatMap {
-      case Right(Some(chunk)) => readAll(stream, chunks :+ chunk)
-      case Right(None)        => Future.successful(chunks.flatten.toArray)
-      case Left(error)        => Future.failed(new IllegalStateException(s"Scala stdout failed: $error"))
+  private object End
+
+  private def drain(stream: ToolInputStream): Future[(List[Int], String)] =
+    stream.stream.startAsync.toFuture.flatMap(reader => drain(reader, Nil))
+
+  private def drain(reader: Reader.AsyncReader[Byte], bytes: List[Int]): Future[(List[Int], String)] =
+    reader.read[Any](End).toFuture
+      .flatMap {
+        case byte: Byte => drain(reader, bytes :+ (byte & 0xff))
+        case _          => Future.successful((bytes, "finished"))
+      }
+      .recover {
+        case error: StreamError =>
+          error.value.asInstanceOf[ByteStreamFailure] match {
+            case ByteStreamFailure.Failed(message) => (bytes, s"failed:$message")
+            case failure                           => throw new IllegalStateException(s"unexpected stdout failure: $failure")
+          }
+        case error => throw new IllegalStateException(s"unexpected stdout failure: $error")
+      }
+
+  private def readN(reader: Reader.AsyncReader[Byte], count: Int): Future[Array[Byte]] = {
+    def loop(bytes: Vector[Byte]): Future[Array[Byte]] =
+      if (bytes.length == count) Future.successful(bytes.toArray)
+      else
+        reader.read[Any](End).toFuture.flatMap {
+          case byte: Byte => loop(bytes :+ byte)
+          case _          => Future.failed(new IllegalStateException("Scala stdout ended before the marker"))
+        }
+    loop(Vector.empty)
+  }
+
+  private def readAll(reader: Reader.AsyncReader[Byte], chunks: Vector[Array[Byte]]): Future[Array[Byte]] =
+    reader.read[Any](End).toFuture.flatMap {
+      case byte: Byte => readAll(reader, chunks :+ Array(byte))
+      case _          => Future.successful(chunks.flatten.toArray)
+    }
+
+  private def readTerminal(stdout: ToolInputStream): Future[String] =
+    stdout.stream.startAsync.toFuture.flatMap(_.read[Any](End).toFuture).map {
+      case _: Byte => "unexpected-chunk:1"
+      case _       => "closed"
+    }.recover {
+      case error: StreamError =>
+        error.value.asInstanceOf[ByteStreamFailure] match {
+          case ByteStreamFailure.Cancelled         => "cancelled"
+          case ByteStreamFailure.Abandoned         => "abandoned"
+          case ByteStreamFailure.ResourceExhausted => "resource-exhausted"
+          case ByteStreamFailure.Failed(_)         => "failed"
+        }
     }
 }
