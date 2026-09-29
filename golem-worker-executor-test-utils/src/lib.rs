@@ -817,14 +817,27 @@ impl TestWorkerExecutor {
         self.leak_detector.clone()
     }
 
-    /// Drops the executor and waits until its service graph is released, for at most 30
-    /// seconds. A drop only asks the tasks of the executor to stop, so a start that follows it at
-    /// once can find what the old graph still holds, such as the exclusive lock of a managed XFS
-    /// root. A test calls this before the next start in the same process.
+    /// Removes the agents from the cache of the executor, drops the executor, and waits until
+    /// its service graph is released, for at most 30 seconds. A cached agent refers to the graph,
+    /// and a drop only asks the tasks of the executor to stop, so without this a start that
+    /// follows in the same process can find what the old graph still holds, such as the
+    /// exclusive lock of a managed XFS root. A test calls this before the next start.
     pub async fn release(self) -> anyhow::Result<()> {
-        let released = self.leak_detector();
-        drop(self);
         use futures::StreamExt as _;
+        let released = self.leak_detector();
+        if let Some(services) = &self.services {
+            let agents = services.active_agents();
+            let workers = agents.snapshot().await;
+            futures::stream::iter(workers)
+                .for_each(|(_, worker)| {
+                    let agents = &agents;
+                    async move {
+                        agents.remove_worker(&worker, false).await;
+                    }
+                })
+                .await;
+        }
+        drop(self);
         let gone = futures::stream::repeat(())
             .then(|()| tokio::time::sleep(Duration::from_millis(10)))
             .filter(|()| std::future::ready(released.upgrade().is_none()));
