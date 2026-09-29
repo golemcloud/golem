@@ -27,13 +27,7 @@
 //	}
 package oplog
 
-import (
-	"encoding/binary"
-
-	"github.com/golemcloud/golem/sdks/go/golem"
-	oplogwit "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_api_oplog"
-	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
-)
+import oplogwit "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_api_oplog"
 
 // Entry is one oplog entry. Its cases are the constants of this package.
 type Entry = oplogwit.PublicOplogEntry
@@ -53,22 +47,4 @@ type (
 type SearchHit struct {
 	Index uint64
 	Entry Entry
-}
-
-func agentIDToWit(id golem.AgentID) types.AgentId {
-	u := id.ComponentID
-	return types.AgentId{
-		ComponentId: types.ComponentId{Uuid: types.Uuid{
-			HighBits: binary.BigEndian.Uint64(u[0:8]),
-			LowBits:  binary.BigEndian.Uint64(u[8:16]),
-		}},
-		AgentId: id.AgentID,
-	}
-}
-
-func readErrorFromWit(e oplogwit.OplogReadError) error {
-	if e.Tag() == oplogwit.OplogReadErrorPermissionDenied {
-		return &golem.AgentOperationError{Kind: golem.AgentOperationPermissionDenied}
-	}
-	return &golem.AgentOperationError{Kind: golem.AgentOperationBackendError, Message: e.InternalError()}
 }

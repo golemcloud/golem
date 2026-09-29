@@ -17,10 +17,12 @@
 package oplog
 
 import (
+	"encoding/binary"
 	"iter"
 
 	"github.com/golemcloud/golem/sdks/go/golem"
 	oplogwit "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_api_oplog"
+	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 )
 
 // Get reads an agent's oplog from the entry at index start. Pages are fetched
@@ -72,4 +74,22 @@ func Search(id golem.AgentID, text string) iter.Seq2[SearchHit, error] {
 			}
 		}
 	}
+}
+
+func agentIDToWit(id golem.AgentID) types.AgentId {
+	u := id.ComponentID
+	return types.AgentId{
+		ComponentId: types.ComponentId{Uuid: types.Uuid{
+			HighBits: binary.BigEndian.Uint64(u[0:8]),
+			LowBits:  binary.BigEndian.Uint64(u[8:16]),
+		}},
+		AgentId: id.AgentID,
+	}
+}
+
+func readErrorFromWit(e oplogwit.OplogReadError) error {
+	if e.Tag() == oplogwit.OplogReadErrorPermissionDenied {
+		return &golem.AgentOperationError{Kind: golem.AgentOperationPermissionDenied}
+	}
+	return &golem.AgentOperationError{Kind: golem.AgentOperationBackendError, Message: e.InternalError()}
 }
