@@ -353,12 +353,16 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     }
                 }
             }
-            if let Some(interrupt) = self.pending_interrupt().await
-                && self
-                    .handle_unloaded_interrupt(interrupt, retry_was_live)
+            // An interrupt that waits now, such as the terminal interrupt that ended the wait of
+            // the start for an upload, is handled as an interrupt of the instantiation.
+            if let Some(interrupt) = self.pending_interrupt().await {
+                match self
+                    .interrupted_before_instance(interrupt.kind, Some(interrupt))
                     .await
-            {
-                break 'outer;
+                {
+                    StartupStep::Retry => continue,
+                    StartupStep::Stop => break,
+                }
             }
             let permit = self
                 .permit_state
@@ -371,97 +375,13 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     recovery_decision,
                 } => (*agent, window, recovery_decision),
                 CreateInstanceResult::Interrupted(kind) => {
-                    self.release_concurrent_agent_permit();
                     let pending_interrupt = self.interrupts.take().await;
-                    let kind = pending_interrupt
-                        .map(|interrupt| interrupt.kind)
-                        .unwrap_or(kind);
-                    if self.parent.initial_worker_metadata.owner_kind
-                        == OwnerKind::EphemeralExternalTool
+                    match self
+                        .interrupted_before_instance(kind, pending_interrupt)
+                        .await
                     {
-                        // Core initialization has already entered the executable Store. Losing it
-                        // is terminal for an external owner, just as losing its invocation body is.
-                        if self
-                            .parent
-                            .add_and_commit_oplog(OplogEntry::interrupted())
-                            .await
-                            .is_err()
-                        {
-                            // The shard has a new owner. Give the agent up without archiving:
-                            // the archive would move an oplog that is no longer this executor's.
-                            self.stop_startup_retired().await;
-                            break;
-                        }
-                        self.stop_unloaded(
-                            Some(super::inactive_ephemeral_agent_error()),
-                            PendingLiveInvocationDisposition::Fail,
-                        )
-                        .await;
-                        self.archive_ephemeral_oplog();
-                        break;
-                    }
-                    // Interrupted while instantiating: record the same lifecycle oplog entry the
-                    // invocation failure path would (`Suspend`/`Interrupted`), then park or
-                    // restart. There is no store to run `on_invocation_failure` on, but no
-                    // invocation was running either — the status marker is all that is needed.
-                    match kind {
-                        InterruptKind::Restart | InterruptKind::Jump => {
-                            debug!("Instantiation interrupted for restart, retrying");
-                            continue;
-                        }
-                        InterruptKind::Suspend(ts) => {
-                            if self
-                                .parent
-                                .add_and_commit_oplog(OplogEntry::suspend())
-                                .await
-                                .is_err()
-                            {
-                                self.stop_startup_retired().await;
-                                break;
-                            }
-                            if ts < *self.parent.last_resume_request.lock().await {
-                                debug!(
-                                    "Suspend during instantiation ignored because there was a resume request since it"
-                                );
-                                continue;
-                            } else {
-                                self.parent.complete_startup(self.start_attempt, Ok(()));
-                                self.stop_unloaded(
-                                    None,
-                                    resident_work_disposition(
-                                        pending_interrupt
-                                            .map(|interrupt| interrupt.unload_request.reason)
-                                            .unwrap_or(UnloadReason::Suspend),
-                                    ),
-                                )
-                                .await;
-                                break;
-                            }
-                        }
-                        InterruptKind::Interrupt(_) => {
-                            if self
-                                .parent
-                                .add_and_commit_oplog(OplogEntry::interrupted())
-                                .await
-                                .is_err()
-                            {
-                                self.stop_startup_retired().await;
-                                break;
-                            }
-                            self.parent.complete_startup(
-                                self.start_attempt,
-                                Err(WorkerExecutorError::Interrupted { kind }),
-                            );
-                            self.stop_unloaded(None, PendingLiveInvocationDisposition::Fail)
-                                .await;
-                            break;
-                        }
-                        InterruptKind::ShardLost => {
-                            // Nothing is written: the oplog belongs to the shard's new owner
-                            // now. Whoever was waiting for this start is told to look there.
-                            self.stop_startup_retired().await;
-                            break;
-                        }
+                        StartupStep::Retry => continue,
+                        StartupStep::Stop => break,
                     }
                 }
                 CreateInstanceResult::Failed => {
@@ -1000,6 +920,106 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
 
     /// Handles an interrupt that arrived while the loop waits, unloaded, for a concurrent-agent
     /// permit. Returns whether the loop exits.
+    /// Handles an interrupt that came before the instance of the start ran: the kind that
+    /// `create_instance` gave, or the interrupt that waits. It records the same lifecycle oplog
+    /// entry that the invocation failure path records (`Suspend` or `Interrupted`), then parks,
+    /// stops or restarts the start. The concurrent-agent permit is released first.
+    async fn interrupted_before_instance(
+        &mut self,
+        kind: InterruptKind,
+        pending_interrupt: Option<PendingWorkerInterrupt>,
+    ) -> StartupStep {
+        self.release_concurrent_agent_permit();
+        let kind = pending_interrupt
+            .map(|interrupt| interrupt.kind)
+            .unwrap_or(kind);
+        if self.parent.initial_worker_metadata.owner_kind == OwnerKind::EphemeralExternalTool {
+            // Core initialization has already entered the executable Store. Losing it
+            // is terminal for an external owner, just as losing its invocation body is.
+            if self
+                .parent
+                .add_and_commit_oplog(OplogEntry::interrupted())
+                .await
+                .is_err()
+            {
+                // The shard has a new owner. Give the agent up without archiving:
+                // the archive would move an oplog that is no longer this executor's.
+                self.stop_startup_retired().await;
+                return StartupStep::Stop;
+            }
+            self.stop_unloaded(
+                Some(super::inactive_ephemeral_agent_error()),
+                PendingLiveInvocationDisposition::Fail,
+            )
+            .await;
+            self.archive_ephemeral_oplog();
+            return StartupStep::Stop;
+        }
+        // Interrupted while instantiating: record the same lifecycle oplog entry the
+        // invocation failure path would (`Suspend`/`Interrupted`), then park or
+        // restart. There is no store to run `on_invocation_failure` on, but no
+        // invocation was running either — the status marker is all that is needed.
+        match kind {
+            InterruptKind::Restart | InterruptKind::Jump => {
+                debug!("Instantiation interrupted for restart, retrying");
+                StartupStep::Retry
+            }
+            InterruptKind::Suspend(ts) => {
+                if self
+                    .parent
+                    .add_and_commit_oplog(OplogEntry::suspend())
+                    .await
+                    .is_err()
+                {
+                    self.stop_startup_retired().await;
+                    return StartupStep::Stop;
+                }
+                if ts < *self.parent.last_resume_request.lock().await {
+                    debug!(
+                        "Suspend during instantiation ignored because there was a resume request since it"
+                    );
+                    StartupStep::Retry
+                } else {
+                    self.parent.complete_startup(self.start_attempt, Ok(()));
+                    self.stop_unloaded(
+                        None,
+                        resident_work_disposition(
+                            pending_interrupt
+                                .map(|interrupt| interrupt.unload_request.reason)
+                                .unwrap_or(UnloadReason::Suspend),
+                        ),
+                    )
+                    .await;
+                    StartupStep::Stop
+                }
+            }
+            InterruptKind::Interrupt(_) => {
+                if self
+                    .parent
+                    .add_and_commit_oplog(OplogEntry::interrupted())
+                    .await
+                    .is_err()
+                {
+                    self.stop_startup_retired().await;
+                    return StartupStep::Stop;
+                }
+                self.parent.complete_startup(
+                    self.start_attempt,
+                    Err(WorkerExecutorError::Interrupted { kind }),
+                );
+                self.stop_unloaded(None, PendingLiveInvocationDisposition::Fail)
+                    .await;
+                StartupStep::Stop
+            }
+            InterruptKind::ShardLost => {
+                // Nothing is written: the oplog belongs to the shard's new owner
+                // now. Whoever was waiting for this start is told to look there.
+                self.stop_startup_retired().await;
+                StartupStep::Stop
+            }
+        }
+    }
+
     async fn handle_unloaded_interrupt(
         &self,
         interrupt: PendingWorkerInterrupt,
@@ -3551,6 +3571,14 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             Ok(InvokeResult::Failed { .. }) | Err(_) => unreachable!(),
         }
     }
+}
+
+/// What the start does after an interrupt that came before its instance ran.
+enum StartupStep {
+    /// The start runs again.
+    Retry,
+    /// The start ends.
+    Stop,
 }
 
 /// Outcome of processing a single command within the inner invocation loop
