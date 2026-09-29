@@ -69,7 +69,7 @@ use crate::services::active_agents::{
 use crate::services::agent_filesystem::{
     AccessMode, FilesystemGenerationHandle, Follow, ObjectKind, OpenOptions, PathTarget,
     ReconstructingFilesystem, ResidentFilesystem, ResidentFilesystemActivity, SealedFilesystem,
-    TreeMark, abort_reconstruction, bind_configured_resource_usage_metering,
+    abort_reconstruction, bind_configured_resource_usage_metering,
     delete as delete_agent_filesystem, delete_created, finish_reconstruction, finish_replay,
     materialize_baseline, open as open_agent_filesystem, open_resource_usage_window,
     prepare_initial_files, provision_initial_files, reconstruction_generation_handle,
@@ -680,8 +680,6 @@ pub struct ResolvedWorkerData<Ctx: WorkerCtx> {
     /// Prevents weak-reference background work from starting while an unloaded
     /// worker is being conditionally removed from `ActiveAgents`.
     cache_retirement_in_progress: AtomicBool,
-    /// The filesystem snapshots of the current generation.
-    filesystem_snapshot_slot: StdMutex<filesystem_snapshots::FilesystemSnapshotSlot>,
     startup_attempt: StartupAttemptTracker,
     linear_memory_grant: StdMutex<Option<Arc<StdMutex<MemoryGrant>>>>,
     /// Lifecycle request shared across resident worker generations. A terminal request is retained
@@ -2438,7 +2436,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 EphemeralInvocationState::Available
             }),
             cache_retirement_in_progress: AtomicBool::new(false),
-            filesystem_snapshot_slot: StdMutex::default(),
             startup_attempt: StartupAttemptTracker::default(),
             linear_memory_grant: StdMutex::new(None),
             interrupts: Arc::default(),
@@ -5268,40 +5265,75 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self.cache_retirement_in_progress.load(Ordering::Acquire)
     }
 
-    /// Writes the confirmation record of the filesystem snapshot `name` while the instance of the
-    /// generation of `mark` runs. It answers [`state_actor::ConfirmationReply::Deferred`] without a
-    /// write when the status is detached, when the instance does not run or runs another
-    /// generation, when the owner retires, or when this executor no longer admits work of the
-    /// agent. Otherwise one status job, which holds the instance lock, checks and appends. So a
-    /// stop waits for at most the status jobs already queued plus one confirm transaction.
-    pub(crate) async fn confirm_filesystem_snapshot(
+    /// Writes the confirmation record of the filesystem snapshot `name` as `who`, when
+    /// [`filesystem_snapshots::owner_gate`] lets it: it reads the detached flag without a lock,
+    /// takes the owned instance lock, applies the gate, and sends one status job that carries the
+    /// guard. A confirmation of the running instance that gives `Confirmed` records the name in
+    /// the slot of the instance under the same guard. So a stop waits for at most the status jobs
+    /// already queued plus one confirm transaction.
+    pub(crate) async fn confirm_as(
         self: &Arc<Self>,
         name: FilesystemSnapshotName,
-        mark: TreeMark,
-    ) -> state_actor::ConfirmationReply {
-        let deferred = state_actor::ConfirmationReply::Deferred;
+        who: filesystem_snapshots::Confirmer,
+    ) -> agent_filesystem_snapshots::ConfirmOutcome {
         if self.last_known_status_detached.load(Ordering::Acquire) {
-            return deferred;
+            return agent_filesystem_snapshots::ConfirmOutcome::Deferred;
         }
         let instance_guard = self.instance.clone().lock_owned().await;
-        let same_generation = self
-            .filesystem_snapshot_slot
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .is_generation(&mark);
-        if !matches!(&*instance_guard, WorkerInstance::Running(_))
-            || !same_generation
-            || self.last_known_status_detached.load(Ordering::Acquire)
-            || self.owner_retirement_requested.is_cancelled()
-            || self
-                .shard_service()
-                .check_admission(&self.owned_agent_id.agent_id)
-                .is_err()
-        {
-            return deferred;
+        let instance = match (&*instance_guard, &who) {
+            (WorkerInstance::Running(running), filesystem_snapshots::Confirmer::Running(mark)) => {
+                filesystem_snapshots::InstanceView::Running {
+                    generation_matches: running
+                        .filesystem_snapshot_slot
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .as_ref()
+                        .is_some_and(|slot| slot.is_generation(mark)),
+                }
+            }
+            (WorkerInstance::Running(_), filesystem_snapshots::Confirmer::Start(_)) => {
+                filesystem_snapshots::InstanceView::Running {
+                    generation_matches: false,
+                }
+            }
+            (WorkerInstance::WaitingForPermit(waiting), _) => {
+                filesystem_snapshots::InstanceView::WaitingForPermit(waiting.start_attempt)
+            }
+            _ => filesystem_snapshots::InstanceView::Other,
+        };
+        if !filesystem_snapshots::owner_gate(
+            instance,
+            &who,
+            self.terminal_interrupt_pending(),
+            self.last_known_status_detached.load(Ordering::Acquire),
+            self.owner_retirement_requested.is_cancelled(),
+            || {
+                self.shard_service()
+                    .check_admission(&self.owned_agent_id.agent_id)
+                    .is_ok()
+            },
+        ) {
+            return agent_filesystem_snapshots::ConfirmOutcome::Deferred;
         }
+        let on_confirmed: state_actor::OnConfirmed = match who {
+            filesystem_snapshots::Confirmer::Running(mark) => {
+                let name = name.clone();
+                Box::new(move |instance| {
+                    if let WorkerInstance::Running(running) = instance
+                        && let Some(slot) = running
+                            .filesystem_snapshot_slot
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .as_mut()
+                    {
+                        slot.confirm(name, mark);
+                    }
+                })
+            }
+            filesystem_snapshots::Confirmer::Start(_) => Box::new(|_| {}),
+        };
         self.state_actor
-            .confirm_filesystem_snapshot(name, instance_guard)
+            .confirm_filesystem_snapshot(name, instance_guard, on_confirmed)
             .await
     }
 
@@ -5363,61 +5395,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         {
             return;
         }
-        let instance_guard = self.instance.clone().lock_owned().await;
-        if !matches!(
-            &*instance_guard,
-            WorkerInstance::WaitingForPermit(waiting) if waiting.start_attempt == start_attempt
-        ) || self.terminal_interrupt_pending()
-            || self.last_known_status_detached.load(Ordering::Acquire)
-            || self.owner_retirement_requested.is_cancelled()
-            || self
-                .shard_service()
-                .check_admission(&self.owned_agent_id.agent_id)
-                .is_err()
-        {
-            return;
-        }
-        let reply = self
-            .state_actor
-            .confirm_filesystem_snapshot(name, instance_guard)
+        let outcome = self
+            .confirm_as(name, filesystem_snapshots::Confirmer::Start(start_attempt))
             .await;
-        debug!(?reply, "Confirmed a filesystem snapshot before a start");
+        debug!(?outcome, "Confirmed a filesystem snapshot before a start");
     }
 
-    /// Ends the filesystem snapshots of the current generation. A confirmation of that generation
-    /// that comes later writes nothing.
-    pub(crate) fn end_filesystem_snapshot_generation(&self) {
-        *self
-            .filesystem_snapshot_slot
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) =
-            filesystem_snapshots::FilesystemSnapshotSlot::default();
-    }
-
-    /// Records the confirmation of `name`, whose capture has `mark`.
-    pub(crate) fn record_confirmed_filesystem_snapshot(
-        &self,
-        name: FilesystemSnapshotName,
-        mark: TreeMark,
-    ) {
-        self.filesystem_snapshot_slot
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .confirm(name, mark);
-    }
-
-    /// Records the filesystem snapshots of a new generation.
-    fn start_filesystem_snapshot_slot(&self, slot: filesystem_snapshots::FilesystemSnapshotSlot) {
-        *self
-            .filesystem_snapshot_slot
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = slot;
-    }
-
-    /// Gives the confirmed filesystem snapshot that a periodic capture compares with, while a
-    /// start would restore its name now.
+    /// Gives the confirmed filesystem snapshot of `slot` that a periodic capture compares with,
+    /// while a start would restore its name now.
     pub(crate) fn filesystem_snapshot_since(
         &self,
+        slot: &filesystem_snapshots::SnapshotSlot,
     ) -> Option<filesystem_snapshots::ConfirmedFilesystemSnapshot> {
         let status = self.last_known_status.load();
         let enabled = self.filesystem_snapshots_enabled();
@@ -5427,12 +5415,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 exclusions.filter(!status.pending_updates.is_empty(), enabled),
             )
         });
-        let slot = self
-            .filesystem_snapshot_slot
+        let slot = slot
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         filesystem_snapshots::since(
-            slot.confirmed(),
+            slot.as_ref().and_then(|slot| slot.confirmed()),
             selected.as_ref(),
             status.last_manual_update_snapshot_index,
         )
@@ -10844,6 +10831,8 @@ struct RunningWorker {
     waiting_for_command: Arc<AtomicBool>,
     concurrent_agent_permit_held: Arc<AtomicBool>,
     filesystem_activity: Arc<StdMutex<Option<ResidentFilesystemActivity>>>,
+    /// The filesystem snapshots of the generation that runs.
+    filesystem_snapshot_slot: filesystem_snapshots::SnapshotSlot,
     unload_request: Arc<StdMutex<Option<UnloadRequest>>>,
     idle_since_millis: Arc<AtomicU64>,
     interrupts: Arc<Interrupts>,
@@ -10986,6 +10975,8 @@ impl RunningWorker {
         let concurrent_agent_permit_held_clone = Arc::clone(&concurrent_agent_permit_held);
         let filesystem_activity = Arc::new(StdMutex::new(None));
         let filesystem_activity_clone = Arc::clone(&filesystem_activity);
+        let filesystem_snapshot_slot = filesystem_snapshots::SnapshotSlot::default();
+        let filesystem_snapshot_slot_clone = Arc::clone(&filesystem_snapshot_slot);
         let unload_request = Arc::new(StdMutex::new(None));
         let unload_request_clone = Arc::clone(&unload_request);
         let idle_since_millis = Arc::new(AtomicU64::new(0));
@@ -11013,6 +11004,7 @@ impl RunningWorker {
                 concurrent_agent_permit,
                 concurrent_agent_permit_held_clone,
                 filesystem_activity_clone,
+                filesystem_snapshot_slot_clone,
                 unload_request_clone,
                 idle_since_millis_clone,
                 resume_replay_pending_clone,
@@ -11059,6 +11051,7 @@ impl RunningWorker {
             waiting_for_command,
             concurrent_agent_permit_held,
             filesystem_activity,
+            filesystem_snapshot_slot,
             unload_request,
             idle_since_millis,
             interrupts,
@@ -11299,6 +11292,7 @@ impl RunningWorker {
     async fn create_instance<Ctx: WorkerCtx>(
         parent: Arc<Worker<Ctx>>,
         concurrent_agent_permit: crate::services::active_agents::ConcurrentAgentPermit,
+        filesystem_snapshot_slot: &filesystem_snapshots::SnapshotSlot,
     ) -> Result<
         (
             WorkerRunningAgent<Ctx>,
@@ -11381,8 +11375,12 @@ impl RunningWorker {
                             .map_err(WorkerExecutorError::from)?;
 
                         // The update is now marked failed in the parent, we can retry.
-                        return Box::pin(Self::create_instance(parent, concurrent_agent_permit))
-                            .await;
+                        return Box::pin(Self::create_instance(
+                            parent,
+                            concurrent_agent_permit,
+                            filesystem_snapshot_slot,
+                        ))
+                        .await;
                     } else {
                         Err(error)
                     }
@@ -11609,12 +11607,13 @@ impl RunningWorker {
                 .await);
             }
         };
-        parent.start_filesystem_snapshot_slot(
-            filesystem_snapshots::FilesystemSnapshotSlot::at_start(
+        *filesystem_snapshot_slot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+            Some(filesystem_snapshots::FilesystemSnapshotSlot::at_start(
                 tree_mark(&reconstructing),
                 baseline_kind.restored(),
-            ),
-        );
+            ));
         let reconstruction_generation_handle =
             match reconstruction_generation_handle(&reconstructing) {
                 Ok(generation_handle) => generation_handle,
@@ -11818,6 +11817,7 @@ impl RunningWorker {
         concurrent_agent_permit: crate::services::active_agents::ConcurrentAgentPermit,
         concurrent_agent_permit_held: Arc<AtomicBool>,
         filesystem_activity: Arc<StdMutex<Option<ResidentFilesystemActivity>>>,
+        filesystem_snapshot_slot: filesystem_snapshots::SnapshotSlot,
         unload_request: Arc<StdMutex<Option<UnloadRequest>>>,
         idle_since_millis: Arc<AtomicU64>,
         resume_replay_pending: Arc<AtomicBool>,
@@ -11837,6 +11837,7 @@ impl RunningWorker {
                 concurrent_agent_permit_held,
             ),
             filesystem_activity,
+            filesystem_snapshot_slot,
             unload_request,
             idle_since_millis,
             resume_replay_pending,

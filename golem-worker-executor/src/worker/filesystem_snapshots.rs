@@ -18,7 +18,6 @@
 //! The decisions are plain functions over values, so fast tests can check them.
 
 use super::Worker;
-use super::state_actor::ConfirmationReply;
 use crate::filesystem_snapshot::ChangeDetection as StoreChangeDetection;
 use crate::services::agent_filesystem::{
     ChangeDetection, InitialFilesRestore, RestoreError, RestoreTree, TreeMark,
@@ -29,6 +28,7 @@ use golem_common::model::UsableAutomaticSnapshot;
 use golem_common::model::oplog::{FilesystemSnapshotName, OplogIndex};
 use std::path::Path;
 use std::sync::Weak;
+use uuid::Uuid;
 
 /// Where the confirmed filesystem snapshot of a worker came from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -46,6 +46,10 @@ pub(crate) struct ConfirmedFilesystemSnapshot {
     pub(crate) mark: TreeMark,
     pub(crate) baseline: ConfirmedBaseline,
 }
+
+/// The slot of the generation that runs, shared by the running worker and its invocation loop.
+/// It is empty before the start of a generation and after its end.
+pub(crate) type SnapshotSlot = std::sync::Arc<std::sync::Mutex<Option<FilesystemSnapshotSlot>>>;
 
 /// What a worker knows about the filesystem snapshots of its current generation.
 #[derive(Clone, Debug, Default)]
@@ -176,23 +180,60 @@ impl RestoreTree for StartRestore {
 }
 
 /// The confirmation of one upload. It holds a weak handle to the worker, so an upload never keeps
-/// a worker in memory, and the mark of the capture, which a confirmation gives to the slot.
+/// a worker in memory, and the mark of the capture, which a confirmation gives to the slot. A
+/// worker that is gone gives `Deferred`.
 pub(crate) fn confirm_by<Ctx: WorkerCtx>(worker: Weak<Worker<Ctx>>, mark: TreeMark) -> Confirm {
     Box::new(move |name| {
         Box::pin(async move {
-            let Some(worker) = worker.upgrade() else {
-                return ConfirmOutcome::Deferred;
-            };
-            match worker.confirm_filesystem_snapshot(name.clone(), mark).await {
-                ConfirmationReply::Confirmed => {
-                    worker.record_confirmed_filesystem_snapshot(name, mark);
-                    ConfirmOutcome::Confirmed
-                }
-                ConfirmationReply::Superseded => ConfirmOutcome::Superseded,
-                ConfirmationReply::Deferred => ConfirmOutcome::Deferred,
+            match worker.upgrade() {
+                Some(worker) => worker.confirm_as(name, Confirmer::Running(mark)).await,
+                None => ConfirmOutcome::Deferred,
             }
         })
     })
+}
+
+/// Who writes a confirmation record.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Confirmer {
+    /// The running instance whose capture has this mark.
+    Running(TreeMark),
+    /// The start with this attempt, before it selects its record.
+    Start(Uuid),
+}
+
+/// What a confirmation sees of the instance of the worker, under the instance lock.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum InstanceView {
+    /// The instance runs, as the top-level variant. `generation_matches` tells whether its
+    /// generation is the generation of the confirmer.
+    Running { generation_matches: bool },
+    /// The instance waits for its permits with this start attempt.
+    WaitingForPermit(Uuid),
+    /// Any other state.
+    Other,
+}
+
+/// Whether `who` may write a confirmation record now: only as the owner of the agent. A running
+/// instance needs the generation of its capture. A start needs its own attempt and no pending
+/// terminal interrupt. Both need an attached status, no retirement of the owner, and the
+/// admission of the shard, which is asked last.
+pub(crate) fn owner_gate(
+    instance: InstanceView,
+    who: &Confirmer,
+    terminal_pending: bool,
+    detached: bool,
+    retiring: bool,
+    admitted: impl FnOnce() -> bool,
+) -> bool {
+    let owner = match (instance, who) {
+        (InstanceView::Running { generation_matches }, Confirmer::Running(_)) => generation_matches,
+        (InstanceView::WaitingForPermit(attempt), Confirmer::Start(start)) => {
+            attempt == *start && !terminal_pending
+        }
+        _ => false,
+    };
+    owner && !detached && !retiring && admitted()
 }
 
 #[cfg(test)]
@@ -290,6 +331,83 @@ mod tests {
                 PeriodicRecord::Uploaded { parent: None },
             ]
         );
+    }
+
+    #[test]
+    async fn only_the_owner_of_the_agent_passes_the_gate_and_the_admission_is_asked_last() {
+        let (mark, _) = marks().await;
+        let attempt = Uuid::new_v4();
+        let running = Confirmer::Running(mark);
+        let start = Confirmer::Start(attempt);
+        let matching = InstanceView::Running {
+            generation_matches: true,
+        };
+        let gate = |instance, who: &Confirmer, terminal, detached, retiring, admitted: bool| {
+            owner_gate(instance, who, terminal, detached, retiring, || admitted)
+        };
+
+        assert_eq!(
+            [
+                gate(matching, &running, false, false, false, true),
+                gate(matching, &running, true, false, false, true),
+                gate(
+                    InstanceView::Running {
+                        generation_matches: false
+                    },
+                    &running,
+                    false,
+                    false,
+                    false,
+                    true
+                ),
+                gate(matching, &start, false, false, false, true),
+                gate(
+                    InstanceView::WaitingForPermit(attempt),
+                    &start,
+                    false,
+                    false,
+                    false,
+                    true
+                ),
+                gate(
+                    InstanceView::WaitingForPermit(attempt),
+                    &start,
+                    true,
+                    false,
+                    false,
+                    true
+                ),
+                gate(
+                    InstanceView::WaitingForPermit(Uuid::new_v4()),
+                    &start,
+                    false,
+                    false,
+                    false,
+                    true
+                ),
+                gate(
+                    InstanceView::WaitingForPermit(attempt),
+                    &running,
+                    false,
+                    false,
+                    false,
+                    true
+                ),
+                gate(InstanceView::Other, &running, false, false, false, true),
+                gate(matching, &running, false, true, false, true),
+                gate(matching, &running, false, false, true, true),
+                gate(matching, &running, false, false, false, false),
+            ],
+            [
+                true, true, false, false, true, false, false, false, false, false, false, false
+            ]
+        );
+        let mut asked = false;
+        owner_gate(InstanceView::Other, &running, false, false, false, || {
+            asked = true;
+            true
+        });
+        assert!(!asked);
     }
 
     #[test]

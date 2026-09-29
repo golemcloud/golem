@@ -764,15 +764,16 @@ snapshots runs after `PendingUpdate` commits, and it never deletes the snapshot 
 successful manual update, because a start restores that baseline without a fallback.
 
 The upload job saves the snapshot, then asks the worker for a confirmation
-(`worker/filesystem_snapshots.rs::WorkerConfirmer`). The worker appends `SnapshotConfirmed` only
-while the instance that took the snapshot runs, in one status job that checks that the record is
-still the status candidate. Otherwise the answer is `Deferred`, and the snapshot stays in the
+(`Worker::confirm_as`, with the pure `worker/filesystem_snapshots.rs::owner_gate`). The worker
+appends `SnapshotConfirmed` only while the instance that took the snapshot runs, in one status job
+that checks that the record is still the status candidate. Otherwise the answer is `Deferred`, and the snapshot stays in the
 store. `Superseded` (an update or a revert replaced the record) deletes it. A stop never waits for
 an upload, and `forget_scope` or a shutdown ends a job also during its retention or its delete.
 
 The next start confirms instead (`Worker::confirm_filesystem_snapshot_before_start`, called from
-`WaitingWorker::new` before it takes permits). When the start would select the last record if it
-were confirmed, it waits for an upload of that record on this executor, for at most
+`WaitingWorker::new` before it takes permits, with `AgentFilesystemSnapshots::prepare_start` for
+the wait and the store check). When the start would select the last record if it were confirmed,
+it waits for an upload of that record on this executor, for at most
 `confirmation_wait`. Then it asks the store once whether the snapshot is whole, for at most what is
 left of `confirmation_wait`, or for at most `store_check_limit` when it did not wait. When the store
 holds it, the start appends `SnapshotConfirmed` as the owner of the agent. A terminal interrupt ends

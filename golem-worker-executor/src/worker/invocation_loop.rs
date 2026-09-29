@@ -33,7 +33,8 @@ use crate::services::{
     HasShardService, HasWorker,
 };
 use crate::worker::filesystem_snapshots::{
-    CaptureFinding, ConfirmedFilesystemSnapshot, PeriodicRecord, confirm_by, plan_periodic_record,
+    CaptureFinding, ConfirmedFilesystemSnapshot, PeriodicRecord, SnapshotSlot, confirm_by,
+    plan_periodic_record,
 };
 use crate::worker::interrupt::Interrupts;
 use crate::worker::invocation::{
@@ -124,6 +125,8 @@ pub struct InvocationLoop<Ctx: WorkerCtx> {
     pub(super) permit_state:
         ConcurrentAgentPermitState<crate::services::active_agents::ConcurrentAgentPermit>,
     pub(super) filesystem_activity: Arc<StdMutex<Option<ResidentFilesystemActivity>>>,
+    /// The filesystem snapshots of the generation that runs.
+    pub(super) filesystem_snapshot_slot: SnapshotSlot,
     pub(super) unload_request: Arc<StdMutex<Option<UnloadRequest>>>,
     pub idle_since_millis: Arc<AtomicU64>,
     /// `ResumeReplay` is not represented in the internal queue, so we track it
@@ -518,6 +521,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                         instance: &agent.runtime.instance,
                         store: &agent.runtime.store,
                         filesystem: &agent.filesystem,
+                        filesystem_snapshot_slot: &self.filesystem_snapshot_slot,
                         invocations_since_snapshot: 0,
                         idle_snapshot_task: None,
                         filesystem_turn_used: false,
@@ -606,7 +610,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                 }
                                 // Cleanup runs independently of this wait. Retain its final result
                                 // so deletion can still join it if the unload deadline expires.
-                                self.parent.end_filesystem_snapshot_generation();
+                                self.end_snapshot_generation();
                                 let unloading = unload_sealed_agent_ownership(
                                     SealedAgentOwnership {
                                         runtime: RunningAgentRuntime { instance, store },
@@ -768,7 +772,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 let owned_agent_id = self.owned_agent_id.clone();
                 async move { hook.before_filesystem_cleanup(&owned_agent_id).await }.boxed()
             });
-            self.parent.end_filesystem_snapshot_generation();
+            self.end_snapshot_generation();
             let unloading = Self::unload_running_agent(
                 agent,
                 unload_request.reason,
@@ -967,6 +971,15 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             }
         }
         self.release_terminal_interrupt().await;
+    }
+
+    /// Ends the filesystem snapshots of the generation that runs. A confirmation of that
+    /// generation that comes later writes nothing.
+    fn end_snapshot_generation(&self) {
+        self.filesystem_snapshot_slot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
     }
 
     async fn release_terminal_interrupt(&self) {
@@ -1266,7 +1279,13 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
         async {
             debug!("Creating the worker instance");
             self.parent.unload_cleanup.lock().unwrap().take();
-            match RunningWorker::create_instance(self.parent.clone(), permit).await {
+            match RunningWorker::create_instance(
+                self.parent.clone(),
+                permit,
+                &self.filesystem_snapshot_slot,
+            )
+            .await
+            {
                 Ok((agent, window, recovery_decision)) => CreateInstanceResult::Created {
                     agent: Box::new(agent),
                     window,
@@ -1553,6 +1572,7 @@ struct InnerInvocationLoop<'a, Ctx: WorkerCtx> {
     instance: &'a Instance,
     store: &'a Mutex<Store<Ctx>>,
     filesystem: &'a ResidentFilesystem,
+    filesystem_snapshot_slot: &'a SnapshotSlot,
     invocations_since_snapshot: u64,
     idle_snapshot_task: Option<JoinHandle<()>>,
     filesystem_turn_used: bool,
@@ -2044,6 +2064,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                 instance: self.instance,
                 store: store.deref_mut(),
                 filesystem: self.filesystem,
+                filesystem_snapshot_slot: self.filesystem_snapshot_slot,
                 uses_streams: false,
             };
             invocation.external_invocation(timestamped_invocation).await
@@ -2182,6 +2203,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
             instance: self.instance,
             store,
             filesystem: self.filesystem,
+            filesystem_snapshot_slot: self.filesystem_snapshot_slot,
             uses_streams: false,
         };
         invocation.process(message).await
@@ -2485,6 +2507,7 @@ struct Invocation<'a, Ctx: WorkerCtx> {
     instance: &'a Instance,
     store: &'a mut Store<Ctx>,
     filesystem: &'a ResidentFilesystem,
+    filesystem_snapshot_slot: &'a SnapshotSlot,
     uses_streams: bool,
 }
 
@@ -3517,7 +3540,9 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 };
                 let capture = match admission {
                     Some(admission) => {
-                        let since = self.parent.filesystem_snapshot_since();
+                        let since = self
+                            .parent
+                            .filesystem_snapshot_since(self.filesystem_snapshot_slot);
                         match self
                             .capture_filesystem(
                                 admission.capture_wait(),
