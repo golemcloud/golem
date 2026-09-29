@@ -101,4 +101,5 @@ agents:
       moonbit-streaming: {}
   MoonBitToolReflectionCaller:
     tools:
-      moonbit-reflection-test: {}
+      moonbit-reflection-test:
+        filesystemAccess: allowed

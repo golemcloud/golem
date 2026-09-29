@@ -1327,12 +1327,14 @@ export class CommandBuilder<
     private readonly toolVersion: string,
     private readonly commandAnnotations?: CommandAnnotations,
     private readonly subtreeForwards: readonly SubtreeForward[] = [],
+    private readonly requiresFilesystem = false,
   ) {}
 
   static root<const Name extends string>(
     name: Name,
+    requiresFilesystem = false,
   ): CommandBuilder<Name, {}, undefined, {}, true> {
-    return new CommandBuilder(name, emptyCommand(name), '0.0.0');
+    return new CommandBuilder(name, emptyCommand(name), '0.0.0', undefined, [], requiresFilesystem);
   }
 
   /** Construct the exact typed client owned by this tool definition. */
@@ -1358,6 +1360,7 @@ export class CommandBuilder<
       version,
       this.commandAnnotations,
       this.subtreeForwards,
+      this.requiresFilesystem,
     );
   }
 
@@ -1378,6 +1381,7 @@ export class CommandBuilder<
       this.toolVersion,
       normalizeAnnotations(annotations),
       this.subtreeForwards,
+      this.requiresFilesystem,
     );
   }
 
@@ -1647,6 +1651,7 @@ export class CommandBuilder<
       this.toolVersion,
       this.commandAnnotations,
       subtreeForwards,
+      this.requiresFilesystem,
     );
   }
 
@@ -1664,7 +1669,9 @@ export class CommandBuilder<
 
   [BUILD_TOOL](this: CommandBuilder<Name, Globals, Body, Children, true>): ExtendedToolType {
     if (this.compiled) return this.compiled;
-    const tool = normalizeExtendedTool(new ExtendedToolType(this.toolVersion, this.finalizeNode()));
+    const tool = normalizeExtendedTool(
+      new ExtendedToolType(this.toolVersion, this.finalizeNode(), this.requiresFilesystem),
+    );
     validateTypeScriptProjection(tool);
     this.compiled = tool;
     return this.compiled;
@@ -1678,8 +1685,11 @@ export type ToolDefinition<
   Children = {},
 > = CommandBuilder<Name, Globals, Body, Children, true>;
 
-export function toolDefinition<const Name extends string>(name: Name): ToolDefinition<Name> {
-  return CommandBuilder.root(name);
+export function toolDefinition<const Name extends string>(
+  name: Name,
+  options: { requiresFilesystem?: boolean } = {},
+): ToolDefinition<Name> {
+  return CommandBuilder.root(name, options.requiresFilesystem ?? false);
 }
 
 export function universalToolMiddleware<

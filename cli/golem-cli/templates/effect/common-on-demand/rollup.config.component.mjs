@@ -68,7 +68,7 @@ if (actualEffectVersion !== expectedEffectVersion) {
       `Pin "effect" to "${expectedEffectVersion}" in package.json.`,
   );
 }
-const configuration = {
+const configuration = () => ({
   input: "./src/main.ts",
   output: {
     file: `${golemTemp}/ts-dist/${componentName}/main.js`,
@@ -90,6 +90,6 @@ const configuration = {
       include: parsedTsConfig.fileNames,
     }),
   ],
-};
+});
 
 export default await componentConfiguration(rollup, configuration);

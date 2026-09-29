@@ -152,6 +152,7 @@ mod tests {
     fn tool(name: &str) -> Tool {
         Tool {
             version: "0.1.0".to_string(),
+        requires_filesystem: false,
             commands: CommandTree {
                 nodes: vec![CommandNode {
                     name: name.to_string(),

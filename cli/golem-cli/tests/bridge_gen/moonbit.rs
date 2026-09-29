@@ -579,6 +579,7 @@ fn phase_eight_tool() -> Tool {
 
     Tool {
         version: "1".into(),
+        requires_filesystem: false,
         commands: CommandTree {
             nodes: vec![
                 root,

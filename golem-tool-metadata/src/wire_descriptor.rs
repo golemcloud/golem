@@ -545,6 +545,7 @@ impl ExtendedToolType<WireTypeRef> {
             .collect::<Result<_, _>>()?;
         Ok(tool::Tool {
             version: self.version,
+            requires_filesystem: self.requires_filesystem,
             commands: tool::CommandTree { nodes },
             schema: schema.finish(),
         })

@@ -864,6 +864,7 @@ fn echo_tool() -> Tool {
     };
     Tool {
         version: "1.0.0".to_string(),
+        requires_filesystem: false,
         commands: CommandTree {
             nodes: vec![golem_common::schema::tool::CommandNode {
                 name: "echo".to_string(),

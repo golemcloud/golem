@@ -58,6 +58,36 @@ test "unknown wire tool errors preserve their payload without schema constructio
 }
 
 ///|
+test "wire structural tool errors map to remote tool errors" {
+  let cases : Array[(@types.ToolError, RemoteToolError)] = [
+    (@types.InvalidToolName("bad"), InvalidToolName("bad")),
+    (@types.InvalidCommandPath(["bad"]), InvalidCommandPath(["bad"])),
+    (@types.InvalidInput("input"), InvalidInput("input")),
+    (
+      @types.ConstraintViolation("constraint"),
+      ConstraintViolation("constraint"),
+    ),
+    (@types.InvalidResult("result"), InvalidResult("result")),
+  ]
+  for pair in cases {
+    let (wire, expected) = pair
+    let mapped : ToolError[NoToolError] = map_wire_rpc_error(
+      @types.RemoteToolError(wire),
+      (_, _) => None,
+    )
+    guard mapped is RemoteTool(actual) else {
+      fail("structural error must map to RemoteTool")
+    }
+    assert_eq(actual, expected)
+  }
+  let internal : ToolError[NoToolError] = map_wire_rpc_error(
+    @types.RemoteInternalError("internal"),
+    (_, _) => None,
+  )
+  assert_true(internal is Rpc(RemoteInternal("internal")))
+}
+
+///|
 test "text input refinement follows option and list fields without changing other strings" {
   let value = @schema.into_wire_record([Some(["blue", "green"]), "untouched"])
   wire_text_input_field(value, 0)

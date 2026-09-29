@@ -1665,6 +1665,7 @@ fn emit_descriptor_plumbing(buf : StringBuilder, symbol_scope : String) -> Unit 
     #|fn __golem_tool_extract_prepared(def : @tool.ToolDef) -> @tool.ToolDef {
     #|  {
     #|    version: def.version,
+    #|    requires_filesystem: def.requires_filesystem,
     #|    commands: def.commands[1:].map(node => {
     #|      __golem_tool_rebase_node(node, -1)
     #|    }),
@@ -1690,7 +1691,7 @@ fn emit_descriptor_plumbing(buf : StringBuilder, symbol_scope : String) -> Unit 
     #|  for node in child.commands {
     #|    commands.push(__golem_tool_rebase_node(node, offset))
     #|  }
-    #|  { version: def.version, commands }
+    #|  { version: def.version, requires_filesystem: def.requires_filesystem, commands }
     #|}
     #|
     #|
@@ -1723,7 +1724,9 @@ fn emit_descriptor(
     raw_descriptor_name(tool, symbol_scope) +
     "() -> @tool.ToolDef {\n  try {\n    let def : @tool.ToolDef = { version: \"" +
     escape_string_lit(tool.version.unwrap_or("0.0.0")) +
-    "\", commands: [\n",
+    "\", requires_filesystem: " +
+    tool.requires_filesystem.to_string() +
+    ", commands: [\n",
   )
   let root = tool.root_command
   let root_args = root.map(i => plans[i]).unwrap_or([])
@@ -1788,7 +1791,9 @@ fn emit_descriptor(
     prepared_descriptor_name(tool, symbol_scope) +
     "(strict_ancestors : @tool.GlobalsDef, parent_globals : @tool.GlobalsDef, override_name : String?, override_doc : @toolCommon.Doc?, override_aliases : Array[String]?) -> @tool.ToolDef {\n  try {\n    let carrier : @tool.ToolDef = { version: \"" +
     escape_string_lit(tool.version.unwrap_or("0.0.0")) +
-    "\", commands: [{ name: \"__golem_ancestry\", aliases: [], doc: { summary: \"\", description: \"\", examples: [] }, globals: strict_ancestors, subcommands: [], body: None }] }\n    let prepared = " +
+    "\", requires_filesystem: " +
+    tool.requires_filesystem.to_string() +
+    ", commands: [{ name: \"__golem_ancestry\", aliases: [], doc: { summary: \"\", description: \"\", examples: [] }, globals: strict_ancestors, subcommands: [], body: None }] }\n    let prepared = " +
     descriptor_helper_name(symbol_scope, "extract_prepared") +
     "(carrier.graft_subtree(" +
     raw_descriptor_name(tool, symbol_scope) +

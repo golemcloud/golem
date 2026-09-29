@@ -364,6 +364,19 @@ test "globals declared by a leaf command are emitted on that command node" {
 }
 
 ///|
+test "direct wire descriptors preserve requires_filesystem" {
+  let source =
+    #|#derive.tool("files", requires_filesystem=true)
+    #|struct Files {}
+    #|pub fn Files::read(path : String) -> String { path }
+  let generated = @formatter.impls_to_string(
+    @lib.generate_tool_registration(@lib.parse_tools([("files.mbt", source)])),
+  )
+  let wire = generated.split("fn __golem_tool_wire_Files").last().unwrap()
+  assert_true(wire.contains("requires_filesystem: true"))
+}
+
+///|
 test "options are optional by default" {
   let source =
     #|#derive.tool

@@ -1169,6 +1169,7 @@ mod tests {
 
         Tool {
             version: "1".to_string(),
+            requires_filesystem: false,
             commands: CommandTree {
                 nodes: vec![
                     root,
@@ -1237,6 +1238,7 @@ mod tests {
         });
         let tool = Tool {
             version: "1".to_string(),
+            requires_filesystem: false,
             commands: CommandTree { nodes: vec![root] },
             schema: SchemaGraph::empty(),
         };
@@ -1265,6 +1267,7 @@ mod tests {
         });
         let tool = Tool {
             version: "1".to_string(),
+            requires_filesystem: false,
             commands: CommandTree { nodes: vec![root] },
             schema: SchemaGraph::empty(),
         };
@@ -1295,6 +1298,7 @@ mod tests {
         });
         let tool = Tool {
             version: "1".to_string(),
+            requires_filesystem: false,
             commands: CommandTree { nodes: vec![root] },
             schema: SchemaGraph {
                 defs: vec![
@@ -1349,6 +1353,7 @@ mod tests {
         });
         let tool = Tool {
             version: "1".to_string(),
+            requires_filesystem: false,
             commands: CommandTree { nodes: vec![root] },
             schema: SchemaGraph {
                 defs: vec![

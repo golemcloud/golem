@@ -171,6 +171,7 @@ fn registered_tool(
         release_id: None,
         definition: Tool {
             version: "1.0.0".to_string(),
+            requires_filesystem: false,
             commands: CommandTree {
                 nodes: vec![CommandNode {
                     name: name.to_string(),

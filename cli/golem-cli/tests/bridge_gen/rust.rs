@@ -1873,6 +1873,7 @@ fn grep_tool() -> Tool {
     });
     Tool {
         version: "1".to_string(),
+        requires_filesystem: false,
         commands: CommandTree {
             nodes: vec![root, replace],
         },
@@ -1908,6 +1909,7 @@ fn git_tool() -> Tool {
     });
     Tool {
         version: "1".to_string(),
+        requires_filesystem: false,
         commands: CommandTree {
             nodes: vec![root, stash, pop],
         },
@@ -1958,6 +1960,7 @@ fn colliding_names_tool() -> Tool {
     });
     Tool {
         version: "1".to_string(),
+        requires_filesystem: false,
         commands: CommandTree {
             nodes: vec![root, sub],
         },

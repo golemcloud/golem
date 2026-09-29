@@ -33,7 +33,7 @@ const exports = [
 ]
 
 // Load the compiler output in memory so unit tests need no prebuilt dist files.
-const sourcePlugin = {
+const sourcePlugin = () => ({
   name: "sdk-test-sources",
   resolveId(id: string, importer?: string) {
     if (importer?.startsWith(sdk) && id.startsWith(".")) return resolve(dirname(importer), id)
@@ -55,20 +55,20 @@ const sourcePlugin = {
       compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
     }).outputText
   },
-}
+})
 
 const build = async (fixture: string) => {
   const source = resolve(root, `test/fixtures/capabilities/${fixture}`)
-  const options = await componentConfiguration(rollup, {
+  const options = await componentConfiguration(rollup, () => ({
     input: existsSync(`${source}.ts`) ? `${source}.ts` : `${source}.mjs`,
     external: (id) =>
       id === "effect" || id === "node:sqlite" || id.startsWith("golem:") || id.startsWith("wasi:"),
-    plugins: [sourcePlugin, nodeResolve()],
+    plugins: [sourcePlugin(), nodeResolve()],
     onwarn: (warning) => {
       if (warning.code !== "CIRCULAR_DEPENDENCY" && warning.code !== "EMPTY_BUNDLE")
         throw new Error(warning.message)
     },
-  })
+  }))
   const bundle = await rollup(options)
   try {
     const { output } = await bundle.generate({
@@ -399,6 +399,8 @@ describe("capability-sensitive component exports", () => {
       expect(
         runtime.golemTool010Guest.discoverTools().map((t: any) => t.commands.nodes[0].name),
       ).toEqual(tools ? ["double"] : [])
+      if (fixture === "tool-only")
+        expect(runtime.golemTool010Guest.discoverTools()[0].requiresFilesystem).toBe(true)
       expect(runtime.toolMiddlewareGuest.discoverToolMiddlewares().map((m: any) => m.name)).toEqual(
         middleware ? ["passthrough"] : [],
       )
@@ -523,4 +525,60 @@ describe("capability-sensitive component exports", () => {
     },
     30000,
   )
+
+  it("requires fresh options and plugins and makes the final configuration one-shot", async () => {
+    const input = resolve(root, "test/fixtures/capabilities/empty.mjs")
+    const factory = () => ({
+      input,
+      external: (id: string) =>
+        id === "effect" || id.startsWith("golem:") || id.startsWith("wasi:"),
+      plugins: [sourcePlugin(), nodeResolve()],
+    })
+    await expect(componentConfiguration(rollup, { input } as any)).rejects.toThrow(
+      "options factory",
+    )
+    await expect(
+      componentConfiguration(rollup, () => ({ ...factory(), watch: {} })),
+    ).rejects.toThrow("watch mode")
+    await expect(
+      componentConfiguration(rollup, () => ({ ...factory(), cache: {} as any })),
+    ).rejects.toThrow("Rollup cache")
+    const reused = { name: "reused" }
+    await expect(
+      componentConfiguration(rollup, () => {
+        const options = factory()
+        return { ...options, plugins: [...options.plugins, reused] }
+      }),
+    ).rejects.toThrow("fresh plugin instances")
+    let nestedCalls = 0
+    await expect(
+      componentConfiguration(rollup, () => ({
+        ...factory(),
+        plugins: [
+          false,
+          Promise.resolve([
+            null,
+            nestedCalls++ === 0 ? [sourcePlugin(), reused] : [undefined, reused],
+          ]),
+        ],
+      })),
+    ).rejects.toThrow("fresh plugin instances")
+
+    const withFalsyPlugins = await componentConfiguration(rollup, () => ({
+      ...factory(),
+      plugins: Promise.resolve([false, null, [undefined, sourcePlugin(), nodeResolve()]]),
+    }))
+    const withFalsyBundle = await rollup(withFalsyPlugins)
+    await withFalsyBundle.close()
+
+    const options = await componentConfiguration(rollup, factory)
+    const bundle = await rollup(options)
+    await bundle.generate({ format: "esm", inlineDynamicImports: true })
+    await bundle.generate({ format: "cjs", inlineDynamicImports: true })
+    await bundle.close()
+    await expect(rollup(options)).rejects.toThrow("one-shot")
+
+    const fresh = await rollup(await componentConfiguration(rollup, factory))
+    await fresh.close()
+  }, 30000)
 })

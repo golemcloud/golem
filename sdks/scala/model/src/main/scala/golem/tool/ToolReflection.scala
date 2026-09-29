@@ -115,6 +115,6 @@ object ToolReflection {
         body
       )
     }
-    ExtendedToolType(tool.version, commands)
+    ExtendedToolType(tool.version, commands, tool.requiresFilesystem)
   }
 }

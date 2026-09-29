@@ -33,8 +33,9 @@ export function discoverCapabilities(parsedConfig) {
     options: { ...parsedConfig.options, allowJs: true, maxNodeModuleJsDepth: 20 },
   });
   const checker = program.getTypeChecker();
-  const capabilities = { agents: false, tools: false, middleware: false };
-  const all = () => Object.assign(capabilities, { agents: true, tools: true, middleware: true });
+  const capabilities = { agents: false, tools: false, middleware: false, schemas: false };
+  const all = () =>
+    Object.assign(capabilities, { agents: true, tools: true, middleware: true, schemas: true });
   const sdkDeclarations = new Set();
   for (const source of program.getSourceFiles()) {
     for (const subpath of ['', '/middleware']) {
@@ -138,6 +139,7 @@ export function discoverCapabilities(parsedConfig) {
         if (fromSdk) {
           const name = symbol.getName();
           if (name === 'defineAgent' || name === 'AgentTypeRegistry') capabilities.agents = true;
+          if (name === 'durable' || name === 'forSchema') capabilities.schemas = true;
           if (name === 'universalToolMiddleware' || name === 'middleware')
             capabilities.middleware = true;
           if (
@@ -180,10 +182,24 @@ export default (async () => {
 export function componentPlugin(parsedConfig, main) {
   const capabilities = discoverCapabilities(parsedConfig);
   const tools = staticTools(parsedConfig, runtime);
-  const dynamicModels = tools.usesDynamicModels || capabilities.middleware;
+  const dynamicModels = tools.usesDynamicModels || capabilities.middleware || capabilities.schemas;
   const entry = '\0golem:component-entry';
+  let started = false;
+  const validateBuild = (options, watchMode = false) => {
+    if (started) throw new Error('The Golem component plugin is one-shot; create a fresh plugin');
+    if (watchMode || options.watch)
+      throw new Error('The Golem component plugin does not support watch mode');
+    if (options.cache) throw new Error('The Golem component plugin does not support Rollup cache');
+  };
   return {
     name: 'golem-component',
+    options(options) {
+      validateBuild(options);
+    },
+    buildStart(options) {
+      validateBuild(options, this.meta.watchMode);
+      started = true;
+    },
     resolveId(id, importer) {
       if (id === 'virtual:agent-main') return entry;
       if (id === sdk) return path.join(runtime, 'index.mjs');

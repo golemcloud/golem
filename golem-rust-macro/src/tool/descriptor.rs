@@ -99,6 +99,7 @@ pub fn synthesize_wire_descriptor_fn(ir: &ToolDefinitionIr) -> Result<TokenStrea
         Some(v) => quote! { #v.to_string() },
         None => quote! { env!("CARGO_PKG_VERSION").to_string() },
     };
+    let requires_filesystem = ir.requires_filesystem;
     let standalone = if needs_composition(ir) {
         quote! { #ident(&mut golem_rust::agentic::ToolBuildCtx::new(), __golem_wire_schema) }
     } else {
@@ -106,7 +107,7 @@ pub fn synthesize_wire_descriptor_fn(ir: &ToolDefinitionIr) -> Result<TokenStrea
             #[allow(unused_mut)]
             let mut commands = ::std::vec![#root];
             #(#links)*
-            ::std::result::Result::Ok(golem_rust::agentic::ExtendedToolType { version: #version, commands })
+            ::std::result::Result::Ok(golem_rust::agentic::ExtendedToolType { version: #version, requires_filesystem: #requires_filesystem, commands })
         }
     };
     Ok(quote! {
@@ -130,7 +131,7 @@ pub fn synthesize_wire_descriptor_fn(ir: &ToolDefinitionIr) -> Result<TokenStrea
                 let name = commands[0].name.clone();
                 golem_rust::agentic::reconcile_command_inherited_globals(&mut commands[0], ctx.inherited_globals(), &name)?;
                 #(#links)*
-                let mut tool = golem_rust::agentic::ExtendedToolType { version: #version, commands };
+                let mut tool = golem_rust::agentic::ExtendedToolType { version: #version, requires_filesystem: #requires_filesystem, commands };
                 if ctx.is_outermost_descriptor() {
                     golem_rust::agentic::normalize_inherited_globals(&mut tool)?;
                 }
@@ -152,6 +153,7 @@ pub fn synthesize_descriptor_fn(ir: &ToolDefinitionIr) -> Result<TokenStream, Er
         Some(v) => quote! { #v.to_string() },
         None => quote! { env!("CARGO_PKG_VERSION").to_string() },
     };
+    let requires_filesystem = ir.requires_filesystem;
 
     // Index 0 is always the root command.
     let root_node = build_root_node(ir, &plan, DescriptorRepr::Dynamic)?;
@@ -179,6 +181,7 @@ pub fn synthesize_descriptor_fn(ir: &ToolDefinitionIr) -> Result<TokenStream, Er
             #(#links)*
             ::std::result::Result::Ok(golem_rust::agentic::ExtendedToolType {
                 version: #version,
+                requires_filesystem: #requires_filesystem,
                 commands,
             })
         }
@@ -239,6 +242,7 @@ pub fn synthesize_descriptor_fn(ir: &ToolDefinitionIr) -> Result<TokenStream, Er
                 #(#links)*
                 let mut __tool = golem_rust::agentic::ExtendedToolType {
                     version: #version,
+                    requires_filesystem: #requires_filesystem,
                     commands,
                 };
                 // A nested subtree child descriptor returns its raw tree with

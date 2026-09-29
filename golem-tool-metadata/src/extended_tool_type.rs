@@ -88,6 +88,7 @@ fn schema_graph_root(graph: &SchemaGraph) -> SchemaType {
 #[derive(Clone, Debug)]
 pub struct ExtendedToolType<S: ToolSchemaRepr = SchemaGraph> {
     pub version: String,
+    pub requires_filesystem: bool,
     pub commands: Vec<ExtendedCommandNode<S>>,
 }
 
@@ -1201,6 +1202,7 @@ impl ExtendedToolType {
         native_schema.defs = schema.defs;
         Ok(native::Tool {
             version: self.version.clone(),
+            requires_filesystem: self.requires_filesystem,
             commands: native::CommandTree { nodes: commands },
             schema: native_schema,
         })
@@ -1397,6 +1399,7 @@ impl ExtendedToolType {
 
         native::Tool {
             version: self.version.clone(),
+            requires_filesystem: self.requires_filesystem,
             commands: native::CommandTree { nodes },
             schema: SchemaGraph::empty(),
         }

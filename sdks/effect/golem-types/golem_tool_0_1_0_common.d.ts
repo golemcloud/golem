@@ -393,6 +393,7 @@ declare module 'golem:tool/common@0.1.0' {
    */
   export type Tool = {
     version: string;
+    requiresFilesystem: boolean;
     commands: CommandTree;
     /**
      * Self-contained type-node pool holding every type referenced from

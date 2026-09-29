@@ -79,6 +79,7 @@ object ToolWireInterop {
   def toolToJs(t: WitTool): JsTool =
     JsTool(
       t.version,
+      t.requiresFilesystem,
       JsCommandTree(t.commands.nodes.map(commandNodeToJs).toJSArray),
       SchemaWireInterop.graphToJs(t.schema)
     )
@@ -86,6 +87,7 @@ object ToolWireInterop {
   def toolFromJs(j: JsTool): WitTool =
     WitTool(
       j.version,
+      j.requiresFilesystem,
       WitCommandTree(j.commands.nodes.toList.toVector.map(commandNodeFromJs)),
       SchemaWireInterop.graphFromJs(j.schema)
     )

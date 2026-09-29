@@ -438,6 +438,7 @@ export class ExtendedToolType {
   constructor(
     readonly version: string,
     readonly root: ExtendedCommandNode,
+    readonly requiresFilesystem = false,
   ) {}
 
   get toolName(): string {

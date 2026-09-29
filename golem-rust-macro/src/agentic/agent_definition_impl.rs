@@ -544,17 +544,13 @@ fn get_agent_type_with_remote_client(
                         return generic_type_in_agent_return_type_error(ty.span(), &output_type_name).into();
                     }
 
-                    let is_unit = matches!(**ty, syn::Type::Tuple(ref t) if t.elems.is_empty());
-
-                    if !is_unit {
-                        output_schema_logic.push(quote! {
-                            if !<#ty as golem_rust::WireSchema>::IS_UNIT {
-                                output = golem_rust::golem_agentic::golem::agent::common::OutputSchema::Single(
-                                    <#ty as golem_rust::WireSchema>::append_schema(&mut __golem_schema)
-                                );
-                            }
-                        });
-                    }
+                    output_schema_logic.push(quote! {
+                        if !<#ty as golem_rust::WireSchema>::IS_UNIT {
+                            output = golem_rust::golem_agentic::golem::agent::common::OutputSchema::Single(
+                                <#ty as golem_rust::WireSchema>::append_schema(&mut __golem_schema)
+                            );
+                        }
+                    });
                 }
             };
 

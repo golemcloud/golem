@@ -77,14 +77,28 @@ struct RawTypedOutputInput {
     tag: String,
 }
 
+#[derive(IntoSchema, FromSchema)]
+#[schema(named = "golem_filesystem_tools.ReadFileCursor")]
+struct RawReadFileCursor {
+    byte_offset: u64,
+    line: u64,
+}
+
+#[derive(IntoSchema)]
+#[schema(rename_all = "kebab-case")]
+struct RawReadFileInput {
+    path: String,
+    start_line: Option<u64>,
+    end_line: Option<u64>,
+    cursor: Option<RawReadFileCursor>,
+}
+
 #[derive(FromSchema)]
 struct RawReadFileResult {
     content: String,
     start_line: Option<u64>,
     end_line: Option<u64>,
-    total_lines: u64,
-    truncated_before: bool,
-    truncated_after: bool,
+    next_cursor: Option<RawReadFileCursor>,
 }
 
 #[derive(FromSchema)]
@@ -1299,20 +1313,17 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         .await;
         let read: RawReadFileResult = invoke_filesystem_tool(
             "read-file".to_string(),
-            raw_filesystem_input(vec![
-                (
-                    "path",
-                    SchemaType::string(),
-                    SchemaValue::String(path.clone()),
-                ),
-                (
-                    "range",
-                    SchemaType::list(SchemaType::u64()),
-                    SchemaValue::List {
-                        elements: vec![SchemaValue::U64(2)],
-                    },
-                ),
-            ]),
+            golem_rust::encode_typed_schema_value(
+                &RawReadFileInput {
+                    path: path.clone(),
+                    start_line: Some(2),
+                    end_line: None,
+                    cursor: None,
+                }
+                .into_typed_schema_value()
+                .expect("encode read-file input"),
+            )
+            .expect("encode read-file wire input"),
         )
         .await;
         let edit: RawEditFileResult = invoke_filesystem_tool(
@@ -1343,9 +1354,9 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             read.content,
             read.start_line.unwrap_or_default().to_string(),
             read.end_line.unwrap_or_default().to_string(),
-            read.total_lines.to_string(),
-            read.truncated_before.to_string(),
-            read.truncated_after.to_string(),
+            read.next_cursor
+                .map(|cursor| format!("{}:{}", cursor.byte_offset, cursor.line))
+                .unwrap_or_else(|| "none".to_string()),
             edit.replacements.to_string(),
             edit.bytes_before.to_string(),
             edit.bytes_after.to_string(),

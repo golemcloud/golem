@@ -2,888 +2,1083 @@
 
 ///|
 #doc(hidden)
-pub fn wasmExportAsyncInvokeToolMiddleware(event_raw : Int, waitable : Int, code : Int) -> Int {
-      @async-core.cb(event_raw, waitable, code)
+pub fn wasmExportAsyncInvokeToolMiddleware(
+  event_raw : Int,
+  waitable : Int,
+  code : Int,
+) -> Int {
+  @async-core.cb(event_raw, waitable, code)
 }
+
 ///|
 #doc(hidden)
 pub fn wasmExportDiscoverToolMiddlewares() -> Int {
+  let result : Result[Array[@common.ToolMiddleware], @types.ToolError] = discover_tool_middlewares()
+  let return_area = mbt_ffi_malloc(48)
 
-      let (result) : (Result[Array[@common.ToolMiddleware], @types.ToolError]) = discover_tool_middlewares();
-      let return_area = mbt_ffi_malloc(48)
+  match result {
+    Ok(payload) => {
+      mbt_ffi_store8(return_area + 0, 0)
 
-      match result {
-            Ok(payload) => {
-                  mbt_ffi_store8((return_area) + 0, (0))
-
-                  let address = mbt_ffi_malloc((payload).length() * 148);
-                  for index = 0; index < (payload).length(); index = index + 1 {
-                        let iter_elem : @common.ToolMiddleware = (payload)[(index)]
-                        let iter_base = address + (index * 148);
-                        @wit_bindgen_export_lower.wit_bindgen_lower_t598((iter_base) + 0, iter_elem)
-
-                  }
-                  mbt_ffi_store32((return_area) + 8, (payload).length())
-                  mbt_ffi_store32((return_area) + 4, address)
-
-                  ()
-            }
-            Err(payload0) => {
-                  mbt_ffi_store8((return_area) + 0, (1))
-                  @wit_bindgen_export_lower.wit_bindgen_lower_t81((return_area) + 4, payload0)
-
-                  ()
-            }
+      let address = mbt_ffi_malloc(payload.length() * 156)
+      for index = 0; index < payload.length(); index = index + 1 {
+        let iter_elem : @common.ToolMiddleware = payload[index]
+        let iter_base = address + index * 156
+        @wit_bindgen_export_lower.wit_bindgen_lower_t598(
+          iter_base + 0,
+          iter_elem,
+        )
       }
-      let ret = return_area
-      return ret
+      mbt_ffi_store32(return_area + 8, payload.length())
+      mbt_ffi_store32(return_area + 4, address)
 
+      ()
+    }
+    Err(payload0) => {
+      mbt_ffi_store8(return_area + 0, 1)
+      @wit_bindgen_export_lower.wit_bindgen_lower_t81(return_area + 4, payload0)
+
+      ()
+    }
+  }
+  let ret = return_area
+  return ret
 }
+
 ///|
 #doc(hidden)
 pub fn wasmExportDiscoverToolMiddlewaresPostReturn(p0 : Int) -> Unit {
-
-      match (mbt_ffi_load8_u((p0) + 0)) {
-            0 => {
-
-                  for index = 0; index < (mbt_ffi_load32((p0) + 8)); index = index + 1 {
-                        let iter_base = (mbt_ffi_load32((p0) + 4)) + (index * 148)
-                        @wit_bindgen_export_lower.wit_bindgen_deallocate_t598((iter_base) + 0)
-
-                  }
-                  mbt_ffi_free(mbt_ffi_load32((p0) + 4))
-
-            }
-            1 => {
-                  @wit_bindgen_export_lower.wit_bindgen_deallocate_t81((p0) + 4)
-
-            }
-            _ => panic()
+  match mbt_ffi_load8_u(p0 + 0) {
+    0 => {
+      for index = 0; index < mbt_ffi_load32(p0 + 8); index = index + 1 {
+        let iter_base = mbt_ffi_load32(p0 + 4) + index * 156
+        @wit_bindgen_export_lower.wit_bindgen_deallocate_t598(iter_base + 0)
       }
-
+      mbt_ffi_free(mbt_ffi_load32(p0 + 4))
+    }
+    1 => @wit_bindgen_export_lower.wit_bindgen_deallocate_t81(p0 + 4)
+    _ => panic()
+  }
 }
+
 ///|
 #doc(hidden)
 pub fn wasmExportGetToolMiddleware(p0 : Int, p1 : Int) -> Int {
+  let result = mbt_ffi_ptr2str(p0, p1)
 
-      let result = mbt_ffi_ptr2str(p0, p1)
+  let result0 : Result[@common.ToolMiddleware, @types.ToolError] = get_tool_middleware(
+    result,
+  )
+  let return_area = mbt_ffi_malloc(160)
 
-      let (result0) : (Result[@common.ToolMiddleware, @types.ToolError]) = get_tool_middleware(result);
-      let return_area = mbt_ffi_malloc(152)
+  match result0 {
+    Ok(payload) => {
+      mbt_ffi_store8(return_area + 0, 0)
+      @wit_bindgen_export_lower.wit_bindgen_lower_t598(return_area + 4, payload)
 
-      match result0 {
-            Ok(payload) => {
-                  mbt_ffi_store8((return_area) + 0, (0))
-                  @wit_bindgen_export_lower.wit_bindgen_lower_t598((return_area) + 4, payload)
+      ()
+    }
+    Err(payload1) => {
+      mbt_ffi_store8(return_area + 0, 1)
+      @wit_bindgen_export_lower.wit_bindgen_lower_t81(return_area + 4, payload1)
 
-                  ()
-            }
-            Err(payload1) => {
-                  mbt_ffi_store8((return_area) + 0, (1))
-                  @wit_bindgen_export_lower.wit_bindgen_lower_t81((return_area) + 4, payload1)
-
-                  ()
-            }
-      }
-      let ret = return_area
-      return ret
-
+      ()
+    }
+  }
+  let ret = return_area
+  return ret
 }
+
 ///|
-fn wasmImportExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream0Read(handle : Int, buffer_ptr : Int, length : Int) -> Int = "[export]golem:tool/tool-middleware-guest@0.1.0" "[async-lower][stream-read-0]invoke-tool-middleware"
+fn wasmImportExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream0Read(
+  handle : Int,
+  buffer_ptr : Int,
+  length : Int,
+) -> Int = "[export]golem:tool/tool-middleware-guest@0.1.0" "[async-lower][stream-read-0]invoke-tool-middleware"
+
 ///|
-fn wasmImportExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream0CancelRead(handle : Int) -> Int = "[export]golem:tool/tool-middleware-guest@0.1.0" "[stream-cancel-read-0]invoke-tool-middleware"
+fn wasmImportExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream0CancelRead(
+  handle : Int,
+) -> Int = "[export]golem:tool/tool-middleware-guest@0.1.0" "[stream-cancel-read-0]invoke-tool-middleware"
 
 ///|
 #warnings("-unused_value")
-fn wasmImportExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream0DropReadable(handle : Int) = "[export]golem:tool/tool-middleware-guest@0.1.0" "[stream-drop-readable-0]invoke-tool-middleware"
+fn wasmImportExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream0DropReadable(
+  handle : Int,
+) = "[export]golem:tool/tool-middleware-guest@0.1.0" "[stream-drop-readable-0]invoke-tool-middleware"
 
 ///|
-fn wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream0Malloc(length : Int) -> Int {
-      let ptr = mbt_ffi_malloc(16 * length)
-      ptr
+fn wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream0Malloc(
+  length : Int,
+) -> Int {
+  let ptr = mbt_ffi_malloc(16 * length)
+  ptr
 }
 
 ///|
 fn wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream0Reject(
-ptr : Int,
-start : Int,
-length : Int,
+  ptr : Int,
+  start : Int,
+  length : Int,
 ) -> Unit {
+  for i in start..<(start + length) {
+    let elem_ptr = ptr + i * 16
 
-      for i in start..<(start + length) {
-            let elem_ptr = ptr + i * 16
-
-            match (mbt_ffi_load8_u((elem_ptr) + 0)) {
-                  0 => {
-                        mbt_ffi_free(mbt_ffi_load32((elem_ptr) + 4))
-
-                  }
-                  1 => {
-
-                        match (mbt_ffi_load8_u((elem_ptr) + 4)) {
-                              0 => ()
-                              1 => ()
-                              2 => ()
-                              3 => {
-                                    mbt_ffi_free(mbt_ffi_load32((elem_ptr) + 8))
-
-                              }
-                              _ => panic()
-                        }
-
-                  }
-                  _ => panic()
-            }
-
-      }
-
+    match mbt_ffi_load8_u(elem_ptr + 0) {
+      0 => mbt_ffi_free(mbt_ffi_load32(elem_ptr + 4))
+      1 =>
+        match mbt_ffi_load8_u(elem_ptr + 4) {
+          0 => ()
+          1 => ()
+          2 => ()
+          3 => mbt_ffi_free(mbt_ffi_load32(elem_ptr + 8))
+          _ => panic()
+        }
+      _ => panic()
+    }
+  }
 }
 
 ///|
-fn wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream0Lift(ptr : Int) -> Result[FixedArray[Byte], @streams.ByteStreamFailure] {
+fn wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream0Lift(
+  ptr : Int,
+) -> Result[FixedArray[Byte], @streams.ByteStreamFailure] {
+  let lifted1 = match mbt_ffi_load8_u(ptr + 0) {
+    0 => {
+      let result = mbt_ffi_ptr2bytes(
+        mbt_ffi_load32(ptr + 4),
+        mbt_ffi_load32(ptr + 8),
+      )
 
-      let lifted1 = match (mbt_ffi_load8_u((ptr) + 0)) {
-            0 => {
+      Result::Ok(result)
+    }
+    1 => {
+      let lifted = match mbt_ffi_load8_u(ptr + 4) {
+        0 => @streams.ByteStreamFailure::Cancelled
+        1 => @streams.ByteStreamFailure::Abandoned
+        2 => @streams.ByteStreamFailure::ResourceExhausted
+        3 => {
+          let result0 = mbt_ffi_ptr2str(
+            mbt_ffi_load32(ptr + 8),
+            mbt_ffi_load32(ptr + 12),
+          )
 
-                  let result = mbt_ffi_ptr2bytes(mbt_ffi_load32((ptr) + 4), mbt_ffi_load32((ptr) + 8))
-
-                  Result::Ok(result)
-            }
-            1 => {
-
-                  let lifted = match (mbt_ffi_load8_u((ptr) + 4)) {
-                        0 => {
-
-                              @streams.ByteStreamFailure::Cancelled
-                        }
-                        1 => {
-
-                              @streams.ByteStreamFailure::Abandoned
-                        }
-                        2 => {
-
-                              @streams.ByteStreamFailure::ResourceExhausted
-                        }
-                        3 => {
-
-                              let result0 = mbt_ffi_ptr2str(mbt_ffi_load32((ptr) + 8), mbt_ffi_load32((ptr) + 12))
-
-                              @streams.ByteStreamFailure::Failed(result0)
-                        }
-                        _ => panic()
-                  }
-
-                  Result::Err(lifted)
-            }
-            _ => panic()
+          @streams.ByteStreamFailure::Failed(result0)
+        }
+        _ => panic()
       }
 
-      lifted1
+      Result::Err(lifted)
+    }
+    _ => panic()
+  }
+
+  lifted1
 }
 
 ///|
 fn wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream0ListLift(
-ptr : Int,
-length : Int,
+  ptr : Int,
+  length : Int,
 ) -> FixedArray[Result[FixedArray[Byte], @streams.ByteStreamFailure]] {
-
-      FixedArray::makei(
-      length,
-      (index) => {
-            let ptr = (ptr) + (index * 16)
-            wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream0Lift(ptr)
-      }
-      )
-
+  FixedArray::makei(length, index => {
+    let ptr = ptr + index * 16
+    wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream0Lift(
+      ptr,
+    )
+  })
 }
 
 ///|
 priv struct WasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream0StreamSource {
-      handle : Int
-      mut closed : Bool
-      mut reading : Bool
-      mut read_task : Int
-      mut read_buffer : Int
-      mut read_discarding : Bool
-      mut read_cleanup_done : Bool
-      read_cleanup : @async-core.CondVar
+  handle : Int
+  mut closed : Bool
+  mut reading : Bool
+  mut read_task : Int
+  mut read_buffer : Int
+  mut read_discarding : Bool
+  mut read_cleanup_done : Bool
+  read_cleanup : @async-core.CondVar
 }
 
 ///|
 fn WasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream0StreamSource::finish_read(
-self : WasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream0StreamSource,
+  self : WasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream0StreamSource,
 ) -> Unit {
-      self.reading = false
-      self.read_task = 0
-      self.read_buffer = 0
-      self.read_discarding = false
-      // Keep completion latched until a later read starts so every waiter woken
-      // by the broadcast can observe it.
+  self.reading = false
+  self.read_task = 0
+  self.read_buffer = 0
+  self.read_discarding = false
+  // Keep completion latched until a later read starts so every waiter woken
+  // by the broadcast can observe it.
 }
 
 ///|
 async fn WasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream0StreamSource::wait_for_read_cleanup(
-self : WasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream0StreamSource,
+  self : WasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream0StreamSource,
 ) -> Unit noraise {
-      @async-core.protect_from_cancel(
-      () => {
-            while !self.read_cleanup_done {
-                  self.read_cleanup.wait()
-            }
-      },
-      resume_on_cancel=true,
-      ) catch {
-            _ => ()
+  @async-core.protect_from_cancel(
+    () => {
+      while !self.read_cleanup_done {
+        self.read_cleanup.wait()
       }
+    },
+    resume_on_cancel=true,
+  ) catch {
+    _ => ()
+  }
 }
 
 ///|
 async fn WasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream0StreamSource::cancel_active_read(
-self : WasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream0StreamSource,
+  self : WasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream0StreamSource,
 ) -> Unit noraise {
-      if !self.reading {
-            return
-      }
-      if self.read_discarding {
-            self.wait_for_read_cleanup()
-            return
-      }
-      self.read_discarding = true
-      let progress_ref = Ref(0)
-      @async-core.protect_from_cancel(
-      () => {
-            progress_ref.val = @async-core.cancel_stream_read(
-            self.read_task,
+  if !self.reading {
+    return
+  }
+  if self.read_discarding {
+    self.wait_for_read_cleanup()
+    return
+  }
+  self.read_discarding = true
+  let progress_ref = Ref(0)
+  @async-core.protect_from_cancel(
+    () => {
+      progress_ref.val = @async-core.cancel_stream_read(
+        self.read_task,
+        self.handle,
+        () => {
+          wasmImportExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream0CancelRead(
             self.handle,
-            () => wasmImportExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream0CancelRead(self.handle),
-            )
-      },
-      resume_on_cancel=true,
-      ) catch {
-            _ => ()
-      }
-      let progress = progress_ref.val
-      if progress > 0 && self.read_buffer != 0 {
-            wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream0Reject(self.read_buffer, 0, progress)
-      }
-      self.read_cleanup_done = true
-      self.read_cleanup.broadcast()
+          )
+        },
+      )
+    },
+    resume_on_cancel=true,
+  ) catch {
+    _ => ()
+  }
+  let progress = progress_ref.val
+  if progress > 0 && self.read_buffer != 0 {
+    wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream0Reject(
+      self.read_buffer,
+      0,
+      progress,
+    )
+  }
+  self.read_cleanup_done = true
+  self.read_cleanup.broadcast()
 }
 
 ///|
 async fn WasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream0StreamSource::close(
-self : WasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream0StreamSource,
+  self : WasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream0StreamSource,
 ) -> Unit noraise {
-      if self.closed {
-            return
-      }
-      if self.reading {
-            self.cancel_active_read()
-      }
-      self.closed = true
-      wasmImportExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream0DropReadable(self.handle)
+  if self.closed {
+    return
+  }
+  if self.reading {
+    self.cancel_active_read()
+  }
+  self.closed = true
+  wasmImportExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream0DropReadable(
+    self.handle,
+  )
 }
 
 ///|
 fn WasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream0StreamSource::close_sync(
-self : WasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream0StreamSource,
+  self : WasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream0StreamSource,
 ) -> Unit {
-      if self.closed || self.reading {
-            return
-      }
+  if self.closed || self.reading {
+    return
+  }
 
-      self.closed = true
-      wasmImportExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream0DropReadable(self.handle)
+  self.closed = true
+  wasmImportExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream0DropReadable(
+    self.handle,
+  )
 }
 
 ///|
 async fn WasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream0StreamSource::read(
-self : WasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream0StreamSource,
-count : Int,
+  self : WasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream0StreamSource,
+  count : Int,
 ) -> FixedArray[Result[FixedArray[Byte], @streams.ByteStreamFailure]]? {
-      if self.closed {
-            return None
-      }
-      if count <= 0 {
-            return Some([])
-      }
-      if self.reading {
-            raise @async-core.EndpointBusy::Read
-      }
-      // `Stream.read` promises at most `count`; bound one canonical allocation.
-      let read_count = if count < 64 {
-            count
-      } else {
-            64
-      }
-      let ptr = wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream0Malloc(read_count)
-      let mut owns_buffer = false
-      defer {
-            if !owns_buffer {
-                  mbt_ffi_free(ptr)
-            }
-      }
-      self.reading = true
-      self.read_task = @async-core.current_component_task_token()
-      self.read_buffer = ptr
-      self.read_discarding = false
-      self.read_cleanup_done = false
-      let discarded = Ref(false)
-      let read_result = try {
-            errdefer {
-                  discarded.val = self.read_discarding
-                  if @async-core.is_being_cancelled() {
-                        self.cancel_active_read()
-                        if !self.closed {
-                              self.closed = true
-                              wasmImportExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream0DropReadable(self.handle)
-                        }
-                  }
-                  self.finish_read()
-            }
-            let result = @async-core.suspend_for_stream_read(
+  if self.closed {
+    return None
+  }
+  if count <= 0 {
+    return Some([])
+  }
+  if self.reading {
+    raise @async-core.EndpointBusy::Read
+  }
+  // `Stream.read` promises at most `count`; bound one canonical allocation.
+  let read_count = if count < 64 { count } else { 64 }
+  let ptr = wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream0Malloc(
+    read_count,
+  )
+  let mut owns_buffer = false
+  defer (if !owns_buffer { mbt_ffi_free(ptr) })
+  self.reading = true
+  self.read_task = @async-core.current_component_task_token()
+  self.read_buffer = ptr
+  self.read_discarding = false
+  self.read_cleanup_done = false
+  let discarded = Ref(false)
+  let read_result = try {
+    errdefer {
+      discarded.val = self.read_discarding
+      if @async-core.is_being_cancelled() {
+        self.cancel_active_read()
+        if !self.closed {
+          self.closed = true
+          wasmImportExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream0DropReadable(
             self.handle,
-            wasmImportExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream0Read(self.handle, ptr, read_count),
-            )
-            Ok(result)
-      } catch {
-            err => Err(err)
+          )
+        }
       }
-      let (progress, end) = match read_result {
-            Ok(result) => result
-            Err(_) if discarded.val => return None
-            Err(err) => raise err
-      }
-      if self.read_discarding {
-            self.wait_for_read_cleanup()
-            self.finish_read()
-            return None
-      }
-      if progress == 0 {
-            self.finish_read()
-            if end {
-                  self.close()
-                  return None
-            }
-            return Some([])
-      }
-      let values = wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream0ListLift(ptr, progress)
-      owns_buffer = false
       self.finish_read()
-      if end {
-            self.close()
-      }
-      Some(values)
+    }
+    let result = @async-core.suspend_for_stream_read(
+      self.handle,
+      wasmImportExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream0Read(
+        self.handle,
+        ptr,
+        read_count,
+      ),
+    )
+    Ok(result)
+  } catch {
+    err => Err(err)
+  }
+  let (progress, end) = match read_result {
+    Ok(result) => result
+    Err(_) if discarded.val => return None
+    Err(err) => raise err
+  }
+  if self.read_discarding {
+    self.wait_for_read_cleanup()
+    self.finish_read()
+    return None
+  }
+  if progress == 0 {
+    self.finish_read()
+    if end {
+      self.close()
+      return None
+    }
+    return Some([])
+  }
+  let values = wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream0ListLift(
+    ptr, progress,
+  )
+  owns_buffer = false
+  self.finish_read()
+  if end {
+    self.close()
+  }
+  Some(values)
 }
 
 ///|
 #warnings("-unused_value")
-fn wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream0StreamLift(handle : Int) -> @async-core.Stream[Result[FixedArray[Byte], @streams.ByteStreamFailure]] {
-      let source = WasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream0StreamSource::{
-            handle,
-            closed: false,
-            reading: false,
-            read_task: 0,
-            read_buffer: 0,
-            read_discarding: false,
-            read_cleanup_done: false,
-            read_cleanup: CondVar(),
-      }
-      @async-core.Stream::from_source(
-      (count) => source.read(count),
-      () => source.close(),
-      () => source.close_sync(),
-      )
+fn wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream0StreamLift(
+  handle : Int,
+) -> @async-core.Stream[Result[FixedArray[Byte], @streams.ByteStreamFailure]] {
+  let source = WasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream0StreamSource::{
+    handle,
+    closed: false,
+    reading: false,
+    read_task: 0,
+    read_buffer: 0,
+    read_discarding: false,
+    read_cleanup_done: false,
+    read_cleanup: CondVar(),
+  }
+  @async-core.Stream::from_source(
+    count => source.read(count),
+    () => source.close(),
+    () => source.close_sync(),
+  )
 }
 
 ///|
 #warnings("-unused_value")
-fn wasmImportExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream1DropReadable(handle : Int) = "[export]golem:tool/tool-middleware-guest@0.1.0" "[stream-drop-readable-1]invoke-tool-middleware"
+fn wasmImportExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream1DropReadable(
+  handle : Int,
+) = "[export]golem:tool/tool-middleware-guest@0.1.0" "[stream-drop-readable-1]invoke-tool-middleware"
 
 ///|
 fn wasmImportExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream1New() -> UInt64 = "[export]golem:tool/tool-middleware-guest@0.1.0" "[stream-new-1]invoke-tool-middleware"
-///|
-fn wasmImportExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream1Write(handle : Int, buffer_ptr : Int, length : Int) -> Int = "[export]golem:tool/tool-middleware-guest@0.1.0" "[async-lower][stream-write-1]invoke-tool-middleware"
 
 ///|
-fn wasmImportExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream1CancelWrite(handle : Int) -> Int = "[export]golem:tool/tool-middleware-guest@0.1.0" "[stream-cancel-write-1]invoke-tool-middleware"
+fn wasmImportExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream1Write(
+  handle : Int,
+  buffer_ptr : Int,
+  length : Int,
+) -> Int = "[export]golem:tool/tool-middleware-guest@0.1.0" "[async-lower][stream-write-1]invoke-tool-middleware"
 
 ///|
-fn wasmImportExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream1DropWritable(handle : Int) = "[export]golem:tool/tool-middleware-guest@0.1.0" "[stream-drop-writable-1]invoke-tool-middleware"
+fn wasmImportExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream1CancelWrite(
+  handle : Int,
+) -> Int = "[export]golem:tool/tool-middleware-guest@0.1.0" "[stream-cancel-write-1]invoke-tool-middleware"
 
 ///|
-fn wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream1Malloc(length : Int) -> Int {
-      let ptr = mbt_ffi_malloc(1 * length)
-      ptr
+fn wasmImportExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream1DropWritable(
+  handle : Int,
+) = "[export]golem:tool/tool-middleware-guest@0.1.0" "[stream-drop-writable-1]invoke-tool-middleware"
+
+///|
+fn wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream1Malloc(
+  length : Int,
+) -> Int {
+  let ptr = mbt_ffi_malloc(1 * length)
+  ptr
 }
 
 ///|
 fn wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream1Commit(
-ptr : Int,
-start : Int,
-length : Int,
+  ptr : Int,
+  start : Int,
+  length : Int,
 ) -> Unit {
-      ignore((ptr, start, length))
+  ignore((ptr, start, length))
 }
 
 ///|
 fn wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream1Reject(
-ptr : Int,
-start : Int,
-length : Int,
+  ptr : Int,
+  start : Int,
+  length : Int,
 ) -> Unit {
-      ignore((ptr, start, length))
+  ignore((ptr, start, length))
 }
 
 ///|
-fn wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream1Lower(value : Byte, ptr : Int) -> Unit {
-      mbt_ffi_store8((ptr) + 0, (value).to_int())
-
+fn wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream1Lower(
+  value : Byte,
+  ptr : Int,
+) -> Unit {
+  mbt_ffi_store8(ptr + 0, value.to_int())
 }
 
 ///|
 priv struct WasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream1StreamProducer {
-      stream : @async-core.Stream[Byte]
-      writer : Int
+  stream : @async-core.Stream[Byte]
+  writer : Int
 }
 
 ///|
-let wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream1StreamProducers : Map[Int, WasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream1StreamProducer] = Map([])
+let wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream1StreamProducers : Map[
+  Int,
+  WasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream1StreamProducer,
+] = Map([])
 
 ///|
-fn wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream1StreamCommit(handle : Int) -> Unit {
-      guard wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream1StreamProducers.get(handle) is Some(prepared) else {
-            return
+fn wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream1StreamCommit(
+  handle : Int,
+) -> Unit {
+  guard wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream1StreamProducers.get(
+      handle,
+    )
+    is Some(prepared) else {
+    return
+  }
+  wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream1StreamProducers.remove(
+    handle,
+  )
+  let stream = prepared.stream
+  let writer = prepared.writer
+  if !@async-core.has_component_task_scope() {
+    abort("component stream producer requires an async task scope")
+  }
+  let producer = stream.take_producer()
+  @async-core.spawn_component_task_current(async fn() {
+    let writer_closed = Ref(false)
+    let writer_lock = @async-core.Mutex()
+    let close_writer = fn() -> Unit {
+      if !writer_closed.val {
+        writer_closed.val = true
+        wasmImportExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream1DropWritable(
+          writer,
+        )
       }
-      wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream1StreamProducers.remove(handle)
-      let stream = prepared.stream
-      let writer = prepared.writer
-      if !@async-core.has_component_task_scope() {
-            abort("component stream producer requires an async task scope")
-      }
-      let producer = stream.take_producer()
-      @async-core.spawn_component_task_current(async fn() {
-            let writer_closed = Ref(false)
-            let writer_lock = @async-core.Mutex()
-            let close_writer = fn() -> Unit {
-                  if !writer_closed.val {
-                        writer_closed.val = true
-                        wasmImportExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream1DropWritable(writer)
-                  }
-            }
-            let close_writer_serialized = async fn() -> Unit {
-                  writer_lock.acquire()
-                  defer writer_lock.release()
-                  close_writer()
-            }
-            let cleanup_value = fn(value : Byte) -> Unit {
-                  let ptr = wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream1Malloc(1)
-                  wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream1Lower(value, ptr)
-                  wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream1Reject(ptr, 0, 1)
-                  mbt_ffi_free(ptr)
-            }
-            let sink = @async-core.Sink::from_callbacks(
-            (data : ArrayView[Byte]) => {
-                  writer_lock.acquire()
-                  defer writer_lock.release()
-                  if writer_closed.val || data.length() == 0 {
-                        return 0
-                  }
-                  let data_len = if data.length() < 65536 {
-                        data.length()
-                  } else {
-                        65536
-                  }
-                  let ptr = wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream1Malloc(data_len)
-                  for i in 0..<data_len {
-                        let value : Byte = data[i]
-                        wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream1Lower(value, ptr + i * 1)
-                  }
-                  let settle_staging = fn(transferred : Int) -> Unit {
-                        wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream1Commit(ptr, 0, transferred)
-                        if transferred < data_len {
-                              wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream1Reject(
-                              ptr,
-                              transferred,
-                              data_len - transferred,
-                              )
-                        }
-                        mbt_ffi_free(ptr)
-                  }
-                  let mut total = 0
-                  let mut dropped = false
-                  while total < data_len {
-                        let (progress, end) = @async-core.suspend_for_stream_write(
-                        writer,
-                        wasmImportExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream1Write(
-                        writer,
-                        ptr + total * 1,
-                        data_len - total,
-                        ),
-                        ) catch {
-                              _ => {
-                                    total = total + @async-core.cancel_stream_write(
-                                    writer,
-                                    () => wasmImportExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream1CancelWrite(writer),
-                                    )
-                                    settle_staging(total)
-                                    close_writer()
-                                    return data_len
-                              }
-                        }
-                        total = total + progress
-                        if end {
-                              dropped = true
-                              break
-                        }
-                  }
-                  settle_staging(total)
-                  if dropped {
-                        close_writer()
-                  }
-                  // The canonical writer accepted `total`; generated cleanup
-                  // consumed the rest of this staging window.
-                  data_len
-            },
-            () => close_writer_serialized(),
-            () => !writer_closed.val,
-            Some(cleanup_value),
-            write_window_size=65536,
+    }
+    let close_writer_serialized = async fn() -> Unit {
+      writer_lock.acquire()
+      defer writer_lock.release()
+      close_writer()
+    }
+    let cleanup_value = fn(value : Byte) -> Unit {
+      let ptr = wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream1Malloc(
+        1,
+      )
+      wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream1Lower(
+        value, ptr,
+      )
+      wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream1Reject(
+        ptr, 0, 1,
+      )
+      mbt_ffi_free(ptr)
+    }
+    let sink = @async-core.Sink::from_callbacks(
+      (data : ArrayView[Byte]) => {
+        writer_lock.acquire()
+        defer writer_lock.release()
+        if writer_closed.val || data.length() == 0 {
+          return 0
+        }
+        let data_len = if data.length() < 65536 { data.length() } else { 65536 }
+        let ptr = wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream1Malloc(
+          data_len,
+        )
+        for i in 0..<data_len {
+          let value : Byte = data[i]
+          wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream1Lower(
+            value,
+            ptr + i * 1,
+          )
+        }
+        let settle_staging = fn(transferred : Int) -> Unit {
+          wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream1Commit(
+            ptr, 0, transferred,
+          )
+          if transferred < data_len {
+            wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream1Reject(
+              ptr,
+              transferred,
+              data_len - transferred,
             )
-            let relay_source = producer is None
-            let run_producer = async fn() -> Unit {
-                  match producer {
-                        Some(producer) => {
-                              producer(sink)
-                              sink.close()
-                        }
-                        None =>
-                        for ;; {
-                              match stream.read(65536) {
-                                    Some(data) =>
-                                    if !sink.write_all(data[:]) {
-                                          stream.reject(cleanup_value)
-                                          return
-                                    }
-                                    None => {
-                                          sink.close()
-                                          return
-                                    }
-                              }
-                        }
-                  }
-            }
-            errdefer {
-                  if relay_source {
-                        @async-core.protect_from_cancel(
-                        () => stream.reject(cleanup_value),
-                        resume_on_cancel=true,
-                        ) catch {
-                              _ => ()
-                        }
-                  }
-                  @async-core.protect_from_cancel(
-                  () => close_writer_serialized(),
-                  resume_on_cancel=true,
+          }
+          mbt_ffi_free(ptr)
+        }
+        let mut total = 0
+        let mut dropped = false
+        while total < data_len {
+          let (progress, end) = @async-core.suspend_for_stream_write(
+            writer,
+            wasmImportExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream1Write(
+              writer,
+              ptr + total * 1,
+              data_len - total,
+            ),
+          ) catch {
+            _ => {
+              total = total +
+                @async-core.cancel_stream_write(writer, () => {
+                  wasmImportExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream1CancelWrite(
+                    writer,
                   )
+                })
+              settle_staging(total)
+              close_writer()
+              return data_len
             }
-            run_producer()
-            // A retained Sink may still own an in-flight canonical write after its
-            // producer returns. Do not drop the writable endpoint until that write
-            // has reached a terminal event and released its staging buffer.
-            @async-core.protect_from_cancel(
-            () => close_writer_serialized(),
-            resume_on_cancel=true,
-            )
-      })
-}
-
-///|
-fn wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream1StreamLower(stream : @async-core.Stream[Byte]) -> Int {
-      if !@async-core.has_component_task_scope() {
-            abort("component stream producer requires an async task scope")
+          }
+          total = total + progress
+          if end {
+            dropped = true
+            break
+          }
+        }
+        settle_staging(total)
+        if dropped {
+          close_writer()
+        }
+        // The canonical writer accepted `total`; generated cleanup
+        // consumed the rest of this staging window.
+        data_len
+      },
+      () => close_writer_serialized(),
+      () => !writer_closed.val,
+      Some(cleanup_value),
+      write_window_size=65536,
+    )
+    let relay_source = producer is None
+    let run_producer = async fn() -> Unit {
+      match producer {
+        Some(producer) => {
+          producer(sink)
+          sink.close()
+        }
+        None =>
+          for ;; {
+            match stream.read(65536) {
+              Some(data) =>
+                if !sink.write_all(data[:]) {
+                  stream.reject(cleanup_value)
+                  return
+                }
+              None => {
+                sink.close()
+                return
+              }
+            }
+          }
       }
-      let pair = wasmImportExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream1New()
-      let reader = pair.to_int()
-      let writer = (pair >> 32).to_int()
-      wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream1StreamProducers.set(reader, { stream, writer })
-      reader
+    }
+    errdefer {
+      if relay_source {
+        @async-core.protect_from_cancel(
+          () => stream.reject(cleanup_value),
+          resume_on_cancel=true,
+        ) catch {
+          _ => ()
+        }
+      }
+      @async-core.protect_from_cancel(
+        () => close_writer_serialized(),
+        resume_on_cancel=true,
+      )
+    }
+    run_producer()
+    // A retained Sink may still own an in-flight canonical write after its
+    // producer returns. Do not drop the writable endpoint until that write
+    // has reached a terminal event and released its staging buffer.
+    @async-core.protect_from_cancel(
+      () => close_writer_serialized(),
+      resume_on_cancel=true,
+    )
+  })
 }
 
 ///|
-fn wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream1StreamLowerCommitted(stream : @async-core.Stream[Byte]) -> Int {
-      let reader = wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream1StreamLower(stream)
-      wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream1StreamCommit(reader)
-      reader
+fn wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream1StreamLower(
+  stream : @async-core.Stream[Byte],
+) -> Int {
+  if !@async-core.has_component_task_scope() {
+    abort("component stream producer requires an async task scope")
+  }
+  let pair = wasmImportExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream1New()
+  let reader = pair.to_int()
+  let writer = (pair >> 32).to_int()
+  wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream1StreamProducers.set(
+    reader,
+    { stream, writer, },
+  )
+  reader
+}
+
+///|
+fn wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream1StreamLowerCommitted(
+  stream : @async-core.Stream[Byte],
+) -> Int {
+  let reader = wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream1StreamLower(
+    stream,
+  )
+  wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream1StreamCommit(
+    reader,
+  )
+  reader
 }
 
 ///|
 #doc(hidden)
 pub fn wasmExportGetToolMiddlewarePostReturn(p0 : Int) -> Unit {
-
-      match (mbt_ffi_load8_u((p0) + 0)) {
-            0 => {
-                  @wit_bindgen_export_lower.wit_bindgen_deallocate_t598((p0) + 4)
-
-            }
-            1 => {
-                  @wit_bindgen_export_lower.wit_bindgen_deallocate_t81((p0) + 4)
-
-            }
-            _ => panic()
-      }
-
+  match mbt_ffi_load8_u(p0 + 0) {
+    0 => @wit_bindgen_export_lower.wit_bindgen_deallocate_t598(p0 + 4)
+    1 => @wit_bindgen_export_lower.wit_bindgen_deallocate_t81(p0 + 4)
+    _ => panic()
+  }
 }
-///|
-fn wasmExportAsyncInvokeToolMiddlewareTaskReturn(p0: Int, p1: Int, p2: Int, p3: Int, p4: Int, p5: Int, p6: Int, p7: Int, p8: Int, p9: Int, p10: Int, p11: Int) = "[export]golem:tool/tool-middleware-guest@0.1.0" "[task-return]invoke-tool-middleware"
 
 ///|
-fn invoke_tool_middleware_task_return(return_result: Ref[Result[@common.InvocationResult, @types.ToolError]?]) -> Unit {
+fn wasmExportAsyncInvokeToolMiddlewareTaskReturn(
+  p0 : Int,
+  p1 : Int,
+  p2 : Int,
+  p3 : Int,
+  p4 : Int,
+  p5 : Int,
+  p6 : Int,
+  p7 : Int,
+  p8 : Int,
+  p9 : Int,
+  p10 : Int,
+  p11 : Int,
+) = "[export]golem:tool/tool-middleware-guest@0.1.0" "[task-return]invoke-tool-middleware"
 
-      match return_result.val {
-            Some(return_value) => {
+///|
+fn invoke_tool_middleware_task_return(
+  return_result : Ref[Result[@common.InvocationResult, @types.ToolError]?],
+) -> Unit {
+  match return_result.val {
+    Some(return_value) => {
+      let cleanup_list : Array[Int] = []
 
-                  let cleanup_list : Array[Int] = []
+      let (
+        lowered54,
+        lowered55,
+        lowered56,
+        lowered57,
+        lowered58,
+        lowered59,
+        lowered60,
+        lowered61,
+        lowered62,
+        lowered63,
+        lowered64,
+        lowered65,
+      ) = match return_value {
+        Ok(payload) => {
+          let (
+            lowered,
+            lowered11,
+            lowered12,
+            lowered13,
+            lowered14,
+            lowered15,
+            lowered16,
+            lowered17,
+            lowered18,
+          ) = match payload.result {
+            None => (0, 0, 0, 0, 0, 0, 0, 0, 0)
+            Some(payload5) => {
+              let address = mbt_ffi_malloc(
+                payload5.graph.type_nodes.length() * 144,
+              )
+              for index6 = 0
+                  index6 < payload5.graph.type_nodes.length()
+                  index6 = index6 + 1 {
+                let iter_elem : @types.SchemaTypeNode = payload5.graph.type_nodes[index6]
+                let iter_base = address + index6 * 144
+                @wit_bindgen_export_lower.wit_bindgen_borrow_lower_t56(
+                  iter_base + 0,
+                  iter_elem,
+                  cleanup_list,
+                )
+              }
 
-                  let (lowered54,lowered55,lowered56,lowered57,lowered58,lowered59,lowered60,lowered61,lowered62,lowered63,lowered64,lowered65) = match return_value {
-                        Ok(payload) => {
+              let address7 = mbt_ffi_malloc(payload5.graph.defs.length() * 24)
+              for index8 = 0
+                  index8 < payload5.graph.defs.length()
+                  index8 = index8 + 1 {
+                let iter_elem : @types.SchemaTypeDef = payload5.graph.defs[index8]
+                let iter_base = address7 + index8 * 24
+                @wit_bindgen_export_lower.wit_bindgen_borrow_lower_t18(
+                  iter_base + 0,
+                  iter_elem,
+                  cleanup_list,
+                )
+              }
 
-                              let (lowered, lowered11, lowered12, lowered13, lowered14, lowered15, lowered16, lowered17, lowered18) = match ((payload).result) {
-                                    None => {
+              let address9 = mbt_ffi_malloc(
+                payload5.value.value_nodes.length() * 32,
+              )
+              for index10 = 0
+                  index10 < payload5.value.value_nodes.length()
+                  index10 = index10 + 1 {
+                let iter_elem : @types.SchemaValueNode = payload5.value.value_nodes[index10]
+                let iter_base = address9 + index10 * 32
+                @wit_bindgen_export_lower.wit_bindgen_borrow_lower_t76(
+                  iter_base + 0,
+                  iter_elem,
+                  cleanup_list,
+                )
+              }
+              cleanup_list.push(address)
+              cleanup_list.push(address7)
+              cleanup_list.push(address9)
 
-                                          ((0), 0, 0, 0, 0, 0, 0, 0, 0)
-                                    }
-                                    Some(payload5) => {
-
-                                          let address = mbt_ffi_malloc((((payload5).graph).type_nodes).length() * 144);
-                                          for index6 = 0; index6 < (((payload5).graph).type_nodes).length(); index6 = index6 + 1 {
-                                                let iter_elem : @types.SchemaTypeNode = (((payload5).graph).type_nodes)[(index6)]
-                                                let iter_base = address + (index6 * 144);
-                                                @wit_bindgen_export_lower.wit_bindgen_borrow_lower_t56((iter_base) + 0, iter_elem, cleanup_list)
-
-                                          }
-
-                                          let address7 = mbt_ffi_malloc((((payload5).graph).defs).length() * 24);
-                                          for index8 = 0; index8 < (((payload5).graph).defs).length(); index8 = index8 + 1 {
-                                                let iter_elem : @types.SchemaTypeDef = (((payload5).graph).defs)[(index8)]
-                                                let iter_base = address7 + (index8 * 24);
-                                                @wit_bindgen_export_lower.wit_bindgen_borrow_lower_t18((iter_base) + 0, iter_elem, cleanup_list)
-
-                                          }
-
-                                          let address9 = mbt_ffi_malloc((((payload5).value).value_nodes).length() * 32);
-                                          for index10 = 0; index10 < (((payload5).value).value_nodes).length(); index10 = index10 + 1 {
-                                                let iter_elem : @types.SchemaValueNode = (((payload5).value).value_nodes)[(index10)]
-                                                let iter_base = address9 + (index10 * 32);
-                                                @wit_bindgen_export_lower.wit_bindgen_borrow_lower_t76((iter_base) + 0, iter_elem, cleanup_list)
-
-                                          }
-                                          cleanup_list.push(address)
-                                          cleanup_list.push(address7)
-                                          cleanup_list.push(address9)
-
-                                          ((1), address, (((payload5).graph).type_nodes).length(), address7, (((payload5).graph).defs).length(), ((payload5).graph).root, address9, (((payload5).value).value_nodes).length(), ((payload5).value).root)
-                                    }
-                              }
-
-                              let (lowered21, lowered22) = match ((payload).stdout) {
-                                    None => {
-
-                                          ((0), 0)
-                                    }
-                                    Some(payload20) => {
-
-                                          ((1), wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream1StreamLowerCommitted(payload20))
-                                    }
-                              }
-
-                              ((0), lowered, lowered11, lowered12, lowered13, lowered14, lowered15, lowered16, lowered17, lowered18, lowered21, lowered22)
-                        }
-                        Err(payload23) => {
-
-                              let (lowered43,lowered44,lowered45,lowered46,lowered47,lowered48,lowered49,lowered50,lowered51,lowered52,lowered53) = match payload23 {
-                                    InvalidToolName(payload24) => {
-
-                                          let ptr = mbt_ffi_str2ptr(payload24)
-                                          cleanup_list.push(ptr)
-
-                                          ((0), ptr, payload24.length(), 0, 0, 0, 0, 0, 0, 0, 0)
-                                    }
-                                    InvalidCommandPath(payload25) => {
-
-                                          let address27 = mbt_ffi_malloc((payload25).length() * 8);
-                                          for index28 = 0; index28 < (payload25).length(); index28 = index28 + 1 {
-                                                let iter_elem : String = (payload25)[(index28)]
-                                                let iter_base = address27 + (index28 * 8);
-
-                                                let ptr26 = mbt_ffi_str2ptr(iter_elem)
-                                                mbt_ffi_store32((iter_base) + 4, iter_elem.length())
-                                                mbt_ffi_store32((iter_base) + 0, ptr26)
-                                                cleanup_list.push(ptr26)
-
-                                          }
-                                          cleanup_list.push(address27)
-
-                                          ((1), address27, (payload25).length(), 0, 0, 0, 0, 0, 0, 0, 0)
-                                    }
-                                    InvalidInput(payload29) => {
-
-                                          let ptr30 = mbt_ffi_str2ptr(payload29)
-                                          cleanup_list.push(ptr30)
-
-                                          ((2), ptr30, payload29.length(), 0, 0, 0, 0, 0, 0, 0, 0)
-                                    }
-                                    ConstraintViolation(payload31) => {
-
-                                          let ptr32 = mbt_ffi_str2ptr(payload31)
-                                          cleanup_list.push(ptr32)
-
-                                          ((3), ptr32, payload31.length(), 0, 0, 0, 0, 0, 0, 0, 0)
-                                    }
-                                    InvalidResult(payload33) => {
-
-                                          let ptr34 = mbt_ffi_str2ptr(payload33)
-                                          cleanup_list.push(ptr34)
-
-                                          ((4), ptr34, payload33.length(), 0, 0, 0, 0, 0, 0, 0, 0)
-                                    }
-                                    CustomError(payload35) => {
-
-                                          let ptr36 = mbt_ffi_str2ptr((payload35).name)
-
-                                          let address37 = mbt_ffi_malloc(((((payload35).payload).graph).type_nodes).length() * 144);
-                                          for index38 = 0; index38 < ((((payload35).payload).graph).type_nodes).length(); index38 = index38 + 1 {
-                                                let iter_elem : @types.SchemaTypeNode = ((((payload35).payload).graph).type_nodes)[(index38)]
-                                                let iter_base = address37 + (index38 * 144);
-                                                @wit_bindgen_export_lower.wit_bindgen_borrow_lower_t56((iter_base) + 0, iter_elem, cleanup_list)
-
-                                          }
-
-                                          let address39 = mbt_ffi_malloc(((((payload35).payload).graph).defs).length() * 24);
-                                          for index40 = 0; index40 < ((((payload35).payload).graph).defs).length(); index40 = index40 + 1 {
-                                                let iter_elem : @types.SchemaTypeDef = ((((payload35).payload).graph).defs)[(index40)]
-                                                let iter_base = address39 + (index40 * 24);
-                                                @wit_bindgen_export_lower.wit_bindgen_borrow_lower_t18((iter_base) + 0, iter_elem, cleanup_list)
-
-                                          }
-
-                                          let address41 = mbt_ffi_malloc(((((payload35).payload).value).value_nodes).length() * 32);
-                                          for index42 = 0; index42 < ((((payload35).payload).value).value_nodes).length(); index42 = index42 + 1 {
-                                                let iter_elem : @types.SchemaValueNode = ((((payload35).payload).value).value_nodes)[(index42)]
-                                                let iter_base = address41 + (index42 * 32);
-                                                @wit_bindgen_export_lower.wit_bindgen_borrow_lower_t76((iter_base) + 0, iter_elem, cleanup_list)
-
-                                          }
-                                          cleanup_list.push(ptr36)
-                                          cleanup_list.push(address37)
-                                          cleanup_list.push(address39)
-                                          cleanup_list.push(address41)
-
-                                          ((5), ptr36, (payload35).name.length(), address37, ((((payload35).payload).graph).type_nodes).length(), address39, ((((payload35).payload).graph).defs).length(), (((payload35).payload).graph).root, address41, ((((payload35).payload).value).value_nodes).length(), (((payload35).payload).value).root)
-                                    }
-                              }
-
-                              ((1), lowered43, lowered44, lowered45, lowered46, lowered47, lowered48, lowered49, lowered50, lowered51, lowered52, lowered53)
-                        }
-                  }
-
-                  wasmExportAsyncInvokeToolMiddlewareTaskReturn(lowered54, lowered55, lowered56, lowered57, lowered58, lowered59, lowered60, lowered61, lowered62, lowered63, lowered64, lowered65)
-
-                  cleanup_list.each(mbt_ffi_free)
-
-                  @async-core.task_returned()
-
+              (
+                1,
+                address,
+                payload5.graph.type_nodes.length(),
+                address7,
+                payload5.graph.defs.length(),
+                payload5.graph.root,
+                address9,
+                payload5.value.value_nodes.length(),
+                payload5.value.root,
+              )
             }
-            None => ()
+          }
+
+          let (lowered21, lowered22) = match payload.stdout {
+            None => (0, 0)
+            Some(payload20) =>
+              (
+                1,
+                wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream1StreamLowerCommitted(
+                  payload20,
+                ),
+              )
+          }
+
+          (
+            0, lowered, lowered11, lowered12, lowered13, lowered14, lowered15, lowered16,
+            lowered17, lowered18, lowered21, lowered22,
+          )
+        }
+        Err(payload23) => {
+          let (
+            lowered43,
+            lowered44,
+            lowered45,
+            lowered46,
+            lowered47,
+            lowered48,
+            lowered49,
+            lowered50,
+            lowered51,
+            lowered52,
+            lowered53,
+          ) = match payload23 {
+            InvalidToolName(payload24) => {
+              let ptr = mbt_ffi_str2ptr(payload24)
+              cleanup_list.push(ptr)
+
+              (0, ptr, payload24.length(), 0, 0, 0, 0, 0, 0, 0, 0)
+            }
+            InvalidCommandPath(payload25) => {
+              let address27 = mbt_ffi_malloc(payload25.length() * 8)
+              for index28 = 0
+                  index28 < payload25.length()
+                  index28 = index28 + 1 {
+                let iter_elem : String = payload25[index28]
+                let iter_base = address27 + index28 * 8
+
+                let ptr26 = mbt_ffi_str2ptr(iter_elem)
+                mbt_ffi_store32(iter_base + 4, iter_elem.length())
+                mbt_ffi_store32(iter_base + 0, ptr26)
+                cleanup_list.push(ptr26)
+              }
+              cleanup_list.push(address27)
+
+              (1, address27, payload25.length(), 0, 0, 0, 0, 0, 0, 0, 0)
+            }
+            InvalidInput(payload29) => {
+              let ptr30 = mbt_ffi_str2ptr(payload29)
+              cleanup_list.push(ptr30)
+
+              (2, ptr30, payload29.length(), 0, 0, 0, 0, 0, 0, 0, 0)
+            }
+            ConstraintViolation(payload31) => {
+              let ptr32 = mbt_ffi_str2ptr(payload31)
+              cleanup_list.push(ptr32)
+
+              (3, ptr32, payload31.length(), 0, 0, 0, 0, 0, 0, 0, 0)
+            }
+            InvalidResult(payload33) => {
+              let ptr34 = mbt_ffi_str2ptr(payload33)
+              cleanup_list.push(ptr34)
+
+              (4, ptr34, payload33.length(), 0, 0, 0, 0, 0, 0, 0, 0)
+            }
+            CustomError(payload35) => {
+              let ptr36 = mbt_ffi_str2ptr(payload35.name)
+
+              let address37 = mbt_ffi_malloc(
+                payload35.payload.graph.type_nodes.length() * 144,
+              )
+              for index38 = 0
+                  index38 < payload35.payload.graph.type_nodes.length()
+                  index38 = index38 + 1 {
+                let iter_elem : @types.SchemaTypeNode = payload35.payload.graph.type_nodes[index38]
+                let iter_base = address37 + index38 * 144
+                @wit_bindgen_export_lower.wit_bindgen_borrow_lower_t56(
+                  iter_base + 0,
+                  iter_elem,
+                  cleanup_list,
+                )
+              }
+
+              let address39 = mbt_ffi_malloc(
+                payload35.payload.graph.defs.length() * 24,
+              )
+              for index40 = 0
+                  index40 < payload35.payload.graph.defs.length()
+                  index40 = index40 + 1 {
+                let iter_elem : @types.SchemaTypeDef = payload35.payload.graph.defs[index40]
+                let iter_base = address39 + index40 * 24
+                @wit_bindgen_export_lower.wit_bindgen_borrow_lower_t18(
+                  iter_base + 0,
+                  iter_elem,
+                  cleanup_list,
+                )
+              }
+
+              let address41 = mbt_ffi_malloc(
+                payload35.payload.value.value_nodes.length() * 32,
+              )
+              for index42 = 0
+                  index42 < payload35.payload.value.value_nodes.length()
+                  index42 = index42 + 1 {
+                let iter_elem : @types.SchemaValueNode = payload35.payload.value.value_nodes[index42]
+                let iter_base = address41 + index42 * 32
+                @wit_bindgen_export_lower.wit_bindgen_borrow_lower_t76(
+                  iter_base + 0,
+                  iter_elem,
+                  cleanup_list,
+                )
+              }
+              cleanup_list.push(ptr36)
+              cleanup_list.push(address37)
+              cleanup_list.push(address39)
+              cleanup_list.push(address41)
+
+              (
+                5,
+                ptr36,
+                payload35.name.length(),
+                address37,
+                payload35.payload.graph.type_nodes.length(),
+                address39,
+                payload35.payload.graph.defs.length(),
+                payload35.payload.graph.root,
+                address41,
+                payload35.payload.value.value_nodes.length(),
+                payload35.payload.value.root,
+              )
+            }
+          }
+
+          (
+            1, lowered43, lowered44, lowered45, lowered46, lowered47, lowered48,
+            lowered49, lowered50, lowered51, lowered52, lowered53,
+          )
+        }
       }
 
+      wasmExportAsyncInvokeToolMiddlewareTaskReturn(
+        lowered54, lowered55, lowered56, lowered57, lowered58, lowered59, lowered60,
+        lowered61, lowered62, lowered63, lowered64, lowered65,
+      )
+
+      cleanup_list.each(mbt_ffi_free)
+
+      @async-core.task_returned()
+    }
+    None => ()
+  }
 }
 
 ///|
 #doc(hidden)
 pub fn wasmExportInvokeToolMiddleware(p0 : Int) -> Int {
-      @async-core.with_waitableset(async fn() {
-            @async-core.with_task_group(async fn(background_group) {
+  @async-core.with_waitableset(async fn() {
+    @async-core.with_task_group(async fn(background_group) {
+      let result = mbt_ffi_ptr2str(
+        mbt_ffi_load32(p0 + 0),
+        mbt_ffi_load32(p0 + 4),
+      )
 
-                  let result = mbt_ffi_ptr2str(mbt_ffi_load32((p0) + 0), mbt_ffi_load32((p0) + 4))
+      let result0 = mbt_ffi_ptr2str(
+        mbt_ffi_load32(p0 + 8),
+        mbt_ffi_load32(p0 + 12),
+      )
 
-                  let result0 = mbt_ffi_ptr2str(mbt_ffi_load32((p0) + 8), mbt_ffi_load32((p0) + 12))
+      let array : Array[String] = []
+      for index = 0; index < mbt_ffi_load32(p0 + 92); index = index + 1 {
+        let iter_base = mbt_ffi_load32(p0 + 88) + index * 8
 
-                  let array : Array[String] = [];
-                  for index = 0; index < (mbt_ffi_load32((p0) + 88)); index = index + 1 {
-                        let iter_base = (mbt_ffi_load32((p0) + 84)) + (index * 8)
+        let result1 = mbt_ffi_ptr2str(
+          mbt_ffi_load32(iter_base + 0),
+          mbt_ffi_load32(iter_base + 4),
+        )
 
-                        let result1 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 0), mbt_ffi_load32((iter_base) + 4))
+        array.push(result1)
+      }
+      mbt_ffi_free(mbt_ffi_load32(p0 + 88))
 
-                        array.push(result1)
-                  }
-                  mbt_ffi_free(mbt_ffi_load32((p0) + 84))
+      let lifted : @async-core.Stream[
+        Result[FixedArray[Byte], @streams.ByteStreamFailure],
+      ]? = match mbt_ffi_load8_u(p0 + 128) {
+        0 => Option::None
+        1 => {
+          let result2 = wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream0StreamLift(
+            mbt_ffi_load32(p0 + 132),
+          )
 
-                  let lifted : @async-core.Stream[Result[FixedArray[Byte], @streams.ByteStreamFailure]]? = match mbt_ffi_load8_u((p0) + 124) {
-                        0 => Option::None
-                        1 => {
-                              let result2 = wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream0StreamLift(mbt_ffi_load32((p0) + 128))
+          Option::Some(result2)
+        }
+        _ => panic()
+      }
 
-                              Option::Some(result2)
-                        }
-                        _ => panic()
-                  }
+      let lifted3 : @streams.ToolStdoutWriter? = match
+        mbt_ffi_load8_u(p0 + 136) {
+        0 => Option::None
+        1 =>
+          Option::Some(
+            @streams.ToolStdoutWriter::ToolStdoutWriter(
+              mbt_ffi_load32(p0 + 140),
+            ),
+          )
+        _ => panic()
+      }
 
-                  let lifted3 : @streams.ToolStdoutWriter? = match mbt_ffi_load8_u((p0) + 132) {
-                        0 => Option::None
-                        1 => {
-
-                              Option::Some(@streams.ToolStdoutWriter::ToolStdoutWriter(mbt_ffi_load32((p0) + 136)))
-                        }
-                        _ => panic()
-                  }
-
-                  let return_result: Ref[Result[@common.InvocationResult, @types.ToolError]?] = Ref(None)
-                  return_result.val = Some(invoke_tool_middleware(result, result0, @wit_bindgen_export_lower.wit_bindgen_lift_t594((p0) + 16), @wit_bindgen_export_lower.wit_bindgen_lift_t79((p0) + 52), array, @wit_bindgen_export_lower.wit_bindgen_lift_t79((p0) + 92), lifted, lifted3, @wit_bindgen_export_lower.wit_bindgen_lift_t440((p0) + 144), @underlying.UnderlyingTool::UnderlyingTool(mbt_ffi_load32((p0) + 256)), background_group))
-                  invoke_tool_middleware_task_return(return_result)
-
-            })
-      })
+      let return_result : Ref[
+        Result[@common.InvocationResult, @types.ToolError]?,
+      ] = Ref(None)
+      return_result.val = Some(
+        invoke_tool_middleware(
+          result,
+          result0,
+          @wit_bindgen_export_lower.wit_bindgen_lift_t594(p0 + 16),
+          @wit_bindgen_export_lower.wit_bindgen_lift_t79(p0 + 56),
+          array,
+          @wit_bindgen_export_lower.wit_bindgen_lift_t79(p0 + 96),
+          lifted,
+          lifted3,
+          @wit_bindgen_export_lower.wit_bindgen_lift_t440(p0 + 144),
+          @underlying.UnderlyingTool::UnderlyingTool(mbt_ffi_load32(p0 + 256)),
+          background_group,
+        ),
+      )
+      invoke_tool_middleware_task_return(return_result)
+    })
+  })
 }
+
 ///|
 #owned(bytes)
 extern "wasm" fn mbt_ffi_bytes2ptr(bytes : FixedArray[Byte]) -> Int =
-#|(func (param i32) (result i32) local.get 0)
+  #|(func (param i32) (result i32) local.get 0)
+
 ///|
 extern "wasm" fn mbt_ffi_free(position : Int) =
-#|(func (param i32) local.get 0 call $moonbit.decref)
+  #|(func (param i32) local.get 0 call $moonbit.decref)
+
 ///|
 extern "wasm" fn mbt_ffi_load32(offset : Int) -> Int =
-#|(func (param i32) (result i32) local.get 0 i32.load)
+  #|(func (param i32) (result i32) local.get 0 i32.load)
+
 ///|
 extern "wasm" fn mbt_ffi_load8_u(offset : Int) -> Int =
-#|(func (param i32) (result i32) local.get 0 i32.load8_u)
+  #|(func (param i32) (result i32) local.get 0 i32.load8_u)
+
 ///|
 extern "wasm" fn mbt_ffi_malloc(size : Int) -> Int =
-#|(func (param i32) (result i32) (local i32)
-#| local.get 0 i32.const 4 i32.add call $moonbit.gc.malloc
-#| local.tee 1 i32.const 0 call $moonbit.init_array8
-#| local.get 1)
+  #|(func (param i32) (result i32) (local i32)
+  #| local.get 0 i32.const 4 i32.add call $moonbit.gc.malloc
+  #| local.tee 1 i32.const 0 call $moonbit.init_array8
+  #| local.get 1)
+
 ///|
 extern "wasm" fn mbt_ffi_ptr2bytes(ptr : Int, len : Int) -> FixedArray[Byte] =
-#|(func (param i32) (param i32) (result i32)
-#| local.get 0
-#| local.get 1 call $moonbit.init_array8
-#| local.get 0)
+  #|(func (param i32) (param i32) (result i32)
+  #| local.get 0
+  #| local.get 1 call $moonbit.init_array8
+  #| local.get 0)
+
 ///|
 extern "wasm" fn mbt_ffi_ptr2str(ptr : Int, len : Int) -> String =
-#|(func (param i32) (param i32) (result i32)
-#| local.get 0
-#| local.get 1 call $moonbit.init_array16
-#| local.get 0)
+  #|(func (param i32) (param i32) (result i32)
+  #| local.get 0
+  #| local.get 1 call $moonbit.init_array16
+  #| local.get 0)
+
 ///|
 extern "wasm" fn mbt_ffi_store32(offset : Int, value : Int) =
-#|(func (param i32) (param i32) local.get 0 local.get 1 i32.store)
+  #|(func (param i32) (param i32) local.get 0 local.get 1 i32.store)
+
 ///|
 extern "wasm" fn mbt_ffi_store8(offset : Int, value : Int) =
-#|(func (param i32) (param i32) local.get 0 local.get 1 i32.store8)
+  #|(func (param i32) (param i32) local.get 0 local.get 1 i32.store8)
+
 ///|
 #owned(str)
 extern "wasm" fn mbt_ffi_str2ptr(str : String) -> Int =
-#|(func (param i32) (result i32) local.get 0)
+  #|(func (param i32) (result i32) local.get 0)

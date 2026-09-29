@@ -672,18 +672,3 @@ fn[E] map_remote_tool_error(
       ToolError::RemoteTool(RemoteToolError::InvalidResult(message))
   }
 }
-
-///|
-fn remote_tool_error_label(error : @types.ToolError) -> String {
-  match error {
-    @types.ToolError::InvalidToolName(name) =>
-      "invalid tool name `" + name + "`"
-    @types.ToolError::InvalidCommandPath(path) =>
-      "invalid command path `" + path.join(" ") + "`"
-    @types.ToolError::InvalidInput(message) => "invalid input: " + message
-    @types.ToolError::ConstraintViolation(message) =>
-      "constraint violation: " + message
-    @types.ToolError::InvalidResult(message) => "invalid result: " + message
-    @types.ToolError::CustomError(error) => "custom error `" + error.name + "`"
-  }
-}

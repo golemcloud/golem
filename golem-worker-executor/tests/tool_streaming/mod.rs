@@ -890,20 +890,30 @@ fn filesystem_tool_input(fields: Vec<(&str, SchemaType, SchemaValue)>) -> TypedS
     )
 }
 
-fn filesystem_line_range(
-    start_line: Option<u64>,
-    end_line: Option<u64>,
-) -> (SchemaType, SchemaValue) {
-    let mut elements = Vec::new();
-    if let Some(start_line) = start_line {
-        elements.push(SchemaValue::U64(start_line));
-    }
-    if let Some(end_line) = end_line {
-        elements.push(SchemaValue::U64(end_line));
-    }
+fn filesystem_optional_line(line: Option<u64>) -> (SchemaType, SchemaValue) {
     (
-        SchemaType::list(SchemaType::u64()),
-        SchemaValue::List { elements },
+        SchemaType::option(SchemaType::u64()),
+        SchemaValue::Option {
+            inner: line.map(|line| Box::new(SchemaValue::U64(line))),
+        },
+    )
+}
+
+fn filesystem_cursor_none() -> (SchemaType, SchemaValue) {
+    (
+        SchemaType::option(SchemaType::record(vec![
+            golem_common::schema::NamedFieldType {
+                name: "byte-offset".to_string(),
+                body: SchemaType::u64(),
+                metadata: Default::default(),
+            },
+            golem_common::schema::NamedFieldType {
+                name: "line".to_string(),
+                body: SchemaType::u64(),
+                metadata: Default::default(),
+            },
+        ])),
+        SchemaValue::Option { inner: None },
     )
 }
 
@@ -9684,8 +9694,16 @@ async fn exercise_filesystem_tools(
                 SchemaValue::String(path.clone()),
             ),
             {
-                let (schema, value) = filesystem_line_range(Some(2), None);
-                ("range", schema, value)
+                let (schema, value) = filesystem_optional_line(Some(2));
+                ("start-line", schema, value)
+            },
+            {
+                let (schema, value) = filesystem_optional_line(None);
+                ("end-line", schema, value)
+            },
+            {
+                let (schema, value) = filesystem_cursor_none();
+                ("cursor", schema, value)
             },
         ]),
     )
@@ -9701,9 +9719,7 @@ async fn exercise_filesystem_tools(
                 SchemaValue::Option {
                     inner: Some(Box::new(SchemaValue::U64(3))),
                 },
-                SchemaValue::U64(3),
-                SchemaValue::Bool(true),
-                SchemaValue::Bool(false),
+                SchemaValue::Option { inner: None },
             ]
         }
     );
@@ -9759,8 +9775,16 @@ async fn exercise_filesystem_tools(
                 SchemaValue::String(path.clone()),
             ),
             {
-                let (schema, value) = filesystem_line_range(None, None);
-                ("range", schema, value)
+                let (schema, value) = filesystem_optional_line(None);
+                ("start-line", schema, value)
+            },
+            {
+                let (schema, value) = filesystem_optional_line(None);
+                ("end-line", schema, value)
+            },
+            {
+                let (schema, value) = filesystem_cursor_none();
+                ("cursor", schema, value)
             },
         ]),
     )
@@ -9776,9 +9800,7 @@ async fn exercise_filesystem_tools(
                 SchemaValue::Option {
                     inner: Some(Box::new(SchemaValue::U64(3))),
                 },
-                SchemaValue::U64(3),
-                SchemaValue::Bool(false),
-                SchemaValue::Bool(false),
+                SchemaValue::Option { inner: None },
             ]
         }
     );
@@ -9939,8 +9961,16 @@ async fn exercise_filesystem_tools(
                 SchemaValue::String("../outside.txt".to_string()),
             ),
             {
-                let (schema, value) = filesystem_line_range(None, None);
-                ("range", schema, value)
+                let (schema, value) = filesystem_optional_line(None);
+                ("start-line", schema, value)
+            },
+            {
+                let (schema, value) = filesystem_optional_line(None);
+                ("end-line", schema, value)
+            },
+            {
+                let (schema, value) = filesystem_cursor_none();
+                ("cursor", schema, value)
             },
         ]),
     )
@@ -10006,9 +10036,7 @@ async fn exercise_guest_invoked_filesystem_tools(
             "two\nthree",
             "2",
             "3",
-            "3",
-            "true",
-            "false",
+            "none",
             "1",
             "14",
             "15",

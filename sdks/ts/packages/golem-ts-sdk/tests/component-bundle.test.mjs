@@ -12,15 +12,16 @@ import { componentPlugin, discoverCapabilities } from '../scripts/component.mjs'
 
 const fixtures = path.resolve('tests/components');
 const expected = {
-  empty: { agents: false, tools: false, middleware: false },
-  'tool-only': { agents: false, tools: true, middleware: false },
-  'agent-only': { agents: true, tools: false, middleware: false },
-  'exported-agent': { agents: true, tools: false, middleware: false },
-  'agent-tool': { agents: true, tools: true, middleware: false },
-  'agent-reflection': { agents: true, tools: false, middleware: false },
-  'durable-json': { agents: true, tools: false, middleware: false },
-  'middleware-only': { agents: false, tools: false, middleware: true },
-  mixed: { agents: true, tools: true, middleware: true },
+  empty: { agents: false, tools: false, middleware: false, schemas: false },
+  'tool-only': { agents: false, tools: true, middleware: false, schemas: false },
+  'agent-only': { agents: true, tools: false, middleware: false, schemas: false },
+  'exported-agent': { agents: true, tools: false, middleware: false, schemas: false },
+  'agent-tool': { agents: true, tools: true, middleware: false, schemas: false },
+  'agent-reflection': { agents: true, tools: false, middleware: false, schemas: false },
+  'durable-json': { agents: true, tools: false, middleware: false, schemas: false },
+  'symbolic-schema-apis': { agents: false, tools: false, middleware: false, schemas: true },
+  'middleware-only': { agents: false, tools: false, middleware: true, schemas: false },
+  mixed: { agents: true, tools: true, middleware: true, schemas: false },
 };
 
 function configuration(main) {
@@ -101,6 +102,21 @@ function instantiate(code, overrides = {}) {
 }
 
 describe('static component exports', () => {
+  it('retains schema adapters for symbolic durable and storage forSchema APIs', async () => {
+    const output = await build('symbolic-schema-apis');
+    await instantiate(output.code);
+    try {
+      expect(globalThis.__golemRegisteredSchemaVendors().sort()).toEqual([
+        'arktype',
+        'effect',
+        'valibot',
+        'zod',
+      ]);
+    } finally {
+      delete globalThis.__golemRegisteredSchemaVendors;
+    }
+  }, 30000);
+
   it('retains the schema adapter used by runtime Durable Stream codecs', async () => {
     const output = await build('durable-json');
     const retained = Object.entries(output.modules)
@@ -556,7 +572,10 @@ describe('static component exports', () => {
           for (const module of modules) expect(retained).not.toContain(module);
       }
       if (!capabilities.tools) expect(output.unminified).not.toContain('class ToolRegistryImpl');
-      if (!capabilities.middleware && !['agent-reflection', 'durable-json'].includes(name)) {
+      if (
+        !capabilities.middleware &&
+        !['agent-reflection', 'durable-json', 'symbolic-schema-apis'].includes(name)
+      ) {
         for (const module of [
           'schema-model/model.mjs',
           'schema-model/wit.mjs',
@@ -691,31 +710,43 @@ describe('static component exports', () => {
       for (const [source, expectedCapabilities] of [
         [
           'import { defineAgent as agent } from "@golemcloud/golem-ts-sdk"; agent({name:"A", id:{}, methods:{}});',
-          { agents: true, tools: false, middleware: false },
+          { agents: true, tools: false, middleware: false, schemas: false },
         ],
         [
           'import * as sdk from "@golemcloud/golem-ts-sdk"; sdk.toolDefinition("x")["implement"]({});',
-          { agents: false, tools: true, middleware: false },
+          { agents: false, tools: true, middleware: false, schemas: false },
         ],
         [
           'import { toolDefinition } from "@golemcloud/golem-ts-sdk"; const { implement: register } = toolDefinition("x"); register({});',
-          { agents: false, tools: true, middleware: false },
+          { agents: false, tools: true, middleware: false, schemas: false },
         ],
         [
           'import { toolDefinition } from "@golemcloud/golem-ts-sdk"; const { middleware: register } = toolDefinition("x"); register({});',
-          { agents: false, tools: false, middleware: true },
+          { agents: false, tools: false, middleware: true, schemas: false },
         ],
         [
           'import { universalToolMiddleware as policy } from "@golemcloud/golem-ts-sdk"; policy({});',
-          { agents: false, tools: false, middleware: true },
+          { agents: false, tools: false, middleware: true, schemas: false },
         ],
         [
           'import type { AgentDefinition } from "@golemcloud/golem-ts-sdk"; export type Definition = AgentDefinition;',
-          { agents: false, tools: false, middleware: false },
+          { agents: false, tools: false, middleware: false, schemas: false },
+        ],
+        [
+          'import { durable as once } from "@golemcloud/golem-ts-sdk"; export const run = () => once;',
+          { agents: false, tools: false, middleware: false, schemas: true },
+        ],
+        [
+          'import type { Bucket } from "@golemcloud/golem-ts-sdk"; export const view = (bucket: Bucket, schema: any) => bucket.forSchema(schema);',
+          { agents: false, tools: false, middleware: false, schemas: true },
+        ],
+        [
+          'const bucket = { forSchema() { return 1; } }; export const view = bucket.forSchema();',
+          { agents: false, tools: false, middleware: false, schemas: false },
         ],
         [
           'import { toolDefinition } from "@golemcloud/golem-ts-sdk"; const key = Math.random() ? "implement" : "middleware"; toolDefinition("x")[key]({});',
-          { agents: true, tools: true, middleware: true },
+          { agents: true, tools: true, middleware: true, schemas: true },
         ],
       ]) {
         const main = path.join(dir, 'main.ts');
@@ -726,4 +757,33 @@ describe('static component exports', () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   }, 30000);
+
+  it('is one-shot, rejects watch/cache, and permits multiple outputs', async () => {
+    const main = path.join(fixtures, 'empty.ts');
+    const create = () => componentPlugin(configuration(main), main);
+    await expect(
+      rollup({ input: 'virtual:agent-main', cache: {}, plugins: [create()] }),
+    ).rejects.toThrow('Rollup cache');
+    await expect(
+      rollup({ input: 'virtual:agent-main', watch: {}, plugins: [create()] }),
+    ).rejects.toThrow('watch mode');
+    const plugin = create();
+    const bundle = await rollup({
+      input: 'virtual:agent-main',
+      external: () => true,
+      plugins: [plugin],
+    });
+    await bundle.generate({ format: 'es' });
+    await bundle.generate({ format: 'cjs' });
+    await bundle.close();
+    await expect(
+      rollup({ input: 'virtual:agent-main', external: () => true, plugins: [plugin] }),
+    ).rejects.toThrow('one-shot');
+    const fresh = await rollup({
+      input: 'virtual:agent-main',
+      external: () => true,
+      plugins: [create()],
+    });
+    await fresh.close();
+  });
 });

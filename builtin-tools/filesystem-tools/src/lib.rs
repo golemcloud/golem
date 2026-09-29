@@ -2,17 +2,33 @@ use golem_rust::{
     FromSchema, FromWire, IntoSchema, IntoWire, ToolError, WireSchema, tool_definition,
     tool_implementation,
 };
-use std::fs;
+use std::fs::{self, File};
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Component, Path};
 
+const MAX_READ_BYTES: usize = 64 * 1024;
+const MAX_READ_LINES: usize = 200;
+
+/// Opaque continuation position returned by `read-file`. Pass it back unchanged to continue.
+#[derive(Debug, Clone, PartialEq, Eq, IntoSchema, FromSchema, FromWire, IntoWire, WireSchema)]
+pub struct ReadFileCursor {
+    /// Zero-based byte position of the next bounded read.
+    pub byte_offset: u64,
+    /// One-based line containing `byte_offset`.
+    pub line: u64,
+}
+
+/// A bounded page of UTF-8 file content and the position needed to request the next page.
 #[derive(Debug, Clone, PartialEq, Eq, IntoSchema, FromSchema, FromWire, IntoWire, WireSchema)]
 pub struct ReadFileResult {
+    /// UTF-8 content traversed in the requested line range; it may contain part of a long line.
     pub content: String,
+    /// First line represented in `content`, or none when no requested content was reached.
     pub start_line: Option<u64>,
+    /// Last line represented in `content`, or none when no requested content was reached.
     pub end_line: Option<u64>,
-    pub total_lines: u64,
-    pub truncated_before: bool,
-    pub truncated_after: bool,
+    /// Continuation for the next bounded call, or none when EOF or `end_line` was reached.
+    pub next_cursor: Option<ReadFileCursor>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, IntoSchema, FromSchema, FromWire, IntoWire, WireSchema)]
@@ -23,61 +39,85 @@ pub enum WriteDisposition {
 
 #[derive(Debug, Clone, PartialEq, Eq, IntoSchema, FromSchema, FromWire, IntoWire, WireSchema)]
 pub struct WriteFileResult {
+    /// Whether the call created a new file or replaced an existing file.
     pub disposition: WriteDisposition,
+    /// Number of UTF-8 bytes written.
     pub bytes_written: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, IntoSchema, FromSchema, FromWire, IntoWire, WireSchema)]
 pub struct EditFileResult {
+    /// Number of replacements made; successful edits always report one.
     pub replacements: u64,
+    /// File size in bytes before replacement.
     pub bytes_before: u64,
+    /// File size in bytes after replacement.
     pub bytes_after: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, ToolError)]
 pub enum FilesystemToolError {
+    /// The path is empty, contains NUL or a parent component, or does not identify a file.
     #[tool_error(kind = "usage-error", exit_code = 2)]
     UnsafePath(String),
+    /// A line bound or continuation cursor is invalid.
     #[tool_error(kind = "usage-error", exit_code = 2)]
     InvalidRange(String),
+    /// `old_text` must contain at least one character.
     #[tool_error(kind = "usage-error", exit_code = 2)]
     EmptyOldText,
+    /// `old_text` was not found, so no edit was made.
     #[tool_error(kind = "runtime-error", exit_code = 1)]
     StaleEdit(String),
+    /// More than one occurrence matched, so no edit was made.
     #[tool_error(kind = "usage-error", exit_code = 2)]
     AmbiguousEdit(String),
+    /// The caller-supplied path does not exist.
     #[tool_error(kind = "runtime-error", exit_code = 1)]
     NotFound(String),
+    /// The caller-supplied path exists but is not a regular file.
     #[tool_error(kind = "runtime-error", exit_code = 1)]
     NotAFile(String),
+    /// The traversed file bytes contain NUL or invalid UTF-8.
     #[tool_error(kind = "runtime-error", exit_code = 1)]
     BinaryFile(String),
+    /// The underlying filesystem operation failed.
     #[tool_error(kind = "runtime-error", exit_code = 1)]
     Io(String),
 }
 
-#[tool_definition(version = "0.1.0")]
+#[tool_definition(version = "0.2.0", requires_filesystem = true)]
 pub trait ReadFile {
+    /// Reads a page from a known text file. Lines are 1-based and `end_line` is inclusive. Omit
+    /// both bounds to read from the beginning. A call examines at most 64 KiB and 200 lines, so a
+    /// distant start or oversized line can produce an empty or partial page. When `next_cursor` is
+    /// present, call again with the same bounds and that cursor. The path must be supplied by the
+    /// caller; this tool does not discover or list files.
     #[command(annotations(
         read_only = true,
         destructive = false,
         idempotent = true,
-        open_world = true
+        open_world = false
     ))]
     fn read_file(
         &self,
         path: String,
-        range: Vec<u64>,
+        start_line: Option<u64>,
+        end_line: Option<u64>,
+        cursor: Option<ReadFileCursor>,
     ) -> Result<ReadFileResult, FilesystemToolError>;
 }
 
-#[tool_definition(version = "0.1.0")]
+#[tool_definition(version = "0.2.0", requires_filesystem = true)]
 pub trait WriteFile {
+    /// Creates or replaces a known UTF-8 text file and reports which occurred and the byte count.
+    /// The caller must supply the path; this tool does not discover files. Errors identify unsafe
+    /// paths, non-file destinations, and filesystem failures.
     #[command(annotations(
         read_only = false,
         destructive = true,
         idempotent = true,
-        open_world = true
+        open_world = false
     ))]
     fn write_file(
         &self,
@@ -87,13 +127,16 @@ pub trait WriteFile {
     ) -> Result<WriteFileResult, FilesystemToolError>;
 }
 
-#[tool_definition(version = "0.1.0")]
+#[tool_definition(version = "0.2.0", requires_filesystem = true)]
 pub trait EditFile {
+    /// Replaces exactly one occurrence of `old_text` in a known UTF-8 text file. The result reports
+    /// replacement and byte counts. Missing text is stale, repeated text is ambiguous, and binary,
+    /// missing, unsafe, or non-file paths are errors. File discovery is not performed.
     #[command(annotations(
         read_only = false,
         destructive = true,
         idempotent = false,
-        open_world = true
+        open_world = false
     ))]
     fn edit_file(
         &self,
@@ -112,22 +155,12 @@ impl ReadFile for ReadFileImpl {
     fn read_file(
         &self,
         path: String,
-        range: Vec<u64>,
+        start_line: Option<u64>,
+        end_line: Option<u64>,
+        cursor: Option<ReadFileCursor>,
     ) -> Result<ReadFileResult, FilesystemToolError> {
         validate_path(&path)?;
-        let content = read_text_file(&path)?;
-        let (start_line, end_line) = match range.as_slice() {
-            [] => (None, None),
-            [start] => (Some(*start), None),
-            [start, end] => (Some(*start), Some(*end)),
-            _ => {
-                return Err(invalid_range(
-                    &path,
-                    "range must contain zero, one, or two line numbers",
-                ));
-            }
-        };
-        slice_lines(&path, &content, start_line, end_line)
+        read_file_page(&path, start_line, end_line, cursor)
     }
 }
 
@@ -238,11 +271,11 @@ fn decode_text(path: &str, bytes: Vec<u8>) -> Result<String, FilesystemToolError
     })
 }
 
-fn slice_lines(
+fn read_file_page(
     path: &str,
-    content: &str,
     requested_start: Option<u64>,
     requested_end: Option<u64>,
+    cursor: Option<ReadFileCursor>,
 ) -> Result<ReadFileResult, FilesystemToolError> {
     if requested_start == Some(0) || requested_end == Some(0) {
         return Err(invalid_range(path, "line numbers are 1-based"));
@@ -253,32 +286,116 @@ fn slice_lines(
         return Err(invalid_range(path, "start_line must not exceed end_line"));
     }
 
-    let lines: Vec<&str> = content.split_inclusive('\n').collect();
-    let total_lines = lines.len() as u64;
-    if let Some(start) = requested_start
-        && start > total_lines
-    {
+    let requested_start = requested_start.unwrap_or(1);
+    let cursor = cursor.unwrap_or(ReadFileCursor {
+        byte_offset: 0,
+        line: 1,
+    });
+    if cursor.line == 0 {
+        return Err(invalid_range(path, "cursor line must be 1-based"));
+    }
+    if cursor.byte_offset == 0 && cursor.line != 1 {
         return Err(invalid_range(
             path,
-            &format!("start_line {start} exceeds total line count {total_lines}"),
+            "a cursor at byte offset zero must be on line one",
         ));
     }
 
-    let effective_start = requested_start.unwrap_or(1);
-    let effective_end = requested_end.unwrap_or(total_lines).min(total_lines);
-    let selected = if total_lines == 0 || effective_start > effective_end {
-        String::new()
-    } else {
-        lines[(effective_start - 1) as usize..effective_end as usize].concat()
-    };
+    let metadata = fs::metadata(path).map_err(|error| match error.kind() {
+        std::io::ErrorKind::NotFound => FilesystemToolError::NotFound(path.to_string()),
+        _ => io_error(path, error),
+    })?;
+    if !metadata.is_file() {
+        return Err(FilesystemToolError::NotAFile(path.to_string()));
+    }
+    if cursor.byte_offset > metadata.len() {
+        return Err(invalid_range(path, "cursor byte offset exceeds file size"));
+    }
+
+    let mut file = File::open(path).map_err(|error| io_error(path, error))?;
+    file.seek(SeekFrom::Start(cursor.byte_offset))
+        .map_err(|error| io_error(path, error))?;
+    let remaining = (metadata.len() - cursor.byte_offset).min(MAX_READ_BYTES as u64) as usize;
+    let mut bytes = vec![0; remaining];
+    file.read_exact(&mut bytes)
+        .map_err(|error| io_error(path, error))?;
+    if bytes.contains(&0) {
+        return Err(FilesystemToolError::BinaryFile(path.to_string()));
+    }
+    if bytes
+        .first()
+        .is_some_and(|byte| byte & 0b1100_0000 == 0b1000_0000)
+    {
+        return Err(invalid_range(
+            path,
+            "cursor byte offset is not on a UTF-8 character boundary",
+        ));
+    }
+
+    let at_eof = cursor.byte_offset + bytes.len() as u64 == metadata.len();
+    match std::str::from_utf8(&bytes) {
+        Ok(_) => {}
+        Err(error) if error.error_len().is_none() && !at_eof => {
+            bytes.truncate(error.valid_up_to());
+        }
+        Err(_) => {
+            return Err(FilesystemToolError::BinaryFile(format!(
+                "file '{path}' contains invalid UTF-8"
+            )));
+        }
+    }
+    if !at_eof && bytes.last() == Some(&b'\r') {
+        bytes.pop();
+    }
+    let text = std::str::from_utf8(&bytes).map_err(|_| {
+        FilesystemToolError::BinaryFile(format!("file '{path}' contains invalid UTF-8"))
+    })?;
+
+    let mut cut = text.len();
+    let mut newline_count = 0;
+    for (offset, byte) in text.bytes().enumerate() {
+        if byte == b'\n' {
+            newline_count += 1;
+            if newline_count == MAX_READ_LINES {
+                cut = offset + 1;
+                break;
+            }
+        }
+    }
+    let traversed = &text[..cut];
+    let mut line = cursor.line;
+    let mut selected_start = None;
+    let mut selected_end = None;
+    let mut selected = String::new();
+    for segment in traversed.split_inclusive('\n') {
+        if line >= requested_start && requested_end.is_none_or(|end| line <= end) {
+            selected_start.get_or_insert(line);
+            selected_end = Some(line);
+            selected.push_str(segment);
+        }
+        if segment.ends_with('\n') {
+            line += 1;
+        }
+    }
+
+    let consumed = traversed.len() as u64;
+    let next_offset = cursor.byte_offset + consumed;
+    if next_offset < metadata.len() && next_offset == cursor.byte_offset {
+        return Err(FilesystemToolError::BinaryFile(format!(
+            "file '{path}' cannot make progress while decoding UTF-8"
+        )));
+    }
+    let range_finished = requested_end.is_some_and(|end| line > end);
+    let next_cursor = (next_offset < metadata.len() && !range_finished).then_some(ReadFileCursor {
+        byte_offset: next_offset,
+        line,
+    });
 
     Ok(ReadFileResult {
         content: selected,
-        start_line: (total_lines > 0).then_some(effective_start),
-        end_line: (total_lines > 0).then_some(effective_end),
-        total_lines,
-        truncated_before: total_lines > 0 && effective_start > 1,
-        truncated_after: effective_end < total_lines,
+        start_line: selected_start,
+        end_line: selected_end,
+        next_cursor,
     })
 }
 
@@ -317,33 +434,112 @@ fn replace_exactly_once(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
-    #[test]
-    fn line_ranges_are_inclusive_and_preserve_crlf() {
-        let result = slice_lines("file", "one\r\ntwo\r\nthree", Some(2), Some(9)).unwrap();
-        assert_eq!(result.content, "two\r\nthree");
-        assert_eq!(result.start_line, Some(2));
-        assert_eq!(result.end_line, Some(3));
-        assert_eq!(result.total_lines, 3);
-        assert!(result.truncated_before);
-        assert!(!result.truncated_after);
+    fn with_file<T>(content: &[u8], test: impl FnOnce(&str) -> T) -> T {
+        let path = std::env::temp_dir().join(format!(
+            "golem-filesystem-tool-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::write(&path, content).unwrap();
+        let result = test(path.to_str().unwrap());
+        fs::remove_file(path).unwrap();
+        result
     }
 
     #[test]
-    fn empty_file_has_no_lines_and_out_of_range_start_is_rejected() {
-        let result = slice_lines("file", "", None, None).unwrap();
-        assert_eq!(result.total_lines, 0);
-        assert_eq!(result.content, "");
-        assert!(matches!(
-            slice_lines("file", "a\n", Some(2), None),
-            Err(FilesystemToolError::InvalidRange(_))
-        ));
+    fn line_ranges_are_inclusive_and_preserve_crlf() {
+        with_file(b"one\r\ntwo\r\nthree", |path| {
+            let result = read_file_page(path, Some(2), Some(9), None).unwrap();
+            assert_eq!(result.content, "two\r\nthree");
+            assert_eq!(result.start_line, Some(2));
+            assert_eq!(result.end_line, Some(3));
+            assert_eq!(result.next_cursor, None);
+        });
+    }
+
+    #[test]
+    fn empty_file_and_start_after_eof_return_an_empty_final_page() {
+        with_file(b"", |path| {
+            let result = read_file_page(path, None, None, None).unwrap();
+            assert_eq!(result.content, "");
+            assert_eq!(result.start_line, None);
+            assert_eq!(result.next_cursor, None);
+        });
+        with_file(b"a\n", |path| {
+            let result = read_file_page(path, Some(20), None, None).unwrap();
+            assert_eq!(result.content, "");
+            assert_eq!(result.next_cursor, None);
+        });
     }
 
     #[test]
     fn invalid_and_descending_ranges_are_rejected() {
-        assert!(slice_lines("file", "a", Some(0), None).is_err());
-        assert!(slice_lines("file", "a\nb", Some(2), Some(1)).is_err());
+        assert!(read_file_page("file", Some(0), None, None).is_err());
+        assert!(read_file_page("file", Some(2), Some(1), None).is_err());
+    }
+
+    #[test]
+    fn pages_at_two_hundred_lines_and_continues() {
+        let content: String = (1..=205).map(|line| format!("line {line}\n")).collect();
+        with_file(content.as_bytes(), |path| {
+            let first = read_file_page(path, None, None, None).unwrap();
+            assert_eq!(first.start_line, Some(1));
+            assert_eq!(first.end_line, Some(200));
+            let cursor = first.next_cursor.unwrap();
+            assert_eq!(cursor.line, 201);
+            let second = read_file_page(path, None, None, Some(cursor)).unwrap();
+            assert_eq!(second.start_line, Some(201));
+            assert_eq!(second.end_line, Some(205));
+            assert_eq!(format!("{}{}", first.content, second.content), content);
+            assert_eq!(second.next_cursor, None);
+        });
+    }
+
+    #[test]
+    fn distant_start_advances_with_empty_pages() {
+        let content: String = (1..=450).map(|line| format!("{line}\n")).collect();
+        with_file(content.as_bytes(), |path| {
+            let first = read_file_page(path, Some(401), Some(402), None).unwrap();
+            assert!(first.content.is_empty());
+            let second = read_file_page(path, Some(401), Some(402), first.next_cursor).unwrap();
+            assert!(second.content.is_empty());
+            let third = read_file_page(path, Some(401), Some(402), second.next_cursor).unwrap();
+            assert_eq!(third.content, "401\n402\n");
+            assert_eq!(third.next_cursor, None);
+        });
+    }
+
+    #[test]
+    fn oversized_lines_page_without_splitting_utf8() {
+        let content = format!("{}é-tail\nnext", "a".repeat(MAX_READ_BYTES - 1));
+        with_file(content.as_bytes(), |path| {
+            let first = read_file_page(path, None, None, None).unwrap();
+            assert_eq!(first.content.len(), MAX_READ_BYTES - 1);
+            assert_eq!(first.end_line, Some(1));
+            let second = read_file_page(path, None, None, first.next_cursor).unwrap();
+            assert_eq!(format!("{}{}", first.content, second.content), content);
+            assert_eq!(second.start_line, Some(1));
+            assert_eq!(second.end_line, Some(2));
+        });
+    }
+
+    #[test]
+    fn paging_does_not_split_crlf() {
+        let content = format!("{}\r\nnext", "a".repeat(MAX_READ_BYTES - 1));
+        with_file(content.as_bytes(), |path| {
+            let first = read_file_page(path, None, None, None).unwrap();
+            assert!(!first.content.ends_with('\r'));
+            let cursor = first.next_cursor.unwrap();
+            assert_eq!(cursor.byte_offset, (MAX_READ_BYTES - 1) as u64);
+            let second = read_file_page(path, None, None, Some(cursor)).unwrap();
+            assert!(second.content.starts_with("\r\n"));
+            assert_eq!(format!("{}{}", first.content, second.content), content);
+        });
     }
 
     #[test]
@@ -356,6 +552,48 @@ mod tests {
             decode_text("file", vec![0xff]),
             Err(FilesystemToolError::BinaryFile(_))
         ));
+        with_file(&[0xc3], |path| {
+            assert!(matches!(
+                read_file_page(path, None, None, None),
+                Err(FilesystemToolError::BinaryFile(_))
+            ));
+        });
+        with_file(b"valid prefix \xc3", |path| {
+            assert!(matches!(
+                read_file_page(path, None, None, None),
+                Err(FilesystemToolError::BinaryFile(_))
+            ));
+        });
+    }
+
+    #[test]
+    fn forged_cursors_are_rejected() {
+        with_file("é".as_bytes(), |path| {
+            assert!(matches!(
+                read_file_page(
+                    path,
+                    None,
+                    None,
+                    Some(ReadFileCursor {
+                        byte_offset: 1,
+                        line: 1,
+                    }),
+                ),
+                Err(FilesystemToolError::InvalidRange(_))
+            ));
+            assert!(matches!(
+                read_file_page(
+                    path,
+                    None,
+                    None,
+                    Some(ReadFileCursor {
+                        byte_offset: 0,
+                        line: 2,
+                    }),
+                ),
+                Err(FilesystemToolError::InvalidRange(_))
+            ));
+        });
     }
 
     #[test]

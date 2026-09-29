@@ -20,6 +20,7 @@ registerHooks({
     if (specifier === "golem:tool/host@0.1.0") {
       const source = `export class ToolRpc {
         constructor(name) { this.name = name; }
+        static create(name) { return new ToolRpc(name); }
         asyncInvokeAndAwait(...args) {
           const result = globalThis.__capabilityToolInvoke(this.name, ...args);
           return { get: () => result, cancel() { throw new Error("unexpected cancellation"); } };

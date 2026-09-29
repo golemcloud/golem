@@ -103,6 +103,10 @@ lazy val root = (project in file("."))
     sbtPlugin,
     testAgents,
     emptyAutoRegisterFixture,
+    toolExportsFixture,
+    agentExportsFixture,
+    mixedExportsFixture,
+    clientExportsFixture,
     middlewareGuestLinkFixture,
     integrationTests
   )

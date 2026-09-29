@@ -1,6 +1,15 @@
 ///|
-#derive.tool("moonbit-reflection-test")
+#derive.tool("moonbit-reflection-test", requires_filesystem=true)
 struct MoonBitReflectionTest {}
+
+///|
+test "registered tool preserves requires_filesystem" {
+  let descriptor = match @tool.get_registered_tool("moonbit-reflection-test") {
+    Ok(descriptor) => descriptor
+    Err(_) => fail("generated tool was not registered")
+  }
+  assert_true(descriptor.requires_filesystem)
+}
 
 ///|
 #warnings("-struct_never_constructed")

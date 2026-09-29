@@ -56,6 +56,10 @@ mod tests {
     #[schema(transparent)]
     struct WireOnlyValue(u32);
 
+    #[derive(Debug, PartialEq, FromWire, IntoWire, WireSchema)]
+    #[schema(transparent)]
+    struct TransparentUnit(());
+
     impl IntoSchema for WireOnlyValue {
         fn type_id() -> golem_rust::schema::TypeId {
             <u32 as IntoSchema>::type_id()
@@ -87,6 +91,8 @@ mod tests {
             first: WireOnlyValue,
             second: Vec<Option<Result<u32, String>>>,
         ) -> WireOnlyValue;
+        fn sync_unit(&mut self) -> TransparentUnit;
+        async fn async_boxed_unit(&mut self) -> Box<TransparentUnit>;
     }
 
     struct DirectDispatchImpl {
@@ -118,6 +124,16 @@ mod tests {
                         .map(|value| value.unwrap_or_else(|s| s.len() as u32))
                         .sum::<u32>(),
             )
+        }
+
+        fn sync_unit(&mut self) -> TransparentUnit {
+            self.calls += 1;
+            TransparentUnit(())
+        }
+
+        async fn async_boxed_unit(&mut self) -> Box<TransparentUnit> {
+            self.calls += 1;
+            Box::new(TransparentUnit(()))
         }
     }
 
@@ -204,6 +220,36 @@ mod tests {
             );
         }
         assert_eq!(agent.calls, 1);
+
+        #[derive(IntoWire)]
+        struct NoArguments {}
+        let sync = agent
+            .invoke(
+                "sync_unit".to_string(),
+                direct::encode(&NoArguments {}).unwrap(),
+                Principal::Anonymous,
+            )
+            .await
+            .unwrap();
+        assert!(sync.value.is_none());
+        assert_eq!(
+            direct::decode_result_payload::<TransparentUnit>(sync.value).unwrap(),
+            TransparentUnit(())
+        );
+        let asynchronous = agent
+            .invoke(
+                "async_boxed_unit".to_string(),
+                direct::encode(&NoArguments {}).unwrap(),
+                Principal::Anonymous,
+            )
+            .await
+            .unwrap();
+        assert!(asynchronous.value.is_none());
+        assert_eq!(
+            direct::decode_result_payload::<Box<TransparentUnit>>(asynchronous.value).unwrap(),
+            Box::new(TransparentUnit(()))
+        );
+        assert_eq!(agent.calls, 3);
     }
 
     #[test]

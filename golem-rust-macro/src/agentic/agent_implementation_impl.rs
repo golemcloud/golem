@@ -267,34 +267,38 @@ fn build_match_arms(
         let ident = &info.method.sig.ident;
 
         let fn_output_info = FunctionOutputInfo::from_signature(&info.method.sig);
+        let output_type = match &info.method.sig.output {
+            syn::ReturnType::Default => syn::parse_quote!(()),
+            syn::ReturnType::Type(_, ty) => ty.as_ref().clone(),
+        };
         let post_method_param_extraction_logic = match fn_output_info.async_ness {
-            Asyncness::Future if !fn_output_info.is_unit => quote! {
-                let result = <Self as #trait_path>::#ident(self, #(#param_idents),*).await;
-                golem_rust::schema::wit::direct::encode_async(&result).await
-                    .map(|value| golem_rust::agentic::AgentInvocationResult { value: Some(value) }).map_err(|e| {
-                    golem_rust::agentic::custom_error(format!(
-                        "Failed serializing return value for method {}: {}",
-                        #method_name, e
-                    ))
-                })
-            },
             Asyncness::Future => quote! {
-                let _ = <Self as #trait_path>::#ident(self, #(#param_idents),*).await;
-                Ok(golem_rust::agentic::AgentInvocationResult { value: None })
-            },
-            Asyncness::Immediate if !fn_output_info.is_unit => quote! {
-                let result = <Self as #trait_path>::#ident(self, #(#param_idents),*);
-                golem_rust::schema::wit::direct::encode_async(&result).await
-                    .map(|value| golem_rust::agentic::AgentInvocationResult { value: Some(value) }).map_err(|e| {
+                let result = <Self as #trait_path>::#ident(self, #(#param_idents),*).await;
+                if <#output_type as golem_rust::WireSchema>::IS_UNIT {
+                    Ok(golem_rust::agentic::AgentInvocationResult { value: None })
+                } else {
+                    golem_rust::schema::wit::direct::encode_async(&result).await
+                        .map(|value| golem_rust::agentic::AgentInvocationResult { value: Some(value) }).map_err(|e| {
                     golem_rust::agentic::custom_error(format!(
                         "Failed serializing return value for method {}: {}",
                         #method_name, e
                     ))
-                })
+                    })
+                }
             },
             Asyncness::Immediate => quote! {
-                let _ = <Self as #trait_path>::#ident(self, #(#param_idents),*);
-                Ok(golem_rust::agentic::AgentInvocationResult { value: None })
+                let result = <Self as #trait_path>::#ident(self, #(#param_idents),*);
+                if <#output_type as golem_rust::WireSchema>::IS_UNIT {
+                    Ok(golem_rust::agentic::AgentInvocationResult { value: None })
+                } else {
+                    golem_rust::schema::wit::direct::encode_async(&result).await
+                        .map(|value| golem_rust::agentic::AgentInvocationResult { value: Some(value) }).map_err(|e| {
+                    golem_rust::agentic::custom_error(format!(
+                        "Failed serializing return value for method {}: {}",
+                        #method_name, e
+                    ))
+                    })
+                }
             },
         };
 

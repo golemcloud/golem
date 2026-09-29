@@ -303,6 +303,7 @@ pub(all) struct TailPositionalDef {
 
 pub(all) struct ToolDef {
   version : String
+  requires_filesystem : Bool
   commands : Array[CommandNodeDef]
 }
 pub fn ToolDef::canonical_input_fields(Self, Int) -> Array[CanonicalInputField] raise ToolBuildError

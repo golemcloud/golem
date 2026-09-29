@@ -74,17 +74,18 @@ pub fn tool_definition_impl(
         )
     };
 
-    let version = match parse_version(attrs.into()) {
+    let (version, requires_filesystem) = match parse_version(attrs.into()) {
         Ok(v) => v,
         Err(err) => return err.to_compile_error().into(),
     };
 
     // Building the IR validates every tool authoring attribute and surfaces
     // parse errors at compile time.
-    let ir = match build_tool_definition_ir(&ir_item_trait, version) {
+    let mut ir = match build_tool_definition_ir(&ir_item_trait, version) {
         Ok(ir) => ir,
         Err(err) => return err.to_compile_error().into(),
     };
+    ir.requires_filesystem = requires_filesystem;
 
     // Metadata synthesis: the hidden free descriptor function that builds the
     // runtime `ExtendedToolType`. It is emitted as a module-level free function
@@ -872,6 +873,7 @@ pub(crate) fn build_tool_definition_ir(
         visibility: item_trait.vis.clone(),
         trait_ident: item_trait.ident.clone(),
         version,
+        requires_filesystem: false,
         doc: parse_doc_full(&item_trait.attrs)?,
         commands,
     })
@@ -1056,15 +1058,18 @@ pub(crate) fn strip_helper_attrs(item_trait: &mut ItemTrait) {
 }
 
 /// Parses the optional `#[tool_definition(version = "...")]` attribute argument.
-pub(crate) fn parse_version(attrs: proc_macro2::TokenStream) -> Result<Option<String>, Error> {
+pub(crate) fn parse_version(
+    attrs: proc_macro2::TokenStream,
+) -> Result<(Option<String>, bool), Error> {
     if attrs.is_empty() {
-        return Ok(None);
+        return Ok((None, false));
     }
     use syn::parse::Parser;
     use syn::punctuated::Punctuated;
     let parser = Punctuated::<Expr, syn::Token![,]>::parse_terminated;
     let exprs = parser.parse2(attrs)?;
     let mut version = None;
+    let mut requires_filesystem = false;
     let mut seen = SeenKeys::default();
     for expr in exprs.iter() {
         let Expr::Assign(assign) = expr else {
@@ -1078,27 +1083,46 @@ pub(crate) fn parse_version(attrs: proc_macro2::TokenStream) -> Result<Option<St
             other => {
                 return Err(Error::new(
                     other.span(),
-                    "the only supported #[tool_definition] argument is `version`",
+                    "the only supported #[tool_definition] arguments are `version` and `requires_filesystem`",
                 ));
             }
         };
-        if key != "version" {
+        if key != "version" && key != "requires_filesystem" {
             return Err(Error::new(
                 key.span(),
-                "the only supported #[tool_definition] argument is `version`",
+                "the only supported #[tool_definition] arguments are `version` and `requires_filesystem`",
             ));
         }
         seen.insert(&key)?;
-        match &*assign.right {
-            Expr::Lit(syn::ExprLit {
-                lit: Lit::Str(s), ..
-            }) => version = Some(s.value()),
+        match (key.to_string().as_str(), &*assign.right) {
+            (
+                "version",
+                Expr::Lit(syn::ExprLit {
+                    lit: Lit::Str(s), ..
+                }),
+            ) => version = Some(s.value()),
+            (
+                "requires_filesystem",
+                Expr::Lit(syn::ExprLit {
+                    lit: Lit::Bool(value),
+                    ..
+                }),
+            ) => requires_filesystem = value.value,
+            ("requires_filesystem", other) => {
+                return Err(Error::new(
+                    other.span(),
+                    "requires_filesystem must be a bool literal",
+                ));
+            }
             other => {
-                return Err(Error::new(other.span(), "version must be a string literal"));
+                return Err(Error::new(
+                    other.1.span(),
+                    "version must be a string literal",
+                ));
             }
         }
     }
-    Ok(version)
+    Ok((version, requires_filesystem))
 }
 
 #[cfg(test)]
@@ -1113,7 +1137,7 @@ mod tests {
 
     fn version(src: &str) -> Result<Option<String>, Error> {
         let attrs: proc_macro2::TokenStream = src.parse().unwrap();
-        parse_version(attrs)
+        parse_version(attrs).map(|value| value.0)
     }
 
     #[test]

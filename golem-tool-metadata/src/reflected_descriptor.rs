@@ -161,6 +161,7 @@ impl From<native::Tool> for ExtendedToolType {
         let defs = value.schema.defs;
         Self {
             version: value.version,
+            requires_filesystem: value.requires_filesystem,
             commands: value
                 .commands
                 .nodes
@@ -220,6 +221,7 @@ mod tests {
         profile.aliases.clear();
         let tool = native::Tool {
             version: "1.2.3".into(),
+            requires_filesystem: false,
             schema: SchemaGraph {
                 root: SchemaType::Record {
                     fields: vec![],

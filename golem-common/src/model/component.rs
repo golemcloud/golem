@@ -317,6 +317,7 @@ mod tests {
     fn component_dto_tool_state_uses_the_same_canonical_diff_hash_shape() {
         let tool_name = ToolName::try_from("grep").unwrap();
         let definition = Tool {
+            requires_filesystem: false,
             version: "1.0.0".to_string(),
             commands: CommandTree { nodes: Vec::new() },
             schema: SchemaGraph::empty(),

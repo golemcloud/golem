@@ -60,6 +60,7 @@ private[macros] final class CompiledWireMetadata[C <: ToolMacroCore](val core: C
             () => t.record(List(t.field("high-bits", t.u64), t.field("low-bits", t.u64))),
             Some("uuid")
           )
+        case '[Array[Byte]]    => t.list(t.u8)
         case '[Option[a]]      => t.option(body(TypeRepr.of[a]))
         case '[Either[e, a]]   => t.result(Some(body(TypeRepr.of[a])), Some(body(TypeRepr.of[e])))
         case '[Map[k, v]]      => t.map(body(TypeRepr.of[k]), body(TypeRepr.of[v]))
@@ -196,7 +197,7 @@ private[macros] final class CompiledWireMetadata[C <: ToolMacroCore](val core: C
             )
         }
       }
-      ToolDescriptorBuilder.build(ir.identity, ir.version, root, children)
+      ToolDescriptorBuilder.build(ir.identity, ir.version, ir.requiresFilesystem, root, children)
     }
     descriptor(traitRepr, Set.empty)(new ToolBuildCtx) match {
       case Right(tool) =>

@@ -8,6 +8,7 @@ mod tests {
     use golem_rust::agentic::{
         AgentStream, AgentTypeName, BaseAgent, Config, Header, HttpRequest, HttpResponse,
         HttpRouter, OriginalHttpRequest, Principal, get_agent_type_by_name,
+        get_enriched_agent_type_by_name, register_agent_type,
     };
     use golem_rust::golem_agentic::golem::agent::common::{
         AgentMode, AgentTypeKind, FileMapping, HttpMethod, InputSchema, PathSegment, Snapshotting,
@@ -80,6 +81,68 @@ mod tests {
         fn ping(&self) -> String {
             "pong".into()
         }
+    }
+
+    #[test]
+    fn router_duplicate_registration_is_atomic_but_regular_agents_can_be_replaced() {
+        let mut regular = get_enriched_agent_type_by_name(&AgentTypeName("Files".into()))
+            .expect("regular fixture must be registered");
+        let mut router = get_enriched_agent_type_by_name(&AgentTypeName("SdkEcho".into()))
+            .expect("router fixture must be registered");
+
+        let ordinary_name = AgentTypeName("__duplicate_regular_registration_test".into());
+        regular.description = "first".into();
+        register_agent_type(ordinary_name, regular.clone());
+        regular.description = "replacement".into();
+        register_agent_type(
+            AgentTypeName("__duplicate_regular_registration_test".into()),
+            regular.clone(),
+        );
+        assert_eq!(
+            get_agent_type_by_name(&AgentTypeName(
+                "__duplicate_regular_registration_test".into()
+            ))
+            .unwrap()
+            .description,
+            "replacement"
+        );
+
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                register_agent_type(
+                    AgentTypeName("__duplicate_regular_registration_test".into()),
+                    router.clone(),
+                );
+            }))
+            .is_err()
+        );
+        assert_eq!(
+            get_agent_type_by_name(&AgentTypeName(
+                "__duplicate_regular_registration_test".into()
+            ))
+            .unwrap()
+            .description,
+            "replacement"
+        );
+
+        let router_name = AgentTypeName("__duplicate_router_registration_test".into());
+        router.description = "router".into();
+        register_agent_type(router_name, router);
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                register_agent_type(
+                    AgentTypeName("__duplicate_router_registration_test".into()),
+                    regular,
+                );
+            }))
+            .is_err()
+        );
+        let retained = get_agent_type_by_name(&AgentTypeName(
+            "__duplicate_router_registration_test".into(),
+        ))
+        .unwrap();
+        assert!(matches!(retained.kind, AgentTypeKind::HttpRouter));
+        assert_eq!(retained.description, "router");
     }
 
     #[test]

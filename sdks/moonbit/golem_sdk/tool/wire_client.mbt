@@ -33,10 +33,16 @@ fn[E] map_wire_rpc_error(
         Some(Err(message)) => tool_protocol_error(message)
         None => UnknownToolError(error.name, error.payload)
       }
-    @types.RemoteToolError(other) =>
-      tool_protocol_error(
-        "remote tool error: " + remote_tool_error_label(other),
-      )
+    @types.RemoteToolError(@types.InvalidToolName(name)) =>
+      RemoteTool(InvalidToolName(name))
+    @types.RemoteToolError(@types.InvalidCommandPath(path)) =>
+      RemoteTool(InvalidCommandPath(path))
+    @types.RemoteToolError(@types.InvalidInput(message)) =>
+      RemoteTool(InvalidInput(message))
+    @types.RemoteToolError(@types.ConstraintViolation(message)) =>
+      RemoteTool(ConstraintViolation(message))
+    @types.RemoteToolError(@types.InvalidResult(message)) =>
+      RemoteTool(InvalidResult(message))
   }
 }
 

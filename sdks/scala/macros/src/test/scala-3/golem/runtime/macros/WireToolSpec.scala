@@ -17,6 +17,9 @@
 package golem.runtime.macros
 
 import golem.Principal
+import golem.schema.*
+import golem.schema.SchemaTypeBody.{ListType, S8Type, U8Type}
+import golem.schema.validation.RefResolution
 import golem.schema.wire.*
 import golem.tool.*
 import golem.tool.wire.*
@@ -35,7 +38,20 @@ object WireToolSpec extends ZIOSpecDefault {
     def echo(value: golem.Uuid): golem.Uuid = value
   }
 
+  @golem.runtime.annotations.toolDefinition(version = "1.0.0")
+  trait ByteArrayTool {
+    def echo(value: Array[Byte], scalar: Byte): Array[Byte]
+  }
+
+  final class ByteArrayToolImpl extends ByteArrayTool {
+    def echo(value: Array[Byte], scalar: Byte): Array[Byte] = value
+  }
+
   private val uuidTool = WireToolMacro.handle[UuidTool, UuidToolImpl]
+  private val byteArrayTool = WireToolMacro.handle[ByteArrayTool, ByteArrayToolImpl]
+
+  private def rootBody(graph: SchemaGraph): SchemaTypeBody =
+    RefResolution.resolveRef(graph, graph.root).toOption.get.body
 
   private def input(nodes: WitSchemaValueNode*): WireToolInput =
     WireToolInput(
@@ -125,6 +141,39 @@ object WireToolSpec extends ZIOSpecDefault {
             ) && value.value.root == 2 && value.graph == ConcreteCodec.uuid.graph
           )
         )
+      )
+    },
+    test("compiled byte arrays use list<u8> while scalar bytes remain s8") {
+      val reflected = ToolReflection.fromWire(byteArrayTool.descriptor)
+      val body = reflected.commands(reflected.commandIndexByPath(List("echo")).get).body.get
+      assertTrue(
+        rootBody(body.positionals.fixed.head.tpe) == ListType(SchemaType(U8Type(None))),
+        rootBody(body.positionals.fixed(1).tpe) == S8Type(None),
+        rootBody(body.result.get.tpe) == ListType(SchemaType(U8Type(None)))
+      )
+    },
+    test("compiled byte array codecs preserve high-bit values") {
+      val result = invoke(
+        byteArrayTool,
+        "echo",
+        WireToolInput(
+          WitSchemaValueTree(
+            Vector(
+              WitSchemaValueNode.U8Value(255),
+              WitSchemaValueNode.U8Value(128),
+              WitSchemaValueNode.ListValue(Vector(0, 1)),
+              WitSchemaValueNode.S8Value(-1),
+              WitSchemaValueNode.RecordValue(Vector(2, 3))
+            ),
+            4
+          ),
+          None,
+          None,
+          Principal.Anonymous
+        )
+      )
+      assertTrue(
+        result.exists(_.exists(value => ConcreteCodec.bytes.decode(value.value).sameElements(Array[Byte](-1, -128))))
       )
     }
   )

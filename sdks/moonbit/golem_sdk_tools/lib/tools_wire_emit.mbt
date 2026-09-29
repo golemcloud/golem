@@ -201,6 +201,8 @@ fn emit_wire_tool_descriptor(
     nodes.join(",\n") +
     "]\n    let root = __golem_schema.push(@types.RecordType([]))\n    { version: \"" +
     escape_string_lit(tool.version.unwrap_or("0.0.0")) +
-    "\", commands: { nodes }, schema: { type_nodes: __golem_schema.nodes, defs: __golem_schema.defs, root } }\n  } catch { error => abort(\"invalid generated tool descriptor: \" + repr(error)) }\n}\n",
+    "\", requires_filesystem: " +
+    tool.requires_filesystem.to_string() +
+    ", commands: { nodes }, schema: { type_nodes: __golem_schema.nodes, defs: __golem_schema.defs, root } }\n  } catch { error => abort(\"invalid generated tool descriptor: \" + repr(error)) }\n}\n",
   )
 }

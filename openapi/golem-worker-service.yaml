@@ -9424,10 +9424,13 @@ components:
       type: object
       required:
       - version
+      - requires_filesystem
       - commands
       properties:
         version:
           type: string
+        requires_filesystem:
+          type: boolean
         commands:
           $ref: '#/components/schemas/CommandTree'
         schema:

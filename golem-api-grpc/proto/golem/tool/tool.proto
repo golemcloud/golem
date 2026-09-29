@@ -9,6 +9,7 @@ message Tool {
   string version = 1;
   CommandTree commands = 2;
   golem.schema.SchemaGraph schema = 3;
+  bool requires_filesystem = 4;
 }
 
 message ToolMiddleware {

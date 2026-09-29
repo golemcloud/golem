@@ -53,6 +53,7 @@ pub fn ToolDef::from_wire(
     }
     {
       version: tool.version,
+      requires_filesystem: tool.requires_filesystem,
       commands: tool.commands.nodes.map(node => CommandNodeDef::{
         name: node.name,
         aliases: node.aliases,

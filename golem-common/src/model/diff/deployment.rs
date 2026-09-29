@@ -935,6 +935,7 @@ mod tests {
             deployment_revision: DeploymentRevision::INITIAL,
             release_id,
             definition: Tool {
+                requires_filesystem: false,
                 version: "1.0.0".to_string(),
                 commands: CommandTree {
                     nodes: vec![CommandNode {

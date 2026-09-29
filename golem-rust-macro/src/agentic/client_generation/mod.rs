@@ -1037,7 +1037,6 @@ fn generate_direct_method_code(
 ) -> proc_macro2::TokenStream {
     let remote_method_name = method_name.to_string();
     let remote_token = quote! { #remote_method_name };
-    let fn_output_info = FunctionOutputInfo::from_signature(sig);
     let return_type = match &sig.output {
         syn::ReturnType::Type(_, ty) => quote! { #ty },
         syn::ReturnType::Default => quote! { () },
@@ -1061,12 +1060,9 @@ fn generate_direct_method_code(
             panic!("live streams cannot cross remote or scheduled agent invocation boundaries")
         }
     };
-    let process_invoke_result = match &sig.output {
-        syn::ReturnType::Type(_, ty) if !fn_output_info.is_unit => quote! {
-            golem_rust::schema::wit::direct::decode::<#ty>(rpc_result_ok.expect("remote method returned no value"))
-                .expect("Failed to deserialize rpc result to return type")
-        },
-        _ => quote! {},
+    let process_invoke_result = quote! {
+        golem_rust::schema::wit::direct::decode_result_payload::<#return_type>(rpc_result_ok)
+            .expect("Failed to deserialize rpc result to return type")
     };
 
     let encoded_input = encode_parameters(input_idents, false, false);

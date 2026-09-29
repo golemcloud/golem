@@ -32,7 +32,7 @@ const externalPackages = (id) =>
   id.startsWith("wasi:") ||
   id === "agent-guest"
 
-export default await componentConfiguration(rollup, {
+export default await componentConfiguration(rollup, () => ({
   input: process.env.GOLEM_COMPONENT_ENTRY ?? "./src/main.ts",
   output: {
     file: `${golemTemp}/ts-dist/${componentName}/main.js`,
@@ -47,4 +47,4 @@ export default await componentConfiguration(rollup, {
     json(),
     typescript({ noEmitOnError: true }),
   ],
-})
+}))

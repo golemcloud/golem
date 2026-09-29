@@ -17,7 +17,7 @@ use crate::agentic::{EnrichedParameterSchema, Principal};
 use crate::{
     AgentId, ComponentId, Uuid,
     agentic::{ResolvedAgent, agent_initiator::AgentInitiator},
-    golem_agentic::exports::golem::agent::guest::AgentType,
+    golem_agentic::{exports::golem::agent::guest::AgentType, golem::agent::common::AgentTypeKind},
 };
 use std::rc::Rc;
 use std::{cell::RefCell, future::Future};
@@ -155,7 +155,7 @@ pub fn get_principal() -> Option<Principal> {
 }
 
 pub fn register_agent_type(agent_type_name: AgentTypeName, agent_type: ExtendedAgentType) {
-    get_state().agent_types.borrow_mut().agent_types.insert(
+    register_agent_type_descriptor(
         agent_type_name,
         Box::new(move || agent_type.to_agent_type()),
     );
@@ -163,11 +163,25 @@ pub fn register_agent_type(agent_type_name: AgentTypeName, agent_type: ExtendedA
 
 #[doc(hidden)]
 pub fn register_wire_agent_type(agent_type_name: AgentTypeName, descriptor: fn() -> AgentType) {
-    get_state()
-        .agent_types
-        .borrow_mut()
-        .agent_types
-        .insert(agent_type_name, Box::new(descriptor));
+    register_agent_type_descriptor(agent_type_name, Box::new(descriptor));
+}
+
+fn register_agent_type_descriptor(
+    agent_type_name: AgentTypeName,
+    descriptor: Box<dyn Fn() -> AgentType>,
+) {
+    let incoming_is_router = matches!(descriptor().kind, AgentTypeKind::HttpRouter);
+    let state = get_state();
+    let mut agent_types = state.agent_types.borrow_mut();
+    if let Some(existing) = agent_types.agent_types.get(&agent_type_name)
+        && (incoming_is_router || matches!(existing().kind, AgentTypeKind::HttpRouter))
+    {
+        panic!(
+            "duplicate HTTP router registration for agent type `{}`",
+            agent_type_name.0
+        );
+    }
+    agent_types.agent_types.insert(agent_type_name, descriptor);
 }
 
 pub fn register_agent_initiator(agent_type_name: &str, initiator: Arc<dyn AgentInitiator>) {

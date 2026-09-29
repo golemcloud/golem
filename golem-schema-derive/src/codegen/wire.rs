@@ -129,11 +129,24 @@ pub fn expand_schema(input: &DeriveInput) -> syn::Result<TokenStream> {
 
             fn append_schema(builder: &mut #direct::WireSchemaBuilder) -> #wire::TypeNodeIndex {
                 let id = <Self as #direct::WireSchema>::wire_type_id();
-                let (definition, fresh) = builder.reserve(id, ::core::option::Option::Some(#display.to_string()));
-                if fresh {
-                    let body = { #body };
-                    let node = builder.push_with_metadata(body, #metadata);
-                    builder.commit(definition, node);
+                let (definition, reservation) = builder.reserve_nominal(
+                    id,
+                    ::core::option::Option::Some(#display.to_string()),
+                    ::core::any::type_name::<Self>(),
+                );
+                match reservation {
+                    #direct::WireSchemaReservation::Fresh => {
+                        let body = { #body };
+                        let node = builder.push_with_metadata(body, #metadata);
+                        builder.commit(definition, node);
+                    }
+                    #direct::WireSchemaReservation::Occupied => {
+                        let checkpoint = builder.begin_candidate(definition);
+                        let body = { #body };
+                        let node = builder.push_with_metadata(body, #metadata);
+                        builder.verify_candidate(checkpoint, definition, node);
+                    }
+                    #direct::WireSchemaReservation::Recursive => {}
                 }
                 builder.reference(definition)
             }
@@ -384,7 +397,7 @@ pub fn expand(input: &DeriveInput, encode: bool) -> syn::Result<TokenStream> {
     let mut encoded_types = TokenStream::new();
     let field_groups = match &input.data {
         Data::Struct(data) => vec![(&data.fields, !attrs.transparent)],
-        Data::Enum(data) => data.variants.iter().map(|v| (&v.fields, false)).collect(),
+        Data::Enum(data) => data.variants.iter().map(|v| (&v.fields, true)).collect(),
         Data::Union(_) => Vec::new(),
     };
     for (fields, is_struct) in field_groups {
@@ -680,7 +693,7 @@ fn fields(
             .clone()
             .map(Member::Named)
             .unwrap_or_else(|| Member::Unnamed(i.into()));
-        let skipped = is_struct
+        let skipped = !single
             && matches!(fields, Fields::Named(_))
             && (attrs.skip || attrs.default_with.is_some());
         if skipped {

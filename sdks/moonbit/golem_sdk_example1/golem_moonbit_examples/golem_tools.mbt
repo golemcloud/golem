@@ -566,6 +566,7 @@ fn __golem_tool_rebase_node(node : @tool.CommandNodeDef, offset : Int) -> @tool.
 fn __golem_tool_extract_prepared(def : @tool.ToolDef) -> @tool.ToolDef {
   {
     version: def.version,
+    requires_filesystem: def.requires_filesystem,
     commands: def.commands[1:].map(node => __golem_tool_rebase_node(node, -1)),
   }
 }
@@ -587,7 +588,11 @@ fn __golem_tool_append_prepared(def : @tool.ToolDef, child : @tool.ToolDef) -> @
   for node in child.commands {
     commands.push(__golem_tool_rebase_node(node, offset))
   }
-  { version: def.version, commands }
+  {
+    version: def.version,
+    requires_filesystem: def.requires_filesystem,
+    commands,
+  }
 }
 
 ///|
@@ -596,6 +601,7 @@ fn __golem_tool_def_raw_MoonBitStreaming() -> @tool.ToolDef {
   try {
     let def :@tool.ToolDef = {
       version: "1.0.0",
+      requires_filesystem: false,
       commands: [
         {
           name: "moonbit-streaming",
@@ -693,6 +699,7 @@ fn __golem_tool_def_prepare_MoonBitStreaming(
   try {
     let carrier :@tool.ToolDef = {
       version: "1.0.0",
+      requires_filesystem: false,
       commands: [
         {
           name: "__golem_ancestry",
@@ -856,6 +863,7 @@ fn __golem_tool_def_raw_CanonicalGrep() -> @tool.ToolDef {
   try {
     let def :@tool.ToolDef = {
       version: "2.0.0",
+      requires_filesystem: false,
       commands: [
         {
           name: "canonical-grep",
@@ -1221,6 +1229,7 @@ fn __golem_tool_def_prepare_CanonicalGrep(
   try {
     let carrier :@tool.ToolDef = {
       version: "2.0.0",
+      requires_filesystem: false,
       commands: [
         {
           name: "__golem_ancestry",
@@ -1681,6 +1690,7 @@ fn __golem_tool_def_raw_CanonicalGit() -> @tool.ToolDef {
   try {
     let def :@tool.ToolDef = {
       version: "0.0.0",
+      requires_filesystem: false,
       commands: [
         {
           name: "canonical-git",
@@ -2190,6 +2200,7 @@ fn __golem_tool_def_prepare_CanonicalGit(
   try {
     let carrier :@tool.ToolDef = {
       version: "0.0.0",
+      requires_filesystem: false,
       commands: [
         {
           name: "__golem_ancestry",
@@ -3965,6 +3976,7 @@ fn __golem_tool_def_raw_CanonicalRemote() -> @tool.ToolDef {
   try {
     let def :@tool.ToolDef = {
       version: "0.0.0",
+      requires_filesystem: false,
       commands: [
         {
           name: "remote",
@@ -4294,6 +4306,7 @@ fn __golem_tool_def_prepare_CanonicalRemote(
   try {
     let carrier :@tool.ToolDef = {
       version: "0.0.0",
+      requires_filesystem: false,
       commands: [
         {
           name: "__golem_ancestry",
@@ -4806,6 +4819,7 @@ fn __golem_tool_def_raw_CanonicalStash() -> @tool.ToolDef {
   try {
     let def :@tool.ToolDef = {
       version: "0.0.0",
+      requires_filesystem: false,
       commands: [
         {
           name: "stash",
@@ -5030,6 +5044,7 @@ fn __golem_tool_def_prepare_CanonicalStash(
   try {
     let carrier :@tool.ToolDef = {
       version: "0.0.0",
+      requires_filesystem: false,
       commands: [
         {
           name: "__golem_ancestry",
@@ -5440,6 +5455,7 @@ fn __golem_tool_def_raw_CanonicalBigBound() -> @tool.ToolDef {
   try {
     let def :@tool.ToolDef = {
       version: "0.0.0",
+      requires_filesystem: false,
       commands: [
         {
           name: "canonical-big-bound",
@@ -5516,6 +5532,7 @@ fn __golem_tool_def_prepare_CanonicalBigBound(
   try {
     let carrier :@tool.ToolDef = {
       version: "0.0.0",
+      requires_filesystem: false,
       commands: [
         {
           name: "__golem_ancestry",
@@ -5686,6 +5703,7 @@ fn __golem_tool_def_raw_MoonBitReflectionTest() -> @tool.ToolDef {
   try {
     let def :@tool.ToolDef = {
       version: "0.0.0",
+      requires_filesystem: true,
       commands: [
         {
           name: "moonbit-reflection-test",
@@ -5939,6 +5957,7 @@ fn __golem_tool_def_prepare_MoonBitReflectionTest(
   try {
     let carrier :@tool.ToolDef = {
       version: "0.0.0",
+      requires_filesystem: true,
       commands: [
         {
           name: "__golem_ancestry",
@@ -6402,6 +6421,7 @@ fn __golem_tool_wire_MoonBitStreaming() -> @toolCommon.Tool {
     let root = __golem_schema.push(@types.RecordType([]))
     {
       version: "1.0.0",
+      requires_filesystem: false,
       commands: { nodes, },
       schema: {
         type_nodes: __golem_schema.nodes,
@@ -6786,6 +6806,7 @@ fn __golem_tool_wire_CanonicalGrep() -> @toolCommon.Tool {
     let root = __golem_schema.push(@types.RecordType([]))
     {
       version: "2.0.0",
+      requires_filesystem: false,
       commands: { nodes, },
       schema: {
         type_nodes: __golem_schema.nodes,
@@ -8037,6 +8058,7 @@ fn __golem_tool_wire_CanonicalGit() -> @toolCommon.Tool {
     let root = __golem_schema.push(@types.RecordType([]))
     {
       version: "0.0.0",
+      requires_filesystem: false,
       commands: { nodes, },
       schema: {
         type_nodes: __golem_schema.nodes,
@@ -8140,6 +8162,7 @@ fn __golem_tool_wire_CanonicalBigBound() -> @toolCommon.Tool {
     let root = __golem_schema.push(@types.RecordType([]))
     {
       version: "0.0.0",
+      requires_filesystem: false,
       commands: { nodes, },
       schema: {
         type_nodes: __golem_schema.nodes,
@@ -8401,6 +8424,7 @@ fn __golem_tool_wire_MoonBitReflectionTest() -> @toolCommon.Tool {
     let root = __golem_schema.push(@types.RecordType([]))
     {
       version: "0.0.0",
+      requires_filesystem: true,
       commands: { nodes, },
       schema: {
         type_nodes: __golem_schema.nodes,

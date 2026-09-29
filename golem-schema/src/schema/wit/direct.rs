@@ -29,11 +29,21 @@ use std::rc::Rc;
 /// Named definitions are reserved before their bodies are appended, allowing
 /// derived recursive types to refer to themselves without constructing a
 /// recursive schema model.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct WireSchemaBuilder {
     type_nodes: Vec<wire::SchemaTypeNode>,
     defs: Vec<wire::SchemaTypeDef>,
     named: HashMap<String, wire::DefIndex>,
+    claimants: HashMap<String, &'static str>,
+    candidate_requests: HashMap<wire::DefIndex, &'static str>,
+    active_candidates: HashMap<wire::DefIndex, &'static str>,
+    validated_claimants: HashSet<(wire::DefIndex, &'static str)>,
+}
+
+pub enum WireSchemaReservation {
+    Fresh,
+    Recursive,
+    Occupied,
 }
 
 impl WireSchemaBuilder {
@@ -60,6 +70,101 @@ impl WireSchemaBuilder {
         self.named.insert(id.clone(), index);
         self.defs.push(wire::SchemaTypeDef { id, name, body: -1 });
         (index, true)
+    }
+
+    pub fn reserve_nominal(
+        &mut self,
+        id: String,
+        name: Option<String>,
+        claimant: &'static str,
+    ) -> (wire::DefIndex, WireSchemaReservation) {
+        if let Some(&definition) = self.named.get(&id) {
+            let owner = self
+                .claimants
+                .get(&id)
+                .copied()
+                .unwrap_or("<manual WireSchema implementation>");
+            let pending = self.defs[definition as usize].body < 0;
+            if pending && owner != claimant {
+                panic!("wire schema id `{id}` is claimed by both `{owner}` and `{claimant}`");
+            }
+            if let Some(active_claimant) = self.active_candidates.get(&definition)
+                && *active_claimant != claimant
+            {
+                panic!(
+                    "wire schema id `{id}` is claimed by both `{active_claimant}` and `{claimant}`"
+                );
+            }
+            let state = if pending
+                || self.active_candidates.get(&definition) == Some(&claimant)
+                || self.validated_claimants.contains(&(definition, claimant))
+            {
+                WireSchemaReservation::Recursive
+            } else {
+                self.candidate_requests.insert(definition, claimant);
+                WireSchemaReservation::Occupied
+            };
+            return (definition, state);
+        }
+        let (definition, fresh) = self.reserve(id.clone(), name);
+        debug_assert!(fresh);
+        self.claimants.insert(id, claimant);
+        (definition, WireSchemaReservation::Fresh)
+    }
+
+    pub fn begin_candidate(&mut self, definition: wire::DefIndex) -> Self {
+        let claimant = self
+            .candidate_requests
+            .remove(&definition)
+            .expect("occupied nominal reservation must precede candidate validation");
+        let checkpoint = self.clone();
+        self.active_candidates.insert(definition, claimant);
+        checkpoint
+    }
+
+    pub fn verify_candidate(
+        &mut self,
+        checkpoint: Self,
+        definition: wire::DefIndex,
+        candidate_body: wire::TypeNodeIndex,
+    ) {
+        let existing_body = self.defs[definition as usize].body;
+        let mut arena = self.clone();
+        let placeholder = arena.push(wire::SchemaTypeBody::TupleType(Vec::new()));
+        for definition in &mut arena.defs {
+            if definition.body < 0 {
+                definition.body = placeholder;
+            }
+        }
+        let mut existing_wire = arena.clone().finish(existing_body);
+        existing_wire.root = existing_body;
+        let mut candidate_wire = arena.finish(candidate_body);
+        candidate_wire.root = candidate_body;
+        let existing = super::decode::decode_graph(&existing_wire)
+            .expect("generated wire schema must form a valid flat arena");
+        let candidate = super::decode::decode_graph(&candidate_wire)
+            .expect("generated wire schema candidate must form a valid flat arena");
+        if !crate::schema::validation::is_equivalent_cross_graph(
+            &existing,
+            &existing.root,
+            &candidate,
+            &candidate.root,
+        ) {
+            let id = &self.defs[definition as usize].id;
+            let claimant = self
+                .claimants
+                .get(id)
+                .copied()
+                .unwrap_or("<manual WireSchema implementation>");
+            panic!("wire schema id `{id}` has a divergent implementation in `{claimant}`");
+        }
+        let claimant = self
+            .active_candidates
+            .get(&definition)
+            .copied()
+            .expect("candidate must remain active until validation completes");
+        *self = checkpoint;
+        self.validated_claimants.insert((definition, claimant));
     }
 
     pub fn commit(&mut self, definition: wire::DefIndex, body: wire::TypeNodeIndex) {
@@ -837,6 +942,19 @@ fn clone_value_node(node: &wire::SchemaValueNode) -> wire::SchemaValueNode {
 pub fn decode<T: FromWire>(tree: wire::SchemaValueTree) -> Result<T, WireError> {
     let mut reader = WireReader::new(tree.value_nodes);
     let value = T::read_wire(&mut reader, tree.root)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+pub fn decode_result_payload<T: FromWire>(
+    tree: Option<wire::SchemaValueTree>,
+) -> Result<T, WireError> {
+    let (nodes, root) = match tree {
+        Some(tree) => (tree.value_nodes, Some(tree.root)),
+        None => (Vec::new(), None),
+    };
+    let mut reader = WireReader::new(nodes);
+    let value = T::read_result_payload(&mut reader, root)?;
     reader.finish()?;
     Ok(value)
 }

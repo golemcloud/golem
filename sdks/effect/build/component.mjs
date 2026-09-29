@@ -16,39 +16,62 @@ const publicEntries = new Map([
   [`${packageName}/ignite2`, "Ignite/IgniteClient.js"],
 ])
 
+const normalizePlugins = async (plugins) => {
+  const normalized = []
+  const visit = async (plugin) => {
+    const resolved = await plugin
+    if (!resolved) return
+    if (Array.isArray(resolved)) {
+      for (const nested of resolved) await visit(nested)
+    } else normalized.push(resolved)
+  }
+  await visit(plugins)
+  return normalized
+}
+
 /**
  * Build-time capability selection, based on the tree-shaken application graph.
  * Discovery does not execute application code. A retained definition module is
  * conservatively considered capable even if registration is conditional.
  */
-export async function componentConfiguration(rollup, options) {
+export async function componentConfiguration(rollup, optionsFactory) {
+  if (typeof optionsFactory !== "function")
+    throw new Error("componentConfiguration expects an options factory")
+  const probeOptions = optionsFactory()
+  if (!probeOptions || typeof probeOptions.then === "function")
+    throw new Error("The component options factory must return Rollup options synchronously")
+  const options = probeOptions
   if (typeof options.input !== "string") throw new Error("Expected one component entrypoint")
+  if (options.watch) throw new Error("Effect component builds do not support watch mode")
+  if (options.cache) throw new Error("Effect component builds do not support Rollup cache")
   const input = resolve(options.input)
-  let usesSourceHttpRouter = false
-  const sdk = {
-    name: "golem-effect-sdk-source",
-    resolveId(source) {
-      if (source === `${packageName}/HttpRouter`) usesSourceHttpRouter = true
-      if (source === packageName)
-        return {
-          id: join(sdkSource, usesSourceHttpRouter ? "internal/component/index.js" : "index.js"),
-          moduleSideEffects: false,
-        }
-      const path = publicEntries.get(source)
-      if (path) return { id: join(sdkSource, path), moduleSideEffects: false }
-      if (source.startsWith(sdkSource + sep)) return { id: source, moduleSideEffects: false }
-      return null
-    },
-    transform(code, id) {
-      if (id.startsWith(sdkSource + sep)) return { code, map: null, moduleSideEffects: false }
-      return null
-    },
+  const makeSdkPlugin = () => {
+    let usesSourceHttpRouter = false
+    return {
+      name: "golem-effect-sdk-source",
+      resolveId(source) {
+        if (source === `${packageName}/HttpRouter`) usesSourceHttpRouter = true
+        if (source === packageName)
+          return {
+            id: join(sdkSource, usesSourceHttpRouter ? "internal/component/index.js" : "index.js"),
+            moduleSideEffects: false,
+          }
+        const path = publicEntries.get(source)
+        if (path) return { id: join(sdkSource, path), moduleSideEffects: false }
+        if (source.startsWith(sdkSource + sep)) return { id: source, moduleSideEffects: false }
+        return null
+      },
+      transform(code, id) {
+        if (id.startsWith(sdkSource + sep)) return { code, map: null, moduleSideEffects: false }
+        return null
+      },
+    }
   }
   const plugins = [
     staticContracts(sdkSource, publicEntries),
-    sdk,
+    makeSdkPlugin(),
     sharedEffectRuntime(input),
-    ...(options.plugins ?? []),
+    ...(await normalizePlugins(options.plugins)),
   ]
   const probe = await rollup({ ...options, input, plugins })
   let modules
@@ -64,6 +87,17 @@ export async function componentConfiguration(rollup, options) {
   } finally {
     await probe.close()
   }
+  const finalOptions = optionsFactory()
+  if (!finalOptions || typeof finalOptions.then === "function")
+    throw new Error("The component options factory must return Rollup options synchronously")
+  if (typeof finalOptions.input !== "string" || resolve(finalOptions.input) !== input)
+    throw new Error("The component options factory must return the same component entrypoint")
+  if (finalOptions.watch) throw new Error("Effect component builds do not support watch mode")
+  if (finalOptions.cache) throw new Error("Effect component builds do not support Rollup cache")
+  const probeCallerPlugins = new Set(await normalizePlugins(options.plugins))
+  const finalCallerPlugins = await normalizePlugins(finalOptions.plugins)
+  if (finalCallerPlugins.some((plugin) => probeCallerPlugins.has(plugin)))
+    throw new Error("The component options factory must create fresh plugin instances")
   const includes = (path) => modules.includes(join(sdkSource, path))
   const capabilities = {
     agents: includes("internal/agent.js"),
@@ -84,10 +118,34 @@ export async function componentConfiguration(rollup, options) {
       ? `export { toolMiddlewareGuest } from ${from("internal/tool/middleware.js")};`
       : `export { toolMiddlewareGuest } from ${empty};`,
   ].join("\n")
+  let started = false
+  const lifecycle = {
+    name: "golem-effect-one-shot",
+    options(inputOptions) {
+      if (started)
+        throw new Error("Effect component configuration is one-shot; create a fresh configuration")
+      if (inputOptions.watch) throw new Error("Effect component builds do not support watch mode")
+      if (inputOptions.cache) throw new Error("Effect component builds do not support Rollup cache")
+    },
+    buildStart(inputOptions) {
+      if (started)
+        throw new Error("Effect component configuration is one-shot; create a fresh configuration")
+      if (this.meta.watchMode) throw new Error("Effect component builds do not support watch mode")
+      if (inputOptions.cache) throw new Error("Effect component builds do not support Rollup cache")
+      started = true
+    },
+  }
+  const finalPlugins = [
+    staticContracts(sdkSource, publicEntries),
+    makeSdkPlugin(),
+    sharedEffectRuntime(input),
+    ...finalCallerPlugins,
+  ]
   return {
-    ...options,
+    ...finalOptions,
     input: entry,
     plugins: [
+      lifecycle,
       {
         name: "golem-effect-static-exports",
         resolveId: (id) => (id === entry ? entry : null),
@@ -100,7 +158,7 @@ export async function componentConfiguration(rollup, options) {
           })
         },
       },
-      ...plugins,
+      ...finalPlugins,
     ],
   }
 }

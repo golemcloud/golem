@@ -462,6 +462,20 @@ if ${marker_exists}
 end
 '''
 
+[tasks.check-sdk-scala-capability-fixtures]
+description = "Links and checks all Scala capability-sensitive export fixtures"
+cwd = "./sdks/scala"
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error sbt -batch "++3.8.2; emptyAutoRegisterFixture/fullLinkJS; toolExportsFixture/fullLinkJS; agentExportsFixture/fullLinkJS; middlewareGuestLinkFixture/fullLinkJS; mixedExportsFixture/fullLinkJS; clientExportsFixture/fullLinkJS"
+exec --fail-on-error node test-capability-exports/check.mjs empty test-empty-auto-register/target/scala-3.8.2/golem-scala-empty-auto-register-fixture-opt/main.js
+exec --fail-on-error node test-capability-exports/check.mjs tool test-capability-exports/toolExportsFixture/target/scala-3.8.2/toolexportsfixture-opt/main.js
+exec --fail-on-error node test-capability-exports/check.mjs agent test-capability-exports/agentExportsFixture/target/scala-3.8.2/agentexportsfixture-opt/main.js
+exec --fail-on-error node test-middleware-guest-link/check.mjs test-middleware-guest-link/target/scala-3.8.2/golem-scala-middleware-guest-link-fixture-opt/main.js
+exec --fail-on-error node test-capability-exports/check.mjs mixed test-capability-exports/mixedExportsFixture/target/scala-3.8.2/mixedexportsfixture-opt/main.js
+exec --fail-on-error node test-capability-exports/check-client.mjs test-capability-exports/toolExportsFixture/target/scala-3.8.2/toolexportsfixture-opt/main.js test-capability-exports/clientExportsFixture/target/scala-3.8.2/clientexportsfixture-opt/main.js
+'''
+
 [tasks.clean-sdk-moonbit]
 description = "Cleans the MoonBit SDK workspace"
 cwd = "./sdks/moonbit"

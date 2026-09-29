@@ -616,7 +616,11 @@ export function staticContracts(runtime, publicEntries) {
   const run = EffectRuntime.Effect.runSync
   function compileTool(builder, clientOptions) {
     const model = load("internal/tool/model.js")
-    const definition = { name: builder.model.name, model: builder.model }
+    const definition = {
+      name: builder.model.name,
+      model: builder.model,
+      requiresFilesystem: builder.requiresFilesystem,
+    }
     const compiled = model.compileDefinition(definition)
     const declarations = []
     const bodies = [...compiled.bodies].map(([key, body]) => {

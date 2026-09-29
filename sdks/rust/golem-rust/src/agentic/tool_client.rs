@@ -1287,10 +1287,8 @@ mod tests {
                 source.set(source.get() + 1);
                 Box::pin(async {
                     decode_direct_wire_invocation_result::<Infallible>(host::InvocationResult {
-                        // The host has already validated the declared graph; concrete decoding
-                        // checks the value's shape, not a newly reconstructed schema graph.
                         result: Some(wire::TypedSchemaValue {
-                            graph: direct::schema::<String>(),
+                            graph: direct::schema::<u32>(),
                             value: direct::encode(&83u32).unwrap(),
                         }),
                         stdout: None,

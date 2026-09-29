@@ -1,6 +1,8 @@
 test_r::enable!();
 
-use golem_schema::schema::wit::direct::{WireError, decode, encode, encode_async, schema};
+use golem_schema::schema::wit::direct::{
+    self, WireError, WireSchema as _, decode, decode_result_payload, encode, encode_async, schema,
+};
 use golem_schema::schema::wit::{
     GuestPermissionCardHandle, GuestQuotaTokenHandle, GuestSecretHandle, wire,
 };
@@ -252,6 +254,109 @@ fn wire_schema_derive_builds_recursive_flat_arena() {
         graph.type_nodes[fault.body as usize].body,
         wire::SchemaTypeBody::VariantType(_)
     ));
+}
+
+#[allow(dead_code)]
+#[derive(WireSchema)]
+#[schema(named = "example.Shared")]
+struct SharedFirst {
+    value: u32,
+}
+
+#[allow(dead_code)]
+#[derive(WireSchema)]
+#[schema(named = "example.Shared")]
+struct SharedIdentical {
+    value: u32,
+}
+
+#[allow(dead_code)]
+#[derive(WireSchema)]
+#[schema(named = "example.Shared")]
+struct SharedDivergent {
+    value: String,
+}
+
+#[allow(dead_code)]
+#[derive(WireSchema)]
+#[schema(named = "example.RecursiveCollision")]
+struct RecursiveCollisionOuter {
+    nested: Box<RecursiveCollisionInner>,
+}
+
+#[allow(dead_code)]
+#[derive(WireSchema)]
+#[schema(named = "example.RecursiveCollision")]
+struct RecursiveCollisionInner {
+    value: u32,
+}
+
+mod oracle_nominal_collision {
+    use super::*;
+
+    #[allow(dead_code)]
+    #[derive(WireSchema)]
+    #[schema(named = "example.OracleNominalCollision")]
+    pub(super) struct A {
+        x: u32,
+        next: Option<Box<A>>,
+    }
+
+    #[allow(dead_code)]
+    #[derive(WireSchema)]
+    #[schema(named = "example.OracleNominalCollision")]
+    pub(super) struct B {
+        x: u32,
+        next: Option<Box<C>>,
+    }
+
+    #[allow(dead_code)]
+    #[derive(WireSchema)]
+    #[schema(named = "example.OracleNominalCollision")]
+    pub(super) struct C {
+        divergent: String,
+    }
+}
+
+#[test]
+fn nominal_wire_schema_ids_deduplicate_only_identical_implementations() {
+    let mut builder = direct::WireSchemaBuilder::default();
+    let first = SharedFirst::append_schema(&mut builder);
+    let identical = SharedIdentical::append_schema(&mut builder);
+    let identical_again = SharedIdentical::append_schema(&mut builder);
+    let graph = builder.finish(identical_again);
+    assert_eq!(graph.defs.len(), 1);
+    assert!(matches!(
+        graph.type_nodes[first as usize].body,
+        wire::SchemaTypeBody::RefType(0)
+    ));
+    assert!(matches!(
+        graph.type_nodes[identical as usize].body,
+        wire::SchemaTypeBody::RefType(0)
+    ));
+    assert!(matches!(
+        graph.type_nodes[identical_again as usize].body,
+        wire::SchemaTypeBody::RefType(0)
+    ));
+
+    assert!(
+        std::panic::catch_unwind(|| {
+            let mut builder = direct::WireSchemaBuilder::default();
+            SharedFirst::append_schema(&mut builder);
+            SharedDivergent::append_schema(&mut builder);
+        })
+        .is_err()
+    );
+    assert!(std::panic::catch_unwind(schema::<RecursiveCollisionOuter>).is_err());
+
+    assert!(
+        std::panic::catch_unwind(|| {
+            let mut builder = direct::WireSchemaBuilder::default();
+            oracle_nominal_collision::A::append_schema(&mut builder);
+            oracle_nominal_collision::B::append_schema(&mut builder);
+        })
+        .is_err()
+    );
 }
 
 #[test]
@@ -718,6 +823,12 @@ fn boxed_transparent_unit_result_schema_has_no_payload() {
         encoded.value_nodes[encoded.root as usize],
         wire::SchemaValueNode::ResultValue(wire::ResultValuePayload::OkValue(None))
     ));
+    assert_eq!(decode_result_payload::<Unit>(None).unwrap(), Unit(()));
+    assert_eq!(
+        decode_result_payload::<Box<Unit>>(None).unwrap(),
+        Box::new(Unit(()))
+    );
+    assert!(decode_result_payload::<String>(None).is_err());
 }
 
 #[derive(Debug, PartialEq, IntoWire, FromWire)]
@@ -868,4 +979,54 @@ fn skipped_generic_field_does_not_require_wire_traits() {
     let decoded = decode::<WithDefault<LocalOnly>>(encoded).unwrap();
     assert_eq!(decoded.value, 8193);
     let _: LocalOnly = decoded.extra;
+
+    #[derive(Debug, PartialEq, IntoWire, FromWire, WireSchema)]
+    enum NamedEnvelope<T> {
+        Value {
+            before: u8,
+            #[schema(skip)]
+            marker: std::marker::PhantomData<T>,
+            #[schema(default = "default_count")]
+            count: u16,
+            after: String,
+        },
+    }
+
+    fn default_count() -> u16 {
+        42
+    }
+
+    let value = NamedEnvelope::<NotWire>::Value {
+        before: 7,
+        marker: std::marker::PhantomData,
+        count: 99,
+        after: "done".to_string(),
+    };
+    let encoded = encode(&value).unwrap();
+    assert!(matches!(
+        &encoded.value_nodes[2],
+        wire::SchemaValueNode::RecordValue(fields) if fields == &[0, 1]
+    ));
+    let NamedEnvelope::Value {
+        before,
+        marker: _,
+        count,
+        after,
+    } = decode::<NamedEnvelope<NotWire>>(encoded).unwrap();
+    assert_eq!(before, 7);
+    assert_eq!(count, 42);
+    assert_eq!(after, "done");
+    let graph = schema::<NamedEnvelope<NotWire>>();
+    let wire::SchemaTypeBody::VariantType(cases) =
+        &graph.type_nodes[graph.defs[0].body as usize].body
+    else {
+        panic!("expected variant schema");
+    };
+    let payload = cases[0].payload.expect("expected named payload");
+    let wire::SchemaTypeBody::RecordType(fields) = &graph.type_nodes[payload as usize].body else {
+        panic!("expected record payload");
+    };
+    assert_eq!(fields.len(), 2);
+    assert_eq!(fields[0].name, "before");
+    assert_eq!(fields[1].name, "after");
 }
