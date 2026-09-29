@@ -13,9 +13,9 @@
 // limitations under the License.
 
 use super::super::fault::{LeaseExpired, OperationCancelled};
+use super::super::tests::polled_until;
 use super::super::tests::scripted::{Script, ScriptedBlobStorage};
 use super::{Lease, SnapshotFiles, extended};
-use futures::StreamExt;
 use golem_common::model::environment::EnvironmentId;
 use golem_service_base::storage::blob::BlobStorageNamespace;
 use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
@@ -171,11 +171,7 @@ async fn detached_files_are_not_cancelled_have_no_lease_and_their_calls_are_trac
             .put_if_absent("final_marker", Path::new("golem/marker"), b"")
             .await
     });
-    let held = futures::stream::repeat(())
-        .then(|()| tokio::time::sleep(Duration::from_millis(5)))
-        .take(2000)
-        .any(|()| std::future::ready(!storage.calls().is_empty()))
-        .await;
+    let held = polled_until(Duration::from_secs(10), || !storage.calls().is_empty()).await;
     let counted = tracker.len();
     storage.open_gate();
     let written = tokio::time::timeout(Duration::from_secs(10), writing).await;
@@ -267,11 +263,8 @@ async fn a_refresh_of_the_lease_during_a_call_does_not_move_the_end_of_that_call
     let refreshing = tokio::spawn({
         let (storage, lease) = (storage.clone(), lease.clone());
         async move {
-            let reached = futures::stream::repeat(())
-                .then(|()| tokio::time::sleep(Duration::from_millis(5)))
-                .take(80)
-                .any(|()| std::future::ready(!storage.calls().is_empty()))
-                .await;
+            let reached =
+                polled_until(Duration::from_millis(400), || !storage.calls().is_empty()).await;
             let refreshed_at = Instant::now();
             lease.extend_from(refreshed_at, Duration::from_secs(10));
             (reached, refreshed_at)

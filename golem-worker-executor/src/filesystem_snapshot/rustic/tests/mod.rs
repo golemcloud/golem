@@ -224,6 +224,20 @@ fn many_directories_tree(count: usize) -> Scratch {
     tree
 }
 
+/// The time between two checks of [`polled_until`].
+const POLL_STEP: Duration = Duration::from_millis(5);
+
+/// Checks the condition every [`POLL_STEP`] until it holds, for at most about `bound`. Gives whether
+/// the condition held.
+pub(super) async fn polled_until(bound: Duration, condition: impl Fn() -> bool) -> bool {
+    let checks = usize::try_from(bound.as_millis() / POLL_STEP.as_millis()).unwrap_or(usize::MAX);
+    futures::stream::repeat(())
+        .then(|()| tokio::time::sleep(POLL_STEP))
+        .take(checks)
+        .any(|()| std::future::ready(condition()))
+        .await
+}
+
 /// Gives a backend over the repository of the scope in the storage, on the current runtime, whose
 /// calls wait for at most `deadline`.
 pub(super) fn backend_of(
@@ -445,18 +459,13 @@ async fn a_create_whose_config_write_finds_the_config_of_another_writer_opens_th
     let lost = tokio::task::spawn_blocking(move || {
         open_or_create(loser, &key()).map(|repository| repository.config().id)
     });
-    let held = futures::stream::repeat(())
-        .then(|()| tokio::time::sleep(Duration::from_millis(5)))
-        .take(2000)
-        .any(|()| {
-            std::future::ready(
-                losing
-                    .calls()
-                    .iter()
-                    .any(|(op_label, path)| *op_label == "write" && path == "config"),
-            )
-        })
-        .await;
+    let held = polled_until(Duration::from_secs(10), || {
+        losing
+            .calls()
+            .iter()
+            .any(|(op_label, path)| *op_label == "write" && path == "config")
+    })
+    .await;
 
     let winner = backend(shared.clone());
     let won = run_blocking(move || Ok(open_or_create(winner, &key())?.config().id)).await;
