@@ -129,11 +129,12 @@ pub async fn MoonBitToolStreamingCaller::dual_output_declared_error(
   let result = match invocation.get() {
     Err(@tool.ToolError::Tool(Expected(message))) => "declared:" + message
     Err(@tool.ToolError::Rpc(_)) => "unexpected:rpc"
+    Err(@tool.ToolError::RemoteTool(@tool.RemoteToolError::InvalidInput(_))) =>
+      "unexpected:invalid-input"
+    Err(@tool.ToolError::RemoteTool(@tool.RemoteToolError::InvalidResult(_))) =>
+      "unexpected:malformed-output"
     Err(@tool.ToolError::RemoteTool(_)) => "unexpected:remote-tool"
     Err(@tool.ToolError::UnknownToolError(name, _)) => "unexpected:" + name
-    Err(@tool.ToolError::InvalidInput(_)) => "unexpected:invalid-input"
-    Err(@tool.ToolError::MalformedRemoteOutput(_)) =>
-      "unexpected:malformed-output"
     Ok(_) => "ok"
   }
   { stdout, stderr, result, }
@@ -205,10 +206,12 @@ pub async fn MoonBitToolStreamingCaller::explicit_stdout_failure(
     Err(@tool.ToolError::Rpc(@tool.RpcError::ResourceExhausted(_))) =>
       "resource-exhausted"
     Err(@tool.ToolError::Rpc(error)) => "rpc:" + repr(error)
-    Err(@tool.ToolError::RemoteTool(@tool.RemoteToolError::InvalidInput(message))) =>
-      "invalid-input:" + message
-    Err(@tool.ToolError::RemoteTool(@tool.RemoteToolError::InvalidResult(message))) =>
-      "malformed-output:" + message
+    Err(
+      @tool.ToolError::RemoteTool(@tool.RemoteToolError::InvalidInput(message))
+    ) => "invalid-input:" + message
+    Err(
+      @tool.ToolError::RemoteTool(@tool.RemoteToolError::InvalidResult(message))
+    ) => "malformed-output:" + message
     Err(@tool.ToolError::RemoteTool(error)) => "remote-tool:" + repr(error)
     Err(@tool.ToolError::Tool(_)) => "tool-error"
     Err(@tool.ToolError::UnknownToolError(name, _)) =>
