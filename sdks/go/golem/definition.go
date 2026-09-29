@@ -213,11 +213,16 @@ func allDefErrors(errs []definitionError) string {
 }
 
 // DefinitionErrors returns every problem found while building the component's
-// agent definitions (bad specs, unsupported types, invalid HTTP routes, …).
+// agent and tool definitions (bad specs, unsupported types, invalid HTTP
+// routes, unbound tool arguments, …).
 // It is empty for a well-formed component. Intended for native tests, which can
 // assert on definitions without deploying; at runtime the same errors surface
 // through discover-agent-types and initialize.
 func DefinitionErrors() []error {
+	// Tool and middleware problems are found as their metadata is derived,
+	// which records them alongside the agents' own.
+	toolDefs.discover(defs)
+	toolDefs.discoverMiddlewares(defs)
 	_, ds := defs.discover()
 	out := make([]error, len(ds))
 	for i := range ds {

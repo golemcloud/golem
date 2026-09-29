@@ -15,10 +15,12 @@
 package golem
 
 import (
+	"errors"
+	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 
-	toolExports "github.com/golemcloud/golem/sdks/go/golem/internal/exports/export_golem_tool_guest"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 	toolCommon "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_tool_common"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
@@ -26,38 +28,69 @@ import (
 
 type NotFoundPayload struct{ Name string }
 
-type LookupArgs struct {
-	Name Positional[string]
-}
+type LookupArgs struct{ Name string }
 
 // declareLookup registers a command with two declared failures: one carrying a
 // payload and one carrying none.
-func declareLookup(r *toolRegistry, d *definitions) (*ToolErrorCase[NotFoundPayload], *ToolErrorCase[Unit], *ToolErrorCase[Unit]) {
-	def := defineToolInto(r, d, "lookup", ToolSpec{Version: "1.0.0"})
-	notFound := defineToolErrorInto[NotFoundPayload](r, d, def, "not-found", ToolErrorSpec{
+func declareLookup(r *toolRegistry, d *definitions) (*ToolCommand[LookupArgs, string], *ToolErrorCase[NotFoundPayload]) {
+	def := defineToolInto(r, d, "lookup", ToolSpec{Version: "1.0.0"}, false)
+	notFound := DefineToolError[NotFoundPayload](def, "not-found", ToolErrorSpec{
 		Kind: UsageError, ExitCode: 2, Summary: "no such name",
 	})
-	offline := defineToolErrorInto[Unit](r, d, def, "offline", ToolErrorSpec{
+	offline := DefineToolError[Unit](def, "offline", ToolErrorSpec{
 		Kind: RuntimeError, ExitCode: 69, Summary: "the directory is unreachable",
 	})
-	unlisted := defineToolErrorInto[Unit](r, d, def, "unlisted", ToolErrorSpec{Kind: RuntimeError})
+	unlisted := DefineToolError[Unit](def, "unlisted", ToolErrorSpec{Kind: RuntimeError})
 
-	cmd := declareCommand[LookupArgs, string](r, d, def, nil, "", LookupArgs{},
-		[]CommandOpt{Raises(notFound, offline)})
-	handleCommandInto(r, d, cmd, func(_ *ToolContext, in LookupArgs) string {
-		switch in.Name.Get() {
+	cmd := def.Body[LookupArgs, string](func(a *LookupArgs, s *ToolCommandSpec) {
+		s.Positional(&a.Name)
+		s.Raises(notFound, offline)
+	})
+	_ = cmd.Handle(func(_ *ToolContext, in LookupArgs) (string, error) {
+		switch in.Name {
 		case "missing":
-			panic(notFound.New(NotFoundPayload{Name: in.Name.Get()}))
+			return "", notFound.New(NotFoundPayload(in))
 		case "offline":
-			panic(offline.New(Unit{}))
+			return "", offline.New(Unit{})
 		case "unlisted":
-			panic(unlisted.New(Unit{}))
+			return "", unlisted.New(Unit{})
+		case "raised-by-panic":
+			panic(offline.New(Unit{}))
 		case "boom":
 			panic("something went wrong")
 		}
-		return "found " + in.Name.Get()
+		return "found " + in.Name, nil
 	})
-	return notFound, offline, unlisted
+	return cmd, notFound
+}
+
+// buildToolFor registers a tool on an isolated definition set and derives its
+// metadata, so each test sees only its own declarations.
+func buildToolFor(t *testing.T, declare func(r *toolRegistry, d *definitions)) (toolCommon.Tool, *toolRegistry, *definitions) {
+	t.Helper()
+	r, d := newToolRegistry(), newDefinitions()
+	declare(r, d)
+	tools, ok := r.discover(d)
+	if !ok {
+		t.Fatalf("tool discovery failed: %s", allDefErrors(d.errs))
+	}
+	if len(tools) != 1 {
+		t.Fatalf("discovered %d tools, want 1", len(tools))
+	}
+	return tools[0], r, d
+}
+
+// encodeArgs renders arguments the way a typed caller sends them.
+func encodeArgs[A any](t *testing.T, ce *commandEntry, fill func(*A)) types.TypedSchemaValue {
+	t.Helper()
+	l, ok := ce.resolve()
+	if !ok {
+		t.Fatalf("command %s is not well-defined: %s", ce.label(), allDefErrors(ce.node.entry.d.errs))
+	}
+	args := reflect.New(ce.argsType).Elem()
+	args.Set(l.defaults)
+	fill(args.Addr().Interface().(*A))
+	return l.encode(ce.node.entry.d, args)
 }
 
 // TestDeclaredErrorsAreInTheCommandContract — the failures are published with
@@ -95,12 +128,12 @@ func TestDeclaredErrorsAreInTheCommandContract(t *testing.T) {
 	}
 }
 
-// invokeLookup runs the lookup command with one positional.
+// invokeLookup runs the lookup command the way the host would.
 func invokeLookup(t *testing.T, d *definitions, r *toolRegistry, name string) witTypes.Result[toolCommon.InvocationResult, types.ToolError] {
 	t.Helper()
 	e, _ := r.get("lookup")
-	return d.invokeCommand(e, nil, encodeToolArgs(t, d, e, nil, name),
-		newToolStdin(toolExports.Stdin{}), newToolStdout(toolExports.Stdout{}))
+	input := encodeArgs(t, e.root.body, func(a *LookupArgs) { a.Name = name })
+	return d.invokeCommand(e, nil, input, nil, &ToolStdout{absent: absentStdout}, nil)
 }
 
 func TestDeclaredErrorTravelsAsCustomErrorWithItsPayload(t *testing.T) {
@@ -137,6 +170,31 @@ func TestDeclaredErrorWithoutAPayload(t *testing.T) {
 	}
 	if name := got.Err().CustomError().Name; name != "offline" {
 		t.Errorf("error name %q, want offline", name)
+	}
+}
+
+// TestADeclaredErrorMayBePanicked — the typed abort still works from deep in
+// a call stack.
+func TestADeclaredErrorMayBePanicked(t *testing.T) {
+	_, r, d := buildToolFor(t, func(r *toolRegistry, d *definitions) { declareLookup(r, d) })
+	got := invokeLookup(t, d, r, "raised-by-panic")
+	if got.Tag() != witTypes.ResultErr || got.Err().Tag() != types.ToolErrorCustomError ||
+		got.Err().CustomError().Name != "offline" {
+		t.Fatalf("got %+v", got)
+	}
+}
+
+// TestMatchRecognisesTheHandlersOwnError — a handler's error is matched the
+// same way as a caller's.
+func TestMatchRecognisesTheHandlersOwnError(t *testing.T) {
+	r, d := newToolRegistry(), newDefinitions()
+	_, notFound := declareLookup(r, d)
+	err := fmt.Errorf("wrapped: %w", notFound.New(NotFoundPayload{Name: "x"}))
+	if p, ok := notFound.Match(err); !ok || p.Name != "x" {
+		t.Errorf("Match gave %+v, %v", p, ok)
+	}
+	if _, ok := notFound.Match(errors.New("other")); ok {
+		t.Error("an unrelated error matched")
 	}
 }
 
@@ -191,9 +249,9 @@ func TestSuccessStillWorksAlongsideDeclaredErrors(t *testing.T) {
 
 func TestDuplicateErrorCaseIsADefinitionError(t *testing.T) {
 	r, d := newToolRegistry(), newDefinitions()
-	def := defineToolInto(r, d, "dupe", ToolSpec{})
-	defineToolErrorInto[Unit](r, d, def, "same", ToolErrorSpec{})
-	defineToolErrorInto[Unit](r, d, def, "same", ToolErrorSpec{})
+	def := defineToolInto(r, d, "dupe", ToolSpec{}, false)
+	DefineToolError[Unit](def, "same", ToolErrorSpec{})
+	DefineToolError[Unit](def, "same", ToolErrorSpec{})
 	mustDefErr(t, d, "error case already declared")
 }
 
@@ -228,7 +286,7 @@ func TestReflectedCommandErrorsAreDescribed(t *testing.T) {
 		t.Errorf("offline = %+v", offline)
 	}
 
-	ctx := &MiddlewareContext[Unit]{call: &middlewareCall{toolName: "lookup", tool: tools[0]}}
+	ctx := &ToolMiddlewareContext[Unit]{call: &middlewareCall{toolName: "lookup", tool: tools[0]}}
 	if md := ctx.ToolMetadata(); md.Name() != "lookup" || md.Version() != "1.0.0" {
 		t.Errorf("ToolMetadata = %q %q", md.Name(), md.Version())
 	}

@@ -33,14 +33,18 @@ type fakeLayer struct {
 	calls   int
 	gotPath []string
 	gotJSON any
-	outcome MiddlewareOutcome
+	outcome ToolMiddlewareOutcome
 }
 
-func (f *fakeLayer) invoke(commandPath []string, input TypedValue, _ nextStdin) MiddlewareOutcome {
+func (f *fakeLayer) invoke(commandPath []string, input TypedValue, _ nextStdin) ToolMiddlewareOutcome {
 	f.calls++
 	f.gotPath = commandPath
 	f.gotJSON, _ = input.JSON()
 	return f.outcome
+}
+
+func succeedWith(v TypedValue) ToolMiddlewareOutcome {
+	return ToolMiddlewareOutcome{result: v, hasResult: true}
 }
 
 func mustTypedValue[T any](t *testing.T, v T) TypedValue {
@@ -54,7 +58,7 @@ func mustTypedValue[T any](t *testing.T, v T) TypedValue {
 
 // runMiddleware registers a middleware and invokes it against a fake layer.
 func runMiddleware(
-	t *testing.T, h func(*MiddlewareContext[AuditParams]) MiddlewareOutcome, next nextLayer, input TypedValue,
+	t *testing.T, h func(*ToolMiddlewareContext[AuditParams]) ToolMiddlewareOutcome, next nextLayer, input TypedValue,
 ) (witTypes.Result[toolCommon.InvocationResult, types.ToolError], *definitions) {
 	t.Helper()
 	saved := toolDefs
@@ -82,11 +86,11 @@ func runMiddleware(
 // TestMiddlewareWrapsTheCallAndPassesItOn — the common shape: observe, forward
 // unchanged, return what came back.
 func TestMiddlewareWrapsTheCallAndPassesItOn(t *testing.T) {
-	layer := &fakeLayer{outcome: Succeed(mustTypedValue(t, "hi ada"))}
+	layer := &fakeLayer{outcome: succeedWith(mustTypedValue(t, "hi ada"))}
 	var sawChannel, sawTool string
 	var sawPath []string
 
-	got, _ := runMiddleware(t, func(ctx *MiddlewareContext[AuditParams]) MiddlewareOutcome {
+	got, _ := runMiddleware(t, func(ctx *ToolMiddlewareContext[AuditParams]) ToolMiddlewareOutcome {
 		sawChannel, sawTool, sawPath = ctx.Parameters().Channel, ctx.ToolName(), ctx.CommandPath()
 		return ctx.Next(ctx.Input())
 	}, layer, mustTypedValue(t, "ada"))
@@ -109,16 +113,16 @@ func TestMiddlewareWrapsTheCallAndPassesItOn(t *testing.T) {
 // TestMiddlewareRewritesInputAndResult — a middleware has no Go types for the
 // tools it wraps, so it works through the schema that travels with the value.
 func TestMiddlewareRewritesInputAndResult(t *testing.T) {
-	layer := &fakeLayer{outcome: Succeed(mustTypedValue(t, "hi ADA"))}
+	layer := &fakeLayer{outcome: succeedWith(mustTypedValue(t, "hi ADA"))}
 
-	got, _ := runMiddleware(t, func(ctx *MiddlewareContext[AuditParams]) MiddlewareOutcome {
+	got, _ := runMiddleware(t, func(ctx *ToolMiddlewareContext[AuditParams]) ToolMiddlewareOutcome {
 		name, err := ctx.Input().JSON()
 		if err != nil {
-			return Fail(err)
+			return ctx.Fail(err)
 		}
 		rewritten, err := ctx.Input().WithJSON(strings.ToUpper(name.(string)))
 		if err != nil {
-			return Fail(err)
+			return ctx.Fail(err)
 		}
 		outcome := ctx.Next(rewritten)
 		result, ok := outcome.Result()
@@ -127,11 +131,11 @@ func TestMiddlewareRewritesInputAndResult(t *testing.T) {
 		}
 		text, err := result.JSON()
 		if err != nil {
-			return Fail(err)
+			return ctx.Fail(err)
 		}
 		replaced, err := result.WithJSON(text.(string) + "!")
 		if err != nil {
-			return Fail(err)
+			return ctx.Fail(err)
 		}
 		return outcome.WithResult(replaced)
 	}, layer, mustTypedValue(t, "ada"))
@@ -151,10 +155,10 @@ func TestMiddlewareRewritesInputAndResult(t *testing.T) {
 // TestMiddlewareCanShortCircuit — not calling Next is how a middleware denies
 // or answers a call itself.
 func TestMiddlewareCanShortCircuit(t *testing.T) {
-	layer := &fakeLayer{outcome: Succeed(mustTypedValue(t, "unreachable"))}
+	layer := &fakeLayer{outcome: succeedWith(mustTypedValue(t, "unreachable"))}
 
-	got, _ := runMiddleware(t, func(ctx *MiddlewareContext[AuditParams]) MiddlewareOutcome {
-		return Succeed(mustTypedValue(t, "cached"))
+	got, _ := runMiddleware(t, func(ctx *ToolMiddlewareContext[AuditParams]) ToolMiddlewareOutcome {
+		return ctx.Succeed(mustTypedValue(t, "cached"))
 	}, layer, mustTypedValue(t, "ada"))
 
 	if got.Tag() != witTypes.ResultOk {
@@ -173,11 +177,11 @@ func TestMiddlewareCanShortCircuit(t *testing.T) {
 // error, not a middleware's paraphrase of it.
 func TestMiddlewarePassesTheToolsOwnErrorThrough(t *testing.T) {
 	inner := types.MakeToolErrorCustomError(types.CustomToolError{Name: "not-found"})
-	layer := &fakeLayer{outcome: MiddlewareOutcome{
+	layer := &fakeLayer{outcome: ToolMiddlewareOutcome{
 		err: &UnderlyingError{Kind: "reported an error", ToolError: &inner},
 	}}
 
-	got, _ := runMiddleware(t, func(ctx *MiddlewareContext[AuditParams]) MiddlewareOutcome {
+	got, _ := runMiddleware(t, func(ctx *ToolMiddlewareContext[AuditParams]) ToolMiddlewareOutcome {
 		return ctx.Next(ctx.Input())
 	}, layer, mustTypedValue(t, "ada"))
 
@@ -195,11 +199,11 @@ func TestMiddlewarePassesTheToolsOwnErrorThrough(t *testing.T) {
 // TestMiddlewareReportsRuntimeRefusals — a denial or cancellation is the
 // runtime's, not the tool's, and has to stay distinguishable.
 func TestMiddlewareReportsRuntimeRefusals(t *testing.T) {
-	layer := &fakeLayer{outcome: MiddlewareOutcome{
+	layer := &fakeLayer{outcome: ToolMiddlewareOutcome{
 		err: &UnderlyingError{Kind: "denied", Message: "quota"},
 	}}
 
-	got, _ := runMiddleware(t, func(ctx *MiddlewareContext[AuditParams]) MiddlewareOutcome {
+	got, _ := runMiddleware(t, func(ctx *ToolMiddlewareContext[AuditParams]) ToolMiddlewareOutcome {
 		return ctx.Next(ctx.Input())
 	}, layer, mustTypedValue(t, "ada"))
 
@@ -212,7 +216,7 @@ func TestMiddlewareReportsRuntimeRefusals(t *testing.T) {
 }
 
 func TestMiddlewareWithoutALayerBeneathSaysSo(t *testing.T) {
-	got, _ := runMiddleware(t, func(ctx *MiddlewareContext[AuditParams]) MiddlewareOutcome {
+	got, _ := runMiddleware(t, func(ctx *ToolMiddlewareContext[AuditParams]) ToolMiddlewareOutcome {
 		return ctx.Next(ctx.Input())
 	}, absentNextLayer{}, mustTypedValue(t, "ada"))
 
@@ -225,7 +229,7 @@ func TestMiddlewareWithoutALayerBeneathSaysSo(t *testing.T) {
 }
 
 func TestMiddlewarePanicBecomesAToolError(t *testing.T) {
-	got, _ := runMiddleware(t, func(ctx *MiddlewareContext[AuditParams]) MiddlewareOutcome {
+	got, _ := runMiddleware(t, func(ctx *ToolMiddlewareContext[AuditParams]) ToolMiddlewareOutcome {
 		panic("middleware gave up")
 	}, absentNextLayer{}, mustTypedValue(t, "ada"))
 
@@ -248,8 +252,8 @@ func TestMiddlewareMetadataPublishesItsParameterSchema(t *testing.T) {
 	m := defineToolMiddlewareInto[AuditParams](toolDefs, d, "audit", ToolMiddlewareSpec{
 		Version: "2.0.0", Summary: "Records every invocation", Aliases: []string{"log"},
 	}, nil)
-	handleToolMiddlewareInto(toolDefs, d, m, func(*MiddlewareContext[AuditParams]) MiddlewareOutcome {
-		return SucceedWithNothing()
+	handleToolMiddlewareInto(toolDefs, d, m, func(ctx *ToolMiddlewareContext[AuditParams]) ToolMiddlewareOutcome {
+		return ctx.SucceedWithNothing()
 	})
 
 	found, ok := toolDefs.discoverMiddlewares(d)
@@ -293,7 +297,7 @@ func TestMiddlewareDeclarationErrors(t *testing.T) {
 
 	t.Run("half a scope", func(t *testing.T) {
 		r, d := newToolRegistry(), newDefinitions()
-		def := defineToolInto(r, d, "greeter", ToolSpec{})
+		def := defineToolInto(r, d, "greeter", ToolSpec{}, false)
 		defineToolMiddlewareInto[AuditParams](r, d, "half", ToolMiddlewareSpec{},
 			[]ToolMiddlewareOpt{func(o *middlewareOpts) { o.presented = def }})
 		mustDefErr(t, d, "needs both a presented and an expected tool")

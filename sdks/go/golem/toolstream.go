@@ -25,20 +25,21 @@ import (
 
 // Tool byte streams.
 //
-// A command that declared a stdin or stdout stream reads and writes it through
-// [ToolContext.Stdin] and [ToolContext.Stdout], which are an ordinary io.Reader
-// and io.Writer — p3 makes the underlying host calls blocking, so there is no
-// callback or future to thread through.
+// A command reads standard input from the io.Reader field it binds with
+// [ToolCommandSpec.Stdin], and a stdout command writes through
+// [ToolStdoutContext.Stdout], an ordinary io.Writer — p3 makes the underlying
+// host calls blocking, so there is no callback or future to thread through.
 //
 // The wire protocol has explicit terminals the author does not have to
-// remember: returning from the handler finishes the output stream, and panicking
-// fails it. Call [ToolStdout.Fail] to end it with a specific cause instead.
+// remember: a handler that succeeds finishes the output stream, and one that
+// fails or panics fails it. Call [ToolStdout.Fail] to end it with a specific
+// cause instead.
 
 // Messages explaining a stream that the host did not supply, shared by the
 // per-target constructors.
 const (
-	absentStdin  = "golem: this command was invoked without a stdin stream; declare one with golem.Stdin"
-	absentStdout = "golem: this command was invoked without a stdout stream; declare one with golem.Stdout"
+	absentStdin  = "golem: this command was invoked without a stdin stream"
+	absentStdout = "golem: this command was invoked without a stdout stream"
 )
 
 // StreamFailure is a recoverable failure carried by a byte stream. Clean end of
@@ -101,7 +102,8 @@ type byteStreamSink interface {
 	Fail(reason streams.ByteStreamFailure) witTypes.Result[witTypes.Unit, streams.StreamWriteError]
 }
 
-// ToolStdin is a command's standard input, read as an ordinary io.Reader.
+// ToolStdin is a byte stream read as an ordinary io.Reader: a command's
+// standard input, or the standard output of a tool it called.
 type ToolStdin struct {
 	src byteStreamSource
 	// absent explains why there is no stream, so a Read says so rather than
@@ -112,6 +114,9 @@ type ToolStdin struct {
 	pending []byte
 	done    bool
 }
+
+// present reports whether the host supplied the stream.
+func (r *ToolStdin) present() bool { return r != nil && r.absent == "" }
 
 // Read fills p from the stream. It returns io.EOF at clean end of input, and a
 // [StreamError] when the producer reports a failure.

@@ -22,6 +22,7 @@ import (
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 	toolCommon "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_tool_common"
 	"github.com/golemcloud/golem/sdks/go/golem/internal/witschema"
+	witTypes "go.bytecodealliance.org/pkg/wit/types"
 )
 
 // Reflection.
@@ -128,6 +129,7 @@ func (c ReflectedConstructor) PackJSON(args map[string]any) (core.SchemaValue, e
 	return core.NewRef(c.conv.Graph).PackParameters(params, args)
 }
 
+//nolint:unused // called from reflection_wasm.go
 func (c ReflectedConstructor) packTree(args map[string]any) (types.SchemaValueTree, error) {
 	built, err := c.PackJSON(args)
 	if err != nil {
@@ -357,7 +359,7 @@ func (r ReflectedTool) Schema() (core.Ref, error) {
 func (r ReflectedTool) Root() ReflectedCommand {
 	return ReflectedCommand{
 		conv: r.conv, convErr: r.convErr, witGraph: r.wit.Schema,
-		tree: r.wit.Commands, index: 0,
+		tree: r.wit.Commands, index: 0, chain: []int32{0},
 	}
 }
 
@@ -401,6 +403,9 @@ type ReflectedCommand struct {
 	tree     toolCommon.CommandTree
 	index    int32
 	path     []string
+	// chain is the node indices from the root to this command, whose globals
+	// the command inherits.
+	chain []int32
 }
 
 func (c ReflectedCommand) node() toolCommon.CommandNode { return c.tree.Nodes[c.index] }
@@ -423,7 +428,8 @@ func (c ReflectedCommand) Subcommands() []ReflectedCommand {
 		out = append(out, ReflectedCommand{
 			conv: c.conv, convErr: c.convErr, witGraph: c.witGraph,
 			tree: c.tree, index: idx,
-			path: append(append([]string(nil), c.path...), c.tree.Nodes[idx].Name),
+			path:  append(append([]string(nil), c.path...), c.tree.Nodes[idx].Name),
+			chain: append(append([]int32(nil), c.chain...), idx),
 		})
 	}
 	return out
@@ -449,43 +455,152 @@ func (c ReflectedCommand) Subcommand(name string) (ReflectedCommand, bool) {
 // dispatches to subcommands stays discoverable but cannot be invoked.
 func (c ReflectedCommand) Callable() bool { return c.node().Body.IsSome() }
 
-// Arguments returns the command's arguments as a parameter list, with
-// positionals first, then options, then flags — the order the invocation record
-// carries them in.
+// canonicalField is one field of a command's canonical input record: the
+// type node the metadata names, and how the record wraps it.
+type canonicalField struct {
+	name string
+	node int32
+	wrap canonicalWrap
+}
+
+type canonicalWrap uint8
+
+const (
+	wrapNone canonicalWrap = iota
+	wrapOption
+	wrapList
+	wrapBool
+	wrapCount
+)
+
+// canonicalFields lists the command's canonical input record: inherited
+// globals root first (options before flags per node), then the body's
+// positionals, tail, options and flags. A field is wrapped in an option when it
+// is neither required nor defaulted, and collects into a list for a tail or a
+// repeatable option.
+func (c ReflectedCommand) canonicalFields() ([]canonicalField, error) {
+	if !c.Callable() {
+		return nil, fmt.Errorf("golem: command %q has no body", c.Name())
+	}
+	isOption := func(idx int32) bool {
+		return int(idx) < len(c.witGraph.TypeNodes) &&
+			c.witGraph.TypeNodes[idx].Body.Tag() == types.SchemaTypeBodyOptionType
+	}
+	optional := func(required, defaulted bool, idx int32) canonicalWrap {
+		if !required && !defaulted && !isOption(idx) {
+			return wrapOption
+		}
+		return wrapNone
+	}
+	var out []canonicalField
+	option := func(o toolCommon.OptionSpec) {
+		switch o.Shape.Tag() {
+		case toolCommon.OptionShapeRepeatableList:
+			out = append(out, canonicalField{o.Long, o.Shape.RepeatableList().ItemType, wrapList})
+		case toolCommon.OptionShapeRepeatableMap:
+			out = append(out, canonicalField{o.Long, o.Shape.RepeatableMap().MapType, wrapNone})
+		case toolCommon.OptionShapeOptionalScalar:
+			n := o.Shape.OptionalScalar()
+			out = append(out, canonicalField{o.Long, n, optional(o.Required, o.Default.IsSome(), n)})
+		default:
+			n := o.Shape.Scalar()
+			out = append(out, canonicalField{o.Long, n, optional(o.Required, o.Default.IsSome(), n)})
+		}
+	}
+	flag := func(f toolCommon.FlagSpec) {
+		if f.Shape.Tag() == toolCommon.FlagShapeCountFlag {
+			out = append(out, canonicalField{f.Long, -1, wrapCount})
+		} else {
+			out = append(out, canonicalField{f.Long, -1, wrapBool})
+		}
+	}
+	for _, idx := range c.chain {
+		g := c.tree.Nodes[idx].Globals
+		for _, o := range g.Options {
+			option(o)
+		}
+		for _, f := range g.Flags {
+			flag(f)
+		}
+	}
+	body := c.node().Body.Some()
+	for _, p := range body.Positionals.Fixed {
+		out = append(out, canonicalField{p.Name, p.Type, optional(p.Required, p.Default.IsSome(), p.Type)})
+	}
+	if body.Positionals.Tail.IsSome() {
+		t := body.Positionals.Tail.Some()
+		out = append(out, canonicalField{t.Name, t.ItemType, wrapList})
+	}
+	for _, o := range body.Options {
+		option(o)
+	}
+	for _, f := range body.Flags {
+		flag(f)
+	}
+	return out, nil
+}
+
+// Arguments returns the command's arguments as a parameter list, in the order
+// and with the types of its canonical input record.
 func (c ReflectedCommand) Arguments() ([]core.Parameter, error) {
 	if c.convErr != nil {
 		return nil, c.convErr
 	}
-	if !c.Callable() {
-		return nil, fmt.Errorf("golem: command %q has no body", c.Name())
+	fields, err := c.canonicalFields()
+	if err != nil {
+		return nil, err
 	}
-	body := c.node().Body.Some()
-	out := make([]core.Parameter, 0,
-		len(body.Positionals.Fixed)+len(body.Options)+len(body.Flags))
-	for _, p := range body.Positionals.Fixed {
-		t, err := c.conv.At(p.Type)
-		if err != nil {
-			return nil, fmt.Errorf("golem: positional %q: %w", p.Name, err)
+	out := make([]core.Parameter, 0, len(fields))
+	for _, f := range fields {
+		switch f.wrap {
+		case wrapBool:
+			out = append(out, core.BoolParameter(f.name))
+			continue
+		case wrapCount:
+			out = append(out, core.Parameter{Name: f.name, Type: core.SchemaType{Body: core.U32Type{}}})
+			continue
 		}
-		out = append(out, core.Parameter{Name: p.Name, Type: t})
-	}
-	for _, o := range body.Options {
-		node, err := optionValueNode(o.Shape)
+		t, err := c.conv.At(f.node)
 		if err != nil {
-			return nil, fmt.Errorf("golem: option %q: %w", o.Long, err)
+			return nil, fmt.Errorf("golem: argument %q: %w", f.name, err)
 		}
-		t, err := c.conv.At(node)
-		if err != nil {
-			return nil, fmt.Errorf("golem: option %q: %w", o.Long, err)
+		switch f.wrap {
+		case wrapOption:
+			t = core.SchemaType{Body: core.OptionType{Inner: t}}
+		case wrapList:
+			t = core.SchemaType{Body: core.ListType{Element: t}}
 		}
-		out = append(out, core.Parameter{Name: o.Long, Type: t})
-	}
-	for _, f := range body.Flags {
-		// A flag has no type of its own on the wire: its type can only be
-		// bool, so the graph need not name one.
-		out = append(out, core.BoolParameter(f.Long))
+		out = append(out, core.Parameter{Name: f.name, Type: t})
 	}
 	return out, nil
+}
+
+// inputGraph is the tool's wire schema extended with the command's canonical
+// input record as its root, which is what the host checks an invocation
+// against.
+func (c ReflectedCommand) inputGraph(fields []canonicalField) types.SchemaGraph {
+	nodes := append([]types.SchemaTypeNode(nil), c.witGraph.TypeNodes...)
+	add := func(b types.SchemaTypeBody) int32 {
+		nodes = append(nodes, types.SchemaTypeNode{Body: b})
+		return int32(len(nodes) - 1)
+	}
+	record := make([]types.NamedFieldType, 0, len(fields))
+	for _, f := range fields {
+		idx := f.node
+		switch f.wrap {
+		case wrapOption:
+			idx = add(types.MakeSchemaTypeBodyOptionType(f.node))
+		case wrapList:
+			idx = add(types.MakeSchemaTypeBodyListType(f.node))
+		case wrapBool:
+			idx = add(types.MakeSchemaTypeBodyBoolType())
+		case wrapCount:
+			idx = add(types.MakeSchemaTypeBodyU32Type(witTypes.None[types.NumericRestrictions]()))
+		}
+		record = append(record, types.NamedFieldType{Name: f.name, Body: idx})
+	}
+	root := add(types.MakeSchemaTypeBodyRecordType(record))
+	return types.SchemaGraph{TypeNodes: nodes, Defs: c.witGraph.Defs, Root: root}
 }
 
 // Result returns the command's result type, or false when it produces none.
@@ -543,9 +658,14 @@ func (c ReflectedCommand) Errors() []ReflectedError {
 	return out
 }
 
-// PackJSON builds the command's invocation input from named arguments.
+// PackJSON builds the command's invocation input from named arguments, one per
+// field of its canonical input record.
 func (c ReflectedCommand) PackJSON(args map[string]any) (TypedValue, error) {
 	params, err := c.Arguments()
+	if err != nil {
+		return TypedValue{}, err
+	}
+	fields, err := c.canonicalFields()
 	if err != nil {
 		return TypedValue{}, err
 	}
@@ -557,7 +677,7 @@ func (c ReflectedCommand) PackJSON(args map[string]any) (TypedValue, error) {
 	if err != nil {
 		return TypedValue{}, err
 	}
-	return TypedValue{wit: types.TypedSchemaValue{Graph: c.witGraph, Value: tree}}, nil
+	return TypedValue{wit: types.TypedSchemaValue{Graph: c.inputGraph(fields), Value: tree}}, nil
 }
 
 // ToJSONSchema renders the command's arguments as a JSON Schema object.
@@ -567,24 +687,6 @@ func (c ReflectedCommand) ToJSONSchema(includeDraftMarker bool) (any, error) {
 		return nil, err
 	}
 	return core.NewRef(c.conv.Graph).ParametersJSONSchema(params, includeDraftMarker)
-}
-
-// optionValueNode reports the type node an option's value is read against,
-// whichever shape the option takes.
-func optionValueNode(shape toolCommon.OptionShape) (int32, error) {
-	switch shape.Tag() {
-	case toolCommon.OptionShapeScalar:
-		return shape.Scalar(), nil
-	case toolCommon.OptionShapeOptionalScalar:
-		return shape.OptionalScalar(), nil
-	case toolCommon.OptionShapeRepeatableList:
-		// The collected value is a list, but the metadata names its element
-		// type, so the two are not interchangeable here.
-		return 0, fmt.Errorf("a repeatable option collects into a list, which the tool schema does not name")
-	case toolCommon.OptionShapeRepeatableMap:
-		return shape.RepeatableMap().MapType, nil
-	}
-	return 0, fmt.Errorf("unknown option shape (tag %d)", shape.Tag())
 }
 
 // ReflectedToolClient invokes a discovered tool. Arguments are packed and

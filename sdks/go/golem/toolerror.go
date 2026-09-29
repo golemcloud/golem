@@ -15,6 +15,7 @@
 package golem
 
 import (
+	"errors"
 	"fmt"
 	"reflect"
 )
@@ -30,20 +31,21 @@ import (
 //	var ErrNotFound = golem.DefineToolError[NotFound](Greeter, "not-found",
 //	    golem.ToolErrorSpec{Kind: golem.UsageError, ExitCode: 2})
 //
-//	var Greet = golem.Body[GreetArgs, string](Greeter, proto, golem.Raises(ErrNotFound))
-//
-//	var _ = golem.HandleCommand(Greet, func(ctx *golem.ToolContext, in GreetArgs) string {
-//	    if !known(in.Name.Get()) {
-//	        panic(ErrNotFound.New(NotFound{Name: in.Name.Get()}))
-//	    }
-//	    return "hi " + in.Name.Get()
+//	var Greet = Greeter.Command[GreetArgs, string]("greet", func(a *GreetArgs, s *golem.ToolCommandSpec) {
+//	    s.Positional(&a.Name)
+//	    s.Raises(ErrNotFound)
 //	})
 //
-// Raising one is a panic because that is this SDK's abort channel: a declared
-// error travels in invoke's error result, which ends the invocation. It is the
-// typed counterpart of an anonymous panic, not a value returned in place of a
-// result — for an outcome the caller is meant to keep handling, return a
-// [Result] instead.
+//	var _ = Greet.Handle(func(ctx *golem.ToolContext, a GreetArgs) (string, error) {
+//	    if !known(a.Name) {
+//	        return "", ErrNotFound.New(NotFound{Name: a.Name})
+//	    }
+//	    return "hi " + a.Name, nil
+//	})
+//
+// A caller recognises the case with Match:
+//
+//	if nf, ok := ErrNotFound.Match(err); ok { … }
 
 // ToolErrorKind says whose fault a failure is, which is what decides whether a
 // caller should fix the invocation or retry it.
@@ -78,7 +80,8 @@ type toolErrorInfo struct {
 }
 
 // ToolErrorDef is a declared error case. The interface is closed: only
-// [DefineToolError] produces one, so [Raises] cannot be handed anything else.
+// [DefineToolError] produces one, so [ToolCommandSpec.Raises] cannot be handed
+// anything else.
 type ToolErrorDef interface{ toolErrorInfo() *toolErrorInfo }
 
 // ToolErrorCase is a declared error case carrying a payload of type P. Use
@@ -90,16 +93,39 @@ func (c *ToolErrorCase[P]) toolErrorInfo() *toolErrorInfo { return c.info }
 // Name returns the error case's declared name.
 func (c *ToolErrorCase[P]) Name() string { return c.info.name }
 
-// New builds the error to panic with. It does not itself panic, so the call
-// site reads `panic(ErrNotFound.New(...))` and the compiler can see that the
-// handler ends there.
+// New builds the error a handler returns to fail with this case.
 func (c *ToolErrorCase[P]) New(payload P) error {
 	return &RaisedToolError{info: c.info, payload: reflect.ValueOf(&payload).Elem()}
 }
 
+// Match reports whether err is this error case, and its payload if so. It
+// recognises both the error a handler returns and the error a typed call
+// reports when the tool failed with the case.
+func (c *ToolErrorCase[P]) Match(err error) (P, bool) {
+	var zero P
+	var raised *RaisedToolError
+	if errors.As(err, &raised) && raised.info == c.info {
+		p, _ := raised.payload.Interface().(P)
+		return p, true
+	}
+	var call *ToolCallError
+	if !errors.As(err, &call) || call.Kind != ToolCallDeclaredError ||
+		call.ErrorName != c.info.name || call.Tool != c.info.tool {
+		return zero, false
+	}
+	if c.info.payload == nil {
+		return zero, true
+	}
+	p, derr := DecodeTypedValue[P](call.payload)
+	if derr != nil {
+		return zero, false
+	}
+	return p, true
+}
+
 // RaisedToolError is a declared error case together with its payload, produced
-// by [ToolErrorCase.New] and recognised by the dispatcher when a handler panics
-// with it.
+// by [ToolErrorCase.New] and recognised by the dispatcher when a handler
+// returns it.
 type RaisedToolError struct {
 	info    *toolErrorInfo
 	payload reflect.Value
@@ -116,46 +142,29 @@ func (e *RaisedToolError) Error() string {
 func (e *RaisedToolError) Name() string { return e.info.name }
 
 // DefineToolError declares an error case on a tool. Declaring it does not make
-// it raisable: each command lists the cases it may raise with [Raises], which is
-// what puts them in that command's published contract.
+// it raisable: each command lists the cases it may return with
+// [ToolCommandSpec.Raises], which is what puts them in that command's published
+// contract.
 func DefineToolError[P any](t *ToolDefinition, name string, spec ToolErrorSpec) *ToolErrorCase[P] {
-	return defineToolErrorInto[P](toolDefs, defs, t, name, spec)
+	return defineToolErrorOn[P](t.entry, name, spec)
 }
 
-func defineToolErrorInto[P any](
-	r *toolRegistry, d *definitions, t *ToolDefinition, name string, spec ToolErrorSpec,
-) *ToolErrorCase[P] {
+// defineToolErrorOn records the case on the tool's own entry, which carries the
+// registry and definitions it was declared into.
+func defineToolErrorOn[P any](e *toolEntry, name string, spec ToolErrorSpec) *ToolErrorCase[P] {
 	payload := reflect.TypeFor[P]()
 	if payload == reflect.TypeFor[Unit]() {
 		payload = nil
 	}
-	info := &toolErrorInfo{tool: t.name, name: name, spec: spec, payload: payload}
+	info := &toolErrorInfo{tool: e.name, name: name, spec: spec, payload: payload}
 	c := &ToolErrorCase[P]{info: info}
-
-	e := r.byName[t.name]
-	if e == nil {
-		d.recordErr("", "", "error case %q declared on unregistered tool %q", name, t.name)
-		return c
+	switch {
+	case name == "":
+		e.fail("an error case needs a name")
+	case e.errorsByName[name] != nil:
+		e.fail("error case already declared: %s", name)
+	default:
+		e.errorsByName[name] = info
 	}
-	if name == "" {
-		d.recordErr("", "", "tool %s: an error case needs a name", t.name)
-		return c
-	}
-	if _, dup := e.errorsByName[name]; dup {
-		d.recordErr("", "", "tool %s: error case already declared: %s", t.name, name)
-		return c
-	}
-	e.errorsByName[name] = info
 	return c
-}
-
-// Raises lists the error cases a command may raise. A command that panics with
-// a case it did not list fails as an invalid result, because the case is not
-// part of the contract the caller was given.
-func Raises(cases ...ToolErrorDef) CommandOpt {
-	return func(o *commandOpts) {
-		for _, c := range cases {
-			o.raises = append(o.raises, c.toolErrorInfo())
-		}
-	}
 }

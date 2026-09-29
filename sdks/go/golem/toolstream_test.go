@@ -234,44 +234,48 @@ func invokeWithStreams(
 ) witTypes.Result[toolCommon.InvocationResult, types.ToolError] {
 	t.Helper()
 	return d.invokeCommand(e, nil, input,
-		&ToolStdin{src: &fakeSource{items: in}}, &ToolStdout{sink: sink})
+		&ToolStdin{src: &fakeSource{items: in}}, &ToolStdout{sink: sink}, nil)
 }
 
 type PipeArgs struct {
-	Mode Positional[string]
+	Mode string
+	In   io.Reader
 }
 
 // declarePipe registers a command that copies stdin to stdout and reacts to the
 // mode it is given, mirroring the tool-streaming test components.
 func declarePipe(r *toolRegistry, d *definitions) {
-	def := defineToolInto(r, d, "pipe", ToolSpec{Version: "0.1.0"})
-	cmd := declareCommand[PipeArgs, uint64](r, d, def, nil, "", PipeArgs{}, []CommandOpt{
-		Stdin(StreamSpec{Required: true}), Stdout(StreamSpec{Required: true}),
+	def := defineToolInto(r, d, "pipe", ToolSpec{Version: "0.1.0"}, false)
+	cmd := def.StdoutBody[PipeArgs, uint64](func(a *PipeArgs, s *ToolCommandSpec) {
+		s.Positional(&a.Mode)
+		s.Stdin(&a.In)
 	})
-	handleCommandInto(r, d, cmd, func(ctx *ToolContext, in PipeArgs) uint64 {
-		switch in.Mode.Get() {
+	_ = cmd.Handle(func(ctx *ToolStdoutContext, in PipeArgs) (uint64, error) {
+		switch in.Mode {
 		case "resource-exhausted":
-			Must0(ctx.Stdout().Fail(StreamResourceExhausted()))
-			return 0
+			return 0, ctx.Stdout().Fail(StreamResourceExhausted())
 		case "panic":
 			panic("handler gave up")
 		}
-		n, err := io.Copy(ctx.Stdout(), ctx.Stdin())
-		if err != nil {
-			panic(err)
-		}
-		return uint64(n)
+		n, err := io.Copy(ctx.Stdout(), in.In)
+		return uint64(n), err
 	})
+}
+
+// pipeInput encodes the pipe's single positional.
+func pipeInput(t *testing.T, r *toolRegistry, mode string) (*toolEntry, types.TypedSchemaValue) {
+	t.Helper()
+	e, _ := r.get("pipe")
+	return e, encodeArgs(t, e.root.body, func(a *PipeArgs) { a.Mode = mode })
 }
 
 // TestCommandStreamsCopyAndFinish — returning from the handler selects the
 // clean terminal, so an author never writes a finish call.
 func TestCommandStreamsCopyAndFinish(t *testing.T) {
 	_, r, d := buildToolFor(t, declarePipe)
-	e, _ := r.get("pipe")
+	e, input := pipeInput(t, r, "echo")
 	sink := &fakeSink{}
 
-	input := encodeToolArgs(t, d, e, nil, "echo")
 	got := invokeWithStreams(t, d, e, input, []streamItem{chunk("abc"), chunk("de")}, sink)
 	if got.Tag() != witTypes.ResultErr {
 		if string(sink.written) != "abcde" {
@@ -302,10 +306,9 @@ func TestCommandStreamsCopyAndFinish(t *testing.T) {
 // itself keeps that terminal, and still returns a result.
 func TestCommandStreamsRespectAnExplicitFailure(t *testing.T) {
 	_, r, d := buildToolFor(t, declarePipe)
-	e, _ := r.get("pipe")
+	e, input := pipeInput(t, r, "resource-exhausted")
 	sink := &fakeSink{}
 
-	input := encodeToolArgs(t, d, e, nil, "resource-exhausted")
 	if got := invokeWithStreams(t, d, e, input, nil, sink); got.Tag() != witTypes.ResultOk {
 		t.Fatalf("invoke failed: %+v", got.Err())
 	}
@@ -322,10 +325,9 @@ func TestCommandStreamsRespectAnExplicitFailure(t *testing.T) {
 // dispatcher fails the stream with the panic's message instead.
 func TestCommandStreamsFailOnPanic(t *testing.T) {
 	_, r, d := buildToolFor(t, declarePipe)
-	e, _ := r.get("pipe")
+	e, input := pipeInput(t, r, "panic")
 	sink := &fakeSink{}
 
-	input := encodeToolArgs(t, d, e, nil, "panic")
 	func() {
 		defer func() { _ = recover() }()
 		invokeWithStreams(t, d, e, input, nil, sink)
@@ -337,7 +339,7 @@ func TestCommandStreamsFailOnPanic(t *testing.T) {
 	if sink.failed == nil {
 		t.Fatal("a panicking handler left the stream without a terminal")
 	}
-	if got := sink.failed.String(); got != "failed: handler gave up" {
+	if got := sink.failed.String(); got != "failed: command <root> panicked: handler gave up" {
 		t.Errorf("failure is %q, want the panic message", got)
 	}
 }

@@ -320,19 +320,22 @@ var _ = witTypes.Unit{}
 func toolSnapshotOf(t *testing.T) ReflectedTool {
 	t.Helper()
 	r, d := newToolRegistry(), newDefinitions()
-	def := defineToolInto(r, d, "files", ToolSpec{Version: "1.0.0", Summary: "File utilities"})
-	declareGroup(r, d, def, []string{"index"}, []CommandOpt{Summary("Manage the index")})
+	def := defineToolInto(r, d, "files", ToolSpec{Version: "1.0.0", Summary: "File utilities"}, false)
+	index := def.Group("index").Doc("Manage the index")
 
 	type AddArgs struct {
-		Path    Positional[string]
-		Force   Flag
-		Retries Opt[int32]
+		Path    string
+		Force   bool
+		Retries int32
 	}
-	add := declareCommand[AddArgs, string](r, d, def, []string{"index", "add"}, "add", AddArgs{
-		Force:   Flag{Short: 'f'},
-		Retries: Opt[int32]{Default: Some(int32(1))},
-	}, []CommandOpt{Summary("Add a file"), Aliases("a")})
-	handleCommandInto(r, d, add, func(_ *ToolContext, in AddArgs) string { return in.Path.Get() })
+	add := index.Command[AddArgs, string]("add", func(a *AddArgs, s *ToolCommandSpec) {
+		s.Doc("Add a file")
+		s.Aliases("a")
+		s.Positional(&a.Path)
+		s.Flag(&a.Force).Short('f')
+		s.Option(&a.Retries).Default(1)
+	})
+	_ = add.Handle(func(_ *ToolContext, in AddArgs) (string, error) { return in.Path, nil })
 
 	tools, ok := r.discover(d)
 	if !ok {

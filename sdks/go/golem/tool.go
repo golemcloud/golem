@@ -40,6 +40,9 @@ import (
 type toolRegistry struct {
 	order  []string
 	byName map[string]*toolEntry
+	// remote holds the tools declared only to be called, so a name is not
+	// declared twice across both kinds.
+	remote map[string]*toolEntry
 	// Middleware is registered alongside tools: a component may export both.
 	middlewareOrder   []string
 	middlewaresByName map[string]*middlewareEntry
@@ -48,6 +51,7 @@ type toolRegistry struct {
 func newToolRegistry() *toolRegistry {
 	return &toolRegistry{
 		byName:            map[string]*toolEntry{},
+		remote:            map[string]*toolEntry{},
 		middlewaresByName: map[string]*middlewareEntry{},
 	}
 }
@@ -122,13 +126,14 @@ func init() {
 		input types.TypedSchemaValue,
 		stdin toolExports.Stdin,
 		stdout toolExports.Stdout,
-		_ common.Principal,
+		principal common.Principal,
 	) witTypes.Result[toolCommon.InvocationResult, types.ToolError] {
 		e, ok := toolDefs.get(toolName)
 		if !ok {
 			return witTypes.Err[toolCommon.InvocationResult](types.MakeToolErrorInvalidToolName(toolName))
 		}
-		return defs.invokeCommand(e, commandPath, input, newToolStdin(stdin), newToolStdout(stdout))
+		return defs.invokeCommand(e, commandPath, input,
+			newToolStdin(stdin), newToolStdout(stdout), principalFromWit(principal))
 	}
 
 	mwExports.Exports.DiscoverToolMiddlewares = func() witTypes.Result[[]toolCommon.ToolMiddleware, types.ToolError] {
@@ -177,12 +182,12 @@ func init() {
 	}
 }
 
-// ToolContext is the per-invocation context handed to a command handler.
+// ToolContext is the per-invocation context handed to a command handler. The
+// arguments, standard input and principal arrive in the argument struct; the
+// context says which command is running.
 type ToolContext struct {
-	tool   string
-	path   []string
-	stdin  *ToolStdin
-	stdout *ToolStdout
+	tool string
+	path []string
 }
 
 // Tool returns the name of the tool being invoked.
@@ -192,15 +197,16 @@ func (c *ToolContext) Tool() string { return c.tool }
 // root; empty means the root command's own body.
 func (c *ToolContext) CommandPath() []string { return append([]string(nil), c.path...) }
 
-// Stdin returns the command's standard input. It is never nil: a command that
-// did not declare a stdin stream, or that the host invoked without one, gets a
-// reader whose every Read explains that rather than a nil dereference.
-func (c *ToolContext) Stdin() *ToolStdin { return c.stdin }
+// ToolStdoutContext is the context handed to a command declared with
+// StdoutCommand, which also carries its standard output.
+type ToolStdoutContext struct {
+	ToolContext
+	stdout *ToolStdout
+}
 
-// Stdout returns the command's standard output. It is never nil, on the same
-// terms as [ToolContext.Stdin]. The stream is finished when the handler returns
-// and failed when it panics.
-func (c *ToolContext) Stdout() *ToolStdout { return c.stdout }
+// Stdout returns the command's standard output. The stream is finished when
+// the handler succeeds and failed when it returns an error or panics.
+func (c *ToolStdoutContext) Stdout() *ToolStdout { return c.stdout }
 
 // toolDefinitionError reports a broken tool declaration. The WIT has no variant
 // for "this component's own metadata is wrong"; invalid-result is the closest,

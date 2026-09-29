@@ -15,615 +15,745 @@
 package golem
 
 import (
-	"reflect"
-	"strconv"
+	"errors"
+	"io"
+	"slices"
 	"strings"
 	"testing"
 
-	toolExports "github.com/golemcloud/golem/sdks/go/golem/internal/exports/export_golem_tool_guest"
+	core "github.com/golemcloud/golem/sdks/go/core/schema"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 	toolCommon "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_tool_common"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
 )
 
-type GreetArgs struct {
-	Name  Positional[string]
-	Loud  Flag
-	Times Opt[int32]
+// The vcs tool below exercises every surface: globals on two levels, a group,
+// positionals with defaults, a tail, scalar, optional, list and map options,
+// bool and count flags, constraints, standard input and output, declared
+// errors and the principal.
+
+type VcsGlobals struct {
+	Dir     string
+	Verbose uint32
 }
 
-var greetProto = GreetArgs{
-	Name:  Positional[string]{Doc: "who to greet", ValueName: "WHO"},
-	Loud:  Flag{Short: 'l', Doc: "shout the greeting"},
-	Times: Opt[int32]{Short: 'n', Doc: "how many times", Default: Some(int32(1))},
+type RemoteGlobals struct{ Timeout int32 }
+
+// CommitArgs lists its fields out of canonical order on purpose: the record the
+// host sends is ordered by kind, not by the struct.
+type CommitArgs struct {
+	Amend bool
+	VcsGlobals
+	Tags    map[string]string
+	Message string
+	Paths   []string
+	Author  Option[string]
+	Branch  string
+	Include []string
+	Signoff bool
+	Caller  Principal
 }
 
-// invokeNoStreams invokes a command the way a host would for a body that
-// declared neither stdin nor stdout.
-func invokeNoStreams(d *definitions, e *toolEntry, path []string, input types.TypedSchemaValue) witTypes.Result[toolCommon.InvocationResult, types.ToolError] {
-	return d.invokeCommand(e, path, input,
-		newToolStdin(toolExports.Stdin{}), newToolStdout(toolExports.Stdout{}))
+type CommitResult struct {
+	Summary string
+	Files   int32
 }
 
-// buildToolFor registers a tool on an isolated definition set and derives its
-// metadata, so each test sees only its own declarations.
-func buildToolFor(t *testing.T, declare func(r *toolRegistry, d *definitions)) (toolCommon.Tool, *toolRegistry, *definitions) {
+type PushArgs struct {
+	VcsGlobals
+	RemoteGlobals
+	Name  string
+	Force bool
+	In    io.Reader
+}
+
+type Rejected struct{ Reason string }
+
+type vcsTool struct {
+	tool       *ToolDefinition
+	commit     *ToolCommand[CommitArgs, CommitResult]
+	push       *ToolStdoutCommand[PushArgs, int32]
+	errNothing *ToolErrorCase[Unit]
+	errReject  *ToolErrorCase[Rejected]
+	seen       *CommitArgs
+}
+
+func declareVcs(r *toolRegistry, d *definitions) *vcsTool {
+	v := &vcsTool{}
+	v.tool = defineToolInto(r, d, "vcs", ToolSpec{Version: "1.2.0", Summary: "A tiny version control tool"}, false)
+	v.tool.Globals[VcsGlobals](func(g *VcsGlobals, s *ToolGlobalsSpec) {
+		s.Option(&g.Dir).Short('C').Default(".").Doc("working directory")
+		s.CountFlag(&g.Verbose).Short('v').Max(3)
+	})
+	v.errNothing = DefineToolError[Unit](v.tool, "nothing-to-commit", ToolErrorSpec{Kind: RuntimeError, ExitCode: 1})
+	v.errReject = DefineToolError[Rejected](v.tool, "rejected", ToolErrorSpec{Kind: RuntimeError, ExitCode: 3})
+
+	v.commit = v.tool.Command[CommitArgs, CommitResult]("commit", func(a *CommitArgs, s *ToolCommandSpec) {
+		s.Doc("Record changes")
+		s.Aliases("ci")
+		amend := s.Flag(&a.Amend)
+		message := s.Option(&a.Message).Short('m')
+		s.Tail(&a.Paths).ValueName("PATH")
+		branch := s.Positional(&a.Branch).Default("main")
+		author := s.Option(&a.Author).Env("VCS_AUTHOR")
+		include := s.List(&a.Include).Delimited(',')
+		s.Map(&a.Tags).LastKeyWins()
+		s.Flag(&a.Signoff).Negatable().Default(true)
+		s.Formatter("text", "plain text")
+		s.Formatter("json", "")
+		s.DefaultFormatter("json")
+		s.Raises(v.errNothing)
+		s.Idempotent()
+		s.RequiresAny(message, include)
+		s.Implies(amend, author)
+		s.Forbids(branch.ValueIs("release"), amend, s.Present(&a.Verbose))
+		s.Mutex(s.ValueIs(&a.Author, Some("bot")), s.ValueIs(&a.Dir, "/"))
+	})
+	_ = v.commit.Handle(func(ctx *ToolContext, a CommitArgs) (CommitResult, error) {
+		v.seen = &a
+		if len(a.Paths) == 0 && !a.Amend {
+			return CommitResult{}, v.errNothing.New(Unit{})
+		}
+		return CommitResult{Summary: ctx.Tool() + " " + strings.Join(ctx.CommandPath(), " ") + ": " + a.Message, Files: int32(len(a.Paths))}, nil
+	})
+
+	remote := v.tool.Group("remote").Doc("Manage remotes").Aliases("r")
+	remote.Globals[RemoteGlobals](func(g *RemoteGlobals, s *ToolGlobalsSpec) {
+		s.Option(&g.Timeout).Default(30)
+	})
+	v.push = remote.StdoutCommand[PushArgs, int32]("push", func(a *PushArgs, s *ToolCommandSpec) {
+		s.Positional(&a.Name)
+		s.Flag(&a.Force).Short('f')
+		s.Stdin(&a.In).Optional().Mime("text/plain")
+		s.StdoutDoc("the pushed bytes, upper-cased")
+		s.StdoutMime("text/plain")
+		s.Raises(v.errReject)
+	})
+	_ = v.push.Handle(func(ctx *ToolStdoutContext, a PushArgs) (int32, error) {
+		switch a.Name {
+		case "forbidden":
+			return 0, v.errReject.New(Rejected{Reason: "protected remote"})
+		case "undeclared":
+			return 0, v.errNothing.New(Unit{})
+		case "plain":
+			return 0, errors.New("disk full")
+		case "panic":
+			panic("handler gave up")
+		}
+		if a.In == nil {
+			return 0, nil
+		}
+		data, err := io.ReadAll(a.In)
+		if err != nil {
+			return 0, err
+		}
+		n, err := ctx.Stdout().Write([]byte(strings.ToUpper(string(data))))
+		return int32(n) + a.Timeout, err
+	})
+	return v
+}
+
+// readerSource adapts an io.Reader to the stream a host hands a command.
+type readerSource struct {
+	r    io.Reader
+	done bool
+}
+
+func (s *readerSource) Read(dst []streamItem) uint32 {
+	if s.done {
+		return 0
+	}
+	buf := make([]byte, 3)
+	n, err := s.r.Read(buf)
+	if err != nil {
+		s.done = true
+	}
+	if n > 0 {
+		dst[0] = chunk(string(buf[:n]))
+		return 1
+	}
+	return 0
+}
+
+func (s *readerSource) WriterDropped() bool { return s.done }
+
+// loopback routes typed calls to r's dispatcher instead of the host, so a
+// native test runs the whole path: defaults, encoding, the host's canonical
+// record, decoding and the result. It records the calls it sees.
+func loopback(t *testing.T, r *toolRegistry, d *definitions, principal Principal) *[]types.TypedSchemaValue {
+	t.Helper()
+	var calls []types.TypedSchemaValue
+	prev := startToolCall
+	t.Cleanup(func() { startToolCall = prev })
+	startToolCall = func(tool string, path []string, input types.TypedSchemaValue, stdin io.Reader, stdout bool) (toolCall, error) {
+		calls = append(calls, input)
+		e, ok := r.get(tool)
+		if !ok {
+			return toolCall{}, toolCallErrorFromWit(tool, path, types.MakeToolRpcErrorNotFound(tool))
+		}
+		in := &ToolStdin{absent: absentStdin}
+		if stdin != nil {
+			in = &ToolStdin{src: &readerSource{r: stdin}}
+		}
+		sink := &fakeSink{}
+		out := &ToolStdout{absent: absentStdout}
+		if stdout {
+			out = &ToolStdout{sink: sink}
+		}
+		res := d.invokeCommand(e, path, input, in, out, principal)
+
+		var reader *ToolStdin
+		if stdout {
+			items := []streamItem{}
+			if len(sink.written) > 0 {
+				items = append(items, chunk(string(sink.written)))
+			}
+			if sink.failed != nil {
+				items = append(items, failure(*sink.failed))
+			}
+			reader = &ToolStdin{src: &fakeSource{items: items}}
+		}
+		return toolCall{
+			stdout: reader,
+			wait: func() (witTypes.Option[types.TypedSchemaValue], *types.ToolRpcError) {
+				if res.Tag() == witTypes.ResultErr {
+					e := types.MakeToolRpcErrorRemoteToolError(res.Err())
+					return witTypes.None[types.TypedSchemaValue](), &e
+				}
+				return res.Ok().Result, nil
+			},
+			cancel: func() {},
+		}, nil
+	}
+	return &calls
+}
+
+func newVcs(t *testing.T) (*vcsTool, *toolRegistry, *definitions) {
 	t.Helper()
 	r, d := newToolRegistry(), newDefinitions()
-	declare(r, d)
-	tools, ok := r.discover(d)
-	if !ok {
+	v := declareVcs(r, d)
+	if _, ok := r.discover(d); !ok {
 		t.Fatalf("tool discovery failed: %s", allDefErrors(d.errs))
 	}
-	if len(tools) != 1 {
-		t.Fatalf("discovered %d tools, want 1", len(tools))
+	return v, r, d
+}
+
+func names[T any](items []T, name func(T) string) []string {
+	out := make([]string, 0, len(items))
+	for _, it := range items {
+		out = append(out, name(it))
 	}
-	return tools[0], r, d
+	return out
 }
 
-// declareGreeter registers the greeter tool with a root body, used by most of
-// the tests below.
-func declareGreeter(r *toolRegistry, d *definitions) CommandDef[GreetArgs, string] {
-	def := defineToolInto(r, d, "greeter", ToolSpec{
-		Version: "1.0.0",
-		Summary: "Greets people",
-	})
-	cmd := declareCommand[GreetArgs, string](r, d, def, nil, "", greetProto, []CommandOpt{
-		Summary("Greet someone"),
-	})
-	handleCommandInto(r, d, cmd, func(ctx *ToolContext, in GreetArgs) string {
-		greeting := strings.TrimSpace(strings.Repeat("hi "+in.Name.Get()+" ", int(in.Times.Get())))
-		if in.Loud.Get() {
-			greeting = strings.ToUpper(greeting)
-		}
-		return greeting
-	})
-	return cmd
+func optionNames(os []toolCommon.OptionSpec) []string {
+	return names(os, func(o toolCommon.OptionSpec) string { return o.Long })
 }
 
-// TestToolMetadataDescribesTheCommandTree — the metadata is the whole contract:
-// a host that never sees the Go types drives the tool from this alone.
+func flagNames(fs []toolCommon.FlagSpec) []string {
+	return names(fs, func(f toolCommon.FlagSpec) string { return f.Long })
+}
+
 func TestToolMetadataDescribesTheCommandTree(t *testing.T) {
-	tool, _, _ := buildToolFor(t, func(r *toolRegistry, d *definitions) { declareGreeter(r, d) })
+	_, r, d := newVcs(t)
+	e, _ := r.get("vcs")
+	tool, _ := d.buildTool(e)
+	nodes := tool.Commands.Nodes
 
-	if tool.Version != "1.0.0" {
-		t.Errorf("version %q, want 1.0.0", tool.Version)
+	root := nodes[0]
+	if root.Name != "vcs" || root.Doc.Summary != "A tiny version control tool" || root.Body.IsSome() {
+		t.Errorf("root node: %+v", root)
 	}
-	if len(tool.Commands.Nodes) != 1 {
-		t.Fatalf("command tree has %d nodes, want 1", len(tool.Commands.Nodes))
+	if got := optionNames(root.Globals.Options); !slices.Equal(got, []string{"dir"}) {
+		t.Errorf("root global options %v", got)
 	}
-	root := tool.Commands.Nodes[0]
-	// The tool's identity is its root command name.
-	if root.Name != "greeter" {
-		t.Errorf("root command %q, want greeter", root.Name)
+	if got := flagNames(root.Globals.Flags); !slices.Equal(got, []string{"verbose"}) {
+		t.Errorf("root global flags %v", got)
 	}
-	if root.Body.IsNone() {
-		t.Fatal("root command has no body")
+	if verbose := root.Globals.Flags[0].Shape; verbose.Tag() != toolCommon.FlagShapeCountFlag || verbose.CountFlag().Some() != 3 {
+		t.Errorf("verbose is not a count flag capped at 3")
 	}
-	body := root.Body.Some()
-
-	if len(body.Positionals.Fixed) != 1 {
-		t.Fatalf("%d positionals, want 1", len(body.Positionals.Fixed))
+	if dir := root.Globals.Options[0]; dir.Required || dir.Default.IsNone() || dir.Short.Some() != 'C' {
+		t.Errorf("dir: %+v", dir)
 	}
-	pos := body.Positionals.Fixed[0]
-	if pos.Name != "name" || pos.Doc.Summary != "who to greet" {
-		t.Errorf("positional is %+v, want name/who to greet", pos)
-	}
-	// A positional is required unless declared Optional.
-	if !pos.Required {
-		t.Error("positional is not required by default")
-	}
-	if !pos.ValueName.IsSome() || pos.ValueName.Some() != "WHO" {
-		t.Errorf("value name %v, want WHO", pos.ValueName)
+	subs := names(root.Subcommands, func(i int32) string { return nodes[i].Name })
+	if !slices.Equal(subs, []string{"commit", "remote"}) {
+		t.Fatalf("subcommands %v", subs)
 	}
 
-	if len(body.Options) != 1 || body.Options[0].Long != "times" {
-		t.Fatalf("options are %+v, want one named times", body.Options)
+	commit := nodes[root.Subcommands[0]]
+	if commit.Doc.Summary != "Record changes" || !slices.Equal(commit.Aliases, []string{"ci"}) {
+		t.Errorf("commit node: %+v", commit)
 	}
-	opt := body.Options[0]
-	if !opt.Short.IsSome() || opt.Short.Some() != 'n' {
-		t.Errorf("option short form %v, want n", opt.Short)
+	body := commit.Body.Some()
+	fixed := body.Positionals.Fixed
+	if len(fixed) != 1 || fixed[0].Name != "branch" || fixed[0].Required || fixed[0].Default.IsNone() {
+		t.Errorf("positionals: %+v", fixed)
 	}
-	if opt.Default.IsNone() {
-		t.Error("declared default did not reach the metadata")
+	if tail := body.Positionals.Tail; tail.IsNone() || tail.Some().Name != "paths" || tail.Some().ValueName.Some() != "PATH" {
+		t.Errorf("tail: %+v", tail)
+	}
+	if got := optionNames(body.Options); !slices.Equal(got, []string{"message", "author", "include", "tags"}) {
+		t.Errorf("options %v", got)
+	}
+	message, author, include, tags := body.Options[0], body.Options[1], body.Options[2], body.Options[3]
+	if !message.Required || message.Shape.Tag() != toolCommon.OptionShapeScalar {
+		t.Errorf("message: %+v", message)
+	}
+	if author.Required || author.EnvVar.Some() != "VCS_AUTHOR" || author.Default.IsSome() {
+		t.Errorf("author: %+v", author)
+	}
+	if include.Shape.Tag() != toolCommon.OptionShapeRepeatableList ||
+		include.Shape.RepeatableList().Repetition.Tag() != toolCommon.RepetitionDelimited {
+		t.Errorf("include is not a delimited list")
+	}
+	if tags.Shape.Tag() != toolCommon.OptionShapeRepeatableMap ||
+		tags.Shape.RepeatableMap().DuplicateKeyPolicy != toolCommon.DuplicateKeyPolicyLastWins {
+		t.Errorf("tags is not a last-wins map")
+	}
+	if got := flagNames(body.Flags); !slices.Equal(got, []string{"amend", "signoff"}) {
+		t.Errorf("flags %v", got)
+	}
+	if signoff := body.Flags[1].Shape.BoolFlag(); !signoff.Default || !signoff.Negatable {
+		t.Errorf("signoff: %+v", signoff)
+	}
+	res := body.Result.Some()
+	if got := names(res.Formatters, func(f toolCommon.Formatter) string { return f.Name }); !slices.Equal(got, []string{"text", "json"}) ||
+		res.DefaultFormatter != "json" {
+		t.Errorf("formatters %v default %s", got, res.DefaultFormatter)
+	}
+	if body.Annotations.IsNone() || !body.Annotations.Some().Idempotent {
+		t.Error("commit is not annotated idempotent")
+	}
+	if len(body.Errors) != 1 || body.Errors[0].Name != "nothing-to-commit" || body.Errors[0].Payload.IsSome() {
+		t.Errorf("errors: %+v", body.Errors)
 	}
 
-	if len(body.Flags) != 1 || body.Flags[0].Long != "loud" {
-		t.Fatalf("flags are %+v, want one named loud", body.Flags)
+	cs := body.Constraints
+	if len(cs) != 4 {
+		t.Fatalf("%d constraints, want 4", len(cs))
 	}
-	if !body.Flags[0].Short.IsSome() || body.Flags[0].Short.Some() != 'l' {
-		t.Errorf("flag short form %v, want l", body.Flags[0].Short)
+	if cs[0].Tag() != toolCommon.ConstraintRequiresAny || refNames(cs[0].RequiresAny()) != "message include" {
+		t.Errorf("requires-any: %s", refNames(cs[0].RequiresAny()))
+	}
+	if imp := cs[1].Implies(); refNames(imp.Lhs) != "amend" || refNames(imp.Rhs) != "author" {
+		t.Errorf("implies: %s -> %s", refNames(imp.Lhs), refNames(imp.Rhs))
+	}
+	if fb := cs[2].Forbids(); refNames(fb.Lhs) != "branch=" || refNames(fb.Rhs) != "amend verbose" {
+		t.Errorf("forbids: %s / %s", refNames(fb.Lhs), refNames(fb.Rhs))
+	}
+	groups := cs[3].MutexGroups()
+	if len(groups) != 2 || refNames(groups[0].Refs) != "author=" || refNames(groups[1].Refs) != "dir=" {
+		t.Errorf("mutex groups: %+v", groups)
 	}
 
-	if body.Result.IsNone() {
-		t.Fatal("command declares no result")
+	remote := nodes[root.Subcommands[1]]
+	if remote.Body.IsSome() || !slices.Equal(remote.Aliases, []string{"r"}) ||
+		!slices.Equal(optionNames(remote.Globals.Options), []string{"timeout"}) {
+		t.Errorf("remote node: %+v", remote)
 	}
-	if tag := tool.Schema.TypeNodes[body.Result.Some().Type].Body.Tag(); tag != types.SchemaTypeBodyStringType {
-		t.Errorf("result type tag %d, want string", tag)
+	push := nodes[remote.Subcommands[0]].Body.Some()
+	if push.Stdout.IsNone() || push.Stdout.Some().Doc.Summary != "the pushed bytes, upper-cased" {
+		t.Errorf("push stdout: %+v", push.Stdout)
+	}
+	if push.Stdin.IsNone() || push.Stdin.Some().Required || !slices.Equal(push.Stdin.Some().Mime, []string{"text/plain"}) {
+		t.Errorf("push stdin: %+v", push.Stdin)
 	}
 }
 
-// TestToolArgumentTypesResolveInTheToolSchema — every type index a command body
-// carries must point into the tool's own schema pool, which is what makes the
-// metadata self-contained.
-func TestToolArgumentTypesResolveInTheToolSchema(t *testing.T) {
-	tool, _, _ := buildToolFor(t, func(r *toolRegistry, d *definitions) { declareGreeter(r, d) })
-	body := tool.Commands.Nodes[0].Body.Some()
-	pool := len(tool.Schema.TypeNodes)
-
-	for _, idx := range []int32{
-		body.Positionals.Fixed[0].Type,
-		body.Options[0].Shape.Scalar(),
-		body.Result.Some().Type,
-	} {
-		if idx < 0 || int(idx) >= pool {
-			t.Errorf("type index %d is outside the tool's %d-node schema", idx, pool)
+func refNames(refs []toolCommon.Ref) string {
+	out := make([]string, 0, len(refs))
+	for _, r := range refs {
+		if r.Tag() == toolCommon.RefPresent {
+			out = append(out, r.Present())
+		} else {
+			out = append(out, r.ValueIs().Name+"=")
 		}
 	}
-	if tag := tool.Schema.TypeNodes[body.Positionals.Fixed[0].Type].Body.Tag(); tag != types.SchemaTypeBodyStringType {
-		t.Errorf("positional type tag %d, want string", tag)
+	return strings.Join(out, " ")
+}
+
+// TestToolCallRoundTripsInCanonicalOrder — the struct's field order differs
+// from the canonical record's, which is the order the host sends; defaults
+// travel for what fill leaves alone.
+func TestToolCallRoundTripsInCanonicalOrder(t *testing.T) {
+	v, r, d := newVcs(t)
+	loopback(t, r, d, AgentPrincipal{AgentID: AgentID{AgentID: "caller()"}})
+
+	res, err := v.commit.Call(func(a *CommitArgs) {
+		a.Message = "fix the build"
+		a.Paths = []string{"a.go", "b.go"}
+		a.Tags = map[string]string{"k": "v"}
+		a.Include = []string{"x"}
+		a.Verbose = 2
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if tag := tool.Schema.TypeNodes[body.Options[0].Shape.Scalar()].Body.Tag(); tag != types.SchemaTypeBodyS32Type {
-		t.Errorf("option type tag %d, want s32", tag)
+	if res.Summary != "vcs commit: fix the build" || res.Files != 2 {
+		t.Errorf("result %+v", res)
+	}
+	seen := v.seen
+	if seen.Branch != "main" || seen.Dir != "." || !seen.Signoff || seen.Amend || seen.Verbose != 2 {
+		t.Errorf("defaults did not arrive: %+v", seen)
+	}
+	if !slices.Equal(seen.Paths, []string{"a.go", "b.go"}) || seen.Tags["k"] != "v" ||
+		!slices.Equal(seen.Include, []string{"x"}) || seen.Author.IsSome() {
+		t.Errorf("arguments did not arrive: %+v", seen)
+	}
+	if p, ok := seen.Caller.(AgentPrincipal); !ok || p.AgentID.AgentID != "caller()" {
+		t.Errorf("principal %+v", seen.Caller)
 	}
 }
 
-// encodeToolArgs builds an invocation input the way a host would: a record with
-// one value per declared argument, in declaration order.
-func encodeToolArgs(t *testing.T, d *definitions, e *toolEntry, path []string, values ...any) types.TypedSchemaValue {
-	t.Helper()
-	ce := e.byPath[pathKey(path)]
-	fields, ok := d.argFields(e.def.name, ce)
+// TestToolCallInputIsTheCanonicalRecord — the input the SDK sends is a record
+// whose fields are exactly the canonical input model reflection derives from
+// the published metadata, so the host accepts it; and reflection's own packing
+// decodes the same way.
+func TestToolCallInputIsTheCanonicalRecord(t *testing.T) {
+	v, r, d := newVcs(t)
+	calls := loopback(t, r, d, AnonymousPrincipal{})
+	if _, err := v.commit.Call(func(a *CommitArgs) { a.Message = "m"; a.Amend = true }); err != nil {
+		t.Fatal(err)
+	}
+	sent := (*calls)[0]
+	rootBody := sent.Graph.TypeNodes[sent.Graph.Root].Body
+	if rootBody.Tag() != types.SchemaTypeBodyRecordType {
+		t.Fatalf("input graph root is not a record")
+	}
+	sentNames := names(rootBody.RecordType(), func(f types.NamedFieldType) string { return f.Name })
+	want := []string{"dir", "verbose", "branch", "paths", "message", "author", "include", "tags", "amend", "signoff"}
+	if !slices.Equal(sentNames, want) {
+		t.Errorf("sent fields %v, want %v", sentNames, want)
+	}
+
+	e, _ := r.get("vcs")
+	tool, _ := d.buildTool(e)
+	cmd, ok := newReflectedTool("vcs", tool).Command([]string{"commit"})
 	if !ok {
-		t.Fatalf("argument fields: %s", allDefErrors(d.errs))
+		t.Fatal("reflection does not find commit")
 	}
-	if len(values) != len(fields) {
-		t.Fatalf("%d values for %d arguments", len(values), len(fields))
+	params, err := cmd.Arguments()
+	if err != nil {
+		t.Fatal(err)
 	}
-	var b valBuilder
-	idxs := make([]int32, 0, len(fields))
-	for i, f := range fields {
-		idxs = append(idxs, f.codec.encode(&b, reflect.ValueOf(values[i])))
+	if got := names(params, func(p core.Parameter) string { return p.Name }); !slices.Equal(got, want) {
+		t.Errorf("reflected fields %v, want %v", got, want)
 	}
-	root := b.push(types.MakeSchemaValueNodeRecordValue(idxs))
-	return types.TypedSchemaValue{
-		Value: types.SchemaValueTree{ValueNodes: b.nodes, Root: root},
-	}
-}
 
-func TestToolInvocationDecodesArgumentsAndEncodesTheResult(t *testing.T) {
-	_, r, d := buildToolFor(t, func(r *toolRegistry, d *definitions) { declareGreeter(r, d) })
-	e, _ := r.get("greeter")
-
-	input := encodeToolArgs(t, d, e, nil, "ada", true, int32(2))
-	got := invokeNoStreams(d, e, nil, input)
-	if got.Tag() != witTypes.ResultOk {
+	packed, err := cmd.PackJSON(map[string]any{
+		"dir": "/src", "verbose": 1, "branch": "dev", "paths": []any{"z"}, "message": "via reflection",
+		"author": "ann", "include": []any{}, "tags": []any{}, "amend": false, "signoff": false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if root := packed.wit.Graph.TypeNodes[packed.wit.Graph.Root].Body; root.Tag() != types.SchemaTypeBodyRecordType {
+		t.Fatal("reflection's input graph root is not a record")
+	}
+	if got := d.invokeCommand(e, []string{"ci"}, packed.wit, nil, &ToolStdout{absent: absentStdout}, nil); got.IsErr() {
 		t.Fatalf("invoke failed: %+v", got.Err())
 	}
-	res := got.Ok()
-	if res.Result.IsNone() {
-		t.Fatal("invocation produced no result")
+	if s := v.seen; s.Dir != "/src" || s.Branch != "dev" || s.Author.Unwrap() != "ann" || s.Signoff || s.Verbose != 1 {
+		t.Errorf("reflection-packed arguments decoded as %+v", s)
+	}
+}
+
+func TestToolCallReportsDeclaredErrors(t *testing.T) {
+	v, r, d := newVcs(t)
+	loopback(t, r, d, AnonymousPrincipal{})
+
+	_, err := v.commit.Call(func(a *CommitArgs) { a.Message = "nothing" })
+	var ce *ToolCallError
+	if !errors.As(err, &ce) || ce.Kind != ToolCallDeclaredError || ce.ErrorName != "nothing-to-commit" {
+		t.Fatalf("got %v", err)
+	}
+	if _, ok := v.errNothing.Match(err); !ok {
+		t.Error("the case does not match its own error")
+	}
+	if _, ok := v.errReject.Match(err); ok {
+		t.Error("another case matches")
 	}
 
-	typed := res.Result.Some()
-	out, err := TypedValue{wit: typed}.JSON()
+	inv, err := v.push.Call(func(a *PushArgs) { a.Name = "forbidden" })
 	if err != nil {
-		t.Fatalf("result is not readable: %v", err)
+		t.Fatal(err)
 	}
-	if out != "HI ADA HI ADA" {
-		t.Errorf("result %v, want %q", out, "HI ADA HI ADA")
+	_, err = inv.Wait()
+	if rej, ok := v.errReject.Match(err); !ok || rej.Reason != "protected remote" {
+		t.Errorf("match gave %+v, %v for %v", rej, ok, err)
 	}
-}
-
-// TestToolInvocationRejectsAnUnknownCommand — the path is caller-supplied, so a
-// wrong one must be reported rather than dispatched somewhere plausible.
-func TestToolInvocationRejectsAnUnknownCommand(t *testing.T) {
-	_, r, d := buildToolFor(t, func(r *toolRegistry, d *definitions) { declareGreeter(r, d) })
-	e, _ := r.get("greeter")
-
-	got := invokeNoStreams(d, e, []string{"absent"}, types.TypedSchemaValue{})
-	if got.Tag() != witTypes.ResultErr {
-		t.Fatal("invoking an unknown command succeeded")
-	}
-	if tag := got.Err().Tag(); tag != types.ToolErrorInvalidCommandPath {
-		t.Errorf("error tag %d, want invalid-command-path", tag)
+	if !strings.Contains(err.Error(), "remote push") {
+		t.Errorf("error does not name the command: %v", err)
 	}
 }
 
-func TestToolInvocationRejectsMalformedInput(t *testing.T) {
-	_, r, d := buildToolFor(t, func(r *toolRegistry, d *definitions) { declareGreeter(r, d) })
-	e, _ := r.get("greeter")
+func TestToolHandlerFailuresAreInvalidResults(t *testing.T) {
+	v, r, d := newVcs(t)
+	loopback(t, r, d, AnonymousPrincipal{})
+	for name, want := range map[string]string{
+		"undeclared": `undeclared error "nothing-to-commit"`,
+		"plain":      "command remote push failed: disk full",
+		"panic":      "command remote push panicked: handler gave up",
+	} {
+		inv, err := v.push.Call(func(a *PushArgs) { a.Name = name })
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = inv.Wait()
+		var ce *ToolCallError
+		if !errors.As(err, &ce) || ce.Kind != ToolCallInvalidResult || !strings.Contains(ce.Message, want) {
+			t.Errorf("%s: got %v, want an invalid result mentioning %q", name, err, want)
+		}
+	}
+}
 
-	// A bare string where the body expects a record of three arguments.
-	var b valBuilder
-	root := b.push(types.MakeSchemaValueNodeStringValue("ada"))
-	got := invokeNoStreams(d, e, nil, types.TypedSchemaValue{
-		Value: types.SchemaValueTree{ValueNodes: b.nodes, Root: root},
+func TestStdoutCommandStreamsItsOutput(t *testing.T) {
+	v, r, d := newVcs(t)
+	loopback(t, r, d, AnonymousPrincipal{})
+
+	inv, err := v.push.Call(func(a *PushArgs) {
+		a.Name = "origin"
+		a.In = strings.NewReader("hello world")
 	})
-	if got.Tag() != witTypes.ResultErr {
-		t.Fatal("invoking with a malformed input succeeded")
-	}
-	if tag := got.Err().Tag(); tag != types.ToolErrorInvalidInput {
-		t.Errorf("error tag %d, want invalid-input", tag)
-	}
-}
-
-// TestSubcommandsAreReachable — a tool may dispatch to named subcommands as
-// well as run its own body.
-func TestSubcommandsAreReachable(t *testing.T) {
-	type EchoArgs struct {
-		Text Positional[string]
-	}
-	tool, r, d := buildToolFor(t, func(r *toolRegistry, d *definitions) {
-		def := defineToolInto(r, d, "multi", ToolSpec{Version: "0.1.0"})
-		cmd := declareCommand[EchoArgs, string](r, d, def, []string{"echo"}, "echo", EchoArgs{}, []CommandOpt{
-			Summary("Echo the argument"), Aliases("say"),
-		})
-		handleCommandInto(r, d, cmd, func(ctx *ToolContext, in EchoArgs) string {
-			return strings.Join(append(ctx.CommandPath(), in.Text.Get()), ":")
-		})
-	})
-
-	if len(tool.Commands.Nodes) != 2 {
-		t.Fatalf("command tree has %d nodes, want 2", len(tool.Commands.Nodes))
-	}
-	if got := tool.Commands.Nodes[0].Subcommands; len(got) != 1 || got[0] != 1 {
-		t.Errorf("root subcommands %v, want [1]", got)
-	}
-	sub := tool.Commands.Nodes[1]
-	if sub.Name != "echo" || len(sub.Aliases) != 1 || sub.Aliases[0] != "say" {
-		t.Errorf("subcommand is %+v, want echo/say", sub)
-	}
-	// The root has no body of its own here, only a subcommand.
-	if tool.Commands.Nodes[0].Body.IsSome() {
-		t.Error("root gained a body it never declared")
-	}
-
-	e, _ := r.get("multi")
-	input := encodeToolArgs(t, d, e, []string{"echo"}, "hello")
-	got := invokeNoStreams(d, e, []string{"echo"}, input)
-	if got.Tag() != witTypes.ResultOk {
-		t.Fatalf("invoking the subcommand failed: %+v", got.Err())
-	}
-	typed := got.Ok().Result.Some()
-	out, err := TypedValue{wit: typed}.JSON()
 	if err != nil {
-		t.Fatalf("result is not readable: %v", err)
+		t.Fatal(err)
 	}
-	if out != "echo:hello" {
-		t.Errorf("result %v, want echo:hello", out)
+	out, n, err := inv.Collect()
+	if err != nil {
+		t.Fatal(err)
 	}
+	if string(out) != "HELLO WORLD" || n != 11+30 {
+		t.Errorf("got %q and %d", out, n)
+	}
+
+	inv, _ = v.push.Call(func(a *PushArgs) { a.Name = "panic" })
+	_, err = io.ReadAll(inv.Stdout())
+	var se *StreamError
+	if !errors.As(err, &se) || se.Failure.String() != "failed: command remote push panicked: handler gave up" {
+		t.Errorf("stdout of a panicking command ended with %v", err)
+	}
+}
+
+type CatArgs struct{ In io.Reader }
+
+func TestRequiredStdinIsRefusedBeforeSending(t *testing.T) {
+	r, d := newToolRegistry(), newDefinitions()
+	tool := defineToolInto(r, d, "cat", ToolSpec{}, false)
+	cat := tool.Body[CatArgs, string](func(a *CatArgs, s *ToolCommandSpec) { s.Stdin(&a.In) })
+	_ = cat.Handle(func(_ *ToolContext, a CatArgs) (string, error) {
+		data, err := io.ReadAll(a.In)
+		return string(data), err
+	})
+	calls := loopback(t, r, d, AnonymousPrincipal{})
+
+	_, err := cat.Call(nil)
+	var ce *ToolCallError
+	if !errors.As(err, &ce) || ce.Kind != ToolCallInvalidInput || len(*calls) != 0 {
+		t.Errorf("got %v after %d calls", err, len(*calls))
+	}
+	got, err := cat.Call(func(a *CatArgs) { a.In = strings.NewReader("meow") })
+	if err != nil || got != "meow" {
+		t.Errorf("got %q, %v", got, err)
+	}
+
+	e, _ := r.get("cat")
+	res := d.invokeCommand(e, nil, (*calls)[0], &ToolStdin{absent: absentStdin}, &ToolStdout{absent: absentStdout}, nil)
+	if res.IsOk() || res.Err().Tag() != types.ToolErrorInvalidInput {
+		t.Errorf("a host invocation without the required stdin was accepted")
+	}
+}
+
+func TestToolInvocationRejectsUnknownCommandsAndMalformedInput(t *testing.T) {
+	_, r, d := newVcs(t)
+	e, _ := r.get("vcs")
+	none := &ToolStdout{absent: absentStdout}
+
+	res := d.invokeCommand(e, []string{"nope"}, types.TypedSchemaValue{}, nil, none, nil)
+	if res.IsOk() || res.Err().Tag() != types.ToolErrorInvalidCommandPath {
+		t.Error("an unknown command was accepted")
+	}
+	res = d.invokeCommand(e, []string{"remote"}, types.TypedSchemaValue{}, nil, none, nil)
+	if res.IsOk() || res.Err().Tag() != types.ToolErrorInvalidCommandPath {
+		t.Error("a group without a body was invoked")
+	}
+	short, _ := EncodeTypedValue(struct{ Message string }{"m"})
+	res = d.invokeCommand(e, []string{"commit"}, short.wit, nil, none, nil)
+	if res.IsOk() || res.Err().Tag() != types.ToolErrorInvalidInput {
+		t.Error("a record with the wrong field count was accepted")
+	}
+}
+
+type BadArgs struct {
+	Name   string
+	Other  string
+	Opt    Option[string]
+	Pos    Option[string]
+	Req    string
+	Tail1  []string
+	Tail2  []string
+	Global VcsGlobals
+}
+
+type SingleArgs struct{ Name string }
+
+type EmbedArgs struct {
+	VcsGlobals
+	Name string
 }
 
 func TestToolDeclarationErrors(t *testing.T) {
-	t.Run("non-marker field", func(t *testing.T) {
-		type Bad struct{ Name string }
-		r, d := newToolRegistry(), newDefinitions()
-		def := defineToolInto(r, d, "bad", ToolSpec{})
-		cmd := declareCommand[Bad, string](r, d, def, nil, "", Bad{}, nil)
-		handleCommandInto(r, d, cmd, func(*ToolContext, Bad) string { return "" })
-		r.discover(d)
-		mustDefErr(t, d, "must be golem.Positional, golem.Opt or golem.Flag")
-	})
-
-	t.Run("missing handler", func(t *testing.T) {
-		r, d := newToolRegistry(), newDefinitions()
-		def := defineToolInto(r, d, "bare", ToolSpec{})
-		declareCommand[GreetArgs, string](r, d, def, nil, "", greetProto, nil)
-		r.discover(d)
-		mustDefErr(t, d, "has no handler")
-	})
-
-	t.Run("duplicate tool", func(t *testing.T) {
-		r, d := newToolRegistry(), newDefinitions()
-		defineToolInto(r, d, "dup", ToolSpec{})
-		defineToolInto(r, d, "dup", ToolSpec{})
-		mustDefErr(t, d, "tool already defined")
-	})
-
-	t.Run("duplicate command", func(t *testing.T) {
-		r, d := newToolRegistry(), newDefinitions()
-		def := defineToolInto(r, d, "dup2", ToolSpec{})
-		declareCommand[GreetArgs, string](r, d, def, nil, "", greetProto, nil)
-		declareCommand[GreetArgs, string](r, d, def, nil, "", greetProto, nil)
-		mustDefErr(t, d, "command already declared")
-	})
-
-	t.Run("two handlers", func(t *testing.T) {
-		r, d := newToolRegistry(), newDefinitions()
-		def := defineToolInto(r, d, "twice", ToolSpec{})
-		cmd := declareCommand[GreetArgs, string](r, d, def, nil, "", greetProto, nil)
-		handleCommandInto(r, d, cmd, func(*ToolContext, GreetArgs) string { return "" })
-		handleCommandInto(r, d, cmd, func(*ToolContext, GreetArgs) string { return "" })
-		mustDefErr(t, d, "already has a handler")
-	})
-}
-
-// TestOptionShapes — the four wire shapes an option can take, each selected by
-// its declaration rather than inferred from the payload type alone.
-func TestOptionShapes(t *testing.T) {
-	type ShapeArgs struct {
-		// --name VALUE; the value is mandatory when the option appears.
-		Plain Opt[string]
-		// --signed, meaning the default, or --signed=mode.
-		Signed Opt[string]
-		// -e a -e b, collecting into a list.
-		Include Opt[[]string]
-		// -c a=1 -c b=2, collecting into a map.
-		Config Opt[map[string]int32]
+	cases := map[string]struct {
+		declare func(tool *ToolDefinition)
+		want    string
+	}{
+		"unbound field": {func(tool *ToolDefinition) {
+			c := tool.Command[SingleArgs, string]("x", nil)
+			_ = c.Handle(func(*ToolContext, SingleArgs) (string, error) { return "", nil })
+		}, "field Name is not bound"},
+		"bound twice": {func(tool *ToolDefinition) {
+			tool.Command[SingleArgs, string]("x", func(a *SingleArgs, s *ToolCommandSpec) {
+				s.Option(&a.Name)
+				s.Positional(&a.Name)
+			})
+		}, "field Name is bound twice"},
+		"foreign pointer": {func(tool *ToolDefinition) {
+			var elsewhere string
+			tool.Command[SingleArgs, string]("x", func(a *SingleArgs, s *ToolCommandSpec) {
+				s.Option(&elsewhere)
+			})
+		}, "does not address a field"},
+		"optional with default": {func(tool *ToolDefinition) {
+			c := tool.Command[BadArgs, string]("x", func(a *BadArgs, s *ToolCommandSpec) {
+				s.Option(&a.Opt).Default(Some("x"))
+			})
+			_ = c.Handle(func(*ToolContext, BadArgs) (string, error) { return "", nil })
+		}, "opt is optional (golem.Option) and cannot also have a default"},
+		"required after optional": {func(tool *ToolDefinition) {
+			c := tool.Command[BadArgs, string]("x", func(a *BadArgs, s *ToolCommandSpec) {
+				s.Positional(&a.Pos)
+				s.Positional(&a.Req)
+			})
+			_ = c.Handle(func(*ToolContext, BadArgs) (string, error) { return "", nil })
+		}, "the required positional req follows the optional positional pos"},
+		"two tails": {func(tool *ToolDefinition) {
+			c := tool.Command[BadArgs, string]("x", func(a *BadArgs, s *ToolCommandSpec) {
+				s.Tail(&a.Tail1)
+				s.Tail(&a.Tail2)
+			})
+			_ = c.Handle(func(*ToolContext, BadArgs) (string, error) { return "", nil })
+		}, "binds 2 tails"},
+		"missing globals embedding": {func(tool *ToolDefinition) {
+			tool.Globals[VcsGlobals](func(g *VcsGlobals, s *ToolGlobalsSpec) { s.Option(&g.Dir) })
+			c := tool.Command[SingleArgs, string]("x", func(a *SingleArgs, s *ToolCommandSpec) { s.Option(&a.Name) })
+			_ = c.Handle(func(*ToolContext, SingleArgs) (string, error) { return "", nil })
+		}, "must embed golem.VcsGlobals"},
+		"global bound by the command": {func(tool *ToolDefinition) {
+			tool.Globals[VcsGlobals](func(g *VcsGlobals, s *ToolGlobalsSpec) { s.Option(&g.Dir) })
+			c := tool.Command[EmbedArgs, string]("x", func(a *EmbedArgs, s *ToolCommandSpec) {
+				s.Option(&a.Name)
+				s.Option(&a.Dir)
+			})
+			_ = c.Handle(func(*ToolContext, EmbedArgs) (string, error) { return "", nil })
+		}, "field Dir belongs to the embedded globals"},
+		"formatters on a unit result": {func(tool *ToolDefinition) {
+			c := tool.Command[SingleArgs, Unit]("x", func(a *SingleArgs, s *ToolCommandSpec) {
+				s.Option(&a.Name)
+				s.Formatters("json")
+			})
+			_ = c.Handle(func(*ToolContext, SingleArgs) (Unit, error) { return Unit{}, nil })
+		}, "declares formatters but returns no result"},
+		"undeclared default formatter": {func(tool *ToolDefinition) {
+			c := tool.Command[SingleArgs, string]("x", func(a *SingleArgs, s *ToolCommandSpec) {
+				s.Option(&a.Name)
+				s.Formatters("json")
+				s.DefaultFormatter("yaml")
+			})
+			_ = c.Handle(func(*ToolContext, SingleArgs) (string, error) { return "", nil })
+		}, `defaults to the formatter "yaml"`},
+		"stdout settings on a plain command": {func(tool *ToolDefinition) {
+			tool.Command[SingleArgs, string]("x", func(a *SingleArgs, s *ToolCommandSpec) {
+				s.Option(&a.Name)
+				s.StdoutMime("text/plain")
+			})
+		}, "declare it with StdoutCommand"},
+		"value-is on a flag": {func(tool *ToolDefinition) {
+			c := tool.Command[CommitArgs, string]("x", func(a *CommitArgs, s *ToolCommandSpec) {
+				s.Option(&a.Message)
+				s.Option(&a.Author)
+				s.Positional(&a.Branch)
+				s.Tail(&a.Paths)
+				s.List(&a.Include)
+				s.Map(&a.Tags)
+				s.Flag(&a.Signoff)
+				s.RequiresAll(s.ValueIs(&a.Amend, true))
+				s.Flag(&a.Amend)
+			})
+			_ = c.Handle(func(*ToolContext, CommitArgs) (string, error) { return "", nil })
+		}, "compares the flag amend with a value"},
+		"no handler": {func(tool *ToolDefinition) {
+			tool.Command[SingleArgs, string]("x", func(a *SingleArgs, s *ToolCommandSpec) { s.Option(&a.Name) })
+		}, "command x has no handler"},
+		"duplicate command": {func(tool *ToolDefinition) {
+			tool.Group("x")
+			tool.Group("x")
+		}, "command already declared: x"},
+		"foreign error case": {func(tool *ToolDefinition) {
+			other := defineToolInto(tool.entry.r, tool.entry.d, "other", ToolSpec{}, false)
+			errOther := DefineToolError[Unit](other, "boom", ToolErrorSpec{})
+			c := tool.Command[SingleArgs, string]("x", func(a *SingleArgs, s *ToolCommandSpec) {
+				s.Option(&a.Name)
+				s.Raises(errOther)
+			})
+			_ = c.Handle(func(*ToolContext, SingleArgs) (string, error) { return "", nil })
+		}, "raises boom, an error declared on the tool other"},
 	}
-	proto := ShapeArgs{
-		Signed:  Opt[string]{ValueOptional: true, Default: Some("on")},
-		Include: Opt[[]string]{Short: 'e', Repeatable: Repeated()},
-		Config:  Opt[map[string]int32]{Short: 'c', Repeatable: Delimited(','), DuplicateKeys: LastKeyWins},
-	}
-
-	tool, _, _ := buildToolFor(t, func(r *toolRegistry, d *definitions) {
-		def := defineToolInto(r, d, "shapes", ToolSpec{Version: "0.1.0"})
-		cmd := declareCommand[ShapeArgs, Unit](r, d, def, nil, "", proto, nil)
-		handleCommandInto(r, d, cmd, func(*ToolContext, ShapeArgs) Unit { return Unit{} })
-	})
-
-	body := tool.Commands.Nodes[0].Body.Some()
-	byName := map[string]toolCommon.OptionSpec{}
-	for _, o := range body.Options {
-		byName[o.Long] = o
-	}
-
-	if got := byName["plain"].Shape.Tag(); got != toolCommon.OptionShapeScalar {
-		t.Errorf("plain shape tag %d, want scalar", got)
-	}
-	if got := byName["signed"].Shape.Tag(); got != toolCommon.OptionShapeOptionalScalar {
-		t.Errorf("signed shape tag %d, want optional-scalar", got)
-	}
-
-	include := byName["include"]
-	if got := include.Shape.Tag(); got != toolCommon.OptionShapeRepeatableList {
-		t.Fatalf("include shape tag %d, want repeatable-list", got)
-	}
-	list := include.Shape.RepeatableList()
-	if list.Repetition.Tag() != toolCommon.RepetitionRepeated {
-		t.Errorf("include repetition tag %d, want repeated", list.Repetition.Tag())
-	}
-	// The collected value is a list, so item-type is the *element* type.
-	if tag := tool.Schema.TypeNodes[list.ItemType].Body.Tag(); tag != types.SchemaTypeBodyStringType {
-		t.Errorf("include item type tag %d, want string", tag)
-	}
-
-	config := byName["config"]
-	if got := config.Shape.Tag(); got != toolCommon.OptionShapeRepeatableMap {
-		t.Fatalf("config shape tag %d, want repeatable-map", got)
-	}
-	m := config.Shape.RepeatableMap()
-	if m.Repetition.Tag() != toolCommon.RepetitionDelimited || m.Repetition.Delimited() != ',' {
-		t.Errorf("config repetition is %+v, want delimited by ','", m.Repetition)
-	}
-	if m.DuplicateKeyPolicy != toolCommon.DuplicateKeyPolicyLastWins {
-		t.Errorf("config duplicate-key policy %d, want last-wins", m.DuplicateKeyPolicy)
-	}
-	// map-type points at the map node itself, never a list of tuples.
-	if tag := tool.Schema.TypeNodes[m.MapType].Body.Tag(); tag != types.SchemaTypeBodyMapType {
-		t.Errorf("config map type tag %d, want map", tag)
-	}
-}
-
-// TestRepeatableOptionsRoundTrip — a repeatable option's collected value is
-// just its declared type, so decoding needs no special case.
-func TestRepeatableOptionsRoundTrip(t *testing.T) {
-	type CollectArgs struct {
-		Include Opt[[]string]
-		Config  Opt[map[string]int32]
-	}
-	proto := CollectArgs{
-		Include: Opt[[]string]{Short: 'e', Repeatable: Repeated()},
-		Config:  Opt[map[string]int32]{Short: 'c', Repeatable: Repeated()},
-	}
-	_, r, d := buildToolFor(t, func(r *toolRegistry, d *definitions) {
-		def := defineToolInto(r, d, "collect", ToolSpec{Version: "0.1.0"})
-		cmd := declareCommand[CollectArgs, string](r, d, def, nil, "", proto, nil)
-		handleCommandInto(r, d, cmd, func(_ *ToolContext, in CollectArgs) string {
-			return strings.Join(in.Include.Get(), "+") + "/" + strconv.Itoa(int(in.Config.Get()["n"]))
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			r, d := newToolRegistry(), newDefinitions()
+			tool := defineToolInto(r, d, "t", ToolSpec{}, false)
+			tc.declare(tool)
+			if _, ok := r.discover(d); ok && len(d.errs) == 0 {
+				t.Fatalf("no definition error, want %q", tc.want)
+			}
+			if msg := allDefErrors(d.errs); !strings.Contains(msg, tc.want) {
+				t.Errorf("errors:\n%s\nwant one containing %q", msg, tc.want)
+			}
 		})
-	})
-	e, _ := r.get("collect")
-
-	input := encodeToolArgs(t, d, e, nil, []string{"a", "b"}, map[string]int32{"n": 7})
-	got := invokeNoStreams(d, e, nil, input)
-	if got.Tag() != witTypes.ResultOk {
-		t.Fatalf("invoke failed: %+v", got.Err())
-	}
-	typed := got.Ok().Result.Some()
-	out, err := TypedValue{wit: typed}.JSON()
-	if err != nil {
-		t.Fatalf("result is not readable: %v", err)
-	}
-	if out != "a+b/7" {
-		t.Errorf("result %v, want a+b/7", out)
 	}
 }
 
-func TestOptionShapeDeclarationErrors(t *testing.T) {
-	t.Run("value-optional without a default", func(t *testing.T) {
-		type Args struct{ Signed Opt[string] }
-		r, d := newToolRegistry(), newDefinitions()
-		def := defineToolInto(r, d, "bare", ToolSpec{})
-		cmd := declareCommand[Args, Unit](r, d, def, nil, "", Args{
-			Signed: Opt[string]{ValueOptional: true},
-		}, nil)
-		handleCommandInto(r, d, cmd, func(*ToolContext, Args) Unit { return Unit{} })
-		r.discover(d)
-		mustDefErr(t, d, "ValueOptional but declares no Default")
-	})
-
-	t.Run("repeatable into a scalar", func(t *testing.T) {
-		type Args struct{ Include Opt[string] }
-		r, d := newToolRegistry(), newDefinitions()
-		def := defineToolInto(r, d, "badrep", ToolSpec{})
-		cmd := declareCommand[Args, Unit](r, d, def, nil, "", Args{
-			Include: Opt[string]{Repeatable: Repeated()},
-		}, nil)
-		handleCommandInto(r, d, cmd, func(*ToolContext, Args) Unit { return Unit{} })
-		r.discover(d)
-		mustDefErr(t, d, "use a slice or a map")
-	})
-
-	t.Run("both shapes at once", func(t *testing.T) {
-		type Args struct{ Include Opt[[]string] }
-		r, d := newToolRegistry(), newDefinitions()
-		def := defineToolInto(r, d, "both", ToolSpec{})
-		cmd := declareCommand[Args, Unit](r, d, def, nil, "", Args{
-			Include: Opt[[]string]{ValueOptional: true, Repeatable: Repeated(), Default: Some([]string{"a"})},
-		}, nil)
-		handleCommandInto(r, d, cmd, func(*ToolContext, Args) Unit { return Unit{} })
-		r.discover(d)
-		mustDefErr(t, d, "an option has one shape")
-	})
-}
-
-// TestDefinitionErrorsTravelAsInvalidResult — a broken declaration is reported
-// through the same variant the TypeScript SDK uses, and never as custom-error,
-// whose name field is reserved for a tool's own declared error cases.
-func TestDefinitionErrorsTravelAsInvalidResult(t *testing.T) {
-	type Bad struct{ Name string }
+func TestRemoteToolsAreDeclaredForCallingOnly(t *testing.T) {
 	r, d := newToolRegistry(), newDefinitions()
-	def := defineToolInto(r, d, "bad", ToolSpec{})
-	cmd := declareCommand[Bad, string](r, d, def, nil, "", Bad{}, nil)
-	handleCommandInto(r, d, cmd, func(*ToolContext, Bad) string { return "" })
-	if _, ok := r.discover(d); ok {
-		t.Fatal("discovery accepted a broken declaration")
+	remote := defineToolInto(r, d, "elsewhere", ToolSpec{}, true)
+	cmd := remote.Command[SingleArgs, string]("run", func(a *SingleArgs, s *ToolCommandSpec) { s.Positional(&a.Name) })
+	if tools, ok := r.discover(d); !ok || len(tools) != 0 {
+		t.Errorf("a remote tool was exported: %d tools", len(tools))
 	}
-
-	err := toolDefinitionError(d)
-	if err.Tag() != types.ToolErrorInvalidResult {
-		t.Fatalf("error tag %d, want invalid-result", err.Tag())
+	if _, ok := d.buildTool(remote.entry); !ok {
+		t.Errorf("a remote tool without handlers is not well-defined: %s", allDefErrors(d.errs))
 	}
-	if !strings.Contains(err.InvalidResult(), "must be golem.Positional") {
-		t.Errorf("message does not name the problem: %q", err.InvalidResult())
+	_ = cmd.Handle(func(*ToolContext, SingleArgs) (string, error) { return "", nil })
+	if msg := allDefErrors(d.errs); !strings.Contains(msg, "belongs to a remote tool") {
+		t.Errorf("handling a remote command was accepted: %s", msg)
 	}
 }
 
-// TestNestedSubcommandsFormATree — a tool may nest commands to any depth, and
-// the flattened tree must link parents to children by index.
-func TestNestedSubcommandsFormATree(t *testing.T) {
-	type AddArgs struct {
-		Name Positional[string]
-		URL  Positional[string]
-	}
-	type RemoveArgs struct {
-		Name Positional[string]
-	}
-
-	tool, r, d := buildToolFor(t, func(r *toolRegistry, d *definitions) {
-		def := defineToolInto(r, d, "git", ToolSpec{Version: "1.0.0"})
-		// The intermediate node is declared so it can carry documentation.
-		declareGroup(r, d, def, []string{"remote"}, []CommandOpt{
-			Summary("Manage remotes"), Aliases("rmt"),
-		})
-		add := declareCommand[AddArgs, string](r, d, def, []string{"remote", "add"}, "add", AddArgs{}, nil)
-		handleCommandInto(r, d, add, func(ctx *ToolContext, in AddArgs) string {
-			return strings.Join(ctx.CommandPath(), " ") + " " + in.Name.Get() + "=" + in.URL.Get()
-		})
-		rm := declareCommand[RemoveArgs, string](r, d, def, []string{"remote", "remove"}, "remove", RemoveArgs{}, nil)
-		handleCommandInto(r, d, rm, func(_ *ToolContext, in RemoveArgs) string { return "removed " + in.Name.Get() })
-	})
-
-	// root -> remote -> {add, remove}
-	if len(tool.Commands.Nodes) != 4 {
-		t.Fatalf("tree has %d nodes, want 4", len(tool.Commands.Nodes))
-	}
-	root := tool.Commands.Nodes[0]
-	if len(root.Subcommands) != 1 {
-		t.Fatalf("root has %d subcommands, want 1", len(root.Subcommands))
-	}
-	remote := tool.Commands.Nodes[root.Subcommands[0]]
-	if remote.Name != "remote" || remote.Doc.Summary != "Manage remotes" {
-		t.Errorf("intermediate node is %+v, want the declared remote group", remote)
-	}
-	if len(remote.Aliases) != 1 || remote.Aliases[0] != "rmt" {
-		t.Errorf("remote aliases %v, want [rmt]", remote.Aliases)
-	}
-	// A group dispatches only: it has no body of its own.
-	if remote.Body.IsSome() {
-		t.Error("the remote group gained a body")
-	}
-	if len(remote.Subcommands) != 2 {
-		t.Fatalf("remote has %d subcommands, want 2", len(remote.Subcommands))
-	}
-	for _, idx := range remote.Subcommands {
-		if tool.Commands.Nodes[idx].Body.IsNone() {
-			t.Errorf("leaf %q has no body", tool.Commands.Nodes[idx].Name)
+func TestKebabNames(t *testing.T) {
+	for in, want := range map[string]string{
+		"Name": "name", "GitDir": "git-dir", "URLPath": "url-path", "MaxCount": "max-count",
+		"HTTP": "http", "Retry2Times": "retry2-times", "ID": "id",
+	} {
+		if got := kebab(in); got != want {
+			t.Errorf("kebab(%q) = %q, want %q", in, got, want)
 		}
-	}
-
-	// Dispatch walks the same path.
-	e, _ := r.get("git")
-	input := encodeToolArgs(t, d, e, []string{"remote", "add"}, "origin", "git@example.com")
-	got := d.invokeCommand(e, []string{"remote", "add"}, input,
-		newToolStdin(toolExports.Stdin{}), newToolStdout(toolExports.Stdout{}))
-	if got.Tag() != witTypes.ResultOk {
-		t.Fatalf("invoking a nested command failed: %+v", got.Err())
-	}
-	typed := got.Ok().Result.Some()
-	out, err := TypedValue{wit: typed}.JSON()
-	if err != nil {
-		t.Fatalf("result is not readable: %v", err)
-	}
-	if out != "remote add origin=git@example.com" {
-		t.Errorf("result %v", out)
 	}
 }
 
-// TestUndeclaredIntermediateNodesAreCreated — declaring only the leaf is
-// enough; the path in between is materialised as dispatch-only nodes.
-func TestUndeclaredIntermediateNodesAreCreated(t *testing.T) {
-	type Args struct{ Value Positional[string] }
-
-	tool, _, _ := buildToolFor(t, func(r *toolRegistry, d *definitions) {
-		def := defineToolInto(r, d, "deep", ToolSpec{Version: "0.1.0"})
-		cmd := declareCommand[Args, string](r, d, def, []string{"a", "b", "c"}, "c", Args{}, nil)
-		handleCommandInto(r, d, cmd, func(*ToolContext, Args) string { return "" })
-	})
-
-	if len(tool.Commands.Nodes) != 4 {
-		t.Fatalf("tree has %d nodes, want 4", len(tool.Commands.Nodes))
-	}
-	at := tool.Commands.Nodes[0]
-	for _, want := range []string{"a", "b", "c"} {
-		if len(at.Subcommands) != 1 {
-			t.Fatalf("node %q has %d subcommands, want 1", at.Name, len(at.Subcommands))
-		}
-		at = tool.Commands.Nodes[at.Subcommands[0]]
-		if at.Name != want {
-			t.Fatalf("node is %q, want %q", at.Name, want)
-		}
-	}
-	// Only the declared leaf has a body.
-	if at.Body.IsNone() {
-		t.Error("the leaf has no body")
-	}
-}
-
-// TestSiblingsShareTheirParentNode — two commands under one path must attach to
-// the same intermediate node rather than each creating their own.
-func TestSiblingsShareTheirParentNode(t *testing.T) {
-	type Args struct{ Value Positional[string] }
-
-	tool, _, _ := buildToolFor(t, func(r *toolRegistry, d *definitions) {
-		def := defineToolInto(r, d, "siblings", ToolSpec{Version: "0.1.0"})
-		for _, leaf := range []string{"one", "two"} {
-			cmd := declareCommand[Args, string](r, d, def, []string{"group", leaf}, leaf, Args{}, nil)
-			handleCommandInto(r, d, cmd, func(*ToolContext, Args) string { return "" })
-		}
-	})
-
-	if len(tool.Commands.Nodes) != 4 {
-		t.Fatalf("tree has %d nodes, want 4 (root, group, two leaves)", len(tool.Commands.Nodes))
-	}
-	if n := len(tool.Commands.Nodes[0].Subcommands); n != 1 {
-		t.Fatalf("root has %d subcommands, want 1", n)
-	}
-	group := tool.Commands.Nodes[tool.Commands.Nodes[0].Subcommands[0]]
-	if len(group.Subcommands) != 2 {
-		t.Errorf("group has %d subcommands, want 2", len(group.Subcommands))
+func TestToolCallOutsideAComponentSaysSo(t *testing.T) {
+	v, _, _ := newVcs(t)
+	_, err := v.commit.Call(func(a *CommitArgs) { a.Message = "m" })
+	if err == nil || !strings.Contains(err.Error(), "only available inside a component") {
+		t.Errorf("got %v", err)
 	}
 }

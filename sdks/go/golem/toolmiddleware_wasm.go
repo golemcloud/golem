@@ -27,7 +27,7 @@ import (
 // beneath a middleware.
 type witNextLayer struct{ tool *underlying.UnderlyingTool }
 
-func (n witNextLayer) invoke(commandPath []string, input TypedValue, stdin nextStdin) MiddlewareOutcome {
+func (n witNextLayer) invoke(commandPath []string, input TypedValue, stdin nextStdin) ToolMiddlewareOutcome {
 	forwarded := witTypes.None[*witTypes.StreamReader[witTypes.Result[[]uint8, streams.ByteStreamFailure]]]()
 	if s, ok := stdin.wit.(mwExports.Stdin); ok {
 		forwarded = s
@@ -36,7 +36,7 @@ func (n witNextLayer) invoke(commandPath []string, input TypedValue, stdin nextS
 	// The result is awaited after the stdout reader is in hand, which is what
 	// lets a middleware relay output while the inner layer is still running.
 	res := call.Get()
-	outcome := MiddlewareOutcome{}
+	outcome := ToolMiddlewareOutcome{}
 	if out.IsSome() {
 		outcome.stdout = &ToolStdin{src: out.Some()}
 	}

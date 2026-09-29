@@ -35,14 +35,14 @@ import (
 //	    Version: "1.0.0", Summary: "Records every invocation",
 //	})
 //
-//	var _ = golem.HandleToolMiddleware(Audit, func(ctx *golem.MiddlewareContext[AuditParams]) golem.MiddlewareOutcome {
+//	var _ = golem.HandleToolMiddleware(Audit, func(ctx *golem.ToolMiddlewareContext[AuditParams]) golem.ToolMiddlewareOutcome {
 //	    record(ctx.Parameters().Channel, ctx.ToolName(), ctx.CommandPath())
 //	    return ctx.Next(ctx.Input())
 //	})
 //
 // A middleware is generic over the tools it wraps, so it does not have their Go
 // types: the call's arguments and its result arrive as [TypedValue], which
-// carries its own schema. Returning without calling [MiddlewareContext.Next]
+// carries its own schema. Returning without calling [ToolMiddlewareContext.Next]
 // short-circuits the call.
 //
 // The middleware's static configuration is the type parameter P, whose schema
@@ -85,7 +85,7 @@ type middlewareEntry struct {
 	spec       ToolMiddlewareSpec
 	opts       middlewareOpts
 	paramsType reflect.Type
-	invoke     func(*middlewareCall) MiddlewareOutcome
+	invoke     func(*middlewareCall) ToolMiddlewareOutcome
 }
 
 // DefineToolMiddleware registers a middleware. Call it from a package-level var
@@ -121,14 +121,14 @@ func defineToolMiddlewareInto[P any](
 
 // HandleToolMiddleware binds a middleware's implementation.
 func HandleToolMiddleware[P any](
-	m *ToolMiddlewareDefinition[P], h func(*MiddlewareContext[P]) MiddlewareOutcome,
+	m *ToolMiddlewareDefinition[P], h func(*ToolMiddlewareContext[P]) ToolMiddlewareOutcome,
 ) Registered {
 	return handleToolMiddlewareInto(toolDefs, defs, m, h)
 }
 
 func handleToolMiddlewareInto[P any](
 	r *toolRegistry, d *definitions, m *ToolMiddlewareDefinition[P],
-	h func(*MiddlewareContext[P]) MiddlewareOutcome,
+	h func(*ToolMiddlewareContext[P]) ToolMiddlewareOutcome,
 ) Registered {
 	e := r.middlewaresByName[m.name]
 	if e == nil {
@@ -139,12 +139,12 @@ func handleToolMiddlewareInto[P any](
 		d.recordErr("", "", "tool middleware %s already has a handler", m.name)
 		return Registered{}
 	}
-	e.invoke = func(call *middlewareCall) MiddlewareOutcome {
+	e.invoke = func(call *middlewareCall) ToolMiddlewareOutcome {
 		params, err := DecodeTypedValue[P](call.parameters)
 		if err != nil {
 			return failOutcome(fmt.Errorf("middleware %s: parameters: %w", m.name, err))
 		}
-		return h(&MiddlewareContext[P]{call: call, params: params})
+		return h(&ToolMiddlewareContext[P]{call: call, params: params})
 	}
 	return Registered{}
 }
@@ -163,52 +163,52 @@ type middlewareCall struct {
 	next        nextLayer
 }
 
-// MiddlewareContext is the per-invocation context handed to a middleware.
-type MiddlewareContext[P any] struct {
+// ToolMiddlewareContext is the per-invocation context handed to a middleware.
+type ToolMiddlewareContext[P any] struct {
 	call   *middlewareCall
 	params P
 }
 
 // Parameters returns the middleware's static configuration for this
 // installation.
-func (c *MiddlewareContext[P]) Parameters() P { return c.params }
+func (c *ToolMiddlewareContext[P]) Parameters() P { return c.params }
 
 // Name returns the middleware's own name.
-func (c *MiddlewareContext[P]) Name() string { return c.call.middleware }
+func (c *ToolMiddlewareContext[P]) Name() string { return c.call.middleware }
 
 // ToolName returns the name of the tool being invoked.
-func (c *MiddlewareContext[P]) ToolName() string { return c.call.toolName }
+func (c *ToolMiddlewareContext[P]) ToolName() string { return c.call.toolName }
 
 // ToolMetadata returns the wrapped tool's published metadata, which is how a
 // universal middleware learns the shape of a tool it was not written for.
-func (c *MiddlewareContext[P]) ToolMetadata() ReflectedTool {
+func (c *ToolMiddlewareContext[P]) ToolMetadata() ReflectedTool {
 	return newReflectedTool(c.call.toolName, c.call.tool)
 }
 
 // CommandPath returns the command being invoked, from the tool's root.
-func (c *MiddlewareContext[P]) CommandPath() []string {
+func (c *ToolMiddlewareContext[P]) CommandPath() []string {
 	return append([]string(nil), c.call.commandPath...)
 }
 
 // Input returns the call's arguments. A middleware that does not rewrite them
-// passes this straight to [MiddlewareContext.Next].
-func (c *MiddlewareContext[P]) Input() TypedValue { return c.call.input }
+// passes this straight to [ToolMiddlewareContext.Next].
+func (c *ToolMiddlewareContext[P]) Input() TypedValue { return c.call.input }
 
 // Stdout returns the middleware's own output stream, which it may write to
 // directly or relay the inner layer's output into.
-func (c *MiddlewareContext[P]) Stdout() *ToolStdout { return c.call.stdout }
+func (c *ToolMiddlewareContext[P]) Stdout() *ToolStdout { return c.call.stdout }
 
 // Next hands the call to the layer beneath and returns its outcome. The
 // original standard input is forwarded as-is. Not calling it short-circuits the
 // call, which is how a middleware denies or caches one.
-func (c *MiddlewareContext[P]) Next(input TypedValue) MiddlewareOutcome {
+func (c *ToolMiddlewareContext[P]) Next(input TypedValue) ToolMiddlewareOutcome {
 	return c.call.next.invoke(c.call.commandPath, input, c.call.stdin)
 }
 
-// MiddlewareOutcome is what a middleware returns: the result to hand back, or a
-// failure. Build one with [Succeed], [SucceedWithNothing] or [Fail], or pass
-// through what [MiddlewareContext.Next] returned.
-type MiddlewareOutcome struct {
+// ToolMiddlewareOutcome is what a middleware returns: the result to hand back,
+// or a failure. Build one with the context's Succeed, SucceedWithNothing or
+// Fail, or pass through what [ToolMiddlewareContext.Next] returned.
+type ToolMiddlewareOutcome struct {
 	result    TypedValue
 	hasResult bool
 	// stdout is the inner layer's output stream when the outcome came from Next,
@@ -218,32 +218,34 @@ type MiddlewareOutcome struct {
 }
 
 // Succeed returns a result to the caller.
-func Succeed(result TypedValue) MiddlewareOutcome {
-	return MiddlewareOutcome{result: result, hasResult: true}
+func (c *ToolMiddlewareContext[P]) Succeed(result TypedValue) ToolMiddlewareOutcome {
+	return ToolMiddlewareOutcome{result: result, hasResult: true}
 }
 
 // SucceedWithNothing returns success with no value, for a command that has no
 // result.
-func SucceedWithNothing() MiddlewareOutcome { return MiddlewareOutcome{} }
+func (c *ToolMiddlewareContext[P]) SucceedWithNothing() ToolMiddlewareOutcome {
+	return ToolMiddlewareOutcome{}
+}
 
 // Fail returns a failure to the caller.
-func Fail(err error) MiddlewareOutcome { return failOutcome(err) }
+func (c *ToolMiddlewareContext[P]) Fail(err error) ToolMiddlewareOutcome { return failOutcome(err) }
 
-func failOutcome(err error) MiddlewareOutcome { return MiddlewareOutcome{err: err} }
+func failOutcome(err error) ToolMiddlewareOutcome { return ToolMiddlewareOutcome{err: err} }
 
 // Result reports the outcome's value, if it has one.
-func (o MiddlewareOutcome) Result() (TypedValue, bool) { return o.result, o.hasResult }
+func (o ToolMiddlewareOutcome) Result() (TypedValue, bool) { return o.result, o.hasResult }
 
 // Err reports the outcome's failure, or nil.
-func (o MiddlewareOutcome) Err() error { return o.err }
+func (o ToolMiddlewareOutcome) Err() error { return o.err }
 
 // Stdout returns the inner layer's output stream when this outcome came from
-// [MiddlewareContext.Next] and the inner layer produced one.
-func (o MiddlewareOutcome) Stdout() *ToolStdin { return o.stdout }
+// [ToolMiddlewareContext.Next] and the inner layer produced one.
+func (o ToolMiddlewareOutcome) Stdout() *ToolStdin { return o.stdout }
 
 // WithResult replaces the outcome's value, which is how a middleware rewrites
 // what the inner layer returned.
-func (o MiddlewareOutcome) WithResult(result TypedValue) MiddlewareOutcome {
+func (o ToolMiddlewareOutcome) WithResult(result TypedValue) ToolMiddlewareOutcome {
 	o.result, o.hasResult, o.err = result, true, nil
 	return o
 }
@@ -347,21 +349,20 @@ func (d *definitions) buildToolMiddleware(e *middlewareEntry) (toolCommon.ToolMi
 		Name:            e.name,
 		Version:         e.spec.Version,
 		Aliases:         append([]string(nil), e.spec.Aliases...),
-		Doc:             docOf(e.spec.Summary, e.spec.Description),
+		Doc:             toolDoc{summary: e.spec.Summary, description: e.spec.Description}.toWit(),
 		Scope:           scope,
 		ParameterSchema: paramsGraph,
 	}, ok
 }
 
-// buildScopedTool derives the metadata of a tool named in a monomorphic scope.
+// buildScopedTool derives the metadata of a tool named in a monomorphic scope,
+// which may be one this component defines or one it declares to call.
 func (d *definitions) buildScopedTool(e *middlewareEntry, t *ToolDefinition, role string) (toolCommon.Tool, bool) {
-	entry, known := toolDefs.get(t.Name())
-	if !known {
-		d.recordErr("", "", "tool middleware %s names the unregistered tool %q as its %s shape",
-			e.name, t.Name(), role)
-		return toolCommon.Tool{}, false
+	tool, ok := d.buildTool(t.entry)
+	if !ok {
+		d.recordErr("", "", "tool middleware %s: its %s tool %q is not well-defined", e.name, role, t.Name())
 	}
-	return d.buildTool(entry)
+	return tool, ok
 }
 
 // nextStdin is the standard input a middleware forwards to the layer beneath.
@@ -376,14 +377,14 @@ type nextStdin struct {
 // dispatcher's logic testable without a host; the wasm build binds the
 // generated resource to it (see toolmiddleware_wasm.go).
 type nextLayer interface {
-	invoke(commandPath []string, input TypedValue, stdin nextStdin) MiddlewareOutcome
+	invoke(commandPath []string, input TypedValue, stdin nextStdin) ToolMiddlewareOutcome
 }
 
 // absentNextLayer stands in when there is no layer beneath, so calling Next
 // reports that rather than dereferencing nil.
 type absentNextLayer struct{}
 
-func (absentNextLayer) invoke([]string, TypedValue, nextStdin) MiddlewareOutcome {
+func (absentNextLayer) invoke([]string, TypedValue, nextStdin) ToolMiddlewareOutcome {
 	return failOutcome(fmt.Errorf("golem: this middleware was invoked without a layer beneath it"))
 }
 
@@ -427,12 +428,12 @@ func (d *definitions) invokeMiddleware(call *middlewareCall) witTypes.Result[too
 
 // runMiddlewareHandler calls the handler, recovering a panic and selecting the
 // output stream's terminal, on the same terms as a command handler.
-func runMiddlewareHandler(e *middlewareEntry, call *middlewareCall) (outcome MiddlewareOutcome, err error) {
+func runMiddlewareHandler(e *middlewareEntry, call *middlewareCall) (outcome ToolMiddlewareOutcome, err error) {
 	finished := false
 	defer func() {
 		if r := recover(); r != nil {
 			_ = call.stdout.Fail(StreamFailed(panicMessage(r)))
-			outcome, err = MiddlewareOutcome{}, fmt.Errorf(
+			outcome, err = ToolMiddlewareOutcome{}, fmt.Errorf(
 				"middleware %s panicked: %s", e.name, panicMessage(r))
 			return
 		}
