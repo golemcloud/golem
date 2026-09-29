@@ -134,24 +134,47 @@ pub(crate) fn since(
     selected_now.then(|| confirmed.clone())
 }
 
-/// What a capture found, without the copy.
+/// What a capture found. `Copy` is the copy that a capture made, which only a capture that
+/// found a change has.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum CaptureFinding {
+enum CaptureFinding<Copy> {
     Unchanged,
     InitialFiles,
-    Captured(ChangeDetection),
+    Captured {
+        copy: Copy,
+        detection: ChangeDetection,
+    },
 }
 
-/// The name that a periodic snapshot record gets.
+impl CaptureFinding<(FilesystemCapture, TreeMark)> {
+    /// The finding of a capture outcome, with the copy and its mark.
+    fn of(outcome: CaptureOutcome) -> Self {
+        match outcome {
+            CaptureOutcome::Unchanged => Self::Unchanged,
+            CaptureOutcome::InitialFiles => Self::InitialFiles,
+            CaptureOutcome::Captured {
+                capture,
+                mark,
+                detection,
+            } => Self::Captured {
+                copy: (capture, mark),
+                detection,
+            },
+        }
+    }
+}
+
+/// The record of a periodic snapshot. `Copy` is the copy that the record uploads.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum PeriodicRecord {
+enum PeriodicRecord<Copy> {
     /// No record is written: the capture found no change against a confirmed snapshot that it
     /// did not have.
     Skipped,
     /// The record has no name. Nothing is uploaded.
     WithoutName,
-    /// The record has the name of the admission, and the capture is uploaded with `parent`.
-    Uploaded {
+    /// The record has the name of the admission, and `copy` is uploaded with `parent`.
+    Own {
+        copy: Copy,
         parent: Option<(FilesystemSnapshotName, StoreChangeDetection)>,
     },
     /// The record has the confirmed name, and its confirmation record follows it at once.
@@ -160,20 +183,25 @@ pub(crate) enum PeriodicRecord {
 
 /// Decides the record of a periodic snapshot from the finding of the capture and the confirmed
 /// snapshot that the capture compared with.
-pub(crate) fn plan_periodic_record(
-    finding: CaptureFinding,
+fn plan_periodic_record<Copy>(
+    finding: CaptureFinding<Copy>,
     since: Option<&ConfirmedFilesystemSnapshot>,
-) -> PeriodicRecord {
+) -> PeriodicRecord<Copy> {
     match (finding, since) {
         (CaptureFinding::Unchanged, Some(since)) => PeriodicRecord::Reused(since.name.clone()),
         (CaptureFinding::Unchanged, None) => PeriodicRecord::Skipped,
         (CaptureFinding::InitialFiles, _) => PeriodicRecord::WithoutName,
-        (CaptureFinding::Captured(ChangeDetection::SizeMtime), Some(since)) => {
-            PeriodicRecord::Uploaded {
-                parent: Some((since.name.clone(), StoreChangeDetection::SizeMtime)),
-            }
-        }
-        (CaptureFinding::Captured(_), _) => PeriodicRecord::Uploaded { parent: None },
+        (
+            CaptureFinding::Captured {
+                copy,
+                detection: ChangeDetection::SizeMtime,
+            },
+            Some(since),
+        ) => PeriodicRecord::Own {
+            copy,
+            parent: Some((since.name.clone(), StoreChangeDetection::SizeMtime)),
+        },
+        (CaptureFinding::Captured { copy, .. }, _) => PeriodicRecord::Own { copy, parent: None },
     }
 }
 
@@ -214,37 +242,27 @@ impl PeriodicPlan {
         let Some((admission, since, outcome)) = capture else {
             return Some(without_name);
         };
-        let finding = match &outcome {
-            CaptureOutcome::Unchanged => CaptureFinding::Unchanged,
-            CaptureOutcome::InitialFiles => CaptureFinding::InitialFiles,
-            CaptureOutcome::Captured { detection, .. } => CaptureFinding::Captured(*detection),
-        };
-        let record = plan_periodic_record(finding, since.as_ref());
-        match outcome {
-            CaptureOutcome::Captured { capture, mark, .. } => Some(Self {
+        match plan_periodic_record(CaptureFinding::of(outcome), since.as_ref()) {
+            PeriodicRecord::Skipped => None,
+            PeriodicRecord::WithoutName => Some(without_name),
+            PeriodicRecord::Reused(name) => Some(Self {
+                name: Some(name.clone()),
+                confirmed_at_once: Some(name),
+                upload: None,
+            }),
+            PeriodicRecord::Own {
+                copy: (tree, mark),
+                parent,
+            } => Some(Self {
                 name: Some(admission.name().clone()),
                 confirmed_at_once: None,
                 upload: Some(PendingUpload {
                     admission,
-                    tree: capture,
+                    tree,
                     mark,
-                    parent: match record {
-                        PeriodicRecord::Uploaded { parent } => parent,
-                        PeriodicRecord::Skipped
-                        | PeriodicRecord::WithoutName
-                        | PeriodicRecord::Reused(_) => None,
-                    },
+                    parent,
                 }),
             }),
-            CaptureOutcome::Unchanged | CaptureOutcome::InitialFiles => match record {
-                PeriodicRecord::Skipped => None,
-                PeriodicRecord::Reused(name) => Some(Self {
-                    name: Some(name.clone()),
-                    confirmed_at_once: Some(name),
-                    upload: None,
-                }),
-                PeriodicRecord::WithoutName | PeriodicRecord::Uploaded { .. } => Some(without_name),
-            },
         }
     }
 
@@ -949,6 +967,10 @@ mod tests {
         );
     }
 
+    fn captured(detection: ChangeDetection) -> CaptureFinding<u8> {
+        CaptureFinding::Captured { copy: 1, detection }
+    }
+
     #[test]
     async fn the_record_of_a_periodic_snapshot_follows_the_finding_of_the_capture() {
         let (mark, _) = marks().await;
@@ -960,15 +982,9 @@ mod tests {
             plan_periodic_record(CaptureFinding::Unchanged, None),
             plan_periodic_record(CaptureFinding::InitialFiles, Some(&since)),
             plan_periodic_record(CaptureFinding::InitialFiles, None),
-            plan_periodic_record(
-                CaptureFinding::Captured(ChangeDetection::SizeMtime),
-                Some(&since),
-            ),
-            plan_periodic_record(
-                CaptureFinding::Captured(ChangeDetection::Full),
-                Some(&since),
-            ),
-            plan_periodic_record(CaptureFinding::Captured(ChangeDetection::Full), None),
+            plan_periodic_record(captured(ChangeDetection::SizeMtime), Some(&since)),
+            plan_periodic_record(captured(ChangeDetection::Full), Some(&since)),
+            plan_periodic_record(captured(ChangeDetection::Full), None),
         ];
 
         assert_eq!(
@@ -978,11 +994,18 @@ mod tests {
                 PeriodicRecord::Skipped,
                 PeriodicRecord::WithoutName,
                 PeriodicRecord::WithoutName,
-                PeriodicRecord::Uploaded {
+                PeriodicRecord::Own {
+                    copy: 1,
                     parent: Some((name, StoreChangeDetection::SizeMtime)),
                 },
-                PeriodicRecord::Uploaded { parent: None },
-                PeriodicRecord::Uploaded { parent: None },
+                PeriodicRecord::Own {
+                    copy: 1,
+                    parent: None
+                },
+                PeriodicRecord::Own {
+                    copy: 1,
+                    parent: None
+                },
             ]
         );
     }
