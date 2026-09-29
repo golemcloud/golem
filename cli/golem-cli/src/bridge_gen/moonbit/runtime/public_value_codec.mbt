@@ -619,15 +619,7 @@ fn pvc_u32(value : Json) -> UInt raise {
 
 ///|
 fn pvc_encode_float(value : Double) -> Json {
-  if value.is_nan() {
-    pvc_obj([("$float", Json::string("nan"))])
-  } else if value.is_pos_inf() {
-    pvc_obj([("$float", Json::string("positive-infinity"))])
-  } else if value.is_neg_inf() {
-    pvc_obj([("$float", Json::string("negative-infinity"))])
-  } else {
-    Json::number(value, repr=value.to_string())
-  }
+  json_double(value)
 }
 
 ///|

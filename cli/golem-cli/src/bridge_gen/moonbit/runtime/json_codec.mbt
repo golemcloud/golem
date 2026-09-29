@@ -47,7 +47,12 @@ fn json_double(d : Double) -> Json {
   } else if d.is_neg_inf() {
     obj([("$float", Json::string("negative-infinity"))])
   } else {
-    Json::number(d, repr=d.to_string())
+    let repr = if d == 0.0 && d.reinterpret_as_uint64() == 0x8000000000000000UL {
+      "-0"
+    } else {
+      d.to_string()
+    }
+    Json::number(d, repr~)
   }
 }
 
@@ -182,11 +187,12 @@ pub fn schema_value_to_json(value : SchemaValue) -> Json {
       node("result", obj(fields))
     }
     TextValue(text, language) => {
-      let fields : Array[(String, Json)] = [("text", Json::string(text))]
+      let fields : Array[(String, Json)] = []
       match language {
         Some(l) => fields.push(("language", Json::string(l)))
         None => ()
       }
+      fields.push(("text", Json::string(text)))
       node("text", obj(fields))
     }
     BinaryValue(bytes, mime_type) => {
@@ -230,7 +236,7 @@ pub fn schema_value_to_json(value : SchemaValue) -> Json {
     UnionValue(tag, body) =>
       node(
         "union",
-        obj([("tag", Json::string(tag)), ("body", schema_value_to_json(body))]),
+        obj([("body", schema_value_to_json(body)), ("tag", Json::string(tag))]),
       )
   }
 }

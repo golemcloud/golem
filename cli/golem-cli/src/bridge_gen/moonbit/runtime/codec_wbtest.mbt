@@ -129,8 +129,10 @@ test "config application JSON preserves reserved-looking fields and nested sums"
     StringValue("ordinary-result-field"),
   ])
   assert_eq(
-    codec.encode_application(value).stringify(),
-    "{\"$option\":\"ordinary-option-field\",\"$result\":\"ordinary-result-field\",\"kind\":\"application-field\",\"value\":{\"ok\":\"nested\"}}",
+    codec.encode_application(value),
+    @json.parse(
+      "{\"$option\":\"ordinary-option-field\",\"$result\":\"ordinary-result-field\",\"kind\":\"application-field\",\"value\":{\"ok\":\"nested\"}}",
+    ),
   )
 }
 
