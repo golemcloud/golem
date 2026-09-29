@@ -201,7 +201,7 @@ val appMode = env.getOrElse("APP_MODE", "default")
 When creating an agent instance directly (outside `golem deploy`), you can pass environment variables with the `--env` / `-e` flag:
 
 ```shell
-golem agent new my-ns:my-component/my-agent-1 \
+golem agent new 'MyAgent("my-agent-1")' \
   --env API_KEY=secret123 \
   --env LOG_LEVEL=debug
 ```
