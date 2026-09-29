@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::super::files::SnapshotFiles;
+use super::super::tests::files_of;
 use super::super::tests::holding::reached_deadline;
 use super::super::tests::scripted::{Script, ScriptedBlobStorage};
 use super::{SnapshotStage, StagedSnapshot, publish, retract};
@@ -60,12 +61,11 @@ fn files(
         environment_id: EnvironmentId(Uuid::new_v4()),
     };
     let over = |storage: Arc<dyn BlobStorage>| {
-        SnapshotFiles::new(
+        files_of(
             storage,
             namespace.clone(),
             deadline,
             tokio_util::sync::CancellationToken::new(),
-            TaskTracker::new(),
         )
     };
     (over(storage.clone()), storage, over(inner))

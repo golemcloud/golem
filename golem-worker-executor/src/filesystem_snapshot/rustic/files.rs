@@ -30,7 +30,7 @@ use tokio_util::sync::{CancellationToken, WaitForCancellationFuture};
 use tokio_util::task::TaskTracker;
 
 /// The target label of each blob storage call of the rustic store.
-pub(super) const TARGET_LABEL: &str = "filesystem_snapshot";
+const TARGET_LABEL: &str = "filesystem_snapshot";
 
 /// The time until which a prune may make storage calls. A prune holds its claim until the time in
 /// its newest marker plus the hold, as the other deletes see it. The lease ends before that, so a
@@ -139,7 +139,7 @@ impl SnapshotFiles {
 
     /// Waits for one call. The tracker counts the call before any check, so a shut down either
     /// stops the call or waits for it. A call of a lease that ran out gives [`LeaseExpired`], also
-    /// when the operation is cancelled too. A call of a cancelled operation does not start, and a
+    /// when the operation is cancelled. A call of a cancelled operation does not start, and a
     /// cancel ends a running call. A call without an answer within the deadline, or within the time
     /// that the lease leaves, fails. Each of these gives an error, the same as a call that failed.
     async fn answer<T>(

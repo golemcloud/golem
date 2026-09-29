@@ -19,7 +19,6 @@
 
 use super::super::backend::KEPT_PACKS_LIMIT;
 use super::super::fault::is_lease_expired;
-use super::super::files::SnapshotFiles;
 use super::super::prune::{
     CLOCK_SKEW_MARGIN, ClaimChoice, ClaimEntry, LEDGERS_PATH, Percent, PruneLedger, claim_hold,
     next_claim, parse_claim_entry, parse_freed, read_ledger,
@@ -176,12 +175,11 @@ async fn blobs(
 
 async fn ledger<S: BlobStorage + 'static>(storage: &Arc<S>, scope: &SnapshotScope) -> PruneLedger {
     read_ledger(
-        &SnapshotFiles::new(
+        &files_of(
             storage.clone(),
             scope.0.clone(),
             Duration::from_secs(2),
-            tokio_util::sync::CancellationToken::new(),
-            tokio_util::task::TaskTracker::new(),
+            CancellationToken::new(),
         ),
         &SystemClock,
     )
@@ -3765,13 +3763,7 @@ async fn a_blob_call_of_a_cancelled_operation_does_not_start() {
         ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |_, _| Script::Pass);
     let cancel = tokio_util::sync::CancellationToken::new();
     cancel.cancel();
-    let files = SnapshotFiles::new(
-        storage.clone(),
-        new_scope().0,
-        LONG_DEADLINE,
-        cancel,
-        tokio_util::task::TaskTracker::new(),
-    );
+    let files = files_of(storage.clone(), new_scope().0, LONG_DEADLINE, cancel);
 
     let read = files
         .get("read_ledger", Path::new("golem/prune-ledgers/1000-0-0f0f"))

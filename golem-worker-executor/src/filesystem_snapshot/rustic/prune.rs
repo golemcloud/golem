@@ -798,6 +798,7 @@ mod tests {
     use super::super::backend::{BlobBackend, KEPT_PACKS_LIMIT};
     use super::super::fault::is_lease_expired;
     use super::super::files::SnapshotFiles;
+    use super::super::tests::files_of;
     use super::super::tests::scripted::{Script, ScriptedBlobStorage};
     use super::{
         CLAIMS_PATH, CLOCK_SKEW_MARGIN, ClaimChoice, ClaimEntry, FREED_PATH, FreedRecord,
@@ -859,14 +860,13 @@ mod tests {
         storage: Arc<dyn BlobStorage>,
         cancel: tokio_util::sync::CancellationToken,
     ) -> SnapshotFiles {
-        SnapshotFiles::new(
+        files_of(
             storage,
             BlobStorageNamespace::InitialAgentFiles {
                 environment_id: EnvironmentId(Uuid::new_v4()),
             },
             DEADLINE,
             cancel,
-            tokio_util::task::TaskTracker::new(),
         )
     }
 
