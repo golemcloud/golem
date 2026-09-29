@@ -96,14 +96,16 @@ fn a_pack_is_kept_when_it_fits_the_limit_and_closes_the_set_when_it_does_not() {
             admit(false, 0, 11, 10),
             admit(false, usize::MAX, 1, usize::MAX),
             admit(false, 0, 0, 0),
+            admit(false, 10, 0, 10),
         ],
         [
             Admit::Keep { bytes: 10 },
             Admit::Keep { bytes: 9 },
             Admit::Close,
             Admit::Close,
-            Admit::Keep { bytes: usize::MAX },
-            Admit::Keep { bytes: 0 },
+            Admit::Close,
+            Admit::Close,
+            Admit::Close,
         ]
     );
 }
