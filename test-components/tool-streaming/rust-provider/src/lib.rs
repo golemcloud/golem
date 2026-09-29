@@ -85,6 +85,9 @@ impl MiddlewareProbe for MiddlewareProbeImpl {
                 "middleware-race-detached"
             };
             wait_at_crash_checkpoint(&value, checkpoint).await;
+            if value == "early-child(fail-after-parent)" {
+                panic!("nested middleware child trap after parent return");
+            }
         }
         if value.starts_with("partial-completed(") || value.starts_with("partial-pending(") {
             announce_middleware_probe_effect(&value).await;

@@ -1959,6 +1959,11 @@ fn zero_agent_remote_component_binding_hash_uses_effective_binding_and_matches_c
                 &[],
                 &[],
                 Default::default(),
+                &BTreeMap::from([(
+                    ToolName::try_from("grep").unwrap(),
+                    environment_binding.clone(),
+                )]),
+                &BTreeMap::new(),
                 &BTreeMap::new(),
                 &BTreeMap::new(),
             )
@@ -1991,6 +1996,12 @@ fn zero_agent_remote_component_binding_hash_uses_effective_binding_and_matches_c
                         effective,
                     )]),
                     bindings: BTreeMap::new(),
+                    environment_middleware_binding: Some((&environment_binding).into()),
+                    component_middleware_bindings: BTreeMap::from([(
+                        component.component_name.0.clone(),
+                        (&component_binding).into(),
+                    )]),
+                    agent_middleware_bindings: BTreeMap::new(),
                 }
                 .into(),
             )]),
@@ -2875,7 +2886,11 @@ fn optional_secret_default_creation_stores_plaintext_inner_schema_not_option_sch
         creations[0].secret_value,
         Some(SchemaValue::String("s3cr3t".to_string()))
     );
-    match resolve_schema_ref(&creations[0].secret_type, &creations[0].secret_type.root) {
+    match creations[0]
+        .secret_type
+        .resolve_ref(&creations[0].secret_type.root)
+        .unwrap()
+    {
         SchemaType::String { .. } => {}
         other => {
             panic!("deployment-created agent secrets must be stored as plaintext T, not {other:?}")

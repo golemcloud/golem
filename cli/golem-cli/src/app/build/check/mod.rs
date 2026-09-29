@@ -224,7 +224,7 @@ fn selected_component_languages(ctx: &BuildContext<'_>) -> BTreeSet<GuestLanguag
     ctx.application_context()
         .selected_component_names()
         .iter()
-        .filter_map(|component_name| ctx.application().component(component_name).guess_language())
+        .filter_map(|component_name| ctx.application().component(component_name).guest_language())
         .collect()
 }
 

@@ -23,6 +23,7 @@ environments:
 
 componentTemplates:
   moonbit-local:
+    guestLanguage: moonbit
     presets:
       debug:
         default: true

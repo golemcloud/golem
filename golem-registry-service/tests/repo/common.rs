@@ -7039,11 +7039,16 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
         expected_agent_middleware_bindings
     );
     let first_plan = first_identity.identity.into_plan(None).unwrap();
-    let (expected_environment_binding_inputs, expected_agent_binding_inputs) =
+    let (mut expected_environment_binding_inputs, mut expected_agent_binding_inputs) =
         diff::tool_middleware_binding_inputs(
             &expected_environment_middleware_bindings,
             &expected_agent_middleware_bindings,
         );
+    expected_environment_binding_inputs.remove(alpha.as_str());
+    expected_agent_binding_inputs
+        .get_mut(&agent_type_name)
+        .unwrap()
+        .remove(alpha.as_str());
     let expected_middleware = (
         ["audit-u".to_string()].into_iter().collect::<BTreeSet<_>>(),
         expected_universal_middlewares.clone(),
@@ -7358,6 +7363,8 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
     let remote_hash = diff::remote_tool_deployments(
         [remote_registered_tool.clone()],
         [remote_binding.clone()],
+        &BTreeMap::new(),
+        &BTreeMap::new(),
         &BTreeMap::new(),
         &BTreeSet::new(),
     )

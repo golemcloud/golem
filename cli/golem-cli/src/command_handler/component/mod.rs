@@ -1695,6 +1695,30 @@ impl ComponentCommandHandler {
                             })
                             .collect(),
                         bindings,
+                        environment_middleware_binding: manifest_config
+                            .environment_binding
+                            .as_ref()
+                            .map(diff::ToolMiddlewareBindingInput::from),
+                        component_middleware_bindings: manifest_config
+                            .component_bindings
+                            .iter()
+                            .map(|(component, binding)| {
+                                (
+                                    component.0.clone(),
+                                    diff::ToolMiddlewareBindingInput::from(binding),
+                                )
+                            })
+                            .collect(),
+                        agent_middleware_bindings: manifest_config
+                            .agent_bindings
+                            .iter()
+                            .map(|(agent, binding)| {
+                                (
+                                    agent.clone(),
+                                    diff::ToolMiddlewareBindingInput::from(binding),
+                                )
+                            })
+                            .collect(),
                     }
                     .into(),
                 );

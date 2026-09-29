@@ -131,6 +131,15 @@ impl DeploymentPlanAmbientToolEntry {
             provision: self.provision.clone(),
             component_bindings,
             bindings,
+            environment_middleware_binding: Some((&self.environment_binding).into()),
+            component_middleware_bindings: component_overrides
+                .iter()
+                .map(|(component, binding)| (component.0.clone(), binding.into()))
+                .collect(),
+            agent_middleware_bindings: overrides
+                .iter()
+                .map(|(agent, binding)| (agent.clone(), binding.into()))
+                .collect(),
         }
     }
 }

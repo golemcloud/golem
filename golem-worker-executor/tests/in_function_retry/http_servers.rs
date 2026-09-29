@@ -17,6 +17,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::spawn;
+use tokio::sync::{Notify, mpsc};
 use tracing::Instrument;
 
 /// Parses the `Content-Length` header from raw HTTP request header text.
@@ -637,6 +638,140 @@ pub(crate) async fn start_partial_response_http_server(
     );
 
     (port, counter, range_counter)
+}
+
+pub(crate) async fn start_gated_partial_response_http_server(
+    prefix_len: usize,
+    body: Vec<u8>,
+    replacement_status: u16,
+) -> (
+    u16,
+    mpsc::UnboundedReceiver<Option<usize>>,
+    Arc<AtomicUsize>,
+    Arc<Notify>,
+    Arc<Notify>,
+) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let counter = Arc::new(AtomicUsize::new(0));
+    let counter_clone = counter.clone();
+    let (request_tx, request_rx) = mpsc::unbounded_channel();
+    let replacement_ready = Arc::new(Notify::new());
+    let replacement_ready_clone = replacement_ready.clone();
+    let release_replacement = Arc::new(Notify::new());
+    let release_replacement_clone = release_replacement.clone();
+
+    spawn(
+        async move {
+            loop {
+                let (mut stream, _) = match listener.accept().await {
+                    Ok(connection) => connection,
+                    Err(_) => break,
+                };
+                let request_number = counter_clone.fetch_add(1, Ordering::SeqCst);
+                let body = body.clone();
+                let request_tx = request_tx.clone();
+                let replacement_ready = replacement_ready_clone.clone();
+                let release_replacement = release_replacement_clone.clone();
+
+                spawn(
+                    async move {
+                        let mut request = Vec::new();
+                        let mut buffer = [0u8; 4096];
+                        loop {
+                            match stream.read(&mut buffer).await {
+                                Ok(0) => return,
+                                Ok(read) => {
+                                    request.extend_from_slice(&buffer[..read]);
+                                    if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                                        break;
+                                    }
+                                }
+                                Err(_) => return,
+                            }
+                        }
+
+                        let request = String::from_utf8_lossy(&request);
+                        let range_start = request.lines().find_map(|line| {
+                            let (name, value) = line.split_once(':')?;
+                            if !name.eq_ignore_ascii_case("range") {
+                                return None;
+                            }
+                            value
+                                .trim()
+                                .strip_prefix("bytes=")?
+                                .strip_suffix('-')?
+                                .parse::<usize>()
+                                .ok()
+                        });
+                        let _ = request_tx.send(range_start);
+
+                        if request_number == 0 {
+                            let headers = format!(
+                                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                                body.len()
+                            );
+                            let _ = stream.write_all(headers.as_bytes()).await;
+                            let _ = stream.write_all(&body[..prefix_len]).await;
+                            let _ = stream.flush().await;
+                            tokio::time::sleep(Duration::from_millis(200)).await;
+                            return;
+                        }
+
+                        if request_number >= 2 {
+                            let body = br#"{"percentage":0.25,"message":"permit released"}"#;
+                            let headers = format!(
+                                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                                body.len()
+                            );
+                            let _ = stream.write_all(headers.as_bytes()).await;
+                            let _ = stream.write_all(body).await;
+                            let _ = stream.shutdown().await;
+                            return;
+                        }
+
+                        let start = range_start.unwrap_or(0);
+                        let remaining = if replacement_status == 206 {
+                            &body[start..]
+                        } else {
+                            &[]
+                        };
+                        let headers = if replacement_status == 206 {
+                            format!(
+                                "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes {}-{}/{}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                                start,
+                                body.len() - 1,
+                                body.len(),
+                                remaining.len()
+                            )
+                        } else {
+                            format!(
+                                "HTTP/1.1 {replacement_status} Range Not Satisfiable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                            )
+                        };
+                        let _ = stream.write_all(headers.as_bytes()).await;
+                        let _ = stream.flush().await;
+                        if request_number == 1 {
+                            replacement_ready.notify_one();
+                            release_replacement.notified().await;
+                        }
+                        let _ = stream.write_all(remaining).await;
+                        let _ = stream.shutdown().await;
+                    }
+                    .in_current_span(),
+                );
+            }
+        }
+        .in_current_span(),
+    );
+
+    (
+        port,
+        request_rx,
+        counter,
+        replacement_ready,
+        release_replacement,
+    )
 }
 
 /// Decodes an HTTP chunked transfer-encoded body into raw bytes.
