@@ -1817,4 +1817,184 @@ mod tests {
             ("Continue".to_string(), Some("confirm".to_string()))
         );
     }
+
+    /// A store over an in-memory store that gives each save a time ten minutes after the time of
+    /// the save before it, so that a retention sees snapshots older than its clock-skew margin,
+    /// and that reports each deleted name.
+    #[derive(Default)]
+    struct SpacedStore {
+        memory: crate::filesystem_snapshot::InMemorySnapshotStore,
+        times: std::sync::Mutex<std::collections::HashMap<String, Timestamp>>,
+        deleted: watch::Sender<Vec<String>>,
+    }
+
+    impl SpacedStore {
+        fn spaced(
+            &self,
+            name: &crate::filesystem_snapshot::SnapshotName,
+            info: crate::filesystem_snapshot::SnapshotInfo,
+        ) -> crate::filesystem_snapshot::SnapshotInfo {
+            let mut times = self.times.lock().unwrap();
+            let count = times.len() as u64;
+            let created_at = *times
+                .entry(name.as_str().to_string())
+                .or_insert_with(|| Timestamp::from(1_800_000_000_000 + count * 10 * 60 * 1000));
+            crate::filesystem_snapshot::SnapshotInfo { created_at, ..info }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl crate::filesystem_snapshot::FilesystemSnapshotStore for SpacedStore {
+        async fn save(
+            &self,
+            scope: &SnapshotScope,
+            name: &crate::filesystem_snapshot::SnapshotName,
+            tree: &Path,
+            parent: Option<(
+                &crate::filesystem_snapshot::SnapshotName,
+                StoreChangeDetection,
+            )>,
+        ) -> Result<
+            crate::filesystem_snapshot::SnapshotInfo,
+            crate::filesystem_snapshot::SnapshotStoreError,
+        > {
+            let info = self.memory.save(scope, name, tree, parent).await?;
+            Ok(self.spaced(name, info))
+        }
+
+        async fn restore(
+            &self,
+            scope: &SnapshotScope,
+            name: &crate::filesystem_snapshot::SnapshotName,
+            into: &Path,
+        ) -> Result<
+            crate::filesystem_snapshot::SnapshotInfo,
+            crate::filesystem_snapshot::SnapshotStoreError,
+        > {
+            self.memory.restore(scope, name, into).await
+        }
+
+        async fn stat(
+            &self,
+            scope: &SnapshotScope,
+            name: &crate::filesystem_snapshot::SnapshotName,
+        ) -> Result<
+            Option<crate::filesystem_snapshot::SnapshotInfo>,
+            crate::filesystem_snapshot::SnapshotStoreError,
+        > {
+            self.memory.stat(scope, name).await
+        }
+
+        async fn list(
+            &self,
+            scope: &SnapshotScope,
+        ) -> Result<
+            Box<
+                [(
+                    crate::filesystem_snapshot::SnapshotName,
+                    crate::filesystem_snapshot::SnapshotInfo,
+                )],
+            >,
+            crate::filesystem_snapshot::SnapshotStoreError,
+        > {
+            Ok(self
+                .memory
+                .list(scope)
+                .await?
+                .iter()
+                .map(|(name, info)| (name.clone(), self.spaced(name, *info)))
+                .collect())
+        }
+
+        async fn delete(
+            &self,
+            scope: &SnapshotScope,
+            name: &crate::filesystem_snapshot::SnapshotName,
+        ) -> Result<(), crate::filesystem_snapshot::SnapshotStoreError> {
+            self.memory.delete(scope, name).await?;
+            self.deleted
+                .send_modify(|deleted| deleted.push(name.as_str().to_string()));
+            Ok(())
+        }
+
+        async fn delete_scope(
+            &self,
+            scope: &SnapshotScope,
+        ) -> Result<(), crate::filesystem_snapshot::SnapshotStoreError> {
+            self.memory.delete_scope(scope).await
+        }
+
+        async fn copy_scope(
+            &self,
+            from: &SnapshotScope,
+            to: &SnapshotScope,
+        ) -> Result<(), crate::filesystem_snapshot::SnapshotStoreError> {
+            self.memory.copy_scope(from, to).await
+        }
+    }
+
+    #[test]
+    async fn the_retention_of_a_saved_manual_update_deletes_the_update_snapshots_beyond_the_kept_count()
+     {
+        let store = Arc::new(SpacedStore::default());
+        let shutdown = crate::services::shutdown::Shutdown::new();
+        let snapshots = AgentFilesystemSnapshots::bind(
+            &crate::services::golem_config::FilesystemSnapshotsConfig::default(),
+            crate::services::agent_filesystem_snapshots::StoreSource::given(
+                store.clone(),
+                crate::services::golem_config::FilesystemSnapshotUploadConfig::default(),
+            ),
+            false,
+            &shutdown,
+        )
+        .unwrap();
+        let scope = agent_scope("update-retention");
+        let tree = tempfile::tempdir().unwrap();
+        let older = [
+            FilesystemSnapshotName::update(),
+            FilesystemSnapshotName::update(),
+        ]
+        .map(|name| crate::filesystem_snapshot::SnapshotName::new(name.as_str()).unwrap());
+        let saved = futures::StreamExt::then(futures::stream::iter(&older), |name| {
+            crate::filesystem_snapshot::FilesystemSnapshotStore::save(
+                store.as_ref(),
+                &scope,
+                name,
+                tree.path(),
+                None,
+            )
+        });
+        futures::TryStreamExt::try_collect::<Vec<_>>(saved)
+            .await
+            .unwrap();
+        let (mark, _) = marks();
+        let scratch = crate::services::agent_filesystem::scratch_directory().await;
+        let mut host = ScriptedHost {
+            whole: std::sync::Mutex::new(Some(WholeCapture::Captured {
+                capture: FilesystemCapture::empty_in(&scratch).await,
+                mark,
+            })),
+            ..ScriptedHost::new()
+        };
+        let UpdateSnapshot::Saved {
+            retention: Some(retention),
+            ..
+        } = update_snapshot(&mut host, &snapshots, &scope).await
+        else {
+            panic!("the manual update saves its snapshot with a retention");
+        };
+        let mut deleted = store.deleted.subscribe();
+
+        retention.retain();
+        let deleted = tokio::time::timeout(
+            Duration::from_secs(10),
+            deleted.wait_for(|deleted| !deleted.is_empty()),
+        )
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .map(|deleted| deleted.clone());
+
+        assert_eq!(deleted, Some(vec![older[0].as_str().to_string()]));
+    }
 }
