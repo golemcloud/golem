@@ -29,7 +29,7 @@ pub struct NestedCliSpec {
     pub env: HashMap<String, String>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NestedCliTarget {
     Command,
     Server,
@@ -40,6 +40,13 @@ pub enum NestedCliTarget {
 pub struct CommandExit {
     pub code: Option<i32>,
     pub success: bool,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum NestedCliEvent {
+    Output(Vec<u8>),
+    OutputClosed(Option<String>),
+    Exited(CommandExit),
 }
 
 pub struct NestedCliRuntime {
@@ -208,26 +215,23 @@ fn spawn_blocking_pty_control(
 }
 
 fn output_event(target: NestedCliTarget, bytes: Vec<u8>) -> TuiEvent {
-    match target {
-        NestedCliTarget::Command => TuiEvent::CommandOutput(bytes),
-        NestedCliTarget::Server => TuiEvent::ServerOutput(bytes),
-        NestedCliTarget::Repl => TuiEvent::ReplOutput(bytes),
+    TuiEvent::NestedCli {
+        target,
+        event: NestedCliEvent::Output(bytes),
     }
 }
 
 fn output_closed_event(target: NestedCliTarget, error: Option<String>) -> TuiEvent {
-    match target {
-        NestedCliTarget::Command => TuiEvent::CommandOutputClosed(error),
-        NestedCliTarget::Server => TuiEvent::ServerOutputClosed(error),
-        NestedCliTarget::Repl => TuiEvent::ReplOutputClosed(error),
+    TuiEvent::NestedCli {
+        target,
+        event: NestedCliEvent::OutputClosed(error),
     }
 }
 
 fn exit_event(target: NestedCliTarget, exit: CommandExit) -> TuiEvent {
-    match target {
-        NestedCliTarget::Command => TuiEvent::CommandExited(exit),
-        NestedCliTarget::Server => TuiEvent::ServerExited(exit),
-        NestedCliTarget::Repl => TuiEvent::ReplExited(exit),
+    TuiEvent::NestedCli {
+        target,
+        event: NestedCliEvent::Exited(exit),
     }
 }
 
@@ -237,34 +241,28 @@ mod tests {
     use test_r::test;
 
     #[test]
-    fn maps_output_events_by_target() {
+    fn process_events_keep_their_target() {
+        let event = output_event(NestedCliTarget::Server, b"server".to_vec());
+
         assert!(matches!(
-            output_event(NestedCliTarget::Command, b"cmd".to_vec()),
-            TuiEvent::CommandOutput(bytes) if bytes == b"cmd"
-        ));
-        assert!(matches!(
-            output_event(NestedCliTarget::Server, b"server".to_vec()),
-            TuiEvent::ServerOutput(bytes) if bytes == b"server"
-        ));
-        assert!(matches!(
-            output_event(NestedCliTarget::Repl, b"repl".to_vec()),
-            TuiEvent::ReplOutput(bytes) if bytes == b"repl"
+            event,
+            TuiEvent::NestedCli {
+                target: NestedCliTarget::Server,
+                event: NestedCliEvent::Output(bytes),
+            } if bytes == b"server"
         ));
     }
 
     #[test]
     fn maps_closed_events_by_target() {
+        let event = output_closed_event(NestedCliTarget::Command, Some("closed".to_string()));
+
         assert!(matches!(
-            output_closed_event(NestedCliTarget::Command, Some("closed".to_string())),
-            TuiEvent::CommandOutputClosed(Some(error)) if error == "closed"
-        ));
-        assert!(matches!(
-            output_closed_event(NestedCliTarget::Server, None),
-            TuiEvent::ServerOutputClosed(None)
-        ));
-        assert!(matches!(
-            output_closed_event(NestedCliTarget::Repl, None),
-            TuiEvent::ReplOutputClosed(None)
+            event,
+            TuiEvent::NestedCli {
+                target: NestedCliTarget::Command,
+                event: NestedCliEvent::OutputClosed(Some(error)),
+            } if error == "closed"
         ));
     }
 
@@ -275,17 +273,14 @@ mod tests {
             success: true,
         };
 
+        let event = exit_event(NestedCliTarget::Repl, exit);
+
         assert!(matches!(
-            exit_event(NestedCliTarget::Command, exit),
-            TuiEvent::CommandExited(value) if value == exit
-        ));
-        assert!(matches!(
-            exit_event(NestedCliTarget::Server, exit),
-            TuiEvent::ServerExited(value) if value == exit
-        ));
-        assert!(matches!(
-            exit_event(NestedCliTarget::Repl, exit),
-            TuiEvent::ReplExited(value) if value == exit
+            event,
+            TuiEvent::NestedCli {
+                target: NestedCliTarget::Repl,
+                event: NestedCliEvent::Exited(value),
+            } if value == exit
         ));
     }
 

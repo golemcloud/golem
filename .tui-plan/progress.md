@@ -1,5 +1,31 @@
 # Progress
 
+## 2026-09-29: Hardened TUI State And Runtime Boundaries
+
+- Moved workspace and Dev-view identity out of the application implementation
+  so layout and navigation share neutral domain types.
+- Replaced ad hoc palette/leader return flags with a tested interaction-mode
+  stack. Nested Help, Commands, leader, filters, context selection, and REPL
+  now restore the mode that actually opened them.
+- Collapsed the parallel action ID/action-kind representation into one typed
+  action identity used by registry metadata and execution.
+- Replaced nine owner-specific nested-CLI events with one typed process
+  envelope and one dispatch point for command, Server, and REPL lifecycle
+  traffic.
+- Introduced `UiGeometry` as the sole cache for the latest layout snapshot, with
+  typed hit-test and region access used by mouse input, pane resize, PTY resize,
+  and geometry assertions.
+- Kept `UX-024` awaiting manual terminal acceptance; this cleanup does not mark
+  the current visual review complete.
+
+Validation:
+
+- `cargo fmt --package golem-cli`
+- `cargo test -p golem-cli --lib --features tui-preview -- tui:: --report-time`
+  (233 passed)
+- `cargo check -p golem-cli --features tui-preview`
+- `git diff --check`
+
 ## 2026-09-29: Restored The Shared Production Visual Foundation
 
 - Replaced the rebuilt shell's hand-written Dev/Ops header with the accepted

@@ -15,6 +15,7 @@
 use super::interaction::InteractionMode;
 use super::navigation::{DevView, Workspace};
 use ratatui::layout::Rect;
+use std::cell::RefCell;
 
 pub(super) const SHELL_COMPACT_WIDTH: u16 = 72;
 pub(super) const SHELL_COMPACT_HEIGHT: u16 = 20;
@@ -132,6 +133,42 @@ pub(super) struct LayoutSnapshot {
     pub(super) workspace_body: Rect,
     pub(super) footer: Rect,
     pub(super) regions: Vec<Region>,
+}
+
+#[derive(Debug, Default)]
+pub(super) struct UiGeometry {
+    snapshot: RefCell<Option<LayoutSnapshot>>,
+}
+
+impl UiGeometry {
+    pub(super) fn update(&self, snapshot: LayoutSnapshot) {
+        self.snapshot.replace(Some(snapshot));
+    }
+
+    pub(super) fn snapshot(&self) -> Option<LayoutSnapshot> {
+        self.snapshot.borrow().clone()
+    }
+
+    pub(super) fn region(&self, kind: RegionKind) -> Option<Rect> {
+        self.snapshot
+            .borrow()
+            .as_ref()
+            .and_then(|snapshot| snapshot.region(kind))
+    }
+
+    pub(super) fn hit_test(&self, x: u16, y: u16) -> Option<RegionKind> {
+        self.snapshot
+            .borrow()
+            .as_ref()
+            .and_then(|snapshot| snapshot.hit_test(x, y))
+    }
+
+    pub(super) fn workspace_body(&self) -> Option<Rect> {
+        self.snapshot
+            .borrow()
+            .as_ref()
+            .map(|snapshot| snapshot.workspace_body)
+    }
 }
 
 impl LayoutSnapshot {
@@ -692,6 +729,31 @@ mod tests {
             snapshot.body.width
         );
         assert!(snapshot.region(RegionKind::DevPrimarySplit).is_none());
+    }
+
+    #[test]
+    fn ui_geometry_exposes_only_the_latest_render_snapshot() {
+        let geometry = UiGeometry::default();
+        assert!(geometry.snapshot().is_none());
+
+        geometry.update(compute(input()));
+        let dev_body = geometry
+            .region(RegionKind::DevViewBody(DevView::BuildDeploy))
+            .unwrap();
+        assert_eq!(
+            geometry.hit_test(dev_body.x, dev_body.y),
+            Some(RegionKind::DevViewBody(DevView::BuildDeploy))
+        );
+
+        let mut second_input = input();
+        second_input.active_workspace = Workspace::Ops;
+        geometry.update(compute(second_input));
+        assert!(
+            geometry
+                .region(RegionKind::DevViewBody(DevView::BuildDeploy))
+                .is_none()
+        );
+        assert!(geometry.region(RegionKind::OpsList).is_some());
     }
 
     #[test]

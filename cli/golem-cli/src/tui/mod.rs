@@ -32,7 +32,7 @@ use app::{AgentRefreshPayload, OpsEnvironmentSnapshot};
 use context_executor::TuiContextTaskResult;
 use crossterm::event::Event;
 use golem_client::model::EnvironmentWithDetails;
-use nested_cli::CommandExit;
+use nested_cli::{NestedCliEvent, NestedCliTarget};
 use std::sync::Arc;
 use tokio::sync::oneshot;
 
@@ -44,17 +44,12 @@ pub use preview::main as preview_main;
 
 enum TuiEvent {
     Terminal(Event),
-    CommandOutput(Vec<u8>),
-    CommandOutputClosed(Option<String>),
-    CommandExited(CommandExit),
+    NestedCli {
+        target: NestedCliTarget,
+        event: NestedCliEvent,
+    },
     SpinnerTick(u64),
-    ServerOutput(Vec<u8>),
-    ServerOutputClosed(Option<String>),
-    ServerExited(CommandExit),
     ServerSpinnerTick(u64),
-    ReplOutput(Vec<u8>),
-    ReplOutputClosed(Option<String>),
-    ReplExited(CommandExit),
     AgentRefreshTick,
     AgentRefreshSpinnerTick {
         generation: u64,

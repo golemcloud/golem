@@ -23,6 +23,11 @@ Every async completion carries both a context identity and request generation.
 Views discard stale results rather than applying data from a context or query
 that is no longer active.
 
+Nested CLI process traffic uses one typed event envelope containing the process
+owner (finite command, Server, or REPL) and lifecycle event (output, output
+closure, or exit). The runtime routes that envelope through one dispatch point;
+do not add parallel top-level event variants for each process owner.
+
 ## Product State
 
 The application state has these independent axes:
@@ -156,6 +161,11 @@ Jobs, evicting the oldest completed record first.
 Rendering computes one LayoutSnapshot containing every visible pane, title,
 content rectangle, scrollbar slot, boundary, split handle, overlay row, and hit
 target. Mouse input routes only through snapshot region IDs.
+
+`UiGeometry` owns the latest rendered snapshot. Rendering replaces it as one
+unit, while pointer routing, PTY resize, and keyboard layout operations read
+regions through its typed accessors. Application code must not keep a second
+geometry cache or reach through the cache's interior mutability directly.
 
 Dev layout is derived from primary view, visible set, and placement:
 

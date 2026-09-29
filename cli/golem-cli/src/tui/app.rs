@@ -35,12 +35,11 @@ use crate::tui::context_executor::{TuiContextExecutor, TuiContextId, TuiContextT
 use crate::tui::input::encode_key_for_pty;
 use crate::tui::interaction::{InteractionMode, ModeStack};
 use crate::tui::layout::{
-    self, DragTarget, LayoutInput, LayoutSnapshot, RegionKind, TuiLayoutState,
-    adaptive_data_popup_rect,
+    self, DragTarget, LayoutInput, RegionKind, TuiLayoutState, UiGeometry, adaptive_data_popup_rect,
 };
 use crate::tui::navigation::{DevView, Workspace};
 use crate::tui::nested_cli::{
-    CommandExit, NestedCliRuntime, NestedCliSpec, NestedCliTarget, spawn_nested_cli,
+    CommandExit, NestedCliEvent, NestedCliRuntime, NestedCliSpec, NestedCliTarget, spawn_nested_cli,
 };
 use crate::tui::terminal::TerminalGuard;
 use crate::tui::terminal_screen::TerminalScreen;
@@ -80,7 +79,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph, ScrollbarState, Wrap};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::io::{Write, stdout};
 use std::path::PathBuf;
@@ -358,7 +357,7 @@ struct TuiApp {
     context_executor: Option<Arc<TuiContextExecutor>>,
     auth_prompt: Option<AuthPromptState>,
     layout: TuiLayoutState,
-    layout_snapshot: RefCell<Option<LayoutSnapshot>>,
+    geometry: UiGeometry,
     preferences_path: PathBuf,
     preferences_error: Option<String>,
 }
@@ -421,7 +420,7 @@ impl TuiApp {
             context_executor: None,
             auth_prompt: None,
             layout,
-            layout_snapshot: RefCell::new(None),
+            geometry: UiGeometry::default(),
             preferences_path,
             preferences_error,
         }
@@ -437,28 +436,11 @@ impl TuiApp {
             }
             TuiEvent::Terminal(Event::Mouse(mouse)) => self.handle_mouse(mouse, Some(event_tx)),
             TuiEvent::Terminal(_) => {}
-            TuiEvent::CommandOutput(bytes) => self.append_command_output(&bytes),
-            TuiEvent::CommandOutputClosed(error) => {
-                if let Some(error) = error {
-                    self.append_local_command_line(format!("output closed: {error}"));
-                }
+            TuiEvent::NestedCli { target, event } => {
+                self.handle_nested_cli_event(target, event, event_tx)
             }
-            TuiEvent::CommandExited(exit) => self.finish_command(exit, event_tx),
             TuiEvent::SpinnerTick(command_id) => self.handle_spinner_tick(command_id),
-            TuiEvent::ServerOutput(bytes) => self.server.run.terminal.feed(&bytes),
-            TuiEvent::ServerOutputClosed(error) => {
-                if let Some(error) = error {
-                    self.server
-                        .run
-                        .terminal
-                        .feed_local_line(format!("server output closed: {error}"));
-                }
-            }
-            TuiEvent::ServerExited(exit) => self.finish_server(exit, event_tx),
             TuiEvent::ServerSpinnerTick(server_id) => self.handle_server_spinner_tick(server_id),
-            TuiEvent::ReplOutput(bytes) => self.append_repl_output(&bytes),
-            TuiEvent::ReplOutputClosed(error) => self.handle_repl_output_closed(error),
-            TuiEvent::ReplExited(exit) => self.finish_repl(exit, event_tx),
             TuiEvent::AgentRefreshTick => self.refresh_agents(Some(event_tx)),
             TuiEvent::AgentRefreshSpinnerTick { generation } => {
                 if self.agents.refresh_running && generation == self.agents.refresh_generation {
@@ -490,6 +472,48 @@ impl TuiApp {
             }
             TuiEvent::AuthPromptFinished => {
                 self.auth_prompt = None;
+            }
+        }
+    }
+
+    fn handle_nested_cli_event(
+        &mut self,
+        target: NestedCliTarget,
+        event: NestedCliEvent,
+        event_tx: &TuiEventSender,
+    ) {
+        match (target, event) {
+            (NestedCliTarget::Command, NestedCliEvent::Output(bytes)) => {
+                self.append_command_output(&bytes)
+            }
+            (NestedCliTarget::Command, NestedCliEvent::OutputClosed(Some(error))) => {
+                self.append_local_command_line(format!("output closed: {error}"));
+            }
+            (NestedCliTarget::Command, NestedCliEvent::OutputClosed(None)) => {}
+            (NestedCliTarget::Command, NestedCliEvent::Exited(exit)) => {
+                self.finish_command(exit, event_tx)
+            }
+            (NestedCliTarget::Server, NestedCliEvent::Output(bytes)) => {
+                self.server.run.terminal.feed(&bytes)
+            }
+            (NestedCliTarget::Server, NestedCliEvent::OutputClosed(Some(error))) => {
+                self.server
+                    .run
+                    .terminal
+                    .feed_local_line(format!("server output closed: {error}"));
+            }
+            (NestedCliTarget::Server, NestedCliEvent::OutputClosed(None)) => {}
+            (NestedCliTarget::Server, NestedCliEvent::Exited(exit)) => {
+                self.finish_server(exit, event_tx)
+            }
+            (NestedCliTarget::Repl, NestedCliEvent::Output(bytes)) => {
+                self.append_repl_output(&bytes)
+            }
+            (NestedCliTarget::Repl, NestedCliEvent::OutputClosed(error)) => {
+                self.handle_repl_output_closed(error)
+            }
+            (NestedCliTarget::Repl, NestedCliEvent::Exited(exit)) => {
+                self.finish_repl(exit, event_tx)
             }
         }
     }
@@ -987,11 +1011,7 @@ impl TuiApp {
     }
 
     fn scroll_region_under_pointer(&mut self, x: u16, y: u16, amount: usize, up: bool) {
-        let region = self
-            .layout_snapshot
-            .borrow()
-            .as_ref()
-            .and_then(|snapshot| snapshot.hit_test(x, y));
+        let region = self.geometry.hit_test(x, y);
         if region.is_none() {
             self.scroll_focused_region(amount, up);
             return;
@@ -1079,11 +1099,7 @@ impl TuiApp {
     }
 
     fn click_region(&mut self, x: u16, y: u16, event_tx: Option<&TuiEventSender>) {
-        let hit = self
-            .layout_snapshot
-            .borrow()
-            .as_ref()
-            .and_then(|snapshot| snapshot.hit_test(x, y));
+        let hit = self.geometry.hit_test(x, y);
         match hit {
             Some(RegionKind::Workspace(Workspace::Ops)) => self.open_ops_workspace(event_tx),
             Some(RegionKind::Workspace(workspace)) => self.active_workspace = workspace,
@@ -1113,13 +1129,12 @@ impl TuiApp {
     }
 
     fn drag_target_at(&self, x: u16, y: u16) -> Option<DragTarget> {
-        self.layout_snapshot
-            .borrow()
-            .as_ref()
-            .and_then(|snapshot| match snapshot.hit_test(x, y) {
-                Some(RegionKind::DevPrimarySplit) => Some(DragTarget::DevPrimary),
-                Some(RegionKind::DevSecondarySplit) => Some(DragTarget::DevSecondary),
-                Some(RegionKind::OpsDetailsSplit) => Some(DragTarget::OpsDetails),
+        self.geometry
+            .hit_test(x, y)
+            .and_then(|region| match region {
+                RegionKind::DevPrimarySplit => Some(DragTarget::DevPrimary),
+                RegionKind::DevSecondarySplit => Some(DragTarget::DevSecondary),
+                RegionKind::OpsDetailsSplit => Some(DragTarget::OpsDetails),
                 _ => None,
             })
     }
@@ -1128,7 +1143,7 @@ impl TuiApp {
         let Some(target) = self.layout.dragging else {
             return;
         };
-        let Some(snapshot) = self.layout_snapshot.borrow().clone() else {
+        let Some(snapshot) = self.geometry.snapshot() else {
             return;
         };
         match target {
@@ -1173,12 +1188,7 @@ impl TuiApp {
     }
 
     fn select_agent_at_row(&mut self, y: u16) {
-        let Some(list_area) = self
-            .layout_snapshot
-            .borrow()
-            .as_ref()
-            .and_then(|snapshot| snapshot.region(RegionKind::OpsList))
-        else {
+        let Some(list_area) = self.geometry.region(RegionKind::OpsList) else {
             return;
         };
         let filtered = self.filtered_agents();
@@ -1708,12 +1718,7 @@ impl TuiApp {
     }
 
     fn move_layout_divider(&mut self, direction: KeyCode, cells: u16) {
-        let Some(area) = self
-            .layout_snapshot
-            .borrow()
-            .as_ref()
-            .map(|snapshot| snapshot.workspace_body)
-        else {
+        let Some(area) = self.geometry.workspace_body() else {
             return;
         };
         match self.active_workspace {
@@ -1810,8 +1815,7 @@ impl TuiApp {
     }
 
     fn agent_details_layout_area(&self) -> Option<Rect> {
-        let snapshot = self.layout_snapshot.borrow();
-        let snapshot = snapshot.as_ref()?;
+        let snapshot = self.geometry.snapshot()?;
         if self.ops_agents_focused() {
             Some(snapshot.workspace_body)
         } else {
@@ -3142,7 +3146,7 @@ impl TuiApp {
             agent_details_visible: self.ops_agents_focused() && self.agents.detail_visible,
             layout: self.layout.clone(),
         });
-        self.layout_snapshot.replace(Some(snapshot.clone()));
+        self.geometry.update(snapshot.clone());
         if let Some(run) = self.command_run.as_mut()
             && let Some(area) = snapshot.region(RegionKind::DevViewBody(DevView::BuildDeploy))
         {
@@ -3824,10 +3828,8 @@ impl TuiApp {
     }
 
     fn dev_pty_size(&self, view: DevView) -> Option<(u16, u16)> {
-        self.layout_snapshot
-            .borrow()
-            .as_ref()
-            .and_then(|snapshot| snapshot.region(RegionKind::DevViewBody(view)))
+        self.geometry
+            .region(RegionKind::DevViewBody(view))
             .map(pty_size_for_region)
     }
 }
@@ -6328,7 +6330,7 @@ fn render_tree(frame: &mut Frame<'_>, app: &TuiApp) {
         agent_details_visible: app.ops_agents_focused() && app.agents.detail_visible,
         layout: app.layout.clone(),
     });
-    app.layout_snapshot.replace(Some(snapshot.clone()));
+    app.geometry.update(snapshot.clone());
 
     render_shell_header(frame, snapshot.header, app);
 
@@ -6631,18 +6633,9 @@ fn render_ops_document(
 
 fn render_ops_agents_overview(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
     let chrome = PaneChrome { area };
-    let snapshot = app.layout_snapshot.borrow();
-    let list_pane = snapshot
-        .as_ref()
-        .and_then(|snapshot| snapshot.region(RegionKind::OpsList))
-        .unwrap_or(area);
-    let details_pane = snapshot
-        .as_ref()
-        .and_then(|snapshot| snapshot.region(RegionKind::OpsDetails));
-    let divider = snapshot
-        .as_ref()
-        .and_then(|snapshot| snapshot.region(RegionKind::OpsDetailsSplit));
-    drop(snapshot);
+    let list_pane = app.geometry.region(RegionKind::OpsList).unwrap_or(area);
+    let details_pane = app.geometry.region(RegionKind::OpsDetails);
+    let divider = app.geometry.region(RegionKind::OpsDetailsSplit);
     let [list_header, list_body] = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(1), Constraint::Min(1)])
@@ -12226,7 +12219,7 @@ fn preview_production_app() -> TuiApp {
         context_executor: None,
         auth_prompt: None,
         layout: TuiLayoutState::default(),
-        layout_snapshot: RefCell::new(None),
+        geometry: UiGeometry::default(),
         preferences_path: PathBuf::from("/tmp/golem-tui-preview-preferences.json"),
         preferences_error: None,
     };
@@ -15121,10 +15114,7 @@ mod tests {
         let app = test_app();
         render_app_text_at(&app, 120, 32);
         assert!(
-            app.layout_snapshot
-                .borrow()
-                .as_ref()
-                .unwrap()
+            app.geometry
                 .region(RegionKind::DevViewBody(DevView::BuildDeploy))
                 .is_none()
         );
@@ -15134,8 +15124,7 @@ mod tests {
     fn production_layout_exposes_both_workspace_selectors() {
         let app = test_app();
         render_app_text_at(&app, 120, 32);
-        let snapshot = app.layout_snapshot.borrow();
-        let snapshot = snapshot.as_ref().unwrap();
+        let snapshot = app.geometry.snapshot().unwrap();
         assert!(
             snapshot
                 .region(RegionKind::Workspace(Workspace::Ops))
@@ -15153,10 +15142,7 @@ mod tests {
         let app = test_app();
         render_app_text_at(&app, 120, 32);
         assert!(
-            app.layout_snapshot
-                .borrow()
-                .as_ref()
-                .unwrap()
+            app.geometry
                 .region(RegionKind::DevViewBody(DevView::BuildDeploy))
                 .is_none()
         );
@@ -15351,14 +15337,7 @@ mod tests {
     fn production_layout_omits_dev_resize_split() {
         let app = test_app();
         render_app_text_at(&app, 120, 32);
-        assert!(
-            app.layout_snapshot
-                .borrow()
-                .as_ref()
-                .unwrap()
-                .region(RegionKind::DevPrimarySplit)
-                .is_none()
-        );
+        assert!(app.geometry.region(RegionKind::DevPrimarySplit).is_none());
     }
 
     #[test]
@@ -15366,14 +15345,7 @@ mod tests {
         let mut app = test_app();
         app.agents.detail_visible = true;
         render_app_text_at(&app, 120, 32);
-        assert!(
-            app.layout_snapshot
-                .borrow()
-                .as_ref()
-                .unwrap()
-                .region(RegionKind::OpsDetailsSplit)
-                .is_some()
-        );
+        assert!(app.geometry.region(RegionKind::OpsDetailsSplit).is_some());
     }
 
     #[test]
@@ -15398,7 +15370,13 @@ mod tests {
         let (tx, _rx) = test_event_channel();
 
         app.handle_key(key(KeyCode::Char('r')));
-        app.handle_event(TuiEvent::ReplOutput(b"hello\x1b[2DXY".to_vec()), &tx);
+        app.handle_event(
+            TuiEvent::NestedCli {
+                target: NestedCliTarget::Repl,
+                event: NestedCliEvent::Output(b"hello\x1b[2DXY".to_vec()),
+            },
+            &tx,
+        );
 
         let frame = render_app_text(&app);
         assert!(!frame.contains("helXY"), "{frame}");
@@ -15410,7 +15388,13 @@ mod tests {
         let (tx, _rx) = test_event_channel();
 
         app.handle_key(key(KeyCode::Char('r')));
-        app.handle_event(TuiEvent::ReplOutput(b"abc".to_vec()), &tx);
+        app.handle_event(
+            TuiEvent::NestedCli {
+                target: NestedCliTarget::Repl,
+                event: NestedCliEvent::Output(b"abc".to_vec()),
+            },
+            &tx,
+        );
         let (_, cursor) = render_app_text_and_cursor(&app);
 
         assert_eq!((cursor.x, cursor.y), (0, 0));
@@ -15488,7 +15472,7 @@ mod tests {
             context_executor: None,
             auth_prompt: None,
             layout: TuiLayoutState::default(),
-            layout_snapshot: RefCell::new(None),
+            geometry: UiGeometry::default(),
             preferences_path: PathBuf::from("/tmp/golem-tui-test-preferences.json"),
             preferences_error: None,
         }
@@ -15822,10 +15806,8 @@ environments:
     }
 
     fn snapshot_region(app: &TuiApp, kind: RegionKind) -> Rect {
-        app.layout_snapshot
-            .borrow()
-            .as_ref()
-            .and_then(|snapshot| snapshot.region(kind))
+        app.geometry
+            .region(kind)
             .unwrap_or_else(|| panic!("missing region {kind:?}"))
     }
 
