@@ -1061,6 +1061,9 @@ async fn get_raw_slice_checks_the_range_that_s3_returns() {
         Some("bytes=0-2") => Answer::partial(Some("bytes 0-2/6"), "a"),
         Some("bytes=3-4") => Answer::partial(Some("bytes 3-4/6"), "def"),
         Some("bytes=3-5") => Answer::partial(Some("bytes 1-5/6"), "def"),
+        Some("bytes=0-18446744073709551615") => {
+            Answer::partial(Some("bytes 0-18446744073709551615/*"), "a")
+        }
         _ => Answer {
             content_length: Some(6),
             ..Answer::partial(None, "abcdef")
@@ -1095,6 +1098,10 @@ async fn get_raw_slice_checks_the_range_that_s3_returns() {
     // object, so its content length does not tell the backend whether the range is in the
     // object.
     let partial_without_content_range = read_error(0, 9).await;
+    // The range from 0 to `u64::MAX` has more bytes than a `u64` counts. The content range gives
+    // the same range, so no byte of the range is missing from it, and the error is not a
+    // `BlobRangeError`.
+    let every_offset = read_error(0, u64::MAX).await;
 
     assert_eq!(
         (
@@ -1108,12 +1115,14 @@ async fn get_raw_slice_checks_the_range_that_s3_returns() {
             short_body,
             long_body,
             without_content_range,
-            partial_without_content_range
+            partial_without_content_range,
+            every_offset
         ),
         (
             Some(b"bcd".to_vec()),
             Some(b"f".to_vec()),
             Err(Some(BlobRangeError { start: 4, end: 9 })),
+            Err(None),
             Err(None),
             Err(None),
             Err(None),

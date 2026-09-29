@@ -3769,6 +3769,87 @@ async fn a_copy_or_a_move_onto_itself_needs_a_blob(
 
 #[test]
 #[tracing::instrument]
+async fn a_copy_or_a_move_to_another_path_writes_the_blob_there(
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(ns)] namespace: &BlobStorageNamespace,
+) {
+    let storage = test.get_blob_storage().await;
+    let label = "a_copy_or_a_move_to_another_path_writes_the_blob_there";
+    let read = |path: &'static str| {
+        let storage = &storage;
+        let namespace = namespace.clone();
+        async move {
+            storage
+                .get_raw(label, "get-raw", namespace, Path::new(path))
+                .await
+                .unwrap()
+        }
+    };
+
+    storage
+        .put_raw(
+            label,
+            "put-blob",
+            namespace.clone(),
+            Path::new("a/x"),
+            &Bytes::from("payload"),
+        )
+        .await
+        .unwrap();
+
+    storage
+        .copy(
+            label,
+            "copy",
+            namespace.clone(),
+            Path::new("a/x"),
+            Path::new("b/y"),
+        )
+        .await
+        .unwrap();
+    let after_copy = (read("a/x").await, read("b/y").await);
+
+    storage
+        .r#move(
+            label,
+            "move",
+            namespace.clone(),
+            Path::new("b/y"),
+            Path::new("c/z"),
+        )
+        .await
+        .unwrap();
+    let after_move = (read("b/y").await, read("c/z").await);
+
+    // The answer is true when the error downcasts to `BlobMissingError`.
+    let missing_source = storage
+        .copy(
+            label,
+            "copy-missing",
+            namespace.clone(),
+            Path::new("missing/blob"),
+            Path::new("d/w"),
+        )
+        .await
+        .map_err(|error| error.downcast_ref::<BlobMissingError>().is_some());
+    // The filesystem backend gives the error of the filesystem for a source with no blob, and
+    // not `BlobMissingError`.
+    let expected_missing_source = Err(format!("{test:?}") != "FsTest");
+
+    let payload = Some(Bytes::from("payload").to_vec());
+    assert_eq!(
+        (after_copy, after_move, missing_source, read("d/w").await),
+        (
+            (payload.clone(), payload.clone()),
+            (None, payload),
+            expected_missing_source,
+            None
+        )
+    );
+}
+
+#[test]
+#[tracing::instrument]
 async fn put_raw_if_absent_writes_a_blob_where_the_path_has_none(
     #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
     #[tagged_as("fss")] namespace: &BlobStorageNamespace,
