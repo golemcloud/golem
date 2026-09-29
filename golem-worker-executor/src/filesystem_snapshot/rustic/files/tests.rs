@@ -247,3 +247,57 @@ async fn a_leased_call_that_gets_no_answer_ends_at_the_expiry_of_the_lease() {
         ended - started
     );
 }
+
+#[test]
+#[timeout("60s")]
+async fn a_refresh_of_the_lease_during_a_call_does_not_move_the_end_of_that_call() {
+    // A task waits until the call reached the storage, and then moves the end of the lease 10 s
+    // later. The call still ends at the expiry that the lease had when the call started.
+    let storage = ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |_, _| {
+        Script::NeverAnswer
+    });
+    let files = files_over(
+        storage.clone(),
+        CancellationToken::new(),
+        TaskTracker::new(),
+    );
+    let started = Instant::now();
+    let expiry = started + Duration::from_millis(50);
+    let lease = Arc::new(Lease::until(expiry));
+    let refreshing = tokio::spawn({
+        let (storage, lease) = (storage.clone(), lease.clone());
+        async move {
+            let reached = futures::stream::repeat(())
+                .then(|()| tokio::time::sleep(Duration::from_millis(1)))
+                .take(40)
+                .any(|()| std::future::ready(!storage.calls().is_empty()))
+                .await;
+            let refreshed_at = Instant::now();
+            lease.extend_from(refreshed_at, Duration::from_secs(10));
+            (reached, refreshed_at)
+        }
+    });
+
+    let read = files
+        .leased(lease.clone())
+        .get("read", Path::new("a"))
+        .await;
+    let ended = Instant::now();
+    let (reached, refreshed_at) = refreshing.await.unwrap();
+
+    assert!(
+        read.as_ref().is_err_and(|error| error.is::<LeaseExpired>()),
+        "{read:?}"
+    );
+    assert_eq!(
+        (
+            reached,
+            refreshed_at < expiry,
+            lease.expiry() > expiry + Duration::from_secs(5),
+            ended >= expiry && ended < expiry + Duration::from_millis(250),
+        ),
+        (true, true, true, true),
+        "the call ended {:?} after its start",
+        ended - started
+    );
+}
