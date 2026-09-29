@@ -227,15 +227,18 @@ fn many_directories_tree(count: usize) -> Scratch {
 /// The time between two checks of [`polled_until`].
 const POLL_STEP: Duration = Duration::from_millis(5);
 
-/// Checks the condition every [`POLL_STEP`] until it holds, for at most about `bound`. Gives whether
-/// the condition held.
+/// Checks the condition every [`POLL_STEP`] until it holds or `bound` ends. Gives whether the
+/// condition held.
 pub(super) async fn polled_until(bound: Duration, condition: impl Fn() -> bool) -> bool {
-    let checks = usize::try_from(bound.as_millis() / POLL_STEP.as_millis()).unwrap_or(usize::MAX);
-    futures::stream::repeat(())
-        .then(|()| tokio::time::sleep(POLL_STEP))
-        .take(checks)
-        .any(|()| std::future::ready(condition()))
-        .await
+    tokio::time::timeout(bound, async {
+        futures::stream::repeat(())
+            .then(|()| tokio::time::sleep(POLL_STEP))
+            .take_while(|()| std::future::ready(!condition()))
+            .for_each(|()| std::future::ready(()))
+            .await
+    })
+    .await
+    .is_ok()
 }
 
 /// Gives a backend over the repository of the scope in the storage, on the current runtime, whose

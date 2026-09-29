@@ -25,7 +25,8 @@ use super::super::prune::{
 use super::super::publish::StagedSnapshot;
 use super::super::tests::scripted::{Script, ScriptedBlobStorage};
 use super::super::tests::{
-    backend_of, copy_flat_tree, entries, files_of, three_file_tree, wait_past_change_times,
+    backend_of, copy_flat_tree, entries, files_of, polled_until, three_file_tree,
+    wait_past_change_times,
 };
 use super::super::{PruneReport, PruneSettings, RepositoryKey, open_existing};
 use super::{
@@ -212,20 +213,7 @@ const REACH_LIMIT: Duration = Duration::from_secs(45);
 
 /// Waits until the condition holds, or until [`LIMIT`] ends. Gives whether the condition holds.
 async fn eventually(condition: impl Fn() -> bool) -> bool {
-    eventually_within(LIMIT, condition).await
-}
-
-/// Waits until the condition holds, or until the limit ends. Gives whether the condition holds.
-async fn eventually_within(limit: Duration, condition: impl Fn() -> bool) -> bool {
-    tokio::time::timeout(limit, async {
-        futures::stream::repeat(())
-            .then(|()| tokio::time::sleep(Duration::from_millis(5)))
-            .take_while(|()| std::future::ready(!condition()))
-            .for_each(|()| std::future::ready(()))
-            .await
-    })
-    .await
-    .is_ok()
+    polled_until(LIMIT, condition).await
 }
 
 /// Runs the operation until the calls of the storage match the condition, and then drops it.
@@ -680,7 +668,7 @@ async fn a_prune_during_a_save_keeps_the_packs_of_the_save() {
         let path = new_tree.path().to_path_buf();
         async move { store.save(&scope, &name("p-new"), &path, None).await }
     });
-    let held = eventually_within(REACH_LIMIT, || index_writes() > before).await;
+    let held = polled_until(REACH_LIMIT, || index_writes() > before).await;
     assert!(held, "the save did not reach its index write");
     let deleted = store.delete(&scope, &name("p-old")).await;
     let pruned_while_held = ledger(&storage, &scope).await.last_prune.is_some();
@@ -1136,7 +1124,7 @@ async fn a_delete_that_paused_after_its_ledger_read_does_not_put_back_the_old_le
     });
     // The second delete lists the freed records too, so the gate would hold it for ever when the
     // first delete did not reach its listing first.
-    let paused_held = eventually_within(REACH_LIMIT, || held.load(Ordering::SeqCst)).await;
+    let paused_held = polled_until(REACH_LIMIT, || held.load(Ordering::SeqCst)).await;
     assert!(
         paused_held,
         "the first delete did not reach its listing of the freed records"
@@ -1556,7 +1544,7 @@ async fn a_prune_slower_than_the_grace_period_keeps_its_claim_fresh() {
     });
     // The second delete claims and lists the packs too, so the gate would hold its prune for ever
     // when the first delete did not reach its listing first.
-    let prune_held = eventually_within(REACH_LIMIT, || held.load(Ordering::SeqCst)).await;
+    let prune_held = polled_until(REACH_LIMIT, || held.load(Ordering::SeqCst)).await;
     assert!(
         prune_held,
         "the first delete did not reach its listing of the packs"
@@ -2795,7 +2783,7 @@ async fn two_deletes_that_read_the_same_ledger_make_one_prune() {
     });
     // The second delete claims and reads too, so the gate would hold it for ever when the first
     // delete did not reach its read first.
-    let first_held = eventually_within(REACH_LIMIT, || held.load(Ordering::SeqCst)).await;
+    let first_held = polled_until(REACH_LIMIT, || held.load(Ordering::SeqCst)).await;
     assert!(
         first_held,
         "the first delete did not reach its first read after its claim"
@@ -2847,7 +2835,7 @@ async fn a_delete_that_claims_after_another_prune_removed_the_claims_does_not_pr
     });
     // The second delete lists the claims too, so the gate would hold it for ever when the first
     // delete did not reach its listing first.
-    let late_held = eventually_within(REACH_LIMIT, || held.load(Ordering::SeqCst)).await;
+    let late_held = polled_until(REACH_LIMIT, || held.load(Ordering::SeqCst)).await;
     assert!(
         late_held,
         "the first delete did not reach its listing of the claims"
