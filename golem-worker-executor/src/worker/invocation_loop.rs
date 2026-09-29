@@ -2563,7 +2563,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 let _ = sender.send(Ok(()));
                 CommandOutcome::Continue
             }
-            QueuedWorkerInvocation::SaveSnapshot => self.save_snapshot().await,
+            QueuedWorkerInvocation::SaveSnapshot => self.take_guest_snapshot().await,
         }
     }
 
@@ -3064,14 +3064,14 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 .await;
         }
         let snapshots = self.parent.agent_filesystem_snapshots();
-        let scope = SnapshotScope::agent(&self.owned_agent_id);
+        let agent_snapshots = SnapshotScope::agent(&self.owned_agent_id);
         let (snapshot, filesystem_snapshot, retention) = match update_snapshot(
             &mut UpdateHost {
                 invocation: self,
                 target_revision,
             },
             &snapshots,
-            &scope,
+            &agent_snapshots,
         )
         .await
         {
@@ -3119,7 +3119,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     Some(Err(_)) => CommandOutcome::BreakInnerLoop(RetryDecision::Immediate),
                     Some(Ok(_)) => {
                         if let Some(retention) = retention {
-                            retention.retain();
+                            retention.delete_older_snapshots();
                         }
                         CommandOutcome::BreakInnerLoop(RetryDecision::Immediate)
                     }
@@ -3138,7 +3138,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     /// Runs the save hook of the guest for a manual update to `target_revision`. A hook that
     /// gives no snapshot records the failed update, or writes nothing on a lost shard, and gives
     /// the outcome of the loop.
-    async fn save_guest_for_update(
+    async fn snapshot_guest_for_update(
         &mut self,
         target_revision: ComponentRevision,
     ) -> Result<golem_common::model::oplog::RawSnapshotData, CommandOutcome> {
@@ -3396,7 +3396,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         invocation_context.push(invocation_span);
     }
 
-    async fn save_snapshot(&mut self) -> CommandOutcome {
+    async fn take_guest_snapshot(&mut self) -> CommandOutcome {
         // A committed snapshot is a replay cut point (snapshot-based recovery skips everything
         // before it), so no durable call or scope may span it. Skip this periodic snapshot when
         // the worker is not at a safe boundary; the next scheduled snapshot will retry.
@@ -3405,8 +3405,8 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             return CommandOutcome::Continue;
         }
         let snapshots = self.parent.agent_filesystem_snapshots();
-        let scope = SnapshotScope::agent(&self.owned_agent_id);
-        match periodic_snapshot(&mut PeriodicHost(self), &snapshots, &scope).await {
+        let agent_snapshots = SnapshotScope::agent(&self.owned_agent_id);
+        match periodic_snapshot(&mut PeriodicHost(self), &snapshots, &agent_snapshots).await {
             PeriodicResult::Continue => CommandOutcome::Continue,
             PeriodicResult::Guest(outcome) => outcome,
             PeriodicResult::NotWritten(failure) => periodic_failure_outcome(&failure),
@@ -3415,7 +3415,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
 
     /// Runs the save hook of the guest for a periodic snapshot. A hook that gives no snapshot
     /// gives the outcome of the loop.
-    async fn save_guest_for_periodic(
+    async fn snapshot_guest_for_periodic(
         &mut self,
     ) -> Result<golem_common::model::oplog::RawSnapshotData, CommandOutcome> {
         let idempotency_key = IdempotencyKey::fresh();
@@ -3661,10 +3661,10 @@ struct PeriodicHost<'i, 'a, Ctx: WorkerCtx>(&'i mut Invocation<'a, Ctx>);
 impl<Ctx: WorkerCtx> PeriodicSnapshotHost for PeriodicHost<'_, '_, Ctx> {
     type Stop = CommandOutcome;
 
-    async fn save_guest(
+    async fn snapshot_guest(
         &mut self,
     ) -> Result<golem_common::model::oplog::RawSnapshotData, CommandOutcome> {
-        self.0.save_guest_for_periodic().await
+        self.0.snapshot_guest_for_periodic().await
     }
 
     fn since(&self) -> Option<ConfirmedFilesystemSnapshot> {
@@ -3764,11 +3764,11 @@ struct UpdateHost<'i, 'a, Ctx: WorkerCtx> {
 impl<Ctx: WorkerCtx> UpdateSnapshotHost for UpdateHost<'_, '_, Ctx> {
     type Stop = CommandOutcome;
 
-    async fn save_guest(
+    async fn snapshot_guest(
         &mut self,
     ) -> Result<golem_common::model::oplog::RawSnapshotData, CommandOutcome> {
         self.invocation
-            .save_guest_for_update(self.target_revision)
+            .snapshot_guest_for_update(self.target_revision)
             .await
     }
 

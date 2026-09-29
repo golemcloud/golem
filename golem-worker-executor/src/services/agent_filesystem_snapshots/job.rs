@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! One upload: save, discard, confirm, then retention or a delete. Each step is a straight line
-//! that asks a rule of `rules` what to do next.
+//! One job: upload, discard, confirm, then a delete of the older snapshots or of the superseded
+//! one. Each step is a straight line that asks a rule of `rules` what to do next.
 
 use super::registry::JobTicket;
 use super::rules::{self, FollowUp, SaveAttempt};
@@ -21,9 +21,7 @@ use super::{
     Admission, CapturedTree, Confirm, Core, JobDecision, SavedUpdate, SnapshotKind, UploadNowError,
     retention, store_name,
 };
-use crate::filesystem_snapshot::{
-    ChangeDetection, SnapshotInfo, SnapshotName, SnapshotScope, SnapshotStoreError,
-};
+use crate::filesystem_snapshot::{ChangeDetection, SnapshotInfo, SnapshotName, SnapshotStoreError};
 use futures::StreamExt as _;
 use golem_common::model::RetryConfig;
 use golem_common::model::oplog::FilesystemSnapshotName;
@@ -33,14 +31,14 @@ use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::{OwnedSemaphorePermit, watch};
 
-/// What the save phase of a job gave.
-enum SaveOutcome {
+/// What the upload of a job gave.
+enum UploadOutcome {
     /// The store holds the snapshot. The permit is the slot of the upload.
     Saved(SnapshotInfo, OwnedSemaphorePermit),
     /// The save failed, after the retries when the error allows them.
     Failed(SnapshotStoreError),
-    /// A shutdown, a call of `forget_scope` for the scope, or the stop of the caller stopped the
-    /// upload.
+    /// A shutdown, a call of `delete_all_snapshots` for the agent, or the stop of the caller
+    /// stopped the upload.
     Stopped,
 }
 
@@ -58,7 +56,7 @@ pub(super) async fn run_job(
         kind,
     } = admission;
     let started = Instant::now();
-    let saved = save_phase(
+    let saved = upload(
         &core,
         &ticket,
         &name,
@@ -69,8 +67,8 @@ pub(super) async fn run_job(
     .await;
     tree.discard.await;
     let (info, permit) = match saved {
-        SaveOutcome::Saved(info, permit) => (info, permit),
-        SaveOutcome::Failed(error) => {
+        UploadOutcome::Saved(info, permit) => (info, permit),
+        UploadOutcome::Failed(error) => {
             ticket.decide(JobDecision::SaveFailed);
             tracing::warn!(
                 error = %error,
@@ -84,7 +82,7 @@ pub(super) async fn run_job(
             );
             return;
         }
-        SaveOutcome::Stopped => return,
+        UploadOutcome::Stopped => return,
     };
     crate::metrics::filesystem_snapshots::record_uploaded_bytes(kind.label(), info.bytes);
     if ticket.stop().is_cancelled() {
@@ -101,21 +99,25 @@ pub(super) async fn run_job(
         started.elapsed(),
     );
     match rules::follow_up(kind, outcome) {
-        FollowUp::Retain => retain(&core, &ticket, &name, kind, &info, None, Some(permit)).await,
-        FollowUp::DeleteOwn => {
+        FollowUp::DeleteOlder => {
+            delete_older_snapshots(&core, &ticket, &name, kind, &info, None, Some(permit)).await
+        }
+        FollowUp::DeleteSuperseded => {
             crate::metrics::filesystem_snapshots::record_dropped_confirmation(outcome.label());
-            delete_own(&core, &ticket, &name).await;
+            delete_superseded(&core, &ticket, &name).await;
         }
         FollowUp::Keep => {}
     }
 }
 
 impl Admission {
-    /// Uploads `tree` and waits until the store holds it. A manual update calls this before it
-    /// writes its record. The scope stays reserved until the [`SavedUpdate`] is retained or
-    /// dropped. When `stop` reports a terminal interrupt, or a shutdown or a call of
-    /// `forget_scope` for the scope stops the upload, the save stops, the tree is discarded, and
-    /// the call gives [`UploadNowError::Stopped`].
+    /// Uploads `tree` while the caller waits, and gives the [`SavedUpdate`] for after the commit
+    /// of the record. It differs from [`Admission::submit`] only in who waits and in what
+    /// follows: both go through the same upload. A manual update calls this before it writes its
+    /// record. The agent stays reserved until the [`SavedUpdate`] deletes the older snapshots or
+    /// is dropped. When `stop` reports a terminal interrupt, or a shutdown or a call of
+    /// `delete_all_snapshots` for the agent stops the upload, the tree is discarded and the call
+    /// gives [`UploadNowError::Stopped`].
     pub(crate) async fn upload_now(
         self,
         tree: CapturedTree,
@@ -128,7 +130,7 @@ impl Admission {
             kind,
         } = self;
         let started = Instant::now();
-        let saved = save_phase(
+        let saved = upload(
             &core,
             &ticket,
             &name,
@@ -139,9 +141,9 @@ impl Admission {
         .await;
         tree.discard.await;
         let result = match saved {
-            SaveOutcome::Saved(info, _slot) => Ok(info),
-            SaveOutcome::Failed(error) => Err(UploadNowError::Store(error)),
-            SaveOutcome::Stopped => Err(UploadNowError::Stopped),
+            UploadOutcome::Saved(info, _slot) => Ok(info),
+            UploadOutcome::Failed(error) => Err(UploadNowError::Store(error)),
+            UploadOutcome::Stopped => Err(UploadNowError::Stopped),
         };
         match &result {
             Ok(info) => {
@@ -181,16 +183,18 @@ pub(super) async fn interrupt_raised(mut stop: watch::Receiver<bool>) {
     }
 }
 
-/// Waits for a slot of the uploads and saves the tree with retries. `stop`, a shutdown, or a call
-/// of `forget_scope` for the scope ends the save with `Stopped`.
-async fn save_phase(
+/// Uploads the tree of a job: waits for a slot of the uploads, then saves the tree under the own
+/// name of the job with retries. Each attempt is one store `save`; when [`rules::save_attempt`]
+/// asks for it, the attempt then asks the store with `stat` whether it holds the own name. `stop`,
+/// a shutdown, or a call of `delete_all_snapshots` for the agent ends the upload with `Stopped`.
+async fn upload(
     core: &Core,
     ticket: &JobTicket,
     name: &FilesystemSnapshotName,
     parent: Option<(FilesystemSnapshotName, ChangeDetection)>,
     tree: &Path,
     stop: impl Future<Output = ()> + Send,
-) -> SaveOutcome {
+) -> UploadOutcome {
     let stop = futures::FutureExt::shared(futures::FutureExt::boxed(stop));
     let (name, parent) = match (
         store_name(name),
@@ -200,7 +204,7 @@ async fn save_phase(
     ) {
         (Ok(name), Ok(parent)) => (name, parent),
         (Err(error), _) | (_, Err(error)) => {
-            return SaveOutcome::Failed(SnapshotStoreError::Storage {
+            return UploadOutcome::Failed(SnapshotStoreError::Storage {
                 retryable: false,
                 source: anyhow::Error::new(error),
             });
@@ -209,54 +213,39 @@ async fn save_phase(
     let permit = tokio::select! {
         permit = Arc::clone(&core.uploads).acquire_owned() => match permit {
             Ok(permit) => permit,
-            Err(_) => return SaveOutcome::Stopped,
+            Err(_) => return UploadOutcome::Stopped,
         },
-        () = ticket.stop().cancelled() => return SaveOutcome::Stopped,
-        () = stop.clone() => return SaveOutcome::Stopped,
+        () = ticket.stop().cancelled() => return UploadOutcome::Stopped,
+        () = stop.clone() => return UploadOutcome::Stopped,
     };
     crate::metrics::filesystem_snapshots::inc_uploads_in_progress();
     ticket.saving();
     let parent = parent.as_ref().map(|(name, detection)| (name, *detection));
-    let scope = ticket.scope();
+    let agent = ticket.agent();
     let saved = tokio::select! {
         biased;
-        saved = retrying(
-            core.settings.upload_retry(),
-            || save_once(core, scope, &name, tree, parent),
-        ) => Some(saved),
+        saved = retrying(core.settings.upload_retry(), || async {
+            match rules::save_attempt(core.store.save(agent, &name, tree, parent).await) {
+                SaveAttempt::Saved(info) => Ok(info),
+                SaveAttempt::StatOwn => core.store.stat(agent, &name).await?.ok_or_else(|| {
+                    SnapshotStoreError::Storage {
+                        retryable: true,
+                        source: anyhow::anyhow!(
+                            "the filesystem snapshot {name} exists at the save and not after it"
+                        ),
+                    }
+                }),
+                SaveAttempt::Failed(error) => Err(error),
+            }
+        }) => Some(saved),
         () = ticket.stop().cancelled() => None,
         () = stop.clone() => None,
     };
     crate::metrics::filesystem_snapshots::dec_uploads_in_progress();
     match saved {
-        Some(Ok(info)) => SaveOutcome::Saved(info, permit),
-        Some(Err(error)) => SaveOutcome::Failed(error),
-        None => SaveOutcome::Stopped,
-    }
-}
-
-/// Saves the tree under the own name of the job, one time, as [`rules::save_attempt`] says.
-async fn save_once(
-    core: &Core,
-    scope: &SnapshotScope,
-    name: &SnapshotName,
-    tree: &Path,
-    parent: Option<(&SnapshotName, ChangeDetection)>,
-) -> Result<SnapshotInfo, SnapshotStoreError> {
-    match rules::save_attempt(core.store.save(scope, name, tree, parent).await) {
-        SaveAttempt::Saved(info) => Ok(info),
-        SaveAttempt::StatOwn => {
-            core.store
-                .stat(scope, name)
-                .await?
-                .ok_or_else(|| SnapshotStoreError::Storage {
-                    retryable: true,
-                    source: anyhow::anyhow!(
-                        "the filesystem snapshot {name} exists at the save and not after it"
-                    ),
-                })
-        }
-        SaveAttempt::Failed(error) => Err(error),
+        Some(Ok(info)) => UploadOutcome::Saved(info, permit),
+        Some(Err(error)) => UploadOutcome::Failed(error),
+        None => UploadOutcome::Stopped,
     }
 }
 
@@ -265,7 +254,7 @@ async fn save_once(
 /// first waits for one. `info` is the info of the own snapshot, and `kept` a snapshot that it
 /// never deletes. A stop ends it at once, and a later retention deletes what it left.
 #[allow(clippy::too_many_arguments)]
-pub(super) async fn retain(
+pub(super) async fn delete_older_snapshots(
     core: &Core,
     ticket: &JobTicket,
     name: &FilesystemSnapshotName,
@@ -284,12 +273,12 @@ pub(super) async fn retain(
             () = ticket.stop().cancelled() => return,
         },
     };
-    let scope = ticket.scope();
+    let agent = ticket.agent();
     let retention = async {
         let Ok(own) = store_name(name) else {
             return;
         };
-        let listing = match core.store.list(scope).await {
+        let listing = match core.store.list(agent).await {
             Ok(listing) => listing,
             Err(error) => {
                 tracing::warn!(error = %error, "Failed to list the filesystem snapshots for retention");
@@ -304,7 +293,7 @@ pub(super) async fn retain(
         futures::stream::iter(victims.iter())
             .for_each(|victim| async move {
                 if let Err(error) = retrying(core.settings.upload_retry(), || {
-                    core.store.delete(scope, victim)
+                    core.store.delete(agent, victim)
                 })
                 .await
                 {
@@ -325,14 +314,14 @@ pub(super) async fn retain(
 
 /// Deletes the snapshot of the job, which no confirmation record names. A stop ends it at once,
 /// and the snapshot stays until a retention of its kind deletes it.
-async fn delete_own(core: &Core, ticket: &JobTicket, name: &FilesystemSnapshotName) {
-    let scope = ticket.scope();
+async fn delete_superseded(core: &Core, ticket: &JobTicket, name: &FilesystemSnapshotName) {
+    let agent = ticket.agent();
     let delete = async {
         let Ok(name) = store_name(name) else {
             return;
         };
         if let Err(error) = retrying(core.settings.upload_retry(), || {
-            core.store.delete(scope, &name)
+            core.store.delete(agent, &name)
         })
         .await
         {

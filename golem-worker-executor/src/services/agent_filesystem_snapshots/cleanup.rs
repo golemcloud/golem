@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! The clean-up queue of `forget` and `forget_scope`. Nothing on it can stop the executor: each
-//! job catches its own error, and a failure after the retries is logged and counted.
+//! The clean-up queue of `delete_snapshots` and `delete_all_snapshots`. Nothing on it can stop the
+//! executor: each job catches its own error, and a failure after the retries is logged and counted.
 
-use super::registry::DeleteTicket;
+use super::registry::DeleteAllTicket;
 use super::{job::retrying, store_name};
 use crate::filesystem_snapshot::{FilesystemSnapshotStore, SnapshotScope};
 use futures::StreamExt as _;
@@ -30,16 +30,16 @@ use tokio_util::task::TaskTracker;
 
 /// One clean-up.
 enum Cleanup {
-    /// Deletes the names of a scope.
+    /// Deletes some snapshots of an agent.
     Delete {
-        scope: SnapshotScope,
+        agent: SnapshotScope,
         names: Box<[FilesystemSnapshotName]>,
     },
-    /// Deletes a scope, after the job of the scope ended. The ticket goes away with the
-    /// clean-up, on each exit.
-    DeleteScope {
-        scope: SnapshotScope,
-        ticket: DeleteTicket,
+    /// Deletes all snapshots of an agent, after the job of the agent ended. The ticket goes away
+    /// with the clean-up, on each exit.
+    DeleteAll {
+        agent: SnapshotScope,
+        ticket: DeleteAllTicket,
     },
 }
 
@@ -85,12 +85,12 @@ impl CleanupQueue {
         Self { sender }
     }
 
-    pub(super) fn delete(&self, scope: SnapshotScope, names: Box<[FilesystemSnapshotName]>) {
-        self.send(Cleanup::Delete { scope, names }, "delete");
+    pub(super) fn delete(&self, agent: SnapshotScope, names: Box<[FilesystemSnapshotName]>) {
+        self.send(Cleanup::Delete { agent, names }, "delete");
     }
 
-    pub(super) fn delete_scope(&self, scope: SnapshotScope, ticket: DeleteTicket) {
-        self.send(Cleanup::DeleteScope { scope, ticket }, "delete_scope");
+    pub(super) fn delete_all(&self, agent: SnapshotScope, ticket: DeleteAllTicket) {
+        self.send(Cleanup::DeleteAll { agent, ticket }, "delete_all");
     }
 
     fn send(&self, cleanup: Cleanup, operation: &'static str) {
@@ -107,33 +107,33 @@ impl CleanupQueue {
 impl Cleaner {
     async fn run(&self, cleanup: Cleanup) {
         match cleanup {
-            Cleanup::Delete { scope, names } => {
+            Cleanup::Delete { agent, names } => {
                 futures::stream::iter(names.iter())
-                    .for_each(|name| self.delete(&scope, name))
+                    .for_each(|name| self.delete(&agent, name))
                     .await
             }
-            Cleanup::DeleteScope { scope, ticket } => {
-                ticket.until_scope_free().await;
+            Cleanup::DeleteAll { agent, ticket } => {
+                ticket.until_agent_free().await;
                 let deleted = self
-                    .with_slot(|| retrying(&self.retry, || self.store.delete_scope(&scope)))
+                    .with_slot(|| retrying(&self.retry, || self.store.delete_scope(&agent)))
                     .await;
                 if let Err(error) = deleted {
                     tracing::warn!(
                         error = %error,
                         "Failed to delete the filesystem snapshots of a deleted agent after the retries"
                     );
-                    crate::metrics::filesystem_snapshots::record_leaked_cleanup("delete_scope");
+                    crate::metrics::filesystem_snapshots::record_leaked_cleanup("delete_all");
                 }
             }
         }
     }
 
-    async fn delete(&self, scope: &SnapshotScope, name: &FilesystemSnapshotName) {
+    async fn delete(&self, agent: &SnapshotScope, name: &FilesystemSnapshotName) {
         let Ok(store_name) = store_name(name) else {
             return;
         };
         let deleted = self
-            .with_slot(|| retrying(&self.retry, || self.store.delete(scope, &store_name)))
+            .with_slot(|| retrying(&self.retry, || self.store.delete(agent, &store_name)))
             .await;
         if let Err(error) = deleted {
             tracing::warn!(

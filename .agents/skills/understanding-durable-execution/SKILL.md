@@ -751,28 +751,29 @@ underlying cause.
 ### Filesystem snapshots
 
 With `filesystem_snapshots` set to `Managed`, a snapshot record also names a filesystem snapshot
-(`services/agent_filesystem_snapshots`). `invocation_loop.rs::save_snapshot` calls one function,
+(`services/agent_filesystem_snapshots`). `invocation_loop.rs::take_guest_snapshot` calls one function,
 `worker/filesystem_snapshots.rs::periodic_snapshot`, which asks the service for admission, runs
-the guest save hook, captures the tree (`agent_filesystem::capture`), appends the
+the guest snapshot hook (`snapshot_guest`), captures the tree (`agent_filesystem::capture`), appends the
 `Snapshot` entry, commits, and gives the capture to an upload job. The record has no name when the
 tree holds only the initial files of the agent. When the tree did not change since the last
 confirmed snapshot, the record reuses its name and the confirmation comes with it
 (`Snapshot` then `SnapshotConfirmed`); the status then keeps the older usable record as the
-fallback. A manual update saves its filesystem snapshot before it writes `PendingUpdate`
+fallback. A manual update uploads its filesystem snapshot before it writes `PendingUpdate`
 (`worker/filesystem_snapshots.rs::update_snapshot`). When a
 periodic upload of the agent runs, the update waits for it to decide and end once, for at most
 `confirmation_wait`, and asks again; another refusal fails the update. A terminal interrupt ends
-that wait, or the upload of the update, and fails the update. The retention of the update
-snapshots runs after `PendingUpdate` commits, and it never deletes the snapshot of the last
-successful manual update, because a start restores that baseline without a fallback.
+that wait, or the upload of the update, and fails the update. The delete of the older update
+snapshots (`UpdateRetention::delete_older_snapshots`) runs after `PendingUpdate` commits, and it
+never deletes the snapshot of the last successful manual update, because a start restores that baseline without a fallback.
 
-The upload job saves the snapshot, then asks the worker for a confirmation
+The upload job uploads the snapshot (`job.rs::upload`), then asks the worker for a confirmation
 (`Worker::confirm_as`, with the pure `worker/filesystem_snapshots.rs::owner_gate`). The worker
 appends `SnapshotConfirmed` only while the instance that took the snapshot runs, in one status job
 that checks that the record is still the status candidate. Otherwise the answer is `Deferred`, and the snapshot stays in the
-store. `Superseded` (an update or a revert replaced the record) deletes it. A stop never waits for
-an upload. A shutdown ends a job also during its retention or its delete, and so does a call of
-`AgentFilesystemSnapshots::forget_scope` for the scope of the job.
+store. `Superseded` (an update or a revert replaced the record) deletes it (`delete_superseded`); `Confirmed`
+deletes the older snapshots of its kind (`delete_older_snapshots`). A stop never waits for
+an upload. A shutdown ends a job also during its deletes, and so does a call of
+`AgentFilesystemSnapshots::delete_all_snapshots` for the agent of the job.
 
 The next start confirms instead (`Worker::confirm_filesystem_snapshot_before_start`, called from
 `WaitingWorker::new` before it takes permits, with `AgentFilesystemSnapshots::prepare_start` for

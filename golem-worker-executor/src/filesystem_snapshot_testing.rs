@@ -178,7 +178,7 @@ impl TestFilesystemSnapshotStore {
 impl FilesystemSnapshotStore for TestFilesystemSnapshotStore {
     async fn save(
         &self,
-        scope: &SnapshotScope,
+        agent: &SnapshotScope,
         name: &SnapshotName,
         tree: &Path,
         parent: Option<(&SnapshotName, ChangeDetection)>,
@@ -210,7 +210,7 @@ impl FilesystemSnapshotStore for TestFilesystemSnapshotStore {
                 source: anyhow::anyhow!("an injected save failure"),
             });
         }
-        let info = self.inner.save(scope, name, tree, parent).await?;
+        let info = self.inner.save(agent, name, tree, parent).await?;
         let offset = *self
             .faults
             .clock_offset
@@ -232,7 +232,7 @@ impl FilesystemSnapshotStore for TestFilesystemSnapshotStore {
 
     async fn restore(
         &self,
-        scope: &SnapshotScope,
+        agent: &SnapshotScope,
         name: &SnapshotName,
         into: &Path,
     ) -> Result<SnapshotInfo, SnapshotStoreError> {
@@ -253,29 +253,29 @@ impl FilesystemSnapshotStore for TestFilesystemSnapshotStore {
                 "an injected restore failure"
             )));
         }
-        self.inner.restore(scope, name, into).await
+        self.inner.restore(agent, name, into).await
     }
 
     async fn stat(
         &self,
-        scope: &SnapshotScope,
+        agent: &SnapshotScope,
         name: &SnapshotName,
     ) -> Result<Option<SnapshotInfo>, SnapshotStoreError> {
         self.faults.stats.fetch_add(1, Ordering::SeqCst);
         Ok(self
             .inner
-            .stat(scope, name)
+            .stat(agent, name)
             .await?
             .map(|info| self.timed(name, info)))
     }
 
     async fn list(
         &self,
-        scope: &SnapshotScope,
+        agent: &SnapshotScope,
     ) -> Result<Box<[(SnapshotName, SnapshotInfo)]>, SnapshotStoreError> {
         Ok(self
             .inner
-            .list(scope)
+            .list(agent)
             .await?
             .iter()
             .map(|(name, info)| (name.clone(), self.timed(name, *info)))
@@ -284,14 +284,14 @@ impl FilesystemSnapshotStore for TestFilesystemSnapshotStore {
 
     async fn delete(
         &self,
-        scope: &SnapshotScope,
+        agent: &SnapshotScope,
         name: &SnapshotName,
     ) -> Result<(), SnapshotStoreError> {
-        self.inner.delete(scope, name).await
+        self.inner.delete(agent, name).await
     }
 
-    async fn delete_scope(&self, scope: &SnapshotScope) -> Result<(), SnapshotStoreError> {
-        self.inner.delete_scope(scope).await
+    async fn delete_scope(&self, agent: &SnapshotScope) -> Result<(), SnapshotStoreError> {
+        self.inner.delete_scope(agent).await
     }
 
     async fn copy_scope(

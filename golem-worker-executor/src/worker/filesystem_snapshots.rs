@@ -315,7 +315,9 @@ pub(crate) trait PeriodicSnapshotHost {
     /// What ends the snapshot when the save hook of the guest does not give a snapshot.
     type Stop;
     /// Runs the save hook of the guest.
-    fn save_guest(&mut self) -> impl Future<Output = Result<RawSnapshotData, Self::Stop>> + Send;
+    fn snapshot_guest(
+        &mut self,
+    ) -> impl Future<Output = Result<RawSnapshotData, Self::Stop>> + Send;
     /// The confirmed snapshot that a capture compares with now.
     fn since(&self) -> Option<ConfirmedFilesystemSnapshot>;
     /// Captures the tree against the mark `since`, and gives `None` when the capture failed.
@@ -354,7 +356,7 @@ pub(crate) enum PeriodicResult<Stop> {
     NotWritten(PeriodicFailure),
 }
 
-/// Takes a periodic snapshot of the agent of `scope`, in this order: admission, the
+/// Takes a periodic snapshot of the agent `agent`, in this order: admission, the
 /// save hook of the guest, the capture, the record with the name, its commit and the checkpoint
 /// of the status, then the upload. An admission that the service refuses skips the snapshot,
 /// and a disabled service gives a record without a name. A capture that fails writes no
@@ -363,9 +365,9 @@ pub(crate) enum PeriodicResult<Stop> {
 pub(crate) async fn periodic_snapshot<Host: PeriodicSnapshotHost>(
     host: &mut Host,
     snapshots: &AgentFilesystemSnapshots,
-    scope: &SnapshotScope,
+    agent: &SnapshotScope,
 ) -> PeriodicResult<Host::Stop> {
-    let admission = match snapshots.admit_periodic(scope).await {
+    let admission = match snapshots.admit_periodic(agent).await {
         Ok(admission) => Some(admission),
         Err(SnapshotSkip::Disabled) => None,
         Err(skip) => {
@@ -373,7 +375,7 @@ pub(crate) async fn periodic_snapshot<Host: PeriodicSnapshotHost>(
             return PeriodicResult::Continue;
         }
     };
-    let snapshot = match host.save_guest().await {
+    let snapshot = match host.snapshot_guest().await {
         Ok(snapshot) => snapshot,
         Err(stop) => return PeriodicResult::Guest(stop),
     };
@@ -433,7 +435,9 @@ pub(crate) trait UpdateSnapshotHost {
     /// What ends the update when the save hook of the guest does not give a snapshot.
     type Stop;
     /// Runs the save hook of the guest.
-    fn save_guest(&mut self) -> impl Future<Output = Result<RawSnapshotData, Self::Stop>> + Send;
+    fn snapshot_guest(
+        &mut self,
+    ) -> impl Future<Output = Result<RawSnapshotData, Self::Stop>> + Send;
     /// Captures the whole tree, and gives `None` when the capture failed.
     fn capture_whole(&self, wait: Duration) -> impl Future<Output = Option<WholeCapture>> + Send;
     /// A receiver of whether a terminal interrupt waits for the agent.
@@ -446,16 +450,17 @@ pub(crate) trait UpdateSnapshotHost {
 }
 
 /// The retention of a saved manual-update snapshot, with the snapshot that it keeps.
-#[must_use = "the retention of a manual-update snapshot runs only after the update record commits"]
+#[must_use = "a dropped update retention deletes no older snapshot; delete them after the record commits"]
 pub(crate) struct UpdateRetention {
     saved: SavedUpdate,
     kept: Option<FilesystemSnapshotName>,
 }
 
 impl UpdateRetention {
-    /// Applies the retention in the background. Call it after the update record commits.
-    pub(crate) fn retain(self) {
-        self.saved.retain(self.kept.as_ref());
+    /// Deletes the older update snapshots in the background, except the kept one. Call it after
+    /// the update record commits.
+    pub(crate) fn delete_older_snapshots(self) {
+        self.saved.delete_older_snapshots(self.kept.as_ref());
     }
 }
 
@@ -476,7 +481,7 @@ pub(crate) enum UpdateSnapshot<Stop> {
     Guest(Stop),
 }
 
-/// Takes the snapshots of a manual update of the agent of `scope`, before the update record:
+/// Takes the snapshots of a manual update of the agent `agent`, before the update record:
 /// admission, the save hook of the guest, a capture of the whole tree, and the upload, which
 /// the update waits for. An upload of a periodic snapshot of the agent can run at the
 /// admission; the update waits for it once and asks again, so a frequent snapshot does not fail
@@ -486,9 +491,9 @@ pub(crate) enum UpdateSnapshot<Stop> {
 pub(crate) async fn update_snapshot<Host: UpdateSnapshotHost>(
     host: &mut Host,
     snapshots: &AgentFilesystemSnapshots,
-    scope: &SnapshotScope,
+    agent: &SnapshotScope,
 ) -> UpdateSnapshot<Host::Stop> {
-    let admission = match snapshots.admit_update(scope, host.terminal()).await {
+    let admission = match snapshots.admit_update(agent, host.terminal()).await {
         Ok(admission) => Some(admission),
         Err(UpdateRefusal::Skip(SnapshotSkip::Disabled)) => None,
         Err(UpdateRefusal::Interrupted) => {
@@ -500,7 +505,7 @@ pub(crate) async fn update_snapshot<Host: UpdateSnapshotHost>(
             ));
         }
     };
-    let snapshot = match host.save_guest().await {
+    let snapshot = match host.snapshot_guest().await {
         Ok(snapshot) => snapshot,
         Err(stop) => return UpdateSnapshot::Guest(stop),
     };
@@ -1341,8 +1346,8 @@ mod tests {
     impl PeriodicSnapshotHost for ScriptedHost {
         type Stop = &'static str;
 
-        async fn save_guest(&mut self) -> Result<RawSnapshotData, &'static str> {
-            self.call("save_guest".to_string());
+        async fn snapshot_guest(&mut self) -> Result<RawSnapshotData, &'static str> {
+            self.call("snapshot_guest".to_string());
             self.guest.take().unwrap_or(Err("saved twice"))
         }
 
@@ -1395,8 +1400,8 @@ mod tests {
     impl UpdateSnapshotHost for ScriptedHost {
         type Stop = &'static str;
 
-        async fn save_guest(&mut self) -> Result<RawSnapshotData, &'static str> {
-            PeriodicSnapshotHost::save_guest(self).await
+        async fn snapshot_guest(&mut self) -> Result<RawSnapshotData, &'static str> {
+            PeriodicSnapshotHost::snapshot_guest(self).await
         }
 
         async fn capture_whole(&self, _wait: Duration) -> Option<WholeCapture> {
@@ -1418,7 +1423,7 @@ mod tests {
         }
     }
 
-    fn agent_scope(name: &str) -> SnapshotScope {
+    fn agent_snapshots(name: &str) -> SnapshotScope {
         SnapshotScope::agent(&golem_common::model::OwnedAgentId::new(
             golem_common::model::environment::EnvironmentId::new(),
             &AgentId {
@@ -1473,13 +1478,13 @@ mod tests {
     #[test]
     async fn a_periodic_snapshot_without_snapshots_writes_a_record_without_a_name() {
         let (disabled, _disabled_shutdown) = disabled_service();
-        let scope = agent_scope("periodic-disabled");
+        let agent = agent_snapshots("periodic-disabled");
         let run = |host: ScriptedHost| {
             let disabled = disabled.as_ref();
-            let scope = &scope;
+            let agent = &agent;
             async move {
                 let mut host = host;
-                let result = periodic_snapshot(&mut host, disabled, scope).await;
+                let result = periodic_snapshot(&mut host, disabled, agent).await;
                 (outcome(&result), host.calls())
             }
         };
@@ -1505,7 +1510,7 @@ mod tests {
             written,
             (
                 "Continue".to_string(),
-                vec!["save_guest", "entry(none)", "write(none)"]
+                vec!["snapshot_guest", "entry(none)", "write(none)"]
                     .into_iter()
                     .map(String::from)
                     .collect()
@@ -1515,14 +1520,14 @@ mod tests {
             guest_stop,
             (
                 "Guest(\"stop\")".to_string(),
-                vec!["save_guest".to_string()]
+                vec!["snapshot_guest".to_string()]
             )
         );
         assert_eq!(
             no_entry,
             (
                 "NotWritten(Entry(\"no payload\"))".to_string(),
-                vec!["save_guest".to_string(), "entry(none)".to_string()]
+                vec!["snapshot_guest".to_string(), "entry(none)".to_string()]
             )
         );
         assert_eq!(
@@ -1535,28 +1540,28 @@ mod tests {
     async fn a_periodic_snapshot_admits_before_the_guest_saves_and_captures_after() {
         let (mark, _) = marks();
         let (snapshots, _shutdown) = enabled_service();
-        let scope = agent_scope("periodic-enabled");
+        let agent = agent_snapshots("periodic-enabled");
         let since = confirmed(&FilesystemSnapshotName::periodic(), mark);
 
-        let held = snapshots.admit_periodic(&scope).await.unwrap();
+        let held = snapshots.admit_periodic(&agent).await.unwrap();
         let mut refused = ScriptedHost::new();
-        let while_held = outcome(&periodic_snapshot(&mut refused, &snapshots, &scope).await);
+        let while_held = outcome(&periodic_snapshot(&mut refused, &snapshots, &agent).await);
         drop(held);
         let mut failed_capture = ScriptedHost::new();
         let capture_failed =
-            outcome(&periodic_snapshot(&mut failed_capture, &snapshots, &scope).await);
+            outcome(&periodic_snapshot(&mut failed_capture, &snapshots, &agent).await);
         let mut initial = ScriptedHost {
             capture: std::sync::Mutex::new(Some(CaptureOutcome::InitialFiles)),
             ..ScriptedHost::new()
         };
-        let initial_files = outcome(&periodic_snapshot(&mut initial, &snapshots, &scope).await);
+        let initial_files = outcome(&periodic_snapshot(&mut initial, &snapshots, &agent).await);
         let mut unchanged = ScriptedHost {
             since: Some(since.clone()),
             capture: std::sync::Mutex::new(Some(CaptureOutcome::Unchanged)),
             ..ScriptedHost::new()
         };
-        let reused = outcome(&periodic_snapshot(&mut unchanged, &snapshots, &scope).await);
-        let free_after = snapshots.admit_periodic(&scope).await.is_ok();
+        let reused = outcome(&periodic_snapshot(&mut unchanged, &snapshots, &agent).await);
+        let free_after = snapshots.admit_periodic(&agent).await.is_ok();
 
         let name = since.name.as_str().to_string();
         assert_eq!(
@@ -1567,7 +1572,7 @@ mod tests {
             (capture_failed, failed_capture.calls()),
             (
                 "Continue".to_string(),
-                vec!["save_guest", "since", "capture(false)"]
+                vec!["snapshot_guest", "since", "capture(false)"]
                     .into_iter()
                     .map(String::from)
                     .collect()
@@ -1578,7 +1583,7 @@ mod tests {
             (
                 "Continue".to_string(),
                 vec![
-                    "save_guest",
+                    "snapshot_guest",
                     "since",
                     "capture(false)",
                     "entry(none)",
@@ -1594,7 +1599,7 @@ mod tests {
             (
                 "Continue".to_string(),
                 vec![
-                    "save_guest".to_string(),
+                    "snapshot_guest".to_string(),
                     "since".to_string(),
                     "capture(true)".to_string(),
                     format!("entry({name})"),
@@ -1622,31 +1627,31 @@ mod tests {
     async fn a_manual_update_snapshot_saves_the_guest_then_captures_the_whole_tree() {
         let (disabled, _disabled_shutdown) = disabled_service();
         let (snapshots, _shutdown) = enabled_service();
-        let scope = agent_scope("update");
+        let agent = agent_snapshots("update");
 
         let mut without = ScriptedHost::new();
         let without_snapshots =
-            update_outcome(&update_snapshot(&mut without, &disabled, &scope).await);
+            update_outcome(&update_snapshot(&mut without, &disabled, &agent).await);
         let mut stopped = ScriptedHost {
             guest: Some(Err("stop")),
             ..ScriptedHost::new()
         };
-        let guest_stop = update_outcome(&update_snapshot(&mut stopped, &snapshots, &scope).await);
+        let guest_stop = update_outcome(&update_snapshot(&mut stopped, &snapshots, &agent).await);
         let mut failed = ScriptedHost::new();
         let capture_failed =
-            update_outcome(&update_snapshot(&mut failed, &snapshots, &scope).await);
+            update_outcome(&update_snapshot(&mut failed, &snapshots, &agent).await);
         let mut initial = ScriptedHost {
             whole: std::sync::Mutex::new(Some(WholeCapture::InitialFiles)),
             ..ScriptedHost::new()
         };
         let initial_files =
-            update_outcome(&update_snapshot(&mut initial, &snapshots, &scope).await);
+            update_outcome(&update_snapshot(&mut initial, &snapshots, &agent).await);
 
         assert_eq!(
             (without_snapshots, without.calls()),
             (
                 "Saved(none, false)".to_string(),
-                vec!["save_guest".to_string()]
+                vec!["snapshot_guest".to_string()]
             )
         );
         assert_eq!(guest_stop, "Guest(stop)");
@@ -1654,28 +1659,28 @@ mod tests {
             (capture_failed, failed.calls()),
             (
                 "Fail(failed to capture the agent filesystem for the update)".to_string(),
-                vec!["save_guest".to_string(), "capture_whole".to_string()]
+                vec!["snapshot_guest".to_string(), "capture_whole".to_string()]
             )
         );
         assert_eq!(initial_files, "Saved(none, false)");
-        assert!(snapshots.admit_periodic(&scope).await.is_ok());
+        assert!(snapshots.admit_periodic(&agent).await.is_ok());
     }
 
     #[test]
     async fn an_interrupted_wait_of_a_manual_update_fails_it_or_writes_nothing_on_a_lost_shard() {
         let (snapshots, _shutdown) = enabled_service();
-        let scope = agent_scope("update-interrupted");
-        let held = snapshots.admit_periodic(&scope).await.unwrap();
+        let agent = agent_snapshots("update-interrupted");
+        let held = snapshots.admit_periodic(&agent).await.unwrap();
         let run = |lost_shard| {
             let snapshots = &snapshots;
-            let scope = &scope;
+            let agent = &agent;
             async move {
                 let mut host = ScriptedHost {
                     lost_shard,
                     ..ScriptedHost::new()
                 };
                 host.terminal.send_replace(true);
-                let result = update_snapshot(&mut host, snapshots, scope).await;
+                let result = update_snapshot(&mut host, snapshots, agent).await;
                 (update_outcome(&result), host.calls())
             }
         };
@@ -1776,10 +1781,10 @@ mod tests {
     #[test]
     async fn a_start_restore_of_a_snapshot_that_the_store_does_not_hold_fails() {
         let (snapshots, _shutdown) = enabled_service();
-        let scope = agent_scope("restore-missing");
+        let agent = agent_snapshots("restore-missing");
         let restore = StartRestore::Store(
             snapshots
-                .restore(&scope, &FilesystemSnapshotName::periodic())
+                .restore(&agent, &FilesystemSnapshotName::periodic())
                 .unwrap(),
         );
         let into = tempfile::tempdir().unwrap();
@@ -1799,7 +1804,7 @@ mod tests {
     async fn a_written_periodic_record_that_uploads_its_capture_asks_for_its_confirmation() {
         let (mark, _) = marks();
         let (snapshots, _shutdown) = enabled_service();
-        let scope = agent_scope("periodic-upload");
+        let agent = agent_snapshots("periodic-upload");
         let scratch = crate::services::agent_filesystem::scratch_directory().await;
         let mut host = ScriptedHost {
             capture: std::sync::Mutex::new(Some(CaptureOutcome::Captured {
@@ -1810,7 +1815,7 @@ mod tests {
             ..ScriptedHost::new()
         };
 
-        let result = outcome(&periodic_snapshot(&mut host, &snapshots, &scope).await);
+        let result = outcome(&periodic_snapshot(&mut host, &snapshots, &agent).await);
 
         assert_eq!(
             (result, host.calls().last().cloned()),
@@ -1847,7 +1852,7 @@ mod tests {
     impl crate::filesystem_snapshot::FilesystemSnapshotStore for SpacedStore {
         async fn save(
             &self,
-            scope: &SnapshotScope,
+            agent: &SnapshotScope,
             name: &crate::filesystem_snapshot::SnapshotName,
             tree: &Path,
             parent: Option<(
@@ -1858,36 +1863,36 @@ mod tests {
             crate::filesystem_snapshot::SnapshotInfo,
             crate::filesystem_snapshot::SnapshotStoreError,
         > {
-            let info = self.memory.save(scope, name, tree, parent).await?;
+            let info = self.memory.save(agent, name, tree, parent).await?;
             Ok(self.spaced(name, info))
         }
 
         async fn restore(
             &self,
-            scope: &SnapshotScope,
+            agent: &SnapshotScope,
             name: &crate::filesystem_snapshot::SnapshotName,
             into: &Path,
         ) -> Result<
             crate::filesystem_snapshot::SnapshotInfo,
             crate::filesystem_snapshot::SnapshotStoreError,
         > {
-            self.memory.restore(scope, name, into).await
+            self.memory.restore(agent, name, into).await
         }
 
         async fn stat(
             &self,
-            scope: &SnapshotScope,
+            agent: &SnapshotScope,
             name: &crate::filesystem_snapshot::SnapshotName,
         ) -> Result<
             Option<crate::filesystem_snapshot::SnapshotInfo>,
             crate::filesystem_snapshot::SnapshotStoreError,
         > {
-            self.memory.stat(scope, name).await
+            self.memory.stat(agent, name).await
         }
 
         async fn list(
             &self,
-            scope: &SnapshotScope,
+            agent: &SnapshotScope,
         ) -> Result<
             Box<
                 [(
@@ -1899,7 +1904,7 @@ mod tests {
         > {
             Ok(self
                 .memory
-                .list(scope)
+                .list(agent)
                 .await?
                 .iter()
                 .map(|(name, info)| (name.clone(), self.spaced(name, *info)))
@@ -1908,10 +1913,10 @@ mod tests {
 
         async fn delete(
             &self,
-            scope: &SnapshotScope,
+            agent: &SnapshotScope,
             name: &crate::filesystem_snapshot::SnapshotName,
         ) -> Result<(), crate::filesystem_snapshot::SnapshotStoreError> {
-            self.memory.delete(scope, name).await?;
+            self.memory.delete(agent, name).await?;
             self.deleted
                 .send_modify(|deleted| deleted.push(name.as_str().to_string()));
             Ok(())
@@ -1919,9 +1924,9 @@ mod tests {
 
         async fn delete_scope(
             &self,
-            scope: &SnapshotScope,
+            agent: &SnapshotScope,
         ) -> Result<(), crate::filesystem_snapshot::SnapshotStoreError> {
-            self.memory.delete_scope(scope).await
+            self.memory.delete_scope(agent).await
         }
 
         async fn copy_scope(
@@ -1948,7 +1953,7 @@ mod tests {
             &shutdown,
         )
         .unwrap();
-        let scope = agent_scope("update-retention");
+        let agent = agent_snapshots("update-retention");
         let tree = tempfile::tempdir().unwrap();
         let older = [
             FilesystemSnapshotName::update(),
@@ -1958,7 +1963,7 @@ mod tests {
         let saved = futures::StreamExt::then(futures::stream::iter(&older), |name| {
             crate::filesystem_snapshot::FilesystemSnapshotStore::save(
                 store.as_ref(),
-                &scope,
+                &agent,
                 name,
                 tree.path(),
                 None,
@@ -1979,13 +1984,13 @@ mod tests {
         let UpdateSnapshot::Saved {
             retention: Some(retention),
             ..
-        } = update_snapshot(&mut host, &snapshots, &scope).await
+        } = update_snapshot(&mut host, &snapshots, &agent).await
         else {
             panic!("the manual update saves its snapshot with a retention");
         };
         let mut deleted = store.deleted.subscribe();
 
-        retention.retain();
+        retention.delete_older_snapshots();
         let deleted = tokio::time::timeout(
             Duration::from_secs(10),
             deleted.wait_for(|deleted| !deleted.is_empty()),

@@ -19,7 +19,7 @@
 //! store. It does not know the oplog entry types or the worker: a [`Confirm`] closure writes the
 //! confirmation record.
 //!
-//! The rules are pure functions in `rules`. The registry keeps the state of the scopes and changes
+//! The rules are pure functions in `rules`. The registry keeps the state of the agents and changes
 //! it only through them, and the jobs are straight-line mechanisms that call a rule at each
 //! decision.
 
@@ -43,7 +43,7 @@ use crate::services::golem_config::{
 };
 use futures::future::BoxFuture;
 use golem_common::model::oplog::FilesystemSnapshotName;
-use registry::{DeleteTicket, JobTicket, Registry, WaitTicket};
+use registry::{DeleteAllTicket, JobTicket, Registry, WaitTicket};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -80,8 +80,8 @@ pub(crate) enum SnapshotSkip {
     UploadInFlight,
     /// The volume has less free space than the pressure target. The loop skips the snapshot.
     VolumeUnderPressure,
-    /// A delete of the scope is queued or runs. The loop skips the snapshot.
-    ScopeDeleting,
+    /// A delete of all snapshots of the agent is queued or runs. The loop skips the snapshot.
+    DeletingAllSnapshots,
 }
 
 impl std::fmt::Display for SnapshotSkip {
@@ -90,7 +90,7 @@ impl std::fmt::Display for SnapshotSkip {
             Self::Disabled => "filesystem snapshots are disabled on this executor",
             Self::UploadInFlight => "an upload of a filesystem snapshot of the agent runs now",
             Self::VolumeUnderPressure => "the volume of the agent filesystems is under pressure",
-            Self::ScopeDeleting => "the filesystem snapshots of the agent are being deleted",
+            Self::DeletingAllSnapshots => "the filesystem snapshots of the agent are being deleted",
         })
     }
 }
@@ -138,8 +138,8 @@ pub(crate) enum JobDecision {
     Confirmed(ConfirmOutcome),
     /// The save failed after its retries. The store does not hold the snapshot.
     SaveFailed,
-    /// A shutdown, or a call of `forget_scope` for the scope, stopped the job, or the admission
-    /// ended without an upload.
+    /// A shutdown, or a call of `delete_all_snapshots` for the agent, stopped the job, or the
+    /// admission ended without an upload.
     Stopped,
 }
 
@@ -170,8 +170,8 @@ pub(crate) enum UpdateRefusal {
 /// Why a manual-update upload did not save.
 #[derive(Debug)]
 pub(crate) enum UploadNowError {
-    /// A terminal interrupt, a shutdown, or a call of `forget_scope` for the scope stopped the
-    /// save.
+    /// A terminal interrupt, a shutdown, or a call of `delete_all_snapshots` for the agent stopped
+    /// the save.
     Stopped,
     /// The save failed, after the retries when the error allows them.
     Store(SnapshotStoreError),
@@ -397,35 +397,35 @@ impl AgentFilesystemSnapshots {
         self.core.is_some()
     }
 
-    /// Asks for an upload of a periodic snapshot of the agent of `scope`, before the guest saves.
+    /// Asks for an upload of a periodic snapshot of the agent `agent`, before the guest saves.
     ///
     /// The admission holds a new name. While it exists, and while the upload that it starts
-    /// runs, each other admission of the scope gives [`SnapshotSkip::UploadInFlight`]. A dropped
-    /// admission frees the scope and writes nothing durable.
+    /// runs, each other admission of the agent gives [`SnapshotSkip::UploadInFlight`]. A dropped
+    /// admission frees the agent and writes nothing durable.
     pub(crate) async fn admit_periodic(
         &self,
-        scope: &SnapshotScope,
+        agent: &SnapshotScope,
     ) -> Result<Admission, SnapshotSkip> {
         let core = self.core.as_ref().ok_or(SnapshotSkip::Disabled)?;
-        Core::admit(core, scope, SnapshotKind::Periodic)
+        Core::admit(core, agent, SnapshotKind::Periodic)
             .await
             .map_err(|refusal| refusal.skip)
     }
 
-    /// Asks for an upload of a manual-update snapshot of the agent of `scope`. When an upload of
-    /// the scope runs, the call waits once for its end, for at most `confirmation_wait`, and asks
+    /// Asks for an upload of a manual-update snapshot of the agent `agent`. When an upload of
+    /// the agent runs, the call waits once for its end, for at most `confirmation_wait`, and asks
     /// again. A shutdown ends the wait like its limit does, and a terminal interrupt that
     /// `interrupt` reports ends it with [`UpdateRefusal::Interrupted`].
     pub(crate) async fn admit_update(
         &self,
-        scope: &SnapshotScope,
+        agent: &SnapshotScope,
         interrupt: watch::Receiver<bool>,
     ) -> Result<Admission, UpdateRefusal> {
         let core = self
             .core
             .as_ref()
             .ok_or(UpdateRefusal::Skip(SnapshotSkip::Disabled))?;
-        let refusal = match Core::admit(core, scope, SnapshotKind::Update).await {
+        let refusal = match Core::admit(core, agent, SnapshotKind::Update).await {
             Ok(admission) => return Ok(admission),
             Err(refusal) => refusal,
         };
@@ -433,17 +433,17 @@ impl AgentFilesystemSnapshots {
             return Err(UpdateRefusal::Skip(refusal.skip));
         };
         tokio::select! {
-            () = core.registry.until_job_gone(scope, id) => {}
+            () = core.registry.until_job_gone(agent, id) => {}
             () = tokio::time::sleep(core.settings.confirmation_wait()) => {}
             () = core.shutdown.cancelled() => {}
             () = job::interrupt_raised(interrupt) => return Err(UpdateRefusal::Interrupted),
         }
-        Core::admit(core, scope, SnapshotKind::Update)
+        Core::admit(core, agent, SnapshotKind::Update)
             .await
             .map_err(|refusal| UpdateRefusal::Skip(refusal.skip))
     }
 
-    /// Tells whether the store holds the whole snapshot `name` of `scope`, before a start
+    /// Tells whether the store holds the whole snapshot `name` of `agent`, before a start
     /// confirms it.
     ///
     /// When an upload of the name runs on this executor and holds a slot of the uploads, the call
@@ -454,7 +454,7 @@ impl AgentFilesystemSnapshots {
     /// slot and no lock while it waits.
     pub(crate) async fn prepare_start(
         &self,
-        scope: &SnapshotScope,
+        agent: &SnapshotScope,
         name: &FilesystemSnapshotName,
         interrupt: watch::Receiver<bool>,
     ) -> StartCheck {
@@ -463,7 +463,7 @@ impl AgentFilesystemSnapshots {
         };
         let started = tokio::time::Instant::now();
         let limit = core.settings.confirmation_wait();
-        let (waited, decision) = match WaitTicket::start_wait(&core.registry, scope, name) {
+        let (waited, decision) = match WaitTicket::start_wait(&core.registry, agent, name) {
             Ok(ticket) => {
                 let decision = tokio::select! {
                     decision = ticket.decided() => Some(decision),
@@ -492,7 +492,7 @@ impl AgentFilesystemSnapshots {
         tokio::select! {
             biased;
             () = job::interrupt_raised(interrupt) => StartCheck::NotStored,
-            stat = tokio::time::timeout(limit, core.store.stat(scope, &store_name)) => match stat {
+            stat = tokio::time::timeout(limit, core.store.stat(agent, &store_name)) => match stat {
                 Ok(Ok(Some(_))) => StartCheck::Stored,
                 Ok(Ok(None)) | Err(_) => StartCheck::NotStored,
                 Ok(Err(error)) => {
@@ -503,53 +503,58 @@ impl AgentFilesystemSnapshots {
         }
     }
 
-    /// Gives the restore of the filesystem snapshot `name` of `scope`. The restore does its work
+    /// Gives the restore of the filesystem snapshot `name` of `agent`. The restore does its work
     /// when the lifecycle calls it, and it waits for a slot of the restores then. This call asks
     /// the store for nothing and waits for nothing.
     pub(crate) fn restore(
         &self,
-        scope: &SnapshotScope,
+        agent: &SnapshotScope,
         name: &FilesystemSnapshotName,
     ) -> Result<StoreRestore, SnapshotsDisabled> {
         let core = self.core.as_ref().ok_or(SnapshotsDisabled)?;
         Ok(StoreRestore::new(
             Arc::clone(&core.store),
-            scope.clone(),
+            agent.clone(),
             name.clone(),
             Arc::clone(&core.restores),
         ))
     }
 
-    /// Deletes the filesystem snapshots `names` of `scope` in the background. The call returns at
+    /// Deletes the filesystem snapshots `names` of `agent` in the background. The call returns at
     /// once and cannot fail. The clean-up retries, and after the retries it logs and counts the
     /// names that stay.
     #[allow(dead_code)]
-    pub(crate) fn forget(&self, scope: &SnapshotScope, names: Box<[FilesystemSnapshotName]>) {
+    pub(crate) fn delete_snapshots(
+        &self,
+        agent: &SnapshotScope,
+        names: Box<[FilesystemSnapshotName]>,
+    ) {
         if let Some(core) = &self.core {
-            core.cleanup.delete(scope.clone(), names);
+            core.cleanup.delete(agent.clone(), names);
         }
     }
 
-    /// Deletes the scope in the background, after the job of the scope ended. The call stops
+    /// Deletes all filesystem snapshots of `agent` in the background, after the job of the agent
+    /// ended. The call stops
     /// that job first, so it sends nothing more; a confirmation that it already sent can still be
     /// appended. The call returns at once and cannot fail.
     ///
-    /// Until the delete ends, with success or with an error, an admission of the scope gives
-    /// [`SnapshotSkip::ScopeDeleting`].
+    /// Until the delete ends, with success or with an error, an admission of the agent gives
+    /// [`SnapshotSkip::DeletingAllSnapshots`].
     #[allow(dead_code)]
-    pub(crate) fn forget_scope(&self, scope: &SnapshotScope) {
+    pub(crate) fn delete_all_snapshots(&self, agent: &SnapshotScope) {
         if let Some(core) = &self.core {
-            let (ticket, stop) = DeleteTicket::forget_scope(&core.registry, scope);
+            let (ticket, stop) = DeleteAllTicket::delete_all_snapshots(&core.registry, agent);
             if let Some(stop) = stop {
                 stop.cancel();
             }
-            core.cleanup.delete_scope(scope.clone(), ticket);
+            core.cleanup.delete_all(agent.clone(), ticket);
         }
     }
 
-    /// Copies each filesystem snapshot of `from` into the empty scope `to`.
+    /// Copies each filesystem snapshot of `from` into `to`, which holds none.
     #[allow(dead_code)]
-    pub(crate) async fn duplicate_scope(
+    pub(crate) async fn copy_all_snapshots(
         &self,
         from: &SnapshotScope,
         to: &SnapshotScope,
@@ -572,11 +577,11 @@ impl AgentFilesystemSnapshots {
 }
 
 impl Core {
-    /// Admits a job of `kind` for `scope` with a new name. The error carries the job that runs
-    /// for the scope.
+    /// Admits a job of `kind` for `agent` with a new name. The error carries the job that runs
+    /// for the agent.
     async fn admit(
         core: &Arc<Self>,
-        scope: &SnapshotScope,
+        agent: &SnapshotScope,
         kind: SnapshotKind,
     ) -> Result<Admission, rules::Refusal> {
         let room = core.room.has_room().await;
@@ -586,7 +591,7 @@ impl Core {
         };
         let ticket = JobTicket::admit(
             &core.registry,
-            scope,
+            agent,
             &name,
             core.shutdown.child_token(),
             room,
@@ -601,7 +606,7 @@ impl Core {
 }
 
 /// The permission of one upload, with its name. Only an admission gives a name, and an admission
-/// cannot be cloned, so each name reaches at most one capture. Dropped, it frees the scope.
+/// cannot be cloned, so each name reaches at most one capture. Dropped, it frees the agent.
 pub(crate) struct Admission {
     core: Arc<Core>,
     ticket: JobTicket,
@@ -620,15 +625,17 @@ impl Admission {
         self.core.settings.capture_wait()
     }
 
-    /// Uploads `tree` in the background, then confirms it with `confirm`.
+    /// Uploads `tree` in the background, then confirms it with `confirm` and deletes the older
+    /// snapshots. It differs from [`Admission::upload_now`] only in who waits and in what
+    /// follows: both go through the same upload.
     ///
-    /// The job waits for a slot of the uploads, saves with retries, discards the tree, and
-    /// confirms. On `Confirmed` it applies retention. On `Superseded` it deletes the snapshot and
-    /// runs no retention. On `Deferred` it keeps the snapshot and runs no retention, because a
-    /// later start can confirm it. When the retries are used up, it confirms nothing.
-    /// A shutdown, or a call of `forget_scope` for the scope, stops the job at each step, also in
-    /// its retention or its delete: it then sends nothing more and deletes nothing more. A confirmation that it
-    /// already sent can still be appended.
+    /// The job uploads, discards the tree, and confirms. On `Confirmed` it deletes the older
+    /// snapshots of its kind. On `Superseded` it deletes its own snapshot and no older one. On
+    /// `Deferred` it keeps the snapshot and deletes nothing, because a later start can confirm
+    /// it. When the retries are used up, it confirms nothing. A shutdown, or a call of
+    /// `delete_all_snapshots` for the agent, stops the job at each step, also in its deletes: it
+    /// then sends nothing more and deletes nothing more. A confirmation that it already sent can
+    /// still be appended.
     pub(crate) fn submit(
         self,
         tree: CapturedTree,
@@ -640,9 +647,9 @@ impl Admission {
     }
 }
 
-/// A manual-update snapshot that the store holds. The loop retains it after the update record
-/// commits. Dropped, it deletes nothing and frees the scope.
-#[must_use = "a dropped saved update runs no retention; retain it after the update record commits"]
+/// A manual-update snapshot that the store holds. The loop deletes the older update snapshots after
+/// the update record commits. Dropped, it deletes nothing and frees the agent.
+#[must_use = "a dropped saved update deletes no older snapshot; delete them after the record commits"]
 pub(crate) struct SavedUpdate {
     core: Arc<Core>,
     ticket: JobTicket,
@@ -651,12 +658,12 @@ pub(crate) struct SavedUpdate {
 }
 
 impl SavedUpdate {
-    /// Applies retention in the background, under a slot of the uploads: it keeps the own
-    /// snapshot and the newest older update snapshots, with the rules of periodic retention, and
-    /// it never deletes `kept`, the snapshot of the last successful manual update, whose record a
-    /// start restores without a fallback. A shutdown, or a call of `forget_scope` for the scope,
+    /// Applies retention in the background, under a slot of the uploads: it keeps the own snapshot
+    /// and the newest older update snapshots, with the rules of periodic retention, and it never
+    /// deletes `kept`, the snapshot of the last successful manual update, whose record a start
+    /// restores without a fallback. A shutdown, or a call of `delete_all_snapshots` for the agent,
     /// stops it.
-    pub(crate) fn retain(self, kept: Option<&FilesystemSnapshotName>) {
+    pub(crate) fn delete_older_snapshots(self, kept: Option<&FilesystemSnapshotName>) {
         let kept = kept.and_then(|name| store_name(name).ok());
         let Self {
             core,
@@ -666,7 +673,7 @@ impl SavedUpdate {
         } = self;
         let jobs = core.jobs.clone();
         jobs.spawn(async move {
-            job::retain(
+            job::delete_older_snapshots(
                 &core,
                 &ticket,
                 &name,

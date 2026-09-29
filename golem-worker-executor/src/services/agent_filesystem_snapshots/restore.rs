@@ -26,7 +26,7 @@ use tokio::sync::Semaphore;
 /// lifecycle calls it, and gives the slot back when it ends, with success or with an error.
 pub(crate) struct StoreRestore {
     store: Arc<dyn FilesystemSnapshotStore>,
-    scope: SnapshotScope,
+    agent: SnapshotScope,
     name: FilesystemSnapshotName,
     restores: Arc<Semaphore>,
 }
@@ -34,13 +34,13 @@ pub(crate) struct StoreRestore {
 impl StoreRestore {
     pub(super) fn new(
         store: Arc<dyn FilesystemSnapshotStore>,
-        scope: SnapshotScope,
+        agent: SnapshotScope,
         name: FilesystemSnapshotName,
         restores: Arc<Semaphore>,
     ) -> Self {
         Self {
             store,
-            scope,
+            agent,
             name,
             restores,
         }
@@ -62,7 +62,7 @@ impl RestoreTree for StoreRestore {
                 source: anyhow::Error::new(error).context("wait for a slot of the restores"),
             })?;
         let started = Instant::now();
-        let result = self.store.restore(&self.scope, &name, into).await;
+        let result = self.store.restore(&self.agent, &name, into).await;
         crate::metrics::filesystem_snapshots::record_restore(
             if result.is_ok() { "restored" } else { "failed" },
             started.elapsed(),

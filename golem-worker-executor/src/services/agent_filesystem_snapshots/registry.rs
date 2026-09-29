@@ -12,46 +12,46 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! The state of the scopes, and the tickets that report to it.
+//! The state of the agents, and the tickets that report to it.
 //!
-//! The registry holds one [`Scopes`] value and changes it only through the transitions of
+//! The registry holds one [`State`] value and changes it only through the transitions of
 //! [`rules`], each with its own answer. Each ticket makes its transition in its constructor, and
 //! its `Drop` only reports the end of what it holds.
 
 use super::JobDecision;
-use super::rules::{self, JobId, Refusal, Scopes, Transition};
+use super::rules::{self, JobId, Refusal, State, Transition};
 use crate::filesystem_snapshot::SnapshotScope;
 use golem_common::model::oplog::FilesystemSnapshotName;
 use std::sync::{Arc, Mutex, PoisonError};
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
-/// The state of the scopes of the service, and the signal that wakes its waiters.
+/// The state of the agents of the service, and the signal that wakes its waiters.
 #[derive(Default)]
 pub(super) struct Registry {
-    scopes: Mutex<Scopes>,
+    state: Mutex<State>,
     changed: watch::Sender<()>,
 }
 
 impl Registry {
     /// Applies the transition `f`, which is the transition `transition` of [`rules`], and wakes
-    /// the waiters when [`rules::wakes`] says so. No lock is held across an await, so the scopes
+    /// the waiters when [`rules::wakes`] says so. No lock is held across an await, so the state
     /// of a poisoned lock are used as they are.
-    fn apply<T>(&self, transition: Transition, f: impl FnOnce(&mut Scopes) -> T) -> T {
-        let answer = f(&mut self.scopes.lock().unwrap_or_else(PoisonError::into_inner));
+    fn apply<T>(&self, transition: Transition, f: impl FnOnce(&mut State) -> T) -> T {
+        let answer = f(&mut self.state.lock().unwrap_or_else(PoisonError::into_inner));
         if rules::wakes(transition) {
             self.changed.send_modify(|()| {});
         }
         answer
     }
 
-    /// Waits until `found` gives a value for the scopes. Gives `None` when the registry is gone.
-    async fn until<T>(&self, found: impl Fn(&Scopes) -> Option<T>) -> Option<T> {
+    /// Waits until `found` gives a value for the state. Gives `None` when the registry is gone.
+    async fn until<T>(&self, found: impl Fn(&State) -> Option<T>) -> Option<T> {
         let mut value = None;
         self.changed
             .subscribe()
             .wait_for(|()| {
-                value = found(&self.scopes.lock().unwrap_or_else(PoisonError::into_inner));
+                value = found(&self.state.lock().unwrap_or_else(PoisonError::into_inner));
                 value.is_some()
             })
             .await
@@ -59,49 +59,49 @@ impl Registry {
         value
     }
 
-    /// Reads the scopes now.
+    /// Reads the state now.
     #[cfg(test)]
-    pub(super) fn read<T>(&self, read: impl FnOnce(&Scopes) -> T) -> T {
-        read(&self.scopes.lock().unwrap_or_else(PoisonError::into_inner))
+    pub(super) fn read<T>(&self, read: impl FnOnce(&State) -> T) -> T {
+        read(&self.state.lock().unwrap_or_else(PoisonError::into_inner))
     }
 
-    /// Waits until the job `id` of `scope` is gone. Gives at once when the registry is gone.
-    pub(super) async fn until_job_gone(&self, scope: &SnapshotScope, id: JobId) {
-        self.until(|scopes| rules::has_ended(scopes, scope, id).then_some(()))
+    /// Waits until the job `id` of `agent` is gone. Gives at once when the registry is gone.
+    pub(super) async fn until_job_gone(&self, agent: &SnapshotScope, id: JobId) {
+        self.until(|state| rules::has_ended(state, agent, id).then_some(()))
             .await;
     }
 
-    /// Waits until no job runs for `scope`. Gives at once when the registry is gone.
-    pub(super) async fn until_scope_free(&self, scope: &SnapshotScope) {
-        self.until(|scopes| rules::is_free(scopes, scope).then_some(()))
+    /// Waits until no job runs for `agent`. Gives at once when the registry is gone.
+    pub(super) async fn until_agent_free(&self, agent: &SnapshotScope) {
+        self.until(|state| rules::is_free(state, agent).then_some(()))
             .await;
     }
 }
 
-/// The admitted job of a scope. Dropping it ends the job.
+/// The admitted job of an agent. Dropping it ends the job.
 pub(super) struct JobTicket {
     registry: Arc<Registry>,
-    scope: SnapshotScope,
+    agent: SnapshotScope,
     id: JobId,
     stop: CancellationToken,
 }
 
 impl JobTicket {
-    /// Admits a job with `name` for `scope`. `stop` stops the job, and `room` tells whether the
+    /// Admits a job with `name` for `agent`. `stop` stops the job, and `room` tells whether the
     /// volume has room for a capture.
     pub(super) fn admit(
         registry: &Arc<Registry>,
-        scope: &SnapshotScope,
+        agent: &SnapshotScope,
         name: &FilesystemSnapshotName,
         stop: CancellationToken,
         room: bool,
     ) -> Result<Self, Refusal> {
-        let id = registry.apply(Transition::Admit, |scopes| {
-            rules::admit(scopes, scope, name, stop.clone(), room)
+        let id = registry.apply(Transition::Admit, |state| {
+            rules::admit(state, agent, name, stop.clone(), room)
         })?;
         Ok(Self {
             registry: Arc::clone(registry),
-            scope: scope.clone(),
+            agent: agent.clone(),
             id,
             stop,
         })
@@ -109,95 +109,97 @@ impl JobTicket {
 
     /// The save of the job holds a slot of the uploads.
     pub(super) fn saving(&self) {
-        self.registry.apply(Transition::Saving, |scopes| {
-            rules::saving(scopes, &self.scope, self.id)
+        self.registry.apply(Transition::Saving, |state| {
+            rules::saving(state, &self.agent, self.id)
         });
     }
 
     /// Records the decision of the job. The first decision stays.
     pub(super) fn decide(&self, decision: JobDecision) {
-        self.registry.apply(Transition::Decide, |scopes| {
-            rules::decide(scopes, &self.scope, self.id, decision)
+        self.registry.apply(Transition::Decide, |state| {
+            rules::decide(state, &self.agent, self.id, decision)
         });
     }
 
-    /// The stop of the job. A delete of the scope and the shutdown cancel it.
+    /// The stop of the job. A delete of all snapshots of the agent and the shutdown cancel it.
     pub(super) fn stop(&self) -> &CancellationToken {
         &self.stop
     }
 
-    pub(super) fn scope(&self) -> &SnapshotScope {
-        &self.scope
+    pub(super) fn agent(&self) -> &SnapshotScope {
+        &self.agent
     }
 }
 
 impl Drop for JobTicket {
     fn drop(&mut self) {
-        self.registry.apply(Transition::End, |scopes| {
-            rules::end(scopes, &self.scope, self.id)
+        self.registry.apply(Transition::End, |state| {
+            rules::end(state, &self.agent, self.id)
         });
     }
 }
 
-/// A queued or running delete of a scope. Dropping it ends the delete.
-pub(super) struct DeleteTicket {
+/// A queued or running delete of all snapshots of an agent. Dropping it ends the delete.
+pub(super) struct DeleteAllTicket {
     registry: Arc<Registry>,
-    scope: SnapshotScope,
+    agent: SnapshotScope,
 }
 
-impl DeleteTicket {
-    /// Marks a delete of `scope`, and gives the stop of the job of the scope, when one runs.
-    pub(super) fn forget_scope(
+impl DeleteAllTicket {
+    /// Marks a delete of all snapshots of `agent`, and gives the stop of the job of the agent, when
+    /// one runs.
+    pub(super) fn delete_all_snapshots(
         registry: &Arc<Registry>,
-        scope: &SnapshotScope,
+        agent: &SnapshotScope,
     ) -> (Self, Option<CancellationToken>) {
-        let stop = registry.apply(Transition::ForgetScope, |scopes| {
-            rules::forget_scope(scopes, scope)
+        let stop = registry.apply(Transition::DeleteAllSnapshots, |state| {
+            rules::delete_all_snapshots(state, agent)
         });
         (
             Self {
                 registry: Arc::clone(registry),
-                scope: scope.clone(),
+                agent: agent.clone(),
             },
             stop,
         )
     }
 
-    /// Waits until no job runs for the scope. A job cannot start while the delete is marked.
-    pub(super) async fn until_scope_free(&self) {
-        self.registry.until_scope_free(&self.scope).await;
+    /// Waits until no job runs for the agent. A job cannot start while the delete is marked.
+    pub(super) async fn until_agent_free(&self) {
+        self.registry.until_agent_free(&self.agent).await;
     }
 }
 
-impl Drop for DeleteTicket {
+impl Drop for DeleteAllTicket {
     fn drop(&mut self) {
-        self.registry.apply(Transition::ScopeDeleted, |scopes| {
-            rules::scope_deleted(scopes, &self.scope)
-        });
+        self.registry
+            .apply(Transition::AllSnapshotsDeleted, |state| {
+                rules::all_snapshots_deleted(state, &self.agent)
+            });
     }
 }
 
 /// A start that waits for the decision of a job. Dropping it ends the wait.
 pub(super) struct WaitTicket {
     registry: Arc<Registry>,
-    scope: SnapshotScope,
+    agent: SnapshotScope,
     id: JobId,
 }
 
 impl WaitTicket {
-    /// Registers a wait for the job of `scope` with `name`, when the start waits for it. Gives
+    /// Registers a wait for the job of `agent` with `name`, when the start waits for it. Gives
     /// the decision that the job has now otherwise.
     pub(super) fn start_wait(
         registry: &Arc<Registry>,
-        scope: &SnapshotScope,
+        agent: &SnapshotScope,
         name: &FilesystemSnapshotName,
     ) -> Result<Self, Option<JobDecision>> {
-        let id = registry.apply(Transition::StartWait, |scopes| {
-            rules::start_wait(scopes, scope, name)
+        let id = registry.apply(Transition::StartWait, |state| {
+            rules::start_wait(state, agent, name)
         })?;
         Ok(Self {
             registry: Arc::clone(registry),
-            scope: scope.clone(),
+            agent: agent.clone(),
             id,
         })
     }
@@ -206,7 +208,7 @@ impl WaitTicket {
     /// gone, gives `Stopped`.
     pub(super) async fn decided(&self) -> JobDecision {
         self.registry
-            .until(|scopes| rules::decision_of(scopes, &self.scope, self.id))
+            .until(|state| rules::decision_of(state, &self.agent, self.id))
             .await
             .unwrap_or(JobDecision::Stopped)
     }
@@ -214,8 +216,8 @@ impl WaitTicket {
 
 impl Drop for WaitTicket {
     fn drop(&mut self) {
-        self.registry.apply(Transition::Unwatch, |scopes| {
-            rules::unwatch(scopes, &self.scope, self.id)
+        self.registry.apply(Transition::Unwatch, |state| {
+            rules::unwatch(state, &self.agent, self.id)
         });
     }
 }
@@ -232,7 +234,7 @@ mod tests {
     #[test]
     fn a_dropped_wait_releases_the_decision_of_the_ended_job() {
         let registry = Arc::new(Registry::default());
-        let scope = SnapshotScope::agent(&OwnedAgentId::new(
+        let agent = SnapshotScope::agent(&OwnedAgentId::new(
             EnvironmentId::new(),
             &AgentId {
                 component_id: ComponentId::new(),
@@ -240,15 +242,15 @@ mod tests {
             },
         ));
         let name = FilesystemSnapshotName::periodic();
-        let job = JobTicket::admit(&registry, &scope, &name, CancellationToken::new(), true)
+        let job = JobTicket::admit(&registry, &agent, &name, CancellationToken::new(), true)
             .expect("admitted");
         job.saving();
-        let wait = WaitTicket::start_wait(&registry, &scope, &name).expect("waits");
+        let wait = WaitTicket::start_wait(&registry, &agent, &name).expect("waits");
         let id = wait.id;
         job.decide(JobDecision::Confirmed(ConfirmOutcome::Confirmed));
         drop(job);
         let decision =
-            |registry: &Registry| registry.read(|scopes| rules::decision_of(scopes, &scope, id));
+            |registry: &Registry| registry.read(|state| rules::decision_of(state, &agent, id));
 
         let while_waiting = decision(&registry);
         drop(wait);

@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! The rules of the service, as pure functions over plain values: the transitions of the jobs
-//! and the scope deletes, the decisions of a job, the plan of a start, and the admission of a
-//! manual update. Nothing here waits, reads a clock or calls the store.
+//! The rules of the service, as pure functions over plain values: the transitions of the jobs and
+//! the deletes of all snapshots, the decisions of a job, the plan of a start, and the admission of
+//! a manual update. Nothing here waits, reads a clock or calls the store.
 
 use super::{ConfirmOutcome, JobDecision, SnapshotKind, SnapshotSkip};
 use crate::filesystem_snapshot::{SnapshotInfo, SnapshotScope, SnapshotStoreError};
@@ -33,20 +33,20 @@ use tokio_util::sync::CancellationToken;
 /// The number of a job. It is unique for the life of the process.
 pub(super) type JobId = u64;
 
-/// The jobs of the scopes, the scope deletes, and the decisions of ended jobs that a start waits
-/// for.
+/// The jobs of the agents, the deletes of all snapshots, and the decisions of ended jobs that a
+/// start waits for.
 #[derive(Debug, Default)]
-pub(super) struct Scopes {
+pub(super) struct State {
     jobs: HashMap<SnapshotScope, Job>,
-    /// The number of queued or running deletes of each scope.
+    /// The number of queued or running deletes of each agent.
     deleting: HashMap<SnapshotScope, NonZeroU32>,
-    /// The last ended job of each scope that a start still waits for.
+    /// The last ended job of each agent that a start still waits for.
     ended: HashMap<SnapshotScope, Ended>,
     /// The number of the last admitted job.
     last_job: JobId,
 }
 
-/// The job of one scope, from its admission to its end.
+/// The job of one agent, from its admission to its end.
 #[derive(Debug)]
 struct Job {
     id: JobId,
@@ -77,7 +77,7 @@ pub(super) enum JobPhase {
     Decided(JobDecision),
 }
 
-/// A transition of [`Scopes`]. The registry wakes its waiters after a transition when
+/// A transition of [`State`]. The registry wakes its waiters after a transition when
 /// [`wakes`] says so.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Transition {
@@ -87,18 +87,18 @@ pub(super) enum Transition {
     End,
     StartWait,
     Unwatch,
-    ForgetScope,
-    ScopeDeleted,
+    DeleteAllSnapshots,
+    AllSnapshotsDeleted,
 }
 
 /// Whether the waiters of the registry must see `transition`. A waiter waits for a decision, for
-/// the end of a job, or for the end of a scope delete.
+/// the end of a job, or for the end of a delete of all snapshots.
 pub(super) fn wakes(transition: Transition) -> bool {
     match transition {
         Transition::Decide
         | Transition::End
-        | Transition::ForgetScope
-        | Transition::ScopeDeleted => true,
+        | Transition::DeleteAllSnapshots
+        | Transition::AllSnapshotsDeleted => true,
         Transition::Admit | Transition::Saving | Transition::StartWait | Transition::Unwatch => {
             false
         }
@@ -109,34 +109,34 @@ pub(super) fn wakes(transition: Transition) -> bool {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct Refusal {
     pub(super) skip: SnapshotSkip,
-    /// The job that runs for the scope, when one runs.
+    /// The job that runs for the agent, when one runs.
     pub(super) running: Option<JobId>,
 }
 
-/// Admits a job with `name` for `scope`, in the order room, scope delete, running job. `stop`
-/// stops the job, and `room` tells whether the volume has room for a capture.
+/// Admits a job with `name` for `agent`, in the order room, delete of all snapshots, running job.
+/// `stop` stops the job, and `room` tells whether the volume has room for a capture.
 pub(super) fn admit(
-    scopes: &mut Scopes,
-    scope: &SnapshotScope,
+    state: &mut State,
+    agent: &SnapshotScope,
     name: &FilesystemSnapshotName,
     stop: CancellationToken,
     room: bool,
 ) -> Result<JobId, Refusal> {
-    let running = scopes.jobs.get(scope).map(|job| job.id);
+    let running = state.jobs.get(agent).map(|job| job.id);
     let refused = |skip| Err(Refusal { skip, running });
     if !room {
         return refused(SnapshotSkip::VolumeUnderPressure);
     }
-    if scopes.deleting.contains_key(scope) {
-        return refused(SnapshotSkip::ScopeDeleting);
+    if state.deleting.contains_key(agent) {
+        return refused(SnapshotSkip::DeletingAllSnapshots);
     }
     if running.is_some() {
         return refused(SnapshotSkip::UploadInFlight);
     }
-    scopes.last_job += 1;
-    let id = scopes.last_job;
-    scopes.jobs.insert(
-        scope.clone(),
+    state.last_job += 1;
+    let id = state.last_job;
+    state.jobs.insert(
+        agent.clone(),
         Job {
             id,
             name: name.clone(),
@@ -149,8 +149,8 @@ pub(super) fn admit(
 }
 
 /// The save of the job `id` holds a slot of the uploads. The phase only moves forward.
-pub(super) fn saving(scopes: &mut Scopes, scope: &SnapshotScope, id: JobId) {
-    if let Some(job) = live(scopes, scope, id)
+pub(super) fn saving(state: &mut State, agent: &SnapshotScope, id: JobId) {
+    if let Some(job) = live(state, agent, id)
         && job.phase == JobPhase::Admitted
     {
         job.phase = JobPhase::Saving;
@@ -158,62 +158,64 @@ pub(super) fn saving(scopes: &mut Scopes, scope: &SnapshotScope, id: JobId) {
 }
 
 /// The job `id` decided. The first decision stays.
-pub(super) fn decide(scopes: &mut Scopes, scope: &SnapshotScope, id: JobId, decision: JobDecision) {
-    if let Some(job) = live(scopes, scope, id)
+pub(super) fn decide(state: &mut State, agent: &SnapshotScope, id: JobId, decision: JobDecision) {
+    if let Some(job) = live(state, agent, id)
         && !matches!(job.phase, JobPhase::Decided(_))
     {
         job.phase = JobPhase::Decided(decision);
     }
 }
 
-/// A delete of `scope` is queued. Gives the stop of the job of the scope, when one runs.
-pub(super) fn forget_scope(
-    scopes: &mut Scopes,
-    scope: &SnapshotScope,
+/// A delete of all snapshots of `agent` is queued. Gives the stop of the job of the agent, when one
+/// runs.
+pub(super) fn delete_all_snapshots(
+    state: &mut State,
+    agent: &SnapshotScope,
 ) -> Option<CancellationToken> {
-    let stop = scopes.jobs.get(scope).map(|job| job.stop.clone());
-    scopes
+    let stop = state.jobs.get(agent).map(|job| job.stop.clone());
+    state
         .deleting
-        .entry(scope.clone())
+        .entry(agent.clone())
         .and_modify(|count| *count = count.saturating_add(1))
         .or_insert(NonZeroU32::MIN);
     stop
 }
 
-/// A delete of `scope` ended. The last one frees the scope and the ended decision of the scope.
-pub(super) fn scope_deleted(scopes: &mut Scopes, scope: &SnapshotScope) {
-    let left = scopes
+/// A delete of all snapshots of `agent` ended. The last one frees the agent and the ended decision
+/// of the agent.
+pub(super) fn all_snapshots_deleted(state: &mut State, agent: &SnapshotScope) {
+    let left = state
         .deleting
-        .get(scope)
+        .get(agent)
         .and_then(|count| NonZeroU32::new(count.get() - 1));
     match left {
         Some(left) => {
-            scopes.deleting.insert(scope.clone(), left);
+            state.deleting.insert(agent.clone(), left);
         }
         None => {
-            scopes.deleting.remove(scope);
+            state.deleting.remove(agent);
         }
     }
-    scopes.ended.remove(scope);
+    state.ended.remove(agent);
 }
 
-/// The live job `id` of `scope`.
-fn live<'a>(scopes: &'a mut Scopes, scope: &SnapshotScope, id: JobId) -> Option<&'a mut Job> {
-    scopes.jobs.get_mut(scope).filter(|job| job.id == id)
+/// The live job `id` of `agent`.
+fn live<'a>(state: &'a mut State, agent: &SnapshotScope, id: JobId) -> Option<&'a mut Job> {
+    state.jobs.get_mut(agent).filter(|job| job.id == id)
 }
 
-/// Frees the scope of the job `id`, and keeps its decision while starts wait for it.
-pub(super) fn end(scopes: &mut Scopes, scope: &SnapshotScope, id: JobId) {
-    if scopes.jobs.get(scope).is_some_and(|job| job.id == id)
-        && let Some(job) = scopes.jobs.remove(scope)
+/// Frees the agent of the job `id`, and keeps its decision while starts wait for it.
+pub(super) fn end(state: &mut State, agent: &SnapshotScope, id: JobId) {
+    if state.jobs.get(agent).is_some_and(|job| job.id == id)
+        && let Some(job) = state.jobs.remove(agent)
         && let Some(waiters) = NonZeroU32::new(job.waiters)
     {
         let decision = match job.phase {
             JobPhase::Decided(decision) => decision,
             JobPhase::Admitted | JobPhase::Saving => JobDecision::Stopped,
         };
-        scopes.ended.insert(
-            scope.clone(),
+        state.ended.insert(
+            agent.clone(),
             Ended {
                 id,
                 decision,
@@ -223,15 +225,15 @@ pub(super) fn end(scopes: &mut Scopes, scope: &SnapshotScope, id: JobId) {
     }
 }
 
-/// A start waits only for a job of the scope with the name that holds a slot of the uploads and
+/// A start waits only for a job of the agent with the name that holds a slot of the uploads and
 /// has not decided. It then registers as a waiter in the same transition and gets the job. A
 /// start that does not wait gets the decision of the job with the name, when known.
 pub(super) fn start_wait(
-    scopes: &mut Scopes,
-    scope: &SnapshotScope,
+    state: &mut State,
+    agent: &SnapshotScope,
     name: &FilesystemSnapshotName,
 ) -> Result<JobId, Option<JobDecision>> {
-    match scopes.jobs.get_mut(scope).filter(|job| &job.name == name) {
+    match state.jobs.get_mut(agent).filter(|job| &job.name == name) {
         Some(job) => match job.phase {
             JobPhase::Saving => {
                 job.waiters += 1;
@@ -245,59 +247,55 @@ pub(super) fn start_wait(
 }
 
 /// Takes one waiter from the job `id`, live or ended.
-pub(super) fn unwatch(scopes: &mut Scopes, scope: &SnapshotScope, id: JobId) {
-    if let Some(job) = live(scopes, scope, id) {
+pub(super) fn unwatch(state: &mut State, agent: &SnapshotScope, id: JobId) {
+    if let Some(job) = live(state, agent, id) {
         job.waiters = job.waiters.saturating_sub(1);
         return;
     }
-    let left = scopes
+    let left = state
         .ended
-        .get(scope)
+        .get(agent)
         .filter(|ended| ended.id == id)
         .map(|ended| NonZeroU32::new(ended.waiters.get() - 1));
     match left {
         Some(Some(waiters)) => {
-            if let Some(ended) = scopes.ended.get_mut(scope) {
+            if let Some(ended) = state.ended.get_mut(agent) {
                 ended.waiters = waiters;
             }
         }
         Some(None) => {
-            scopes.ended.remove(scope);
+            state.ended.remove(agent);
         }
         None => {}
     }
 }
 
-/// The decision of the job `id` of `scope`, or `None` while it runs undecided. A job that ended
+/// The decision of the job `id` of `agent`, or `None` while it runs undecided. A job that ended
 /// without a kept decision counts as stopped.
-pub(super) fn decision_of(
-    scopes: &Scopes,
-    scope: &SnapshotScope,
-    id: JobId,
-) -> Option<JobDecision> {
-    match scopes.jobs.get(scope).filter(|job| job.id == id) {
+pub(super) fn decision_of(state: &State, agent: &SnapshotScope, id: JobId) -> Option<JobDecision> {
+    match state.jobs.get(agent).filter(|job| job.id == id) {
         Some(job) => match job.phase {
             JobPhase::Decided(decision) => Some(decision),
             JobPhase::Admitted | JobPhase::Saving => None,
         },
         None => Some(
-            scopes
+            state
                 .ended
-                .get(scope)
+                .get(agent)
                 .filter(|ended| ended.id == id)
                 .map_or(JobDecision::Stopped, |ended| ended.decision),
         ),
     }
 }
 
-/// Whether the job `id` of `scope` ended.
-pub(super) fn has_ended(scopes: &Scopes, scope: &SnapshotScope, id: JobId) -> bool {
-    scopes.jobs.get(scope).is_none_or(|job| job.id != id)
+/// Whether the job `id` of `agent` ended.
+pub(super) fn has_ended(state: &State, agent: &SnapshotScope, id: JobId) -> bool {
+    state.jobs.get(agent).is_none_or(|job| job.id != id)
 }
 
-/// Whether no job runs for `scope`.
-pub(super) fn is_free(scopes: &Scopes, scope: &SnapshotScope) -> bool {
-    !scopes.jobs.contains_key(scope)
+/// Whether no job runs for `agent`.
+pub(super) fn is_free(state: &State, agent: &SnapshotScope) -> bool {
+    !state.jobs.contains_key(agent)
 }
 
 /// What one save attempt gave.
@@ -343,9 +341,9 @@ pub(super) fn retry_delay(
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum FollowUp {
     /// Applies retention.
-    Retain,
+    DeleteOlder,
     /// Deletes the own snapshot, which no confirmation record names.
-    DeleteOwn,
+    DeleteSuperseded,
     /// Keeps the snapshot and does nothing more.
     Keep,
 }
@@ -354,8 +352,8 @@ pub(super) enum FollowUp {
 /// snapshot applies retention, and only a superseded one is deleted.
 pub(super) fn follow_up(kind: SnapshotKind, outcome: ConfirmOutcome) -> FollowUp {
     match (kind, outcome) {
-        (SnapshotKind::Periodic, ConfirmOutcome::Confirmed) => FollowUp::Retain,
-        (_, ConfirmOutcome::Superseded) => FollowUp::DeleteOwn,
+        (SnapshotKind::Periodic, ConfirmOutcome::Confirmed) => FollowUp::DeleteOlder,
+        (_, ConfirmOutcome::Superseded) => FollowUp::DeleteSuperseded,
         (SnapshotKind::Update, ConfirmOutcome::Confirmed) | (_, ConfirmOutcome::Deferred) => {
             FollowUp::Keep
         }
@@ -469,7 +467,7 @@ mod tests {
     use golem_common::model::{AgentId, OwnedAgentId};
     use test_r::test;
 
-    fn scope(name: &str) -> SnapshotScope {
+    fn agent_snapshots(name: &str) -> SnapshotScope {
         SnapshotScope::agent(&OwnedAgentId::new(
             EnvironmentId::new(),
             &AgentId {
@@ -480,57 +478,53 @@ mod tests {
     }
 
     fn try_admit(
-        scopes: &mut Scopes,
-        scope: &SnapshotScope,
+        state: &mut State,
+        agent: &SnapshotScope,
         name: &FilesystemSnapshotName,
         room: bool,
     ) -> Result<JobId, Refusal> {
-        admit(scopes, scope, name, CancellationToken::new(), room)
+        admit(state, agent, name, CancellationToken::new(), room)
     }
 
-    fn admitted(
-        scopes: &mut Scopes,
-        scope: &SnapshotScope,
-        name: &FilesystemSnapshotName,
-    ) -> JobId {
-        try_admit(scopes, scope, name, true).expect("admitted")
+    fn admitted(state: &mut State, agent: &SnapshotScope, name: &FilesystemSnapshotName) -> JobId {
+        try_admit(state, agent, name, true).expect("admitted")
     }
 
     fn refusal(result: Result<JobId, Refusal>) -> Option<(SnapshotSkip, Option<JobId>)> {
         result.err().map(|refusal| (refusal.skip, refusal.running))
     }
 
-    fn end_job(scopes: &mut Scopes, scope: &SnapshotScope, id: JobId) {
-        end(scopes, scope, id);
+    fn end_job(state: &mut State, agent: &SnapshotScope, id: JobId) {
+        end(state, agent, id);
     }
 
     fn wait(
-        scopes: &mut Scopes,
-        scope: &SnapshotScope,
+        state: &mut State,
+        agent: &SnapshotScope,
         name: &FilesystemSnapshotName,
     ) -> Result<JobId, Option<JobDecision>> {
-        start_wait(scopes, scope, name)
+        start_wait(state, agent, name)
     }
 
     #[test]
-    fn an_admission_checks_room_then_a_scope_delete_then_a_running_job() {
-        let mut scopes = Scopes::default();
-        let scope = scope("order");
-        let other = self::scope("other");
+    fn an_admission_checks_room_then_a_delete_of_all_snapshots_then_a_running_job() {
+        let mut state = State::default();
+        let agent = agent_snapshots("order");
+        let other = agent_snapshots("other");
         let name = FilesystemSnapshotName::periodic();
 
-        forget_scope(&mut scopes, &scope);
-        let deleting_without_room = refusal(try_admit(&mut scopes, &scope, &name, false));
-        let deleting = refusal(try_admit(&mut scopes, &scope, &name, true));
-        let first = admitted(&mut scopes, &other, &name);
-        let running = refusal(try_admit(&mut scopes, &other, &name, true));
-        let running_without_room = refusal(try_admit(&mut scopes, &other, &name, false));
+        delete_all_snapshots(&mut state, &agent);
+        let deleting_without_room = refusal(try_admit(&mut state, &agent, &name, false));
+        let deleting = refusal(try_admit(&mut state, &agent, &name, true));
+        let first = admitted(&mut state, &other, &name);
+        let running = refusal(try_admit(&mut state, &other, &name, true));
+        let running_without_room = refusal(try_admit(&mut state, &other, &name, false));
 
         assert_eq!(
             deleting_without_room,
             Some((SnapshotSkip::VolumeUnderPressure, None))
         );
-        assert_eq!(deleting, Some((SnapshotSkip::ScopeDeleting, None)));
+        assert_eq!(deleting, Some((SnapshotSkip::DeletingAllSnapshots, None)));
         assert_eq!(running, Some((SnapshotSkip::UploadInFlight, Some(first))));
         assert_eq!(
             running_without_room,
@@ -540,43 +534,43 @@ mod tests {
 
     #[test]
     fn a_job_number_is_never_given_twice_and_an_end_frees_only_its_own_job() {
-        let mut scopes = Scopes::default();
-        let scope = scope("numbers");
+        let mut state = State::default();
+        let agent = agent_snapshots("numbers");
         let name = FilesystemSnapshotName::periodic();
 
-        let first = admitted(&mut scopes, &scope, &name);
-        end_job(&mut scopes, &scope, first);
-        let second = admitted(&mut scopes, &scope, &name);
-        end_job(&mut scopes, &scope, first);
-        let still_running = !is_free(&scopes, &scope);
-        end_job(&mut scopes, &scope, second);
+        let first = admitted(&mut state, &agent, &name);
+        end_job(&mut state, &agent, first);
+        let second = admitted(&mut state, &agent, &name);
+        end_job(&mut state, &agent, first);
+        let still_running = !is_free(&state, &agent);
+        end_job(&mut state, &agent, second);
 
         assert!(second > first);
         assert!(still_running);
-        assert!(is_free(&scopes, &scope));
-        assert!(has_ended(&scopes, &scope, second));
+        assert!(is_free(&state, &agent));
+        assert!(has_ended(&state, &agent, second));
     }
 
     #[test]
     fn the_phase_only_moves_forward_and_the_first_decision_stays() {
-        let mut scopes = Scopes::default();
-        let scope = scope("phase");
+        let mut state = State::default();
+        let agent = agent_snapshots("phase");
         let name = FilesystemSnapshotName::periodic();
-        let id = admitted(&mut scopes, &scope, &name);
+        let id = admitted(&mut state, &agent, &name);
 
-        let admitted_decision = decision_of(&scopes, &scope, id);
-        saving(&mut scopes, &scope, id);
-        let saving_decision = decision_of(&scopes, &scope, id);
-        decide(&mut scopes, &scope, id, JobDecision::SaveFailed);
+        let admitted_decision = decision_of(&state, &agent, id);
+        saving(&mut state, &agent, id);
+        let saving_decision = decision_of(&state, &agent, id);
+        decide(&mut state, &agent, id, JobDecision::SaveFailed);
         decide(
-            &mut scopes,
-            &scope,
+            &mut state,
+            &agent,
             id,
             JobDecision::Confirmed(ConfirmOutcome::Confirmed),
         );
-        saving(&mut scopes, &scope, id);
-        let decided = decision_of(&scopes, &scope, id);
-        let phase = scopes.jobs.get(&scope).map(|job| job.phase);
+        saving(&mut state, &agent, id);
+        let decided = decision_of(&state, &agent, id);
+        let phase = state.jobs.get(&agent).map(|job| job.phase);
 
         assert_eq!(
             (admitted_decision, saving_decision, decided, phase),
@@ -591,25 +585,25 @@ mod tests {
 
     #[test]
     fn a_start_waits_only_for_a_saving_undecided_job_with_its_name() {
-        let mut scopes = Scopes::default();
-        let scope = scope("start-wait");
+        let mut state = State::default();
+        let agent = agent_snapshots("start-wait");
         let name = FilesystemSnapshotName::periodic();
         let other = FilesystemSnapshotName::periodic();
 
-        let no_job = wait(&mut scopes, &scope, &name);
-        let id = admitted(&mut scopes, &scope, &name);
-        let while_admitted = wait(&mut scopes, &scope, &name);
-        saving(&mut scopes, &scope, id);
-        let other_name = wait(&mut scopes, &scope, &other);
-        let while_saving = wait(&mut scopes, &scope, &name);
-        let waiters = scopes.jobs.get(&scope).map(|job| job.waiters);
+        let no_job = wait(&mut state, &agent, &name);
+        let id = admitted(&mut state, &agent, &name);
+        let while_admitted = wait(&mut state, &agent, &name);
+        saving(&mut state, &agent, id);
+        let other_name = wait(&mut state, &agent, &other);
+        let while_saving = wait(&mut state, &agent, &name);
+        let waiters = state.jobs.get(&agent).map(|job| job.waiters);
         decide(
-            &mut scopes,
-            &scope,
+            &mut state,
+            &agent,
             id,
             JobDecision::Confirmed(ConfirmOutcome::Deferred),
         );
-        let decided = wait(&mut scopes, &scope, &name);
+        let decided = wait(&mut state, &agent, &name);
 
         assert_eq!(no_job, Err(None));
         assert_eq!(while_admitted, Err(None));
@@ -624,37 +618,37 @@ mod tests {
 
     #[test]
     fn an_ended_job_keeps_its_decision_only_while_a_start_waits_for_it() {
-        let mut scopes = Scopes::default();
-        let scope = scope("ended");
+        let mut state = State::default();
+        let agent = agent_snapshots("ended");
         let name = FilesystemSnapshotName::periodic();
 
-        let unwatched = admitted(&mut scopes, &scope, &name);
-        saving(&mut scopes, &scope, unwatched);
+        let unwatched = admitted(&mut state, &agent, &name);
+        saving(&mut state, &agent, unwatched);
         decide(
-            &mut scopes,
-            &scope,
+            &mut state,
+            &agent,
             unwatched,
             JobDecision::Confirmed(ConfirmOutcome::Superseded),
         );
-        end_job(&mut scopes, &scope, unwatched);
-        let without_waiter = (scopes.ended.len(), decision_of(&scopes, &scope, unwatched));
+        end_job(&mut state, &agent, unwatched);
+        let without_waiter = (state.ended.len(), decision_of(&state, &agent, unwatched));
 
-        let watched = admitted(&mut scopes, &scope, &name);
-        saving(&mut scopes, &scope, watched);
-        assert!(wait(&mut scopes, &scope, &name).is_ok());
-        assert!(wait(&mut scopes, &scope, &name).is_ok());
+        let watched = admitted(&mut state, &agent, &name);
+        saving(&mut state, &agent, watched);
+        assert!(wait(&mut state, &agent, &name).is_ok());
+        assert!(wait(&mut state, &agent, &name).is_ok());
         decide(
-            &mut scopes,
-            &scope,
+            &mut state,
+            &agent,
             watched,
             JobDecision::Confirmed(ConfirmOutcome::Superseded),
         );
-        end_job(&mut scopes, &scope, watched);
-        let kept = decision_of(&scopes, &scope, watched);
-        unwatch(&mut scopes, &scope, unwatched);
-        unwatch(&mut scopes, &scope, watched);
-        let after_one = scopes.ended.len();
-        unwatch(&mut scopes, &scope, watched);
+        end_job(&mut state, &agent, watched);
+        let kept = decision_of(&state, &agent, watched);
+        unwatch(&mut state, &agent, unwatched);
+        unwatch(&mut state, &agent, watched);
+        let after_one = state.ended.len();
+        unwatch(&mut state, &agent, watched);
 
         assert_eq!(without_waiter, (0, Some(JobDecision::Stopped)));
         assert_eq!(
@@ -662,75 +656,78 @@ mod tests {
             Some(JobDecision::Confirmed(ConfirmOutcome::Superseded))
         );
         assert_eq!(after_one, 1);
-        assert!(scopes.ended.is_empty());
+        assert!(state.ended.is_empty());
     }
 
     #[test]
     fn an_undecided_job_that_ends_with_a_waiter_keeps_stopped() {
-        let mut scopes = Scopes::default();
-        let scope = scope("stopped");
+        let mut state = State::default();
+        let agent = agent_snapshots("stopped");
         let name = FilesystemSnapshotName::periodic();
-        let id = admitted(&mut scopes, &scope, &name);
-        saving(&mut scopes, &scope, id);
-        assert!(wait(&mut scopes, &scope, &name).is_ok());
+        let id = admitted(&mut state, &agent, &name);
+        saving(&mut state, &agent, id);
+        assert!(wait(&mut state, &agent, &name).is_ok());
 
-        end_job(&mut scopes, &scope, id);
+        end_job(&mut state, &agent, id);
 
         assert_eq!(
-            scopes.ended.get(&scope).map(|ended| ended.decision),
+            state.ended.get(&agent).map(|ended| ended.decision),
             Some(JobDecision::Stopped)
         );
     }
 
     #[test]
     fn an_unwatch_of_a_live_job_takes_one_waiter_and_a_stale_one_does_nothing() {
-        let mut scopes = Scopes::default();
-        let scope = scope("unwatch");
+        let mut state = State::default();
+        let agent = agent_snapshots("unwatch");
         let name = FilesystemSnapshotName::periodic();
-        let id = admitted(&mut scopes, &scope, &name);
-        saving(&mut scopes, &scope, id);
-        assert!(wait(&mut scopes, &scope, &name).is_ok());
-        assert!(wait(&mut scopes, &scope, &name).is_ok());
+        let id = admitted(&mut state, &agent, &name);
+        saving(&mut state, &agent, id);
+        assert!(wait(&mut state, &agent, &name).is_ok());
+        assert!(wait(&mut state, &agent, &name).is_ok());
 
-        unwatch(&mut scopes, &scope, id + 1);
-        let after_stale = scopes.jobs.get(&scope).map(|job| job.waiters);
-        unwatch(&mut scopes, &scope, id);
+        unwatch(&mut state, &agent, id + 1);
+        let after_stale = state.jobs.get(&agent).map(|job| job.waiters);
+        unwatch(&mut state, &agent, id);
 
         assert_eq!(after_stale, Some(2));
-        assert_eq!(scopes.jobs.get(&scope).map(|job| job.waiters), Some(1));
+        assert_eq!(state.jobs.get(&agent).map(|job| job.waiters), Some(1));
     }
 
     #[test]
-    fn scope_deletes_count_and_the_last_end_frees_the_scope_and_its_ended_decision() {
-        let mut scopes = Scopes::default();
-        let scope = scope("deletes");
+    fn deletes_of_all_snapshots_count_and_the_last_end_frees_the_agent_and_its_ended_decision() {
+        let mut state = State::default();
+        let agent = agent_snapshots("deletes");
         let name = FilesystemSnapshotName::periodic();
-        let id = admitted(&mut scopes, &scope, &name);
-        saving(&mut scopes, &scope, id);
-        assert!(wait(&mut scopes, &scope, &name).is_ok());
-        let stop = scopes.jobs.get(&scope).map(|job| job.stop.clone());
+        let id = admitted(&mut state, &agent, &name);
+        saving(&mut state, &agent, id);
+        assert!(wait(&mut state, &agent, &name).is_ok());
+        let stop = state.jobs.get(&agent).map(|job| job.stop.clone());
 
-        let first = forget_scope(&mut scopes, &scope);
-        end_job(&mut scopes, &scope, id);
-        let second = forget_scope(&mut scopes, &scope);
-        scope_deleted(&mut scopes, &scope);
+        let first = delete_all_snapshots(&mut state, &agent);
+        end_job(&mut state, &agent, id);
+        let second = delete_all_snapshots(&mut state, &agent);
+        all_snapshots_deleted(&mut state, &agent);
         let after_one = (
-            refusal(try_admit(&mut scopes, &scope, &name, true)),
-            scopes.ended.len(),
+            refusal(try_admit(&mut state, &agent, &name, true)),
+            state.ended.len(),
         );
-        scope_deleted(&mut scopes, &scope);
-        scope_deleted(&mut scopes, &scope);
-        let after_all = try_admit(&mut scopes, &scope, &name, true).is_ok();
+        all_snapshots_deleted(&mut state, &agent);
+        all_snapshots_deleted(&mut state, &agent);
+        let after_all = try_admit(&mut state, &agent, &name, true).is_ok();
 
         assert!(first.is_some_and(|token| Some(&token) == stop.as_ref()));
         assert!(second.is_none());
-        assert_eq!(after_one, (Some((SnapshotSkip::ScopeDeleting, None)), 0));
+        assert_eq!(
+            after_one,
+            (Some((SnapshotSkip::DeletingAllSnapshots, None)), 0)
+        );
         assert!(after_all);
-        assert!(scopes.deleting.is_empty());
+        assert!(state.deleting.is_empty());
     }
 
     #[test]
-    fn only_decisions_ends_and_scope_deletes_wake_the_waiters() {
+    fn only_decisions_ends_and_deletes_of_all_snapshots_wake_the_waiters() {
         assert_eq!(
             [
                 Transition::Admit,
@@ -739,8 +736,8 @@ mod tests {
                 Transition::End,
                 Transition::StartWait,
                 Transition::Unwatch,
-                Transition::ForgetScope,
-                Transition::ScopeDeleted,
+                Transition::DeleteAllSnapshots,
+                Transition::AllSnapshotsDeleted,
             ]
             .map(wakes),
             [false, false, true, true, false, false, true, true]
@@ -800,7 +797,8 @@ mod tests {
     }
 
     #[test]
-    fn only_a_confirmed_periodic_snapshot_is_retained_and_only_a_superseded_one_deleted() {
+    fn only_a_confirmed_periodic_snapshot_deletes_older_ones_and_only_a_superseded_one_is_deleted()
+    {
         assert_eq!(
             [
                 (SnapshotKind::Periodic, ConfirmOutcome::Confirmed),
@@ -812,11 +810,11 @@ mod tests {
             ]
             .map(|(kind, outcome)| follow_up(kind, outcome)),
             [
-                FollowUp::Retain,
-                FollowUp::DeleteOwn,
+                FollowUp::DeleteOlder,
+                FollowUp::DeleteSuperseded,
                 FollowUp::Keep,
                 FollowUp::Keep,
-                FollowUp::DeleteOwn,
+                FollowUp::DeleteSuperseded,
                 FollowUp::Keep,
             ]
         );
@@ -862,7 +860,7 @@ mod tests {
                     running: Some(4)
                 }),
                 update_admission(Refusal {
-                    skip: SnapshotSkip::ScopeDeleting,
+                    skip: SnapshotSkip::DeletingAllSnapshots,
                     running: Some(4)
                 }),
                 update_admission(Refusal {

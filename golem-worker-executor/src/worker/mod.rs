@@ -5380,10 +5380,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let Some(name) = self.start_selection(&status).candidate else {
             return;
         };
-        let scope = crate::filesystem_snapshot::SnapshotScope::agent(&self.owned_agent_id);
+        let agent_snapshots =
+            crate::filesystem_snapshot::SnapshotScope::agent(&self.owned_agent_id);
         if self
             .agent_filesystem_snapshots()
-            .prepare_start(&scope, &name, self.terminal_interrupt())
+            .prepare_start(&agent_snapshots, &name, self.terminal_interrupt())
             .await
             != agent_filesystem_snapshots::StartCheck::Stored
         {
@@ -11129,11 +11130,11 @@ impl RunningWorker {
             snapshots.is_enabled(),
         ) {
             filesystem_snapshots::BaselineStep::Ready { kind, restore } => {
-                let scope =
+                let agent_snapshots =
                     crate::filesystem_snapshot::SnapshotScope::agent(&parent.owned_agent_id);
                 let restore = match restore {
                     Some(name) => Some(filesystem_snapshots::StartRestore::Store(
-                        snapshots.restore(&scope, &name).map_err(|_| {
+                        snapshots.restore(&agent_snapshots, &name).map_err(|_| {
                             filesystem_snapshots::baseline_disabled_error(
                                 &kind,
                                 &parent.owned_agent_id.agent_id,
