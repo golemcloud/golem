@@ -423,6 +423,67 @@ test('REST request JSON preserves canonical string-form u64 values', async () =>
   }
 });
 
+test('REST request JSON preserves native f32 and f64 negative zero values', async () => {
+  const bodies = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (_url, init) => {
+    bodies.push(init.body);
+    return Response.json({
+      agentId: { agentId: 'agent', componentId: 'component' },
+      idempotencyKey: 'key',
+      componentRevision: 1,
+      result: {
+        kind: 'value',
+        graph: { root: { kind: 'record', value: { fields: [] } } },
+        value: { kind: 'record', value: { fields: [] } },
+      },
+    });
+  };
+  try {
+    await createAgent(
+      { type: 'custom', url: 'http://example.test', token: 'test' },
+      {
+        appName: 'app',
+        envName: 'env',
+        agentTypeName: 'agent',
+        parameters: { kind: 'f32', value: -0 },
+      },
+    );
+    await invokeAgent(
+      { type: 'custom', url: 'http://example.test', token: 'test' },
+      {
+        appName: 'app',
+        envName: 'env',
+        agentTypeName: 'agent',
+        parameters: { kind: 'record', value: { fields: [] } },
+        config: [{ path: ['float-shaped'], value: { kind: 'f32', value: -0 } }],
+        methodName: 'run',
+        methodParameters: {
+          kind: 'record',
+          value: {
+            fields: [
+              { kind: 'f64', value: -0 },
+              { kind: 'u32', value: -0 },
+            ],
+          },
+        },
+        mode: 'await',
+      },
+    );
+    assert.match(bodies[0], /"parameters":\{"kind":"f32","value":-0\}/u);
+    assert.match(
+      bodies[1],
+      /"config":\[\{"path":\["float-shaped"\],"value":\{"kind":"f32","value":0\}\}\]/u,
+    );
+    assert.match(
+      bodies[1],
+      /"methodParameters":\{"kind":"record","value":\{"fields":\[\{"kind":"f64","value":-0\},\{"kind":"u32","value":0\}\]\}\}/u,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('invokeAgent losslessly parses nested 64-bit schema integers', async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async () =>

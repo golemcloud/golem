@@ -571,7 +571,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function restJson(value: unknown): string {
-  const encode = (current: unknown, arrayElement: boolean): string | undefined => {
+  const encode = (
+    current: unknown,
+    arrayElement: boolean,
+    nativeValue: boolean,
+  ): string | undefined => {
     if (current === null) return 'null';
     switch (typeof current) {
       case 'boolean':
@@ -583,11 +587,25 @@ function restJson(value: unknown): string {
         return Number.isFinite(current) ? JSON.stringify(current) : 'null';
       case 'object':
         if (Array.isArray(current)) {
-          return `[${current.map((item) => encode(item, true) ?? 'null').join(',')}]`;
+          return `[${current.map((item) => encode(item, true, nativeValue) ?? 'null').join(',')}]`;
         }
+        const object = current as Record<string, unknown>;
         return `{${Object.keys(current)
           .flatMap((key) => {
-            const encoded = encode((current as Record<string, unknown>)[key], false);
+            const item = object[key];
+            const encoded =
+              nativeValue &&
+              key === 'value' &&
+              (object.kind === 'f32' || object.kind === 'f64') &&
+              typeof item === 'number' &&
+              Object.is(item, -0)
+                ? '-0'
+                : encode(
+                    item,
+                    false,
+                    nativeValue ||
+                      (current === value && (key === 'parameters' || key === 'methodParameters')),
+                  );
             return encoded === undefined ? [] : [`${JSON.stringify(key)}:${encoded}`];
           })
           .join(',')}}`;
@@ -597,7 +615,7 @@ function restJson(value: unknown): string {
         return arrayElement ? 'null' : undefined;
     }
   };
-  return encode(value, false) ?? 'null';
+  return encode(value, false, false) ?? 'null';
 }
 
 function parseInvocationResultJson(json: string): AgentInvocationResult {
