@@ -40,7 +40,9 @@ pub(super) struct KeptPacks {
 struct State {
     packs: HashMap<Id, Bytes>,
     bytes: usize,
-    /// A pack that was read whole did not fit in the limit.
+    /// The set keeps no more packs. A whole read that ends and keeps nothing sets it: the set was
+    /// closed already, its kept bytes reached the limit, or the pack did not fit. A set whose kept
+    /// bytes reached the limit also keeps no more packs before this is set.
     closed: bool,
     reading: HashSet<Id>,
 }
@@ -88,11 +90,9 @@ fn admit(closed: bool, kept_bytes: usize, len: usize, limit: usize) -> Admit {
     if closed || kept_bytes >= limit {
         return Admit::Close;
     }
-    let bytes = kept_bytes.saturating_add(len);
-    if bytes <= limit {
-        Admit::Keep { bytes }
-    } else {
-        Admit::Close
+    match kept_bytes.checked_add(len) {
+        Some(bytes) if bytes <= limit => Admit::Keep { bytes },
+        _ => Admit::Close,
     }
 }
 

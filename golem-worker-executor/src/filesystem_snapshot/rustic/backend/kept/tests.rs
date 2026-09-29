@@ -94,9 +94,7 @@ fn a_pack_is_kept_when_it_fits_the_limit_and_closes_the_set_when_it_does_not() {
             admit(false, 4, 5, 10),
             admit(false, 4, 7, 10),
             admit(false, 0, 11, 10),
-            admit(false, usize::MAX, 1, usize::MAX),
-            admit(false, 0, 0, 0),
-            admit(false, 10, 0, 10),
+            admit(false, 1, usize::MAX, usize::MAX),
         ],
         [
             Admit::Keep { bytes: 10 },
@@ -104,9 +102,19 @@ fn a_pack_is_kept_when_it_fits_the_limit_and_closes_the_set_when_it_does_not() {
             Admit::Close,
             Admit::Close,
             Admit::Close,
-            Admit::Close,
-            Admit::Close,
         ]
+    );
+}
+
+#[test]
+fn a_full_set_keeps_no_pack_also_one_that_fits() {
+    assert_eq!(
+        [
+            admit(false, usize::MAX, 1, usize::MAX),
+            admit(false, 0, 0, 0),
+            admit(false, 10, 0, 10),
+        ],
+        [Admit::Close, Admit::Close, Admit::Close]
     );
 }
 
