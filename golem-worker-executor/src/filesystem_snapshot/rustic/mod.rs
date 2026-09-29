@@ -38,9 +38,9 @@ use backend::BlobBackend;
 use rustic_core::jiff::Span;
 use rustic_core::repofile::{Chunker, MasterKey, SnapshotFile};
 use rustic_core::{
-    BackupOptions, ConfigOptions, Credentials, KeyOptions, LocalDestination, LsOptions, OpenStatus,
-    ParentOptions, PruneOptions, PruneStats, Repository as RusticRepository, RepositoryBackends,
-    RepositoryOptions, RestoreOptions, RusticResult, SnapshotGroupCriterion,
+    BackupOptions, ConfigOptions, Credentials, KeyOptions, LimitOption, LocalDestination,
+    LsOptions, OpenStatus, ParentOptions, PruneOptions, PruneStats, Repository as RusticRepository,
+    RepositoryBackends, RepositoryOptions, RestoreOptions, RusticResult, SnapshotGroupCriterion,
 };
 use std::fmt::{Debug, Formatter};
 use std::num::NonZeroUsize;
@@ -102,8 +102,7 @@ pub(super) struct SaveSettings {
     pub(super) detection: ChangeDetection,
 }
 
-/// The settings of one prune. A prune keeps the repack limits of rustic: up to 5% unused data stays
-/// after the prune, and a prune repacks at most 10% of the repository.
+/// The settings of one prune. Each prune also has the limits [`MAX_UNUSED`] and [`MAX_REPACK`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct PruneSettings {
     /// Whether a repack copies the blobs as they are. Without it, a repack decrypts,
@@ -233,6 +232,13 @@ const ZSTD_LEVEL: i32 = 3;
 /// the pack, so a pack that does not read back is never written.
 const EXTRA_VERIFY: bool = true;
 
+/// The most unused data that a prune leaves in a repository: 5% of the size after the prune. A pack
+/// that holds more unused data than this allows is repacked.
+const MAX_UNUSED: LimitOption = LimitOption::Percentage(5);
+
+/// The most data that one prune repacks: 10% of the size of the repository.
+const MAX_REPACK: LimitOption = LimitOption::Percentage(10);
+
 /// The options of a repository that a save makes: [`CHUNKER`], [`ZSTD_LEVEL`] and
 /// [`EXTRA_VERIFY`].
 fn config_options() -> ConfigOptions {
@@ -260,6 +266,8 @@ fn backup_options(settings: &SaveSettings) -> BackupOptions {
 /// The options of a prune.
 fn prune_options(settings: &PruneSettings) -> anyhow::Result<PruneOptions> {
     Ok(PruneOptions::default()
+        .max_unused(MAX_UNUSED)
+        .max_repack(MAX_REPACK)
         .fast_repack(settings.fast_repack)
         .keep_delete(Span::try_from(settings.keep_delete)?))
 }
