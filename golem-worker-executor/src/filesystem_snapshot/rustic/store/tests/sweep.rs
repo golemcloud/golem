@@ -347,22 +347,13 @@ impl Case {
     }
 }
 
-/// What a case found. The tests check the rules inside the case, and read none of these fields.
-#[derive(Debug)]
-#[allow(dead_code)]
-pub(super) struct Found {
-    pub(super) prunes: usize,
-    pub(super) failed: bool,
-    pub(super) steps: [usize; 2],
-}
-
 /// Runs the two deletes of a copy of the prepared scope in the order of the schedule, and checks
 /// the rules of the prune protocol.
 pub(super) async fn run_case(
     shared: &Arc<InMemoryBlobStorage>,
     prepared: &SnapshotScope,
     schedule: &Schedule,
-) -> Result<Found, String> {
+) -> Result<(), String> {
     let scope = new_scope();
     store(shared.clone(), policy(LONG_DEADLINE, NEVER, Duration::ZERO))
         .copy_scope(prepared, &scope)
@@ -607,7 +598,7 @@ async fn check(
     schedule: &Schedule,
     log: &[Step],
     results: Vec<Result<Result<(), SnapshotStoreError>, tokio::task::JoinError>>,
-) -> Result<Found, String> {
+) -> Result<(), String> {
     let failed = log.iter().any(|step| step.failed);
     let prune_starts = log
         .iter()
@@ -731,10 +722,5 @@ async fn check(
             ));
         }
     }
-    let steps = [0, 1].map(|who| log.iter().filter(|step| step.delete == who).count());
-    Ok(Found {
-        prunes,
-        failed,
-        steps,
-    })
+    Ok(())
 }

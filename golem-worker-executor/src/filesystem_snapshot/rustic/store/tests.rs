@@ -5692,7 +5692,6 @@ async fn two_deletes_make_at_most_one_prune_in_random_orders_with_a_failed_call(
             .run(&strategy, |schedule| {
                 runtime
                     .block_on(sweep::run_case(&shared, &prepared, &schedule))
-                    .map(|_| ())
                     .map_err(proptest::test_runner::TestCaseError::fail)
             })
             .map_err(|error| error.to_string())
