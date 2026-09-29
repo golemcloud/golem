@@ -1865,11 +1865,11 @@ async fn a_save_and_a_prune_take_their_times_from_the_injected_clock() {
 }
 
 /// Gives a store over the storage with the policy, whose clock is an hour ahead of the clock of the
-/// host, the clock, and the first millisecond of that hour on the clock of the host.
+/// host. It also gives the first millisecond of that hour on the clock of the host.
 fn store_an_hour_ahead(
     storage: Arc<dyn BlobStorage>,
     policy: StorePolicy,
-) -> (Arc<RusticSnapshotStore>, Arc<TestClock>, u64) {
+) -> (Arc<RusticSnapshotStore>, u64) {
     let clock = Arc::new(TestClock::default());
     clock.set_ahead(Duration::from_secs(3600));
     let ahead = golem_common::model::Timestamp::now_utc().to_millis() + 3_600_000;
@@ -1877,9 +1877,9 @@ fn store_an_hour_ahead(
         storage,
         key(),
         policy,
-        clock.clone(),
+        clock,
     ));
-    (store, clock, ahead)
+    (store, ahead)
 }
 
 #[test]
@@ -1888,7 +1888,7 @@ async fn the_refresh_markers_of_a_prune_take_their_times_from_the_injected_clock
     // A short grace period makes the claim get new markers while the gate holds the prune at its
     // listing of the packs.
     let storage = holding_the_prune();
-    let (store, _clock, ahead) = store_an_hour_ahead(
+    let (store, ahead) = store_an_hour_ahead(
         storage.clone(),
         policy(LONG_DEADLINE, ALWAYS, Duration::from_millis(400)),
     );
@@ -1962,7 +1962,7 @@ async fn the_final_marker_of_a_dropped_delete_takes_its_time_from_the_injected_c
     // The gate holds the first call of the prune, and the test drops the delete there, so the
     // claim guard writes the final marker in its own task.
     let storage = holding_the_prune();
-    let (store, _clock, ahead) = store_an_hour_ahead(
+    let (store, ahead) = store_an_hour_ahead(
         storage.clone(),
         policy(LONG_DEADLINE, ALWAYS, Duration::from_secs(3600)),
     );
