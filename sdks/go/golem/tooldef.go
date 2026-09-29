@@ -1125,7 +1125,14 @@ func (d *definitions) declaredToolError(ce *commandEntry, raised *RaisedToolErro
 			"command %s returned the undeclared error %q; list it with Raises",
 			ce.label(), raised.info.name))
 	}
-	payload := types.TypedSchemaValue{}
+	// A case without a payload carries the empty tuple, which is what the host
+	// checks such a case against.
+	payload := types.TypedSchemaValue{
+		Graph: types.SchemaGraph{
+			TypeNodes: []types.SchemaTypeNode{{Body: types.MakeSchemaTypeBodyTupleType(nil)}},
+		},
+		Value: types.SchemaValueTree{ValueNodes: []types.SchemaValueNode{types.MakeSchemaValueNodeTupleValue(nil)}},
+	}
 	if raised.info.payload != nil {
 		c := d.compile(raised.info.payload)
 		g := graphBuilder{d: d}

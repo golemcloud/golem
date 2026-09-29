@@ -1,6 +1,6 @@
 # Define a Golem Tool in Go
 
-A **tool** is a CLI-shaped callable unit: a command tree whose command bodies take arguments and return a result. It is declared in Go, like an agent, from package-level vars: the tool, its error cases and its commands in a definition package, the handlers in an `impl` package.
+A **tool** is a CLI-shaped callable unit: a command tree whose commands take arguments and return a result. It is declared from package-level vars, like an agent: the tool, its error cases and its commands. A command's arguments are an ordinary Go struct, and its spec binds each field to the command line once.
 
 ## Definition
 
@@ -21,118 +21,116 @@ var ErrNotFound = golem.DefineToolError[NotFound](Tool, "not-found", golem.ToolE
 	Kind: golem.UsageError, ExitCode: 2, Summary: "no such person",
 })
 
-// Every exported field is an argument marker. Its wire name is the field name
-// with the first letter lower-cased: name, loud, times.
 type GreetArgs struct {
-	Name  golem.Positional[string]
-	Loud  golem.Flag
-	Times golem.Opt[int32]
+	Name  string
+	Loud  bool
+	Times int32
+	Title golem.Option[string]
 }
 
-var Greet = golem.Command[GreetArgs, string](Tool, []string{"greet"}, GreetArgs{
-	Name:  golem.Positional[string]{Doc: "who to greet", ValueName: "NAME"},
-	Loud:  golem.Flag{Short: 'l', Doc: "shout the greeting"},
-	Times: golem.Opt[int32]{Short: 'n', Doc: "how many times", Default: golem.Some(int32(1))},
-},
-	golem.Summary("Greet someone"),
-	golem.Raises(ErrNotFound),
-)
+var Greet = Tool.Command[GreetArgs, string]("greet", func(a *GreetArgs, s *golem.ToolCommandSpec) {
+	s.Doc("Greet someone")
+	s.Positional(&a.Name).ValueName("NAME").Doc("who to greet")
+	s.Flag(&a.Loud).Short('l')
+	s.Option(&a.Times).Short('n').Default(1)
+	s.Option(&a.Title)
+	s.Raises(ErrNotFound)
+})
 ```
 
-The prototype literal carries the metadata; fields that need none can be left out. `golem.Body[Args, Out](Tool, proto, ...)` declares the root command's own body instead of a subcommand.
+The wire name is the field name in kebab case (`Times` → `times`, `GitDir` → `git-dir`); `.Name("…")` overrides it. The field's type decides the shape:
+
+| Field | Bound with | Shape |
+|---|---|---|
+| `T` | `Positional`, `Option` | Required, unless it has a `.Default(v)` |
+| `golem.Option[T]` | `Positional`, `Option` | Optional |
+| `[]T` | `Tail` | The variadic positional after the fixed ones: `.Min`, `.Max`, `.Separator("--")`, `.Verbatim()` |
+| `[]T` | `List` | `--inc a --inc b`; `.Delimited(',')` takes `--inc a,b`, `.Either(',')` both |
+| `map[K]V` | `Map` | `-l k=v`; `.LastKeyWins()` instead of rejecting a repeated key |
+| `bool` | `Flag` | A switch; `.Negatable()` adds `--no-<name>`, `.Default(true)` |
+| `uint32` | `CountFlag` | `-vvv`; `.Max(3)` |
+| `io.Reader` | `Stdin` | The command's standard input; `.Optional()`, `.Mime(…)` |
+| `golem.Principal` | — | Filled by the host with who invoked the command |
+
+Every exported field must be bound, or be the principal; a mistake — an unbound field, a field bound twice, a pointer into another struct — is a definition error, reported by `golem.DefinitionErrors()` and at deploy.
+
+Other command settings: `s.Description`, `s.Example`, `s.Aliases`, `s.ResultDoc`, `s.Formatter("json", "summary")` / `s.Formatters(…)` / `s.DefaultFormatter`, and the annotations `s.ReadOnly()`, `s.Destructive()`, `s.Idempotent()`, `s.OpenWorld()`.
 
 ## Implementation
 
 ```go
-package impl
-
-import (
-	"strings"
-
-	"myapp/tools/greeter"
-
-	"github.com/golemcloud/golem/sdks/go/golem"
-)
-
-var _ = golem.HandleCommand(greeter.Greet, func(_ *golem.ToolContext, in greeter.GreetArgs) string {
-	name := in.Name.Get()
-	if name == "nobody" {
-		panic(greeter.ErrNotFound.New(greeter.NotFound{Name: name}))
+var _ = Greet.Handle(func(ctx *golem.ToolContext, a GreetArgs) (string, error) {
+	if a.Name == "nobody" {
+		return "", ErrNotFound.New(NotFound{Name: a.Name})
 	}
-	greeting := "hi " + name
-	if in.Loud.Get() {
+	greeting := "hi " + a.Name
+	if a.Loud {
 		greeting = strings.ToUpper(greeting)
 	}
-	return strings.Repeat(greeting+"\n", int(in.Times.Get()))
+	return strings.Repeat(greeting+"\n", int(a.Times)), nil
 })
 ```
 
-Blank-import the `impl` package from `main.go`, the same as an agent's. A component can export tools without defining any agent.
+Handlers can live in an `impl` package; blank-import it from `main.go`, the same as an agent's. A component can export tools without defining any agent.
 
-- `Get()` returns the parsed value, or the declared default when the caller omitted it.
-- Raise a declared error with `panic(ErrX.New(payload))`; use `golem.Unit` as the payload type for none. Raising a case the command did not list in `golem.Raises` fails as an invalid result.
-- Any other panic fails the invocation. For an outcome the caller should handle as data, return a `golem.Result[T, E]` instead.
-- Return `golem.Unit` for a command with no result.
+- Return a declared case with `ErrX.New(payload)` (`golem.Unit` for none). Returning a case the command did not list in `s.Raises` fails as an invalid result, and so does any other error or a panic.
+- Use `golem.Unit` as the result type for a command that returns nothing.
 
-## Arguments
-
-| Marker | Shape |
-|---|---|
-| `golem.Positional[T]` | By position; required unless `Optional`; `AcceptsStdin` reads it from stdin when absent |
-| `golem.Opt[T]` | `--name VALUE`; `Short`, `Aliases`, `EnvVar`, `Required`, `Default` |
-| `golem.Opt[T]{ValueOptional: true, Default: ...}` | `--name` may be written bare and then means `Default` |
-| `golem.Opt[[]T]{Repeatable: golem.Repeated()}` | `-e a -e b`; `golem.Delimited(',')` accepts `-e a,b`, `golem.RepeatedOrDelimited(',')` both |
-| `golem.Opt[map[K]V]{Repeatable: ...}` | `-l k=v`; `DuplicateKeys: golem.LastKeyWins` instead of rejecting |
-| `golem.Flag` | Boolean switch, absent means false |
-
-## Command Tree, Formats and Constraints
+## Command Tree and Globals
 
 ```go
-var (
-	_ = golem.Group(Tool, []string{"stock"}, golem.Summary("Query stock levels"))
+type StockGlobals struct{ Warehouse string }
 
-	Show = golem.Command[ShowArgs, string](Tool, []string{"stock", "show"}, ShowArgs{
-		Format: golem.Opt[string]{Short: 'f', Default: golem.Some("text")},
-	},
-		golem.Aliases("get"),
-		golem.Formats(golem.Formatter{Name: "text"}, golem.Formatter{Name: "json"}),
-		golem.Constrain(
-			golem.Mutex(golem.Present("json"), golem.Present("yaml")),
-			golem.Implies(golem.AllOf(golem.ValueIs("format", "json")), golem.AnyOf(golem.Present("label"))),
-		),
-	)
-)
+var Stock = Tool.Group("stock").Doc("Query stock levels").
+	Globals[StockGlobals](func(g *StockGlobals, s *golem.ToolGlobalsSpec) {
+		s.Option(&g.Warehouse).Short('w').Default("main")
+	})
+
+type ShowArgs struct {
+	StockGlobals // every command below a node with globals embeds them
+	Item    string
+	JSON    bool
+	YAML    bool
+}
+
+var Show = Stock.Command[ShowArgs, string]("show", func(a *ShowArgs, s *golem.ToolCommandSpec) {
+	s.Aliases("get")
+	item := s.Positional(&a.Item)
+	json, yaml := s.Flag(&a.JSON), s.Flag(&a.YAML)
+	s.Mutex(json, yaml)
+	s.Implies(json, s.Present(&a.Warehouse))
+	s.Forbids(item.ValueIs("secret"), yaml)
+})
 ```
 
-Intermediate path segments are created automatically; `golem.Group` only adds documentation and aliases. Constraints name arguments by wire name and are checked when the tool is discovered, so a typo or a mistyped `ValueIs` literal is a definition error. The other rules are `RequiresAll`, `RequiresAny`, `AllOrNone`, `MutexGroups` and `Forbids`.
+Globals are options and flags only; each command embeds the globals of every node on its path, the tool's own included. `Tool.Body[Args, Out](spec)` declares what the tool (or a group) does when invoked without a subcommand.
+
+Constraints refer to bindings, `binding.ValueIs(v)` or, for any field including an inherited global, `s.Present(&a.F)` / `s.ValueIs(&a.F, v)`: `RequiresAll`, `RequiresAny`, `AllOrNone`, `Mutex`, `MutexGroups(s.AllOf(…), …)`, `Implies(lhs, rhs)` and `Forbids(lhs, …)`, with `s.AllOf`/`s.AnyOf` to group references.
 
 ## Stdin and Stdout
 
-Declare the streams, then use `ctx.Stdin()` as an `io.Reader` and `ctx.Stdout()` as an `io.Writer`:
+A command that writes standard output is declared with `StdoutCommand`; its handler gets a `*golem.ToolStdoutContext`:
 
 ```go
-type UpperArgs struct{}
+type UpperArgs struct{ In io.Reader }
 
-var Upper = golem.Command[UpperArgs, golem.Unit](Tool, []string{"upper"}, UpperArgs{},
-	golem.Stdin(golem.StreamSpec{Mime: []string{"text/plain"}, Required: true}),
-	golem.Stdout(golem.StreamSpec{Mime: []string{"text/plain"}}),
-)
+var Upper = Tool.StdoutCommand[UpperArgs, golem.Unit]("upper", func(a *UpperArgs, s *golem.ToolCommandSpec) {
+	s.Stdin(&a.In).Mime("text/plain")
+	s.StdoutMime("text/plain")
+})
 
-var _ = golem.HandleCommand(Upper, func(ctx *golem.ToolContext, _ UpperArgs) golem.Unit {
-	scanner := bufio.NewScanner(ctx.Stdin())
+var _ = Upper.Handle(func(ctx *golem.ToolStdoutContext, a UpperArgs) (golem.Unit, error) {
+	scanner := bufio.NewScanner(a.In)
 	for scanner.Scan() {
 		if _, err := io.WriteString(ctx.Stdout(), strings.ToUpper(scanner.Text())+"\n"); err != nil {
-			panic(err)
+			return golem.Unit{}, err
 		}
 	}
-	if err := scanner.Err(); err != nil {
-		panic(err)
-	}
-	return golem.Unit{}
+	return golem.Unit{}, scanner.Err()
 })
 ```
 
-Stdout is finished when the handler returns and failed when it panics; `ctx.Stdout().Fail(golem.StreamFailed("reason"))` ends it with a specific cause. A producer failure on stdin surfaces as a `*golem.StreamError`, never as `io.EOF`.
+Stdout is finished when the handler succeeds and failed when it returns an error or panics; `ctx.Stdout().Fail(golem.StreamFailed("reason"))` ends it with a specific cause. A producer failure on stdin surfaces as a `*golem.StreamError`, never as `io.EOF`.
 
 ## Deploy
 

@@ -63,8 +63,8 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-atomic-block-go` | Atomic regions, custom durability (`DurableOp`), idempotence, oplog commit, idempotency keys |
 | `golem-retry-policies-go` | Configuring semantic retry policies |
 | `golem-add-transactions-go` | Saga-pattern transactions with compensation |
-| `golem-define-tool-go` | Defining and implementing a typed tool (`DefineTool` + `HandleCommand`) |
-| `golem-call-tool-go` | Calling a tool from an agent through the discovered tool client |
+| `golem-define-tool-go` | Defining and implementing a typed tool (`DefineTool`, `Tool.Command`, `Handle`) |
+| `golem-call-tool-go` | Calling a tool with typed arguments (its own declaration or a generated guest tool client), or a discovered one |
 | `golem-tools-middleware-go` | Wrapping tool invocations with middleware for policy, auditing or rewriting |
 | `golem-add-postgres-go` | Using PostgreSQL via the `golem/rdbms/postgres` wrapper |
 | `golem-add-mysql-go` | Using MySQL via the `golem/rdbms/mysql` wrapper |

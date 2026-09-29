@@ -168,8 +168,16 @@ func TestDeclaredErrorWithoutAPayload(t *testing.T) {
 	if got.Tag() != witTypes.ResultErr {
 		t.Fatal("raising a declared error produced a successful invocation")
 	}
-	if name := got.Err().CustomError().Name; name != "offline" {
-		t.Errorf("error name %q, want offline", name)
+	custom := got.Err().CustomError()
+	if custom.Name != "offline" {
+		t.Errorf("error name %q, want offline", custom.Name)
+	}
+	// The host checks a case without a payload against the empty tuple.
+	root := custom.Payload.Graph.TypeNodes[custom.Payload.Graph.Root].Body
+	value := custom.Payload.Value.ValueNodes[custom.Payload.Value.Root]
+	if root.Tag() != types.SchemaTypeBodyTupleType || len(root.TupleType()) != 0 ||
+		value.Tag() != types.SchemaValueNodeTupleValue || len(value.TupleValue()) != 0 {
+		t.Errorf("a payload-less case carries %+v / %+v, want the empty tuple", root, value)
 	}
 }
 

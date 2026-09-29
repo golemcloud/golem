@@ -31,11 +31,11 @@ var Audit = golem.DefineToolMiddleware[AuditParams]("audit", golem.ToolMiddlewar
 	Summary: "Records every tool invocation",
 })
 
-var _ = golem.HandleToolMiddleware(Audit, func(ctx *golem.MiddlewareContext[AuditParams]) golem.MiddlewareOutcome {
+var _ = golem.HandleToolMiddleware(Audit, func(ctx *golem.ToolMiddlewareContext[AuditParams]) golem.ToolMiddlewareOutcome {
 	p := ctx.Parameters()
 	slog.Info("tool call", "channel", p.Channel, "tool", ctx.ToolName(), "command", ctx.CommandPath())
 	if p.Deny {
-		return golem.Fail(errors.New("denied by audit policy")) // Next is never called
+		return ctx.Fail(errors.New("denied by audit policy")) // Next is never called
 	}
 
 	outcome := ctx.Next(ctx.Input())
@@ -50,7 +50,7 @@ var _ = golem.HandleToolMiddleware(Audit, func(ctx *golem.MiddlewareContext[Audi
 	}
 	if out := outcome.Stdout(); out != nil {
 		if _, err := io.Copy(ctx.Stdout(), out); err != nil {
-			return golem.Fail(err)
+			return ctx.Fail(err)
 		}
 	}
 	return outcome
@@ -64,8 +64,8 @@ Blank-import the package from `main.go`. Use `golem.Unit` as the parameter type 
 | Return | Effect |
 |---|---|
 | `ctx.Next(input)` | Call the layer beneath; the original stdin is forwarded |
-| `golem.Succeed(v)` / `golem.SucceedWithNothing()` | Short-circuit with a result, e.g. from a cache |
-| `golem.Fail(err)` | Short-circuit or replace the outcome with a failure |
+| `ctx.Succeed(v)` / `ctx.SucceedWithNothing()` | Short-circuit with a result, e.g. from a cache |
+| `ctx.Fail(err)` | Short-circuit or replace the outcome with a failure |
 | `outcome.WithResult(v)` | Keep the inner outcome but replace its value |
 
 Build values with `golem.EncodeTypedValue(goValue)`, read them with `v.JSON()` or `golem.DecodeTypedValue[T](v)`, and rewrite arguments with `ctx.Input().WithJSON(newArgs)` before passing them to `Next`. A failure from the layer beneath is a `*golem.UnderlyingError` (`errors.As`), whose `ToolError` is set when the tool itself reported the error. A panic in the handler fails the call.
@@ -80,7 +80,7 @@ var Policy = golem.DefineToolMiddleware[golem.Unit]("greeter-policy",
 	golem.Wraps(greeter.Tool, greeter.Tool),
 )
 
-var _ = golem.HandleToolMiddleware(Policy, func(ctx *golem.MiddlewareContext[golem.Unit]) golem.MiddlewareOutcome {
+var _ = golem.HandleToolMiddleware(Policy, func(ctx *golem.ToolMiddlewareContext[golem.Unit]) golem.ToolMiddlewareOutcome {
 	outcome := ctx.Next(ctx.Input())
 	if result, ok := outcome.Result(); ok {
 		if greeting, err := golem.DecodeTypedValue[string](result); err == nil {
