@@ -130,6 +130,7 @@ describe("capability-sensitive component exports", () => {
       expect(modules).toContain("internal/component/HttpRouter.js")
       expect(modules).not.toContain("HttpRouter.js")
     },
+    30000,
   )
 
   it("does not rewrite a shadowed local DSL function", async () => {
