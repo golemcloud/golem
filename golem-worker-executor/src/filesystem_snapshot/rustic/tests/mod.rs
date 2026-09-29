@@ -52,9 +52,7 @@ use golem_service_base::storage::blob::{
 };
 use pretty_assertions::assert_eq;
 use rustic_core::repofile::{BlobType, IndexFile};
-use rustic_core::{
-    OpenStatus, PruneOptions, Repository as RusticRepository, RestoreOptions, RusticResult,
-};
+use rustic_core::{OpenStatus, Repository as RusticRepository, RestoreOptions, RusticResult};
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -226,21 +224,6 @@ fn many_directories_tree(count: usize) -> Scratch {
     tree
 }
 
-/// Prunes the repository of the scope with the options, on a blocking thread. Each call on the
-/// storage waits for at most `deadline`.
-async fn prune(
-    storage: Arc<dyn BlobStorage>,
-    scope: &SnapshotScope,
-    deadline: Duration,
-    options: PruneOptions,
-) -> anyhow::Result<()> {
-    with_existing_repository(storage, scope, deadline, move |repository| {
-        let plan = repository.prune_plan(&options)?;
-        Ok(repository.prune(&options, plan)?)
-    })
-    .await
-}
-
 /// Gives a backend over the repository of the scope in the storage, on the current runtime, whose
 /// calls wait for at most `deadline`.
 pub(super) fn backend_of(
@@ -256,13 +239,14 @@ pub(super) fn backend_of(
 }
 
 /// Prunes the repository of the scope with the settings through the prune of the store, on a
-/// blocking thread.
+/// blocking thread. Each call on the storage waits for at most `deadline`.
 async fn prune_with(
     storage: Arc<dyn BlobStorage>,
     scope: &SnapshotScope,
+    deadline: Duration,
     settings: PruneSettings,
 ) -> anyhow::Result<Option<PruneReport>> {
-    let backend = backend_of(storage, scope, STORAGE_CALL_DEADLINE);
+    let backend = backend_of(storage, scope, deadline);
     run_blocking(move || super::prune(backend, &key(), &settings)).await
 }
 
@@ -854,7 +838,15 @@ async fn a_prune_whose_tree_pack_reads_get_no_answer_fails_and_stops_its_threads
 
     let pruned = tokio::time::timeout(
         LIMIT,
-        prune(storage, &scope, SHORT_DEADLINE, PruneOptions::default()),
+        prune_with(
+            storage,
+            &scope,
+            SHORT_DEADLINE,
+            PruneSettings {
+                fast_repack: true,
+                keep_delete: Duration::ZERO,
+            },
+        ),
     )
     .await;
     let stopped = dropped_within_limit(dropped).await;
@@ -894,15 +886,19 @@ async fn a_prune_after_a_delete_deletes_the_packs_of_that_name_and_the_other_nam
         .collect::<Vec<_>>();
     let into = Scratch::new();
 
+    // The first prune marks the packs that only the deleted name used, and the second prune
+    // deletes them, because they stay marked for no time.
     store.delete(&scope, &name("p-first")).await.unwrap();
-    prune(
-        inner.clone(),
-        &scope,
-        STORAGE_CALL_DEADLINE,
-        PruneOptions::default().instant_delete(true),
-    )
-    .await
-    .unwrap();
+    let settings = PruneSettings {
+        fast_repack: true,
+        keep_delete: Duration::ZERO,
+    };
+    prune_with(inner.clone(), &scope, STORAGE_CALL_DEADLINE, settings)
+        .await
+        .unwrap();
+    prune_with(inner.clone(), &scope, STORAGE_CALL_DEADLINE, settings)
+        .await
+        .unwrap();
     let restored = store.restore(&scope, &name("p-second"), into.path()).await;
 
     assert_eq!(
@@ -1180,12 +1176,12 @@ async fn two_prunes_without_a_grace_period_under_the_limits_of_rustic_give_back_
                 .collect::<Vec<_>>()
         };
 
-        let marked = prune_with(storage.clone(), &scope, settings)
+        let marked = prune_with(storage.clone(), &scope, STORAGE_CALL_DEADLINE, settings)
             .await
             .unwrap()
             .unwrap();
         let after_mark = stored(pack_paths(&storage, &scope).await);
-        let deleted = prune_with(storage.clone(), &scope, settings)
+        let deleted = prune_with(storage.clone(), &scope, STORAGE_CALL_DEADLINE, settings)
             .await
             .unwrap()
             .unwrap();
@@ -1222,6 +1218,7 @@ async fn a_prune_of_a_scope_without_a_repository_gives_nothing() {
     let pruned = prune_with(
         storage,
         &new_scope(),
+        STORAGE_CALL_DEADLINE,
         PruneSettings {
             fast_repack: false,
             keep_delete: Duration::ZERO,
