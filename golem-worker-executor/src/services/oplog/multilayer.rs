@@ -177,6 +177,11 @@ pub trait OplogArchive: Debug {
     fn fence(&self) -> Option<OplogFence> {
         None
     }
+
+    /// Forgets the writer generation this archive recorded at open, once it holds no entries, for
+    /// an oplog that is fully archived: the record would otherwise outlive the emptied archive. A
+    /// later write through this handle records the generation again first.
+    async fn release(&self) {}
 }
 
 /// The first refusal any of `layers` has latched.
@@ -273,6 +278,10 @@ impl OplogArchive for InstrumentedOplogArchive {
 
     fn fence(&self) -> Option<OplogFence> {
         self.inner.fence()
+    }
+
+    async fn release(&self) {
+        self.inner.release().await
     }
 }
 
@@ -1033,6 +1042,11 @@ impl MultiLayerOplog {
         // Every layer is opened, recording `shard_epoch` on it, before the archive watermark is
         // read below: an older owner's transfer either landed before this owner's record, and the
         // watermark covers it, or is refused after it.
+        //
+        // A primary that refused this owner's claim leaves the handle finished: its commits fail
+        // and `archive` refuses, so nothing ever writes its layers. They are opened without an
+        // epoch rather than paying a refused write, a warning, or a stale claim on each.
+        let shard_epoch = shard_epoch.filter(|_| primary.fence().is_none());
         let mut lower: Vec<Arc<dyn OplogArchive + Send + Sync>> = Vec::new();
         for (i, layer) in multi_layer_oplog_service.lower.iter().enumerate() {
             if i != (multi_layer_oplog_service.lower.len().get() - 1) {
@@ -1646,6 +1660,10 @@ impl OplogArchive for WrappedOplogArchive {
 
     fn fence(&self) -> Option<OplogFence> {
         self.archive.fence()
+    }
+
+    async fn release(&self) {
+        self.archive.release().await
     }
 }
 

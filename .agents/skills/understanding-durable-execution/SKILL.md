@@ -382,9 +382,14 @@ owner leaves by:
   (`multilayer.rs::BackgroundTransfer::run`): an append the storage turned away is not verified,
   so the new owner's history does not trip fail-stop validation, and a source whose entries were
   not archived is not trimmed. The refusal latches on the archive handle, `Oplog::fence` reports
-  it for the whole layered oplog, and `archive` stops asking for more work. An emptied level is
+  it for the whole layered oplog, and `archive` stops asking for more work. An open refused at the
+  primary oplog, or at an ephemeral oplog's first level, records nothing on the remaining levels:
+  the handle is finished and never writes them. An emptied level is
   removed with `delete_empty_with_epoch`, which keeps its epoch record: the owner keeps writing
-  the level, and an older owner is still refused. Deleting the agent removes the records with it,
+  the level, and an older owner is still refused. Once an ephemeral oplog is fully archived to
+  its last layer, `EphemeralOplog::archive` releases the emptied levels (`OplogArchive::release`,
+  a fenced `delete_with_epoch`), so no record outlives its data; a later write through the same
+  handle records the epoch again first. Deleting the agent removes the records with it,
   so a transfer still in flight on an older owner cannot write the deleted agent's archive back.
   An ephemeral oplog's writer task latches a refused batch, and the next add or commit fails with
   it; the open-oplog cache replaces an ephemeral handle for an opener at a newer epoch, as it

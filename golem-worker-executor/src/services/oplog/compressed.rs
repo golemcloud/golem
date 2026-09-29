@@ -38,6 +38,7 @@ use golem_common::model::{RetryConfig, ShardEpoch};
 use golem_common::serialization::{deserialize, serialize};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use tracing::warn;
 
@@ -303,6 +304,9 @@ pub struct CompressedOplogArchive {
     /// Set by the first refused write, or at open when a newer owner's generation was already
     /// recorded. Every later write through this handle is refused without reaching the storage.
     fence: OnceLock<OplogFence>,
+    /// Set when [`OplogArchive::release`] forgot the recorded generation: the next write records
+    /// it again before it asserts it.
+    released: AtomicBool,
 }
 
 impl CompressedOplogArchive {
@@ -325,6 +329,7 @@ impl CompressedOplogArchive {
             level,
             shard_epoch: None,
             fence: OnceLock::new(),
+            released: AtomicBool::new(false),
         }
     }
 
@@ -365,6 +370,27 @@ impl CompressedOplogArchive {
             agent_mode: self.agent_mode,
             level: self.level,
         }
+    }
+
+    /// Records this handle's generation again if [`OplogArchive::release`] forgot it, before a
+    /// write asserts it. A newer owner's record refuses it, as it would the open.
+    async fn reclaim_if_released(&self) -> Result<(), OplogError> {
+        if let Some(shard_epoch) = self.shard_epoch
+            && self.released.swap(false, Ordering::AcqRel)
+            && let Some(fence) = record_owning_epoch(
+                &*self.indexed_storage,
+                &self.retry_config,
+                self.namespace(),
+                &self.agent_id,
+                &self.key,
+                shard_epoch,
+            )
+            .await
+        {
+            let _ = self.fence.set(fence.clone());
+            return Err(OplogError::Fenced(fence));
+        }
+        Ok(())
     }
 
     /// Latches the fence a refused storage call reported, and returns it as the write's error.
@@ -529,6 +555,7 @@ impl OplogArchive for CompressedOplogArchive {
             return Ok(0);
         }
         refuse_if_fenced(self.fence.get())?;
+        self.reclaim_if_released().await?;
 
         // The cache lock must not be held across the storage writes below: `append` can be
         // reached from host-call contexts (through ephemeral oplogs), and an async lock held
@@ -647,6 +674,7 @@ impl OplogArchive for CompressedOplogArchive {
 
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> Result<u64, OplogError> {
         refuse_if_fenced(self.fence.get())?;
+        self.reclaim_if_released().await?;
         let before = self.length().await;
         let is = self.indexed_storage.clone();
         let key = self.key.clone();
@@ -725,6 +753,38 @@ impl OplogArchive for CompressedOplogArchive {
 
     fn fence(&self) -> Option<OplogFence> {
         self.fence.get().cloned()
+    }
+
+    /// Removes the level's record with the fenced delete, which also removes the key: nothing is
+    /// left under it. A refusal means a newer owner holds the level, and latches like a write.
+    async fn release(&self) {
+        let Some(shard_epoch) = self.shard_epoch else {
+            return;
+        };
+        if self.fence.get().is_some() || self.length().await > 0 {
+            return;
+        }
+        let is = self.indexed_storage.clone();
+        let key = self.key.clone();
+        let released =
+            retry_storage_op_fenceable(&self.retry_config, "compressed_release", &key, || {
+                let is = is.clone();
+                let ns = self.namespace();
+                let key = key.clone();
+                async move {
+                    is.with("compressed_oplog", "release")
+                        .delete_with_epoch(ns, &key, Some(shard_epoch))
+                        .await
+                }
+            })
+            .await;
+        record_oplog_epoch_fence("archive_release", released.is_err());
+        match released {
+            Ok(()) => self.released.store(true, Ordering::Release),
+            Err(error) => {
+                self.latch(error);
+            }
+        }
     }
 }
 

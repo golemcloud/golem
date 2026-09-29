@@ -239,6 +239,10 @@ impl OplogArchive for RecordingArchive {
     fn fence(&self) -> Option<OplogFence> {
         self.inner.fence()
     }
+
+    async fn release(&self) {
+        self.inner.release().await
+    }
 }
 
 pub(super) fn make_agent_metadata(
@@ -457,6 +461,10 @@ impl OplogArchive for BlockingArchive {
 
     fn fence(&self) -> Option<OplogFence> {
         self.inner.fence()
+    }
+
+    async fn release(&self) {
+        self.inner.release().await
     }
 }
 
@@ -10092,19 +10100,47 @@ async fn a_stale_create_of_an_oplog_the_owner_already_created_is_fenced_not_fata
     );
 }
 
-/// One executor's view of storage that every executor shares: a primary oplog over one
-/// compressed archive level. Nothing is archived automatically; each test drives the transfer
-/// it examines. With a [`PausePoint`], the level is a [`BlockingArchive`] holding the transfer
-/// there until `release` is notified.
+/// The storages the cross-executor archive scenarios run on: in-memory, and SQLite as a
+/// transactional backend. The executors of a scenario share one storage, as executors share a
+/// store.
+async fn archive_storages(
+    tempdir: &tempfile::TempDir,
+) -> Vec<(&'static str, Arc<dyn IndexedStorage + Send + Sync>)> {
+    let config = golem_common::config::DbSqliteConfig {
+        database: tempdir
+            .path()
+            .join("archive.db")
+            .to_string_lossy()
+            .into_owned(),
+        max_connections: 4,
+        foreign_keys: false,
+    };
+    vec![
+        ("in-memory", Arc::new(InMemoryIndexedStorage::new())),
+        (
+            "sqlite",
+            Arc::new(SqliteIndexedStorage::configured(&config).await.unwrap()),
+        ),
+    ]
+}
+
+/// One executor's view of storage that every executor shares: a primary oplog over `levels`
+/// compressed archive levels, and a blob layer below them when `blob` is set. Nothing is archived
+/// automatically; each test drives the transfer it examines. With a [`PausePoint`], the deepest
+/// compressed level is a [`BlockingArchive`] holding the transfer there until `release` is
+/// notified. `calls` counts what reaches the bottom layer.
 struct ArchivingExecutor {
     primary: Arc<dyn OplogService>,
     service: MultiLayerOplogService,
+    calls: Arc<ArchiveCallCounts>,
     paused: StdMutex<Option<oneshot::Receiver<()>>>,
     release: Arc<Notify>,
 }
 
 async fn archiving_executor(
-    storage: &Arc<InMemoryIndexedStorage>,
+    storage: &Arc<dyn IndexedStorage + Send + Sync>,
+    levels: usize,
+    blob: bool,
     pause_at: Option<PausePoint>,
 ) -> ArchivingExecutor {
     let primary: Arc<dyn OplogService> = Arc::new(
@@ -10118,26 +10154,47 @@ async fn archiving_executor(
         )
         .await,
     );
-    let level: Arc<dyn OplogArchiveService> = Arc::new(CompressedOplogArchiveService::new(
-        storage.clone(),
-        1,
-        RetryConfig::default(),
-    ));
     let (paused_tx, paused) = oneshot::channel();
+    let mut paused_tx = Some(paused_tx);
     let release = Arc::new(Notify::new());
-    let level = match pause_at {
-        Some(pause_at) => Arc::new(BlockingArchiveService {
-            inner: level,
-            pause_at,
-            paused: Arc::new(Mutex::new(Some(paused_tx))),
-            release: release.clone(),
-            append_finished: Arc::new(Notify::new()),
-        }) as _,
-        None => level,
-    };
+    let mut layers: Vec<Arc<dyn OplogArchiveService>> = (1..=levels)
+        .map(|level| {
+            let compressed: Arc<dyn OplogArchiveService> = Arc::new(
+                CompressedOplogArchiveService::new(storage.clone(), level, RetryConfig::default()),
+            );
+            match pause_at.filter(|_| level == levels) {
+                Some(pause_at) => Arc::new(BlockingArchiveService {
+                    inner: compressed,
+                    pause_at,
+                    paused: Arc::new(Mutex::new(paused_tx.take())),
+                    release: release.clone(),
+                    append_finished: Arc::new(Notify::new()),
+                }) as _,
+                None => compressed,
+            }
+        })
+        .collect();
+    if blob {
+        layers.push(Arc::new(BlobOplogArchiveService::new(
+            Arc::new(InMemoryBlobStorage::new()),
+            levels + 1,
+        )));
+    }
+    let calls = Arc::new(ArchiveCallCounts::default());
+    let bottom = layers.pop().unwrap();
+    layers.push(Arc::new(RecordingArchiveService {
+        inner: bottom,
+        calls: calls.clone(),
+    }));
     ArchivingExecutor {
         primary: primary.clone(),
-        service: MultiLayerOplogService::new(primary, nev![level], 100, 1),
+        service: MultiLayerOplogService::new(
+            primary,
+            nonempty_collections::NEVec::try_from_vec(layers).unwrap(),
+            100,
+            1,
+        ),
+        calls,
         paused: StdMutex::new(Some(paused)),
         release,
     }
@@ -10145,20 +10202,38 @@ async fn archiving_executor(
 
 impl ArchivingExecutor {
     async fn open(&self, owned_agent_id: &OwnedAgentId, epoch: u64) -> Arc<dyn Oplog> {
-        let metadata = make_agent_metadata(
-            owned_agent_id.agent_id(),
-            AccountId::new(),
-            owned_agent_id.environment_id(),
-        );
+        self.open_as(owned_agent_id, AgentMode::Durable, epoch)
+            .await
+    }
+
+    async fn open_ephemeral(&self, owned_agent_id: &OwnedAgentId, epoch: u64) -> Arc<dyn Oplog> {
+        self.open_as(owned_agent_id, AgentMode::Ephemeral, epoch)
+            .await
+    }
+
+    async fn open_as(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        epoch: u64,
+    ) -> Arc<dyn Oplog> {
+        let metadata = AgentMetadata {
+            agent_mode,
+            ..make_agent_metadata(
+                owned_agent_id.agent_id(),
+                AccountId::new(),
+                owned_agent_id.environment_id(),
+            )
+        };
         self.service
             .open(
                 &mut self.service.lock_lifecycle(&owned_agent_id.agent_id).await,
                 owned_agent_id,
-                AgentMode::Durable,
+                agent_mode,
                 None,
                 metadata,
                 default_last_known_status(),
-                default_execution_status(AgentMode::Durable),
+                default_execution_status(agent_mode),
                 Some(ShardEpoch(epoch)),
             )
             .await
@@ -10174,16 +10249,33 @@ impl ArchivingExecutor {
     }
 }
 
-/// The archive level's length, read from the storage rather than through a handle.
+/// A compressed level's length in chunks, read from the storage rather than through a handle.
 async fn archive_level_length(
-    storage: &Arc<InMemoryIndexedStorage>,
+    storage: &Arc<dyn IndexedStorage + Send + Sync>,
     owned_agent_id: &OwnedAgentId,
+    level: usize,
 ) -> u64 {
-    CompressedOplogArchiveService::new(storage.clone(), 1, RetryConfig::default())
+    CompressedOplogArchiveService::new(storage.clone(), level, RetryConfig::default())
         .open(owned_agent_id, AgentMode::Durable, None)
         .await
         .length()
         .await
+}
+
+/// Whether a compressed level holds a generation above `epoch`: an open at `epoch` is refused
+/// exactly then, and otherwise records `epoch` itself.
+async fn level_refuses(
+    storage: &Arc<dyn IndexedStorage + Send + Sync>,
+    owned_agent_id: &OwnedAgentId,
+    agent_mode: AgentMode,
+    level: usize,
+    epoch: u64,
+) -> bool {
+    CompressedOplogArchiveService::new(storage.clone(), level, RetryConfig::default())
+        .open(owned_agent_id, agent_mode, Some(ShardEpoch(epoch)))
+        .await
+        .fence()
+        .is_some()
 }
 
 fn archiving_agent(name: &str) -> OwnedAgentId {
@@ -10220,13 +10312,13 @@ async fn start_paused_transfer(
     transfer
 }
 
-fn assert_fenced_by(fence: Option<OplogFence>, expected: u64, actual: Option<u64>) {
+fn assert_fenced_by(backend: &str, fence: Option<OplogFence>, expected: u64, actual: Option<u64>) {
     match fence {
         Some(fence) => {
-            assert_eq!(fence.expected_epoch, ShardEpoch(expected));
-            assert_eq!(fence.actual_epoch, actual.map(ShardEpoch));
+            assert_eq!(fence.expected_epoch, ShardEpoch(expected), "{backend}");
+            assert_eq!(fence.actual_epoch, actual.map(ShardEpoch), "{backend}");
         }
-        None => panic!("expected the superseded owner's oplog to be fenced"),
+        None => panic!("{backend}: expected the superseded owner's oplog to be fenced"),
     }
 }
 
@@ -10234,176 +10326,393 @@ fn assert_fenced_by(fence: Option<OplogFence>, expected: u64, actual: Option<u64
 async fn a_superseded_owners_in_flight_transfer_cannot_write_the_new_owners_archive(
     _tracing: &Tracing,
 ) {
-    let storage = Arc::new(InMemoryIndexedStorage::new());
-    let losing_executor = archiving_executor(&storage, Some(PausePoint::Append)).await;
-    let owning_executor = archiving_executor(&storage, None).await;
-    let owned_agent_id = archiving_agent("archive-append-after-takeover");
+    let tempdir = tempfile::TempDir::new().unwrap();
+    for (backend, storage) in archive_storages(&tempdir).await {
+        let losing_executor =
+            archiving_executor(&storage, 1, false, Some(PausePoint::Append)).await;
+        let owning_executor = archiving_executor(&storage, 1, false, None).await;
+        let owned_agent_id = archiving_agent("archive-append-after-takeover");
 
-    let loser = losing_executor.open(&owned_agent_id, 5).await;
-    loser.add(OplogEntry::suspend().rounded()).await.unwrap();
-    loser.commit(CommitLevel::Always).await.unwrap();
-    let transfer = start_paused_transfer(&losing_executor, &loser).await;
+        let loser = losing_executor.open(&owned_agent_id, 5).await;
+        loser.add(OplogEntry::suspend().rounded()).await.unwrap();
+        loser.commit(CommitLevel::Always).await.unwrap();
+        let transfer = start_paused_transfer(&losing_executor, &loser).await;
 
-    // The shard moves while the transfer is in flight. The new owner's open records its epoch on
-    // the primary oplog and on the archive level, and it writes.
-    let owner = owning_executor.open(&owned_agent_id, 6).await;
-    owner.add(OplogEntry::exited().rounded()).await.unwrap();
-    owner.commit(CommitLevel::Always).await.unwrap();
+        // The shard moves while the transfer is in flight. The new owner's open records its epoch
+        // on the primary oplog and on the archive level, and it writes.
+        let owner = owning_executor.open(&owned_agent_id, 6).await;
+        owner.add(OplogEntry::exited().rounded()).await.unwrap();
+        owner.commit(CommitLevel::Always).await.unwrap();
 
-    losing_executor.release.notify_one();
-    transfer
-        .await
-        .expect("a refused transfer must stop, not fail its verification");
+        losing_executor.release.notify_one();
+        transfer
+            .await
+            .expect("a refused transfer must stop, not fail its verification");
 
-    assert_fenced_by(loser.fence(), 5, Some(6));
-    assert_eq!(
-        archive_level_length(&storage, &owned_agent_id).await,
-        0,
-        "the superseded owner wrote the new owner's archive level"
-    );
-    assert_eq!(
-        owning_executor.primary_entries(&owned_agent_id).await,
-        vec![OplogIndex::INITIAL, OplogIndex::from_u64(2)],
-        "the superseded owner trimmed the new owner's primary oplog"
-    );
+        assert_fenced_by(backend, loser.fence(), 5, Some(6));
+        assert_eq!(
+            archive_level_length(&storage, &owned_agent_id, 1).await,
+            0,
+            "{backend}: the superseded owner wrote the new owner's archive level"
+        );
+        assert_eq!(
+            owning_executor.primary_entries(&owned_agent_id).await,
+            vec![OplogIndex::INITIAL, OplogIndex::from_u64(2)],
+            "{backend}: the superseded owner trimmed the new owner's primary oplog"
+        );
+    }
 }
 
 #[test]
 async fn a_superseded_owners_transfer_cannot_trim_the_new_owners_primary_oplog(_tracing: &Tracing) {
-    let storage = Arc::new(InMemoryIndexedStorage::new());
-    let losing_executor = archiving_executor(&storage, Some(PausePoint::Verify)).await;
-    let owning_executor = archiving_executor(&storage, None).await;
-    let owned_agent_id = archiving_agent("primary-trim-after-takeover");
+    let tempdir = tempfile::TempDir::new().unwrap();
+    for (backend, storage) in archive_storages(&tempdir).await {
+        let losing_executor =
+            archiving_executor(&storage, 1, false, Some(PausePoint::Verify)).await;
+        let owning_executor = archiving_executor(&storage, 1, false, None).await;
+        let owned_agent_id = archiving_agent("primary-trim-after-takeover");
 
-    let loser = losing_executor.open(&owned_agent_id, 5).await;
-    loser.add(OplogEntry::suspend().rounded()).await.unwrap();
-    loser.commit(CommitLevel::Always).await.unwrap();
-    // The archive append lands before the takeover; the trim of the primary comes after it.
-    let transfer = start_paused_transfer(&losing_executor, &loser).await;
+        let loser = losing_executor.open(&owned_agent_id, 5).await;
+        loser.add(OplogEntry::suspend().rounded()).await.unwrap();
+        loser.commit(CommitLevel::Always).await.unwrap();
+        // The archive append lands before the takeover; the trim of the primary comes after it.
+        let transfer = start_paused_transfer(&losing_executor, &loser).await;
 
-    let owner = owning_executor.open(&owned_agent_id, 6).await;
-    owner.add(OplogEntry::exited().rounded()).await.unwrap();
-    owner.commit(CommitLevel::Always).await.unwrap();
+        let owner = owning_executor.open(&owned_agent_id, 6).await;
+        owner.add(OplogEntry::exited().rounded()).await.unwrap();
+        owner.commit(CommitLevel::Always).await.unwrap();
 
-    losing_executor.release.notify_one();
-    transfer.await.unwrap();
+        losing_executor.release.notify_one();
+        transfer.await.unwrap();
 
-    assert_eq!(
-        owning_executor.primary_entries(&owned_agent_id).await,
-        vec![OplogIndex::INITIAL, OplogIndex::from_u64(2)],
-        "the superseded owner trimmed the new owner's primary oplog"
-    );
-    // The refused trim latches, so the superseded owner does not write again.
-    assert_fenced_by(loser.fence(), 5, Some(6));
-    assert!(matches!(
-        loser.add(OplogEntry::exited().rounded()).await,
-        Err(OplogError::Fenced(_))
-    ));
+        assert_eq!(
+            owning_executor.primary_entries(&owned_agent_id).await,
+            vec![OplogIndex::INITIAL, OplogIndex::from_u64(2)],
+            "{backend}: the superseded owner trimmed the new owner's primary oplog"
+        );
+        // The refused trim latches, so the superseded owner does not write again.
+        assert_fenced_by(backend, loser.fence(), 5, Some(6));
+        assert!(
+            matches!(
+                loser.add(OplogEntry::exited().rounded()).await,
+                Err(OplogError::Fenced(_))
+            ),
+            "{backend}"
+        );
+    }
 }
 
 #[test]
 async fn an_agent_deleted_by_its_new_owner_gets_no_archive_chunks_back(_tracing: &Tracing) {
-    let storage = Arc::new(InMemoryIndexedStorage::new());
-    let losing_executor = archiving_executor(&storage, Some(PausePoint::Append)).await;
-    let owning_executor = archiving_executor(&storage, None).await;
-    let owned_agent_id = archiving_agent("archive-append-after-delete");
+    let tempdir = tempfile::TempDir::new().unwrap();
+    for (backend, storage) in archive_storages(&tempdir).await {
+        let losing_executor =
+            archiving_executor(&storage, 1, false, Some(PausePoint::Append)).await;
+        let owning_executor = archiving_executor(&storage, 1, false, None).await;
+        let owned_agent_id = archiving_agent("archive-append-after-delete");
 
-    let loser = losing_executor.open(&owned_agent_id, 5).await;
-    loser.add(OplogEntry::suspend().rounded()).await.unwrap();
-    loser.commit(CommitLevel::Always).await.unwrap();
-    let transfer = start_paused_transfer(&losing_executor, &loser).await;
+        let loser = losing_executor.open(&owned_agent_id, 5).await;
+        loser.add(OplogEntry::suspend().rounded()).await.unwrap();
+        loser.commit(CommitLevel::Always).await.unwrap();
+        let transfer = start_paused_transfer(&losing_executor, &loser).await;
 
-    // The new owner takes the agent over and deletes it, taking every recorded generation with it.
-    let _owner = owning_executor.open(&owned_agent_id, 6).await;
-    owning_executor
-        .service
-        .delete(
-            &mut owning_executor
-                .service
-                .lock_lifecycle(&owned_agent_id.agent_id)
-                .await,
-            &owned_agent_id,
-            AgentMode::Durable,
-            Some(ShardEpoch(6)),
-        )
-        .await
-        .unwrap();
-
-    losing_executor.release.notify_one();
-    transfer.await.unwrap();
-
-    assert_fenced_by(loser.fence(), 5, None);
-    assert!(
-        !owning_executor
+        // The new owner takes the agent over and deletes it, taking every recorded generation
+        // with it.
+        let _owner = owning_executor.open(&owned_agent_id, 6).await;
+        owning_executor
             .service
-            .exists(&owned_agent_id, AgentMode::Durable)
-            .await,
-        "the superseded owner's transfer brought the deleted agent's archive back"
-    );
+            .delete(
+                &mut owning_executor
+                    .service
+                    .lock_lifecycle(&owned_agent_id.agent_id)
+                    .await,
+                &owned_agent_id,
+                AgentMode::Durable,
+                Some(ShardEpoch(6)),
+            )
+            .await
+            .unwrap();
+
+        losing_executor.release.notify_one();
+        transfer.await.unwrap();
+
+        assert_fenced_by(backend, loser.fence(), 5, None);
+        assert!(
+            !owning_executor
+                .service
+                .exists(&owned_agent_id, AgentMode::Durable)
+                .await,
+            "{backend}: the superseded owner's transfer brought the deleted agent's archive back"
+        );
+    }
+}
+
+#[test]
+async fn a_superseded_owners_level_transfer_cannot_write_the_next_level(_tracing: &Tracing) {
+    let tempdir = tempfile::TempDir::new().unwrap();
+    for (backend, storage) in archive_storages(&tempdir).await {
+        let losing_executor =
+            archiving_executor(&storage, 2, false, Some(PausePoint::Append)).await;
+        let owning_executor = archiving_executor(&storage, 2, false, None).await;
+        let owned_agent_id = archiving_agent("level-transfer-after-takeover");
+
+        // The entry moves from the primary oplog to level 1, and its transfer on to level 2 is in
+        // flight when the shard moves.
+        let loser = losing_executor.open(&owned_agent_id, 5).await;
+        loser.add(OplogEntry::suspend().rounded()).await.unwrap();
+        loser.commit(CommitLevel::Always).await.unwrap();
+        MultiLayerOplog::try_archive_blocking(&loser).await.unwrap();
+        assert_eq!(
+            archive_level_length(&storage, &owned_agent_id, 1).await,
+            1,
+            "{backend}"
+        );
+        let transfer = start_paused_transfer(&losing_executor, &loser).await;
+
+        let _owner = owning_executor.open(&owned_agent_id, 6).await;
+        losing_executor.release.notify_one();
+        transfer
+            .await
+            .expect("a refused transfer must stop, not fail its verification");
+
+        assert_fenced_by(backend, loser.fence(), 5, Some(6));
+        assert_eq!(
+            archive_level_length(&storage, &owned_agent_id, 2).await,
+            0,
+            "{backend}: the superseded owner wrote the new owner's level 2"
+        );
+        assert_eq!(
+            archive_level_length(&storage, &owned_agent_id, 1).await,
+            1,
+            "{backend}: the superseded owner trimmed the new owner's level 1"
+        );
+    }
+}
+
+#[test]
+async fn a_fenced_oplog_starts_no_archive_transfer(_tracing: &Tracing) {
+    let tempdir = tempfile::TempDir::new().unwrap();
+    for (backend, storage) in archive_storages(&tempdir).await {
+        // Durable: the entry the superseded owner committed is still in its primary oplog, and an
+        // archive run would transfer it.
+        let losing_executor = archiving_executor(&storage, 1, false, None).await;
+        let owning_executor = archiving_executor(&storage, 1, false, None).await;
+        let owned_agent_id = archiving_agent("durable-archive-after-fence");
+        let loser = losing_executor.open(&owned_agent_id, 5).await;
+        loser.add(OplogEntry::suspend().rounded()).await.unwrap();
+        loser.commit(CommitLevel::Always).await.unwrap();
+        let _owner = owning_executor.open(&owned_agent_id, 6).await;
+        let refused = async {
+            loser.add(OplogEntry::exited().rounded()).await?;
+            loser.commit(CommitLevel::Always).await
+        }
+        .await;
+        assert!(matches!(refused, Err(OplogError::Fenced(_))), "{backend}");
+
+        assert_eq!(
+            MultiLayerOplog::try_archive_blocking(&loser).await,
+            Some(false),
+            "{backend}"
+        );
+        assert_eq!(
+            losing_executor.calls.append.load(Ordering::Relaxed),
+            0,
+            "{backend}: a fenced durable oplog started a transfer"
+        );
+
+        // Ephemeral: the newer handle's entry sits in level 1, and an archive run through the
+        // older one would move it to the blob layer.
+        let executor = archiving_executor(&storage, 1, true, None).await;
+        let owned_agent_id = archiving_agent("ephemeral-archive-after-fence");
+        let older = executor.open_ephemeral(&owned_agent_id, 5).await;
+        let newer = executor.open_ephemeral(&owned_agent_id, 7).await;
+        newer.add(OplogEntry::suspend().rounded()).await.unwrap();
+        newer.commit(CommitLevel::Always).await.unwrap();
+        let refused = async {
+            older.add(OplogEntry::exited().rounded()).await?;
+            older.commit(CommitLevel::Always).await
+        }
+        .await;
+        assert!(matches!(refused, Err(OplogError::Fenced(_))), "{backend}");
+
+        assert_eq!(
+            EphemeralOplog::try_archive_blocking(&older).await,
+            Some(false),
+            "{backend}"
+        );
+        assert_eq!(
+            executor.calls.append.load(Ordering::Relaxed),
+            0,
+            "{backend}: a fenced ephemeral oplog started a transfer"
+        );
+    }
+}
+
+#[test]
+async fn a_stale_open_records_nothing_on_the_archive_levels(_tracing: &Tracing) {
+    let tempdir = tempfile::TempDir::new().unwrap();
+    for (backend, storage) in archive_storages(&tempdir).await {
+        // Durable: the owner has claimed the primary oplog but not yet opened its archive level.
+        // An open at an older epoch is refused at the primary and claims nothing on the level.
+        let owning_executor = archiving_executor(&storage, 1, false, None).await;
+        let stale_executor = archiving_executor(&storage, 1, false, None).await;
+        let owned_agent_id = archiving_agent("stale-durable-open");
+        let metadata = make_agent_metadata(
+            owned_agent_id.agent_id(),
+            AccountId::new(),
+            owned_agent_id.environment_id(),
+        );
+        let _owner = owning_executor
+            .primary
+            .open(
+                &mut owning_executor
+                    .primary
+                    .lock_lifecycle(&owned_agent_id.agent_id)
+                    .await,
+                &owned_agent_id,
+                AgentMode::Durable,
+                None,
+                metadata,
+                default_last_known_status(),
+                default_execution_status(AgentMode::Durable),
+                Some(ShardEpoch(6)),
+            )
+            .await;
+        let stale = stale_executor.open(&owned_agent_id, 5).await;
+        assert_fenced_by(backend, stale.fence(), 5, Some(6));
+        assert!(
+            !level_refuses(&storage, &owned_agent_id, AgentMode::Durable, 1, 1).await,
+            "{backend}: a stale durable open claimed the archive level"
+        );
+
+        // Ephemeral: the owner has recorded level 1 but not level 2. An open at an older epoch is
+        // refused at level 1 and claims nothing on level 2.
+        let executor = archiving_executor(&storage, 2, false, None).await;
+        let owned_agent_id = archiving_agent("stale-ephemeral-open");
+        assert!(!level_refuses(&storage, &owned_agent_id, AgentMode::Ephemeral, 1, 7).await);
+        let stale = executor.open_ephemeral(&owned_agent_id, 5).await;
+        assert_fenced_by(backend, stale.fence(), 5, Some(7));
+        assert!(
+            !level_refuses(&storage, &owned_agent_id, AgentMode::Ephemeral, 2, 1).await,
+            "{backend}: a stale ephemeral open claimed the lower archive level"
+        );
+    }
 }
 
 #[test]
 async fn a_stale_archive_level_handle_cannot_trim_the_owners_level(_tracing: &Tracing) {
-    let storage = Arc::new(InMemoryIndexedStorage::new());
-    let level = CompressedOplogArchiveService::new(storage.clone(), 1, RetryConfig::default());
-    let owned_agent_id = archiving_agent("archive-level-trim");
-    let entries = |range: std::ops::RangeInclusive<u64>| {
-        range
-            .map(|idx| (OplogIndex::from_u64(idx), OplogEntry::suspend().rounded()))
-            .collect::<Vec<_>>()
-    };
-
-    // Read through a handle of its own, so what the level holds comes from the storage rather
-    // than from a writer's cache.
-    let stored = |from: u64, n: u64| {
-        let level = &level;
-        let owned_agent_id = &owned_agent_id;
-        async move {
-            level
-                .read_source(
-                    owned_agent_id,
-                    AgentMode::Durable,
-                    OplogIndex::from_u64(from),
-                    n,
-                )
-                .await
-                .into_keys()
-                .map(|idx| idx.as_u64())
+    let tempdir = tempfile::TempDir::new().unwrap();
+    for (backend, storage) in archive_storages(&tempdir).await {
+        let level = CompressedOplogArchiveService::new(storage.clone(), 1, RetryConfig::default());
+        let owned_agent_id = archiving_agent("archive-level-trim");
+        let entries = |range: std::ops::RangeInclusive<u64>| {
+            range
+                .map(|idx| (OplogIndex::from_u64(idx), OplogEntry::suspend().rounded()))
                 .collect::<Vec<_>>()
-        }
-    };
+        };
 
-    let stale = level
-        .open(&owned_agent_id, AgentMode::Durable, Some(ShardEpoch(5)))
-        .await;
-    stale.append(&entries(1..=3)).await.unwrap();
-    let owner = level
-        .open(&owned_agent_id, AgentMode::Durable, Some(ShardEpoch(6)))
-        .await;
+        // Read through a handle of its own, so what the level holds comes from the storage rather
+        // than from a writer's cache.
+        let stored = |from: u64, n: u64| {
+            let level = &level;
+            let owned_agent_id = &owned_agent_id;
+            async move {
+                level
+                    .read_source(
+                        owned_agent_id,
+                        AgentMode::Durable,
+                        OplogIndex::from_u64(from),
+                        n,
+                    )
+                    .await
+                    .into_keys()
+                    .map(|idx| idx.as_u64())
+                    .collect::<Vec<_>>()
+            }
+        };
 
-    // A trim by the older generation is refused, removes nothing, and latches.
-    match stale.drop_prefix(OplogIndex::from_u64(3)).await {
-        Err(OplogError::Fenced(fence)) => {
-            assert_eq!(fence.expected_epoch, ShardEpoch(5));
-            assert_eq!(fence.actual_epoch, Some(ShardEpoch(6)));
+        let stale = level
+            .open(&owned_agent_id, AgentMode::Durable, Some(ShardEpoch(5)))
+            .await;
+        stale.append(&entries(1..=3)).await.unwrap();
+        let owner = level
+            .open(&owned_agent_id, AgentMode::Durable, Some(ShardEpoch(6)))
+            .await;
+
+        // A trim by the older generation is refused, removes nothing, and latches.
+        match stale.drop_prefix(OplogIndex::from_u64(3)).await {
+            Err(OplogError::Fenced(fence)) => {
+                assert_eq!(fence.expected_epoch, ShardEpoch(5), "{backend}");
+                assert_eq!(fence.actual_epoch, Some(ShardEpoch(6)), "{backend}");
+            }
+            other => panic!("{backend}: expected the stale trim to be fenced, got {other:?}"),
         }
-        other => panic!("expected the stale trim to be fenced, got {other:?}"),
+        assert_eq!(stored(1, 3).await, vec![1, 2, 3], "{backend}");
+        assert!(stale.fence().is_some(), "{backend}");
+        assert!(
+            matches!(
+                stale.append(&entries(4..=4)).await,
+                Err(OplogError::Fenced(_))
+            ),
+            "{backend}"
+        );
+
+        // The owner empties the level. The level is deleted but its generation stays: an older
+        // one is still refused at open, and the owner keeps writing the level.
+        owner.drop_prefix(OplogIndex::from_u64(3)).await.unwrap();
+        assert!(
+            !level.exists(&owned_agent_id, AgentMode::Durable).await,
+            "{backend}"
+        );
+        assert!(
+            level_refuses(&storage, &owned_agent_id, AgentMode::Durable, 1, 5).await,
+            "{backend}"
+        );
+        owner.append(&entries(4..=4)).await.unwrap();
+        assert_eq!(stored(1, 4).await, vec![4], "{backend}");
     }
-    assert_eq!(stored(1, 3).await, vec![1, 2, 3]);
-    assert!(stale.fence().is_some());
-    assert!(matches!(
-        stale.append(&entries(4..=4)).await,
-        Err(OplogError::Fenced(_))
-    ));
+}
 
-    // The owner empties the level. The level is deleted but its generation stays: an older one is
-    // still refused at open, and the owner keeps writing the level.
-    owner.drop_prefix(OplogIndex::from_u64(3)).await.unwrap();
-    assert!(!level.exists(&owned_agent_id, AgentMode::Durable).await);
-    let reopened_stale = level
-        .open(&owned_agent_id, AgentMode::Durable, Some(ShardEpoch(5)))
-        .await;
-    assert!(reopened_stale.fence().is_some());
-    owner.append(&entries(4..=4)).await.unwrap();
-    assert_eq!(stored(1, 4).await, vec![4]);
+#[test]
+async fn a_fully_archived_ephemeral_oplog_leaves_no_epoch_record_behind(_tracing: &Tracing) {
+    let tempdir = tempfile::TempDir::new().unwrap();
+    for (backend, storage) in archive_storages(&tempdir).await {
+        let executor = archiving_executor(&storage, 1, true, None).await;
+        let owned_agent_id = archiving_agent("archived-ephemeral");
+        let oplog = executor.open_ephemeral(&owned_agent_id, 5).await;
+        oplog.add(OplogEntry::suspend().rounded()).await.unwrap();
+        oplog.commit(CommitLevel::Always).await.unwrap();
+
+        // Archived as at the end of the instance: every entry moves to the blob layer, and the
+        // emptied level forgets the generation it recorded.
+        while EphemeralOplog::try_archive_blocking(&oplog).await == Some(true) {}
+        assert!(
+            !CompressedOplogArchiveService::new(storage.clone(), 1, RetryConfig::default())
+                .exists(&owned_agent_id, AgentMode::Ephemeral)
+                .await,
+            "{backend}"
+        );
+        assert!(
+            !level_refuses(&storage, &owned_agent_id, AgentMode::Ephemeral, 1, 1).await,
+            "{backend}: the emptied level kept the epoch record of an archived oplog"
+        );
+        assert_eq!(
+            oplog.read_exact(OplogIndex::INITIAL, 1).await.len(),
+            1,
+            "{backend}"
+        );
+
+        // The handle can still write the level: it records its generation again first.
+        oplog.add(OplogEntry::exited().rounded()).await.unwrap();
+        oplog.commit(CommitLevel::Always).await.unwrap();
+        assert!(
+            level_refuses(&storage, &owned_agent_id, AgentMode::Ephemeral, 1, 4).await,
+            "{backend}"
+        );
+        assert_eq!(
+            oplog.read_exact(OplogIndex::INITIAL, 2).await.len(),
+            2,
+            "{backend}"
+        );
+    }
 }

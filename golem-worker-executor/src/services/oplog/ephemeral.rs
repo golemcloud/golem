@@ -646,6 +646,7 @@ impl EphemeralOplog {
             source + 1 < last_movable
         } else {
             // Fully archived, and no transfer was enqueued to wait for
+            self.release_archive_layers().await;
             return false;
         };
 
@@ -653,9 +654,21 @@ impl EphemeralOplog {
             done_rx
                 .await
                 .expect("Failed to wait for the archiving to finish");
+            if !result {
+                self.release_archive_layers().await;
+            }
         }
 
         result
+    }
+
+    /// Forgets the writer generation each emptied archive layer recorded at open, once this oplog
+    /// has moved down to its last layer. Archiving runs with no live writer, so nothing refills
+    /// an emptied layer here; each record would otherwise outlive it, one per ephemeral agent.
+    async fn release_archive_layers(&self) {
+        for layer in &self.lower {
+            layer.release().await;
+        }
     }
 
     /// Spawns the background transfer fiber that processes `TransferFromLower`
@@ -774,6 +787,7 @@ impl EphemeralOplog {
         fresh: bool,
         shard_epoch: Option<ShardEpoch>,
     ) -> NEVec<Arc<dyn OplogArchive + Send + Sync>> {
+        let mut shard_epoch = shard_epoch;
         let mut lower: Vec<Arc<dyn OplogArchive + Send + Sync>> = Vec::new();
         for (i, layer) in lower_services.iter().enumerate() {
             let raw = if fresh {
@@ -783,6 +797,12 @@ impl EphemeralOplog {
             } else {
                 layer.open(owned_agent_id, agent_mode, shard_epoch).await
             };
+            // A refused claim leaves the oplog finished: every write is refused on its fence, and
+            // nothing ever writes the layers below, so they are opened without an epoch rather
+            // than paying a refused write, a warning, or a stale claim on each.
+            if raw.fence().is_some() {
+                shard_epoch = None;
+            }
             if i != (lower_services.len().get() - 1) {
                 let instrumented = Arc::new(InstrumentedOplogArchive::new(
                     raw,
