@@ -50,6 +50,11 @@ use uuid::Uuid;
 #[async_trait]
 trait GetBlobStorage: Debug {
     async fn get_blob_storage(&self) -> TestStorage;
+
+    /// Tells if `copy` from a path with no blob gives [`BlobMissingError`] on this backend.
+    fn copy_of_a_missing_source_gives_blob_missing_error(&self) -> bool {
+        true
+    }
 }
 
 /// The storage of one test, and the MinIO container that the S3 storage uses while the test
@@ -117,6 +122,11 @@ impl GetBlobStorage for FsTest {
         TestStorage::new(Arc::new(
             fs::FileSystemBlobStorage::new(&path).await.unwrap(),
         ))
+    }
+
+    /// The filesystem backend gives the error of the filesystem for a source with no blob.
+    fn copy_of_a_missing_source_gives_blob_missing_error(&self) -> bool {
+        false
     }
 }
 
@@ -3832,9 +3842,7 @@ async fn a_copy_or_a_move_to_another_path_writes_the_blob_there(
         )
         .await
         .map_err(|error| error.downcast_ref::<BlobMissingError>().is_some());
-    // The filesystem backend gives the error of the filesystem for a source with no blob, and
-    // not `BlobMissingError`.
-    let expected_missing_source = Err(format!("{test:?}") != "FsTest");
+    let expected_missing_source = Err(test.copy_of_a_missing_source_gives_blob_missing_error());
 
     let payload = Some(Bytes::from("payload").to_vec());
     assert_eq!(

@@ -2100,21 +2100,41 @@ async fn get_metadata_gives_none_for_a_missing_name_whose_marker_does_not_fit_th
     );
 }
 
-/// The answer of one operation at a root path, and the number of requests that it sent. An
-/// answer is the text of the value, or the `BlobNameError` of the error.
-type RootAnswer = (&'static str, Result<String, Option<BlobNameError>>, usize);
+/// The value that one operation at a root path gives when it gives no error.
+#[derive(Debug, PartialEq)]
+enum RootValue {
+    /// The bytes of a read, or nothing.
+    Bytes(Option<Vec<u8>>),
+    /// Tells if a read of a stream or of metadata found something.
+    Found(bool),
+    /// A write, a delete, `create_dir`, a copy or a move ended with no error.
+    Done,
+    /// Tells if `delete_dir` deleted a directory.
+    Deleted(bool),
+    /// The answer of `exists`.
+    Exists(ExistsResult),
+    /// The answer of `put_raw_if_absent`.
+    Put(PutIfAbsent),
+}
 
-/// Runs the call, and gives its answer and the number of requests that it sent.
-async fn root_answer<T: Debug>(
+/// The answer of one operation at a root path, and the number of requests that it sent. An
+/// answer is the value, or the `BlobNameError` of the error.
+type RootAnswer = (
+    &'static str,
+    Result<RootValue, Option<BlobNameError>>,
+    usize,
+);
+
+/// Runs the call, and gives its answer and the number of requests that it sent. `value` makes
+/// the value of the answer from the result of the call.
+async fn root_answer<T>(
     requests: &SentRequests,
     operation: &'static str,
     call: impl Future<Output = anyhow::Result<T>>,
+    value: impl FnOnce(T) -> RootValue,
 ) -> RootAnswer {
     let before = sent(requests).len();
-    let answer = call
-        .await
-        .map(|value| format!("{value:?}"))
-        .map_err(name_error);
+    let answer = call.await.map(value).map_err(name_error);
     (operation, answer, sent(requests).len() - before)
 }
 
@@ -2132,117 +2152,132 @@ async fn root_answers(
         .map_error(widen_infallible)
         .erased();
     let label = "test";
+    let done = |()| RootValue::Done;
     vec![
         root_answer(
             requests,
             "get_raw",
             storage.get_raw(label, "get-raw", namespace(), path),
+            RootValue::Bytes,
         )
         .await,
-        root_answer(requests, "get_stream", async {
-            storage
-                .get_stream(label, "get-stream", namespace(), path)
-                .await
-                .map(|stream| stream.is_some())
-        })
+        root_answer(
+            requests,
+            "get_stream",
+            storage.get_stream(label, "get-stream", namespace(), path),
+            |stream| RootValue::Found(stream.is_some()),
+        )
         .await,
-        root_answer(requests, "get_range_stream(0, 0)", async {
-            storage
-                .get_range_stream(label, "get-range-stream", namespace(), path, 0, 0)
-                .await
-                .map(|stream| stream.is_some())
-        })
+        root_answer(
+            requests,
+            "get_range_stream(0, 0)",
+            storage.get_range_stream(label, "get-range-stream", namespace(), path, 0, 0),
+            |stream| RootValue::Found(stream.is_some()),
+        )
         .await,
-        root_answer(requests, "get_range_stream(0, 1)", async {
-            storage
-                .get_range_stream(label, "get-range-stream", namespace(), path, 0, 1)
-                .await
-                .map(|stream| stream.is_some())
-        })
+        root_answer(
+            requests,
+            "get_range_stream(0, 1)",
+            storage.get_range_stream(label, "get-range-stream", namespace(), path, 0, 1),
+            |stream| RootValue::Found(stream.is_some()),
+        )
         .await,
         root_answer(
             requests,
             "get_raw_slice",
             storage.get_raw_slice(label, "get-raw-slice", namespace(), path, 0, 0),
+            RootValue::Bytes,
         )
         .await,
-        root_answer(requests, "get_metadata", async {
-            storage
-                .get_metadata(label, "get-metadata", namespace(), path)
-                .await
-                .map(|metadata| metadata.is_some())
-        })
+        root_answer(
+            requests,
+            "get_metadata",
+            storage.get_metadata(label, "get-metadata", namespace(), path),
+            |metadata| RootValue::Found(metadata.is_some()),
+        )
         .await,
         root_answer(
             requests,
             "put_raw",
             storage.put_raw(label, "put-raw", namespace(), path, &data),
+            done,
         )
         .await,
         root_answer(
             requests,
             "put_raw_if_absent",
             storage.put_raw_if_absent(label, "put-raw-if-absent", namespace(), path, &data),
+            RootValue::Put,
         )
         .await,
         root_answer(
             requests,
             "put_stream",
             storage.put_stream(label, "put-stream", namespace(), path, &stream),
+            done,
         )
         .await,
         root_answer(
             requests,
             "delete",
             storage.delete(label, "delete", namespace(), path),
+            done,
         )
         .await,
         root_answer(
             requests,
             "delete_many",
             storage.delete_many(label, "delete-many", namespace(), &[path.to_path_buf()]),
+            done,
         )
         .await,
         root_answer(
             requests,
             "create_dir",
             storage.create_dir(label, "create-dir", namespace(), path),
+            done,
         )
         .await,
         root_answer(
             requests,
             "delete_dir",
             storage.delete_dir(label, "delete-dir", namespace(), path),
+            RootValue::Deleted,
         )
         .await,
         root_answer(
             requests,
             "exists",
             storage.exists(label, "exists", namespace(), path),
+            RootValue::Exists,
         )
         .await,
         root_answer(
             requests,
             "copy from the root",
             storage.copy(label, "copy", namespace(), path, Path::new("blob")),
+            done,
         )
         .await,
         root_answer(
             requests,
             "copy to the root",
             storage.copy(label, "copy", namespace(), Path::new("blob"), path),
+            done,
         )
         .await,
         root_answer(
             requests,
             "move from the root",
             storage.r#move(label, "move", namespace(), path, Path::new("blob")),
+            done,
         )
         .await,
         root_answer(
             requests,
             "move to the root",
             storage.r#move(label, "move", namespace(), Path::new("blob"), path),
+            done,
         )
         .await,
     ]
@@ -2271,27 +2306,27 @@ async fn a_root_path_sends_no_request() {
     };
     let expected = roots.map(|_| {
         vec![
-            ("get_raw", Ok("None".to_string()), 0),
-            ("get_stream", Ok("false".to_string()), 0),
-            ("get_range_stream(0, 0)", Ok("false".to_string()), 0),
-            ("get_range_stream(0, 1)", Ok("false".to_string()), 0),
-            ("get_raw_slice", Ok("None".to_string()), 0),
-            ("get_metadata", Ok("false".to_string()), 0),
+            ("get_raw", Ok(RootValue::Bytes(None)), 0),
+            ("get_stream", Ok(RootValue::Found(false)), 0),
+            ("get_range_stream(0, 0)", Ok(RootValue::Found(false)), 0),
+            ("get_range_stream(0, 1)", Ok(RootValue::Found(false)), 0),
+            ("get_raw_slice", Ok(RootValue::Bytes(None)), 0),
+            ("get_metadata", Ok(RootValue::Found(false)), 0),
             ("put_raw", no_name(), 0),
             ("put_raw_if_absent", no_name(), 0),
             ("put_stream", no_name(), 0),
-            ("delete", Ok("()".to_string()), 0),
-            ("delete_many", Ok("()".to_string()), 0),
-            ("create_dir", Ok("()".to_string()), 0),
-            ("delete_dir", Ok("false".to_string()), 0),
-            ("exists", Ok("Directory".to_string()), 0),
+            ("delete", Ok(RootValue::Done), 0),
+            ("delete_many", Ok(RootValue::Done), 0),
+            ("create_dir", Ok(RootValue::Done), 0),
+            ("delete_dir", Ok(RootValue::Deleted(false)), 0),
+            ("exists", Ok(RootValue::Exists(ExistsResult::Directory)), 0),
             ("copy from the root", no_name(), 0),
             ("copy to the root", no_name(), 0),
             ("move from the root", no_name(), 0),
             ("move to the root", no_name(), 0),
         ]
     });
-    assert_eq!(answers, expected.to_vec());
+    assert_eq!(answers, Vec::from(expected));
 }
 
 #[test]
