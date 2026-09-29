@@ -2739,7 +2739,10 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
             }
             SchemaType::Path { .. } => format!("@runtime.PathValue({val})"),
             SchemaType::Url { .. } => format!("@runtime.UrlValue({val})"),
-            SchemaType::Uuid { .. } => format!("@model.SchemaValue::Uuid({val})"),
+            SchemaType::Uuid { .. } => match self.mode {
+                MoonBitBridgeMode::ExternalRest => format!("@runtime.UuidValue({val})"),
+                MoonBitBridgeMode::GuestWasmRpc => format!("@model.SchemaValue::Uuid({val})"),
+            },
             SchemaType::Datetime { .. } => format!("@runtime.DatetimeValue({val})"),
             SchemaType::Duration { .. } => format!("@runtime.DurationValue({val})"),
             SchemaType::Record { .. }
@@ -2924,9 +2927,14 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
             }
             SchemaType::Path { .. } => format!("@runtime.as_path({val})"),
             SchemaType::Url { .. } => format!("@runtime.as_url({val})"),
-            SchemaType::Uuid { .. } => format!(
-                "match {val} {{ Uuid(value) => value; other => raise @runtime.BridgeError(\"Expected UUID value, got \" + other.to_string()) }}"
-            ),
+            SchemaType::Uuid { .. } => match self.mode {
+                MoonBitBridgeMode::ExternalRest => format!(
+                    "match {val} {{ @runtime.UuidValue(value) => value; other => raise @runtime.BridgeError(\"Expected UUID value, got \" + other.to_string()) }}"
+                ),
+                MoonBitBridgeMode::GuestWasmRpc => format!(
+                    "match {val} {{ Uuid(value) => value; other => raise @runtime.BridgeError(\"Expected UUID value, got \" + other.to_string()) }}"
+                ),
+            },
             SchemaType::Datetime { .. } => format!("@runtime.as_datetime({val})"),
             SchemaType::Duration { .. } => format!("@runtime.as_duration({val})"),
             SchemaType::Record { .. }
@@ -3138,7 +3146,11 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
                 Ok(format!("Result[{ok_type}, {err_type}]"))
             }
             SchemaType::Path { .. } | SchemaType::Url { .. } => Ok("String".to_string()),
-            SchemaType::Uuid { .. } => Ok("@types.Uuid".to_string()),
+            SchemaType::Uuid { .. } => Ok(match self.mode {
+                MoonBitBridgeMode::ExternalRest => "String",
+                MoonBitBridgeMode::GuestWasmRpc => "@types.Uuid",
+            }
+            .to_string()),
             SchemaType::Datetime { .. } => Ok(match self.mode {
                 MoonBitBridgeMode::ExternalRest => "String",
                 MoonBitBridgeMode::GuestWasmRpc => "@types.Datetime",
@@ -3925,7 +3937,7 @@ mod tests {
                     description: String::new(),
                     prompt_hint: None,
                     input_schema: InputSchema::parameters(vec![]),
-                    output_schema: OutputSchema::Single(Box::new(SchemaType::string())),
+                    output_schema: OutputSchema::Single(Box::new(SchemaType::uuid())),
                     http_endpoint: vec![],
                     read_only: None,
                 },
@@ -3946,6 +3958,10 @@ mod tests {
         assert!(client.contains("@runtime.AgentStream[Array[String]]?"));
         assert!(client.contains("@runtime.invoke_streaming_agent"));
         assert!(client.contains(".encode(value))"));
+        assert!(client.contains("@runtime.UuidValue(value)"));
+        assert!(client.contains("@runtime.UuidValue(value) => value"));
+        assert!(!client.contains("@model."));
+        assert!(!client.contains("@types."));
         assert!(!client.contains("trigger_exchange"));
         assert!(!client.contains("schedule_exchange"));
         let manifest = std::fs::read_to_string(target.join("moon.mod.json")).unwrap();

@@ -103,6 +103,7 @@ pub fn schema_value_to_json(value : SchemaValue) -> Json {
     CharValue(v) =>
       node("char", Json::string(String::from_array([v.unsafe_to_char()])))
     StringValue(v) => node("string", Json::string(v))
+    UuidValue(v) => node("uuid", Json::string(v))
     RecordValue(fields) =>
       node(
         "record",
@@ -360,6 +361,7 @@ pub fn schema_value_from_json(j : Json) -> SchemaValue raise {
       CharValue(s.get_char(0).unwrap().to_int())
     }
     "string" => StringValue(expect_string(value))
+    "uuid" => UuidValue(expect_string(value))
     "record" => {
       let m = expect_object(value)
       exact_fields(m, ["fields"])
