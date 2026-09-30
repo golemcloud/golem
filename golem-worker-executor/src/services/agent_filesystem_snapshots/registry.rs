@@ -27,6 +27,14 @@ use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
 /// The state of the agents of the service, and the signal that wakes its waiters.
+///
+/// A transition that wakes wakes every waiter, not only the waiters of its agent. The waiters are
+/// few and short-lived: a start that waits for the upload of its own agent, a manual update that
+/// waits for the job of its agent, and a delete of all snapshots of an agent. After a restart of
+/// the executor there are none, because the jobs live in the process. Each woken waiter takes the
+/// lock once and checks its own agent in O(1), so even a few hundred waiters cost well under a
+/// millisecond for each transition. A signal for each agent would add state and a lifecycle for
+/// no measured gain.
 #[derive(Default)]
 pub(super) struct Registry {
     state: Mutex<State>,
