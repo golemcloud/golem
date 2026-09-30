@@ -163,18 +163,56 @@
     },
     {
       "id": "BYPASS-1",
-      "status": "new assertion",
-      "remaining": "Create the named shared-WIT and generated-surface absence suite."
+      "status": "covered",
+      "existingCoverage": [
+        {
+          "test": "middleware_bypass_wit_exposes_only_definition_discovery_and_runtime_owned_underlying_calls",
+          "file": "golem-common/src/schema/tool/tests.rs",
+          "oracle": "Exact hand-authored shared-WIT function inventories admit definition discovery but no installed-chain enumeration or mutation operations."
+        },
+        {
+          "test": "tool_middleware_cross_crate_components_and_compile_failures",
+          "file": "cli/golem-cli/tests/app/rust_minimal_exports.rs",
+          "oracle": "Generated component contracts are inspected independently and reject relevant root-world imports outside the ordinary tool host and runtime-owned underlying capability."
+        }
+      ]
     },
     {
       "id": "BYPASS-2",
-      "status": "new integration boundary",
-      "remaining": "Deploy discoverable-but-uninstalled and manifest-installed middleware and compare effects."
+      "status": "covered",
+      "existingCoverage": [
+        {
+          "test": "discoverable_middleware_metadata_does_not_self_install",
+          "file": "golem-common/src/model/tool_middleware/compile/tests.rs",
+          "oracle": "The same registered definition produces zero compiled occurrences without an installation and one literal named occurrence with an explicit installation."
+        },
+        {
+          "test": "middleware_chain_dispatches_universal_monomorphic_and_typed_parameters_in_all_modes",
+          "file": "golem-worker-executor/tests/tool_streaming/mod.rs",
+          "oracle": "A real uploaded discoverable middleware component yields literal leaf-only results before installation and transformed chain results only after an authorized deployment update and reconstruction."
+        }
+      ]
     },
     {
       "id": "BYPASS-3",
-      "status": "new assertion",
-      "remaining": "Add WIT/generated-surface constructor absence checks and an independent forged-handle runtime rejection."
+      "status": "covered",
+      "existingCoverage": [
+        {
+          "test": "middleware_bypass_wit_exposes_only_definition_discovery_and_runtime_owned_underlying_calls",
+          "file": "golem-common/src/schema/tool/tests.rs",
+          "oracle": "The exact underlying interface inventory contains only invoke, get, and cancel and independently excludes constructor and static functions."
+        },
+        {
+          "test": "tool_middleware_cross_crate_components_and_compile_failures",
+          "file": "cli/golem-cli/tests/app/rust_minimal_exports.rs",
+          "oracle": "Generated component WIT is checked for constructor/factory absence, and a fixture attempting UnderlyingTool::new fails compilation with the expected missing-associated-function diagnostic."
+        },
+        {
+          "test": "underlying_capability_rejects_missing_and_wrong_type_resource_handles",
+          "file": "golem-worker-executor/src/durable_host/tool/mod.rs",
+          "oracle": "Wasmtime ResourceTable independently rejects both a missing numeric representation and an occupied representation of the wrong type while preserving the actual entry."
+        }
+      ]
     },
     {
       "id": "BYPASS-4",

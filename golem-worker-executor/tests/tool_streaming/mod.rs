@@ -1973,6 +1973,44 @@ async fn middleware_chain_dispatches_universal_monomorphic_and_typed_parameters_
     let parameterized = definition("streaming-parameterized");
     let agent_type = AgentTypeName("ToolStreamingCaller".to_string());
     let tool_name = ToolName::try_from("middleware-probe").unwrap();
+    let deployment = deployment_state(
+        context.account_id,
+        provider_component.id,
+        provider_component.revision,
+        "golem-it:tool-streaming-rust-provider",
+        agent_type.0.as_str(),
+        provider_metadata.tools.clone(),
+    );
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment),
+    );
+    let agent_id = agent_id!("ToolStreamingCaller", "middleware-chain-dispatch");
+    let worker_id = executor
+        .start_agent(&caller_component.id, agent_id.clone())
+        .await?;
+
+    let uninstalled: Vec<String> = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &agent_id,
+            "middleware_probe_modes",
+            data_value!("uninstalled"),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(
+        uninstalled,
+        [
+            "leaf(sync-uninstalled)",
+            "fire-and-forget-admitted",
+            "leaf(async-uninstalled)",
+        ],
+        "uploaded discoverable middleware metadata must not install itself"
+    );
+
     let mut deployment = deployment_state(
         context.account_id,
         provider_component.id,
@@ -2024,10 +2062,7 @@ async fn middleware_chain_dispatches_universal_monomorphic_and_typed_parameters_
         caller_component.revision,
         Some(deployment),
     );
-    let agent_id = agent_id!("ToolStreamingCaller", "middleware-chain-dispatch");
-    let worker_id = executor
-        .start_agent(&caller_component.id, agent_id.clone())
-        .await?;
+    executor.simulated_crash(&worker_id).await?;
 
     let results: Vec<String> = executor
         .invoke_and_await_agent(

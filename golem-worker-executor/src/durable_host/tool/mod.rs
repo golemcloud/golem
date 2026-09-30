@@ -6427,13 +6427,14 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
 mod tests {
     use super::{
         ResolvedToolCommand, SkippedToolAttachmentEndpoints, ToolOutputEntry,
-        ToolOutputWriterEntry, ToolStdinEntry, ToolStdinStreamConsumer, WitRegisteredTool,
-        await_native_entity_body, caller_tool_owner, classify_tool_discovery_error,
-        cleanup_tool_endpoints, first_output_limit_error, materialize_output_writer,
-        merge_discovered_tools, native_output_handles, option_args, output_limit_error,
-        publish_output_completions, recorded_tool_body_is_skipped, resolve_tool_command,
-        select_native_body_result, terminal_tool_discovery_error, validate_declared_tool_error,
-        validate_declared_tool_result, validate_native_tool_output, validate_stream_attachments,
+        ToolOutputWriterEntry, ToolStdinEntry, ToolStdinStreamConsumer, UnderlyingToolEntry,
+        WitRegisteredTool, await_native_entity_body, caller_tool_owner,
+        classify_tool_discovery_error, cleanup_tool_endpoints, first_output_limit_error,
+        materialize_output_writer, merge_discovered_tools, native_output_handles, option_args,
+        output_limit_error, publish_output_completions, recorded_tool_body_is_skipped,
+        resolve_tool_command, select_native_body_result, terminal_tool_discovery_error,
+        validate_declared_tool_error, validate_declared_tool_result, validate_native_tool_output,
+        validate_stream_attachments,
     };
     use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind};
     use crate::durable_host::entity::RecordedEntityTerminal;
@@ -6491,8 +6492,26 @@ mod tests {
     use test_r::test;
     use test_r::timeout;
     use tokio::sync::mpsc;
-    use wasmtime::component::{Component, Linker, StreamReader};
+    use wasmtime::component::{Component, Linker, Resource, ResourceTable, StreamReader};
     use wasmtime::{Config, Engine, Store};
+
+    #[test]
+    fn underlying_capability_rejects_missing_and_wrong_type_resource_handles() {
+        let mut table = ResourceTable::new();
+        let missing = Resource::<UnderlyingToolEntry>::new_borrow(42);
+        assert!(table.get(&missing).is_err());
+
+        let occupied = table
+            .push("not an underlying capability".to_string())
+            .unwrap();
+        let wrong_type = Resource::<UnderlyingToolEntry>::new_borrow(occupied.rep());
+        assert!(table.get(&wrong_type).is_err());
+        assert_eq!(
+            table.get(&occupied).unwrap(),
+            "not an underlying capability",
+            "a failed forged lookup must not consume or replace the actual table entry"
+        );
+    }
 
     #[test]
     #[timeout("10s")]

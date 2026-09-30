@@ -28,6 +28,89 @@ use crate::schema::schema_value::SchemaValue;
 use proptest::prelude::*;
 use test_r::test;
 
+fn wit_interface<'a>(source: &'a str, name: &str) -> &'a str {
+    let marker = format!("interface {name} {{");
+    let start = source
+        .find(&marker)
+        .unwrap_or_else(|| panic!("missing WIT interface `{name}`"));
+    let body_start = start + marker.len();
+    let mut depth = 1_u32;
+
+    for (offset, character) in source[body_start..].char_indices() {
+        match character {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return &source[body_start..body_start + offset];
+                }
+            }
+            _ => {}
+        }
+    }
+
+    panic!("unterminated WIT interface `{name}`")
+}
+
+fn wit_functions(interface: &str) -> std::collections::BTreeSet<&str> {
+    interface
+        .lines()
+        .filter_map(|line| {
+            let (name, declaration) = line.trim().split_once(':')?;
+            declaration.contains("func(").then_some(name.trim())
+        })
+        .collect()
+}
+
+#[test]
+fn middleware_bypass_wit_exposes_only_definition_discovery_and_runtime_owned_underlying_calls() {
+    let host = include_str!("../../../wit/deps/golem-tool/host.wit");
+    let middleware = include_str!("../../../wit/deps/golem-tool/middleware.wit");
+
+    assert_eq!(
+        wit_functions(wit_interface(host, "host")),
+        [
+            "async-invoke-and-await",
+            "cancel",
+            "create",
+            "create-output",
+            "create-stdin",
+            "create-stdin-from-stream",
+            "fail",
+            "finish",
+            "get",
+            "get-all-tools",
+            "get-invoke-results",
+            "get-tool",
+            "invoke",
+            "invoke-and-await",
+            "wait",
+            "write",
+        ]
+        .into_iter()
+        .collect()
+    );
+    assert_eq!(
+        wit_functions(wit_interface(middleware, "tool-middleware-guest")),
+        [
+            "discover-tool-middlewares",
+            "get-tool-middleware",
+            "invoke-tool-middleware",
+        ]
+        .into_iter()
+        .collect(),
+        "middleware discovery describes component exports; it must not be treated as installed-chain enumeration"
+    );
+
+    let underlying = wit_interface(middleware, "underlying");
+    assert_eq!(
+        wit_functions(underlying),
+        ["cancel", "get", "invoke"].into_iter().collect()
+    );
+    assert!(!underlying.contains("constructor("));
+    assert!(!underlying.contains("static func"));
+}
+
 // --- builders ---
 
 /// Root command node with no body and no subcommands.
