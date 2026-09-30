@@ -3065,8 +3065,15 @@ impl TestCaseBuilder {
         self.add(
             OplogEntry::snapshot_confirmed(filesystem_snapshot.clone()).rounded(),
             move |mut status| {
-                if expect_confirmed && let Some(last) = status.last_automatic_snapshot.as_mut() {
-                    last.files.confirm(&filesystem_snapshot);
+                if expect_confirmed {
+                    status.last_automatic_snapshot =
+                        status
+                            .last_automatic_snapshot
+                            .take()
+                            .map(|last| AutomaticSnapshot {
+                                files: last.files.confirmed(&filesystem_snapshot),
+                                ..last
+                            });
                 }
                 status
             },

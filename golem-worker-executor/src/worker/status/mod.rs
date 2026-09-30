@@ -1627,9 +1627,13 @@ fn calculate_update_fields(
                 filesystem_snapshot,
                 ..
             } => {
-                if let Some(last) = last_automatic_snapshot.as_mut() {
-                    last.files.confirm(filesystem_snapshot);
-                }
+                last_automatic_snapshot =
+                    last_automatic_snapshot
+                        .take()
+                        .map(|last| AutomaticSnapshot {
+                            files: last.files.confirmed(filesystem_snapshot),
+                            ..last
+                        });
             }
             _ => {}
         }

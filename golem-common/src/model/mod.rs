@@ -1380,12 +1380,12 @@ impl SnapshotFiles {
         matches!(self, Self::Confirmed(_))
     }
 
-    /// Confirms the named filesystem snapshot when its name is `name`.
-    pub fn confirm(&mut self, name: &FilesystemSnapshotName) {
-        if let Self::Unconfirmed(own) = self
-            && own == name
-        {
-            *self = Self::Confirmed(own.clone());
+    /// The files after a `SnapshotConfirmed` entry of `name`: confirmed when the entry names
+    /// `name` and is unconfirmed, and unchanged otherwise.
+    pub fn confirmed(self, name: &FilesystemSnapshotName) -> Self {
+        match self {
+            Self::Unconfirmed(own) if &own == name => Self::Confirmed(own),
+            files => files,
         }
     }
 }

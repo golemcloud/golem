@@ -1643,9 +1643,8 @@ fn only_the_named_filesystem_snapshot_of_an_automatic_snapshot_is_confirmed() {
     use crate::model::SnapshotFiles;
     let name = crate::model::oplog::FilesystemSnapshotName::periodic();
     let other = crate::model::oplog::FilesystemSnapshotName::periodic();
-    let confirmed = |mut files: SnapshotFiles, by: &crate::model::oplog::FilesystemSnapshotName| {
-        files.confirm(by);
-        files
+    let confirmed = |files: SnapshotFiles, by: &crate::model::oplog::FilesystemSnapshotName| {
+        files.confirmed(by)
     };
 
     assert_eq!(
