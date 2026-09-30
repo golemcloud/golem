@@ -384,7 +384,9 @@ pub(super) fn save_attempt(result: Result<SnapshotInfo, SnapshotStoreError>) -> 
 /// The delay before the next attempt after attempt number `attempt` failed with `error`, or
 /// `None` when no attempt follows. `jitter` is the jitter factor that the caller drew below the
 /// `max_jitter_factor` of `retry`: the delay grows by that part of itself, and stays at most the
-/// `max_delay` of `retry`, as [`get_delay`] gives it.
+/// `max_delay` of `retry`, as [`get_delay`] gives it. A jitter that is negative or not a number
+/// counts as none, and a delay too large for a [`Duration`] is the `max_delay`, so no jitter
+/// panics.
 pub(super) fn retry_delay(
     retry: &RetryConfig,
     attempt: u32,
@@ -403,7 +405,12 @@ pub(super) fn retry_delay(
         ..retry.clone()
     };
     let base = get_delay(&without_jitter, attempt).filter(|_| retryable)?;
-    Some(base.mul_f64(1.0 + jitter).min(retry.max_delay))
+    let grown = base.as_secs_f64() * (1.0 + jitter.max(0.0));
+    Some(
+        Duration::try_from_secs_f64(grown)
+            .unwrap_or(retry.max_delay)
+            .min(retry.max_delay),
+    )
 }
 
 /// What a job does after its confirmation.
@@ -926,6 +933,32 @@ mod tests {
                 None,
                 None,
                 None
+            ]
+        );
+    }
+
+    #[test]
+    fn a_jitter_that_is_negative_not_a_number_or_huge_never_panics() {
+        let retry = RetryConfig {
+            max_attempts: 5,
+            min_delay: Duration::from_secs(2),
+            max_delay: Duration::from_secs(20),
+            multiplier: 4.0,
+            max_jitter_factor: Some(1.0),
+        };
+
+        assert_eq!(
+            [-0.5, f64::NAN, 1e300, f64::INFINITY].map(|jitter| retry_delay(
+                &retry,
+                1,
+                &storage(true),
+                jitter
+            )),
+            [
+                Some(Duration::from_secs(2)),
+                Some(Duration::from_secs(2)),
+                Some(Duration::from_secs(20)),
+                Some(Duration::from_secs(20)),
             ]
         );
     }

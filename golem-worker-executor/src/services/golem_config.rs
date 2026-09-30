@@ -2443,6 +2443,8 @@ const DEFAULT_FILESYSTEM_SNAPSHOT_CONFIRMATION_WAIT: Duration = Duration::from_s
 const DEFAULT_FILESYSTEM_SNAPSHOT_STORE_CHECK_LIMIT: Duration = Duration::from_secs(5);
 /// The default of [`FilesystemSnapshotUploadConfig::capture_wait`].
 const DEFAULT_FILESYSTEM_SNAPSHOT_CAPTURE_WAIT: Duration = Duration::from_secs(5);
+/// The largest jitter factor of the retries of the uploads: a jitter at most doubles a delay.
+const MAX_FILESYSTEM_SNAPSHOT_JITTER_FACTOR: f64 = 1.0;
 /// The default of [`FilesystemSnapshotUploadConfig::retained_periodic_snapshots`] and of
 /// [`FilesystemSnapshotUploadConfig::retained_update_snapshots`].
 const DEFAULT_FILESYSTEM_SNAPSHOT_RETAINED: usize = 2;
@@ -2518,6 +2520,15 @@ impl FilesystemSnapshotUploadConfig {
         }
         if !upload_retry.multiplier.is_finite() || upload_retry.multiplier < 1.0 {
             return Err("upload_retry.multiplier must be at least 1".to_string());
+        }
+        if upload_retry
+            .max_jitter_factor
+            .is_some_and(|factor| !(0.0..=MAX_FILESYSTEM_SNAPSHOT_JITTER_FACTOR).contains(&factor))
+        {
+            return Err(format!(
+                "upload_retry.max_jitter_factor must be between 0 and \
+                 {MAX_FILESYSTEM_SNAPSHOT_JITTER_FACTOR}"
+            ));
         }
         Ok(Self {
             max_concurrent_uploads: count(max_concurrent_uploads, "max_concurrent_uploads")?,
@@ -3165,8 +3176,9 @@ pub fn make_config_loader() -> ConfigLoader<GolemConfig> {
 #[cfg(test)]
 mod tests {
     use super::{
-        DurableStreamConfig, FilesystemSnapshotStoreConfig, FilesystemSnapshotsConfig, GolemConfig,
-        InvocationResultsConfig, Limits, RetryConfig,
+        DurableStreamConfig, FilesystemSnapshotStoreConfig, FilesystemSnapshotUploadConfig,
+        FilesystemSnapshotUploadValues, FilesystemSnapshotsConfig, GolemConfig,
+        InvocationResultsConfig, Limits, RetryConfig, default_filesystem_snapshot_upload_retry,
     };
     use golem_common::SafeDisplay;
     use serde_json::{Value, json};
@@ -3448,6 +3460,31 @@ mod tests {
     }
 
     #[test]
+    fn filesystem_snapshots_upload_settings_refuse_a_jitter_factor_that_is_not_a_number() {
+        let with_jitter = |factor: f64| {
+            FilesystemSnapshotUploadConfig::new(FilesystemSnapshotUploadValues {
+                upload_retry: RetryConfig {
+                    max_jitter_factor: Some(factor),
+                    ..default_filesystem_snapshot_upload_retry()
+                },
+                ..FilesystemSnapshotUploadValues::default()
+            })
+            .err()
+        };
+        let refused = "upload_retry.max_jitter_factor must be between 0 and 1".to_string();
+
+        assert_eq!(
+            [
+                with_jitter(f64::NAN),
+                with_jitter(f64::INFINITY),
+                with_jitter(0.0),
+                with_jitter(1.0),
+            ],
+            [Some(refused.clone()), Some(refused), None, None]
+        );
+    }
+
+    #[test]
     fn filesystem_snapshots_managed_config_refuses_zero_counts_zero_waits_and_a_bad_retry() {
         let retry = |max_attempts: u32, min_delay: &str, max_delay: &str, multiplier: f64| {
             json!({
@@ -3457,6 +3494,18 @@ mod tests {
                     "min_delay": min_delay,
                     "max_delay": max_delay,
                     "multiplier": multiplier,
+                },
+            })
+        };
+        let jitter = |factor: f64| {
+            json!({
+                "repository_key": KEY,
+                "upload_retry": {
+                    "max_attempts": 3,
+                    "min_delay": "1s",
+                    "max_delay": "2s",
+                    "multiplier": 2.0,
+                    "max_jitter_factor": factor,
                 },
             })
         };
@@ -3500,6 +3549,14 @@ mod tests {
             (
                 retry(3, "1s", "2s", 0.5),
                 "upload_retry.multiplier must be at least 1",
+            ),
+            (
+                jitter(-0.5),
+                "upload_retry.max_jitter_factor must be between 0 and 1",
+            ),
+            (
+                jitter(1e20),
+                "upload_retry.max_jitter_factor must be between 0 and 1",
             ),
         ];
 

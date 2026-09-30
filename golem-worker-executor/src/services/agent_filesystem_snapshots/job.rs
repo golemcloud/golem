@@ -400,7 +400,8 @@ async fn delete_superseded(core: &Core, ticket: &JobTicket, name: &FilesystemSna
     }
 }
 
-/// Draws the jitter factor of a retry delay below the `max_jitter_factor` of `retry`.
+/// Draws the jitter factor of a retry delay below the `max_jitter_factor` of `retry`. The
+/// settings allow a factor from 0 to 1, and a factor of 0 gives no jitter.
 fn jitter(retry: &RetryConfig) -> f64 {
     retry
         .max_jitter_factor
