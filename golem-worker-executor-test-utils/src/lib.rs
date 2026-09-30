@@ -2427,6 +2427,46 @@ impl NativeTestTool for NativeTestToolImpl {
             self.0.fetch_add(1, Ordering::SeqCst);
         }
 
+        if let Some(key) = mode.strip_prefix("config:") {
+            let expected = golem_schema::schema::wit::encode_graph(
+                &golem_common::schema::SchemaGraph::anonymous(
+                    golem_common::schema::SchemaType::option(
+                        golem_common::schema::SchemaType::string(),
+                    ),
+                ),
+            )?;
+            let value =
+                golem_worker_executor::preview2::golem::agent::host::Host::get_config_value(
+                    ctx.durable_ctx_mut(),
+                    vec![key.to_string()],
+                    expected,
+                )
+                .await?;
+            let evidence = match value {
+                Ok(value) => match golem_schema::schema::wit::decode_value(&value)? {
+                    golem_common::schema::SchemaValue::Option { inner: Some(value) } => {
+                        match *value {
+                            golem_common::schema::SchemaValue::String(value) => value,
+                            other => format!("unexpected:{other:?}"),
+                        }
+                    }
+                    golem_common::schema::SchemaValue::Option { inner: None } => {
+                        "missing".to_string()
+                    }
+                    other => format!("unexpected:{other:?}"),
+                },
+                Err(_) => "denied".to_string(),
+            };
+            if let Some(mut stdout) = stdout {
+                stdout
+                    .write(evidence.into_bytes())
+                    .await
+                    .map_err(anyhow::Error::msg)?;
+                stdout.finish().map_err(anyhow::Error::msg)?;
+            }
+            return Ok(());
+        }
+
         if mode == "wait-cancel" {
             if let Some(stdout) = &mut stdout {
                 stdout

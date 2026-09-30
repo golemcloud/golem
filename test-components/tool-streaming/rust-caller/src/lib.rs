@@ -171,6 +171,12 @@ struct TypedInputItem {
     label: String,
 }
 
+#[derive(ConfigSchema)]
+pub struct ToolStreamingCallerConfig {
+    pub allowed: Option<String>,
+    pub denied: Option<String>,
+}
+
 #[derive(IntoSchema)]
 struct RawTypedInput {
     input: AgentStream<TypedInputItem>,
@@ -319,7 +325,7 @@ pub struct TypedInputEvidence {
 
 #[agent_definition]
 pub trait ToolStreamingCaller {
-    fn new(name: String) -> Self;
+    fn new(name: String, #[agent_config] config: Config<ToolStreamingCallerConfig>) -> Self;
 
     fn record_native_order(&self, marker: String) -> String;
     fn replay_probe(&self) -> String;
@@ -365,6 +371,7 @@ pub trait ToolStreamingCaller {
     async fn produce_typed_input(&self, decorated: bool) -> Vec<TypedInputEvidence>;
     async fn native_modes_stream_cancel_overlap(&self) -> Vec<String>;
     async fn native_effect_count(&self) -> String;
+    async fn native_config(&self, key: String) -> String;
     async fn raw_handle_lifecycles(&self) -> Vec<String>;
     async fn raw_observer_detach_and_fire_open(&self) -> Vec<String>;
     async fn stdout_drop_preserves_sibling(&self) -> Vec<String>;
@@ -815,7 +822,10 @@ async fn wait_at_promise_checkpoint(name: &str) {
 
 #[agent_implementation]
 impl ToolStreamingCaller for ToolStreamingCallerImpl {
-    fn new(_name: String) -> Self {
+    fn new(
+        _name: String,
+        #[agent_config] _config: Config<ToolStreamingCallerConfig>,
+    ) -> Self {
         assert!(
             std::env::var_os("FORBID_AGENT_CONSTRUCTION").is_none(),
             "component-baseline owners must not construct an agent"
@@ -2037,6 +2047,21 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         )
         .await
         .expect("read native effect counter");
+        String::from_utf8(read_all(stdout).await).unwrap()
+    }
+
+    async fn native_config(&self, key: String) -> String {
+        let rpc = ToolRpc::create("native-streaming").expect("tool RPC creation failed");
+        let (target, stdout) = tool_host::create_output();
+        rpc.invoke_and_await(
+            vec!["run".to_string()],
+            raw_input(&format!("config:{key}")),
+            Some(closed_raw_stdin()),
+            Some(target),
+            None,
+        )
+        .await
+        .expect("invoke native config probe");
         String::from_utf8(read_all(stdout).await).unwrap()
     }
 

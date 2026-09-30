@@ -25,6 +25,7 @@ use golem_common::base_model::agent::{AgentPrincipal, Principal};
 use golem_common::base_model::json::NormalizedJsonValue;
 use golem_common::model::account::AccountEmail;
 use golem_common::model::agent::{AgentTypeName, ParsedAgentId};
+use golem_common::model::agent_config::CanonicalAgentConfigPath;
 use golem_common::model::agent_secret::{
     AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
 };
@@ -45,8 +46,8 @@ use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::retry_policy::NamedRetryPolicy;
 use golem_common::model::tool::{
-    CompiledToolBinding, SecretKeyScope, ToolBindingOwner, ToolFilesystemAccess, ToolName,
-    ToolProvisionConfig, ToolSource,
+    CompiledToolBinding, ConfigKeyScope, SecretKeyScope, ToolBindingOwner, ToolFilesystemAccess,
+    ToolName, ToolProvisionConfig, ToolSource,
 };
 use golem_common::model::{AgentInvocation, AgentInvocationResult, IdempotencyKey, OwnedAgentId};
 use golem_common::schema::schema_type::SchemaType;
@@ -346,6 +347,7 @@ fn activation_with_provision(
         account_id,
         filesystem,
         provision,
+        ConfigKeyScope::All,
         SecretKeyScope::All,
         SecretKeyScope::All,
     )
@@ -368,8 +370,31 @@ fn activation_with_secret_policy(
         account_id,
         FilesystemCapability::Incapable,
         ToolProvisionConfig::default(),
+        ConfigKeyScope::All,
         secret_keys_readable,
         secret_keys_revealable,
+    )
+}
+
+fn activation_with_config_policy(
+    executable: ExecutableTarget,
+    component_name: &str,
+    agent_type_name: AgentTypeName,
+    tool_name: ToolName,
+    account_id: golem_common::model::account::AccountId,
+    config_keys_readable: ConfigKeyScope,
+) -> EntityActivation {
+    activation_with_policy(
+        executable,
+        component_name,
+        agent_type_name,
+        tool_name,
+        account_id,
+        FilesystemCapability::Incapable,
+        ToolProvisionConfig::default(),
+        config_keys_readable,
+        SecretKeyScope::All,
+        SecretKeyScope::All,
     )
 }
 
@@ -382,6 +407,7 @@ fn activation_with_policy(
     account_id: golem_common::model::account::AccountId,
     filesystem: FilesystemCapability,
     provision: ToolProvisionConfig,
+    config_keys_readable: ConfigKeyScope,
     secret_keys_readable: SecretKeyScope,
     secret_keys_revealable: SecretKeyScope,
 ) -> EntityActivation {
@@ -402,7 +428,7 @@ fn activation_with_policy(
         account_id,
         account_email: AccountEmail::new("test@golem"),
         parameters: NormalizedJsonValue::new(serde_json::json!({})),
-        config_keys_readable: Default::default(),
+        config_keys_readable,
         secret_keys_readable,
         secret_keys_revealable,
         filesystem_access: match filesystem {
@@ -3344,74 +3370,102 @@ async fn entity_agent_config_uses_owner_component_declarations(
             .await?;
     let tool_name = ToolName::try_from("owner-config-reader").unwrap();
     let entity = AgentEntity::Tool(tool_name.clone());
-    let activation = Arc::new(activation(
-        ExecutableTarget::new(entity_component.id, entity_component.revision),
-        "test:owner-config-reader",
-        agent_id.agent_type.clone(),
-        tool_name,
-        context.account_id,
-        FilesystemCapability::Incapable,
-    ));
-    // The executable deliberately has no LocalConfigAgent declaration. Successful config and
-    // agent-type lookups therefore prove that both use the pinned owner component revision.
-    let expected = encode_graph(&SchemaGraph::anonymous(SchemaType::s32()))?;
     let expected_owner_component_id = owner_component.id;
     let expected_owner_component_revision = owner_component.revision;
     let expected_entity_component_id = entity_component.id;
     let expected_entity_component_revision = entity_component.revision;
-    run_synchronous_entity_invocation(
-        &active_agent,
-        owner_metadata,
-        &owner_id,
-        &entity,
-        activation,
-        move |_instance, store, _principal| {
-            Box::pin(async move {
-                assert_eq!(
-                    store.data().component_metadata().id,
-                    expected_entity_component_id
-                );
-                assert_eq!(
-                    store.data().component_metadata().revision,
-                    expected_entity_component_revision
-                );
-                assert_eq!(
-                    store.data().durable_ctx().owner_component_metadata().id,
-                    expected_owner_component_id
-                );
-                assert_eq!(
-                    store
-                        .data()
-                        .durable_ctx()
-                        .owner_component_metadata()
-                        .revision,
-                    expected_owner_component_revision
-                );
+    let foo = CanonicalAgentConfigPath(vec!["foo".to_string()]);
+    let cases = [
+        (ConfigKeyScope::All, "foo", SchemaType::s32(), true),
+        (
+            ConfigKeyScope::Keys(BTreeSet::from([foo.clone()])),
+            "foo",
+            SchemaType::s32(),
+            true,
+        ),
+        (
+            ConfigKeyScope::Keys(BTreeSet::from([foo])),
+            "bar",
+            SchemaType::string(),
+            false,
+        ),
+        (
+            ConfigKeyScope::Keys(BTreeSet::new()),
+            "foo",
+            SchemaType::s32(),
+            false,
+        ),
+    ];
+    for (scope, key, expected_type, allowed) in cases {
+        let activation = Arc::new(activation_with_config_policy(
+            ExecutableTarget::new(entity_component.id, entity_component.revision),
+            "test:owner-config-reader",
+            agent_id.agent_type.clone(),
+            tool_name.clone(),
+            context.account_id,
+            scope,
+        ));
+        let expected = encode_graph(&SchemaGraph::anonymous(expected_type))?;
+        let key = key.to_string();
+        // The executable deliberately has no LocalConfigAgent declaration. These lookups prove
+        // both declaration ownership and binding-policy narrowing against creation overrides.
+        run_synchronous_entity_invocation(
+            &active_agent,
+            owner_metadata.clone(),
+            &owner_id,
+            &entity,
+            activation,
+            move |_instance, store, _principal| {
+                Box::pin(async move {
+                    assert_eq!(
+                        store.data().component_metadata().id,
+                        expected_entity_component_id
+                    );
+                    assert_eq!(
+                        store.data().component_metadata().revision,
+                        expected_entity_component_revision
+                    );
+                    assert_eq!(
+                        store.data().durable_ctx().owner_component_metadata().id,
+                        expected_owner_component_id
+                    );
+                    assert_eq!(
+                        store
+                            .data()
+                            .durable_ctx()
+                            .owner_component_metadata()
+                            .revision,
+                        expected_owner_component_revision
+                    );
 
-                let config = AgentHost::get_config_value(
-                    store.data_mut().durable_ctx_mut(),
-                    vec!["foo".to_string()],
-                    expected,
-                )
-                .await?
-                .map_err(|error| WorkerExecutorError::runtime(format!("{error:?}")))?;
-                let config = decode_value(&config)
-                    .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
-                assert_eq!(config, SchemaValue::S32(7));
+                    let config = AgentHost::get_config_value(
+                        store.data_mut().durable_ctx_mut(),
+                        vec![key.clone()],
+                        expected,
+                    )
+                    .await?;
+                    assert_eq!(
+                        config.is_ok(),
+                        allowed,
+                        "unexpected policy result for {key}"
+                    );
+                    if let Ok(config) = config {
+                        let config = decode_value(&config)
+                            .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+                        assert_eq!(config, SchemaValue::S32(7));
+                    }
 
-                let agent_type = AgentHost::get_agent_type(
-                    store.data_mut().durable_ctx_mut(),
-                    "LocalConfigAgent".to_string(),
-                )
-                .await?;
-                assert!(
-                    agent_type.is_some(),
-                    "entity agent-type lookup must use the owner's component revision"
-                );
-                Ok(())
-            })
-        },
-    )
-    .await?;
+                    let agent_type = AgentHost::get_agent_type(
+                        store.data_mut().durable_ctx_mut(),
+                        "LocalConfigAgent".to_string(),
+                    )
+                    .await?;
+                    assert!(agent_type.is_some());
+                    Ok(())
+                })
+            },
+        )
+        .await?;
+    }
     Ok(())
 }

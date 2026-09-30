@@ -827,6 +827,12 @@ async fn duplicate_secret_policy_occurrences_are_isolated_from_leaf(
             input_secret_revealed: false,
         }
     );
+    // Together these observations exercise all four operation shapes independently: restricted
+    // hold/pass, universal resolve-without-reveal, leaf reveal of a received handle, and the
+    // allowed occurrence's resolve-plus-reveal.
+    assert!(!restricted.config_resolved && evidence.leaf_revealed);
+    assert!(universal.config_resolved && !universal.configured_secret_revealed);
+    assert!(allowed.config_resolved && allowed.configured_secret_revealed);
     let replayed_oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     let host_starts = |function_fragment: &str| {
         replayed_oplog
@@ -924,6 +930,14 @@ async fn duplicate_secret_policy_occurrences_are_isolated_from_leaf(
     assert!(
         !cli_shaped.contains(plaintext),
         "CLI-shaped oplog JSON must not contain secret plaintext"
+    );
+    assert!(
+        cli_shaped.contains(&agent_id.to_string()),
+        "reveal audit payloads must retain the calling owner"
+    );
+    assert!(
+        cli_shaped.contains("toolSecret"),
+        "configured-secret reveal audit payloads must retain the canonical config key"
     );
     promise_server.abort();
     Ok(())

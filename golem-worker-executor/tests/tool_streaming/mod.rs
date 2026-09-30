@@ -75,7 +75,7 @@ use golem_worker_executor_test_utils::{
     TestWorkerExecutor, WorkerExecutorTestDependencies, native_streaming_tool_metadata,
     native_test_tool_metadata, start_with_overrides,
 };
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::convert::Infallible;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -4158,6 +4158,136 @@ async fn concurrent_tool_attempt_identity_survives_reordered_admission_and_repla
     executor.delete_worker(&worker_id).await?;
     provider_checkpoint_server.abort();
     caller_checkpoint_server.abort();
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
+async fn native_tool_config_uses_owner_binding_without_host_privilege(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::model::agent_config::CanonicalAgentConfigPath;
+    use golem_common::model::worker::AgentConfigEntryDto;
+
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let mut streaming = native_streaming_tool_metadata();
+    streaming.commands.nodes[0].name = "native-streaming".to_string();
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state.clone()),
+            native_tool_metadata: Some(streaming.clone()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let configured = |allowed: &str, denied: &str| {
+        vec![
+            AgentConfigEntryDto {
+                path: vec!["allowed".to_string()],
+                value: serde_json::json!(allowed).into(),
+            },
+            AgentConfigEntryDto {
+                path: vec!["denied".to_string()],
+                value: serde_json::json!(denied).into(),
+            },
+        ]
+    };
+    let narrowed_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .unique()
+        .name("native-config-narrowed")
+        .with_agent_config(
+            "ToolStreamingCaller",
+            configured("narrowed-allowed", "narrowed-denied"),
+        )
+        .store()
+        .await?;
+    let empty_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .unique()
+        .name("native-config-empty")
+        .with_agent_config(
+            "ToolStreamingCaller",
+            configured("empty-allowed", "empty-denied"),
+        )
+        .store()
+        .await?;
+    let owner = ToolBindingOwner::AgentType {
+        agent_type_name: AgentTypeName("ToolStreamingCaller".to_string()),
+    };
+    let tool_name = ToolName::try_from("native-streaming").unwrap();
+    for (component, scope) in [
+        (
+            &narrowed_component,
+            ConfigKeyScope::Keys(BTreeSet::from([CanonicalAgentConfigPath(vec![
+                "allowed".to_string(),
+            ])])),
+        ),
+        (&empty_component, ConfigKeyScope::Keys(BTreeSet::new())),
+    ] {
+        let mut deployment = native_deployment_state(
+            context.account_id,
+            "ToolStreamingCaller",
+            streaming.clone(),
+            native_test_tool_metadata(),
+        );
+        deployment
+            .tool_bindings
+            .get_mut(&owner)
+            .unwrap()
+            .get_mut(&tool_name)
+            .unwrap()
+            .config_keys_readable = scope;
+        environment_state.set_tool_deployment(
+            context.default_environment_id,
+            component.id,
+            component.revision,
+            Some(deployment),
+        );
+    }
+
+    let narrowed = agent_id!("ToolStreamingCaller", "native-config-narrowed");
+    assert_eq!(
+        executor
+            .invoke_and_await_agent(
+                &narrowed_component,
+                &narrowed,
+                "native_config",
+                data_value!("allowed")
+            )
+            .await?
+            .into_typed::<String>()?,
+        "narrowed-allowed"
+    );
+    assert_eq!(
+        executor
+            .invoke_and_await_agent(
+                &narrowed_component,
+                &narrowed,
+                "native_config",
+                data_value!("denied")
+            )
+            .await?
+            .into_typed::<String>()?,
+        "denied"
+    );
+    let empty = agent_id!("ToolStreamingCaller", "native-config-empty");
+    for key in ["allowed", "denied"] {
+        assert_eq!(
+            executor
+                .invoke_and_await_agent(&empty_component, &empty, "native_config", data_value!(key))
+                .await?
+                .into_typed::<String>()?,
+            "denied"
+        );
+    }
     Ok(())
 }
 
