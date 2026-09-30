@@ -18,18 +18,23 @@
 //! give the store a short or a long deadline and a prune policy that the test controls.
 
 use super::super::fault::is_lease_expired;
-use super::super::files::SnapshotFiles;
 use super::super::prune::{
     CLOCK_SKEW_MARGIN, ClaimChoice, ClaimEntry, LEDGERS_PATH, Percent, PruneLedger, claim_hold,
     next_claim, parse_claim_entry, parse_freed, read_ledger,
 };
+use super::super::publish::StagedSnapshot;
 use super::super::tests::scripted::{Script, ScriptedBlobStorage};
-use super::super::tests::{copy_flat_tree, entries, three_file_tree, wait_past_change_times};
-use super::super::{PruneReport, PruneSettings, RepackLimits, RepositoryKey, open_existing};
-use super::{
-    RusticSnapshotStore, StepGate, StorePolicy, leaves_marked_packs, scope_snapshots,
-    store_backup_options, store_restore_options, whole_millis_from,
+use super::super::tests::{
+    backend_of, copy_flat_tree, entries, files_of, polled_until, three_file_tree,
+    wait_past_change_times,
 };
+use super::super::{PruneReport, PruneSettings, RepositoryKey, open_existing};
+use super::{
+    RusticSnapshotStore, StorePolicy, leaves_marked_packs, scope_snapshots, store_backup_options,
+    store_restore_options, whole_millis_from,
+};
+use crate::filesystem_snapshot::clock::SystemClock;
+use crate::filesystem_snapshot::contract_tests::clock::TestClock;
 use crate::filesystem_snapshot::contract_tests::fixture::{
     Listed, Scratch, Spec, fixture, listing, write_tree,
 };
@@ -52,6 +57,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 use test_r::core::DynamicTestRegistration;
 use test_r::{test, test_gen, timeout};
+use tokio_util::sync::CancellationToken;
 
 /// The id of a snapshot file that no scope holds, as the content of a record of freed bytes.
 const GONE_SNAPSHOT: &str = "0000000000000000000000000000000000000000000000000000000000000000";
@@ -94,7 +100,12 @@ fn policy(deadline: Duration, prune_threshold: Percent, grace: Duration) -> Stor
 }
 
 fn store(storage: Arc<dyn BlobStorage>, policy: StorePolicy) -> Arc<RusticSnapshotStore> {
-    Arc::new(RusticSnapshotStore::with_policy(storage, key(), policy))
+    Arc::new(RusticSnapshotStore::with_policy(
+        storage,
+        key(),
+        policy,
+        Arc::new(SystemClock),
+    ))
 }
 
 fn name(text: &str) -> SnapshotName {
@@ -163,13 +174,15 @@ async fn blobs(
 }
 
 async fn ledger<S: BlobStorage + 'static>(storage: &Arc<S>, scope: &AgentSnapshots) -> PruneLedger {
-    read_ledger(&SnapshotFiles {
-        storage: storage.clone(),
-        namespace: scope.0.clone(),
-        deadline: Duration::from_secs(2),
-        cancel: tokio_util::sync::CancellationToken::new(),
-        tracker: tokio_util::task::TaskTracker::new(),
-    })
+    read_ledger(
+        &files_of(
+            storage.clone(),
+            scope.0.clone(),
+            Duration::from_secs(2),
+            CancellationToken::new(),
+        ),
+        &SystemClock,
+    )
     .await
     .unwrap()
 }
@@ -191,17 +204,16 @@ async fn freed<S: BlobStorage + 'static>(storage: &Arc<S>, scope: &AgentSnapshot
         .fold(0, u64::saturating_add)
 }
 
-/// Waits until the condition holds, or until the limit ends. Gives whether the condition holds.
+/// The longest time that a test waits for an operation to reach the call that a gate holds for
+/// it. The test uses it when another operation of the same storage runs next. A save, a forget or
+/// a prune runs on a blocking thread. A save or a prune also runs at nice 19. So on a busy host
+/// the first operation can take longer than [`LIMIT`] to reach its gate. Each test that waits this
+/// long has a timeout of 120 s, so the timeout covers its setup, this wait and its later steps.
+const REACH_LIMIT: Duration = Duration::from_secs(45);
+
+/// Waits until the condition holds, or until [`LIMIT`] ends. Gives whether the condition holds.
 async fn eventually(condition: impl Fn() -> bool) -> bool {
-    tokio::time::timeout(LIMIT, async {
-        futures::stream::repeat(())
-            .then(|()| tokio::time::sleep(Duration::from_millis(5)))
-            .take_while(|()| std::future::ready(!condition()))
-            .for_each(|()| std::future::ready(()))
-            .await
-    })
-    .await
-    .is_ok()
+    polled_until(LIMIT, condition).await
 }
 
 /// Runs the operation until the calls of the storage match the condition, and then drops it.
@@ -246,7 +258,6 @@ fn the_policy_takes_the_configured_values_and_the_options_are_strict() {
             policy.restore_reader_threads.get(),
             policy.prune.keep_delete,
             policy.prune.fast_repack,
-            policy.prune.repack,
             policy.prune_threshold,
         ),
         (
@@ -255,7 +266,6 @@ fn the_policy_takes_the_configured_values_and_the_options_are_strict() {
             4,
             Duration::from_secs(15 * 60),
             true,
-            RepackLimits::Rustic,
             Percent(10),
         )
     );
@@ -280,6 +290,36 @@ fn the_policy_takes_the_configured_values_and_the_options_are_strict() {
 }
 
 #[test]
+fn a_size_and_mtime_save_names_its_parent_and_ignores_the_change_time_and_a_full_save_forces_a_read()
+ {
+    let policy = StorePolicy::from_config(&config());
+    let parent = SnapshotId::default();
+    let modes = [
+        Some((parent, ChangeDetection::SizeMtime)),
+        Some((parent, ChangeDetection::Full)),
+        None,
+    ]
+    .map(|mode| {
+        let options = store_backup_options(&policy, mode).parent_opts;
+        (
+            options.parents,
+            options.ignore_ctime,
+            options.ignore_inode,
+            options.force,
+        )
+    });
+
+    assert_eq!(
+        modes,
+        [
+            (vec![parent.to_hex().to_string()], true, false, false),
+            (Vec::new(), false, false, true),
+            (Vec::new(), false, false, true),
+        ]
+    );
+}
+
+#[test]
 fn a_save_time_is_the_first_whole_millisecond_that_is_not_before_the_call() {
     let now = golem_common::model::Timestamp::now_utc();
     let whole = golem_common::model::Timestamp::from(5_000);
@@ -293,6 +333,50 @@ fn a_save_time_is_the_first_whole_millisecond_that_is_not_before_the_call() {
             golem_common::model::Timestamp::from(rounded.to_millis()) == rounded,
         ),
         (whole, true, true, true)
+    );
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_new_repository_uses_the_rabin_chunker_zstd_level_3_and_extra_verify() {
+    let storage = Arc::new(InMemoryBlobStorage::new());
+    let store = store(
+        storage.clone(),
+        policy(LONG_DEADLINE, NEVER, Duration::ZERO),
+    );
+    let scope = new_scope();
+    let tree = one_file_tree("settings");
+
+    store
+        .save(&scope, &name("p-settings"), tree.path(), None)
+        .await
+        .unwrap();
+    let backend = backend_of(storage, &scope, LONG_DEADLINE);
+    let config = tokio::task::spawn_blocking(move || {
+        let repository = open_existing(backend, &key()).unwrap().unwrap();
+        let config = repository.config();
+        (
+            config.chunker,
+            config.chunk_size,
+            config.chunk_min_size,
+            config.chunk_max_size,
+            config.compression,
+            config.extra_verify,
+        )
+    })
+    .await
+    .unwrap();
+
+    assert_eq!(
+        config,
+        (
+            Some(rustic_core::repofile::Chunker::Rabin),
+            None,
+            None,
+            None,
+            Some(3),
+            Some(true)
+        )
     );
 }
 
@@ -315,15 +399,9 @@ async fn a_tree_saved_through_a_proc_self_fd_path_is_stored_below_the_root() {
         .save(&scope, &name("p-fd"), Path::new(&through_fd), None)
         .await
         .unwrap();
-    let namespace = scope.0.clone();
+    let backend = backend_of(storage, &scope, LONG_DEADLINE);
     let paths = tokio::task::spawn_blocking(move || {
-        let backend = super::super::backend::BlobBackend::new(
-            storage,
-            namespace,
-            tokio::runtime::Handle::current(),
-            LONG_DEADLINE,
-        );
-        let repository = open_existing(Arc::new(backend), &key()).unwrap().unwrap();
+        let repository = open_existing(backend, &key()).unwrap().unwrap();
         scope_snapshots(&repository)
             .unwrap()
             .readable
@@ -544,10 +622,12 @@ async fn two_stores_that_create_one_repository_at_the_same_time_both_save() {
 }
 
 #[test]
-#[timeout("60s")]
+#[timeout("120s")]
 async fn a_prune_during_a_save_keeps_the_packs_of_the_save() {
     // The first index write after the arm waits at the gate. That is the index write of the
-    // second save, so its packs are in no index while the delete prunes.
+    // second save, so its packs are in no index while the delete prunes. The test stops when the
+    // save does not reach that write before the delete runs. The prune of the delete writes an
+    // index file too, so the gate would then hold the prune until the test times out.
     let hold_next_index = Arc::new(AtomicBool::new(false));
     let storage = ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), {
         let hold_next_index = hold_next_index.clone();
@@ -588,7 +668,8 @@ async fn a_prune_during_a_save_keeps_the_packs_of_the_save() {
         let path = new_tree.path().to_path_buf();
         async move { store.save(&scope, &name("p-new"), &path, None).await }
     });
-    let held = eventually(|| index_writes() > before).await;
+    let held = polled_until(REACH_LIMIT, || index_writes() > before).await;
+    assert!(held, "the save did not reach its index write");
     let deleted = store.delete(&scope, &name("p-old")).await;
     let pruned_while_held = ledger(&storage, &scope).await.last_prune.is_some();
     storage.open_gate();
@@ -1015,7 +1096,7 @@ async fn save_each(store: &RusticSnapshotStore, scope: &AgentSnapshots, names: &
 }
 
 #[test]
-#[timeout("60s")]
+#[timeout("120s")]
 async fn a_delete_that_paused_after_its_ledger_read_does_not_put_back_the_old_ledger() {
     // The gate holds the first delete after its record write and its ledger read. The second
     // delete prunes to its end. The first delete then goes on with the ledger that it read.
@@ -1041,7 +1122,13 @@ async fn a_delete_that_paused_after_its_ledger_read_does_not_put_back_the_old_le
         let scope = scope.clone();
         async move { store.delete(&scope, &name("p-1")).await }
     });
-    let paused_held = eventually(|| held.load(Ordering::SeqCst)).await;
+    // The second delete lists the freed records too. So the gate would hold it for ever when the
+    // first delete did not reach its listing first.
+    let paused_held = polled_until(REACH_LIMIT, || held.load(Ordering::SeqCst)).await;
+    assert!(
+        paused_held,
+        "the first delete did not reach its listing of the freed records"
+    );
 
     let pruned = store.delete(&scope, &name("p-2")).await;
     let after_prune = ledger(&storage, &scope).await;
@@ -1424,7 +1511,7 @@ async fn a_prune_that_finds_a_snapshot_file_gone_at_each_attempt_after_refreshes
 }
 
 #[test]
-#[timeout("60s")]
+#[timeout("120s")]
 async fn a_prune_slower_than_the_grace_period_keeps_its_claim_fresh() {
     // The gate holds the prune at its listing of the packs for longer than the grace period.
     let grace = Duration::from_millis(400);
@@ -1455,7 +1542,13 @@ async fn a_prune_slower_than_the_grace_period_keeps_its_claim_fresh() {
         let scope = scope.clone();
         async move { store.delete(&scope, &name("p-1")).await }
     });
-    let prune_held = eventually(|| held.load(Ordering::SeqCst)).await;
+    // The second delete claims and lists the packs too. So the gate would hold its prune for ever
+    // when the first delete did not reach its listing first.
+    let prune_held = polled_until(REACH_LIMIT, || held.load(Ordering::SeqCst)).await;
+    assert!(
+        prune_held,
+        "the first delete did not reach its listing of the packs"
+    );
     let first = claim_time(&storage, &scope).await.unwrap_or(u64::MAX);
     let wanted = first.saturating_add(u64::try_from(grace.as_millis()).unwrap_or(u64::MAX));
 
@@ -1635,10 +1728,13 @@ async fn a_marker_ahead_within_the_margin_after_a_slow_claim_listing_holds_the_c
             Script::Pass
         }
     });
-    let store = store(
+    let clock = Arc::new(TestClock::default());
+    let store = Arc::new(RusticSnapshotStore::with_policy(
         storage.clone(),
+        key(),
         policy(LONG_DEADLINE, ALWAYS, Duration::from_secs(3600)),
-    );
+        clock.clone(),
+    ));
     let scope = new_scope();
     save_each(&store, &scope, &["p-1", "p-2"]).await;
     let ahead = golem_common::model::Timestamp::now_utc().to_millis() + 130_000;
@@ -1668,7 +1764,7 @@ async fn a_marker_ahead_within_the_margin_after_a_slow_claim_listing_holds_the_c
     })
     .await;
 
-    store.clock_ahead.store(20_000, Ordering::SeqCst);
+    clock.advance(Duration::from_secs(20));
     storage.open_gate();
     let deleted = tokio::time::timeout(LIMIT, deleting).await;
     let calls = storage.calls();
@@ -1684,6 +1780,214 @@ async fn a_marker_ahead_within_the_margin_after_a_slow_claim_listing_holds_the_c
                 .count(),
         ),
         (true, 0, 0)
+    );
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_ledger_entry_ahead_within_the_margin_of_the_moved_clock_holds_the_prune() {
+    // The entry is 130 s ahead of the clock of the host, beyond the margin of 120 s. The clock of
+    // the store is 20 s ahead, so the entry is within the margin of that clock, and it is the
+    // ledger. Its hold has not passed, so the delete does not prune.
+    let storage =
+        ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |_, _| Script::Pass);
+    let clock = Arc::new(TestClock::default());
+    let store = Arc::new(RusticSnapshotStore::with_policy(
+        storage.clone(),
+        key(),
+        policy(LONG_DEADLINE, ALWAYS, Duration::ZERO),
+        clock.clone(),
+    ));
+    let scope = new_scope();
+    save_each(&store, &scope, &["p-1", "p-2"]).await;
+    let ahead = golem_common::model::Timestamp::now_utc().to_millis() + 130_000;
+    put_ledger_entry(&storage, &scope, &format!("{ahead}-0-ahead")).await;
+    clock.advance(Duration::from_secs(20));
+
+    let deleted = store.delete(&scope, &name("p-1")).await;
+
+    assert!(deleted.is_ok(), "{deleted:?}");
+    assert_eq!(prunes(&storage.calls()), 0);
+}
+
+/// Gives the time in the name of each blob that the calls with the operation label wrote. The time
+/// is the number before the first `-` of the name, after the `@` of a marker.
+fn written_times(calls: &[(&'static str, String)], op_label: &str) -> Box<[u64]> {
+    calls
+        .iter()
+        .filter(|(label, _)| *label == op_label)
+        .filter_map(|(_, path)| {
+            let file = Path::new(path).file_name()?.to_str()?;
+            let time = file.split_once('@').map_or(file, |(_, rest)| rest);
+            time.split('-').next()?.parse().ok()
+        })
+        .collect()
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_save_and_a_prune_take_their_times_from_the_injected_clock() {
+    // The clock of the store is one hour ahead of the clock of the host. The time of each save,
+    // each claim marker, the final marker and the ledger entry comes from the clock of the store.
+    let storage =
+        ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |_, _| Script::Pass);
+    let clock = Arc::new(TestClock::default());
+    clock.set_ahead(Duration::from_secs(3600));
+    let store = Arc::new(RusticSnapshotStore::with_policy(
+        storage.clone(),
+        key(),
+        policy(LONG_DEADLINE, ALWAYS, Duration::ZERO),
+        clock.clone(),
+    ));
+    let scope = new_scope();
+    let ahead = golem_common::model::Timestamp::now_utc().to_millis() + 3_600_000;
+    let tree = one_file_tree("timed");
+
+    let saved = store
+        .save(&scope, &name("p-1"), tree.path(), None)
+        .await
+        .unwrap();
+    save_each(&store, &scope, &["p-2"]).await;
+    store.delete(&scope, &name("p-1")).await.unwrap();
+    let calls = storage.calls();
+    let written = ["write_marker", "final_marker", "write_ledger"]
+        .map(|op_label| written_times(&calls, op_label));
+
+    assert_eq!(
+        (
+            saved.created_at.to_millis() >= ahead,
+            written.clone().map(|times| times.len()),
+            written.iter().flatten().all(|time| *time >= ahead),
+        ),
+        (true, [1, 1, 1], true),
+        "{written:?}"
+    );
+}
+
+/// Gives a store over the storage with the policy, whose clock is an hour ahead of the clock of the
+/// host. It also gives the first millisecond of that hour on the clock of the host.
+fn store_an_hour_ahead(
+    storage: Arc<dyn BlobStorage>,
+    policy: StorePolicy,
+) -> (Arc<RusticSnapshotStore>, u64) {
+    let clock = Arc::new(TestClock::default());
+    clock.set_ahead(Duration::from_secs(3600));
+    let ahead = golem_common::model::Timestamp::now_utc().to_millis() + 3_600_000;
+    let store = Arc::new(RusticSnapshotStore::with_policy(
+        storage,
+        key(),
+        policy,
+        clock,
+    ));
+    (store, ahead)
+}
+
+#[test]
+#[timeout("60s")]
+async fn the_refresh_markers_of_a_prune_take_their_times_from_the_injected_clock() {
+    // A short grace period makes the claim get new markers while the gate holds the prune at its
+    // listing of the packs.
+    let storage = holding_the_prune();
+    let (store, ahead) = store_an_hour_ahead(
+        storage.clone(),
+        policy(LONG_DEADLINE, ALWAYS, Duration::from_millis(400)),
+    );
+    let scope = new_scope();
+    save_each(&store, &scope, &["p-1", "p-2"]).await;
+    let pruning = tokio::spawn({
+        let (store, scope) = (store.clone(), scope.clone());
+        async move { store.delete(&scope, &name("p-1")).await }
+    });
+    let refreshed =
+        eventually(|| written_times(&storage.calls(), "refresh_claim").len() >= 2).await;
+    storage.open_gate();
+    let pruned = tokio::time::timeout(LIMIT, pruning).await;
+    let refreshes = written_times(&storage.calls(), "refresh_claim");
+
+    assert!(matches!(pruned, Ok(Ok(Ok(())))), "{pruned:?}");
+    assert_eq!(
+        (refreshed, refreshes.iter().all(|time| *time >= ahead)),
+        (true, true),
+        "{refreshes:?}"
+    );
+}
+
+#[test]
+#[timeout("60s")]
+async fn the_second_ledger_read_of_a_delete_compares_with_the_injected_clock() {
+    // The gate holds the claim write while the test adds a ledger entry 130 s ahead of the clock of
+    // the host. That is beyond the margin of 120 s of the clock of the host. It is within the
+    // margin of the clock of the store, which is 20 s ahead. So only the clock of the store makes
+    // the second read of the ledger see a new ledger, and then the delete does not prune.
+    let storage = ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |op_label, _| {
+        if op_label == "write_claim" {
+            Script::WaitForGate
+        } else {
+            Script::Pass
+        }
+    });
+    let clock = Arc::new(TestClock::default());
+    let store = Arc::new(RusticSnapshotStore::with_policy(
+        storage.clone(),
+        key(),
+        policy(LONG_DEADLINE, ALWAYS, Duration::ZERO),
+        clock.clone(),
+    ));
+    let scope = new_scope();
+    save_each(&store, &scope, &["p-1", "p-2"]).await;
+    clock.advance(Duration::from_secs(20));
+    let deleting = tokio::spawn({
+        let (store, scope) = (store.clone(), scope.clone());
+        async move { store.delete(&scope, &name("p-1")).await }
+    });
+    let claiming = eventually(|| {
+        storage
+            .calls()
+            .iter()
+            .any(|(op_label, _)| *op_label == "write_claim")
+    })
+    .await;
+    let ahead = golem_common::model::Timestamp::now_utc().to_millis() + 130_000;
+    put_ledger_entry(&storage, &scope, &format!("{ahead}-0-ahead")).await;
+    storage.open_gate();
+    let deleted = tokio::time::timeout(LIMIT, deleting).await;
+
+    assert!(matches!(deleted, Ok(Ok(Ok(())))), "{deleted:?}");
+    assert_eq!((claiming, prunes(&storage.calls())), (true, 0));
+}
+
+#[test]
+#[timeout("60s")]
+async fn the_final_marker_of_a_dropped_delete_takes_its_time_from_the_injected_clock() {
+    // The gate holds the first call of the prune, and the test drops the delete there. So the
+    // claim guard writes the final marker in its own task.
+    let storage = holding_the_prune();
+    let (store, ahead) = store_an_hour_ahead(
+        storage.clone(),
+        policy(LONG_DEADLINE, ALWAYS, Duration::from_secs(3600)),
+    );
+    let scope = new_scope();
+    save_each(&store, &scope, &["p-1", "p-2"]).await;
+    let deleting = tokio::spawn({
+        let (store, scope) = (store.clone(), scope.clone());
+        async move { store.delete(&scope, &name("p-1")).await }
+    });
+    let started = eventually(|| prunes(&storage.calls()) == 1).await;
+    deleting.abort();
+    let _ = deleting.await;
+    let ended = eventually(|| store.work_in_flight() == 0).await;
+    storage.open_gate();
+    let finals = written_times(&storage.calls(), "final_marker");
+
+    assert_eq!(
+        (
+            started,
+            ended,
+            finals.len(),
+            finals.iter().all(|time| *time >= ahead)
+        ),
+        (true, true, 1, true),
+        "{finals:?}"
     );
 }
 
@@ -2076,52 +2380,6 @@ async fn a_failed_ledger_write_after_a_prune_keeps_the_claim_so_no_second_prune_
 
 #[test]
 #[timeout("60s")]
-async fn a_backend_that_does_not_build_after_the_claim_releases_it() {
-    // The first claim write makes the next backend build fail, and that build is the one of the
-    // prune.
-    let refuse_backends = Arc::new(AtomicBool::new(false));
-    let armed = Arc::new(AtomicBool::new(true));
-    let storage = ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), {
-        let refuse_backends = refuse_backends.clone();
-        move |op_label, _| {
-            if op_label == "write_claim" && armed.swap(false, Ordering::SeqCst) {
-                refuse_backends.store(true, Ordering::SeqCst);
-            }
-            Script::Pass
-        }
-    });
-    let store = Arc::new(RusticSnapshotStore {
-        refuse_backends: refuse_backends.clone(),
-        ..RusticSnapshotStore::with_policy(
-            storage.clone(),
-            key(),
-            policy(LONG_DEADLINE, ALWAYS, Duration::from_secs(3600)),
-        )
-    });
-    let scope = new_scope();
-    save_each(&store, &scope, &["p-1", "p-2"]).await;
-
-    let failed = store.delete(&scope, &name("p-1")).await;
-    let claims_after_failure = blobs(&*storage, &scope.0, "golem/prune-claims/").await;
-    refuse_backends.store(false, Ordering::SeqCst);
-    let retried = store.delete(&scope, &name("p-2")).await;
-
-    assert!(
-        failed.as_ref().is_err_and(|error| is_storage(error, true)),
-        "{failed:?}"
-    );
-    assert!(retried.is_ok(), "{retried:?}");
-    assert_eq!(
-        (
-            claims_after_failure,
-            ledger(&storage, &scope).await.last_prune.is_some(),
-        ),
-        (Vec::<String>::new(), true)
-    );
-}
-
-#[test]
-#[timeout("60s")]
 async fn a_forget_that_fails_after_the_record_write_leaves_the_record() {
     // The forget deletes the snapshot file, and the storage refuses that call.
     let storage =
@@ -2490,7 +2748,7 @@ async fn a_claim_without_a_marker_does_not_unblock_a_live_holder() {
 }
 
 #[test]
-#[timeout("60s")]
+#[timeout("120s")]
 async fn two_deletes_that_read_the_same_ledger_make_one_prune() {
     // The first read after the first claim is the start of the first prune. The gate holds it,
     // so the second delete reads the ledger that the first delete read.
@@ -2523,7 +2781,13 @@ async fn two_deletes_that_read_the_same_ledger_make_one_prune() {
         let scope = scope.clone();
         async move { store.delete(&scope, &name("p-1")).await }
     });
-    let first_held = eventually(|| held.load(Ordering::SeqCst)).await;
+    // The second delete claims and reads too, so the gate would hold it for ever when the first
+    // delete did not reach its read first.
+    let first_held = polled_until(REACH_LIMIT, || held.load(Ordering::SeqCst)).await;
+    assert!(
+        first_held,
+        "the first delete did not reach its first read after its claim"
+    );
 
     let second = store.delete(&scope, &name("p-2")).await;
     storage.open_gate();
@@ -2543,7 +2807,7 @@ async fn two_deletes_that_read_the_same_ledger_make_one_prune() {
 }
 
 #[test]
-#[timeout("60s")]
+#[timeout("120s")]
 async fn a_delete_that_claims_after_another_prune_removed_the_claims_does_not_prune() {
     // The gate holds the first delete after its ledger read and before its listing of the claims.
     // The second delete prunes to its end, so the first delete claims in a removed directory.
@@ -2569,7 +2833,13 @@ async fn a_delete_that_claims_after_another_prune_removed_the_claims_does_not_pr
         let scope = scope.clone();
         async move { store.delete(&scope, &name("p-1")).await }
     });
-    let late_held = eventually(|| held.load(Ordering::SeqCst)).await;
+    // The second delete lists the claims too, so the gate would hold it for ever when the first
+    // delete did not reach its listing first.
+    let late_held = polled_until(REACH_LIMIT, || held.load(Ordering::SeqCst)).await;
+    assert!(
+        late_held,
+        "the first delete did not reach its listing of the claims"
+    );
 
     let pruned = store.delete(&scope, &name("p-2")).await;
     storage.open_gate();
@@ -3539,13 +3809,7 @@ async fn a_blob_call_of_a_cancelled_operation_does_not_start() {
         ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |_, _| Script::Pass);
     let cancel = tokio_util::sync::CancellationToken::new();
     cancel.cancel();
-    let files = SnapshotFiles {
-        storage: storage.clone(),
-        namespace: new_scope().0,
-        deadline: LONG_DEADLINE,
-        cancel,
-        tracker: tokio_util::task::TaskTracker::new(),
-    };
+    let files = files_of(storage.clone(), new_scope().0, LONG_DEADLINE, cancel);
 
     let read = files
         .get("read_ledger", Path::new("golem/prune-ledgers/1000-0-0f0f"))
@@ -3630,9 +3894,7 @@ async fn shut_down_waits_for_the_step_of_a_prune_and_its_refresh_that_is_not_pol
     tokio::pin!(deleting);
     let reached = tokio::select! {
         biased;
-        () = async {
-            eventually(|| held.load(Ordering::SeqCst)).await;
-        } => true,
+        held = eventually(|| held.load(Ordering::SeqCst)) => held,
         _ = &mut deleting => false,
     };
 
@@ -3861,32 +4123,50 @@ async fn a_publish_held_at_its_storage_call_keeps_shut_down_waiting_until_it_end
 #[timeout("60s")]
 async fn a_shut_down_between_the_claim_listing_and_the_claim_guard_makes_no_storage_call_after_it_returns()
  {
-    // The gate holds the delete after it listed the claims and before it builds its claim guard,
-    // so the tracker is empty and `shut_down` returns while the delete waits.
-    let storage =
-        ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |_, _| Script::Pass);
-    let gate = Arc::new(StepGate::default());
-    let store = Arc::new(RusticSnapshotStore {
-        claim_gate: Some(gate.clone()),
-        ..RusticSnapshotStore::with_policy(
-            storage.clone(),
-            key(),
-            policy(LONG_DEADLINE, ALWAYS, Duration::from_secs(3600)),
-        )
+    // The scripted storage holds the claim listing, and the test clock holds its next read. That is
+    // the read of the claim choice, after the listing and before the claim guard. So the tracker is
+    // empty and `shut_down` returns while the delete waits. The claim listing is the last storage
+    // call at the hold, and no claim is written, so the hold is at that point.
+    let storage = ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |op_label, _| {
+        if op_label == "list_claims" {
+            Script::WaitForGate
+        } else {
+            Script::Pass
+        }
     });
+    let clock = Arc::new(TestClock::default());
+    let store = Arc::new(RusticSnapshotStore::with_policy(
+        storage.clone(),
+        key(),
+        policy(LONG_DEADLINE, ALWAYS, Duration::from_secs(3600)),
+        clock.clone(),
+    ));
     let scope = new_scope();
     save_each(&store, &scope, &["p-1", "p-2"]).await;
     let deleting = tokio::spawn({
         let (store, scope) = (store.clone(), scope.clone());
         async move { store.delete(&scope, &name("p-1")).await }
     });
-    let reached = tokio::time::timeout(LIMIT, gate.reached.notified())
-        .await
-        .is_ok();
+    let listing = eventually(|| {
+        storage
+            .calls()
+            .iter()
+            .any(|(op_label, _)| *op_label == "list_claims")
+    })
+    .await;
+    clock.hold_next_read();
+    storage.open_gate();
+    let reached = tokio::task::spawn_blocking({
+        let clock = clock.clone();
+        move || clock.wait_until_held(LIMIT)
+    })
+    .await
+    .unwrap();
+    let calls_at_hold = storage.calls();
 
     let stopped = tokio::time::timeout(LIMIT, store.shut_down()).await.is_ok();
     let calls_at_shut_down = storage.calls();
-    gate.open.notify_one();
+    clock.release();
     let deleted = tokio::time::timeout(LIMIT, deleting).await;
     let ended = eventually(|| store.work_in_flight() == 0).await;
 
@@ -3898,8 +4178,27 @@ async fn a_shut_down_between_the_claim_listing_and_the_claim_guard_makes_no_stor
         "{deleted:?}"
     );
     assert_eq!(
-        (reached, stopped, ended, storage.calls()),
-        (true, true, true, calls_at_shut_down)
+        (
+            listing,
+            reached,
+            calls_at_hold.last().map(|(op_label, _)| *op_label),
+            calls_at_hold
+                .iter()
+                .filter(|(op_label, _)| *op_label == "write_claim")
+                .count(),
+            stopped,
+            ended,
+            storage.calls(),
+        ),
+        (
+            true,
+            true,
+            Some("list_claims"),
+            0,
+            true,
+            true,
+            calls_at_shut_down
+        )
     );
 }
 
@@ -3963,42 +4262,48 @@ async fn a_save_that_loses_the_creation_of_the_repository_after_its_first_config
 
 #[test]
 #[timeout("60s")]
-async fn shut_down_waits_for_the_check_of_the_tree_of_a_save() {
-    // The gate holds the check of the tree on its blocking thread.
-    let gate = Arc::new(StepGate::default());
-    let store = Arc::new(RusticSnapshotStore {
-        path_check_gate: Some(gate.clone()),
-        ..RusticSnapshotStore::with_policy(
-            Arc::new(InMemoryBlobStorage::new()),
-            key(),
-            policy(LONG_DEADLINE, NEVER, Duration::ZERO),
-        )
-    });
-    let scope = new_scope();
+async fn shut_down_waits_for_the_check_of_a_local_path() {
+    // The check waits on its blocking thread until the test lets it go.
+    let store = store(
+        Arc::new(InMemoryBlobStorage::new()),
+        policy(LONG_DEADLINE, NEVER, Duration::ZERO),
+    );
     let tree = one_file_tree("checked");
-    let saving = tokio::spawn({
-        let (store, scope, path) = (store.clone(), scope.clone(), tree.path().to_path_buf());
-        async move { store.save(&scope, &name("p-checked"), &path, None).await }
+    let (reached_sender, reached) = std::sync::mpsc::channel::<()>();
+    let (open, opened) = std::sync::mpsc::channel::<()>();
+    let checking = tokio::spawn({
+        let (store, path) = (store.clone(), tree.path().to_path_buf());
+        async move {
+            store
+                .check_path(
+                    crate::sandbox_filesystem::NativeOperation::Metadata,
+                    &path,
+                    SnapshotStoreError::Source,
+                    move |_| {
+                        let _ = reached_sender.send(());
+                        let _ = opened.recv();
+                        Ok(())
+                    },
+                )
+                .await
+        }
     });
-    let reached = tokio::time::timeout(LIMIT, gate.reached.notified())
+    let reached = tokio::task::spawn_blocking(move || reached.recv_timeout(LIMIT).is_ok())
         .await
-        .is_ok();
+        .unwrap();
 
     let shutting = store.shut_down();
     tokio::pin!(shutting);
     let waited = tokio::time::timeout(Duration::from_millis(200), &mut shutting)
         .await
         .is_err();
-    gate.open.notify_one();
+    open.send(()).unwrap();
     // A finished future must not be polled again, so the second wait runs only after a first wait
     // that timed out.
     let stopped = !waited || tokio::time::timeout(LIMIT, &mut shutting).await.is_ok();
-    let saved = tokio::time::timeout(LIMIT, saving).await;
+    let checked = tokio::time::timeout(LIMIT, checking).await;
 
-    assert!(
-        matches!(&saved, Ok(Ok(Err(error))) if is_storage(error, false) || is_storage(error, true)),
-        "{saved:?}"
-    );
+    assert!(matches!(&checked, Ok(Ok(Ok(())))), "{checked:?}");
     assert_eq!((reached, waited, stopped), (true, true, true));
 }
 
@@ -4180,6 +4485,7 @@ async fn a_save_dropped_during_the_delete_after_a_failed_publish_still_deletes_t
                 storage.clone(),
                 key(),
                 policy(LONG_DEADLINE, NEVER, Duration::ZERO),
+                Arc::new(SystemClock),
             )
             .stat(&scope, &name("p-dropped"))
             .await
@@ -4189,100 +4495,78 @@ async fn a_save_dropped_during_the_delete_after_a_failed_publish_still_deletes_t
     );
 }
 
+/// A snapshot file of a save that the backend kept and did not write.
+fn staged_snapshot() -> StagedSnapshot {
+    StagedSnapshot {
+        path: Arc::from(Path::new(&format!("snapshots/{}", "cd".repeat(32)))),
+        content: bytes::Bytes::from_static(b"snapshot"),
+    }
+}
+
 #[test]
 #[timeout("60s")]
-async fn a_save_whose_publish_is_counted_before_shut_down_and_polled_after_its_cancel_publishes_nothing()
- {
-    // The gate holds the save after the tracker counts its publish and before the first poll of
-    // the publish. `shut_down` cancels and then waits for the publish, and the gate opens only
-    // after the cancel.
+async fn a_publish_that_is_counted_before_shut_down_and_polled_after_its_cancel_publishes_nothing()
+{
+    // The tracker counts the publish when the save makes it, before its first poll. `shut_down`
+    // cancels and then waits for the publish, and the publish is polled only after the cancel.
     let storage = Arc::new(InMemoryBlobStorage::new());
-    let gate = Arc::new(StepGate::default());
-    let store = Arc::new(RusticSnapshotStore {
-        publish_poll_gate: Some(gate.clone()),
-        ..RusticSnapshotStore::with_policy(
-            storage.clone(),
-            key(),
-            policy(LONG_DEADLINE, NEVER, Duration::ZERO),
-        )
-    });
+    let store = store(
+        storage.clone(),
+        policy(LONG_DEADLINE, NEVER, Duration::ZERO),
+    );
     let scope = new_scope();
-    let tree = one_file_tree("late");
-    let saving = tokio::spawn({
-        let (store, scope, path) = (store.clone(), scope.clone(), tree.path().to_path_buf());
-        async move { store.save(&scope, &name("p-late"), &path, None).await }
-    });
-    let reached = tokio::time::timeout(LIMIT, gate.reached.notified())
-        .await
-        .is_ok();
+    let publishing = store.publish_staged(&scope, staged_snapshot());
+    let counted = store.work_in_flight();
 
     let shutting_down = tokio::spawn({
         let store = store.clone();
         async move { store.shut_down().await }
     });
     let cancelled = eventually(|| store.root.is_cancelled()).await;
-    gate.open.notify_one();
-    let saved = tokio::time::timeout(LIMIT, saving).await;
+    let waited = !shutting_down.is_finished();
+    let published = tokio::time::timeout(LIMIT, publishing).await;
     let stopped = tokio::time::timeout(LIMIT, shutting_down).await;
 
     assert!(
-        matches!(&saved, Ok(Ok(Err(error))) if is_storage(error, false)),
-        "{saved:?}"
+        matches!(&published, Ok(Err(error)) if is_storage(error, false)),
+        "{published:?}"
     );
     assert!(matches!(stopped, Ok(Ok(()))), "{stopped:?}");
     assert_eq!(
         (
-            reached,
+            counted,
             cancelled,
+            waited,
             blobs(&*storage, &scope.0, "snapshots/").await
         ),
-        (true, true, Vec::<String>::new())
+        (1, true, true, Vec::<String>::new())
     );
 }
 
 #[test]
 #[timeout("60s")]
-async fn a_save_that_reaches_its_publish_after_shut_down_publishes_nothing() {
-    // The gate holds the save after its blocking work, so the tracker is empty and `shut_down`
-    // returns before the publish starts.
+async fn a_publish_that_starts_after_shut_down_publishes_nothing() {
     let storage = Arc::new(InMemoryBlobStorage::new());
-    let gate = Arc::new(StepGate::default());
-    let store = Arc::new(RusticSnapshotStore {
-        publish_gate: Some(gate.clone()),
-        ..RusticSnapshotStore::with_policy(
-            storage.clone(),
-            key(),
-            policy(LONG_DEADLINE, NEVER, Duration::ZERO),
-        )
-    });
+    let store = store(
+        storage.clone(),
+        policy(LONG_DEADLINE, NEVER, Duration::ZERO),
+    );
     let scope = new_scope();
-    let tree = one_file_tree("late");
-    let saving = tokio::spawn({
-        let store = store.clone();
-        let scope = scope.clone();
-        let path = tree.path().to_path_buf();
-        async move { store.save(&scope, &name("p-late"), &path, None).await }
-    });
-    let reached = tokio::time::timeout(LIMIT, gate.reached.notified())
-        .await
-        .is_ok();
 
     let stopped = tokio::time::timeout(LIMIT, store.shut_down()).await.is_ok();
-    gate.open.notify_one();
-    let saved = tokio::time::timeout(LIMIT, saving).await;
+    let published = store.publish_staged(&scope, staged_snapshot()).await;
 
     assert!(
-        matches!(&saved, Ok(Ok(Err(error))) if is_storage(error, false)),
-        "{saved:?}"
+        matches!(&published, Err(error) if is_storage(error, false)),
+        "{published:?}"
     );
     assert_eq!(
         (
-            reached,
             stopped,
             blobs(&*storage, &scope.0, "snapshots/").await,
             store.work_in_flight(),
         ),
-        (true, true, Vec::<String>::new(), 0)
+        (true, Vec::<String>::new(), 0)
     );
 }
 
@@ -4467,15 +4751,9 @@ async fn snapshot_files(
     storage: Arc<dyn BlobStorage>,
     scope: &AgentSnapshots,
 ) -> Vec<rustic_core::repofile::SnapshotFile> {
-    let namespace = scope.0.clone();
+    let backend = backend_of(storage, scope, LONG_DEADLINE);
     tokio::task::spawn_blocking(move || {
-        let backend = super::super::backend::BlobBackend::new(
-            storage,
-            namespace,
-            tokio::runtime::Handle::current(),
-            LONG_DEADLINE,
-        );
-        let repository = open_existing(Arc::new(backend), &key()).unwrap().unwrap();
+        let repository = open_existing(backend, &key()).unwrap().unwrap();
         scope_snapshots(&repository).unwrap().readable
     })
     .await
@@ -4798,7 +5076,6 @@ async fn a_delete_that_frees_nothing_writes_no_ledger() {
 #[test]
 fn a_prune_that_marks_only_a_pack_that_no_index_lists_leaves_marked_packs() {
     assert!(leaves_marked_packs(&PruneReport {
-        packs_used: 3,
         packs_unindexed: 1,
         ..PruneReport::default()
     }));
@@ -4867,13 +5144,8 @@ fn a_prune_leaves_marked_packs_when_it_marks_repacks_or_keeps_marked_packs() {
             leaves_marked_packs(&report(1, 0, 0)),
             leaves_marked_packs(&report(0, 1, 0)),
             leaves_marked_packs(&report(0, 0, 1)),
-            leaves_marked_packs(&PruneReport {
-                packs_used: 3,
-                marked_packs_deleted: 2,
-                ..PruneReport::default()
-            }),
         ],
-        [false, true, true, true, false]
+        [false, true, true, true]
     );
 }
 
@@ -5341,17 +5613,7 @@ async fn the_storage_calls_of_the_rayon_workers_of_a_prune_that_repacks_run_at_n
     // The deleted snapshot shares a pack with the kept one, so the prune repacks that pack. The
     // prune reads the index files and repacks with rayon, on the workers of the pool of the prune.
     let (storage, calls) = nice_recording_storage();
-    let base = policy(LONG_DEADLINE, ALWAYS, Duration::ZERO);
-    let store = store(
-        storage,
-        StorePolicy {
-            prune: PruneSettings {
-                repack: RepackLimits::Unlimited,
-                ..base.prune
-            },
-            ..base
-        },
-    );
+    let store = store(storage, policy(LONG_DEADLINE, ALWAYS, Duration::ZERO));
     let scope = new_scope();
     let file = |content: &[u8]| Spec::File {
         content: Box::from(content),
@@ -5588,7 +5850,6 @@ async fn two_deletes_make_at_most_one_prune_in_random_orders_with_a_failed_call(
             .run(&strategy, |schedule| {
                 runtime
                     .block_on(sweep::run_case(&shared, &prepared, &schedule))
-                    .map(|_| ())
                     .map_err(proptest::test_runner::TestCaseError::fail)
             })
             .map_err(|error| error.to_string())
@@ -5634,7 +5895,7 @@ async fn a_restore_builds_its_pool_with_the_restore_reader_threads() {
             build_pool: recording_pool,
             ..super::super::priority::LowPriority::new(policy.save_threads)
         },
-        ..RusticSnapshotStore::with_policy(storage, key(), policy)
+        ..RusticSnapshotStore::with_policy(storage, key(), policy, Arc::new(SystemClock))
     };
     let scope = new_scope();
     let tree = one_file_tree("restored");

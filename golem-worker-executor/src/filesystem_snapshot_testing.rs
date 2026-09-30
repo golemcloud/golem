@@ -50,16 +50,25 @@ struct Faults {
 }
 
 /// A filesystem snapshot store in memory, with faults and counts for tests.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct TestFilesystemSnapshotStore {
     inner: InMemorySnapshotStore,
     faults: Arc<Faults>,
 }
 
+impl Default for TestFilesystemSnapshotStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TestFilesystemSnapshotStore {
     /// Makes a store that holds no snapshot.
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            inner: InMemorySnapshotStore::new(),
+            faults: Arc::default(),
+        }
     }
 
     /// Makes the next `count` saves fail with an error that allows a retry.

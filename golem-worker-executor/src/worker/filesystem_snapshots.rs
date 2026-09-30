@@ -1442,7 +1442,7 @@ mod tests {
         let snapshots = AgentFilesystemSnapshots::bind(
             &crate::services::golem_config::FilesystemSnapshotsConfig::default(),
             crate::services::agent_filesystem_snapshots::StoreSource::given(
-                Arc::new(crate::filesystem_snapshot::InMemorySnapshotStore::default()),
+                Arc::new(crate::filesystem_snapshot::InMemorySnapshotStore::new()),
                 crate::services::golem_config::FilesystemSnapshotUploadConfig::default(),
             ),
             false,
@@ -1826,11 +1826,20 @@ mod tests {
     /// A store over an in-memory store that gives each save a time ten minutes after the time of
     /// the save before it, so that a retention sees snapshots older than its clock-skew margin,
     /// and that reports each deleted name.
-    #[derive(Default)]
     struct SpacedStore {
         memory: crate::filesystem_snapshot::InMemorySnapshotStore,
         times: std::sync::Mutex<std::collections::HashMap<String, Timestamp>>,
         deleted: watch::Sender<Vec<String>>,
+    }
+
+    impl Default for SpacedStore {
+        fn default() -> Self {
+            Self {
+                memory: crate::filesystem_snapshot::InMemorySnapshotStore::new(),
+                times: std::sync::Mutex::default(),
+                deleted: watch::Sender::default(),
+            }
+        }
     }
 
     impl SpacedStore {

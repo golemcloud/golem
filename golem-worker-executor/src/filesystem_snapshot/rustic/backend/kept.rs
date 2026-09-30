@@ -36,16 +36,65 @@ pub(super) struct KeptPacks {
     read_ended: Condvar,
 }
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 struct State {
     packs: HashMap<Id, Bytes>,
     bytes: usize,
-    /// A pack that was read whole did not fit in the limit.
+    /// The set keeps no more packs. A whole read that ends and keeps nothing sets it. That read
+    /// keeps nothing when the set was closed already, when its kept bytes reached the limit, or
+    /// when the pack did not fit. A set whose kept bytes reached the limit also keeps no more packs
+    /// before this is set.
     closed: bool,
     reading: HashSet<Id>,
-    /// The threads that wait for the read of a pack by another thread.
-    #[cfg(test)]
-    waiters: usize,
+}
+
+/// What a thread that wants a pack does.
+#[derive(Debug, PartialEq, Eq)]
+enum Want<'a> {
+    /// Another thread reads the pack, so this thread waits for that read.
+    Wait,
+    /// The set keeps the pack.
+    Kept(&'a Bytes),
+    /// The set is closed or full and does not keep the pack, so the pack is not read whole.
+    Skip,
+    /// This thread reads the pack whole.
+    Read,
+}
+
+/// Gives what a thread that wants the pack does in the state, with the limit of the kept bytes.
+fn want<'a>(state: &'a State, id: &Id, limit: usize) -> Want<'a> {
+    if state.reading.contains(id) {
+        Want::Wait
+    } else if let Some(pack) = state.packs.get(id) {
+        Want::Kept(pack)
+    } else if state.closed || state.bytes >= limit {
+        Want::Skip
+    } else {
+        Want::Read
+    }
+}
+
+/// What the set does with a pack that a thread read whole.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Admit {
+    /// Keeps the pack, and then keeps `bytes` in total.
+    Keep { bytes: usize },
+    /// Keeps nothing, and the set is closed after it. This occurs when the set was closed already,
+    /// when its kept bytes reached the limit, or when the pack does not fit.
+    Close,
+}
+
+/// Gives what the set does with a pack of `len` bytes. The set keeps `kept_bytes`, and `closed` is
+/// true when it is closed. `limit` is the limit of the kept bytes. A set that is closed, or whose
+/// kept bytes reached the limit, keeps nothing.
+fn admit(closed: bool, kept_bytes: usize, len: usize, limit: usize) -> Admit {
+    if closed || kept_bytes >= limit {
+        return Admit::Close;
+    }
+    match kept_bytes.checked_add(len) {
+        Some(bytes) if bytes <= limit => Admit::Keep { bytes },
+        _ => Admit::Close,
+    }
 }
 
 impl KeptPacks {
@@ -59,38 +108,26 @@ impl KeptPacks {
     }
 
     /// Gives the kept pack, or reads it with `read`. While one thread reads a pack, the other
-    /// threads that want it wait for that read, and then take the kept pack or read it again. A
-    /// pack is kept only when its read succeeds and it fits in the limit. When the set is closed and
-    /// the pack is not kept, it gives `None` and does not read, so the caller reads only its range.
+    /// threads that want it wait for that read. Then they take the kept pack or read it again. A
+    /// pack is kept only when its read succeeds, the set is still open when the read ends, and the
+    /// pack fits in the limit. When the set is closed and the pack is not kept, it gives `None` and
+    /// does not read, so the caller reads only its range.
     /// A failed read keeps nothing and does not close the set.
     pub(super) fn get_or_read(
         &self,
         id: &Id,
         read: impl FnOnce() -> RusticResult<Bytes>,
     ) -> Option<RusticResult<Bytes>> {
-        #[cfg(test)]
-        let mut counted = false;
         let mut state = self
             .read_ended
             .wait_while(self.state(), |state| {
-                let waits = state.reading.contains(id);
-                #[cfg(test)]
-                if waits && !counted {
-                    state.waiters += 1;
-                    counted = true;
-                }
-                waits
+                want(state, id, self.limit) == Want::Wait
             })
             .unwrap_or_else(PoisonError::into_inner);
-        #[cfg(test)]
-        if counted {
-            state.waiters -= 1;
-        }
-        if let Some(pack) = state.packs.get(id) {
-            return Some(Ok(pack.clone()));
-        }
-        if state.closed || state.bytes >= self.limit {
-            return None;
+        match want(&state, id, self.limit) {
+            Want::Kept(pack) => return Some(Ok(pack.clone())),
+            Want::Skip => return None,
+            Want::Wait | Want::Read => {}
         }
         state.reading.insert(*id);
         drop(state);
@@ -103,12 +140,6 @@ impl KeptPacks {
             reading.keep(pack);
         }
         Some(read)
-    }
-
-    /// Gives the number of threads that wait for the read of a pack by another thread.
-    #[cfg(test)]
-    pub(super) fn waiters(&self) -> usize {
-        self.state().waiters
     }
 
     fn state(&self) -> MutexGuard<'_, State> {
@@ -136,15 +167,16 @@ struct Reading<'a> {
 }
 
 impl Reading<'_> {
-    /// Keeps the pack when it fits in the limit, and closes the set when it does not.
+    /// Keeps the pack when the set is open and the pack fits in the limit. Otherwise it keeps nothing
+    /// and closes the set, which can be closed already.
     fn keep(&self, pack: &Bytes) {
         let mut state = self.kept.state();
-        let bytes = state.bytes.saturating_add(pack.len());
-        if bytes <= self.kept.limit {
-            state.bytes = bytes;
-            state.packs.insert(self.id, pack.clone());
-        } else {
-            state.closed = true;
+        match admit(state.closed, state.bytes, pack.len(), self.kept.limit) {
+            Admit::Keep { bytes } => {
+                state.bytes = bytes;
+                state.packs.insert(self.id, pack.clone());
+            }
+            Admit::Close => state.closed = true,
         }
     }
 }
@@ -155,3 +187,6 @@ impl Drop for Reading<'_> {
         self.kept.read_ended.notify_all();
     }
 }
+
+#[cfg(test)]
+mod tests;

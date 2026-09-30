@@ -24,8 +24,8 @@
 //! ledger make one prune. The claims of a ledger are in one directory, named by the time of the last
 //! prune in that ledger.
 
-use super::backend::Lease;
-use super::files::SnapshotFiles;
+use super::files::{Lease, SnapshotFiles};
+use crate::filesystem_snapshot::clock::Clock;
 use futures::{StreamExt, TryStreamExt, stream};
 use golem_common::model::Timestamp;
 use golem_service_base::storage::blob::{ListedBlob, PutIfAbsent};
@@ -205,11 +205,15 @@ pub(super) fn older_entries(listed: &[ListedBlob], ended: Timestamp) -> Box<[Box
 }
 
 /// Reads the ledger of the scope from one listing of its entries. No read of content is needed.
-pub(super) async fn read_ledger(files: &SnapshotFiles) -> anyhow::Result<PruneLedger> {
+/// The clock is read after the listing, so the margin check compares with a time from after it.
+pub(super) async fn read_ledger(
+    files: &SnapshotFiles,
+    clock: &dyn Clock,
+) -> anyhow::Result<PruneLedger> {
     let listed = files
         .list_below("read_ledger", Path::new(LEDGERS_PATH))
         .await?;
-    Ok(newest_ledger(&listed, Timestamp::now_utc()))
+    Ok(newest_ledger(&listed, clock.now()))
 }
 
 /// Writes a new ledger entry for a prune that ended at `ended`.
@@ -540,9 +544,9 @@ pub(super) async fn list_claims(
 /// and then the wall time in the name of the marker. The instant is read first, so the lease starts
 /// no later than the time in the name, and it never ends later than the hold that other deletes
 /// count from the name.
-pub(super) fn marker_time() -> (Instant, Timestamp) {
+pub(super) fn marker_time(clock: &dyn Clock) -> (Instant, Timestamp) {
     let started = Instant::now();
-    let time = Timestamp::now_utc();
+    let time = clock.now();
     (started, time)
 }
 
@@ -591,8 +595,9 @@ async fn write_leased_marker(
     number: u64,
     lease: &Lease,
     span: Duration,
+    clock: &dyn Clock,
 ) -> anyhow::Result<Box<Path>> {
-    let (started, time) = marker_time();
+    let (started, time) = marker_time(clock);
     let marker = write_marker(files, op_label, directory, number, time).await?;
     lease.extend_from(started, span);
     Ok(marker)
@@ -654,13 +659,22 @@ pub(super) async fn keep_claim_fresh(
     written: &Mutex<Vec<Box<Path>>>,
     lease: &Lease,
     span: Duration,
+    clock: &dyn Clock,
 ) {
     stream::repeat(())
         .then(|()| tokio::time::sleep(period))
-        .take_until(files.cancel.cancelled())
+        .take_until(files.cancelled())
         .for_each(|()| async move {
-            let marker =
-                write_leased_marker(files, "refresh_claim", directory, number, lease, span).await;
+            let marker = write_leased_marker(
+                files,
+                "refresh_claim",
+                directory,
+                number,
+                lease,
+                span,
+                clock,
+            )
+            .await;
             match marker {
                 Ok(path) => written
                     .lock()
@@ -781,9 +795,10 @@ pub(super) async fn remove_old_claims(files: &SnapshotFiles, ended: Timestamp) {
 
 #[cfg(test)]
 mod tests {
-    use super::super::backend::BlobBackend;
+    use super::super::backend::{BlobBackend, KEPT_PACKS_LIMIT};
     use super::super::fault::is_lease_expired;
     use super::super::files::SnapshotFiles;
+    use super::super::tests::files_of;
     use super::super::tests::scripted::{Script, ScriptedBlobStorage};
     use super::{
         CLAIMS_PATH, CLOCK_SKEW_MARGIN, ClaimChoice, ClaimEntry, FREED_PATH, FreedRecord,
@@ -794,6 +809,7 @@ mod tests {
         parse_record, prune_due, read_ledger, record_content, record_freed, refresh_period, settle,
         settle_freed, take_claim, write_ledger,
     };
+    use crate::filesystem_snapshot::clock::SystemClock;
     use futures::StreamExt;
     use golem_common::model::Timestamp;
     use golem_common::model::environment::EnvironmentId;
@@ -837,15 +853,21 @@ mod tests {
     }
 
     fn files_over(storage: Arc<dyn BlobStorage>) -> SnapshotFiles {
-        SnapshotFiles {
+        files_with_cancel(storage, tokio_util::sync::CancellationToken::new())
+    }
+
+    fn files_with_cancel(
+        storage: Arc<dyn BlobStorage>,
+        cancel: tokio_util::sync::CancellationToken,
+    ) -> SnapshotFiles {
+        files_of(
             storage,
-            namespace: BlobStorageNamespace::InitialAgentFiles {
+            BlobStorageNamespace::InitialAgentFiles {
                 environment_id: EnvironmentId(Uuid::new_v4()),
             },
-            deadline: DEADLINE,
-            cancel: tokio_util::sync::CancellationToken::new(),
-            tracker: tokio_util::task::TaskTracker::new(),
-        }
+            DEADLINE,
+            cancel,
+        )
     }
 
     #[test]
@@ -1169,8 +1191,9 @@ mod tests {
     #[test]
     #[timeout("60s")]
     async fn the_refresh_of_a_claim_ends_when_its_operation_is_cancelled() {
-        let files = new_files();
-        files.cancel.cancel();
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let files = files_with_cancel(Arc::new(InMemoryBlobStorage::new()), cancel.clone());
+        cancel.cancel();
 
         let ended = tokio::time::timeout(
             Duration::from_secs(10),
@@ -1182,6 +1205,7 @@ mod tests {
                 &std::sync::Mutex::default(),
                 &Lease::until(Instant::now()),
                 GRACE,
+                &SystemClock,
             ),
         )
         .await
@@ -1201,7 +1225,7 @@ mod tests {
         let written = std::sync::Mutex::<Vec<Box<Path>>>::default();
         let directory = claims_directory(&ledger(None, false));
         tokio::select! {
-            () = keep_claim_fresh(files, &directory, 0, period, &written, lease, span) => None,
+            () = keep_claim_fresh(files, &directory, 0, period, &written, lease, span, &SystemClock) => None,
             ended = async {
                 futures::stream::repeat(())
                     .then(|()| tokio::time::sleep(Duration::from_millis(5)))
@@ -1286,12 +1310,10 @@ mod tests {
         .await
         .is_some();
         let backend = BlobBackend::new(
-            storage,
-            files.namespace.clone(),
+            files.leased(lease.clone()),
             tokio::runtime::Handle::current(),
-            DEADLINE,
-        )
-        .leased_by(lease.clone());
+            KEPT_PACKS_LIMIT,
+        );
         let listed = tokio::task::spawn_blocking(move || backend.list(FileType::Snapshot))
             .await
             .unwrap();
@@ -1317,7 +1339,7 @@ mod tests {
         let files = new_files();
         let directory = claims_directory(&ledger(Some(42), false));
         let marker = || {
-            let (at, time) = marker_time();
+            let (at, time) = marker_time(&SystemClock);
             (marker_path(&directory, 0, time), at)
         };
         let (first_marker, first_at) = marker();
@@ -1605,9 +1627,9 @@ mod tests {
         let files = new_files();
         let ended = Timestamp::from(Timestamp::now_utc().to_millis());
 
-        let before = read_ledger(&files).await.unwrap();
+        let before = read_ledger(&files, &SystemClock).await.unwrap();
         write_ledger(&files, ended, true).await.unwrap();
-        let after = read_ledger(&files).await.unwrap();
+        let after = read_ledger(&files, &SystemClock).await.unwrap();
 
         assert_eq!(
             (before, after),

@@ -20,11 +20,11 @@
 //! next storage call. The store counts each blocking task and each backend in a task tracker, and
 //! [`RusticSnapshotStore::shut_down`] waits for them.
 
-use super::backend::{BlobBackend, Lease, within_lease};
+use super::backend::{BlobBackend, KEPT_PACKS_LIMIT};
 use super::fault::{
     Operation, classify, is_file_missing, is_snapshot_missing, is_storage_failure, storage_failure,
 };
-use super::files::SnapshotFiles;
+use super::files::{Lease, SnapshotFiles};
 use super::priority::LowPriority;
 use super::prune::{
     ClaimChoice, Percent, claim_hold, claims_directory, hold_passed, keep_claim_fresh, lease_span,
@@ -36,10 +36,10 @@ use super::prune::{
 use super::publish::{SnapshotStage, StagedSnapshot, publish};
 use super::scope::{copy_scope, delete_scope};
 use super::{
-    ChangeDetection as RusticChangeDetection, PruneReport, PruneSettings, RepackLimits,
-    RepositoryKey, RepositorySettings, SaveSettings, backup_options, open_existing, open_or_create,
+    PruneReport, PruneSettings, RepositoryKey, backup_options, open_existing, open_or_create,
     prune, restore_snapshot, run_blocking,
 };
+use crate::filesystem_snapshot::clock::{Clock, SystemClock};
 use crate::filesystem_snapshot::{
     AgentSnapshots, ChangeDetection, FilesystemSnapshotStore, SnapshotInfo, SnapshotName,
     SnapshotStoreError, newest_first, snapshot_time,
@@ -88,8 +88,6 @@ const PRUNE_GRACE: Duration = Duration::from_secs(15 * 60);
 pub(super) struct StorePolicy {
     /// The longest time that one blob storage call waits for an answer.
     pub(super) deadline: Duration,
-    /// The settings of a repository that a save makes.
-    pub(super) repository: RepositorySettings,
     /// The number of threads of each parallel stage of a save. `None` is the number of CPUs that
     /// the process can use.
     pub(super) save_threads: Option<NonZeroUsize>,
@@ -110,13 +108,11 @@ impl StorePolicy {
     pub(super) fn from_config(config: &FilesystemSnapshotStoreConfig) -> Self {
         Self {
             deadline: config.storage_call_deadline(),
-            repository: RepositorySettings::DEFAULT,
             save_threads: Some(config.save_threads()),
             restore_reader_threads: config.restore_reader_threads(),
             prune: PruneSettings {
                 fast_repack: true,
                 keep_delete: PRUNE_GRACE,
-                repack: RepackLimits::Rustic,
             },
             prune_threshold: PRUNE_THRESHOLD,
         }
@@ -124,35 +120,27 @@ impl StorePolicy {
 }
 
 /// The options of a save of the store: a failed read of an entry fails the save, and no device id
-/// is kept. `SizeMtime` compares with the parent that the id names, and each other case reads
-/// every file.
+/// is kept. `SizeMtime` compares each file with the parent that the id names. It compares the type,
+/// the size and the modification time, and not the change time or the inode. `Full`, and a save
+/// without a parent, use no parent, so they read every file.
 fn store_backup_options(
     policy: &StorePolicy,
     parent: Option<(SnapshotId, ChangeDetection)>,
 ) -> BackupOptions {
-    let base = |detection| {
-        backup_options(&SaveSettings {
-            threads: policy.save_threads,
-            detection,
-        })
+    let base = backup_options(policy.save_threads)
         .fail_on_read_error(true)
-        .ignore_save_opts(LocalSourceSaveOptions::default().set_devid(DevIdOption::No))
+        .ignore_save_opts(LocalSourceSaveOptions::default().set_devid(DevIdOption::No));
+    let parent_opts = match parent {
+        // rustic compares the inodes only when `ignore_inode` is true.
+        Some((id, ChangeDetection::SizeMtime)) => base
+            .parent_opts
+            .clone()
+            .parents(vec![id.to_hex().to_string()])
+            .ignore_ctime(true)
+            .ignore_inode(false),
+        None | Some((_, ChangeDetection::Full)) => base.parent_opts.clone().force(true),
     };
-    match parent {
-        Some((id, ChangeDetection::SizeMtime)) => {
-            let options = base(RusticChangeDetection::SizeMtime);
-            let parent_opts = options
-                .parent_opts
-                .clone()
-                .parents(vec![id.to_hex().to_string()]);
-            options.parent_opts(parent_opts)
-        }
-        None | Some((_, ChangeDetection::Full)) => {
-            let options = base(RusticChangeDetection::Ctime);
-            let parent_opts = options.parent_opts.clone().force(true);
-            options.parent_opts(parent_opts)
-        }
-    }
+    base.parent_opts(parent_opts)
 }
 
 /// The options of a restore of the store. A metadata error fails the restore. The restore does not
@@ -177,39 +165,9 @@ pub(crate) struct RusticSnapshotStore {
     tracker: TaskTracker,
     /// Runs saves and prunes at a low priority.
     low_priority: LowPriority,
-    /// Holds a save after its blocking work and before its publish, when a test sets it.
-    #[cfg(test)]
-    pub(super) publish_gate: Option<Arc<StepGate>>,
-    /// Holds a save after the tracker counts its publish and before the first poll of the publish,
-    /// when a test sets it.
-    #[cfg(test)]
-    pub(super) publish_poll_gate: Option<Arc<StepGate>>,
-    /// Holds a delete after it chose its claim and before it builds its claim guard, when a test
-    /// sets it.
-    #[cfg(test)]
-    pub(super) claim_gate: Option<Arc<StepGate>>,
-    /// Holds the check of the local path of a save or a restore on its blocking thread, when a
-    /// test sets it.
-    #[cfg(test)]
-    pub(super) path_check_gate: Option<Arc<StepGate>>,
-    /// Makes each backend build fail while a test sets it.
-    #[cfg(test)]
-    pub(super) refuse_backends: Arc<std::sync::atomic::AtomicBool>,
-    /// The number of milliseconds that the clock of the prune decisions is ahead of the wall
-    /// clock. A test moves it to make time pass.
-    #[cfg(test)]
-    pub(super) clock_ahead: Arc<std::sync::atomic::AtomicU64>,
-}
-
-/// A gate that holds an operation at one point, for example a save after its blocking work and
-/// before its publish.
-#[cfg(test)]
-#[derive(Debug, Default)]
-pub(super) struct StepGate {
-    /// Notified when the operation reaches the gate.
-    pub(super) reached: tokio::sync::Notify,
-    /// Lets the operation go on.
-    pub(super) open: tokio::sync::Notify,
+    /// Gives the wall time that the store compares with the times from storage, and the times that
+    /// it writes.
+    clock: Arc<dyn Clock>,
 }
 
 /// The claim of a prune that a delete holds.
@@ -245,6 +203,8 @@ struct ClaimGuard {
     /// The blobs of the scope, with a token that nothing cancels, so a release and a final marker
     /// also run after a cancel or a drop.
     files: SnapshotFiles,
+    /// Gives the time of the final marker.
+    clock: Arc<dyn Clock>,
     directory: Arc<Path>,
     number: u64,
     /// Whether this delete wrote the claim. A delete that did not write it deletes only its
@@ -266,12 +226,11 @@ impl ClaimGuard {
         number: u64,
         marker: Box<Path>,
         tracked: TaskTrackerToken,
+        clock: Arc<dyn Clock>,
     ) -> Self {
         Self {
-            files: SnapshotFiles {
-                cancel: CancellationToken::new(),
-                ..files.clone()
-            },
+            files: files.detached(),
+            clock,
             directory: directory.clone(),
             number,
             claimed: AtomicBool::new(false),
@@ -352,8 +311,9 @@ impl ClaimGuard {
         let files = self.files.clone();
         let directory = self.directory.clone();
         let number = self.number;
+        let clock = self.clock.clone();
         if let Err(error) = self.spawn_tracked(async move {
-            write_final_marker(&files, &directory, number).await;
+            write_final_marker(&files, &directory, number, clock.now()).await;
         }) {
             warn!(
                 error = %error,
@@ -367,7 +327,7 @@ impl ClaimGuard {
     /// it again.
     async fn finish(&self) {
         if self.state.load(Ordering::SeqCst) == CLAIM_STARTED
-            && write_final_marker(&self.files, &self.directory, self.number).await
+            && write_final_marker(&self.files, &self.directory, self.number, self.clock.now()).await
         {
             self.state.store(CLAIM_FINISHED, Ordering::SeqCst);
         }
@@ -414,24 +374,23 @@ impl Drop for ClaimGuard {
     }
 }
 
-/// Writes the final marker of the claim with the number, and tells whether the write succeeded. A
-/// failed write gives a warning.
-async fn write_final_marker(files: &SnapshotFiles, directory: &Path, number: u64) -> bool {
-    write_marker(
-        files,
-        "final_marker",
-        directory,
-        number,
-        Timestamp::now_utc(),
-    )
-    .await
-    .inspect_err(|error| {
-        warn!(
-            error = %format!("{error:#}"),
-            "Failed to write the final marker of the prune claim of a filesystem snapshot scope"
-        );
-    })
-    .is_ok()
+/// Writes the final marker of the claim with the number at the time, and tells whether the write
+/// succeeded. A failed write gives a warning.
+async fn write_final_marker(
+    files: &SnapshotFiles,
+    directory: &Path,
+    number: u64,
+    time: Timestamp,
+) -> bool {
+    write_marker(files, "final_marker", directory, number, time)
+        .await
+        .inspect_err(|error| {
+            warn!(
+                error = %format!("{error:#}"),
+                "Failed to write the final marker of the prune claim of a filesystem snapshot scope"
+            );
+        })
+        .is_ok()
 }
 
 /// Moves the claim of the state from pending to started, and tells whether the prune may start.
@@ -470,7 +429,8 @@ fn shut_down_error() -> SnapshotStoreError {
 }
 
 impl RusticSnapshotStore {
-    /// Gives the store over the blob storage, with the key and the values of the configuration.
+    /// Gives the store over the blob storage, with the key and the values of the configuration,
+    /// and the clock of the host.
     pub(crate) fn new(
         storage: Arc<dyn BlobStorage>,
         config: &FilesystemSnapshotStoreConfig,
@@ -479,13 +439,16 @@ impl RusticSnapshotStore {
             storage,
             RepositoryKey::new(*config.repository_key().bytes()),
             StorePolicy::from_config(config),
+            Arc::new(SystemClock),
         )
     }
 
+    /// Gives the store over the blob storage, with the key, the policy and the clock.
     pub(super) fn with_policy(
         storage: Arc<dyn BlobStorage>,
         key: RepositoryKey,
         policy: StorePolicy,
+        clock: Arc<dyn Clock>,
     ) -> Self {
         // The global rayon pool starts at its first use, and its threads keep the priority of the
         // thread that starts it. It starts here, at the normal priority, before a save or a prune.
@@ -497,18 +460,7 @@ impl RusticSnapshotStore {
             root: CancellationToken::new(),
             tracker: TaskTracker::new(),
             low_priority: LowPriority::new(policy.save_threads),
-            #[cfg(test)]
-            publish_gate: None,
-            #[cfg(test)]
-            publish_poll_gate: None,
-            #[cfg(test)]
-            claim_gate: None,
-            #[cfg(test)]
-            path_check_gate: None,
-            #[cfg(test)]
-            refuse_backends: Arc::default(),
-            #[cfg(test)]
-            clock_ahead: Arc::default(),
+            clock,
         }
     }
 
@@ -536,16 +488,6 @@ impl RusticSnapshotStore {
         self.tracker.len()
     }
 
-    /// Gives the time now, for a comparison with a time from storage.
-    fn now(&self) -> Timestamp {
-        let now = Timestamp::now_utc();
-        #[cfg(test)]
-        let now = Timestamp::from(
-            now.to_millis() + self.clock_ahead.load(std::sync::atomic::Ordering::SeqCst),
-        );
-        now
-    }
-
     /// Starts an operation. The token of the operation is cancelled when the guard drops.
     fn start(&self) -> Result<(CancellationToken, DropGuard), SnapshotStoreError> {
         if self.root.is_cancelled() {
@@ -555,36 +497,25 @@ impl RusticSnapshotStore {
         Ok((token.clone(), token.drop_guard()))
     }
 
-    /// Gives a backend over the repository of the scope for the operation with the token.
-    fn backend(
-        &self,
-        scope: &AgentSnapshots,
-        token: &CancellationToken,
-    ) -> Result<BlobBackend, SnapshotStoreError> {
-        #[cfg(test)]
-        if self
-            .refuse_backends
-            .load(std::sync::atomic::Ordering::SeqCst)
-        {
-            return Err(SnapshotStoreError::Storage {
-                retryable: true,
-                source: anyhow::anyhow!("the test refuses to build a backend"),
-            });
-        }
+    /// Gives a backend over the repository of the blobs, whose calls follow the policy of the
+    /// blobs.
+    fn backend(&self, files: SnapshotFiles) -> Result<BlobBackend, SnapshotStoreError> {
         let runtime = Handle::try_current()
             .context("a filesystem snapshot operation needs an async runtime")
             .map_err(|source| SnapshotStoreError::Storage {
                 retryable: false,
                 source,
             })?;
-        Ok(BlobBackend::new(
-            self.storage.clone(),
-            scope.0.clone(),
-            runtime,
-            self.policy.deadline,
-        )
-        .cancelled_by(token.clone())
-        .tracked_by(self.tracker.token()))
+        Ok(BlobBackend::new(files, runtime, KEPT_PACKS_LIMIT).tracked_by(self.tracker.token()))
+    }
+
+    /// Gives a backend over the repository of the scope for the operation with the token.
+    fn scope_backend(
+        &self,
+        scope: &AgentSnapshots,
+        token: &CancellationToken,
+    ) -> Result<BlobBackend, SnapshotStoreError> {
+        self.backend(self.files(scope, token))
     }
 
     /// Runs the task on a blocking thread that the tracker counts, and classifies its error.
@@ -604,13 +535,13 @@ impl RusticSnapshotStore {
 
     /// Gives the blobs of the scope for the operation with the token.
     fn files(&self, scope: &AgentSnapshots, token: &CancellationToken) -> SnapshotFiles {
-        SnapshotFiles {
-            storage: self.storage.clone(),
-            namespace: scope.0.clone(),
-            deadline: self.policy.deadline,
-            cancel: token.clone(),
-            tracker: self.tracker.clone(),
-        }
+        SnapshotFiles::new(
+            self.storage.clone(),
+            scope.0.clone(),
+            self.policy.deadline,
+            token.clone(),
+            self.tracker.clone(),
+        )
     }
 
     /// Prunes the repository when a prune is due. The records of freed bytes stay until a prune
@@ -635,13 +566,15 @@ impl RusticSnapshotStore {
         let grace = self.policy.prune.keep_delete;
         let deadline = self.policy.deadline;
         let threshold = self.policy.prune_threshold;
-        let ledger = read_ledger(&files).await.map_err(storage_failure)?;
+        let ledger = read_ledger(&files, &*self.clock)
+            .await
+            .map_err(storage_failure)?;
         // Each comparison with a time from storage uses a clock reading from after the listing
         // that gave that time. A listing can take up to one storage call deadline, and a stale
         // reading can put a marker that another host wrote within the margin beyond the margin.
         // Each step below runs only when a prune can still be due, so a delete within the hold
         // reads no record, and a delete whose records are too small reads no record content.
-        if !hold_passed(&ledger, self.now(), grace, deadline) {
+        if !hold_passed(&ledger, self.clock.now(), grace, deadline) {
             return Ok(());
         }
         let listed = list_freed_names(&files).await.map_err(storage_failure)?;
@@ -649,7 +582,7 @@ impl RusticSnapshotStore {
         if upper == 0 && !ledger.awaiting_removal {
             return Ok(());
         }
-        let size = if needs_repository_size(&ledger, upper, self.now(), grace, deadline) {
+        let size = if needs_repository_size(&ledger, upper, self.clock.now(), grace, deadline) {
             repository_bytes(&files).await.map_err(storage_failure)?
         } else {
             0
@@ -663,7 +596,7 @@ impl RusticSnapshotStore {
         if !prune_due(
             &ledger,
             records.bytes,
-            self.now(),
+            self.clock.now(),
             size,
             threshold,
             grace,
@@ -676,15 +609,10 @@ impl RusticSnapshotStore {
             .await
             .map_err(storage_failure)?;
         let ClaimChoice::Claim(number) =
-            next_claim(&listed, self.now(), claim_hold(grace, deadline))
+            next_claim(&listed, self.clock.now(), claim_hold(grace, deadline))
         else {
             return Ok(());
         };
-        #[cfg(test)]
-        if let Some(gate) = &self.claim_gate {
-            gate.reached.notify_one();
-            gate.open.notified().await;
-        }
         // The token of the tracker comes before the check of the cancel, so either the delete sees
         // a shut down and makes no more storage calls, or `shut_down` waits for the guard and for
         // each call that the guard makes.
@@ -693,11 +621,18 @@ impl RusticSnapshotStore {
             return Err(shut_down_error());
         }
         let span = lease_span(grace, deadline);
-        let (started, time) = marker_time();
+        let (started, time) = marker_time(&*self.clock);
         let marker = marker_path(&claims, number, time);
         // The guard exists before the marker write, so a drop of the delete from here until the
         // prune starts releases the claim.
-        let guard = ClaimGuard::new(&files, &claims, number, marker.clone(), tracked);
+        let guard = ClaimGuard::new(
+            &files,
+            &claims,
+            number,
+            marker.clone(),
+            tracked,
+            self.clock.clone(),
+        );
         let lease = take_claim(&files, &claims, number, &marker, started, span)
             .await
             .map_err(storage_failure)?;
@@ -713,7 +648,7 @@ impl RusticSnapshotStore {
         };
         // Only an error before the prune starts releases the claim, so a retry of the delete
         // prunes again. A prune that started can have marked packs, so its claim stays.
-        let backend = match self.prepare_prune(scope, token, &files, &claim).await {
+        let backend = match self.prepare_prune(&files, &claim).await {
             Ok(Some(backend)) => backend,
             other => {
                 claim.guard.release().await;
@@ -734,12 +669,12 @@ impl RusticSnapshotStore {
         // ends, so a prune that a shut down stopped also gets it.
         claim.guard.finish().await;
         let marked_packs = pruned?;
-        let ended = Timestamp::now_utc();
+        let ended = self.clock.now();
         // The lease fences the ledger write as it fences the calls of rustic. A write that would
         // start after the lease ran out is not sent, and a write that starts before is bounded by
         // the time left, so the entry never lands after another delete can take the claim over.
         // A prune whose ledger write the lease skipped keeps its claim and runs no cleanup.
-        within_lease(&claim.lease, write_ledger(&files, ended, marked_packs))
+        write_ledger(&files.leased(claim.lease.clone()), ended, marked_packs)
             .await
             .map_err(storage_failure)?;
         remove_older_ledgers(&files, ended).await;
@@ -748,23 +683,46 @@ impl RusticSnapshotStore {
         Ok(())
     }
 
+    /// Publishes the staged snapshot file of a save. The publish is the commit point, so no cancel
+    /// ends it. The tracker counts it from the call, so a `shut_down` that has not cancelled yet
+    /// waits for it, and the deadline limits that wait. The check of the cancel and the start of the
+    /// write are in the first poll of the returned future. So a publish never starts after the
+    /// cancel.
+    fn publish_staged(
+        &self,
+        scope: &AgentSnapshots,
+        staged: StagedSnapshot,
+    ) -> impl Future<Output = Result<(), SnapshotStoreError>> + Send + 'static {
+        let files = self.files(scope, &self.root).detached();
+        let (root, tracker) = (self.root.clone(), self.tracker.clone());
+        self.tracker.track_future(async move {
+            if root.is_cancelled() {
+                // No snapshot file is written. A later prune marks the packs of the save.
+                return Err(shut_down_error());
+            }
+            publish(&files, &staged, &tracker)
+                .await
+                .map_err(storage_failure)
+        })
+    }
+
     /// Checks the ledger again and builds the backend of the prune. It gives `None` when another
     /// prune ended after the claim.
     async fn prepare_prune(
         &self,
-        scope: &AgentSnapshots,
-        token: &CancellationToken,
         files: &SnapshotFiles,
         claim: &Claim,
     ) -> Result<Option<Arc<BlobBackend>>, SnapshotStoreError> {
         // A prune writes its ledger before it deletes the claims, so a delete that claims in a
         // directory that such a prune removed sees the new ledger here.
-        let again = read_ledger(files).await.map_err(storage_failure)?;
+        let again = read_ledger(files, &*self.clock)
+            .await
+            .map_err(storage_failure)?;
         if *claims_directory(&again) != *claim.guard.directory() {
             return Ok(None);
         }
         Ok(Some(Arc::new(
-            self.backend(scope, token)?.leased_by(claim.lease.clone()),
+            self.backend(files.leased(claim.lease.clone()))?,
         )))
     }
 
@@ -812,6 +770,7 @@ impl RusticSnapshotStore {
             claim.guard.markers(),
             &claim.lease,
             claim.span,
+            &*self.clock,
         );
         let attempts = self
             .tracker
@@ -844,47 +803,25 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
         let (token, _guard) = self.start()?;
         self.check_tree(tree).await?;
         let stage = Arc::new(SnapshotStage::default());
-        let backend = Arc::new(self.backend(scope, &token)?.staging_in(stage.clone()));
+        let backend = Arc::new(self.scope_backend(scope, &token)?.staging_in(stage.clone()));
         let key = self.key.clone();
         let policy = self.policy;
         let name = name.clone();
         let tree: Box<Path> = tree.into();
         let parent = parent.map(|(parent, detection)| (parent.clone(), detection));
         let low_priority = self.low_priority;
+        let clock = self.clock.clone();
         let staged = self
             .blocking(Operation::Save, move || {
                 low_priority.run("fs-snap-save", move || {
-                    stage_save(backend, &stage, &key, &policy, &name, &tree, parent)
+                    stage_save(
+                        backend, &stage, &key, &policy, &name, &tree, parent, &*clock,
+                    )
                 })
             })
             .await?;
         let (staged, info) = staged.ok_or(SnapshotStoreError::AlreadyExists)?;
-        #[cfg(test)]
-        if let Some(gate) = &self.publish_gate {
-            gate.reached.notify_one();
-            gate.open.notified().await;
-        }
-        // The publish is the commit point, so no cancel ends it. The tracker counts it from here,
-        // so a `shut_down` that has not cancelled yet waits for it, and the deadline limits that wait.
-        // The check of the cancel and the start of the write are in the first poll of the tracked
-        // future, so a publish never starts after the cancel.
-        let files = self.files(scope, &CancellationToken::new());
-        let (root, tracker) = (self.root.clone(), self.tracker.clone());
-        let publishing = self.tracker.track_future(async move {
-            if root.is_cancelled() {
-                // No snapshot file is written. A later prune marks the packs of the save.
-                return Err(shut_down_error());
-            }
-            publish(&files, &staged, &tracker)
-                .await
-                .map_err(storage_failure)
-        });
-        #[cfg(test)]
-        if let Some(gate) = &self.publish_poll_gate {
-            gate.reached.notify_one();
-            gate.open.notified().await;
-        }
-        publishing.await?;
+        self.publish_staged(scope, staged).await?;
         Ok(info)
     }
 
@@ -896,19 +833,20 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
     ) -> Result<SnapshotInfo, SnapshotStoreError> {
         let (token, _guard) = self.start()?;
         self.check_destination(into).await?;
-        let backend = Arc::new(self.backend(scope, &token)?);
+        let backend = Arc::new(self.scope_backend(scope, &token)?);
         let key = self.key.clone();
         let options = store_restore_options(&self.policy);
         let name = name.clone();
         let into: Box<Path> = into.into();
         // The index load of a restore uses rayon, so the restore runs in a pool of its own, with the
-        // reader threads of a restore.
+        // reader threads of a restore. The blocking thread starts the threads of that pool, so they
+        // have its normal priority.
         let pool = LowPriority {
             threads: Some(self.policy.restore_reader_threads),
             ..self.low_priority
         };
         self.blocking(Operation::Restore, move || {
-            pool.run_at_normal_priority("fs-snap-restore", move || {
+            pool.in_own_pool("fs-snap-restore", move || {
                 let Some(repository) = open_existing(backend, &key)? else {
                     return Ok(Lookup::Missing);
                 };
@@ -932,7 +870,7 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
         name: &SnapshotName,
     ) -> Result<Option<SnapshotInfo>, SnapshotStoreError> {
         let (token, _guard) = self.start()?;
-        let backend = Arc::new(self.backend(scope, &token)?);
+        let backend = Arc::new(self.scope_backend(scope, &token)?);
         let key = self.key.clone();
         let name = name.clone();
         self.blocking(Operation::Repository, move || {
@@ -950,7 +888,7 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
         scope: &AgentSnapshots,
     ) -> Result<Box<[(SnapshotName, SnapshotInfo)]>, SnapshotStoreError> {
         let (token, _guard) = self.start()?;
-        let backend = Arc::new(self.backend(scope, &token)?);
+        let backend = Arc::new(self.scope_backend(scope, &token)?);
         let key = self.key.clone();
         self.blocking(Operation::Repository, move || {
             Ok(match open_existing(backend, &key)? {
@@ -967,7 +905,7 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
         name: &SnapshotName,
     ) -> Result<(), SnapshotStoreError> {
         let (token, _guard) = self.start()?;
-        let backend = Arc::new(self.backend(scope, &token)?);
+        let backend = Arc::new(self.scope_backend(scope, &token)?);
         let key = self.key.clone();
         let name = name.clone();
         let found = self
@@ -1004,10 +942,11 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
                 .await
                 .map_err(storage_failure)?;
         }
-        // The forget deletes the snapshot files with rayon, so it runs in a pool of its own.
+        // The forget deletes the snapshot files with rayon, so it runs in a pool of its own. The
+        // blocking thread starts the threads of that pool, so they have its normal priority.
         let pool = self.low_priority;
         self.blocking(Operation::Repository, move || {
-            pool.run_at_normal_priority("fs-snap-delete", move || {
+            pool.in_own_pool("fs-snap-delete", move || {
                 repository.delete_snapshots(&ids)?;
                 Ok(())
             })
@@ -1080,19 +1019,12 @@ impl RusticSnapshotStore {
         operation: NativeOperation,
         path: &Path,
         error: fn(std::io::Error) -> SnapshotStoreError,
-        check: fn(&Path) -> Result<(), SnapshotStoreError>,
+        check: impl FnOnce(&Path) -> Result<(), SnapshotStoreError> + Send + 'static,
     ) -> Result<(), SnapshotStoreError> {
         let path: Box<Path> = path.into();
         let tracked = self.tracker.token();
-        #[cfg(test)]
-        let gate = self.path_check_gate.clone();
         execute_native(NativeStorageProfile::Unknown, operation, move || {
             let _tracked = tracked;
-            #[cfg(test)]
-            if let Some(gate) = gate {
-                gate.reached.notify_one();
-                futures::executor::block_on(gate.open.notified());
-            }
             check(&path)
         })
         .await
@@ -1182,12 +1114,13 @@ fn stage_save(
     name: &SnapshotName,
     tree: &Path,
     parent: Option<(SnapshotName, ChangeDetection)>,
+    clock: &dyn Clock,
 ) -> anyhow::Result<Option<(StagedSnapshot, SnapshotInfo)>> {
     // The init of the fork checks the config a second time before its write, so a save that loses
     // the race to create the repository can fail at that check with an error that is not
     // `ConfigExists`. A config that is there after the error is the repository of the winner.
-    let repository = match open_or_create(backend.clone(), key, &policy.repository) {
-        Ok((repository, _)) => repository,
+    let repository = match open_or_create(backend.clone(), key) {
+        Ok(repository) => repository,
         Err(error) => open_existing(backend, key).ok().flatten().ok_or(error)?,
     };
     let before = scope_snapshots(&repository)?;
@@ -1203,7 +1136,7 @@ fn stage_save(
         .filter_map(snapshot_info)
         .map(|info| info.created_at)
         .max();
-    let created_at = snapshot_time(whole_millis_from(Timestamp::now_utc()), newest);
+    let created_at = snapshot_time(whole_millis_from(clock.now()), newest);
     // rustic strips the root from the path of each entry. The canonical root is the path that the
     // walk of rustic gives, also when the caller gives a path through a symlink such as
     // `/proc/self/fd/N`.
@@ -1287,7 +1220,10 @@ fn lookup(found: ScopeSnapshots, name: &SnapshotName) -> Lookup {
 }
 
 /// Of the snapshot files with the name, gives the one with the least time and id.
-fn named<'a>(snapshots: &'a [SnapshotFile], name: &SnapshotName) -> Option<&'a SnapshotFile> {
+pub(super) fn named<'a>(
+    snapshots: &'a [SnapshotFile],
+    name: &SnapshotName,
+) -> Option<&'a SnapshotFile> {
     snapshots
         .iter()
         .filter(|snapshot| snapshot.label == name.as_str())

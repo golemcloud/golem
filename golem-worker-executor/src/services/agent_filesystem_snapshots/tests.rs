@@ -26,10 +26,27 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use test_r::test;
 
+/// The in-memory store, empty by default.
+struct Memory(InMemorySnapshotStore);
+
+impl Default for Memory {
+    fn default() -> Self {
+        Self(InMemorySnapshotStore::new())
+    }
+}
+
+impl std::ops::Deref for Memory {
+    type Target = InMemorySnapshotStore;
+
+    fn deref(&self) -> &InMemorySnapshotStore {
+        &self.0
+    }
+}
+
 /// A store over the in-memory store that a test can make fail, hold and count.
 #[derive(Default)]
 struct ScriptedStore {
-    memory: InMemorySnapshotStore,
+    memory: Memory,
     /// The number of saves that still fail with a retryable storage error.
     failing_saves: AtomicUsize,
     /// Whether a failing save publishes the tree before it fails, as a late PUT does.
@@ -1897,7 +1914,7 @@ async fn managed_xfs_a_volume_below_the_pressure_target_admits_no_periodic_uploa
     .unwrap();
     let pressure = FilesystemPressureConfig::new(1, u64::MAX, 1, 2, 1, Duration::ZERO).unwrap();
     let snapshots = AgentFilesystemSnapshots::enabled(
-        Arc::new(InMemorySnapshotStore::default()) as Arc<dyn FilesystemSnapshotStore>,
+        Arc::new(InMemorySnapshotStore::new()) as Arc<dyn FilesystemSnapshotStore>,
         settings(4, 4, 1),
         VolumeRoom::Pressure {
             volume: provisioning.volume().clone(),

@@ -25,6 +25,7 @@ use std::cmp::Reverse;
 use std::fmt::{Display, Formatter};
 use std::path::Path;
 
+mod clock;
 #[cfg(test)]
 mod contract_tests;
 mod memory;
@@ -120,6 +121,7 @@ pub(crate) struct SnapshotInfo {
 
 /// How a save with a parent finds the files that did not change since the parent.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(dead_code)]
 pub(crate) enum ChangeDetection {
     /// Compares each file with the parent by size and modification time.
     SizeMtime,
