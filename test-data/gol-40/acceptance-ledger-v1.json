@@ -534,98 +534,83 @@
     },
     {
       "id": "STREAM-RUNTIME",
-      "status": "new assertion",
+      "status": "covered",
       "existingCoverage": [
         {
-          "test": "test_generated_streaming_bridges_end_to_end",
-          "file": "cli/golem-cli/tests/app/agents.rs",
-          "oracle": "Independently compiled Rust, TypeScript, Scala, and MoonBit drivers assert literal values and language-specific completion markers."
+          "test": "rust_generated_client_streams_live_and_handles_edges",
+          "file": "golem-worker-executor/tests/tool_streaming/mod.rs",
+          "oracle": "Literal byte/terminal/result rows, settled entity oplog pairs, empty active runtime metadata, and an unchanged entity Start count after reconstruction independently cover the deployed Rust runtime tuple and exactly-once effect boundary."
         },
         {
-          "test": "test_ts_native_stream_guest_bridge_e2e",
-          "file": "cli/golem-cli/tests/app/typescript_guest_streams.rs",
-          "oracle": "Fixed CLI-visible output from ordinary deployed TypeScript guest streams."
+          "test": "typescript_generated_client_streams_live",
+          "file": "golem-worker-executor/tests/tool_streaming/mod.rs",
+          "oracle": "A deployed TypeScript provider/caller pair is checked against literal binary stdout/stderr, declared-error and explicit-failure terminals, and structured owner observations."
         },
         {
-          "test": "test_ts_native_stream_forwarding_guest_bridge_e2e",
-          "file": "cli/golem-cli/tests/app/typescript_guest_streams.rs",
-          "oracle": "Fixed CLI-visible output from unread stream forwarding."
+          "test": "TypeScript tool-registry stdout lifecycle cases",
+          "file": "sdks/ts/packages/golem-ts-sdk/tests/tool-registry.test.ts",
+          "oracle": "Independently authored writer and stdin spies assert exact chunks, finish/fail selection, structured success/error retention, exception behavior, cancellation cleanup, and one terminal action per provider invocation."
         },
         {
-          "test": "test_ts_native_stream_producer_error_guest_bridge_e2e",
-          "file": "cli/golem-cli/tests/app/typescript_guest_streams.rs",
-          "oracle": "Expected invocation failure from a fatal producer error."
+          "test": "scala_generated_client_streams_live",
+          "file": "golem-worker-executor/tests/tool_streaming/mod.rs",
+          "oracle": "A deployed Scala provider/caller checks literal binary output, independent stdout/stderr, normal and failed terminals, declared errors, and stdin cleanup."
         },
         {
-          "test": "test_ts_native_stream_pending_cancel_guest_bridge_e2e",
-          "file": "cli/golem-cli/tests/app/typescript_guest_streams.rs",
-          "oracle": "Expected CLI-visible pending-cancellation failure."
+          "test": "provider terminal tuples preserve partial stdout, stderr, outcome, and cleanup independently",
+          "file": "sdks/scala/core/js/src/test/scala/golem/runtime/tool/ToolGuestSpec.scala",
+          "oracle": "A hand-authored scenario table asserts exact bytes, terminals, structured outcomes, stdin closes, output disposal, and one lifecycle invocation for success, declared error, explicit failure, and cancellation."
         },
         {
-          "test": "test_ts_native_stream_result_items_guest_bridge_e2e",
-          "file": "cli/golem-cli/tests/app/typescript_guest_streams.rs",
-          "oracle": "Fixed CLI-visible recoverable result-item output."
+          "test": "moonbit_generated_client_streams_live",
+          "file": "golem-worker-executor/tests/tool_streaming/mod.rs",
+          "oracle": "A deployed MoonBit provider/caller checks literal binary stdout/stderr, independent result state, normal declared-error completion, and explicit output failure."
         },
         {
-          "test": "test_scala_agent_guest_streams_e2e",
-          "file": "cli/golem-cli/tests/app/scala_guest_streams.rs",
-          "oracle": "Scala consumer markers for deployed stream, nested, cancellation, and recovery cases."
+          "test": "invocation stdout terminals preserve structured results and original errors",
+          "file": "sdks/moonbit/golem_sdk/tool/provider_stdout_wbtest.mbt",
+          "oracle": "A hand-authored provider scenario table independently checks structured success/error/exception/cancellation, terminal identity, abandonment, finish failure, and exactly one resource drop."
         },
         {
-          "test": "test_scala_agent_guest_stream_producer_errors_e2e",
-          "file": "cli/golem-cli/tests/app/scala_guest_streams.rs",
-          "oracle": "CLI failure and error text for fatal Scala producer propagation."
-        },
-        {
-          "test": "test_moonbit_generated_guest_streams_e2e",
-          "file": "cli/golem-cli/tests/app/moonbit_guest_streams.rs",
-          "oracle": "MoonBit consumer success markers for generated deployed streams."
-        },
-        {
-          "test": "test_moonbit_generated_guest_streams_producer_failure",
-          "file": "cli/golem-cli/tests/app/moonbit_guest_streams.rs",
-          "oracle": "Explicit MoonBit producer-failure result and error text."
-        },
-        {
-          "test": "test_moonbit_generated_guest_streams_peer_drop",
-          "file": "cli/golem-cli/tests/app/moonbit_guest_streams.rs",
-          "oracle": "Explicit MoonBit peer-drop behavior."
-        },
-        {
-          "test": "rust_generated_native_stream_bridge_e2e",
-          "file": "cli/golem-cli/tests/app/rust_streams.rs",
-          "oracle": "Independently authored provider/consumer component assertions and CLI output."
+          "test": "preserves independent stream terminals, structured outcomes, and stdin cleanup",
+          "file": "sdks/effect/test/tool-runtime.test.ts",
+          "oracle": "Independent byte collectors, terminal state, structured outcome matching, and stdin-return spies cover Effect success, declared error, explicit failure plus success, exception, cancellation, and writer abandonment."
         },
         {
           "test": "node test.mjs",
           "file": "sdks/effect/integration-test/cross-sdk/package.json",
           "sourceFile": "sdks/effect/integration-test/cross-sdk/test.mjs",
-          "oracle": "Node assert checks compare independently implemented Effect, TypeScript, and Rust peers."
+          "oracle": "Unique payloads and fixed output assertions exercise the deployed Effect provider through independently implemented TypeScript and Rust peers."
         }
-      ],
-      "remaining": "For every provider language, assert exact stdout/stderr bytes and terminals, structured result/error, stdin cleanup, owner outcome, and effect count across all required terminal cases, including Effect."
+      ]
     },
     {
       "id": "STREAM-MIDDLEWARE",
-      "status": "new integration boundary",
-      "remaining": "Route partial-output declared errors and explicit stream failure plus structured success through universal and monomorphic middleware."
+      "status": "covered",
+      "existingCoverage": [
+        {
+          "test": "middleware_chain_dispatches_universal_monomorphic_and_typed_parameters_in_all_modes",
+          "file": "golem-worker-executor/tests/tool_streaming/mod.rs",
+          "fixture": "test-components/tool-streaming/rust-middleware/src/lib.rs",
+          "oracle": "Literal partial bytes, terminal identity, structured declared-error/success state, empty active-operation metadata, and an exact three-layer entity Start delta prove universal and exact monomorphic forwarding do not collapse independent outcomes or duplicate effects."
+        }
+      ]
     },
     {
       "id": "STREAM-CANCELLATION",
-      "status": "new assertion",
+      "status": "covered",
       "existingCoverage": [
         {
-          "test": "test_ts_native_stream_pending_cancel_guest_bridge_e2e",
-          "file": "cli/golem-cli/tests/app/typescript_guest_streams.rs",
-          "oracle": "Expected CLI-visible cancellation failure."
+          "test": "rust_generated_client_streams_live_and_handles_edges",
+          "file": "golem-worker-executor/tests/tool_streaming/mod.rs",
+          "oracle": "Distinct fixture rows assert invocation cancellation closes stdin, output-reader cancellation preserves the result, writer abandonment stays independent, and dropping the result observer does not cancel output; every entity Start has End or Cancelled, reconstruction adds no Start, and active operations and slots are empty."
         },
         {
-          "test": "test_moonbit_generated_guest_streams_peer_drop",
-          "file": "cli/golem-cli/tests/app/moonbit_guest_streams.rs",
-          "oracle": "Explicit peer-drop behavior observed by the MoonBit consumer."
+          "test": "explicit invocation cancellation is distinct from observer and output drop; dropping a raw result observer does not cancel its output reader; cancelling a blocked output read preserves the result observer",
+          "file": "sdks/moonbit/golem_sdk/tool/client_stream_cancellation_wbtest.mbt",
+          "oracle": "Separate affine-resource tests provide an independent language-level oracle for cancellation versus observer/output detachment and verify that reader cancellation cannot change the invocation result."
         }
-      ],
-      "remaining": "Independently distinguish invocation cancellation, output-reader cancellation, writer abandonment, and dropped result observer, including replay and cleanup."
+      ]
     }
   ]
 }

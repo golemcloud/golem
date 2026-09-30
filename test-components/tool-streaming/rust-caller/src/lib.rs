@@ -232,10 +232,7 @@ struct EnvironmentProbeCallerImpl;
 
 #[agent_implementation]
 impl EnvironmentProbeCaller for EnvironmentProbeCallerImpl {
-    fn new(
-        _name: String,
-        #[agent_config] _config: Config<EnvironmentProbeCallerConfig>,
-    ) -> Self {
+    fn new(_name: String, #[agent_config] _config: Config<EnvironmentProbeCallerConfig>) -> Self {
         Self
     }
 
@@ -822,10 +819,7 @@ async fn wait_at_promise_checkpoint(name: &str) {
 
 #[agent_implementation]
 impl ToolStreamingCaller for ToolStreamingCallerImpl {
-    fn new(
-        _name: String,
-        #[agent_config] _config: Config<ToolStreamingCallerConfig>,
-    ) -> Self {
+    fn new(_name: String, #[agent_config] _config: Config<ToolStreamingCallerConfig>) -> Self {
         assert!(
             std::env::var_os("FORBID_AGENT_CONSTRUCTION").is_none(),
             "component-baseline owners must not construct an agent"
@@ -1108,6 +1102,20 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
     }
 
     async fn rust_provider_terminal_rows(&self) -> Vec<String> {
+        let mut declared = StreamingClient::default()
+            .run("declared-error".to_string(), input_stream(Vec::new()))
+            .await
+            .expect("start declared error case");
+        let mut declared_output = Vec::new();
+        let declared_stdout = declared.stdout.as_mut().expect("streaming tool has stdout");
+        while let Some(item) = declared_stdout.next().await {
+            declared_output.extend(item.expect("declared error must finish stdout normally"));
+        }
+        let declared_result = declared
+            .result()
+            .await
+            .expect_err("declared error must retain its structured failure");
+
         let mut failed = StreamingClient::default()
             .run(
                 "explicit-stdout-failure".to_string(),
@@ -1143,6 +1151,9 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             .expect("finish failure preserves structured success");
 
         vec![
+            String::from_utf8(declared_output).expect("marker is UTF-8"),
+            "finished".to_string(),
+            format!("{declared_result:?}"),
             String::from_utf8(failed_prefix).expect("marker is UTF-8"),
             failed_terminal,
             failed_result.output_closed.to_string(),

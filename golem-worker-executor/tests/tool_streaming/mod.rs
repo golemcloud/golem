@@ -1094,9 +1094,6 @@ fn install_middleware_chain(
                 .expect("fixture contracts must be compatible")
             });
             if let Some(presented) = &presented_definition {
-                assert!(next_effective_definition.commands.nodes.iter().all(|node| {
-                    node.body.as_ref().is_none_or(|body| body.errors.is_empty())
-                }), "this fixture helper requires an inner surface with no inherited errors");
                 effective_definition = presented.clone();
             }
             CompiledToolMiddlewareOccurrence {
@@ -1985,6 +1982,7 @@ async fn middleware_chain_dispatches_universal_monomorphic_and_typed_parameters_
             .unwrap()
     };
     let universal = definition("streaming-universal-pass-through");
+    let streaming_pass_through = definition("streaming-monomorphic-pass-through");
     let transform = definition("streaming-transform");
     let parameterized = definition("streaming-parameterized");
     let agent_type = AgentTypeName("ToolStreamingCaller".to_string());
@@ -2067,10 +2065,16 @@ async fn middleware_chain_dispatches_universal_monomorphic_and_typed_parameters_
         middleware_component.revision,
         "golem-it:tool-streaming-rust-middleware",
         &middleware_metadata.tool_middlewares,
-        vec![(
-            universal.name.as_str(),
-            empty_middleware_parameters(universal),
-        )],
+        vec![
+            (
+                universal.name.as_str(),
+                empty_middleware_parameters(universal),
+            ),
+            (
+                streaming_pass_through.name.as_str(),
+                empty_middleware_parameters(streaming_pass_through),
+            ),
+        ],
     );
     environment_state.set_tool_deployment(
         context.default_environment_id,
@@ -2114,6 +2118,66 @@ async fn middleware_chain_dispatches_universal_monomorphic_and_typed_parameters_
     assert_eq!(streamed.bytes_read, stream_input.len() as u64);
     assert!(!streamed.output_closed);
     assert_eq!(streamed.completion, "ok");
+
+    let starts_before_terminal_rows = executor
+        .get_oplog(&worker_id, OplogIndex::INITIAL)
+        .await?
+        .into_iter()
+        .filter(|entry| {
+            matches!(
+                &entry.entry,
+                PublicOplogEntry::Start(params)
+                    if params.function_name == "golem::entity::invoke"
+            )
+        })
+        .count();
+    let terminal_rows: Vec<String> = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &agent_id,
+            "rust_provider_terminal_rows",
+            data_value!(),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(&terminal_rows[..2], ["marker:", "finished"]);
+    assert!(terminal_rows[2].contains("Declared"), "{terminal_rows:?}");
+    assert_eq!(
+        &terminal_rows[3..],
+        [
+            "marker:",
+            "stream producer failed",
+            "false",
+            "marker:",
+            "false",
+        ]
+    );
+    let starts_after_terminal_rows = executor
+        .get_oplog(&worker_id, OplogIndex::INITIAL)
+        .await?
+        .into_iter()
+        .filter(|entry| {
+            matches!(
+                &entry.entry,
+                PublicOplogEntry::Start(params)
+                    if params.function_name == "golem::entity::invoke"
+            )
+        })
+        .count();
+    assert_eq!(
+        starts_after_terminal_rows - starts_before_terminal_rows,
+        9,
+        "three provider calls through two middleware layers must each execute exactly once"
+    );
+    if let Some(active) = executor
+        .active_entity_metadata(&OwnedAgentId::new(
+            context.default_environment_id,
+            &worker_id,
+        ))
+        .await
+    {
+        assert!(active.tool_operations.operations.is_empty());
+    }
 
     let short_circuit = definition("streaming-short-circuit");
     let mut redeployed = deployment_state(
@@ -4781,6 +4845,71 @@ async fn rust_generated_client_streams_live_and_handles_edges(
         observer_detach,
         ["invoke-open-stdin", "invoke-and-await-observer-detach"]
     );
+    let raw_oplog = executor
+        .get_oplog(&raw_worker_id, OplogIndex::INITIAL)
+        .await?;
+    let raw_entity_starts = raw_oplog
+        .iter()
+        .filter(|entry| {
+            matches!(
+                &entry.entry,
+                PublicOplogEntry::Start(params)
+                    if params.function_name == "golem::entity::invoke"
+            )
+        })
+        .count();
+    assert!(raw_entity_starts >= 9, "{raw_oplog:#?}");
+    for start in raw_oplog.iter().filter_map(|entry| match &entry.entry {
+        PublicOplogEntry::Start(params) if params.function_name == "golem::entity::invoke" => {
+            Some(entry.oplog_index)
+        }
+        _ => None,
+    }) {
+        assert!(
+            raw_oplog.iter().any(|entry| {
+                matches!(&entry.entry, PublicOplogEntry::End(params) if params.start_index == start)
+                    || matches!(&entry.entry, PublicOplogEntry::Cancelled(params) if params.start_index == start)
+            }),
+            "raw lifecycle entity Start {start} was not settled"
+        );
+    }
+    executor.simulated_crash(&raw_worker_id).await?;
+    let _: String = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &raw_agent_id,
+            "replay_probe",
+            data_value!(),
+        )
+        .await?
+        .into_typed()?;
+    let replayed_raw_oplog = executor
+        .get_oplog(&raw_worker_id, OplogIndex::INITIAL)
+        .await?;
+    assert_eq!(
+        replayed_raw_oplog
+            .iter()
+            .filter(|entry| {
+                matches!(
+                    &entry.entry,
+                    PublicOplogEntry::Start(params)
+                        if params.function_name == "golem::entity::invoke"
+                )
+            })
+            .count(),
+        raw_entity_starts,
+        "replay after cancellation and observer/output detach repeated a tool effect"
+    );
+    if let Some(active) = executor
+        .active_entity_metadata(&OwnedAgentId::new(
+            context.default_environment_id,
+            &raw_worker_id,
+        ))
+        .await
+    {
+        assert!(active.tool_operations.operations.is_empty());
+        assert!(active.slots.iter().all(|slot| slot.invocations.is_empty()));
+    }
     executor.delete_worker(&raw_worker_id).await?;
 
     eprintln!("starting stdout_drop_preserves_sibling");

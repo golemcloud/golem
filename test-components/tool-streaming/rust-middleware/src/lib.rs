@@ -22,6 +22,30 @@ pub trait MiddlewareProbe {
 }
 
 #[derive(IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
+pub struct StreamSummary {
+    pub chunks_read: u32,
+    pub bytes_read: u64,
+    pub output_closed: bool,
+}
+
+#[derive(Debug, Clone, golem_rust::ToolError)]
+pub enum StreamingError {
+    #[tool_error(kind = "runtime-error", exit_code = 7)]
+    Declared { bytes_read: u64 },
+}
+
+#[tool_definition(version = "1.0.0")]
+pub trait Streaming {
+    async fn run(
+        &self,
+        mode: String,
+        stdin: InputStream,
+        stdout: OutputStream,
+        principal: golem_rust::agentic::Principal,
+    ) -> Result<StreamSummary, StreamingError>;
+}
+
+#[derive(IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub struct SecretPolicyObservation {
     pub label: String,
     pub config_resolved: bool,
@@ -394,6 +418,46 @@ async fn universal_pass_through(
         .invoke_forwarding_outputs(command_path, input, stdin, stdout, stderr)
         .await
 }
+
+fn invoke_streaming_pass_through(
+    _tool_name: String,
+    _tool_metadata: Tool,
+    _parameters: TypedSchemaValue,
+    command_path: Vec<String>,
+    input: TypedSchemaValue,
+    stdin: Option<InputStream>,
+    stdout: Option<OutputStream>,
+    stderr: Option<OutputStream>,
+    _principal: Principal,
+    underlying: UnderlyingTool,
+) -> ToolMiddlewareInvokeFuture {
+    Box::pin(async move {
+        underlying
+            .invoke_forwarding_outputs(command_path, input, stdin, stdout, stderr)
+            .await
+    })
+}
+
+golem_rust::ctor::__support::ctor_parse!(
+    #[ctor]
+    fn register_streaming_pass_through() {
+        let definition = <StreamingUnderlying as ToolUnderlying>::__golem_tool_descriptor();
+        golem_rust::tool::register_tool_middleware(
+            ToolMiddleware {
+                name: "streaming-monomorphic-pass-through".to_string(),
+                version: "1.0.0".to_string(),
+                aliases: Vec::new(),
+                doc: Default::default(),
+                scope: ToolMiddlewareScope::Monomorphic(Box::new(MonomorphicToolMiddlewareScope {
+                    presented: definition.clone(),
+                    expected: Some(definition),
+                })),
+                parameter_schema: try_into_schema_graph::<EmptyMiddlewareParameters>().unwrap(),
+            },
+            invoke_streaming_pass_through,
+        );
+    }
+);
 
 #[derive(IntoSchema, FromSchema)]
 struct HumanApprovalParameters {
