@@ -11,14 +11,16 @@ use golem_rust::durability::{Durability, DurableFunctionType};
 use golem_rust::golem_agentic::golem::tool::host::{
     self as tool_host, ByteStreamFailure, ToolRpc, ToolRpcError,
 };
+use golem_rust::quota::QuotaToken;
 use golem_rust::{
     ConfigSchema, FromSchema, FromWire, IntoSchema, IntoTypedSchemaValue, IntoWire, SchemaGraph,
     SchemaType, SchemaValue, TypedSchemaValue, WireSchema, agent_definition, agent_implementation,
-    decode_typed_schema_value_owned, read_only,
+    decode_typed_schema_value_owned, encode_schema_value, read_only,
 };
 use matrix_core_tool_guest_client::{
     MatrixCoreArtifactInspectError, MatrixCoreClient, MatrixDimensions, MatrixRequest,
 };
+use matrix_resource_tool_guest_client::MatrixResourceClient;
 use secret_policy_probe_tool_guest_client::SecretPolicyProbeClient;
 use std::io::{Read, Write};
 use streaming_tool_guest_client::{StreamSummary, StreamingClient, StreamingRunError};
@@ -111,6 +113,30 @@ pub struct MatrixObservation {
     pub error_retryable: bool,
 }
 
+#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
+#[schema(rename_all = "camelCase")]
+pub struct MatrixResourceObservation {
+    pub secret_first_provider: String,
+    pub secret_second_provider: String,
+    pub secret_first_revealed: bool,
+    pub secret_second_revealed: bool,
+    pub secret_principal: String,
+    pub secret_owner_agent_id: String,
+    pub quota_provider: String,
+    pub quota_reserved: bool,
+    pub quota_returned_usable: bool,
+    pub quota_original_consumed: bool,
+    pub quota_principal: String,
+    pub quota_owner_agent_id: String,
+    pub permission_supported: bool,
+    pub permission_provider: String,
+    pub permission_same_identity: bool,
+    pub permission_original_consumed: bool,
+    pub permission_principal: String,
+    pub permission_owner_agent_id: String,
+    pub typed_values: Vec<u32>,
+}
+
 #[derive(IntoSchema)]
 struct RawRunInput {
     mode: String,
@@ -193,6 +219,12 @@ struct TypedInputItem {
 pub struct ToolStreamingCallerConfig {
     pub allowed: Option<String>,
     pub denied: Option<String>,
+}
+
+#[derive(ConfigSchema)]
+pub struct RustResourceToolStreamingCallerConfig {
+    #[config_schema(secret)]
+    pub secret: Secret<String>,
 }
 
 #[derive(IntoSchema)]
@@ -433,6 +465,31 @@ pub trait ToolStreamingCaller {
 }
 
 struct ToolStreamingCallerImpl;
+
+#[agent_definition]
+pub trait RustResourceToolStreamingCaller {
+    fn new(
+        name: String,
+        #[agent_config] config: Config<RustResourceToolStreamingCallerConfig>,
+    ) -> Self;
+
+    async fn matrix_resource_observation(&self) -> MatrixResourceObservation;
+}
+
+struct RustResourceToolStreamingCallerImpl {
+    config: Config<RustResourceToolStreamingCallerConfig>,
+}
+
+fn matrix_typed_input(values: [u32; 3]) -> AgentStream<u32> {
+    let (mut writer, input) = AgentStream::new();
+    spawn_local(async move {
+        writer
+            .write_all(values)
+            .await
+            .expect("write matrix typed input values");
+    });
+    input
+}
 
 fn input_stream(chunks: Vec<Vec<u8>>) -> InputStream {
     let (mut writer, reader) =
@@ -3267,6 +3324,82 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             error_field: rejection.field,
             error_reason: rejection.reason,
             error_retryable: rejection.retryable,
+        }
+    }
+}
+
+#[agent_implementation]
+impl RustResourceToolStreamingCaller for RustResourceToolStreamingCallerImpl {
+    fn new(
+        _name: String,
+        #[agent_config] config: Config<RustResourceToolStreamingCallerConfig>,
+    ) -> Self {
+        Self { config }
+    }
+
+    async fn matrix_resource_observation(&self) -> MatrixResourceObservation {
+        let secret = self
+            .config
+            .get()
+            .expect("matrix resource config access is allowed")
+            .secret
+            .handle()
+            .expect("matrix resource secret handle access is allowed");
+        let first_secret = MatrixResourceClient::default()
+            .secret()
+            .exchange(secret)
+            .await
+            .expect("first matrix secret exchange succeeds");
+        let second_secret = MatrixResourceClient::default()
+            .secret()
+            .exchange(first_secret.secret)
+            .await
+            .expect("second matrix secret exchange succeeds");
+
+        let quota = QuotaToken::new("matrix-capacity", 2);
+        let quota_original =
+            QuotaToken::from_value(&quota.to_value()).expect("clone matrix quota handle cell");
+        let quota_exchange = MatrixResourceClient::default()
+            .quota()
+            .exchange(quota)
+            .await
+            .expect("matrix quota exchange succeeds");
+        let quota_original_consumed = encode_schema_value(&quota_original.to_value()).is_err();
+        let quota_returned_usable = quota_exchange
+            .token
+            .reserve(0)
+            .map(|reservation| reservation.commit(0))
+            .is_ok();
+
+        let typed_values = MatrixResourceClient::default()
+            .typed()
+            .transform(matrix_typed_input([2, 5, 9]))
+            .await
+            .expect("matrix typed transform starts")
+            .collect()
+            .await
+            .expect("matrix typed transform completes");
+
+        MatrixResourceObservation {
+            secret_first_provider: first_secret.provider,
+            secret_second_provider: second_secret.provider,
+            secret_first_revealed: first_secret.revealed,
+            secret_second_revealed: second_secret.revealed,
+            secret_principal: second_secret.principal,
+            secret_owner_agent_id: second_secret.owner_agent_id,
+            quota_provider: quota_exchange.provider,
+            quota_reserved: quota_exchange.reserved,
+            quota_returned_usable,
+            quota_original_consumed,
+            quota_principal: quota_exchange.principal,
+            quota_owner_agent_id: quota_exchange.owner_agent_id,
+            permission_supported: false,
+            permission_provider: String::new(),
+            permission_same_identity: false,
+            permission_original_consumed: false,
+            permission_principal: String::new(),
+            permission_owner_agent_id: String::new(),
+            typed_values,
         }
     }
 }

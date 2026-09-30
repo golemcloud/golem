@@ -458,6 +458,7 @@ dependencies = [
  "futures-concurrency",
  "golem-rust",
  "matrix-core-tool-guest-client",
+ "matrix-resource-tool-guest-client",
  "secret-policy-probe-tool-guest-client",
  "streaming-tool-guest-client",
  "typed-output-stream-tool-guest-client",
@@ -605,6 +606,16 @@ dependencies = [
 
 [[package]]
 name = "matrix-core-tool-guest-client"
+version = "0.0.1"
+dependencies = [
+ "chrono",
+ "golem-rust",
+ "serde",
+ "uuid",
+]
+
+[[package]]
+name = "matrix-resource-tool-guest-client"
 version = "0.0.1"
 dependencies = [
  "chrono",

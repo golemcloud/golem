@@ -1,9 +1,19 @@
 use golem_rust::agentic::{
-    AgentStream, InputStream, OutputStream, Principal, Secret, pump_tool_stdin, spawn_local,
+    AgentStream, InputStream, OutputStream, Principal, Secret as ConfigSecret, pump_tool_stdin,
+    spawn_local,
 };
+use golem_rust::bindings::golem::permissions::types as permission_types;
 use golem_rust::golem_agentic::golem::agent::host as agent_host;
 use golem_rust::golem_agentic::golem::tool::host::{self as tool_host, ByteStreamFailure, ToolRpc};
 use golem_rust::quota::QuotaToken;
+use golem_rust::schema::wit::GuestPermissionCardHandle;
+use golem_rust::schema::wit::direct::{
+    WireError, WirePreflight, WireReader, WireSchemaBuilder, WireWriter,
+};
+use golem_rust::schema::wit::wire;
+use golem_rust::schema::{
+    FromSchemaError, QuotaTokenSpec, SchemaBuilder, SchemaType, SchemaValue, TypeId,
+};
 use golem_rust::secrets::GuestSecretHandle;
 use golem_rust::{
     FromSchema, FromWire, IntoSchema, IntoTypedSchemaValue, IntoWire, ToolError, WireSchema,
@@ -128,6 +138,253 @@ impl Artifact for MatrixArtifactImpl {
     }
 }
 
+pub struct MatrixCapacityToken(QuotaToken);
+
+impl WireSchema for MatrixCapacityToken {
+    fn wire_type_id() -> String {
+        QuotaToken::wire_type_id()
+    }
+
+    fn append_schema(builder: &mut WireSchemaBuilder) -> i32 {
+        builder.push(wire::SchemaTypeBody::QuotaTokenType(wire::QuotaTokenSpec {
+            resource_name: Some("matrix-capacity".to_string()),
+        }))
+    }
+}
+
+impl FromWire for MatrixCapacityToken {
+    fn read_wire(reader: &mut WireReader, index: i32) -> Result<Self, WireError> {
+        QuotaToken::read_wire(reader, index).map(Self)
+    }
+}
+
+impl IntoWire for MatrixCapacityToken {
+    fn preflight(&self, resources: &mut WirePreflight) -> Result<(), WireError> {
+        self.0.preflight(resources)
+    }
+
+    fn write_wire(&self, writer: &mut WireWriter) -> Result<i32, WireError> {
+        self.0.write_wire(writer)
+    }
+}
+
+impl IntoSchema for MatrixCapacityToken {
+    fn type_id() -> TypeId {
+        QuotaToken::type_id()
+    }
+
+    fn register_in(_builder: &mut SchemaBuilder) -> SchemaType {
+        SchemaType::quota_token(QuotaTokenSpec {
+            resource_name: Some("matrix-capacity".to_string()),
+        })
+    }
+
+    fn to_value(&self) -> SchemaValue {
+        self.0.to_value()
+    }
+}
+
+impl FromSchema for MatrixCapacityToken {
+    fn from_value(value: &SchemaValue) -> Result<Self, FromSchemaError> {
+        QuotaToken::from_value(value).map(Self)
+    }
+}
+
+#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
+#[schema(rename_all = "camelCase")]
+pub struct SecretExchange {
+    pub provider: String,
+    pub principal: String,
+    pub owner_agent_id: String,
+    pub revealed: bool,
+    pub secret: GuestSecretHandle,
+}
+
+#[derive(IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
+#[schema(rename_all = "camelCase")]
+pub struct QuotaExchange {
+    pub provider: String,
+    pub principal: String,
+    pub owner_agent_id: String,
+    pub reserved: bool,
+    pub token: MatrixCapacityToken,
+}
+
+#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
+#[schema(rename_all = "camelCase")]
+pub struct PermissionExchange {
+    pub provider: String,
+    pub principal: String,
+    pub owner_agent_id: String,
+    pub card: GuestPermissionCardHandle,
+}
+
+pub struct MatrixSecretSubtree;
+pub struct MatrixQuotaSubtree;
+pub struct MatrixPermissionsSubtree;
+pub struct MatrixTypedSubtree;
+
+#[tool_definition(version = "1.0.0")]
+pub trait MatrixResource {
+    #[command(subtree = Secret)]
+    fn secret(&self) -> MatrixSecretSubtree;
+
+    #[command(subtree = Quota)]
+    fn quota(&self) -> MatrixQuotaSubtree;
+
+    #[command(subtree = Permissions)]
+    fn permissions(&self) -> MatrixPermissionsSubtree;
+
+    #[command(subtree = Typed)]
+    fn typed(&self) -> MatrixTypedSubtree;
+}
+
+struct MatrixResourceImpl;
+
+#[tool_implementation]
+impl MatrixResource for MatrixResourceImpl {
+    fn secret(&self) -> MatrixSecretSubtree {
+        MatrixSecretSubtree
+    }
+
+    fn quota(&self) -> MatrixQuotaSubtree {
+        MatrixQuotaSubtree
+    }
+
+    fn permissions(&self) -> MatrixPermissionsSubtree {
+        MatrixPermissionsSubtree
+    }
+
+    fn typed(&self) -> MatrixTypedSubtree {
+        MatrixTypedSubtree
+    }
+}
+
+fn matrix_resource_evidence(principal: &Principal) -> (String, String, String) {
+    let owner_agent_id = golem_rust::get_self_metadata()
+        .expect("matrix resource owner metadata")
+        .agent_id
+        .agent_id;
+    (
+        "rust".to_string(),
+        matrix_principal(principal),
+        owner_agent_id,
+    )
+}
+
+#[tool_definition]
+pub trait Secret {
+    async fn exchange(
+        &self,
+        secret: GuestSecretHandle,
+        principal: golem_rust::agentic::Principal,
+    ) -> SecretExchange;
+}
+
+struct SecretImpl;
+
+#[tool_implementation]
+impl Secret for SecretImpl {
+    async fn exchange(&self, secret: GuestSecretHandle, principal: Principal) -> SecretExchange {
+        let (provider, principal, owner_agent_id) = matrix_resource_evidence(&principal);
+        let revealed = reveal_string(&secret)
+            .map(|value| value == "matrix-secret-value")
+            .unwrap_or(false);
+        SecretExchange {
+            provider,
+            principal,
+            owner_agent_id,
+            revealed,
+            secret,
+        }
+    }
+}
+
+#[tool_definition]
+pub trait Quota {
+    async fn exchange(
+        &self,
+        token: MatrixCapacityToken,
+        principal: golem_rust::agentic::Principal,
+    ) -> QuotaExchange;
+}
+
+struct QuotaImpl;
+
+#[tool_implementation]
+impl Quota for QuotaImpl {
+    async fn exchange(&self, token: MatrixCapacityToken, principal: Principal) -> QuotaExchange {
+        let (provider, principal, owner_agent_id) = matrix_resource_evidence(&principal);
+        let reserved = token
+            .0
+            .reserve(1)
+            .map(|reservation| reservation.commit(1))
+            .is_ok();
+        QuotaExchange {
+            provider,
+            principal,
+            owner_agent_id,
+            reserved,
+            token,
+        }
+    }
+}
+
+#[tool_definition]
+pub trait Permissions {
+    async fn exchange(
+        &self,
+        card: GuestPermissionCardHandle,
+        principal: golem_rust::agentic::Principal,
+    ) -> PermissionExchange;
+}
+
+struct PermissionsImpl;
+
+#[tool_implementation]
+impl Permissions for PermissionsImpl {
+    async fn exchange(
+        &self,
+        card: GuestPermissionCardHandle,
+        principal: Principal,
+    ) -> PermissionExchange {
+        assert_eq!(
+            card.with_handle(permission_types::is_polymorphic),
+            Some(false),
+            "matrix resource permission card must be non-polymorphic"
+        );
+        let (provider, principal, owner_agent_id) = matrix_resource_evidence(&principal);
+        PermissionExchange {
+            provider,
+            principal,
+            owner_agent_id,
+            card,
+        }
+    }
+}
+
+#[tool_definition]
+pub trait Typed {
+    fn transform(&self, input: AgentStream<u32>) -> AgentStream<u32>;
+}
+
+struct TypedImpl;
+
+#[tool_implementation]
+impl Typed for TypedImpl {
+    fn transform(&self, mut input: AgentStream<u32>) -> AgentStream<u32> {
+        let (mut writer, output) = AgentStream::new();
+        spawn_local(async move {
+            while let Ok(Some(value)) = input.next().await {
+                if writer.write_one(value * 3 + 1).await.is_err() {
+                    break;
+                }
+            }
+        });
+        output
+    }
+}
+
 #[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub struct EnvironmentProbeEvidence {
     pub marker: String,
@@ -166,7 +423,7 @@ impl EnvironmentProbe for EnvironmentProbeImpl {
         commit_amount: u64,
     ) -> EnvironmentProbeEvidence {
         let marker = owner_config_string("marker").expect("caller owner marker is configured");
-        let secret = Secret::<String>::new(vec!["secret".to_string()])
+        let secret = ConfigSecret::<String>::new(vec!["secret".to_string()])
             .get()
             .expect("caller environment secret is readable and revealable");
         let token = QuotaToken::new("owner-capacity", expected_use);
