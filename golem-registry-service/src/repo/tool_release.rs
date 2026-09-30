@@ -14,8 +14,8 @@
 
 use crate::repo::model::tool_release::{
     TOOL_RELEASE_LIFECYCLE_DE_PUBLISHED, TOOL_RELEASE_LIFECYCLE_PUBLISHED,
-    TOOL_RELEASE_LIFECYCLE_SUPERSEDED, TOOL_RELEASE_ORIGIN_PROTECTED_SYSTEM, ToolReleaseRecord,
-    ToolReleaseWithOwnerRecord,
+    TOOL_RELEASE_LIFECYCLE_SUPERSEDED, TOOL_RELEASE_ORIGIN_ORDINARY,
+    TOOL_RELEASE_ORIGIN_PROTECTED_SYSTEM, ToolReleaseRecord, ToolReleaseWithOwnerRecord,
 };
 use crate::repo::release_grant_lifecycle::{self as lifecycle, ReleaseKind};
 use async_trait::async_trait;
@@ -90,6 +90,14 @@ pub trait ToolReleaseRepo: Send + Sync {
         tool_release_id: Uuid,
         actor: Uuid,
     ) -> Result<Option<ToolReleaseWithOwnerRecord>, ToolReleaseRepoError>;
+
+    /// Marks a protected system release superseded (a newer version of the built-in tool
+    /// replaced it). Returns whether it changed; an ordinary release is never touched.
+    async fn supersede_system_release(
+        &self,
+        tool_release_id: Uuid,
+        actor: Uuid,
+    ) -> Result<bool, ToolReleaseRepoError>;
 }
 
 pub struct LoggedToolReleaseRepo<Repo: ToolReleaseRepo> {
@@ -180,6 +188,17 @@ impl<Repo: ToolReleaseRepo> ToolReleaseRepo for LoggedToolReleaseRepo<Repo> {
     ) -> Result<Option<ToolReleaseWithOwnerRecord>, ToolReleaseRepoError> {
         self.repo
             .restore(tool_release_id, actor)
+            .instrument(info_span!("tool release repository", tool_release_id = %tool_release_id))
+            .await
+    }
+
+    async fn supersede_system_release(
+        &self,
+        tool_release_id: Uuid,
+        actor: Uuid,
+    ) -> Result<bool, ToolReleaseRepoError> {
+        self.repo
+            .supersede_system_release(tool_release_id, actor)
             .instrument(info_span!("tool release repository", tool_release_id = %tool_release_id))
             .await
     }
@@ -617,5 +636,27 @@ impl ToolReleaseRepo for DbToolReleaseRepo<PostgresPool> {
         } else {
             self.get_by_id(tool_release_id).await
         }
+    }
+
+    async fn supersede_system_release(
+        &self,
+        tool_release_id: Uuid,
+        actor: Uuid,
+    ) -> Result<bool, ToolReleaseRepoError> {
+        // The shared statement refuses one origin; refusing the ordinary origin leaves only a
+        // protected system release to supersede, the inverse of a republished coordinate.
+        let updated = self
+            .db_pool
+            .with_rw(METRICS_SVC_NAME, "supersede_system_release")
+            .execute(
+                sqlx::query(&lifecycle::supersede_release::<ToolReleaseKind>())
+                    .bind(tool_release_id)
+                    .bind(TOOL_RELEASE_LIFECYCLE_SUPERSEDED)
+                    .bind(SqlDateTime::now())
+                    .bind(actor)
+                    .bind(TOOL_RELEASE_ORIGIN_ORDINARY),
+            )
+            .await?;
+        Ok(updated.rows_affected() == 1)
     }
 }

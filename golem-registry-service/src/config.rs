@@ -128,6 +128,8 @@ pub struct RegistryServiceConfig {
     #[serde(default)]
     pub builtin_plugins: BuiltinPluginsConfig,
     #[serde(default)]
+    pub builtin_tools: BuiltinToolsConfig,
+    #[serde(default)]
     pub deployment_events: DeploymentEventsConfig,
     #[serde(default)]
     pub security_scheme: SecuritySchemeConfig,
@@ -188,6 +190,12 @@ impl SafeDisplay for RegistryServiceConfig {
             &mut result,
             "builtin plugins: enabled={}",
             self.builtin_plugins.enabled(),
+        );
+
+        let _ = writeln!(
+            &mut result,
+            "builtin tools: enabled={}",
+            self.builtin_tools.enabled(),
         );
 
         let _ = writeln!(&mut result, "deployment events:");
@@ -318,6 +326,7 @@ impl Default for RegistryServiceConfig {
             initial_accounts,
             initial_plans,
             builtin_plugins: BuiltinPluginsConfig::default(),
+            builtin_tools: BuiltinToolsConfig::default(),
             deployment_events: DeploymentEventsConfig::default(),
             security_scheme: SecuritySchemeConfig::default(),
             mcp_oauth: golem_mcp_import::oauth::Limits::default(),
@@ -582,6 +591,28 @@ impl Default for BuiltinPluginsConfig {
 }
 
 impl BuiltinPluginsConfig {
+    pub fn enabled(&self) -> bool {
+        matches!(self, Self::Enabled(_))
+    }
+}
+
+/// Whether the registry provisions the built-in tools (the Bash tool) at startup. Provisioning
+/// extracts each embedded component's metadata once per registry database, so a deployment wants
+/// it on; a test that boots a fresh registry and never uses a built-in tool can turn it off.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "type", content = "config")]
+pub enum BuiltinToolsConfig {
+    Enabled(Empty),
+    Disabled(Empty),
+}
+
+impl Default for BuiltinToolsConfig {
+    fn default() -> Self {
+        Self::Enabled(Empty {})
+    }
+}
+
+impl BuiltinToolsConfig {
     pub fn enabled(&self) -> bool {
         matches!(self, Self::Enabled(_))
     }

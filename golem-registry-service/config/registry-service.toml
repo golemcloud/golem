@@ -15,6 +15,11 @@ type = "Disabled"
 
 [builtin_plugins.config]
 
+[builtin_tools]
+type = "Enabled"
+
+[builtin_tools.config]
+
 [component_compilation]
 type = "Enabled"
 

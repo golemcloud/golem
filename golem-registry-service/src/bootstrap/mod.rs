@@ -519,19 +519,21 @@ impl Services {
         .await
         .map_err(|error| anyhow::anyhow!("Failed to provision built-in plugins: {error}"))?;
 
-        crate::services::builtin_tool_provisioner::provision_builtin_tools(
-            builtin_tool_owner_account_id,
-            &auth_service,
-            &application_service,
-            &environment_service,
-            &component_service,
-            &component_write_service,
-            &deployment_service,
-            &deployment_write_service,
-            &tool_release_service,
-        )
-        .await
-        .map_err(|error| anyhow::anyhow!("Failed to provision built-in tools: {error}"))?;
+        if config.builtin_tools.enabled() {
+            crate::services::builtin_tool_provisioner::provision_builtin_tools(
+                builtin_tool_owner_account_id,
+                &auth_service,
+                &application_service,
+                &environment_service,
+                &component_service,
+                &component_write_service,
+                &deployment_service,
+                &deployment_write_service,
+                &tool_release_service,
+            )
+            .await
+            .map_err(|error| anyhow::anyhow!("Failed to provision built-in tools: {error}"))?;
+        }
 
         let builtin_tool_owner = &config.initial_accounts["builtin_tool_owner"];
         native_tool_catalog

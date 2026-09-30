@@ -1,6 +1,8 @@
 use crate::api::make_open_api_service;
 use crate::bootstrap::Services;
-use crate::config::{ComponentCompilationConfig, LoginConfig, RegistryServiceConfig};
+use crate::config::{
+    BuiltinToolsConfig, ComponentCompilationConfig, LoginConfig, RegistryServiceConfig,
+};
 use golem_common::config::{DbConfig, DbSqliteConfig};
 use golem_common::model::Empty;
 use golem_common::model::application::{ApplicationCreation, ApplicationName};
@@ -49,6 +51,7 @@ async fn operator_and_runtime_routes_authenticate_and_target_exact_import() {
         login: LoginConfig::Disabled(Empty {}),
         blob_storage: BlobStorageConfig::default_in_memory(),
         component_compilation: ComponentCompilationConfig::Disabled(Empty {}),
+        builtin_tools: BuiltinToolsConfig::Disabled(Empty {}),
         ..Default::default()
     };
     let root = &config.initial_accounts["root"];

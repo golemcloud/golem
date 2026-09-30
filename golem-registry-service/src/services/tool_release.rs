@@ -70,6 +70,10 @@ pub enum ToolReleaseError {
     ToolReleaseNotDePublished,
     #[error("Protected system tool releases cannot be modified")]
     ProtectedToolRelease,
+    /// A built-in release named by its coordinates was superseded by a newer version: the text
+    /// names both, and the version to switch to.
+    #[error("{0}")]
+    SupersededSystemRelease(String),
     #[error(transparent)]
     Unauthorized(#[from] AuthorizationError),
     #[error(transparent)]
@@ -96,6 +100,22 @@ pub struct ToolReleaseService {
 }
 
 type PublicationAssessment = PublicationDecision<ToolReleaseId>;
+
+/// How a built-in tool's release stands against the artifact embedded in this build, judged
+/// without extracting the artifact's metadata.
+#[derive(Debug)]
+pub(crate) enum SystemReleaseState {
+    /// No release has this coordinate.
+    Absent,
+    /// The release is published from these bytes, as this component, with this build's metadata
+    /// version, and the component still exports the released definition: nothing to do.
+    Current(Box<ToolRelease>),
+    /// As `Current`, except that a newer version has superseded the release: a build older than
+    /// the provisioned inventory is running, and the newer release stays.
+    Superseded,
+    /// Anything else. The full check, with the extracted definition in hand, decides.
+    Differs,
+}
 
 impl ToolReleaseService {
     pub fn new(
@@ -441,9 +461,42 @@ impl ToolReleaseService {
         if release.lifecycle != ToolReleaseLifecycle::Published
             && !(allows_superseded && release.lifecycle == ToolReleaseLifecycle::Superseded)
         {
+            if release.lifecycle == ToolReleaseLifecycle::Superseded
+                && release.origin == ToolReleaseOrigin::ProtectedSystem
+                && let Some(current) = self.published_system_release(&release.name).await?
+            {
+                return Err(ToolReleaseError::SupersededSystemRelease(format!(
+                    "built-in tool {name}@{old} was superseded by {name}@{new}; update the manifest \
+                     to {name}@{new}",
+                    name = release.name,
+                    old = release.version,
+                    new = current.version,
+                )));
+            }
             return Err(ToolReleaseError::ReferencedToolReleaseNotFound);
         }
         Ok(record)
+    }
+
+    /// The published built-in release of `name`, if there is one.
+    async fn published_system_release(
+        &self,
+        name: &ToolName,
+    ) -> Result<Option<ToolRelease>, ToolReleaseError> {
+        for record in self
+            .tool_release_repo
+            .list_by_owner(self.builtin_tool_owner_account_id.0)
+            .await?
+        {
+            let release: ToolRelease = record.release.try_into()?;
+            if release.name == *name
+                && release.lifecycle == ToolReleaseLifecycle::Published
+                && release.origin == ToolReleaseOrigin::ProtectedSystem
+            {
+                return Ok(Some(release));
+            }
+        }
+        Ok(None)
     }
 
     pub(crate) async fn resolve_user_grantable_reference(
@@ -547,6 +600,126 @@ impl ToolReleaseService {
             }
             Err(other) => Err(other.into()),
         }
+    }
+
+    /// The cheap half of [`Self::preflight_system_component_release`]: it compares the recorded
+    /// release with the embedded artifact's hash instead of with the artifact's extracted
+    /// definition, so a boot whose artifact is already provisioned need not compile it.
+    pub(crate) async fn system_component_release_state(
+        &self,
+        name: &ToolName,
+        version: &str,
+        component_name: &golem_common::model::component::ComponentName,
+        wasm_hash: diff::Hash,
+    ) -> Result<SystemReleaseState, ToolReleaseError> {
+        let Some(existing) = self
+            .tool_release_repo
+            .get_by_coordinates(self.builtin_tool_owner_account_id.0, name.as_str(), version)
+            .await?
+        else {
+            return Ok(SystemReleaseState::Absent);
+        };
+        let release: ToolRelease = existing.release.try_into()?;
+        let ToolSource::Component {
+            component_id,
+            component_revision,
+            component_name: recorded_name,
+        } = &release.source
+        else {
+            return Ok(SystemReleaseState::Differs);
+        };
+        if release.metadata_version != TOOL_METADATA_WIT_VERSION
+            || !release.immutable
+            || release.origin != ToolReleaseOrigin::ProtectedSystem
+            || release.system_availability != Some(SystemToolAvailability::Grantable)
+            || recorded_name != component_name
+        {
+            return Ok(SystemReleaseState::Differs);
+        }
+        let Ok(component) = self
+            .component_service
+            .get_component_revision(
+                *component_id,
+                *component_revision,
+                false,
+                &AuthCtx::system(),
+            )
+            .await
+        else {
+            return Ok(SystemReleaseState::Differs);
+        };
+        let Ok(deployed) = self
+            .component_service
+            .get_all_deployed_component_versions(*component_id, &AuthCtx::system())
+            .await
+        else {
+            return Ok(SystemReleaseState::Differs);
+        };
+        if component.component_name != *component_name
+            || component.account_id != self.builtin_tool_owner_account_id
+            || component.wasm_hash != wasm_hash
+            || !deployed
+                .iter()
+                .any(|value| value.revision == *component_revision)
+            || component
+                .metadata
+                .tools()
+                .get(name)
+                .map(|tool| &tool.definition)
+                != Some(&release.definition)
+        {
+            return Ok(SystemReleaseState::Differs);
+        }
+        Ok(match release.lifecycle {
+            ToolReleaseLifecycle::Published => SystemReleaseState::Current(Box::new(release)),
+            ToolReleaseLifecycle::Superseded => SystemReleaseState::Superseded,
+            ToolReleaseLifecycle::DePublished => SystemReleaseState::Differs,
+        })
+    }
+
+    /// Marks superseded every other published built-in release of `name`, once the release at
+    /// `version` is published, so the tool always has a published release. Grants keep the
+    /// releases they hold (a superseded release still resolves by id); coordinates resolve only
+    /// to the published one. Returns the releases it superseded.
+    pub(crate) async fn supersede_older_system_releases(
+        &self,
+        name: &ToolName,
+        version: &str,
+    ) -> Result<Vec<ToolRelease>, ToolReleaseError> {
+        let owner = self.builtin_tool_owner_account_id;
+        let releases: Vec<ToolRelease> = self
+            .tool_release_repo
+            .list_by_owner(owner.0)
+            .await?
+            .into_iter()
+            .map(|record| record.release.try_into())
+            .collect::<Result<_, _>>()?;
+        let is_published_system = |release: &ToolRelease| {
+            release.name == *name
+                && release.lifecycle == ToolReleaseLifecycle::Published
+                && release.origin == ToolReleaseOrigin::ProtectedSystem
+        };
+        if !releases
+            .iter()
+            .any(|release| release.version == version && is_published_system(release))
+        {
+            return Err(ToolReleaseError::InternalError(anyhow::anyhow!(
+                "built-in tool release '{name}@{version}' is not published; nothing supersedes older releases"
+            )));
+        }
+        let mut superseded = Vec::new();
+        for release in releases {
+            if release.version != version
+                && is_published_system(&release)
+                && self
+                    .tool_release_repo
+                    .supersede_system_release(release.id.0, AccountId::SYSTEM.0)
+                    .await?
+            {
+                superseded.push(release);
+            }
+        }
+        Ok(superseded)
     }
 
     pub(crate) async fn preflight_system_component_release(

@@ -90,6 +90,10 @@ pub enum DeploymentWriteError {
     },
     #[error("Tool release coordinate exists with different immutable metadata")]
     ToolReleaseImmutableConflict,
+    /// A built-in release the deployment names by coordinates was superseded; the text names the
+    /// version to switch to.
+    #[error("{0}")]
+    ToolReleaseSuperseded(String),
     #[error("A de-published tool release must be restored explicitly before publication")]
     ToolReleaseDePublishedConflict,
     #[error("Tool middleware release coordinate exists with different immutable metadata")]
@@ -121,6 +125,7 @@ impl SafeDisplay for DeploymentWriteError {
             Self::VersionAlreadyExists { .. } => self.to_string(),
             Self::NoOpDeployment => self.to_string(),
             Self::ToolReleaseImmutableConflict => self.to_string(),
+            Self::ToolReleaseSuperseded(_) => self.to_string(),
             Self::ToolReleaseDePublishedConflict => self.to_string(),
             Self::ToolMiddlewareReleaseImmutableConflict => self.to_string(),
             Self::ToolMiddlewareReleaseDePublishedConflict => self.to_string(),
@@ -343,7 +348,13 @@ impl DeploymentWriteService {
         let resolved_remote_tools = self
             .environment_tool_grant_service
             .resolve_active_references_partial(&environment, &remote_tool_references, auth)
-            .await?;
+            .await
+            .map_err(|error| match error {
+                EnvironmentToolGrantError::ReleaseSuperseded(message) => {
+                    DeploymentWriteError::ToolReleaseSuperseded(message)
+                }
+                other => other.into(),
+            })?;
         let mut remote_tools = ordinary_remote_tools
             .into_iter()
             .zip(resolved_remote_tools)

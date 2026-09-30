@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::arguments::{ParsedToolArguments, parse};
-use golem_common::schema::tool::*;
-use golem_common::schema::{SchemaGraph, SchemaType, SchemaValue};
+use super::{ParsedToolArguments, parse};
+use crate::schema::tool::*;
+use crate::schema::{SchemaGraph, SchemaType, SchemaValue};
 use test_r::test;
 
 fn body() -> CommandBody {

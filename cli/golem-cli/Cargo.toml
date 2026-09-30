@@ -132,6 +132,7 @@ windows-sys = { workspace = true }
 [dev-dependencies]
 axum = { workspace = true }
 expectrl = { workspace = true }
+flate2 = { workspace = true }
 goldenfile = { workspace = true }
 golem-common = { workspace = true, features = ["proptest"] }
 log = { workspace = true }

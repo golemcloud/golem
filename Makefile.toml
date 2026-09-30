@@ -1641,7 +1641,7 @@ cd ../..
 ## BUILT-IN TOOLS
 [tasks.build-builtin-tools]
 dependencies = ["wit"]
-description = "Builds the built-in filesystem tool component"
+description = "Builds the built-in tool components: the filesystem tools through their manifest, and Bash reproducibly in a pinned container (builtin-tools/bash/build-bash-wasm.sh)"
 script_runner = "@duckscript"
 script = '''
 exec --fail-on-error cargo build -p golem --bin golem
@@ -1649,6 +1649,40 @@ golem = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/debug/golem"
 cd builtin-tools/filesystem-tools
 exec --fail-on-error ${golem} build -P release --force-build --yes
 exec --fail-on-error ${golem} exec -P release copy
+cd ../..
+exec --fail-on-error sh builtin-tools/bash/build-bash-wasm.sh
+'''
+
+[tasks.test-builtin-bash-pipelines]
+description = "Checks the Bash shell's exact WASM outputs against recorded Bash goldens, and the feature checklist"
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo build --manifest-path builtin-tools/bash/Cargo.toml --locked --target-dir ${CARGO_MAKE_CRATE_TARGET_DIRECTORY} -p bash-shell --example cooperative --features test-support --release --target wasm32-wasip2
+exec --fail-on-error python3 builtin-tools/bash/conformance/test_conformance.py
+exec --fail-on-error python3 builtin-tools/bash/conformance/conformance.py check --wasm ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/wasm32-wasip2/release/examples/cooperative.wasm
+exec --fail-on-error python3 builtin-tools/bash/conformance/conformance.py coverage --wasm ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/wasm32-wasip2/release/examples/cooperative.wasm
+'''
+
+[tasks.test-builtin-bash-sweep]
+description = "Runs Brush's compatibility suite on the Bash shell against its baseline, and checks every matrix case (both tiers) against its recorded golden"
+script_runner = "@shell"
+script = '''
+builtin-tools/bash/conformance/compat/ci.sh ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}
+'''
+
+[tasks.test-builtin-bash-oracle-drift]
+description = "Re-checks every recorded golden (both tiers) against a live Bash oracle, to catch one whose answer has since changed. `stale` only needs Docker, not a built wasm. Not run on every push -- see the Oracle drift workflow's paths/schedule triggers."
+script_runner = "@shell"
+script = '''
+python3 builtin-tools/bash/conformance/conformance.py stale
+'''
+
+[tasks.check-builtin-bash-deny]
+description = "Checks the Bash workspace's dependency sources against deny.toml (the pinned engine forks and nothing else)"
+script_runner = "@duckscript"
+script = '''
+cd builtin-tools/bash
+exec --fail-on-error cargo deny check sources
 cd ../..
 '''
 
