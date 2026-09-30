@@ -247,12 +247,9 @@ impl CaptureFinding<(FilesystemCapture, TreeMark)> {
     }
 }
 
-/// The record of a periodic snapshot. `Copy` is the copy that the record uploads.
+/// The record that a periodic snapshot writes. `Copy` is the copy that the record uploads.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum PeriodicRecord<Copy> {
-    /// No record is written: the capture found no change against a confirmed snapshot that it
-    /// did not have.
-    Skipped,
     /// The record has no name. Nothing is uploaded.
     WithoutName,
     /// The record has no name, and the tree at `mark` holds only initial files. Nothing is
@@ -269,16 +266,17 @@ enum PeriodicRecord<Copy> {
 
 /// Decides the record of a periodic snapshot from the finding of the capture and the confirmed
 /// snapshot that the capture compared with. An unchanged tree reuses the name of that snapshot,
-/// or writes a record without a name when that snapshot has none.
+/// or writes a record without a name when that snapshot has none. Gives `None` when no record is
+/// written: the capture found no change against a confirmed snapshot that it did not have.
 fn plan_periodic_record<Copy>(
     finding: CaptureFinding<Copy>,
     since: Option<&ConfirmedFilesystemSnapshot>,
-) -> PeriodicRecord<Copy> {
+) -> Option<PeriodicRecord<Copy>> {
     let since_name = since.map(|since| since.name.clone());
-    match (finding, since_name) {
+    Some(match (finding, since_name) {
         (CaptureFinding::Unchanged, Some(Some(name))) => PeriodicRecord::Reused(name),
         (CaptureFinding::Unchanged, Some(None)) => PeriodicRecord::WithoutName,
-        (CaptureFinding::Unchanged, None) => PeriodicRecord::Skipped,
+        (CaptureFinding::Unchanged, None) => return None,
         (CaptureFinding::InitialFiles { mark }, _) => PeriodicRecord::InitialFiles { mark },
         (
             CaptureFinding::Captured {
@@ -291,14 +289,13 @@ fn plan_periodic_record<Copy>(
             parent: Some((name, StoreChangeDetection::SizeMtime)),
         },
         (CaptureFinding::Captured { copy, .. }, _) => PeriodicRecord::Own { copy, parent: None },
-    }
+    })
 }
 
 impl<Copy> PeriodicRecord<Copy> {
     /// The same record with the copy that `with` makes of its copy.
     fn with_copy<Other>(self, with: impl FnOnce(Copy) -> Other) -> PeriodicRecord<Other> {
         match self {
-            Self::Skipped => PeriodicRecord::Skipped,
             Self::WithoutName => PeriodicRecord::WithoutName,
             Self::InitialFiles { mark } => PeriodicRecord::InitialFiles { mark },
             Self::Own { copy, parent } => PeriodicRecord::Own {
@@ -311,7 +308,7 @@ impl<Copy> PeriodicRecord<Copy> {
 }
 
 /// What a periodic snapshot writes: the record that [`plan_periodic_record`] decides, with the
-/// upload that starts after the record commits. It is never [`PeriodicRecord::Skipped`].
+/// upload that starts after the record commits.
 struct PeriodicPlan(PeriodicRecord<PendingUpload>);
 
 /// The upload of a periodic snapshot whose record is not written yet. It is consumed once, by
@@ -337,14 +334,12 @@ impl PeriodicPlan {
         let Some((admission, since, outcome)) = capture else {
             return Some(Self(PeriodicRecord::WithoutName));
         };
-        match plan_periodic_record(CaptureFinding::of(outcome), since.as_ref()) {
-            PeriodicRecord::Skipped => None,
-            record => Some(Self(record.with_copy(|(tree, mark)| PendingUpload {
-                admission,
-                tree,
-                mark,
-            }))),
-        }
+        let record = plan_periodic_record(CaptureFinding::of(outcome), since.as_ref())?;
+        Some(Self(record.with_copy(|(tree, mark)| PendingUpload {
+            admission,
+            tree,
+            mark,
+        })))
     }
 
     /// The filesystem snapshot name of the record.
@@ -352,9 +347,7 @@ impl PeriodicPlan {
         match &self.0 {
             PeriodicRecord::Own { copy, .. } => Some(copy.admission.name().clone()),
             PeriodicRecord::Reused(name) => Some(name.clone()),
-            PeriodicRecord::Skipped
-            | PeriodicRecord::WithoutName
-            | PeriodicRecord::InitialFiles { .. } => None,
+            PeriodicRecord::WithoutName | PeriodicRecord::InitialFiles { .. } => None,
         }
     }
 
@@ -362,8 +355,7 @@ impl PeriodicPlan {
     fn confirmed_at_once(&self) -> Option<FilesystemSnapshotName> {
         match &self.0 {
             PeriodicRecord::Reused(name) => Some(name.clone()),
-            PeriodicRecord::Skipped
-            | PeriodicRecord::WithoutName
+            PeriodicRecord::WithoutName
             | PeriodicRecord::InitialFiles { .. }
             | PeriodicRecord::Own { .. } => None,
         }
@@ -383,7 +375,7 @@ impl PeriodicPlan {
                     },
                 parent,
             } => admission.submit(tree.into(), parent, host.confirm(mark)),
-            PeriodicRecord::Skipped | PeriodicRecord::WithoutName | PeriodicRecord::Reused(_) => {}
+            PeriodicRecord::WithoutName | PeriodicRecord::Reused(_) => {}
         }
     }
 
@@ -1130,27 +1122,27 @@ mod tests {
         assert_eq!(
             cases,
             [
-                PeriodicRecord::Reused(name.clone()),
-                PeriodicRecord::WithoutName,
-                PeriodicRecord::Skipped,
-                PeriodicRecord::InitialFiles { mark },
-                PeriodicRecord::InitialFiles { mark },
-                PeriodicRecord::Own {
+                Some(PeriodicRecord::Reused(name.clone())),
+                Some(PeriodicRecord::WithoutName),
+                None,
+                Some(PeriodicRecord::InitialFiles { mark }),
+                Some(PeriodicRecord::InitialFiles { mark }),
+                Some(PeriodicRecord::Own {
                     copy: 1,
                     parent: Some((name, StoreChangeDetection::SizeMtime)),
-                },
-                PeriodicRecord::Own {
+                }),
+                Some(PeriodicRecord::Own {
                     copy: 1,
                     parent: None
-                },
-                PeriodicRecord::Own {
+                }),
+                Some(PeriodicRecord::Own {
                     copy: 1,
                     parent: None
-                },
-                PeriodicRecord::Own {
+                }),
+                Some(PeriodicRecord::Own {
                     copy: 1,
                     parent: None
-                },
+                }),
             ]
         );
     }
