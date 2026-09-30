@@ -83,7 +83,7 @@ use crate::services::oplog::{
 };
 use crate::services::resource_limits::AtomicResourceEntry;
 use crate::services::resource_usage_metering::ResourceUsageAccount;
-use crate::services::rpc::DurableStreamReadError;
+use crate::services::rpc::DurableStreamRemoteError;
 use crate::services::worker::{
     GetWorkerMetadataResult, InvocationResultIndexLookup, WorkerService,
 };
@@ -307,6 +307,14 @@ struct StartupComponentChargeRequirement {
 /// loop and re-runs `lookup_invocation_result`, which loads the published status
 /// record. Cheap, but not free, so this is not a millisecond knob.
 pub const INVOCATION_OWNERSHIP_RECHECK_INTERVAL: Duration = Duration::from_secs(5);
+
+/// Upper bound on telling one stream producer that this consumer is being deleted.
+///
+/// The control is retried while the producer is unavailable, which covers a producer that is
+/// recovering, migrating or being deleted itself. A producer that stays unavailable longer than
+/// this, typically because its own deletion failed, fails this deletion attempt instead of
+/// leaving the consumer in `Deleting` without a result; the deletion can then be retried.
+const CONSUMER_DELETION_FINALIZATION_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Classifies a `get_metadata(target)` result into the startup charge action,
 /// preserving the invariant that admission charges the target revision whenever
@@ -3021,8 +3029,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
         };
         let started = matches!(outcome, DeleteOutcome::Started(_));
-        let producer_attempt =
-            started.then(|| self.durable_stream_producer.begin_deletion_attempt());
         drop(instance);
         drop(cleanup);
         if let Some(hook) = Ctx::worker_deletion_hook(&self.extra_deps()) {
@@ -3042,21 +3048,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             DeleteOutcome::AlreadyDeleting(_) => return Ok(Some(outcome)),
         }
 
-        let producer_attempt = producer_attempt.expect("started deletion has a producer attempt");
         let worker = self.clone();
         let sender = sender.expect("started deletion has a completion sender");
         tokio::spawn(async move {
-            let result = std::panic::AssertUnwindSafe(
-                worker.run_deletion_attempt(retry_cleanup, &producer_attempt),
-            )
-            .catch_unwind()
-            .await
-            .unwrap_or_else(|_| {
-                Err(WorkerExecutorError::runtime(
-                    "Worker deletion task panicked",
-                ))
-            });
-            producer_attempt.finish(&result);
+            let result = std::panic::AssertUnwindSafe(worker.run_deletion_attempt(retry_cleanup))
+                .catch_unwind()
+                .await
+                .unwrap_or_else(|_| {
+                    Err(WorkerExecutorError::runtime(
+                        "Worker deletion task panicked",
+                    ))
+                });
             let _ = sender.send(result);
         });
 
@@ -3067,7 +3069,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     async fn run_deletion_attempt(
         self: &Arc<Self>,
         retry_cleanup: bool,
-        producer_attempt: &durable_stream_producer::DeletionProducerAttempt,
     ) -> Result<(), WorkerExecutorError> {
         let interrupt_kind = InterruptKind::Interrupt(Timestamp::now_utc());
         if !self
@@ -3189,7 +3190,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             };
             let activity = crate::services::activity::ActivityGate::new();
             let guard = activity.try_enter().unwrap();
-            producer_attempt.publish(producer.clone(), activity.clone());
             let maintenance = std::panic::AssertUnwindSafe(guard.scope(async {
                 self.finalize_durable_stream_consumer_dependencies(&producer)
                     .await?;
@@ -3243,9 +3243,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     "Worker deletion maintenance panicked",
                 ))
             });
+            producer.poison();
             activity.close();
             activity.wait_drained().await;
-            producer.poison();
             producer.wait_durable_drained().await;
             self.state_actor.drain_lifecycle().await?;
             self.durable_stream_commit()(None).await;
@@ -3467,14 +3467,19 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
         let auth_ctx = self.durable_stream_consumer_auth_ctx()?;
         for (key, mapping) in dependencies.into_values() {
-            RoutedStreamAttachmentControl::new(self.rpc(), mapping, auth_ctx.clone())
-                .finalize_attachment(
-                    key,
-                    StreamAttachmentFinalizationReason::ConsumerDeleted,
-                    Timestamp::now_utc().to_millis(),
-                )
-                .await
-                .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
+            let producer = OwnedAgentId::new(key.producer_environment_id, &key.producer);
+            let control = RoutedStreamAttachmentControl::new(self.rpc(), mapping, auth_ctx.clone());
+            tokio::time::timeout(
+                CONSUMER_DELETION_FINALIZATION_TIMEOUT,
+                control.finalize_deleted_consumer(key, Timestamp::now_utc().to_millis()),
+            )
+            .await
+            .map_err(|_| {
+                WorkerExecutorError::runtime(format!(
+                    "durable stream producer {producer} stayed unavailable while finalizing a deleted consumer's attachment"
+                ))
+            })?
+            .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
         }
         Ok(())
     }
@@ -7100,16 +7105,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         idempotency_key: &IdempotencyKey,
     ) -> Result<Option<StreamSessionPreparedRecord>, WorkerExecutorError> {
-        let producer = self.durable_stream_producer().await?;
-        self.prepared_stream_session_with_producer(idempotency_key, &producer)
-            .await
-    }
-
-    async fn prepared_stream_session_with_producer(
-        &self,
-        idempotency_key: &IdempotencyKey,
-        producer: &DurableStreamStore,
-    ) -> Result<Option<StreamSessionPreparedRecord>, WorkerExecutorError> {
         let Some(index) = self
             .durable_stream_session_status(idempotency_key)
             .await?
@@ -7117,11 +7112,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         else {
             return Ok(None);
         };
-        match producer
-            .read_session_record(index)
-            .await
-            .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?
-        {
+        match self.read_stream_session_record(index).await? {
             StreamSessionRecord::Prepared(record) => Ok(Some(record)),
             _ => Err(WorkerExecutorError::runtime(
                 "stream session index does not refer to Prepared",
@@ -7787,11 +7778,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub(crate) async fn control_durable_stream_attachment(
         &self,
         request: StreamAttachmentControlRequest,
-    ) -> Result<bool, WorkerExecutorError> {
+    ) -> Result<bool, DurableStreamRemoteError<WorkerExecutorError>> {
         if !request.is_well_formed() {
             return Err(WorkerExecutorError::invalid_request(
                 "malformed durable stream attachment control request",
-            ));
+            )
+            .into());
         }
         let key = request.operation.key();
         if let StreamAttachmentControlOperation::SourceUnavailable {
@@ -7808,11 +7800,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             {
                 return Err(WorkerExecutorError::invalid_request(
                     "source-unavailable overlay does not match the consumer incarnation",
-                ));
+                )
+                .into());
             }
             return self
-                .durable_stream_producer()
-                .await?
+                .load_durable_stream_producer()
+                .await
+                .map_err(|error| {
+                    DurableStreamRemoteError::from_producer(error, WorkerExecutorError::runtime)
+                })?
                 .commit_source_unavailable_overlay(
                     None,
                     key.clone(),
@@ -7821,7 +7817,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     *consumer_read_ordinal,
                 )
                 .await
-                .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime));
+                .map_err(|error| {
+                    DurableStreamRemoteError::from_producer(error, WorkerExecutorError::runtime)
+                });
         }
         if key.producer_environment_id != self.owned_agent_id.environment_id
             || key.producer != self.owned_agent_id.agent_id
@@ -7829,7 +7827,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         {
             return Err(WorkerExecutorError::invalid_request(
                 "durable stream attachment does not match the producer incarnation",
-            ));
+            )
+            .into());
         }
         let mapping = request.mapping.as_ref().ok_or_else(|| {
             WorkerExecutorError::invalid_request(
@@ -7843,21 +7842,18 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         {
             return Err(WorkerExecutorError::invalid_request(
                 "durable stream attachment mapping does not match the producer key",
-            ));
+            )
+            .into());
         }
-        let deletion_producer = if self.deletion_owns_retirement().await {
-            Some(self.durable_stream_producer.deletion_producer().await?)
-        } else {
-            None
-        };
-        let producer = match &deletion_producer {
-            Some(access) => access.producer().clone(),
-            None => self.durable_stream_producer().await?,
-        };
+        let producer = self.load_durable_stream_producer().await.map_err(|error| {
+            DurableStreamRemoteError::from_producer(error, WorkerExecutorError::runtime)
+        })?;
         producer
             .validate_handle(&mapping.handle)
             .await
-            .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?;
+            .map_err(|error| {
+                DurableStreamRemoteError::from_producer(error, WorkerExecutorError::invalid_request)
+            })?;
         let probe =
             DbDirectStreamAttachmentConsumerProbe::new(self.worker_service(), self.oplog_service());
         let consumer_status = if let StreamAttachmentControlOperation::Cancel {
@@ -7905,7 +7901,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         if !authorized {
             return Err(WorkerExecutorError::invalid_request(format!(
                 "consumer durable topology does not authorize this attachment transition: {consumer_status:?}"
-            )));
+            )).into());
         }
         let producer_now_millis = Timestamp::now_utc().to_millis();
         let replayed = match request.operation {
@@ -7944,7 +7940,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 if !role_matches {
                     return Err(WorkerExecutorError::invalid_request(
                         "durable stream cancellation role does not match its session mapping",
-                    ));
+                    )
+                    .into());
                 }
                 let source = &mapping.handle.source_invocation;
                 if matches!(
@@ -7958,12 +7955,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         .registered_stream_role(&mapping.handle)
                         .await
                         .map_err(|error| {
-                            error.into_worker_executor_error(WorkerExecutorError::runtime)
+                            DurableStreamRemoteError::from_producer(
+                                error,
+                                WorkerExecutorError::runtime,
+                            )
                         })?
                         .direction()
                         == SessionStreamRole::Output
                     && let Some(prepared) = self
-                        .prepared_stream_session_with_producer(&source.idempotency_key, &producer)
+                        .prepared_stream_session(&source.idempotency_key)
                         .await?
                     && stream_output_consumer_is_observer(&prepared.attempt, &key)?
                 {
@@ -7976,7 +7976,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         .await
                         .map(|outcome| outcome.replayed)
                         .map_err(|error| {
-                            error.into_worker_executor_error(WorkerExecutorError::runtime)
+                            DurableStreamRemoteError::from_producer(
+                                error,
+                                WorkerExecutorError::runtime,
+                            )
                         });
                 }
                 producer
@@ -7992,14 +7995,16 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 unreachable!("source-unavailable controls return before producer execution")
             }
         }
-        .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
+        .map_err(|error| {
+            DurableStreamRemoteError::from_producer(error, WorkerExecutorError::runtime)
+        })?;
         Ok(replayed)
     }
 
     pub(crate) async fn read_durable_stream_by_handle(
         &self,
         request: golem_common::model::durable_stream::StreamHandleReadRequest,
-    ) -> Result<Vec<u8>, DurableStreamReadError<WorkerExecutorError>> {
+    ) -> Result<Vec<u8>, DurableStreamRemoteError<WorkerExecutorError>> {
         let handle = &request.handle;
         if handle.producer_environment_id != self.owned_agent_id.environment_id
             || handle.producer != self.owned_agent_id.agent_id
@@ -8014,12 +8019,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .load_durable_stream_producer()
             .await
             .map_err(|error| {
-                DurableStreamReadError::from_producer(error, WorkerExecutorError::runtime)
+                DurableStreamRemoteError::from_producer(error, WorkerExecutorError::runtime)
             })?
             .read_by_handle(request)
             .await
             .map_err(|error| {
-                DurableStreamReadError::from_producer(error, WorkerExecutorError::invalid_request)
+                DurableStreamRemoteError::from_producer(error, WorkerExecutorError::invalid_request)
             })?;
         golem_common::serialization::serialize(&result)
             .map_err(WorkerExecutorError::runtime)
@@ -8030,7 +8035,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub(crate) async fn read_durable_stream_segment(
         &self,
         request: AttachedStreamSegmentRequest,
-    ) -> Result<Vec<CommittedProducerStreamEvent>, DurableStreamReadError<WorkerExecutorError>>
+    ) -> Result<Vec<CommittedProducerStreamEvent>, DurableStreamRemoteError<WorkerExecutorError>>
     {
         if !request.is_well_formed() {
             return Err(WorkerExecutorError::invalid_request(
@@ -8049,13 +8054,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .into());
         }
         let producer = self.load_durable_stream_producer().await.map_err(|error| {
-            DurableStreamReadError::from_producer(error, WorkerExecutorError::runtime)
+            DurableStreamRemoteError::from_producer(error, WorkerExecutorError::runtime)
         })?;
         producer
             .validate_handle(&request.mapping.handle)
             .await
             .map_err(|error| {
-                DurableStreamReadError::from_producer(error, WorkerExecutorError::invalid_request)
+                DurableStreamRemoteError::from_producer(error, WorkerExecutorError::invalid_request)
             })?;
         let probe =
             DbDirectStreamAttachmentConsumerProbe::new(self.worker_service(), self.oplog_service());
@@ -8100,12 +8105,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .activate_attachment(key.clone(), Timestamp::now_utc().to_millis())
                 .await
                 .map_err(|error| {
-                    DurableStreamReadError::from_producer(error, WorkerExecutorError::runtime)
+                    DurableStreamRemoteError::from_producer(error, WorkerExecutorError::runtime)
                 })?;
             events = read().await;
         }
         let events = events.map_err(|error| {
-            DurableStreamReadError::from_producer(error, WorkerExecutorError::runtime)
+            DurableStreamRemoteError::from_producer(error, WorkerExecutorError::runtime)
         })?;
         if request.wait_for_events
             && probe

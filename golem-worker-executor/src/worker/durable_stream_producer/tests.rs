@@ -2,7 +2,6 @@ use super::*;
 use crate::durable_host::durable_stream::tests::{TestOplog, identity};
 use crate::services::activity::spawn_with_activity;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
 use test_r::test;
 
 async fn load() -> LoadResult {
@@ -50,91 +49,6 @@ async fn first_load_and_retirement_wake_parked_recovery() {
     assert!(slot.try_retire_quiescent());
     changed.await;
     assert!(slot.is_retired());
-}
-
-#[test]
-#[test_r::timeout("10s")]
-async fn deletion_control_waits_for_the_replacement_producer() {
-    let slot = Arc::new(DurableStreamProducerSlot::default());
-    slot.fence();
-    let attempt = slot.begin_deletion_attempt();
-    let waiting = tokio::spawn({
-        let slot = slot.clone();
-        async move { slot.deletion_producer().await }
-    });
-    tokio::task::yield_now().await;
-    assert!(!waiting.is_finished());
-
-    let producer = load().await.unwrap();
-    let activity = ActivityGate::new();
-    attempt.publish(producer.clone(), activity);
-    let published = waiting.await.unwrap().unwrap();
-    assert!(Arc::ptr_eq(published.producer(), &producer));
-    published.producer().ensure_healthy().unwrap();
-}
-
-#[test]
-#[test_r::timeout("10s")]
-async fn deletion_control_survives_the_claim_to_attempt_publication_race() {
-    let slot = Arc::new(DurableStreamProducerSlot::default());
-    let mut waiting = Box::pin(slot.deletion_producer());
-    assert!(
-        tokio::time::timeout(Duration::from_millis(10), waiting.as_mut())
-            .await
-            .is_err(),
-        "a control routed after deletion claims retirement must wait for its attempt publication"
-    );
-
-    let attempt = slot.begin_deletion_attempt();
-    let producer = load().await.unwrap();
-    attempt.publish(producer.clone(), ActivityGate::new());
-    let published = waiting.await.unwrap();
-    assert!(Arc::ptr_eq(published.producer(), &producer));
-}
-
-#[test]
-#[test_r::timeout("10s")]
-async fn failed_deletion_attempt_wakes_waiters_and_retry_has_fresh_state() {
-    let slot = Arc::new(DurableStreamProducerSlot::default());
-    let first = slot.begin_deletion_attempt();
-    let waiting = tokio::spawn({
-        let slot = slot.clone();
-        async move { slot.deletion_producer().await }
-    });
-    tokio::task::yield_now().await;
-    assert!(!waiting.is_finished());
-    first.finish(&Err(WorkerExecutorError::runtime("load failed")));
-    assert!(waiting.await.unwrap().is_err());
-
-    let second = slot.begin_deletion_attempt();
-    let producer = load().await.unwrap();
-    second.publish(producer.clone(), ActivityGate::new());
-    let published = slot.deletion_producer().await.unwrap();
-    assert!(Arc::ptr_eq(published.producer(), &producer));
-}
-
-#[test]
-#[test_r::timeout("10s")]
-async fn admitted_deletion_control_drains_before_poison_and_late_control_is_rejected() {
-    let slot = Arc::new(DurableStreamProducerSlot::default());
-    let attempt = slot.begin_deletion_attempt();
-    let producer = load().await.unwrap();
-    let activity = ActivityGate::new();
-    let maintenance = activity.try_enter().unwrap();
-    attempt.publish(producer.clone(), activity.clone());
-
-    let control = slot.deletion_producer().await.unwrap();
-    activity.close();
-    drop(maintenance);
-    let mut drained = Box::pin(activity.wait_drained());
-    assert!(futures::poll!(drained.as_mut()).is_pending());
-    assert!(slot.deletion_producer().await.is_err());
-    producer.ensure_healthy().unwrap();
-
-    drop(control);
-    drained.await;
-    producer.poison();
-    assert!(producer.ensure_healthy().is_err());
 }
 
 #[test]

@@ -57,7 +57,7 @@ use crate::services::oplog::{
     CommitLevel, DurableStreamOplogRecord, Oplog, OplogError, OplogFence, OplogOps, OplogService,
     OplogServiceOps,
 };
-use crate::services::rpc::{DurableStreamReadError, Rpc};
+use crate::services::rpc::{DurableStreamRemoteError, Rpc};
 use crate::services::worker::WorkerService;
 use crate::services::worker_fork::lineage::StreamForkLineage;
 use async_trait::async_trait;

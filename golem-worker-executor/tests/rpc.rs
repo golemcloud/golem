@@ -2548,6 +2548,42 @@ async fn concurrently_deleting_attached_stream_consumer_and_producer_succeeds(
 #[test]
 #[timeout("2 minutes")]
 #[tracing::instrument]
+async fn deleting_stream_consumer_after_its_producer_succeeds(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .store()
+        .await?;
+    let name = format!("sequential-stream-delete-{}", uuid::Uuid::new_v4());
+    let caller = agent_id!("StreamingRpcCaller", name.clone());
+    let producer = agent_id!("StreamingRpcTarget", name);
+
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &caller,
+            "benchmark_producer",
+            data_value!(1u32, 4096u32),
+        )
+        .await?;
+
+    let caller_id = AgentId::from_agent_id(component.id, &caller).map_err(anyhow::Error::msg)?;
+    let producer_id =
+        AgentId::from_agent_id(component.id, &producer).map_err(anyhow::Error::msg)?;
+    executor.delete_worker(&producer_id).await?;
+    executor.delete_worker(&caller_id).await?;
+    Ok(())
+}
+
+#[test]
+#[timeout("2 minutes")]
+#[tracing::instrument]
 async fn active_ephemeral_compute_interrupt_same_key_does_not_restart_invocation(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,

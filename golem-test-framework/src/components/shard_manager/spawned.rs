@@ -43,10 +43,22 @@ pub struct SpawnedShardManager {
 }
 
 struct ProcessState {
-    shutting_down: bool,
-    shutdown: tokio::sync::watch::Sender<bool>,
+    supervision: Supervision,
+    /// Set while an in-flight automatic restart must give up instead of waiting for the new
+    /// process to serve.
+    interrupt_restart: tokio::sync::watch::Sender<bool>,
     child: Option<Child>,
     logger: Option<ChildProcessLogger>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Supervision {
+    /// The restart monitor, when enabled, replaces a process that exited on its own.
+    Active,
+    /// `kill` stopped the process on purpose; the monitor leaves it down until `restart`.
+    Suspended,
+    /// The component is being dropped; the monitor exits.
+    ShuttingDown,
 }
 
 struct StartingChild(Option<Child>);
@@ -126,8 +138,8 @@ impl SpawnedShardManager {
             number_of_shards_override: Arc::new(RwLock::new(number_of_shards_override)),
             state_write_timeout_override,
             process: Arc::new(Mutex::new(ProcessState {
-                shutting_down: false,
-                shutdown: tokio::sync::watch::channel(false).0,
+                supervision: Supervision::Active,
+                interrupt_restart: tokio::sync::watch::channel(false).0,
                 child: Some(child),
                 logger: Some(logger),
             })),
@@ -162,7 +174,7 @@ impl SpawnedShardManager {
         out_level: Level,
         err_level: Level,
         otlp: bool,
-        mut shutdown: Option<tokio::sync::watch::Receiver<bool>>,
+        mut interrupt: Option<tokio::sync::watch::Receiver<bool>>,
     ) -> anyhow::Result<(Child, ChildProcessLogger)> {
         let mut child = StartingChild(Some(
             Command::new(executable)
@@ -197,9 +209,11 @@ impl SpawnedShardManager {
 
         let deadline = Instant::now() + Duration::from_secs(90);
         loop {
-            if shutdown.as_ref().is_some_and(|shutdown| *shutdown.borrow()) {
-                let _ = child.kill();
-                anyhow::bail!("Shard manager shutdown requested during startup");
+            if interrupt
+                .as_ref()
+                .is_some_and(|interrupt| *interrupt.borrow())
+            {
+                anyhow::bail!("Shard manager restart interrupted during startup");
             }
             match child.try_wait() {
                 Ok(Some(status)) => {
@@ -207,17 +221,15 @@ impl SpawnedShardManager {
                 }
                 Ok(None) => {}
                 Err(error) => {
-                    let _ = child.kill();
                     anyhow::bail!("Failed to inspect golem-shard-manager process: {error}");
                 }
             }
             let serving = is_serving_grpc("localhost", grpc_port, Duration::from_millis(500));
-            let serving = match shutdown.as_mut() {
-                Some(shutdown) => tokio::select! {
+            let serving = match interrupt.as_mut() {
+                Some(interrupt) => tokio::select! {
                     biased;
-                    _ = shutdown.changed() => {
-                        let _ = child.kill();
-                        anyhow::bail!("Shard manager shutdown requested during startup");
+                    _ = interrupt.changed() => {
+                        anyhow::bail!("Shard manager restart interrupted during startup");
                     }
                     serving = serving => serving,
                 },
@@ -227,15 +239,13 @@ impl SpawnedShardManager {
                 break;
             }
             if Instant::now() >= deadline {
-                let _ = child.kill();
                 anyhow::bail!("Timed out waiting for golem-shard-manager startup");
             }
-            match shutdown.as_mut() {
-                Some(shutdown) => tokio::select! {
+            match interrupt.as_mut() {
+                Some(interrupt) => tokio::select! {
                     biased;
-                    _ = shutdown.changed() => {
-                        let _ = child.kill();
-                        anyhow::bail!("Shard manager shutdown requested during startup");
+                    _ = interrupt.changed() => {
+                        anyhow::bail!("Shard manager restart interrupted during startup");
                     }
                     _ = tokio::time::sleep(Duration::from_millis(250)) => {}
                 },
@@ -256,6 +266,9 @@ impl SpawnedShardManager {
         process.logger.take();
     }
 
+    /// Replaces a shard manager process that exited on its own. An explicit `kill` suspends the
+    /// monitor and interrupts a restart that is still waiting for the new process to serve, so
+    /// stopping never waits for a restart to succeed.
     fn start_automatic_restart_monitor(&self) {
         let process = self.process.clone();
         let lifecycle = self.lifecycle.clone();
@@ -271,22 +284,24 @@ impl SpawnedShardManager {
         let out_level = self.out_level;
         let err_level = self.err_level;
         let otlp = self.otlp;
-        let shutdown = self.process.lock().unwrap().shutdown.subscribe();
 
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(Duration::from_millis(250)).await;
-                if process.lock().unwrap().shutting_down {
-                    return;
+                match process.lock().unwrap().supervision {
+                    Supervision::ShuttingDown => return,
+                    Supervision::Suspended => continue,
+                    Supervision::Active => {}
                 }
 
                 let _lifecycle = lifecycle.lock().await;
-                if process.lock().unwrap().shutting_down {
-                    return;
-                }
-
                 let exited = {
                     let mut state = process.lock().unwrap();
+                    match state.supervision {
+                        Supervision::ShuttingDown => return,
+                        Supervision::Suspended => continue,
+                        Supervision::Active => {}
+                    }
                     match state.child.as_mut().map(Child::try_wait) {
                         Some(Ok(Some(status))) => {
                             warn!(?status, "Spawned shard manager exited; restarting it");
@@ -301,13 +316,13 @@ impl SpawnedShardManager {
                         Some(Ok(None)) | None => false,
                     }
                 };
-
                 if !exited {
                     continue;
                 }
-                let current_number_of_shards_override = *number_of_shards_override.read().unwrap();
 
-                let (mut restarted_child, restarted_logger) = loop {
+                let current_number_of_shards_override = *number_of_shards_override.read().unwrap();
+                let interrupt = process.lock().unwrap().interrupt_restart.subscribe();
+                let restarted = loop {
                     let restart = std::panic::AssertUnwindSafe(Self::start(
                         &executable,
                         &working_directory,
@@ -321,39 +336,44 @@ impl SpawnedShardManager {
                         out_level,
                         err_level,
                         otlp,
-                        Some(shutdown.clone()),
+                        Some(interrupt.clone()),
                     ))
                     .catch_unwind()
                     .await;
                     match restart {
-                        Ok(Ok(restarted)) => break restarted,
+                        Ok(Ok(restarted)) => break Some(restarted),
                         Ok(Err(error)) => {
-                            if process.lock().unwrap().shutting_down {
-                                return;
+                            if process.lock().unwrap().supervision != Supervision::Active {
+                                break None;
                             }
                             warn!(%error, "Failed to restart spawned shard manager; retrying");
-                            tokio::time::sleep(Duration::from_secs(1)).await;
                         }
                         Err(_) => {
-                            if process.lock().unwrap().shutting_down {
-                                return;
+                            if process.lock().unwrap().supervision != Supervision::Active {
+                                break None;
                             }
                             warn!("Restarting the spawned shard manager panicked; retrying");
-                            tokio::time::sleep(Duration::from_secs(1)).await;
                         }
                     }
+                    tokio::time::sleep(Duration::from_secs(1)).await;
                 };
 
                 let mut state = process.lock().unwrap();
-                if state.shutting_down {
-                    drop(state);
-                    let _ = restarted_child.kill();
-                    let _ = restarted_child.wait();
+                match (restarted, state.supervision) {
+                    (Some((child, logger)), Supervision::Active) => {
+                        state.child = Some(child);
+                        state.logger = Some(logger);
+                        info!("Restarted spawned shard manager after an unexpected exit");
+                    }
+                    (Some((mut child, _)), _) => {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                    }
+                    (None, _) => {}
+                }
+                if state.supervision == Supervision::ShuttingDown {
                     return;
                 }
-                state.child = Some(restarted_child);
-                state.logger = Some(restarted_logger);
-                info!("Restarted spawned shard manager after an unexpected exit");
             }
         });
     }
@@ -370,6 +390,13 @@ impl ShardManager for SpawnedShardManager {
     }
 
     async fn kill(&self) {
+        {
+            let mut process = self.process.lock().unwrap();
+            if process.supervision == Supervision::Active {
+                process.supervision = Supervision::Suspended;
+            }
+            process.interrupt_restart.send_replace(true);
+        }
         let _lifecycle = self.lifecycle.lock().await;
         self.blocking_kill();
     }
@@ -383,7 +410,6 @@ impl ShardManager for SpawnedShardManager {
         }
         let number_of_shards_override: Option<usize> =
             *self.number_of_shards_override.read().unwrap();
-        let shutdown = self.process.lock().unwrap().shutdown.subscribe();
 
         let (child, logger) = Self::start(
             &self.executable,
@@ -398,7 +424,7 @@ impl ShardManager for SpawnedShardManager {
             self.out_level,
             self.err_level,
             self.otlp,
-            Some(shutdown),
+            None,
         )
         .await
         .expect("Failed to restart golem-shard-manager");
@@ -410,6 +436,10 @@ impl ShardManager for SpawnedShardManager {
 
         process.child = Some(child);
         process.logger = Some(logger);
+        if process.supervision == Supervision::Suspended {
+            process.supervision = Supervision::Active;
+        }
+        process.interrupt_restart.send_replace(false);
     }
 }
 
@@ -417,8 +447,8 @@ impl Drop for SpawnedShardManager {
     fn drop(&mut self) {
         info!("Stopping golem-shard-manager");
         let mut process = self.process.lock().unwrap();
-        process.shutting_down = true;
-        process.shutdown.send_replace(true);
+        process.supervision = Supervision::ShuttingDown;
+        process.interrupt_restart.send_replace(true);
         if let Some(mut child) = process.child.take() {
             let _ = child.kill();
             let _ = child.wait();

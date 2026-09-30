@@ -26,7 +26,7 @@ use crate::model::public_oplog::{
 };
 use crate::model::{LastError, LookupResult};
 use crate::services::events::Event;
-use crate::services::rpc::DurableStreamReadError;
+use crate::services::rpc::DurableStreamRemoteError;
 use crate::services::shard_manager::{RecoveryOutcome, ShardAssignmentChangedHook};
 use crate::services::worker_activator::{
     DefaultWorkerActivator, LazyWorkerActivator, WorkerActivator,
@@ -508,7 +508,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     async fn control_durable_stream_attachment_internal(
         &self,
         request: DurableStreamAttachmentControlRequest,
-    ) -> Result<durable_stream_attachment_control_response::Result, WorkerExecutorError> {
+    ) -> Result<
+        durable_stream_attachment_control_response::Result,
+        DurableStreamRemoteError<WorkerExecutorError>,
+    > {
         let owned_agent_id = extract_owned_agent_id(
             &request,
             |request| &request.producer_agent_id,
@@ -523,7 +526,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         if !matches!(auth_ctx, AuthCtx::System | AuthCtx::Agent(_)) {
             return Err(WorkerExecutorError::invalid_request(
                 "durable stream attachment control requires an authenticated internal caller",
-            ));
+            )
+            .into());
         }
         if let Some(control) = request.export_control {
             if !matches!(auth_ctx, AuthCtx::System)
@@ -534,7 +538,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             {
                 return Err(WorkerExecutorError::invalid_request(
                     "export stream control requires a system caller and no attachment fields",
-                ));
+                )
+                .into());
             }
             let result =
                 match Worker::<Ctx>::find_durable_stream_worker(self, &owned_agent_id).await? {
@@ -584,56 +589,37 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         {
             return Err(WorkerExecutorError::invalid_request(
                 "durable stream attachment target does not match the routed worker",
-            ));
+            )
+            .into());
         }
         let worker = Worker::<Ctx>::find_durable_stream_worker(self, &owned_agent_id)
             .await?
             .ok_or_else(|| WorkerExecutorError::worker_not_found(owned_agent_id.agent_id()))?;
-        let deleting_producer =
-            !control.operation.targets_consumer() && worker.deletion_owns_retirement().await;
-        if deleting_producer {
-            return worker
-                .control_durable_stream_attachment(control)
-                .await
-                .map(durable_stream_attachment_control_response::Result::Replayed);
-        }
+        // A producer that is being deleted is unavailable rather than failed: the caller retries
+        // until the deletion either finishes (the producer is then not found, which completes a
+        // consumer-side finalization) or fails and leaves the producer resident again. A consumer
+        // that is being deleted no longer accepts overlays; its own deletion settles its topology.
+        let targets_consumer = control.operation.targets_consumer();
+        let deleting = |message: &str| {
+            if targets_consumer {
+                DurableStreamRemoteError::Other(WorkerExecutorError::invalid_request(message))
+            } else {
+                DurableStreamRemoteError::Unavailable
+            }
+        };
         let scope = crate::worker::tasks::TaskScope::default();
-        if let Err(error) = scope.bind(&worker.tasks) {
-            if !control.operation.targets_consumer() && worker.deletion_owns_retirement().await {
-                return worker
-                    .control_durable_stream_attachment(control)
-                    .await
-                    .map(durable_stream_attachment_control_response::Result::Replayed);
-            }
-            return Err(WorkerExecutorError::invalid_request(error));
-        }
-        let retry_control = control.clone();
-        let result = scope
+        scope.bind(&worker.tasks).map_err(deleting)?;
+        scope
             .run(worker.control_durable_stream_attachment(control))
-            .await;
-        drop(scope);
-        match result {
-            Some(result) => {
-                result.map(durable_stream_attachment_control_response::Result::Replayed)
-            }
-            None if !retry_control.operation.targets_consumer()
-                && worker.deletion_owns_retirement().await =>
-            {
-                worker
-                    .control_durable_stream_attachment(retry_control)
-                    .await
-                    .map(durable_stream_attachment_control_response::Result::Replayed)
-            }
-            None => Err(WorkerExecutorError::invalid_request(
-                "Worker is being deleted",
-            )),
-        }
+            .await
+            .ok_or_else(|| deleting("Worker is being deleted"))?
+            .map(durable_stream_attachment_control_response::Result::Replayed)
     }
 
     async fn read_durable_stream_segment_internal(
         &self,
         request: DurableStreamSegmentReadRequest,
-    ) -> Result<Vec<u8>, DurableStreamReadError<WorkerExecutorError>> {
+    ) -> Result<Vec<u8>, DurableStreamRemoteError<WorkerExecutorError>> {
         let owned_agent_id = extract_owned_agent_id(
             &request,
             |request| &request.producer_agent_id,
@@ -3221,7 +3207,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     result: Some(result),
                 })))
             }
-            Err(mut error) => record.fail(
+            Err(DurableStreamRemoteError::Unavailable) => {
+                let message = "durable stream producer is unavailable";
+                record.fail(
+                    Err(Status::unavailable(message)),
+                    &mut WorkerExecutorError::runtime(message),
+                )
+            }
+            Err(DurableStreamRemoteError::Other(mut error)) => record.fail(
                 Ok(Response::new(DurableStreamAttachmentControlResponse {
                     result: Some(durable_stream_attachment_control_response::Result::Failure(
                         error.clone().into(),
@@ -3251,14 +3244,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     payload,
                 )),
             }))),
-            Err(DurableStreamReadError::Unavailable) => {
+            Err(DurableStreamRemoteError::Unavailable) => {
                 let message = "durable stream producer is unavailable";
                 record.fail(
                     Err(Status::unavailable(message)),
                     &mut WorkerExecutorError::runtime(message),
                 )
             }
-            Err(DurableStreamReadError::Other(mut error)) => record.fail(
+            Err(DurableStreamRemoteError::Other(mut error)) => record.fail(
                 Ok(Response::new(DurableStreamSegmentReadResponse {
                     result: Some(durable_stream_segment_read_response::Result::Failure(
                         error.clone().into(),
@@ -3304,15 +3297,15 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let result = match worker {
             Ok(worker) => match request.try_into() {
                 Ok(request) => worker.read_stream_slot(request).await,
-                Err(error) => Err(DurableStreamReadError::Other(error)),
+                Err(error) => Err(DurableStreamRemoteError::Other(error)),
             },
             Err(error) => Err(error.into()),
         };
         let result = match result {
             Ok(Some(value)) => Outcome::Success(value.into()),
             Ok(None) => Outcome::NotFound(golem::common::Empty {}),
-            Err(DurableStreamReadError::Other(error)) => Outcome::Failure(error.into()),
-            Err(DurableStreamReadError::Unavailable) => {
+            Err(DurableStreamRemoteError::Other(error)) => Outcome::Failure(error.into()),
+            Err(DurableStreamRemoteError::Unavailable) => {
                 return Err(Status::unavailable(
                     "durable stream producer is unavailable",
                 ));

@@ -249,12 +249,18 @@ commit, then stop status writers. Only explicit interruption records a pending t
 Archival moves the oplog before removing the cached worker. The open oplog generation and its
 forwarding wrapper may be reused by the next worker, so ordinary retirement does not close their
 task admission or forwarding. Deletion claims ownership under the same owner-cleanup lock, then
-drains the resident stream producer before running maintenance on a private producer. Each deletion
-attempt publishes that replacement and an admission gate through the producer slot before
-maintenance. Producer controls arriving after retirement either join that attempt, holding an
-admission until the operation finishes, or receive its terminal failure; a retry has a fresh
-attempt. Deletion closes admission and drains those controls before poisoning the replacement.
-Only deletion closes the oplog generation permanently.
+drains the resident stream producer before running maintenance on a private producer. Failed
+maintenance is drained before a retry; only deletion closes the oplog generation permanently.
+
+Producer-targeted attachment controls (consumer-side finalization, activation, refresh) reach the
+producer's executor through `Rpc::control_durable_stream_attachment`, which returns
+`DurableStreamRemoteError` like slot reads. A producer that is recovering, fenced, or being deleted
+answers `Unavailable`; the caller retries with backoff instead of failing. A producer that no longer
+exists answers not-found, and consumer-side finalization treats that as success because the
+producer's own deletion cascade already dropped the attachment. Consumer deletion bounds each
+producer finalization with a timeout so a producer that never becomes reachable fails the deletion
+attempt instead of hanging it; the attempt can be retried. Producer deletion never waits for
+consumer cooperation.
 
 Cold acquisition reserves one unresolved `Worker` in `ActiveAgents`. `initialize_with` owns one
 shared attempt independently of request cancellation. `finish_construction` prepares resolved data

@@ -21,6 +21,7 @@ use crate::components::rdb::PostgresInfo;
 use crate::components::rdb::Rdb;
 use crate::components::rdb::docker_postgres::DockerPostgresRdb;
 use crate::components::rdb::provided_postgres::ProvidedPostgresRdb;
+use crate::components::rdb::sqlite::SqliteRdb;
 use crate::components::rdb::unavailable::UnavailableRdb;
 use crate::components::redis::Redis;
 use crate::components::redis::provided::ProvidedRedis;
@@ -388,10 +389,14 @@ impl BenchmarkTestDependencies {
         let initial_agent_files_service =
             Arc::new(InitialAgentFilesService::new(blob_storage.clone()));
 
-        let rdb: Arc<dyn Rdb> = {
-            let unique_network_id = Uuid::new_v4().to_string();
-            Arc::new(DockerPostgresRdb::new(&unique_network_id, true).await)
-        };
+        let unique_id = Uuid::new_v4().to_string();
+        let rdb: Arc<dyn Rdb> = Arc::new(DockerPostgresRdb::new(&unique_id, true).await);
+        // The shard manager only stores lease and quota state that nothing else reads. Keeping it
+        // out of the shared Postgres instance means executor and registry load cannot delay its
+        // state writes past `state_write_timeout`, which would make it lose its leases mid-run.
+        let shard_manager_rdb: Arc<dyn Rdb> = Arc::new(SqliteRdb::new(
+            &std::env::temp_dir().join(format!("golem-bench-shard-manager-{unique_id}")),
+        ));
 
         let component_compilation_service: Arc<dyn ComponentCompilationService> = Arc::new(
             SpawnedComponentCompilationService::new(
@@ -448,7 +453,7 @@ impl BenchmarkTestDependencies {
                 true,
                 shard_manager_http_port,
                 shard_manager_grpc_port,
-                rdb.clone(),
+                shard_manager_rdb,
                 registry_service.clone(),
                 verbosity,
                 out_level,
