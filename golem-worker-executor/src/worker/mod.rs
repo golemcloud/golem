@@ -5334,15 +5334,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let instance = match (&*instance_guard, &who) {
             (WorkerInstance::Running(running), filesystem_snapshots::Confirmer::Running(mark)) => {
                 filesystem_snapshots::InstanceView::Running {
-                    generation_matches: running
-                        .filesystem_snapshot_slot
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner)
-                        .as_ref()
-                        .and_then(|slot| {
-                            filesystem_snapshots::confirmed_slot(slot, Some(&name), *mark)
-                        })
-                        .is_some(),
+                    generation_matches: running.filesystem_snapshot_slot.owns(*mark),
                 }
             }
             (WorkerInstance::Running(_), filesystem_snapshots::Confirmer::Start(_)) => {
@@ -5374,15 +5366,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 let name = name.clone();
                 Box::new(move |instance| {
                     if let WorkerInstance::Running(running) = instance {
-                        let mut slot = running
-                            .filesystem_snapshot_slot
-                            .lock()
-                            .unwrap_or_else(std::sync::PoisonError::into_inner);
-                        if let Some(confirmed) = slot.as_ref().and_then(|current| {
-                            filesystem_snapshots::confirmed_slot(current, Some(&name), mark)
-                        }) {
-                            *slot = Some(confirmed);
-                        }
+                        running.filesystem_snapshot_slot.record(Some(&name), mark);
                     }
                 })
             }
@@ -5448,20 +5432,18 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         debug!(?outcome, "Confirmed a filesystem snapshot before a start");
     }
 
-    /// Gives the confirmed filesystem snapshot of `slot` that a periodic capture compares with,
-    /// while a start would restore its name now.
-    pub(crate) fn filesystem_snapshot_since(
+    /// The automatic snapshot record that a start selects now, under the exclusions of this
+    /// incarnation, and the index of the manual-update baseline. A periodic capture compares
+    /// with the confirmed snapshot of its slot only while a start would restore it.
+    pub(crate) fn baseline_selected_now(
         &self,
-        slot: &filesystem_snapshots::SnapshotSlot,
-    ) -> Option<filesystem_snapshots::ConfirmedFilesystemSnapshot> {
+    ) -> (
+        Option<golem_common::model::UsableAutomaticSnapshot>,
+        Option<OplogIndex>,
+    ) {
         let status = self.last_known_status.load();
-        let selected = self.start_selection(&status).automatic;
-        let slot = slot
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        filesystem_snapshots::since(
-            slot.as_ref().and_then(|slot| slot.confirmed()),
-            selected.as_ref(),
+        (
+            self.start_selection(&status).automatic,
             status.last_manual_update_snapshot_index,
         )
     }
@@ -10952,13 +10934,7 @@ impl StartFilesystem {
         let filesystem_snapshots::StartBaseline { restore, kind } = self.baseline;
         match materialize_baseline(reconstructing, prepared, restore).await {
             Ok(reconstructing) => {
-                *slot
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner) =
-                    Some(filesystem_snapshots::FilesystemSnapshotSlot::at_start(
-                        tree_mark(&reconstructing),
-                        kind.restored(),
-                    ));
+                slot.start(tree_mark(&reconstructing), kind.restored());
                 Ok(reconstructing)
             }
             Err(failure) => Err(StartFilesystemFailure {
@@ -11043,7 +11019,7 @@ impl RunningWorker {
         let filesystem_activity = Arc::new(StdMutex::new(None));
         let filesystem_activity_clone = Arc::clone(&filesystem_activity);
         let filesystem_snapshot_slot = filesystem_snapshots::SnapshotSlot::default();
-        let filesystem_snapshot_slot_clone = Arc::clone(&filesystem_snapshot_slot);
+        let filesystem_snapshot_slot_clone = filesystem_snapshot_slot.clone();
         let unload_request = Arc::new(StdMutex::new(None));
         let unload_request_clone = Arc::clone(&unload_request);
         let idle_since_millis = Arc::new(AtomicU64::new(0));

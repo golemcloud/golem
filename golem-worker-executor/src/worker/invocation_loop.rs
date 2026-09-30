@@ -32,8 +32,8 @@ use crate::services::{
 };
 use crate::worker::filesystem_snapshots::{
     ConfirmedFilesystemSnapshot, PeriodicFailure, PeriodicResult, PeriodicSnapshotHost,
-    SnapshotSlot, UpdateSnapshot, UpdateSnapshotHost, confirm_by, confirmed_slot,
-    periodic_snapshot, update_snapshot,
+    SnapshotSlot, UpdateSnapshot, UpdateSnapshotHost, confirm_by, periodic_snapshot,
+    update_snapshot,
 };
 use crate::worker::interrupt::Interrupts;
 use crate::worker::invocation::{
@@ -895,10 +895,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
     /// Ends the filesystem snapshots of the generation that runs. A confirmation of that
     /// generation that comes later writes nothing.
     fn end_snapshot_generation(&self) {
-        self.filesystem_snapshot_slot
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take();
+        self.filesystem_snapshot_slot.end();
     }
 
     async fn release_terminal_interrupt(&self) {
@@ -3670,9 +3667,10 @@ impl<Ctx: WorkerCtx> PeriodicSnapshotHost for PeriodicHost<'_, '_, Ctx> {
     }
 
     fn since(&self) -> Option<ConfirmedFilesystemSnapshot> {
+        let (selected, last_manual_update) = self.0.parent.baseline_selected_now();
         self.0
-            .parent
-            .filesystem_snapshot_since(self.0.filesystem_snapshot_slot)
+            .filesystem_snapshot_slot
+            .since(selected.as_ref(), last_manual_update)
     }
 
     async fn capture(
@@ -3757,17 +3755,7 @@ impl<Ctx: WorkerCtx> PeriodicSnapshotHost for PeriodicHost<'_, '_, Ctx> {
     }
 
     fn initial_files_written(&self, mark: TreeMark) {
-        let mut slot = self
-            .0
-            .filesystem_snapshot_slot
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(written) = slot
-            .as_ref()
-            .and_then(|current| confirmed_slot(current, None, mark))
-        {
-            *slot = Some(written);
-        }
+        self.0.filesystem_snapshot_slot.record(None, mark);
     }
 }
 

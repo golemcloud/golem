@@ -62,13 +62,77 @@ pub(crate) struct ConfirmedFilesystemSnapshot {
     pub(crate) baseline: ConfirmedBaseline,
 }
 
-/// The slot of the generation that runs, shared by the running worker and its invocation loop.
-/// It is empty before the start of a generation and after its end.
-pub(crate) type SnapshotSlot = std::sync::Arc<std::sync::Mutex<Option<FilesystemSnapshotSlot>>>;
+/// The filesystem snapshots of the generation that runs, shared by the running worker, its
+/// invocation loop and the confirmations of its uploads. It is empty before the start of a
+/// generation and after its end. Every write that is not a start goes through the generation
+/// check of [`confirmed_slot`], so a confirmation or a record of an ended generation changes
+/// nothing.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct SnapshotSlot(std::sync::Arc<std::sync::Mutex<Option<FilesystemSnapshotSlot>>>);
+
+impl SnapshotSlot {
+    /// Starts the snapshots of a generation whose baseline has `mark`. A start that restored a
+    /// named snapshot gives it as `restored`.
+    pub(crate) fn start(
+        &self,
+        mark: TreeMark,
+        restored: Option<(FilesystemSnapshotName, ConfirmedBaseline)>,
+    ) {
+        *self.lock() = Some(FilesystemSnapshotSlot::at_start(mark, restored));
+    }
+
+    /// Ends the snapshots of the generation that runs.
+    pub(crate) fn end(&self) {
+        self.lock().take();
+    }
+
+    /// Whether a capture with `mark` is of the generation that runs.
+    pub(crate) fn owns(&self, mark: TreeMark) -> bool {
+        self.lock()
+            .as_ref()
+            .is_some_and(|slot| same_generation(slot, mark))
+    }
+
+    /// Records the confirmation of `name`, or the written record without a name of a tree of
+    /// initial files when `name` is `None`, whose capture has `mark`. Only the generation that
+    /// took the capture takes it.
+    pub(crate) fn record(&self, name: Option<&FilesystemSnapshotName>, mark: TreeMark) {
+        let mut slot = self.lock();
+        if let Some(next) = slot
+            .as_ref()
+            .and_then(|current| confirmed_slot(current, name, mark))
+        {
+            *slot = Some(next);
+        }
+    }
+
+    /// The confirmed snapshot that a capture compares with now, as [`since`] decides from the
+    /// record `selected` that a start selects now and the index `last_manual_update` of the
+    /// manual-update baseline.
+    pub(crate) fn since(
+        &self,
+        selected: Option<&UsableAutomaticSnapshot>,
+        last_manual_update: Option<OplogIndex>,
+    ) -> Option<ConfirmedFilesystemSnapshot> {
+        since(
+            self.lock()
+                .as_ref()
+                .and_then(FilesystemSnapshotSlot::confirmed),
+            selected,
+            last_manual_update,
+        )
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Option<FilesystemSnapshotSlot>> {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
 
 /// What a worker knows about the filesystem snapshots of its current generation.
 #[derive(Clone, Debug)]
-pub(crate) struct FilesystemSnapshotSlot {
+struct FilesystemSnapshotSlot {
     /// The mark of the baseline of the current generation.
     generation: TreeMark,
     /// The last confirmed filesystem snapshot of the current generation, or the last written
@@ -79,7 +143,7 @@ pub(crate) struct FilesystemSnapshotSlot {
 impl FilesystemSnapshotSlot {
     /// The slot of a start with the baseline `mark`. A start that restored a named snapshot gives
     /// it as `restored`.
-    pub(crate) fn at_start(
+    fn at_start(
         mark: TreeMark,
         restored: Option<(FilesystemSnapshotName, ConfirmedBaseline)>,
     ) -> Self {
@@ -93,7 +157,7 @@ impl FilesystemSnapshotSlot {
         }
     }
 
-    pub(crate) fn confirmed(&self) -> Option<&ConfirmedFilesystemSnapshot> {
+    fn confirmed(&self) -> Option<&ConfirmedFilesystemSnapshot> {
         self.confirmed.as_ref()
     }
 }
@@ -101,31 +165,34 @@ impl FilesystemSnapshotSlot {
 /// The slot after the confirmation of `name`, whose capture has `mark`, or `None` when the
 /// capture is of another generation than `slot`. `name` is `None` for the written record of a
 /// tree of initial files at `mark`. A confirmation or such a record counts only for the
-/// generation that took its capture. The owner gate asks this before the append, and the append
-/// asks it again when it sets the slot, because the loop starts a new generation without the
-/// instance lock.
-pub(crate) fn confirmed_slot(
+/// generation that took its capture. The owner gate asks for the generation before the append,
+/// and the append asks again when it sets the slot, because the loop starts a new generation
+/// without the instance lock.
+fn confirmed_slot(
     slot: &FilesystemSnapshotSlot,
     name: Option<&FilesystemSnapshotName>,
     mark: TreeMark,
 ) -> Option<FilesystemSnapshotSlot> {
-    slot.generation
-        .same_generation(&mark)
-        .then(|| FilesystemSnapshotSlot {
-            generation: slot.generation,
-            confirmed: Some(ConfirmedFilesystemSnapshot {
-                name: name.cloned(),
-                mark,
-                baseline: ConfirmedBaseline::Periodic,
-            }),
-        })
+    same_generation(slot, mark).then(|| FilesystemSnapshotSlot {
+        generation: slot.generation,
+        confirmed: Some(ConfirmedFilesystemSnapshot {
+            name: name.cloned(),
+            mark,
+            baseline: ConfirmedBaseline::Periodic,
+        }),
+    })
+}
+
+/// Whether a capture with `mark` is of the generation of `slot`.
+fn same_generation(slot: &FilesystemSnapshotSlot, mark: TreeMark) -> bool {
+    slot.generation.same_generation(&mark)
 }
 
 /// Gives the confirmed snapshot that a capture compares with: the confirmed snapshot of the slot
 /// while a start would restore its name now. A snapshot without a name matches a selected record
 /// without a name. `selected` is the automatic snapshot record that a start selects now, and
 /// `last_manual_update` the index of the manual-update baseline.
-pub(crate) fn since(
+fn since(
     confirmed: Option<&ConfirmedFilesystemSnapshot>,
     selected: Option<&UsableAutomaticSnapshot>,
     last_manual_update: Option<OplogIndex>,
@@ -1919,6 +1986,32 @@ mod tests {
         let (disabled, _disabled_shutdown) = disabled_service();
 
         assert_eq!((enabled.is_enabled(), disabled.is_enabled()), (true, false));
+    }
+
+    #[test]
+    async fn the_shared_slot_takes_a_record_only_from_the_generation_that_runs() {
+        let (first, later) = marks();
+        let (other, _) = marks();
+        let name = FilesystemSnapshotName::periodic();
+        let selected_name = selected(Some(&name));
+        let slot = SnapshotSlot::default();
+
+        slot.record(Some(&name), later);
+        let before_start = slot.since(Some(&selected_name), None);
+        slot.start(first, None);
+        slot.record(Some(&name), other);
+        let of_other_generation = slot.since(Some(&selected_name), None);
+        slot.record(Some(&name), later);
+        let of_own_generation = slot.since(Some(&selected_name), None);
+        let owns = (slot.owns(later), slot.owns(other));
+        slot.end();
+        let ended = (slot.since(Some(&selected_name), None), slot.owns(later));
+
+        assert_eq!(before_start, None);
+        assert_eq!(of_other_generation, None);
+        assert_eq!(of_own_generation, Some(confirmed(&name, later)));
+        assert_eq!(owns, (true, false));
+        assert_eq!(ended, (None, false));
     }
 
     #[test]
