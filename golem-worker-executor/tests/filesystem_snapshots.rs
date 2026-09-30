@@ -144,6 +144,47 @@ fn entry(source: &str, target: &str, permissions: AgentFilePermissions) -> IFSEn
     }
 }
 
+/// One filesystem operation of the test agent, relative to the root of its filesystem.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Operation {
+    Mkdir {
+        path: &'static str,
+    },
+    Write {
+        path: &'static str,
+        content: &'static str,
+    },
+    Remove {
+        path: &'static str,
+    },
+    Rename {
+        from: &'static str,
+        to: &'static str,
+    },
+    Link {
+        existing: &'static str,
+        link: &'static str,
+    },
+    Symlink {
+        link: &'static str,
+        target: &'static str,
+    },
+}
+
+impl Operation {
+    /// The operation, the path and the argument of the `apply` call of the agent.
+    fn call(self) -> (&'static str, &'static str, &'static str) {
+        match self {
+            Self::Mkdir { path } => ("mkdir", path, ""),
+            Self::Write { path, content } => ("write", path, content),
+            Self::Remove { path } => ("remove", path, ""),
+            Self::Rename { from, to } => ("rename", from, to),
+            Self::Link { existing, link } => ("link", existing, link),
+            Self::Symlink { link, target } => ("symlink", link, target),
+        }
+    }
+}
+
 /// The agent under test, with its component.
 struct Agent {
     component: ComponentDto,
@@ -179,13 +220,13 @@ impl Agent {
         OwnedAgentId::new(context.default_environment_id, &self.worker_id)
     }
 
+    /// Applies `operation` and gives its result: `ok`, or the error of the agent.
     async fn apply(
         &self,
         executor: &TestWorkerExecutor,
-        operation: &str,
-        path: &str,
-        argument: &str,
+        operation: Operation,
     ) -> anyhow::Result<String> {
+        let (operation, path, argument) = operation.call();
         let (operation, path, argument) = (
             operation.to_string(),
             path.to_string(),
@@ -210,10 +251,10 @@ impl Agent {
     async fn apply_all(
         &self,
         executor: &TestWorkerExecutor,
-        operations: &[(&str, &str, &str)],
+        operations: &[Operation],
     ) -> anyhow::Result<()> {
         let outcomes = futures::stream::iter(operations.iter())
-            .then(|(operation, path, argument)| self.apply(executor, operation, path, argument))
+            .then(|operation| self.apply(executor, *operation))
             .collect::<Vec<_>>()
             .await
             .into_iter()
@@ -309,7 +350,7 @@ impl Agent {
     async fn apply_and_confirm(
         &self,
         executor: &TestWorkerExecutor,
-        operation: (&str, &str, &str),
+        operation: Operation,
     ) -> anyhow::Result<(OplogIndex, String)> {
         self.apply_all(executor, &[operation]).await?;
         let name = self.confirmed(executor).await?;
@@ -429,9 +470,15 @@ async fn a_periodic_snapshot_brings_the_files_back_after_a_restart(
         .apply_all(
             &executor,
             &[
-                ("mkdir", "data", ""),
-                ("write", "data/one.txt", "one"),
-                ("write", "two.txt", "two"),
+                Operation::Mkdir { path: "data" },
+                Operation::Write {
+                    path: "data/one.txt",
+                    content: "one",
+                },
+                Operation::Write {
+                    path: "two.txt",
+                    content: "two",
+                },
             ],
         )
         .await?;
@@ -496,15 +543,40 @@ async fn a_restart_from_a_snapshot_gives_the_tree_of_a_full_replay(
         .apply_all(
             &executor,
             &[
-                ("remove", "ro-deleted.txt", ""),
-                ("write", "rw-modified.txt", "modified by the agent"),
-                ("remove", "rw-deleted.txt", ""),
-                ("rename", "ro-renamed.txt", "renamed.txt"),
-                ("link", "ro-linked.txt", "second-name.txt"),
-                ("rename", "dir", "moved-dir"),
-                ("write", "agent.txt", "agent data"),
-                ("link", "agent.txt", "agent-alias.txt"),
-                ("symlink", "pointer", "agent.txt"),
+                Operation::Remove {
+                    path: "ro-deleted.txt",
+                },
+                Operation::Write {
+                    path: "rw-modified.txt",
+                    content: "modified by the agent",
+                },
+                Operation::Remove {
+                    path: "rw-deleted.txt",
+                },
+                Operation::Rename {
+                    from: "ro-renamed.txt",
+                    to: "renamed.txt",
+                },
+                Operation::Link {
+                    existing: "ro-linked.txt",
+                    link: "second-name.txt",
+                },
+                Operation::Rename {
+                    from: "dir",
+                    to: "moved-dir",
+                },
+                Operation::Write {
+                    path: "agent.txt",
+                    content: "agent data",
+                },
+                Operation::Link {
+                    existing: "agent.txt",
+                    link: "agent-alias.txt",
+                },
+                Operation::Symlink {
+                    link: "pointer",
+                    target: "agent.txt",
+                },
             ],
         )
         .await?;
@@ -539,13 +611,25 @@ async fn an_injected_upload_failure_falls_back_and_a_later_upload_recovers(
     let executor = start_snapshotting(deps, &context, &store, Duration::from_secs(1), None).await?;
     let agent = Agent::start(&executor, &context, initial_file_system, "failure", &[]).await?;
     agent
-        .apply_all(&executor, &[("write", "first.txt", "first")])
+        .apply_all(
+            &executor,
+            &[Operation::Write {
+                path: "first.txt",
+                content: "first",
+            }],
+        )
         .await?;
     let first = agent.confirmed(&executor).await?;
 
     store.fail_next_saves(usize::MAX);
     agent
-        .apply_all(&executor, &[("write", "second.txt", "second")])
+        .apply_all(
+            &executor,
+            &[Operation::Write {
+                path: "second.txt",
+                content: "second",
+            }],
+        )
         .await?;
     let saves = store.save_count();
     eventually(Duration::from_secs(30), || async {
@@ -561,7 +645,13 @@ async fn an_injected_upload_failure_falls_back_and_a_later_upload_recovers(
     let after_failure = agent.describe(&falling_back).await?;
     store.fail_next_saves(0);
     agent
-        .apply_all(&falling_back, &[("write", "third.txt", "third")])
+        .apply_all(
+            &falling_back,
+            &[Operation::Write {
+                path: "third.txt",
+                content: "third",
+            }],
+        )
         .await?;
     let recovered = agent.confirmed(&falling_back).await?;
     let recovered_live = agent.describe(&falling_back).await?;
@@ -603,9 +693,18 @@ async fn invocations_during_an_upload_keep_their_results_after_a_restart(
         .apply_all(
             &executor,
             &[
-                ("write", "before.txt", "before"),
-                ("write", "during-1.txt", "during"),
-                ("write", "during-2.txt", "during"),
+                Operation::Write {
+                    path: "before.txt",
+                    content: "before",
+                },
+                Operation::Write {
+                    path: "during-1.txt",
+                    content: "during",
+                },
+                Operation::Write {
+                    path: "during-2.txt",
+                    content: "during",
+                },
             ],
         )
         .await?;
@@ -694,7 +793,13 @@ async fn stop_during_an_upload(
 ) -> anyhow::Result<(Vec<String>, String)> {
     store.set_save_delay(Duration::from_secs(2));
     agent
-        .apply_all(executor, &[("write", "file.txt", "content")])
+        .apply_all(
+            executor,
+            &[Operation::Write {
+                path: "file.txt",
+                content: "content",
+            }],
+        )
         .await?;
     let live = agent.describe(executor).await?;
     let named = eventually(Duration::from_secs(30), || async {
@@ -726,12 +831,24 @@ async fn a_crash_during_an_upload_restarts_with_the_tree_of_a_run_without_a_cras
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let operations = [
-        ("mkdir", "logs", ""),
-        ("write", "logs/1.txt", "one"),
-        ("write", "logs/2.txt", "two"),
-        ("rename", "logs/1.txt", "logs/first.txt"),
-        ("link", "logs/2.txt", "second.txt"),
-        ("remove", "logs/2.txt", ""),
+        Operation::Mkdir { path: "logs" },
+        Operation::Write {
+            path: "logs/1.txt",
+            content: "one",
+        },
+        Operation::Write {
+            path: "logs/2.txt",
+            content: "two",
+        },
+        Operation::Rename {
+            from: "logs/1.txt",
+            to: "logs/first.txt",
+        },
+        Operation::Link {
+            existing: "logs/2.txt",
+            link: "second.txt",
+        },
+        Operation::Remove { path: "logs/2.txt" },
     ];
     let reference_context = TestContext::new(last_unique_id);
     let reference_store = TestFilesystemSnapshotStore::new();
@@ -891,7 +1008,13 @@ async fn an_unchanged_tree_reuses_the_confirmed_name_and_saves_nothing(
         start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
     let agent = Agent::start(&executor, &context, initial_file_system, "unchanged", &[]).await?;
     agent
-        .apply_all(&executor, &[("write", "file.txt", "content")])
+        .apply_all(
+            &executor,
+            &[Operation::Write {
+                path: "file.txt",
+                content: "content",
+            }],
+        )
         .await?;
     let name = agent.confirmed(&executor).await?;
     let saves = store.save_count();
@@ -955,7 +1078,13 @@ async fn a_manual_update_brings_the_files_into_the_target_revision(
     agent
         .apply_all(
             &executor,
-            &[("mkdir", "work", ""), ("write", "work/state.db", "rows")],
+            &[
+                Operation::Mkdir { path: "work" },
+                Operation::Write {
+                    path: "work/state.db",
+                    content: "rows",
+                },
+            ],
         )
         .await?;
     // A manual update fails while an upload of the agent runs.
@@ -1030,10 +1159,22 @@ async fn a_changed_file_at_a_changed_declaration_fails_both_updates_the_same_way
         component: manual.component.clone(),
     };
     manual
-        .apply_all(&executor, &[("write", "config.txt", "changed")])
+        .apply_all(
+            &executor,
+            &[Operation::Write {
+                path: "config.txt",
+                content: "changed",
+            }],
+        )
         .await?;
     automatic
-        .apply_all(&executor, &[("write", "config.txt", "changed")])
+        .apply_all(
+            &executor,
+            &[Operation::Write {
+                path: "config.txt",
+                content: "changed",
+            }],
+        )
         .await?;
     let manual_before = manual.describe(&executor).await?;
     let automatic_before = automatic.describe(&executor).await?;
@@ -1097,7 +1238,13 @@ async fn a_start_waits_for_a_running_upload_until_the_limit_and_then_falls_back(
     let agent = Agent::start(&executor, &context, initial_file_system, "waiting", &[]).await?;
     store.set_save_delay(Duration::from_secs(120));
     agent
-        .apply_all(&executor, &[("write", "file.txt", "content")])
+        .apply_all(
+            &executor,
+            &[Operation::Write {
+                path: "file.txt",
+                content: "content",
+            }],
+        )
         .await?;
     let live = agent.describe(&executor).await?;
     let named = eventually(Duration::from_secs(30), || async {
@@ -1168,7 +1315,7 @@ async fn tree_without_snapshots(
     deps: &WorkerExecutorTestDependencies,
     last_unique_id: &LastUniqueId,
     component: &PrecompiledComponent,
-    operations: &[(&str, &str, &str)],
+    operations: &[Operation],
 ) -> anyhow::Result<(Vec<String>, u32)> {
     let context = TestContext::new(last_unique_id);
     let root = tempfile::tempdir()?;
@@ -1189,7 +1336,16 @@ async fn a_newer_and_an_older_record_that_both_fail_to_load_end_in_a_full_replay
     #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    let operations = [("write", "a.txt", "a"), ("write", "b.txt", "b")];
+    let operations = [
+        Operation::Write {
+            path: "a.txt",
+            content: "a",
+        },
+        Operation::Write {
+            path: "b.txt",
+            content: "b",
+        },
+    ];
     let expected =
         tree_without_snapshots(deps, last_unique_id, initial_file_system, &operations).await?;
     let context = TestContext::new(last_unique_id);
@@ -1235,7 +1391,16 @@ async fn a_start_attempt_from_a_record_that_fails_to_load_writes_nothing_to_the_
         agent: agent_id!(AGENT_TYPE, "clean"),
         component: failing.component.clone(),
     };
-    let operations = [("write", "a.txt", "a"), ("write", "b.txt", "b")];
+    let operations = [
+        Operation::Write {
+            path: "a.txt",
+            content: "a",
+        },
+        Operation::Write {
+            path: "b.txt",
+            content: "b",
+        },
+    ];
     failing.apply_and_confirm(&executor, operations[0]).await?;
     let (newer, _) = failing.apply_and_confirm(&executor, operations[1]).await?;
     clean.apply_and_confirm(&executor, operations[0]).await?;
@@ -1260,7 +1425,16 @@ async fn a_rejected_record_stays_rejected_after_a_restart_and_the_older_record_s
     #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    let operations = [("write", "a.txt", "a"), ("write", "b.txt", "b")];
+    let operations = [
+        Operation::Write {
+            path: "a.txt",
+            content: "a",
+        },
+        Operation::Write {
+            path: "b.txt",
+            content: "b",
+        },
+    ];
     let expected =
         tree_without_snapshots(deps, last_unique_id, initial_file_system, &operations).await?;
     let context = TestContext::new(last_unique_id);
@@ -1300,9 +1474,9 @@ async fn a_rejected_record_stays_rejected_after_a_restart_and_the_older_record_s
 }
 
 /// One step of a generated history of an agent.
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 enum Step {
-    Operation(&'static str, &'static str, &'static str),
+    Operation(Operation),
     /// A manual update to a new revision with the declaration set of this index.
     ManualUpdate(usize),
 }
@@ -1332,11 +1506,17 @@ fn step_strategy() -> impl proptest::strategy::Strategy<Value = Step> {
     ]);
     let other = prop::sample::select(vec!["x.txt", "z.txt", "d/y.txt", "e"]);
     prop_oneof![
-        4 => path.clone().prop_map(|path| Step::Operation("write", path, "v")),
-        2 => path.clone().prop_map(|path| Step::Operation("remove", path, "")),
-        1 => Just(Step::Operation("mkdir", "d", "")),
-        2 => (path.clone(), other.clone()).prop_map(|(path, to)| Step::Operation("rename", path, to)),
-        2 => (path, other).prop_map(|(path, to)| Step::Operation("link", path, to)),
+        4 => path
+            .clone()
+            .prop_map(|path| Step::Operation(Operation::Write { path, content: "v" })),
+        2 => path
+            .clone()
+            .prop_map(|path| Step::Operation(Operation::Remove { path })),
+        1 => Just(Step::Operation(Operation::Mkdir { path: "d" })),
+        2 => (path.clone(), other.clone())
+            .prop_map(|(from, to)| Step::Operation(Operation::Rename { from, to })),
+        2 => (path, other)
+            .prop_map(|(existing, link)| Step::Operation(Operation::Link { existing, link })),
         1 => (0usize..4).prop_map(Step::ManualUpdate),
     ]
 }
@@ -1352,18 +1532,107 @@ impl Agent {
             self.applied(executor).await?,
         ))
     }
+
+    /// Runs `steps` in order. Gives the agent with the component of its last update, and the
+    /// result of each step: the result of an operation, or the outcome of an update.
+    async fn run_steps(
+        self,
+        executor: &TestWorkerExecutor,
+        steps: &[Step],
+    ) -> anyhow::Result<(Agent, Vec<String>)> {
+        futures::stream::iter(steps)
+            .map(Ok::<_, anyhow::Error>)
+            .try_fold(
+                (self, Vec::new()),
+                |(agent, mut results), step| async move {
+                    match step {
+                        Step::Operation(operation) => {
+                            results.push(agent.apply(executor, *operation).await?);
+                            Ok((agent, results))
+                        }
+                        Step::ManualUpdate(set) => {
+                            let before = agent.update_results(executor).await?.len();
+                            let updated = executor
+                                .update_component_with_files(
+                                    &agent.component.id,
+                                    AGENT_TYPE,
+                                    "it_initial_file_system_release",
+                                    declaration_set(*set),
+                                )
+                                .await?;
+                            executor
+                                .manual_update_worker(&agent.worker_id, updated.revision, false)
+                                .await?;
+                            let outcome = eventually(Duration::from_secs(60), || async {
+                                let outcomes = agent.update_results(executor).await?;
+                                Ok((outcomes.len() > before)
+                                    .then(|| outcomes.last().cloned())
+                                    .flatten())
+                            })
+                            .await?;
+                            results.push(outcome);
+                            Ok((
+                                Agent {
+                                    component: updated,
+                                    ..agent
+                                },
+                                results,
+                            ))
+                        }
+                    }
+                },
+            )
+            .await
+    }
+
+    /// The outcome of each update in the oplog, in oplog order.
+    async fn update_results(&self, executor: &TestWorkerExecutor) -> anyhow::Result<Vec<String>> {
+        Ok(executor
+            .get_oplog(&self.worker_id, OplogIndex::INITIAL)
+            .await?
+            .into_iter()
+            .filter_map(|entry| match entry.entry {
+                PublicOplogEntry::SuccessfulUpdate(updated) => {
+                    Some(format!("updated to {:?}", updated.target_revision))
+                }
+                PublicOplogEntry::FailedUpdate(failed) => Some(format!(
+                    "failed to update to {:?}: {}",
+                    failed.target_revision,
+                    failed.details.unwrap_or_default()
+                )),
+                _ => None,
+            })
+            .collect())
+    }
 }
 
-/// Runs `steps` on an agent with snapshots, and gives the tree and the operation count before the
-/// restart, after a restart from its last usable snapshot, and after a replay without the
-/// periodic snapshots, with the number of restores of the restart.
+/// What a run of a generated history gives.
+#[derive(Debug, PartialEq, Eq)]
+struct History {
+    /// The result of each step: before the restart, then after it.
+    results: Vec<String>,
+    /// The tree and the operation count before the restart.
+    live: Outcome,
+    /// The tree and the operation count right after the restart from the last usable snapshot.
+    restored: Outcome,
+    /// The tree and the operation count after the steps that follow the restart.
+    finished: Outcome,
+    /// The tree and the operation count after a replay without the periodic snapshots.
+    replayed: Outcome,
+    /// The number of restores of the restart.
+    restores: usize,
+}
+
+/// Runs `before` on an agent with snapshots, restarts the executor, and runs `after` on the
+/// agent that the restart restored from its last usable snapshot. Then replays the agent without
+/// the periodic snapshots.
 async fn run_history(
     deps: &WorkerExecutorTestDependencies,
     last_unique_id: &LastUniqueId,
     component: &PrecompiledComponent,
     initial: usize,
-    steps: &[Step],
-) -> anyhow::Result<(Outcome, Outcome, Outcome, usize)> {
+    (before, after): (&[Step], &[Step]),
+) -> anyhow::Result<History> {
     let context = TestContext::new(last_unique_id);
     let store = TestFilesystemSnapshotStore::new();
     let executor =
@@ -1376,40 +1645,7 @@ async fn run_history(
         &declaration_set(initial),
     )
     .await?;
-    let executor_ref = &executor;
-    let agent = futures::stream::iter(steps)
-        .map(Ok::<_, anyhow::Error>)
-        .try_fold(agent, |agent, step| async move {
-            match step {
-                Step::Operation(operation, path, argument) => {
-                    agent.apply(executor_ref, operation, path, argument).await?;
-                    Ok(agent)
-                }
-                Step::ManualUpdate(set) => {
-                    let outcomes = agent.update_outcomes(executor_ref).await?;
-                    let updated = executor_ref
-                        .update_component_with_files(
-                            &agent.component.id,
-                            AGENT_TYPE,
-                            "it_initial_file_system_release",
-                            declaration_set(*set),
-                        )
-                        .await?;
-                    executor_ref
-                        .manual_update_worker(&agent.worker_id, updated.revision, false)
-                        .await?;
-                    eventually(Duration::from_secs(60), || async {
-                        Ok((agent.update_outcomes(executor_ref).await? > outcomes).then_some(()))
-                    })
-                    .await?;
-                    Ok(Agent {
-                        component: updated,
-                        ..agent
-                    })
-                }
-            }
-        })
-        .await?;
+    let (agent, mut results) = agent.run_steps(&executor, before).await?;
     let live = agent.outcome(&executor).await?;
     executor.release().await?;
     let restores = store.restore_count();
@@ -1417,6 +1653,9 @@ async fn run_history(
         start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
     let restored = agent.outcome(&restarted).await?;
     let restores = store.restore_count() - restores;
+    let (agent, after_results) = agent.run_steps(&restarted, after).await?;
+    results.extend(after_results);
+    let finished = agent.outcome(&restarted).await?;
     restarted.release().await?;
     // Without the periodic snapshots, the start uses the snapshot of the last manual update, or
     // replays the whole oplog.
@@ -1432,29 +1671,78 @@ async fn run_history(
     let replaying = start_replaying_with(deps, &context, root.path(), Some(&store)).await?;
     let replayed = agent.outcome(&replaying).await?;
     replaying.release().await?;
-    Ok((live, restored, replayed, restores))
+    Ok(History {
+        results,
+        live,
+        restored,
+        finished,
+        replayed,
+        restores,
+    })
 }
 
-impl Agent {
-    /// The number of successful and failed updates in the oplog.
-    async fn update_outcomes(&self, executor: &TestWorkerExecutor) -> anyhow::Result<usize> {
-        Ok(executor
-            .get_oplog(&self.worker_id, OplogIndex::INITIAL)
-            .await?
-            .iter()
-            .filter(|entry| {
-                matches!(
-                    entry.entry,
-                    PublicOplogEntry::SuccessfulUpdate(_) | PublicOplogEntry::FailedUpdate(_)
-                )
-            })
-            .count())
-    }
+/// Runs all `steps` without a restart, on an executor with snapshots and its own store, and
+/// gives the result of each step and the final tree and operation count. A manual update keeps
+/// the files of the agent only with filesystem snapshots, so the run takes them too.
+async fn run_without_a_restart(
+    deps: &WorkerExecutorTestDependencies,
+    last_unique_id: &LastUniqueId,
+    component: &PrecompiledComponent,
+    initial: usize,
+    steps: &[Step],
+) -> anyhow::Result<(Vec<String>, Outcome)> {
+    let context = TestContext::new(last_unique_id);
+    let store = TestFilesystemSnapshotStore::new();
+    let executor =
+        start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+    let agent = Agent::start(
+        &executor,
+        &context,
+        component,
+        "without-a-restart",
+        &declaration_set(initial),
+    )
+    .await?;
+    let (agent, results) = agent.run_steps(&executor, steps).await?;
+    let outcome = agent.outcome(&executor).await?;
+    executor.release().await?;
+    Ok((results, outcome))
+}
+
+/// Compares a run of a history with a restart against a run without one. The restart gives the
+/// tree before it, the steps after it give the results and the tree of the run without a
+/// restart, and a replay gives the same final tree. Gives the differences.
+fn compare_history(history: &History, results: &[String], outcome: &Outcome) -> Vec<String> {
+    [
+        (history.results != results).then(|| {
+            format!(
+                "results {:?}, without a restart {results:?}",
+                history.results
+            )
+        }),
+        (history.restored != history.live)
+            .then(|| format!("restored {:?}, live {:?}", history.restored, history.live)),
+        (&history.finished != outcome).then(|| {
+            format!(
+                "finished {:?}, without a restart {outcome:?}",
+                history.finished
+            )
+        }),
+        (history.replayed != history.finished).then(|| {
+            format!(
+                "replayed {:?}, finished {:?}",
+                history.replayed, history.finished
+            )
+        }),
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
 }
 
 #[test]
-#[timeout("10m")]
-async fn generated_histories_restart_from_a_snapshot_with_the_tree_of_a_full_replay(
+#[timeout("15m")]
+async fn generated_histories_restart_from_a_snapshot_with_the_tree_and_the_results_of_a_full_replay(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
@@ -1462,7 +1750,11 @@ async fn generated_histories_restart_from_a_snapshot_with_the_tree_of_a_full_rep
 ) -> anyhow::Result<()> {
     use proptest::strategy::{Strategy, ValueTree};
     let mut runner = proptest::test_runner::TestRunner::deterministic();
-    let histories = (0usize..3, proptest::collection::vec(step_strategy(), 1..12));
+    let histories = (
+        0usize..3,
+        proptest::collection::vec(step_strategy(), 1..12),
+        0usize..12,
+    );
     let cases = std::iter::repeat_with(|| {
         histories
             .new_tree(&mut runner)
@@ -1473,13 +1765,24 @@ async fn generated_histories_restart_from_a_snapshot_with_the_tree_of_a_full_rep
     .collect::<anyhow::Result<Vec<_>>>()?;
 
     let outcomes = futures::stream::iter(cases)
-        .then(|(initial, steps)| async move {
-            let (live, restored, replayed, restores) =
-                run_history(deps, last_unique_id, initial_file_system, initial, &steps).await?;
+        .then(|(initial, steps, restart_at)| async move {
+            let (before, after) = steps.split_at(restart_at.min(steps.len()));
+            let history = run_history(
+                deps,
+                last_unique_id,
+                initial_file_system,
+                initial,
+                (before, after),
+            )
+            .await?;
+            let (results, outcome) =
+                run_without_a_restart(deps, last_unique_id, initial_file_system, initial, &steps)
+                    .await?;
+            let differences = compare_history(&history, &results, &outcome);
             Ok::<_, anyhow::Error>((
-                (restored != live || replayed != live)
-                    .then(|| format!("{initial} {steps:?}: live {live:?}, restored {restored:?}, replayed {replayed:?}")),
-                restores,
+                (!differences.is_empty())
+                    .then(|| format!("{initial} {before:?} | {after:?}: {differences:#?}")),
+                history.restores,
             ))
         })
         .collect::<Vec<_>>()
@@ -1564,12 +1867,30 @@ async fn managed_xfs_restart_from_a_snapshot_gives_the_tree_of_a_full_replay(
         .apply_all(
             &executor,
             &[
-                ("write", "rw-modified.txt", "modified by the agent"),
-                ("rename", "ro-renamed.txt", "renamed.txt"),
-                ("rename", "dir", "moved-dir"),
-                ("write", "agent.txt", "agent data"),
-                ("link", "agent.txt", "agent-alias.txt"),
-                ("symlink", "pointer", "agent.txt"),
+                Operation::Write {
+                    path: "rw-modified.txt",
+                    content: "modified by the agent",
+                },
+                Operation::Rename {
+                    from: "ro-renamed.txt",
+                    to: "renamed.txt",
+                },
+                Operation::Rename {
+                    from: "dir",
+                    to: "moved-dir",
+                },
+                Operation::Write {
+                    path: "agent.txt",
+                    content: "agent data",
+                },
+                Operation::Link {
+                    existing: "agent.txt",
+                    link: "agent-alias.txt",
+                },
+                Operation::Symlink {
+                    link: "pointer",
+                    target: "agent.txt",
+                },
             ],
         )
         .await?;
@@ -1626,7 +1947,13 @@ async fn managed_xfs_manual_update_brings_the_files_into_the_target_revision(
     agent
         .apply_all(
             &executor,
-            &[("mkdir", "work", ""), ("write", "work/state.db", "rows")],
+            &[
+                Operation::Mkdir { path: "work" },
+                Operation::Write {
+                    path: "work/state.db",
+                    content: "rows",
+                },
+            ],
         )
         .await?;
     agent.confirmed(&executor).await?;
@@ -1692,7 +2019,13 @@ async fn a_manual_update_during_an_upload_waits_for_the_upload_and_succeeds(
     .await?;
     store.set_save_delay(Duration::from_secs(2));
     agent
-        .apply_all(&executor, &[("write", "state.db", "rows")])
+        .apply_all(
+            &executor,
+            &[Operation::Write {
+                path: "state.db",
+                content: "rows",
+            }],
+        )
         .await?;
     eventually(Duration::from_secs(30), || async {
         let records = agent.records(&executor).await?;
@@ -1739,7 +2072,16 @@ async fn a_newest_record_whose_filesystem_does_not_restore_falls_back_to_the_old
     #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    let operations = [("write", "a.txt", "a"), ("write", "b.txt", "b")];
+    let operations = [
+        Operation::Write {
+            path: "a.txt",
+            content: "a",
+        },
+        Operation::Write {
+            path: "b.txt",
+            content: "b",
+        },
+    ];
     let expected =
         tree_without_snapshots(deps, last_unique_id, initial_file_system, &operations).await?;
     let context = TestContext::new(last_unique_id);
@@ -1783,7 +2125,13 @@ async fn a_start_during_an_upload_waits_for_it_and_then_confirms_its_snapshot(
     let agent = Agent::start(&executor, &context, initial_file_system, "start-waits", &[]).await?;
     store.set_save_delay(Duration::from_secs(3));
     agent
-        .apply_all(&executor, &[("write", "file.txt", "content")])
+        .apply_all(
+            &executor,
+            &[Operation::Write {
+                path: "file.txt",
+                content: "content",
+            }],
+        )
         .await?;
     let live = agent.describe(&executor).await?;
     let named = eventually(Duration::from_secs(30), || async {
@@ -1849,7 +2197,13 @@ async fn an_invocation_during_a_stop_waits_for_the_upload_only_in_its_start_and_
     .await?;
     store.set_save_delay(upload);
     agent
-        .apply_all(&executor, &[("write", "file.txt", "content")])
+        .apply_all(
+            &executor,
+            &[Operation::Write {
+                path: "file.txt",
+                content: "content",
+            }],
+        )
         .await?;
     let live = agent.describe(&executor).await?;
     eventually(Duration::from_secs(30), || async {
@@ -1897,7 +2251,13 @@ async fn a_named_manual_update_record_fails_a_start_without_filesystem_snapshots
     )
     .await?;
     agent
-        .apply_all(&executor, &[("write", "state.db", "rows")])
+        .apply_all(
+            &executor,
+            &[Operation::Write {
+                path: "state.db",
+                content: "rows",
+            }],
+        )
         .await?;
     agent.confirmed(&executor).await?;
     let updated = executor
@@ -1944,7 +2304,7 @@ impl Agent {
         executor: &TestWorkerExecutor,
         files: Vec<IFSEntry>,
     ) -> anyhow::Result<ComponentDto> {
-        let outcomes = self.update_outcomes(executor).await?;
+        let outcomes = self.update_results(executor).await?.len();
         let updated = executor
             .update_component_with_files(
                 &self.component.id,
@@ -1957,7 +2317,7 @@ impl Agent {
             .manual_update_worker(&self.worker_id, updated.revision, false)
             .await?;
         eventually(Duration::from_secs(60), || async {
-            Ok((self.update_outcomes(executor).await? > outcomes).then_some(()))
+            Ok((self.update_results(executor).await?.len() > outcomes).then_some(()))
         })
         .await?;
         Ok(updated)
@@ -1990,8 +2350,14 @@ async fn failed_manual_updates_never_delete_the_snapshot_of_the_last_successful_
         .apply_all(
             &executor,
             &[
-                ("write", "config.txt", "changed"),
-                ("write", "state.db", "rows"),
+                Operation::Write {
+                    path: "config.txt",
+                    content: "changed",
+                },
+                Operation::Write {
+                    path: "state.db",
+                    content: "rows",
+                },
             ],
         )
         .await?;
@@ -2123,7 +2489,13 @@ async fn a_terminal_interrupt_ends_a_manual_update_that_waits_for_an_upload(
     .await?;
     store.set_save_delay(Duration::from_secs(60));
     agent
-        .apply_all(&executor, &[("write", "state.db", "rows")])
+        .apply_all(
+            &executor,
+            &[Operation::Write {
+                path: "state.db",
+                content: "rows",
+            }],
+        )
         .await?;
     eventually(Duration::from_secs(30), || async {
         let records = agent.records(&executor).await?;
@@ -2213,7 +2585,13 @@ async fn a_lost_shard_ends_a_manual_update_that_waits_for_an_upload_without_a_fa
     .await?;
     store.set_save_delay(Duration::from_secs(60));
     agent
-        .apply_all(&executor, &[("write", "state.db", "rows")])
+        .apply_all(
+            &executor,
+            &[Operation::Write {
+                path: "state.db",
+                content: "rows",
+            }],
+        )
         .await?;
     eventually(Duration::from_secs(30), || async {
         let records = agent.records(&executor).await?;
@@ -2291,7 +2669,13 @@ async fn a_terminal_interrupt_ends_a_manual_update_during_its_upload(
     )
     .await?;
     agent
-        .apply_all(&executor, &[("write", "state.db", "rows")])
+        .apply_all(
+            &executor,
+            &[Operation::Write {
+                path: "state.db",
+                content: "rows",
+            }],
+        )
         .await?;
     agent.confirmed(&executor).await?;
 
