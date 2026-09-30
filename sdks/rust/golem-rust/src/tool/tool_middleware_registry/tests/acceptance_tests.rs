@@ -968,6 +968,48 @@ fn middleware_receives_ordinary_output_writer_parameter(
 }
 
 #[test]
+fn synchronous_underlying_invoke_returns_both_output_streams(
+    _registry_test_state: &RegistryTestState,
+) {
+    run_acceptance(async {
+        let mut result = stream_underlying(true, true)
+            .invoke(
+                vec!["copy".to_string()],
+                ().into_typed_schema_value().unwrap(),
+                Some(readable_stream(b"request")),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            String::from_value(result.result.unwrap().value()).unwrap(),
+            "copied"
+        );
+        let stdout = result
+            .stdout
+            .take()
+            .unwrap()
+            .collect()
+            .await
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+            .concat();
+        let stderr = result
+            .stderr
+            .take()
+            .unwrap()
+            .collect()
+            .await
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+            .concat();
+        assert_eq!(stdout, b"response");
+        assert_eq!(stderr, b"diagnostic");
+    });
+}
+
+#[test]
 fn dispatch_rejects_invalid_commands_inputs_results_and_stream_shapes(
     _registry_test_state: &RegistryTestState,
 ) {

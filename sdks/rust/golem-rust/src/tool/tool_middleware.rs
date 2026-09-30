@@ -637,12 +637,6 @@ impl UnderlyingTool {
         decode_custom_error: impl Fn(String, TypedSchemaValue) -> Result<Option<E>, String>,
     ) -> Result<InvocationResult, ToolInvokeError<E>> {
         let mut invocation = self.start_with(command_path, input, stdin).await?;
-        if invocation.stdout.is_some() || invocation.stderr.is_some() {
-            return Err(ToolInvokeError::InvalidResult(
-                "output-bearing underlying invocations must use the started invocation API"
-                    .to_string(),
-            ));
-        }
         let result = invocation.get_with(decode_custom_error).await?;
         Ok(InvocationResult {
             result,
