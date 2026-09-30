@@ -929,6 +929,20 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     #[cfg(feature = "test-utils")]
+    pub async fn terminal_stop_claimed_for_test(&self) -> bool {
+        matches!(
+            *self.interrupt_signal.lock().await,
+            super::WorkerInterruptState::TerminalClaimed
+        )
+    }
+
+    #[cfg(feature = "test-utils")]
+    pub fn monthly_window_active_for_test(&self) -> bool {
+        let target = self.monthly_window.lock().unwrap().clone();
+        target.is_some_and(|target| *target.active.lock().unwrap())
+    }
+
+    #[cfg(feature = "test-utils")]
     pub async fn selected_owner_failure_for_test(&self) -> Option<String> {
         let active = self
             .active_agents()
@@ -1004,6 +1018,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .unwrap()
             .as_ref()
             .map(|(kind, _)| *kind)
+    }
+
+    #[cfg(feature = "test-utils")]
+    pub fn monthly_stop_reason_for_test(&self) -> Option<&'static str> {
+        self.monthly_stop
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|(_, exhaustion)| exhaustion.reason())
     }
 
     #[cfg(feature = "test-utils")]
@@ -1319,7 +1342,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 }
                 let kind = InterruptKind::Suspend(Timestamp::now_utc());
                 let admission = self.stop_progress.lock().unwrap();
+                // Monthly observations cannot reopen a terminal stop already claimed by this execution.
                 if !admission.retired
+                    && !matches!(*interrupts, super::WorkerInterruptState::TerminalClaimed)
                     && interrupts.queue(PendingWorkerInterrupt {
                         kind,
                         reacquire_permits: false,

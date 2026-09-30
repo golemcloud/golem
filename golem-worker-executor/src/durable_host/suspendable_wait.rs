@@ -809,6 +809,91 @@ mod tests {
         }
     }
 
+    async fn deadline_wait_order(agent_mode: AgentMode, ready_first: bool, stop_before_poll: bool) {
+        let waits = Arc::new(Mutex::new(BTreeMap::new()));
+        let context = SuspendableWaitContext {
+            wait_id: 1,
+            agent_mode,
+            suspend: SuspendConfig {
+                wait_suspend_grace: Duration::from_secs(300),
+                ..Default::default()
+            },
+            wait_deadline: Some(Utc::now() + chrono::Duration::seconds(20)),
+            suspendable_waits: waits.clone(),
+            wakeup_scheduler: unused_wakeup_scheduler(),
+        };
+        let ready = tokio::sync::Notify::new();
+        let (stop, stopped) = tokio::sync::oneshot::channel();
+        let kind = InterruptKind::Suspend(Timestamp::now_utc());
+        let mut stop = Some(stop);
+        if stop_before_poll {
+            stop.take().unwrap().send(kind).unwrap();
+        }
+        let mut wait = Box::pin(park_suspendable_wait(
+            context,
+            Box::pin(async { stopped.await.unwrap() }),
+            || ready.notified(),
+            || false,
+            // Voluntary ineligibility must never suppress an explicit stop.
+            || false,
+            || Some(Duration::from_secs(20)),
+        ));
+        if !stop_before_poll {
+            std::future::poll_fn(|cx| {
+                assert!(wait.as_mut().poll(cx).is_pending());
+                Poll::Ready(())
+            })
+            .await;
+            assert_eq!(
+                waits.lock().unwrap().len(),
+                usize::from(agent_mode == AgentMode::Durable)
+            );
+        }
+        if ready_first {
+            ready.notify_one();
+        } else if let Some(stop) = stop.take() {
+            stop.send(kind).unwrap();
+        }
+        let outcome = tokio::time::timeout(Duration::from_secs(1), &mut wait)
+            .await
+            .expect("wait must not depend on the deadline or voluntary grace")
+            .unwrap();
+        drop(wait);
+        assert!(waits.lock().unwrap().is_empty());
+        if ready_first {
+            assert_eq!(outcome, ParkOutcome::Ready);
+            // A later stop has no receiver and cannot rewrite selected readiness.
+            assert_eq!(stop.take().unwrap().send(kind), Err(kind));
+        } else {
+            assert_eq!(outcome, ParkOutcome::Interrupted(kind));
+            ready.notify_one();
+        }
+    }
+
+    #[test]
+    #[test_r::timeout("5s")]
+    async fn deadline_wait_readiness_before_stop_stays_ready() {
+        for mode in [AgentMode::Durable, AgentMode::Ephemeral] {
+            deadline_wait_order(mode, true, false).await;
+        }
+    }
+
+    #[test]
+    #[test_r::timeout("5s")]
+    async fn deadline_wait_stop_before_readiness_retains_typed_cause() {
+        for mode in [AgentMode::Durable, AgentMode::Ephemeral] {
+            deadline_wait_order(mode, false, false).await;
+        }
+    }
+
+    #[test]
+    #[test_r::timeout("5s")]
+    async fn deadline_wait_stop_before_first_poll_is_not_lost() {
+        for mode in [AgentMode::Durable, AgentMode::Ephemeral] {
+            deadline_wait_order(mode, false, true).await;
+        }
+    }
+
     #[test]
     async fn durable_promise_wait_ready_race_does_not_suspend() {
         let ready = Arc::new(AtomicBool::new(false));

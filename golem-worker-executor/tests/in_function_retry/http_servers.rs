@@ -493,8 +493,9 @@ pub(crate) async fn start_failing_http_server_any_method(
 /// Starts a TCP server that sends partial responses, then supports Range-based resume.
 /// First `fail_count` connections: sends `initial_status` headers + `prefix_len` bytes then drops.
 /// Subsequent connections: if `resume_supports_range` is true and a Range header is present,
-/// responds 206 with remaining bytes; otherwise responds with `resume_status` and the full body.
-/// The body is `body_size` bytes of sequential values (i % 256).
+/// responds 206 with remaining bytes; `resume_status` 416 refuses a Range request,
+/// and other statuses send the full body. The body is `body_size` bytes of sequential
+/// values (i % 256), except that the 416 case starts with `h` for the P2 reader.
 /// Returns `(port, connection_counter, range_counter)`.
 pub(crate) async fn start_partial_response_http_server(
     fail_count: usize,
@@ -512,7 +513,12 @@ pub(crate) async fn start_partial_response_http_server(
     let range_counter_clone = range_counter.clone();
 
     // Generate the full body (deterministic pattern)
-    let full_body: Vec<u8> = (0..body_size).map(|i| (i % 256) as u8).collect();
+    let mut full_body: Vec<u8> = (0..body_size).map(|i| (i % 256) as u8).collect();
+    if resume_status == 416
+        && let Some(first) = full_body.first_mut()
+    {
+        *first = b'h';
+    }
 
     spawn(
         async move {
@@ -594,7 +600,10 @@ pub(crate) async fn start_partial_response_http_server(
                         range_counter_clone.fetch_add(1, Ordering::SeqCst);
                     }
 
-                    if resume_supports_range && let Some(start) = range_start {
+                    if resume_status == 416 && range_start.is_some() {
+                        let response = "HTTP/1.1 416 Range Not Satisfiable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+                        let _ = stream.write_all(response.as_bytes()).await;
+                    } else if resume_supports_range && let Some(start) = range_start {
                         if start <= body_size {
                             // 206 Partial Content
                             let remaining = &full_body[start..];

@@ -1258,6 +1258,12 @@ impl AtomicResourceEntry {
     }
 
     #[cfg(feature = "test-utils")]
+    pub fn effective_fuel_for_test(&self) -> u64 {
+        let state = self.usage_revision_state.lock().unwrap();
+        self.effective_fuel_with_revision_state(&state)
+    }
+
+    #[cfg(feature = "test-utils")]
     pub fn monthly_capacity_is_exhausted_for_test(&self, mode: AgentMode) -> bool {
         self.with_monthly_capacity(mode, None, |capacity| capacity.exhaustion.is_some())
     }

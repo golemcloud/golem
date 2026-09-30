@@ -45,12 +45,14 @@ use crate::services::{HasOplog, HasWorker};
 use bytes::Bytes;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::payload::HostPayloadPair;
+use golem_common::model::oplog::types::SerializableStreamError;
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequestHttpRequest, HostResponse, OplogEntry, OplogIndex,
 };
 use golem_common::model::{NamedRetryPolicy, PredicateValue, RetryContext, RetryProperties};
 use golem_common::related_span;
 use golem_common::tracing::TraceOrigin;
+use golem_service_base::error::worker_executor::InterruptKind;
 use http::{HeaderName, HeaderValue};
 use http_body_util::BodyExt;
 use std::str::FromStr;
@@ -138,6 +140,51 @@ pub enum HttpStreamInlineRetryOutcome {
     Retried,
     NotRetried,
     FallBackToTrap(SemanticTrapRetryOverride),
+}
+
+pub(crate) enum ResumeBodyError {
+    Terminal(SerializableStreamError),
+    Infrastructure(anyhow::Error),
+    Interrupt(anyhow::Error),
+}
+
+impl ResumeBodyError {
+    fn native_trap(error: wasmtime::Error) -> Self {
+        if error.root_cause().downcast_ref::<InterruptKind>().is_some() {
+            Self::Interrupt(error.into())
+        } else {
+            Self::Infrastructure(error.into())
+        }
+    }
+
+    fn into_anyhow(self) -> anyhow::Error {
+        match self {
+            Self::Terminal(_) => unreachable!("sending has no response-body terminal"),
+            Self::Infrastructure(error) | Self::Interrupt(error) => error,
+        }
+    }
+}
+
+fn range_not_satisfiable_error() -> ResumeBodyError {
+    ResumeBodyError::Terminal(SerializableStreamError::LastOperationFailed(
+        "HTTP retry failed: server returned 416 Range Not Satisfiable".to_string(),
+    ))
+}
+
+fn classify_resume_prefix_error(error: wasmtime_wasi::StreamError) -> ResumeBodyError {
+    match error {
+        wasmtime_wasi::StreamError::Closed => {
+            ResumeBodyError::Terminal(SerializableStreamError::LastOperationFailed(
+                "HTTP retry failed: response shorter than previously consumed bytes".to_string(),
+            ))
+        }
+        wasmtime_wasi::StreamError::LastOperationFailed(error) => {
+            ResumeBodyError::Terminal(SerializableStreamError::LastOperationFailed(format!(
+                "HTTP retry failed: error reading prefix for skip: {error}"
+            )))
+        }
+        wasmtime_wasi::StreamError::Trap(error) => ResumeBodyError::native_trap(error),
+    }
 }
 
 /// Reasons why an HTTP request is not eligible for transparent inline retry.
@@ -587,7 +634,8 @@ async fn send_with_interrupt_aware_retries<Ctx: crate::workerctx::WorkerCtx>(
     extra_headers: &[(String, String)],
     retry_function_name: Option<&'static str>,
     connection_pool: Option<HttpConnectionPool>,
-) -> Result<InterruptAwareSendOutcome, anyhow::Error> {
+    #[cfg(feature = "test-utils")] retry_observation: Option<(u32, OplogIndex)>,
+) -> Result<InterruptAwareSendOutcome, ResumeBodyError> {
     let mut retry_state = retry_function_name.map(|_| InFunctionRetryState::new());
     let reconstructed_body_len: u64 = body_chunks
         .iter()
@@ -616,18 +664,67 @@ async fn send_with_interrupt_aware_retries<Ctx: crate::workerctx::WorkerCtx>(
         }
 
         let http_request =
-            reconstruct_http_request(&request_state.request, hyper_body, &merged_extra_headers)?;
+            reconstruct_http_request(&request_state.request, hyper_body, &merged_extra_headers)
+                .map_err(ResumeBodyError::Infrastructure)?;
         let config = request_state.outgoing_request_config();
 
         let mut future_resp =
             default_send_request_with_pool(http_request, config, None, connection_pool.clone());
 
         use wasmtime_wasi::Pollable;
-        future_resp.ready().await;
+        #[cfg(feature = "test-utils")]
+        let observer = retry_observation.and_then(|(stream_handle, child_start)| {
+            ctx.public_state.worker().p2_native_input_observer_for_test(
+                ctx.state.get_current_idempotency_key(),
+                stream_handle,
+                "http_body_resend_response_ready",
+                Some(child_start),
+            )
+        });
+        #[cfg(feature = "test-utils")]
+        let selection = if let Some((stream_rep, start_index)) = retry_observation {
+            let key = ctx.state.get_current_idempotency_key();
+            ctx.public_state
+                .worker()
+                .wait_p2_http_pre_subscription_for_test(
+                    key.as_ref(),
+                    crate::worker::P2HttpPreSubscriptionOperationForTest::ResendResponseReady,
+                    stream_rep,
+                    start_index,
+                )
+                .await
+        } else {
+            None
+        };
+        let interrupt = ctx.create_interrupt_signal();
+        let ready = async {
+            #[cfg(feature = "test-utils")]
+            match observer {
+                Some(observer) => observer.observe(future_resp.ready()).await,
+                None => future_resp.ready().await,
+            }
+            #[cfg(not(feature = "test-utils"))]
+            future_resp.ready().await;
+        };
+        let interrupted = tokio::select! {
+            biased;
+            _ = ready => None,
+            interrupt_kind = interrupt => Some(interrupt_kind),
+        };
+        #[cfg(feature = "test-utils")]
+        if let Some(selection) = selection {
+            selection.report(match interrupted {
+                Some(kind) => crate::worker::P2HttpPreSubscriptionSelectionForTest::Interrupt(kind),
+                None => crate::worker::P2HttpPreSubscriptionSelectionForTest::Native,
+            });
+        }
+        if let Some(kind) = interrupted {
+            return Err(ResumeBodyError::Interrupt(kind.into()));
+        }
 
         match future_resp.unwrap_ready() {
             Ok(Ok(resp)) => return Ok(InterruptAwareSendOutcome::Response(resp)),
-            Err(_trap) => return Ok(InterruptAwareSendOutcome::NotRetried),
+            Err(trap) => return Err(ResumeBodyError::native_trap(trap)),
             Ok(Err(ref error_code))
                 if classify_http_error_code(error_code) == HostFailureKind::Permanent =>
             {
@@ -664,7 +761,7 @@ async fn send_with_interrupt_aware_retries<Ctx: crate::workerctx::WorkerCtx>(
                                     );
                                 }
                                 futures::future::Either::Right((interrupt_kind, _)) => {
-                                    return Err(anyhow::Error::from(interrupt_kind));
+                                    return Err(ResumeBodyError::Interrupt(interrupt_kind.into()));
                                 }
                             }
                         }
@@ -1359,6 +1456,18 @@ pub async fn try_output_stream_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
     Ok(HttpStreamInlineRetryOutcome::Retried)
 }
 
+// The response owns the connection worker and pool permits until its body takes
+// over. Keep them through stream extraction, prefix preparation and guest reads.
+fn incoming_body_from_response(response: IncomingResponse) -> HostIncomingBody {
+    let (_parts, body) = response.resp.into_parts();
+    let mut incoming = HostIncomingBody::new(body, response.between_bytes_timeout);
+    if let Some(worker) = response.worker {
+        incoming.retain_worker(worker, response.worker_error_receiver);
+    }
+    incoming.retain_connection_permits(response.connection_permits);
+    incoming
+}
+
 /// Attempts response-body resumption inline retry for a response body stream read failure.
 ///
 /// When reading response body bytes fails with a transient error, this function:
@@ -1372,11 +1481,13 @@ pub async fn try_output_stream_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
 /// Returns `Retried` if retry succeeded (stream swapped, caller should re-attempt read),
 /// `NotRetried` if retry is not eligible or conditions are not met, and `FallBackToTrap` when the
 /// already-evaluated policy decision must be preserved by the caller's trap path.
-/// `Err` with a StreamError if content mismatch detected.
-pub async fn try_resuming_response_body_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
+/// `Err` distinguishes guest-visible prefix/range failures from infrastructure
+/// failures and typed interruptions.
+pub(crate) async fn try_resuming_response_body_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
     ctx: &mut crate::durable_host::DurableWorkerCtx<Ctx>,
     stream_handle: u32,
-) -> Result<HttpStreamInlineRetryOutcome, anyhow::Error> {
+    #[cfg(feature = "test-utils")] child_start_index: OplogIndex,
+) -> Result<HttpStreamInlineRetryOutcome, ResumeBodyError> {
     use wasmtime::component::Resource;
     use wasmtime_wasi::p2::bindings::io::streams::InputStream as WasiInputStream;
     use wasmtime_wasi_http::p2::bindings::http::types::IncomingBody as WasiIncomingBody;
@@ -1410,10 +1521,14 @@ pub async fn try_resuming_response_body_inline_retry<Ctx: crate::workerctx::Work
 
     // 3. Count bytes already delivered to the guest from the oplog
     let oplog = ctx.public_state.oplog();
-    let consumed_len = count_incoming_body_bytes(&oplog, request_state.begin_index()).await?;
+    let consumed_len = count_incoming_body_bytes(&oplog, request_state.begin_index())
+        .await
+        .map_err(ResumeBodyError::Infrastructure)?;
 
     // 4. Reconstruct the outgoing request body chunks from the oplog
-    let body_chunks = reconstruct_outgoing_body_chunks(&oplog, request_state.begin_index()).await?;
+    let body_chunks = reconstruct_outgoing_body_chunks(&oplog, request_state.begin_index())
+        .await
+        .map_err(ResumeBodyError::Infrastructure)?;
 
     // 5. Build the request, adding a Range header if bytes were already consumed.
     //    If the original request already has a Range header, response-body
@@ -1443,10 +1558,27 @@ pub async fn try_resuming_response_body_inline_retry<Ctx: crate::workerctx::Work
             let sleep = tokio::time::sleep(delay);
             tokio::pin!(sleep);
 
+            #[cfg(feature = "test-utils")]
+            let observer = ctx.public_state.worker().p2_native_input_observer_for_test(
+                ctx.state.get_current_idempotency_key(),
+                stream_handle,
+                "http_body_retry_delay_sleep",
+                Some(child_start_index),
+            );
+            #[cfg(feature = "test-utils")]
+            let sleep = async {
+                match observer {
+                    Some(observer) => observer.observe(sleep).await,
+                    None => sleep.await,
+                }
+            };
+            #[cfg(feature = "test-utils")]
+            tokio::pin!(sleep);
+
             match futures::future::select(sleep, interrupt).await {
                 futures::future::Either::Left(_) => {}
                 futures::future::Either::Right((interrupt_kind, _)) => {
-                    return Err(anyhow::Error::from(interrupt_kind));
+                    return Err(ResumeBodyError::Interrupt(interrupt_kind.into()));
                 }
             }
         }
@@ -1470,6 +1602,8 @@ pub async fn try_resuming_response_body_inline_retry<Ctx: crate::workerctx::Work
         &extra_headers,
         Some("http-resume-response-body-send"),
         connection_pool,
+        #[cfg(feature = "test-utils")]
+        Some((stream_handle, child_start_index)),
     )
     .await?
     {
@@ -1486,7 +1620,6 @@ pub async fn try_resuming_response_body_inline_retry<Ctx: crate::workerctx::Work
 
     let status = response.resp.status().as_u16();
     let original_status = request_state.response_status;
-    let between_bytes_timeout = response.between_bytes_timeout;
 
     // 7. Handle the resume response according to the shared policy
     let content_range = response
@@ -1506,49 +1639,118 @@ pub async fn try_resuming_response_body_inline_retry<Ctx: crate::workerctx::Work
             // trying to avoid) then swap.
             let skip_len = if status == 206 { 0 } else { consumed_len };
 
-            let (_parts, body) = response.resp.into_parts();
-            let new_body = HostIncomingBody::new(body, between_bytes_timeout);
-
-            // Swap IncomingBody at body_handle first, then take stream from it
-            let body_entry: &mut HostIncomingBody =
-                ctx.table()
-                    .get_mut(&Resource::<WasiIncomingBody>::new_borrow(body_handle))?;
-            *body_entry = new_body;
-            let mut new_stream = body_entry.take_stream().ok_or_else(|| {
-                anyhow::anyhow!("HTTP retry failed: could not take stream from new body")
+            // Prepare the detached response before replacing either guest resource.
+            let mut new_body = incoming_body_from_response(response);
+            let mut new_stream = new_body.take_stream().ok_or_else(|| {
+                ResumeBodyError::Infrastructure(anyhow::anyhow!(
+                    "HTTP retry failed: could not take stream from new body"
+                ))
             })?;
 
-            // Skip skip_len bytes from the new stream (read and discard)
+            #[cfg(feature = "test-utils")]
+            let guest_stream_identity = {
+                let entry: &wasmtime_wasi::DynInputStream = ctx
+                    .table()
+                    .get(&Resource::<WasiInputStream>::new_borrow(stream_handle))
+                    .map_err(|error| ResumeBodyError::Infrastructure(error.into()))?;
+                (&**entry as *const dyn wasmtime_wasi::InputStream) as *const () as usize
+            };
             let mut skipped = 0u64;
             while skipped < skip_len {
-                // Wait for data to be available
-                new_stream.ready().await;
-
-                let remaining = (skip_len - skipped) as usize;
-                let chunk = new_stream.read(remaining).map_err(|e| match e {
-                    wasmtime_wasi::StreamError::Closed => anyhow::anyhow!(
-                        "HTTP retry failed: response shorter than previously consumed bytes"
-                    ),
-                    wasmtime_wasi::StreamError::LastOperationFailed(e) => {
-                        anyhow::anyhow!("HTTP retry failed: error reading prefix for skip: {e}")
+                #[cfg(feature = "test-utils")]
+                let observer = ctx.public_state.worker().p2_native_input_observer_for_test(
+                    ctx.state.get_current_idempotency_key(),
+                    stream_handle,
+                    "http_body_prefix_skip_ready",
+                    Some(child_start_index),
+                );
+                #[cfg(feature = "test-utils")]
+                let selection = {
+                    let key = ctx.state.get_current_idempotency_key();
+                    ctx.public_state
+                        .worker()
+                        .wait_p2_http_pre_subscription_for_test(
+                            key.as_ref(),
+                            crate::worker::P2HttpPreSubscriptionOperationForTest::PrefixSkipReady,
+                            stream_handle,
+                            child_start_index,
+                        )
+                        .await
+                };
+                let interrupt = ctx.create_interrupt_signal();
+                let ready = async {
+                    #[cfg(feature = "test-utils")]
+                    match observer {
+                        Some(observer) => observer.observe(new_stream.ready()).await,
+                        None => new_stream.ready().await,
                     }
-                    wasmtime_wasi::StreamError::Trap(e) => {
-                        anyhow::anyhow!("HTTP retry failed: trap reading prefix for skip: {e}")
+                    #[cfg(not(feature = "test-utils"))]
+                    new_stream.ready().await;
+                };
+                let interrupted = tokio::select! {
+                    biased;
+                    _ = ready => None,
+                    interrupt_kind = interrupt => Some(interrupt_kind),
+                };
+                #[cfg(feature = "test-utils")]
+                if let Some(selection) = selection {
+                    selection.report(match interrupted {
+                        Some(kind) => {
+                            crate::worker::P2HttpPreSubscriptionSelectionForTest::Interrupt(kind)
+                        }
+                        None => crate::worker::P2HttpPreSubscriptionSelectionForTest::Native,
+                    });
+                }
+                if let Some(interrupt_kind) = interrupted {
+                    #[cfg(feature = "test-utils")]
+                    {
+                        let entry: &wasmtime_wasi::DynInputStream = ctx
+                            .table()
+                            .get(&Resource::<WasiInputStream>::new_borrow(stream_handle))
+                            .expect("original guest stream must remain installed on prefix interruption");
+                        assert_eq!(
+                            (&**entry as *const dyn wasmtime_wasi::InputStream) as *const ()
+                                as usize,
+                            guest_stream_identity,
+                            "prefix interruption must not swap the guest stream"
+                        );
+                        assert!(
+                            ctx.table()
+                                .get(&Resource::<WasiIncomingBody>::new_borrow(body_handle))
+                                .is_ok(),
+                            "original guest body must remain installed on prefix interruption"
+                        );
                     }
-                })?;
-
-                if chunk.is_empty() {
-                    // No data yet, will retry after ready()
-                    continue;
+                    return Err(ResumeBodyError::Interrupt(interrupt_kind.into()));
                 }
 
+                let remaining = (skip_len - skipped) as usize;
+                let chunk = new_stream
+                    .read(remaining)
+                    .map_err(classify_resume_prefix_error)?;
+                if chunk.is_empty() {
+                    continue;
+                }
                 skipped += chunk.len() as u64;
             }
 
-            // Swap the InputStream in the resource table (it now has the remaining body)
+            // Check both slots before replacing either one. No other Store operation
+            // can mutate the table while this call has exclusive access to ctx.
+            ctx.table()
+                .get(&Resource::<WasiIncomingBody>::new_borrow(body_handle))
+                .map_err(|error| ResumeBodyError::Infrastructure(error.into()))?;
+            ctx.table()
+                .get(&Resource::<WasiInputStream>::new_borrow(stream_handle))
+                .map_err(|error| ResumeBodyError::Infrastructure(error.into()))?;
+            let body_entry: &mut HostIncomingBody = ctx
+                .table()
+                .get_mut(&Resource::<WasiIncomingBody>::new_borrow(body_handle))
+                .map_err(|error| ResumeBodyError::Infrastructure(error.into()))?;
+            *body_entry = new_body;
             let stream_entry: &mut wasmtime_wasi::DynInputStream = ctx
                 .table()
-                .get_mut(&Resource::<WasiInputStream>::new_borrow(stream_handle))?;
+                .get_mut(&Resource::<WasiInputStream>::new_borrow(stream_handle))
+                .map_err(|error| ResumeBodyError::Infrastructure(error.into()))?;
             *stream_entry = new_stream;
 
             tracing::debug!(
@@ -1560,12 +1762,7 @@ pub async fn try_resuming_response_body_inline_retry<Ctx: crate::workerctx::Work
             );
             Ok(HttpStreamInlineRetryOutcome::Retried)
         }
-        ResumeResponseAction::RangeNotSatisfiable => {
-            // Range Not Satisfiable — content changed
-            Err(anyhow::anyhow!(
-                "HTTP retry failed: server returned 416 Range Not Satisfiable"
-            ))
-        }
+        ResumeResponseAction::RangeNotSatisfiable => Err(range_not_satisfiable_error()),
         ResumeResponseAction::Fallback => {
             // Mismatched/missing Content-Range on a 206, status change, or
             // unsupported status — don't retry
@@ -1879,8 +2076,11 @@ pub(crate) async fn try_awaiting_response_inline_retry<Ctx: crate::workerctx::Wo
         &[],
         None,
         connection_pool,
+        #[cfg(feature = "test-utils")]
+        None,
     )
-    .await?
+    .await
+    .map_err(ResumeBodyError::into_anyhow)?
     {
         InterruptAwareSendOutcome::Response(response) => Ok(Some(response)),
         InterruptAwareSendOutcome::NotRetried => Ok(None),
@@ -1894,9 +2094,219 @@ pub(crate) async fn try_awaiting_response_inline_retry<Ctx: crate::workerctx::Wo
 mod tests {
     use super::*;
     use crate::durable_host::durability::SemanticTrapRetryVerdict;
+    use golem_common::model::Timestamp;
     use golem_common::model::oplog::types::SerializableHttpMethod;
     use golem_common::model::{Predicate, RetryPolicy, RetryPolicyState};
-    use test_r::test;
+    use test_r::{test, timeout};
+    use wasmtime_wasi::Pollable;
+    use wasmtime_wasi::StreamError;
+
+    #[test]
+    #[timeout("10s")]
+    async fn resumed_body_retains_nonpooled_worker_for_delayed_chunk() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (send_next_chunk, wait_for_next_chunk) = tokio::sync::oneshot::channel::<()>();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut bytes = Vec::new();
+            loop {
+                let mut buffer = [0u8; 512];
+                let read = socket.read(&mut buffer).await.unwrap();
+                assert!(read > 0, "request headers ended early");
+                bytes.extend_from_slice(&buffer[..read]);
+                if bytes.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\na")
+                .await
+                .unwrap();
+            wait_for_next_chunk.await.unwrap();
+            socket.write_all(b"b").await.unwrap();
+        });
+
+        let request = hyper::Request::builder()
+            .uri(format!("http://127.0.0.1:{port}/"))
+            .header(http::header::HOST, format!("127.0.0.1:{port}"))
+            .body(body_chunks_to_hyper_body(Vec::new()))
+            .unwrap();
+        let mut future = send_reconstructed_request(
+            request,
+            OutgoingRequestConfig {
+                use_tls: false,
+                connect_timeout: Duration::from_secs(2),
+                first_byte_timeout: Duration::from_secs(2),
+                between_bytes_timeout: Duration::from_secs(2),
+            },
+            None,
+        );
+        let mut body = tokio::time::timeout(Duration::from_secs(3), async {
+            future.ready().await;
+            let response = future.unwrap_ready().unwrap().unwrap();
+            assert!(
+                response.worker.is_some(),
+                "nonpooled worker must be retained"
+            );
+            assert!(response.worker_error_receiver.is_some());
+            incoming_body_from_response(response)
+        })
+        .await
+        .unwrap();
+        let mut stream = body.take_stream().unwrap();
+        tokio::time::timeout(Duration::from_secs(3), stream.ready())
+            .await
+            .unwrap();
+        assert_eq!(stream.read(1).unwrap(), Bytes::from_static(b"a"));
+        send_next_chunk.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(3), stream.ready())
+            .await
+            .unwrap();
+        assert_eq!(stream.read(1).unwrap(), Bytes::from_static(b"b"));
+        tokio::time::timeout(Duration::from_secs(3), server)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
+    #[test]
+    async fn resumed_body_holds_connection_permits_until_body_drop() {
+        use http_body_util::Full;
+        use tokio::sync::Semaphore;
+        use wasmtime_wasi_http::p2::types::ConnectionPermits;
+
+        let host = Arc::new(Semaphore::new(1));
+        let global = Arc::new(Semaphore::new(1));
+        let permits = ConnectionPermits {
+            _host: host.clone().try_acquire_owned().unwrap(),
+            _global: global.clone().try_acquire_owned().unwrap(),
+        };
+        let response = IncomingResponse {
+            resp: hyper::Response::new(
+                Full::new(Bytes::from_static(b"data"))
+                    .map_err(|never: std::convert::Infallible| match never {})
+                    .boxed_unsync(),
+            ),
+            worker: None,
+            between_bytes_timeout: Duration::from_secs(2),
+            worker_error_receiver: None,
+            connection_permits: Some(permits),
+            pooled_connection: None,
+        };
+        let mut body = incoming_body_from_response(response);
+        let stream = body.take_stream().unwrap();
+        assert!(host.try_acquire().is_err());
+        assert!(global.try_acquire().is_err());
+        drop(stream);
+        assert!(
+            host.try_acquire().is_err(),
+            "stream drop must not free permits"
+        );
+        drop(body);
+        assert!(host.try_acquire().is_ok());
+        assert!(global.try_acquire().is_ok());
+    }
+
+    #[test]
+    #[timeout("10s")]
+    async fn resumed_body_keeps_single_connection_pool_slot_occupied() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use wasmtime_wasi_http::HttpConnectionPoolConfig;
+
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (accepted_second, mut second_acceptance) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (mut first, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 512];
+            let mut request_bytes = Vec::new();
+            loop {
+                let n = first.read(&mut buf).await.unwrap();
+                assert!(n > 0);
+                request_bytes.extend_from_slice(&buf[..n]);
+                if request_bytes.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            first
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\na")
+                .await
+                .unwrap();
+            let (mut second, _) = listener.accept().await.unwrap();
+            accepted_second.send(()).unwrap();
+            request_bytes.clear();
+            loop {
+                let n = second.read(&mut buf).await.unwrap();
+                assert!(n > 0);
+                request_bytes.extend_from_slice(&buf[..n]);
+                if request_bytes.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            second
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                .await
+                .unwrap();
+        });
+
+        let pool = HttpConnectionPool::new(HttpConnectionPoolConfig {
+            max_connections_per_host: 1,
+            max_total_connections: 1,
+            ..Default::default()
+        });
+        let request = || {
+            hyper::Request::builder()
+                .uri(format!("http://127.0.0.1:{port}/"))
+                .body(body_chunks_to_hyper_body(Vec::new()))
+                .unwrap()
+        };
+        let config = || OutgoingRequestConfig {
+            use_tls: false,
+            connect_timeout: Duration::from_secs(2),
+            first_byte_timeout: Duration::from_secs(2),
+            between_bytes_timeout: Duration::from_secs(2),
+        };
+        let mut first = send_reconstructed_request(request(), config(), Some(pool.clone()));
+        let response = tokio::time::timeout(Duration::from_secs(3), async {
+            first.ready().await;
+            first.unwrap_ready().unwrap().unwrap()
+        })
+        .await
+        .unwrap();
+        assert!(response.connection_permits.is_some());
+        let mut body = incoming_body_from_response(response);
+        let mut stream = body.take_stream().unwrap();
+        tokio::time::timeout(Duration::from_secs(3), stream.ready())
+            .await
+            .unwrap();
+        assert_eq!(stream.read(1).unwrap(), Bytes::from_static(b"a"));
+
+        let mut second = send_reconstructed_request(request(), config(), Some(pool));
+        assert!(
+            tokio::time::timeout(Duration::from_millis(150), second.ready())
+                .await
+                .is_err()
+        );
+        assert!(second_acceptance.try_recv().is_err());
+        drop(stream);
+        drop(body);
+        tokio::time::timeout(Duration::from_secs(3), &mut second_acceptance)
+            .await
+            .unwrap()
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(3), second.ready())
+            .await
+            .unwrap();
+        assert!(second.unwrap_ready().unwrap().is_ok());
+        tokio::time::timeout(Duration::from_secs(3), server)
+            .await
+            .unwrap()
+            .unwrap();
+    }
 
     fn make_exec_state() -> DurableExecutionState {
         DurableExecutionState {
@@ -1905,6 +2315,79 @@ mod tests {
             assume_idempotence: true,
             max_in_function_retry_delay: Duration::from_secs(1),
         }
+    }
+
+    #[test]
+    fn body_retry_interrupt_retains_context_and_typed_cause() {
+        let kind = InterruptKind::Suspend(Timestamp::now_utc());
+        let error = anyhow::Error::new(kind).context("response-body retry delay");
+        let ResumeBodyError::Interrupt(error) =
+            ResumeBodyError::native_trap(wasmtime::Error::from_anyhow(error))
+        else {
+            panic!("typed native trap must interrupt the incomplete child")
+        };
+        assert_eq!(error.to_string(), "response-body retry delay");
+        assert_eq!(
+            error.root_cause().downcast_ref::<InterruptKind>(),
+            Some(&kind)
+        );
+    }
+
+    #[test]
+    fn body_retry_infrastructure_preserves_original_cause() {
+        let error = anyhow::anyhow!("payload unavailable").context("download outgoing body");
+        let ResumeBodyError::Infrastructure(error) = ResumeBodyError::Infrastructure(error) else {
+            panic!("payload download must trap, not complete a guest child")
+        };
+        assert_eq!(error.to_string(), "download outgoing body");
+        assert_eq!(error.root_cause().to_string(), "payload unavailable");
+
+        let native = anyhow::anyhow!("missing body table slot").context("HTTP body table");
+        let ResumeBodyError::Infrastructure(error) =
+            ResumeBodyError::native_trap(wasmtime::Error::from_anyhow(native))
+        else {
+            panic!("native table trap must not be recorded as a guest error")
+        };
+        assert_eq!(error.root_cause().to_string(), "missing body table slot");
+    }
+
+    #[test]
+    fn body_retry_416_and_short_prefix_are_terminal_but_native_trap_is_not() {
+        assert_eq!(
+            classify_resume_response(416, None, 1, Some(200)),
+            ResumeResponseAction::RangeNotSatisfiable
+        );
+        let ResumeBodyError::Terminal(SerializableStreamError::LastOperationFailed(message)) =
+            range_not_satisfiable_error()
+        else {
+            panic!("416 must be a guest-visible terminal error")
+        };
+        assert!(message.contains("416 Range Not Satisfiable"));
+
+        let ResumeBodyError::Terminal(SerializableStreamError::LastOperationFailed(message)) =
+            classify_resume_prefix_error(StreamError::Closed)
+        else {
+            panic!("short prefix must be a guest-visible terminal error")
+        };
+        assert!(message.contains("shorter than previously consumed bytes"));
+
+        let ResumeBodyError::Terminal(SerializableStreamError::LastOperationFailed(message)) =
+            classify_resume_prefix_error(StreamError::LastOperationFailed(
+                wasmtime::Error::from_anyhow(anyhow::anyhow!("peer failed")),
+            ))
+        else {
+            panic!("native prefix error must be a guest-visible terminal error")
+        };
+        assert!(message.contains("peer failed"));
+
+        let ResumeBodyError::Infrastructure(error) =
+            classify_resume_prefix_error(StreamError::Trap(wasmtime::Error::from_anyhow(
+                anyhow::anyhow!("prefix stream trap"),
+            )))
+        else {
+            panic!("native prefix trap must remain infrastructure")
+        };
+        assert_eq!(error.root_cause().to_string(), "prefix stream trap");
     }
 
     #[test]

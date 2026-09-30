@@ -10403,6 +10403,10 @@ struct PrivateDurableWorkerState {
     /// oplog.
     file_stream_pollables: HashSet<u32>,
 
+    tcp_connect_replay: sockets::tcp::TcpConnectReplay,
+    open_tcp_input_streams: HashSet<u32>,
+    open_tcp_output_streams: HashSet<u32>,
+
     /// Shadow of the wasmtime P3 TCP one-shot `send`/`receive` stream-taken flags,
     /// keyed by TCP socket resource rep. The durable wrappers replay `send`/`receive`
     /// from the oplog instead of invoking the native host call, so the native
@@ -10818,6 +10822,9 @@ impl PrivateDurableWorkerState {
             open_filesystem_output_streams: HashMap::new(),
             open_filesystem_input_streams: HashSet::new(),
             file_stream_pollables: HashSet::new(),
+            tcp_connect_replay: sockets::tcp::TcpConnectReplay::default(),
+            open_tcp_input_streams: HashSet::new(),
+            open_tcp_output_streams: HashSet::new(),
             tcp_taken_streams: HashMap::new(),
             snapshotting_mode: false,
             invocation_strictness: InvocationStrictness::Normal,

@@ -3323,6 +3323,7 @@ struct ProductionContextTestServerBootstrap {
     component_service_directory: PathBuf,
     resource_limits: Arc<dyn ResourceLimits>,
     wrap_rpc: Option<Arc<WrapRpcFn>>,
+    wrap_key_value_storage: Option<Arc<WrapKeyValueStorageFn>>,
     active_agents:
         Arc<OnceLock<Arc<ActiveAgents<golem_worker_executor::workerctx::default::Context>>>>,
 }
@@ -3331,6 +3332,17 @@ struct ProductionContextTestServerBootstrap {
 impl Bootstrap<golem_worker_executor::workerctx::default::Context>
     for ProductionContextTestServerBootstrap
 {
+    fn wrap_key_value_storage(
+        &self,
+        storage: Arc<dyn KeyValueStorage + Send + Sync>,
+    ) -> Arc<dyn KeyValueStorage + Send + Sync> {
+        if let Some(wrap) = &self.wrap_key_value_storage {
+            wrap(storage)
+        } else {
+            storage
+        }
+    }
+
     fn create_active_agents(
         &self,
         golem_config: &GolemConfig,
@@ -3584,6 +3596,7 @@ async fn run_production_context_bootstrap(
             component_service_directory: deps.component_service_directory.clone(),
             resource_limits,
             wrap_rpc: overrides.wrap_rpc,
+            wrap_key_value_storage: overrides.wrap_key_value_storage,
             active_agents: production_active_agents.clone(),
         },
         config,
@@ -3667,6 +3680,23 @@ pub async fn start_with_resource_limits(
         TestExecutorOverrides::default(),
         None,
         "Timeout waiting for custom-resource-limits server to start",
+    )
+    .await
+}
+
+pub async fn start_with_resource_limits_and_overrides(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    resource_limits: Arc<dyn ResourceLimits>,
+    overrides: TestExecutorOverrides,
+) -> anyhow::Result<TestWorkerExecutor> {
+    run_production_context_bootstrap(
+        deps,
+        context,
+        resource_limits,
+        overrides,
+        None,
+        "Timeout waiting for custom-resource-limits server with overrides to start",
     )
     .await
 }

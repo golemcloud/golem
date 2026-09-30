@@ -19,6 +19,8 @@ use crate::durable_host::suspendable_wait::{
     ephemeral_sleep_too_long_error, park_suspendable_wait, std_duration_to_nanos,
 };
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx, SuspendForSleep};
+#[cfg(feature = "test-utils")]
+use crate::services::HasWorker;
 use crate::workerctx::WorkerCtx;
 use chrono::{Duration, Utc};
 use futures::pin_mut;
@@ -65,11 +67,16 @@ impl<Ctx: WorkerCtx> HostPollable for DurableWorkerCtx<Ctx> {
         // its result was persisted, and the file operation it gates re-executes for real during
         // replay. Await the real readiness too, so subsequent (non-durable) reads/writes observe
         // the same stream state as the recorded run (see
-        // `PrivateDurableWorkerState::file_stream_pollables`).
-        if !was_live && is_ready && self.state.file_stream_pollables.contains(&rep) {
-            let pollable = Resource::<Pollable>::new_borrow(rep);
-            let mut view = self.as_wasi_view();
-            HostPollable::block(&mut view.io_data(), pollable).await?;
+        // `PrivateDurableWorkerState::file_stream_pollables`). TCP connect likewise re-executes
+        // natively, so its recorded readiness must precede synchronous `finish_connect`.
+        if !was_live && is_ready {
+            if self.state.file_stream_pollables.contains(&rep) {
+                let pollable = Resource::<Pollable>::new_borrow(rep);
+                let mut view = self.as_wasi_view();
+                HostPollable::block(&mut view.io_data(), pollable).await?;
+            } else if self.state.tcp_connect_replay.needs_readiness(rep) {
+                self.revalidate_tcp_connect(rep, true).await?;
+            }
         }
 
         Ok(is_ready)
@@ -98,6 +105,7 @@ impl<Ctx: WorkerCtx> HostPollable for DurableWorkerCtx<Ctx> {
         // Only unclassify after the resource is really gone: reps are recycled by the
         // resource table, and a failed drop leaves the pollable live.
         self.state.file_stream_pollables.remove(&child_rep);
+        self.state.tcp_connect_replay.drop_pollable(child_rep);
 
         // If this child belonged to a FutureInvokeResult whose drop was deferred,
         // finalize the parent deletion now that this child is gone.
@@ -197,18 +205,27 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         // operations they gate re-execute for real during replay. Await their
                         // real readiness too, so subsequent (non-durable) reads/writes observe
                         // the same stream state as the recorded run (see
-                        // `PrivateDurableWorkerState::file_stream_pollables`).
+                        // `PrivateDurableWorkerState::file_stream_pollables`). A reconstructed
+                        // TCP connect also needs its native future driven before `finish_connect`.
+                        // Other network pollables do not share that reconstruction contract.
                         if let Ok(ready_indices) = &response.result {
-                            let ready_file_pollables = ready_indices
+                            let ready_reconstructed_pollables = ready_indices
                                 .iter()
                                 .filter_map(|idx| in_.get(*idx as usize))
                                 .map(|pollable| pollable.rep())
-                                .filter(|rep| self.state.file_stream_pollables.contains(rep))
+                                .filter(|rep| {
+                                    self.state.file_stream_pollables.contains(rep)
+                                        || self.state.tcp_connect_replay.needs_readiness(*rep)
+                                })
                                 .collect::<Vec<_>>();
-                            for rep in ready_file_pollables {
-                                let pollable = Resource::<Pollable>::new_borrow(rep);
-                                let mut view = self.as_wasi_view();
-                                HostPollable::block(&mut view.io_data(), pollable).await?;
+                            for rep in ready_reconstructed_pollables {
+                                if self.state.file_stream_pollables.contains(&rep) {
+                                    let pollable = Resource::<Pollable>::new_borrow(rep);
+                                    let mut view = self.as_wasi_view();
+                                    HostPollable::block(&mut view.io_data(), pollable).await?;
+                                } else {
+                                    self.revalidate_tcp_connect(rep, false).await?;
+                                }
                             }
                         }
                         break 'poll response;
@@ -263,10 +280,24 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     .unwrap()
                     .create_await_interrupt_signal();
 
+                #[cfg(feature = "test-utils")]
+                let observer = self.public_state.worker().p2_poll_observer_for_test(
+                    self.state.get_current_idempotency_key(),
+                    handle.start_index(),
+                    reps.clone(),
+                );
                 let result = {
                     let mut view = self.as_wasi_view();
                     let mut io_data = view.io_data();
                     let poll = Host::poll(&mut io_data, in_);
+                    #[cfg(feature = "test-utils")]
+                    let poll = async {
+                        if let Some(observer) = observer {
+                            observer.observe(poll).await
+                        } else {
+                            poll.await
+                        }
+                    };
                     pin_mut!(poll);
 
                     let _promise_waiting = PromiseWaiting::new(record_ephemeral_promise_wait);
@@ -394,6 +425,60 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         };
 
         response.result.map_err(wasmtime::Error::msg)
+    }
+}
+
+impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
+    /// The recorded call is already closed. Only its reconstructed native connect can be
+    /// interrupted here; replay resolution and its mandatory completion are never raced.
+    async fn revalidate_tcp_connect(
+        &mut self,
+        rep: u32,
+        _ready_probe: bool,
+    ) -> wasmtime::Result<()> {
+        #[cfg(feature = "test-utils")]
+        let (wait_gate, outcome_gate) = {
+            let gate = self
+                .public_state
+                .worker()
+                .take_p2_connect_replay_gate_for_test(_ready_probe);
+            if let Some(gate) = gate {
+                let _ = gate.entered.send(());
+                let _ = gate.subscribe.await;
+                (
+                    Some((gate.waiting, gate.ready)),
+                    Some((gate.selected, gate.finish)),
+                )
+            } else {
+                (None, None)
+            }
+        };
+        let interrupt_signal = self
+            .execution_status
+            .read()
+            .unwrap()
+            .create_await_interrupt_signal();
+        let result = {
+            let readiness = async {
+                #[cfg(feature = "test-utils")]
+                if let Some((waiting, ready)) = wait_gate {
+                    let _ = waiting.send(());
+                    let _ = ready.await;
+                }
+                let mut view = self.as_wasi_view();
+                HostPollable::block(&mut view.io_data(), Resource::new_borrow(rep)).await
+            };
+            tokio::select! {
+                result = readiness => result,
+                kind = interrupt_signal => Err(wasmtime::Error::from_anyhow(kind.into())),
+            }
+        };
+        #[cfg(feature = "test-utils")]
+        if let Some((selected, finish)) = outcome_gate {
+            let _ = selected.send(result.is_ok());
+            let _ = finish.await;
+        }
+        result
     }
 }
 

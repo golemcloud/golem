@@ -178,6 +178,11 @@ never be started again" (`worker/mod.rs`, `INACTIVE_EPHEMERAL_AGENT_ERROR`).
 
 ### Monthly admission, interruption, and recovery
 
+Before extending quota interruption to pending host adapters, follow
+[reuse-first resource-limit delivery](../testing/reference/resource-limit-delivery.md).
+Inherit Worker acceptance, typed signals, invocation-loop cleanup and ordinary reconstruction;
+record independent defects and unverified combinations separately from the bounded delivery claim.
+
 Monthly policy uses the shared account `AtomicResourceEntry` in `services/resource_limits.rs`.
 Registry revisions arrive through the existing refresh path; stale refreshes must not restore
 older policy. Admission in `worker/invocation_loop.rs` checks the latest cached capacity before
@@ -275,6 +280,14 @@ The invocation loop remains the sole primary-Store owner. Tests in
 admission teardown and monitor driver in both fence orders, then verify one pending invocation
 executes after physical unload and reconstruction.
 
+Monthly acceptance rejects further proposals once a terminal stop is claimed, under the existing
+interrupt and admission locks. The same active window can keep accounting during retirement, but
+later ticks or applied updates cannot replace the accepted monthly kind/reason or queue another
+terminal demand. This also preserves a claimed user stop. Generic terminal queuing still permits
+later deletion. `tests/api/monthly_p2_input/repeated_stop.rs` holds a real outcome writer after
+selection, checks tick and changed-resource update rejection, then verifies one terminal, physical
+cleanup, durable continuation and ephemeral archival.
+
 Outcome selection shares the interrupt guard. Success, a typed invocation-deadline failure and
 a lifecycle candidate wait for an unpublished terminal stop accepted before selection; the selected
 failure keeps the typed interrupt and applicable ephemeral monthly error. The primary invocation
@@ -296,8 +309,241 @@ selection on real Workers, including silent TCP and a blocked concurrent-agent p
 
 The default 10 ms epoch increment still does not wake pending host futures. Real silent-TCP tests
 cover monthly-memory detection by both the local tick and applied Registry update, cooperative
-socket closure, durable reconstruction and ephemeral resource failure. This is not a universal
-bound for compute, storage or every host wait; preserve the permit-owned billing window.
+socket closure, durable reconstruction and ephemeral resource failure. The P2 TCP input
+`subscribe().block()` tests in `tests/api/monthly_p2_poll.rs` cover memory, prepaid compute and
+mode-matching scripted storage in both modes. They verify physical unload and permit release
+before peer readiness, then repair the original poll Start for durable agents. Scripted allocation
+proves Worker orchestration, not native managed-XFS measurement. These tests do not establish a
+bound for other host waits; preserve the permit-owned billing window.
+
+P2 TCP `start_connect` re-executes natively on reconstruction. A completed connect poll must drive
+the new native connect future before returning its recorded readiness, otherwise synchronous
+`finish_connect` can return `WouldBlock` and diverge. `TcpConnectReplay` in
+`durable_host/sockets/tcp.rs` classifies only socket pollables with an unfinished connect.
+`durable_host/io/poll.rs` revalidates their recorded-ready `poll` or `ready` result without changing
+the oplog. Only the native TCP readiness wait selects the existing typed interrupt signal, after
+completed replay has closed the durable handle. Replay resolution, the recorded terminal and
+file-readiness revalidation stay outside that race. Late subscribers read an already published
+stop from `ExecutionStatus`. Tests in `tests/api/monthly_p2_poll.rs` gate both replay entry points
+before subscription, while waiting and after readiness selection; they retain the original input
+Start across another monthly stop and recovery. Holding the Store at that gate proves the permit
+is still held after signal delivery, before physical unload. The gate controls native readiness
+delivery, not a real network timeout. Failed native reconnect outcomes remain a raw-P2 replay
+limitation; readiness does not guarantee the original successful connection result.
+
+Successful pollable drops clear classification. Native socket deletion requires all pollable
+children to be dropped first, so socket cleanup need not scan unrelated subscriptions. This does
+not revalidate HTTP, UDP or TCP input pollables. Exported P2 `pollable.ready` remains a nonblocking
+live probe, as verified by `tests/api/p2_ready.rs`.
+
+Raw P2 TCP `blocking_read` and `blocking_skip` in `durable_host/io/streams.rs` select the existing
+typed interrupt signal around only the native input future. Successful `finish_connect` and
+`accept` classify the returned input stream; successful native stream drop removes that rep.
+Filesystem and unknown streams keep their existing behavior. Native stream cancellation,
+resource deletion and invocation-result commit remain outside the select.
+
+These raw TCP calls have **no durable host Start or recorded read/skip result**. At a pending
+stop, the connect poll is already complete and the method remains unfinished. Reconstruction
+reconnects and re-executes input under the retained invocation key, not a repaired stream Start.
+Even completed historical raw input executes again when a fresh invocation reconstructs an
+unloaded Worker. Deterministic peer data is required to reproduce the recorded invocation result;
+this does not provide exactly-once TCP consumption.
+
+`tests/api/monthly_p2_input.rs` covers each export with memory, prepaid compute and matching
+scripted storage in both modes. Its Worker-local test observer reports the real native future's
+first `Poll::Pending` and tracks return versus drop without gating readiness or locking the Store.
+Tests keep the peer silent through monthly stop, physical unload and permit release. Durable
+cases retain 2 Started/1 Finished, then reach 2/2 after reconnect and one-byte input. The separate
+completion tests let native input finish, hold the existing selected-result boundary, then accept
+a monthly stop. Commit and notification win before stop publication. They also reconstruct
+completed history and count the repeated native input before fresh work. Other TCP output and
+UDP waits are separate operations, not covered by these input tests.
+
+Raw P2 TCP `output.blocking_splice(&input, 1)` is a distinct export whose native provider first
+checks output capacity, then waits for input and finally writes and flushes output. Successful
+TCP `finish_connect` and `accept` register input and output reps independently; successful stream
+drop removes only that stream's classification. When both reps are registered raw TCP streams,
+the native splice selects the existing composed `create_interrupt_signal()` through
+`interruptible_tcp_input`. Input and output need not share a socket. HTTP batched calls,
+filesystem readiness, unknown outputs, durable settlement and resource deletion stay outside
+this select. Raw read/skip retain their separate signal construction.
+
+`tests/api/monthly_p2_input.rs` and `monthly_p2_input/cross_socket.rs` observe the actual splice
+future's first Pending for same-socket and cross-socket pairs. A positive native `check_write`
+probe runs only when the test observer is installed. Fresh output capacity and a silent source
+support input-demand attribution through provider ordering; the provider-internal input await
+is not instrumented. Both configurations exposed accepted-stop physical-teardown failures.
+Each now has memory, prepaid-compute and matching scripted-storage cases in both agent modes.
+They check socket closure and joined Store/permit/window cleanup before any input byte, durable
+same-key reconnection or ephemeral terminal/probe, and completion-first cached success. The
+cross-socket tests require both sockets to close and later count a byte consumed on A and emitted
+on B. Memory accounting uses a drained seed and isolated target account interval, not a per-worker
+billing key or an exact parked-duration charge. Scripted storage is not native managed-XFS evidence.
+
+`durable_p2_cross_socket_splice_stop_before_subscription` holds a keyed test-only gate immediately
+before the composed constructor. A real monthly-memory stop is accepted, frozen and published
+while the Store, window and permit remain held. Releasing the gate allows the latched signal to
+interrupt, followed by physical cleanup and ordinary same-key reconstruction. The unbiased select
+may skip native polling or poll Pending before dropping; neither order is a ready/stop tie proof.
+This control covers durable monthly memory only. Deadline/entity sources are composed in code,
+but separate guest deadline/entity cancellation tests remain unproved.
+
+Like raw read/skip, splice has no durable host Start or recorded byte result. Completed guest
+history can consume and emit TCP bytes again; only a same-key result-cache lookup stays offline.
+These tests do **not** prove output back-pressure, post-consumption flush cancellation,
+transactional byte effects, accepted/half-dropped socket combinations or external exactly-once.
+
+A P2 HTTP response-body `blocking_read` is different from raw TCP input: it opens a
+`HttpTypesIncomingBodyStreamBlockingRead` child under the batched HTTP request scope. Only its
+live native read selects the typed interrupt. An interrupted native read leaves that child
+incomplete without a `Cancelled`; reconstruction retains the scope and Jump-replaces its
+contents, reissues the HTTP request with the same idempotency-key header and reads the first
+byte again. The native select excludes response-body resumption, retry policy, durable
+completion, stream drop and request-scope finalization. Inline resumption classifies errors where they arise: retry-delay interruptions and typed
+native traps abandon the child with its original error chain. Payload download, request
+reconstruction, resource-table failures and non-interrupt native traps use the child's
+call-owned infrastructure trap, leaving its Start incomplete. A 416 response, a short
+resent prefix or native prefix `LastOperationFailed` instead completes the child with
+recorded `LastOperationFailed` before returning that stream error; completion failure
+propagates. The resent response is prepared and its prefix skipped before either guest
+body or stream is replaced. The inline retry delay, live response-body resend
+`future_resp.ready()`, and matching full-response prefix-skip `new_stream.ready()` listen for
+the typed interrupt. Each ready select prefers native completion on a tie. An interrupted
+prefix skip drops the detached body without replacing the original guest body or stream.
+Retry policy, response classification, prefix read, durable completion and request-scope
+settlement remain outside those ready selects. `tests/api/monthly_p2_http_body.rs` observes the second native read's actual Pending
+after a first byte and keeps the first response silent through physical stop.
+`tests/api/monthly_p2_http_retry_delay.rs` instead closes the partial first response, observes
+the actual retry sleep's first Pending with the same read child and invocation, and stops before
+any second request. It tests both modes under memory, prepaid compute and matching scripted storage,
+plus a completion-before-stop case where the sleep returns before the second request. A two-slot
+pool permits durable repair. Account-level positive memory updates after the seed are not attributed
+to the target because the seed's sub-unit remainder may flush later; the closed-window zero-delta
+check remains separate. `tests/api/monthly_p2_http_resend.rs` ends the partial first response,
+observes the second request and its native resend-ready Pending with two HTTP pool slots, then verifies
+physical stop and socket closure while the second response headers remain withheld. Its
+completion-before-stop control releases the second response while the same native ready future
+is Pending and verifies normal End and Finished with no monthly stop. `tests/api/monthly_p2_http_prefix.rs` receives the second
+Range request, sends a matching full 200 response's headers, then withholds its first body
+frame while the actual prefix-skip ready future reports Pending. It checks physical unload
+and socket closure while that frame remains withheld; its completion control releases the frame
+first and observes Returned,
+settled child/scope and Finished. All four suites cover memory, prepaid compute and matching
+scripted storage in both modes; they count physical reissues, not exactly-once remote effects.
+Direct P2 HTTP response-body `blocking_skip` also opens a `WriteRemoteBatched` child under
+that request scope. Its live native wait selects the typed signal with native completion first
+on a tie, abandoning only the skip child on interruption. Replay retains the single scope,
+Jump-replaces the interrupted children and sends a new HTTP request with the same key.
+`tests/api/monthly_p2_http_skip.rs` observes the actual skip Pending after a completed first-byte
+read, keeps the second byte gated through physical stop, and verifies completion-first return
+separately. The one-slot pool self-wait is separate GOL-685. Status-code retry resend-ready, background
+resend-ready, nonblocking body reads and upload capacity remain separate boundaries.
+
+The three durable-memory `stop_before_subscription` tests in the resend, prefix and skip suites
+park the real live operation just before its existing Worker-backed typed subscription. One
+`test-utils` latch matches both invocation key and exact operation, reports the open child Start,
+stream rep and permit-held monthly runtime, and leaves the native future unpolled while parked.
+Resend has already sent request 2 but receives no response headers; prefix has received matching full
+200 headers but no second-response body frame; direct skip withholds the first response's
+remaining byte. Each test verifies the open child under the original request scope, the peer
+attempt count and held permit, then accepts and freezes the matching monthly Suspend with the
+owner before releasing the latch. After release the native-first select can poll the real
+future once to `Pending` before it reads the latched stop. The observer may therefore report
+no Pending event, or one matching event ending in `Dropped`; `Returned` would be wrong. A
+selection receipt confirms the actual typed interrupt branch. Physical unload, socket closure
+and permit release occur while the peer still withholds the response headers or body bytes. The
+child has no invented End or Cancelled; the method has no Finished until a new request supplies
+data and durable reconstruction Jump-repairs that child under the same scope and invocation key. These three tests cover **durable monthly memory** with publication
+before subscription. The separate six-cell matrices cover already-subscribed native Pending
+waits in both modes under memory, prepaid compute and matching scripted storage. Completion-first
+controls let native work finish before a stop; none of these cases asserts a simultaneous
+native-ready/stop-ready tie.
+
+P3 UDP `receive` in `durable_host/p3/sockets/udp.rs` selects the same typed signal only
+around the native live receive. `run_read_access` leaves an interrupted
+`P3SocketsTypesUdpSocketReceive` Start incomplete; its call-owned trap context preserves the
+`InterruptKind` root cause. Replay resolution, End persistence, accessor delivery and native
+bind/drop remain outside the select. The call remains `ReadRemote` and repairs its original Start.
+
+`tests/api/monthly_p3_udp.rs` covers explicitly bound, unconnected receive in both modes with
+memory, prepaid compute and matching scripted storage. A test-utils-only observer reports the
+real receive future's first Pending and native local address, then distinguishes return from drop.
+The guest binds loopback port zero and never reads that varying port. After physical unload,
+rebinding the observed address proves socket retirement; UDP has no EOF. Reconstruction binds
+again and the test sends one datagram to the newly observed address. The original Start gets one
+End and delivery, and the retained invocation finishes once. Idle eviction then forces completed
+history to replay with the sender gone. The next native receive belongs only to fresh work.
+A completion-first control verifies End and delivery before a monthly stop, then preserves the
+selected invocation result through commit and notification. These tests do not establish
+exactly-once datagram consumption across the receive-before-End crash window. Connected UDP
+reconstruction and incomplete batched sends remain separate, unresolved contracts.
+
+WebSocket initial `connect` in `durable_host/websocket/client.rs` opens its `WriteRemote`
+Start before acquiring the executor-wide connection-pool permit. The live pool acquisition
+selects the existing typed interrupt signal without a Store lock. An interrupted acquisition
+abandons the call for a trap, leaving its Start incomplete; it does not append `Cancelled`.
+Only successful acquisition transfers the permit to the live socket. The subsequent handshake
+has its own interrupt select; neither call completion nor resource-table registration is raced
+with this pool wait. `tests/api/monthly_websocket/pool.rs` holds the sole pool slot with a
+completed, loaded-idle Worker whose monthly permit and monitor have been released. A second
+Worker parks on initial connect with no peer connection or receive Start. Six resource/mode
+cases stop and physically unload that target before evicting the holder. Durable reconstruction
+repairs the original connect Start and invocation key after the slot is freed; ephemeral failure
+remains terminal. Peer handshakes and frames are counted as attempts, not external exactly-once
+effects.
+
+The initial `connect_async` handshake begins after a free pool permit is acquired. A passive
+observer in `tests/api/monthly_websocket/handshake.rs` reports its first native Pending while an
+in-process TCP peer holds back the Upgrade response. Six resource/mode cells stop the Worker,
+close the half-open socket and return both permits while 101 remains withheld. Durable replay
+repairs the original Connect Start with a new handshake; ephemeral failure is typed and a fresh
+Worker probes the released pool. A completion-first control lets 101 arrive before exhaustion.
+The handshake already selected the typed signal; these tests did not expose a production RED.
+
+Completed durable Connect replay instead restores a `Replay` connection handle without a TCP
+connection. A fresh Receive accessor or direct Close opens its own Start, then acquires a pool
+slot before reconnecting. `tests/api/monthly_websocket/reconnect_pool.rs` holds the only slot
+with another loaded-idle Worker and observes the *target's* native acquire Pending. Both helper
+acquisitions select the composed typed signal; the direct helper formerly waited without a
+signal. The holder stays loaded until the stopped target physically unloads. After holder
+eviction and capacity grant, the original Receive Start gains End then CompletionDelivered, or
+the original Close Start gains direct End, with one new handshake and no historical replay
+traffic. `tests/api/monthly_websocket/reconnect_handshake.rs` instead starts with the pool free
+and withholds the third TCP Upgrade response after the target's actual reconnect `connect_async`
+reports Pending. The typed stop closes that socket and frees the slot before the peer supplies
+101; recovery repairs the same operation Start on a fourth TCP connection. Both helper paths
+have durable memory, prepaid compute and scripted durable-storage cases and completion-first
+controls for each wait. The direct post-permit handshake also uses the composed interrupt signal.
+Completed-connect replay is not available to ephemeral agents, which cannot resume or invoke a
+reconstructed incarnation. Entity-local cancellation, a native ready/stop tie, timed receive,
+reader/writer locks and send/close transport back-pressure remain unproved by these matrices.
+
+A timed WebSocket receive is another distinct frame read: `live.reader.lock().await` completes
+before `reader.next()` is wrapped by the timeout and raced against the composed typed signal.
+`tests/api/monthly_websocket/timed_receive.rs` observes the *native read's* first Pending after a
+valid Upgrade while the peer withholds its frame, matched to the timed Receive Start, invocation
+key and runtime. The guest's 300-second deadline is not driven by the monthly test clock. Six
+resource/mode cases check stop and physical socket/Store/permit/window release with the frame
+still withheld, durable same-key repair of the original timed Start and ephemeral typed failure
+with a fresh Worker probe. A separate one-second timeout-first control returns `None` before
+any monthly exhaustion, then preserves its cached result. The existing frame select already
+interrupted; no production RED or timeout/stop tie is claimed. The reader mutex acquisition
+**precedes** that select, so these tests do not cover lock contention. Scripted storage proves
+Worker orchestration, not native managed-XFS measurement.
+
+A second timed receive on the **same** guest WebSocket can reach the reader mutex while an
+untimed receive holds it in its native frame read. `tests/api/monthly_websocket/reader_lock.rs`
+observes the timed `reader.lock()` future's first Pending after both distinct Starts; six
+resource/mode cells prove **stop-only** physical cleanup with both frames withheld. The first
+interruptible read releases its guard on an owner monthly stop, so the missing select around
+the second lock await has no demonstrated normal-Worker RED. A separate control shows the timed
+deadline begins only after lock acquisition. This is not completed coverage: durable same-key
+repair of the two incomplete reads timed out because both replay accessors may independently
+reconnect the saved handle through a one-slot pool; one holds the slot while the other remains
+in the acquire branch without rechecking Live. This failed continuation is tracked separately as GOL-693, Backlog/Medium. It is not passing
+recovery evidence or a repair gate for the pending-host quota extension. Preserve that limitation;
+do not add a second pool slot merely to make this replay test pass or claim an invented terminal.
+Entity-local cancellation and the writer mutex are distinct.
 
 Explicit interruption retires the cached owner and fences its replacement startup. Automatic
 shard-assignment recovery leaves `Interrupted` workers stopped, even with queued invocations or

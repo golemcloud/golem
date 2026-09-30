@@ -14,6 +14,7 @@
 
 use crate::Tracing;
 use golem_common::model::RetryConfig;
+use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
@@ -360,6 +361,85 @@ async fn http_resuming_response_body_inline_retry_accepts_matching_non_partial_s
         "Expected at least 1 in-function retry error entry in oplog for response-body resumption, got {retry_count}"
     );
 
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn http_body_resume_416_records_guest_terminal(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let overrides = TestExecutorOverrides {
+        configure: Some(Arc::new(|config| {
+            config.retry = RetryConfig {
+                max_attempts: 2,
+                min_delay: Duration::from_millis(1),
+                max_delay: Duration::from_millis(5),
+                multiplier: 1.0,
+                max_jitter_factor: None,
+            };
+            config.max_in_function_retry_delay = Duration::from_secs(1);
+        })),
+        ..Default::default()
+    };
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+    let (port, connections, range_requests) =
+        start_partial_response_http_server(1, 1, 1024, 200, 416, false).await;
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("HttpClient4");
+    let worker_id = executor
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            HashMap::from([("PORT".to_string(), port.to_string())]),
+            Vec::new(),
+        )
+        .await?;
+
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "get_for_p2_body_wait",
+            data_value!(format!("localhost:{port}")),
+        )
+        .await;
+    assert!(result.is_err(), "guest must observe the 416 body failure");
+    assert_eq!(connections.load(Ordering::SeqCst), 2);
+    assert_eq!(range_requests.load(Ordering::SeqCst), 1);
+
+    let entries = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let body_starts: Vec<_> = entries
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(start)
+                if start.function_name == "http::types::incoming_body_stream::blocking_read" =>
+            {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .collect();
+    assert!(
+        !body_starts.is_empty(),
+        "expected P2 response-body blocking-read Starts"
+    );
+    assert!(
+        entries.iter().any(|entry| match &entry.entry {
+            PublicOplogEntry::End(end) if body_starts.contains(&end.start_index) => {
+                format!("{:?}", end.response).contains("416 Range Not Satisfiable")
+            }
+            _ => false,
+        }),
+        "416 must finish a body-read child with a recorded guest error: {entries:?}"
+    );
     Ok(())
 }
 

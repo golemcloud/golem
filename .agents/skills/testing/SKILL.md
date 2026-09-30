@@ -39,6 +39,8 @@ CLI integration suites and takes a very long time.
 
 **Whenever tests are modified, always run the affected tests to verify they still pass before considering the task complete.**
 
+Before inventorying or extending pending-host quota interruption, use [reuse-first resource-limit delivery](reference/resource-limit-delivery.md) to freeze the supported scope, reuse the Worker stop path and select bounded validation. An inventory records evidence and residuals; it does not create acceptance gates.
+
 For running specific tests during development:
 ```shell
 cargo test -p <crate> -- <test_name> --report-time

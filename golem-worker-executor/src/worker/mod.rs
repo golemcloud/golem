@@ -32,8 +32,63 @@ mod invocation_loop;
 mod lifecycle;
 mod monthly;
 #[cfg(feature = "test-utils")]
+mod p2_connect_replay_test;
+#[cfg(feature = "test-utils")]
+mod p2_http_pre_subscription_test;
+#[cfg(feature = "test-utils")]
+mod p2_native_input_test;
+#[cfg(feature = "test-utils")]
+mod p2_poll_test;
+#[cfg(feature = "test-utils")]
+mod p3_udp_receive_test;
+#[cfg(feature = "test-utils")]
+mod rpc_result_test;
+#[cfg(feature = "test-utils")]
+mod websocket_handshake_test;
+#[cfg(feature = "test-utils")]
+mod websocket_reader_lock_test;
+#[cfg(feature = "test-utils")]
+mod websocket_reconnect_pool_test;
+#[cfg(feature = "test-utils")]
+mod websocket_timed_receive_test;
+#[cfg(feature = "test-utils")]
 pub use monthly::{
     MonthlyAcceptanceForTest, MonthlyClockForTest, MonthlyProposalForTest, MonthlyTimerPollForTest,
+};
+#[cfg(feature = "test-utils")]
+pub use p2_connect_replay_test::P2ConnectReplayControlForTest;
+#[cfg(feature = "test-utils")]
+pub use p2_http_pre_subscription_test::{
+    P2HttpPreSubscriptionControlForTest, P2HttpPreSubscriptionEnteredForTest,
+    P2HttpPreSubscriptionOperationForTest, P2HttpPreSubscriptionSelectionForTest,
+};
+#[cfg(feature = "test-utils")]
+pub use p2_native_input_test::{
+    P2NativeInputPendingForTest, P2NativeInputStateForTest, P2SplicePreSubscriptionControlForTest,
+    P2SplicePreSubscriptionEnteredForTest,
+};
+#[cfg(feature = "test-utils")]
+pub use p2_poll_test::{P2PollPendingForTest, P2PollStateForTest};
+#[cfg(feature = "test-utils")]
+pub use p3_udp_receive_test::{P3UdpReceivePendingForTest, P3UdpReceiveStateForTest};
+#[cfg(feature = "test-utils")]
+pub use rpc_result_test::{RpcResultPendingForTest, RpcResultStateForTest};
+#[cfg(feature = "test-utils")]
+pub use websocket_handshake_test::{
+    WebSocketHandshakePathForTest, WebSocketHandshakePendingForTest, WebSocketHandshakeStateForTest,
+};
+#[cfg(feature = "test-utils")]
+pub use websocket_reader_lock_test::{
+    WebSocketReaderLockPendingForTest, WebSocketReaderLockStateForTest,
+};
+#[cfg(feature = "test-utils")]
+pub use websocket_reconnect_pool_test::{
+    WebSocketReconnectPathForTest, WebSocketReconnectPoolPendingForTest,
+    WebSocketReconnectPoolStateForTest,
+};
+#[cfg(feature = "test-utils")]
+pub use websocket_timed_receive_test::{
+    WebSocketTimedReceivePendingForTest, WebSocketTimedReceiveStateForTest,
 };
 pub mod owner_lane;
 pub mod read_only_cache;
@@ -825,6 +880,35 @@ struct StopProgressState {
     invocation_admission_gate: Option<StopTestGate>,
     #[cfg(feature = "test-utils")]
     completed_replay_gate: Option<CompletedReplayTestGate>,
+    #[cfg(feature = "test-utils")]
+    p2_connect_replay_gate: Option<p2_connect_replay_test::P2ConnectReplayGate>,
+    #[cfg(feature = "test-utils")]
+    p2_http_pre_subscription_gate: Option<p2_http_pre_subscription_test::P2HttpPreSubscriptionGate>,
+    #[cfg(feature = "test-utils")]
+    p2_splice_pre_subscription_gate: Option<p2_native_input_test::P2SplicePreSubscriptionGate>,
+    #[cfg(feature = "test-utils")]
+    p2_native_input_observer:
+        Option<tokio::sync::mpsc::UnboundedSender<P2NativeInputPendingForTest>>,
+    #[cfg(feature = "test-utils")]
+    p2_native_retry_delay_observed: bool,
+    #[cfg(feature = "test-utils")]
+    p2_poll_observer: Option<tokio::sync::mpsc::UnboundedSender<P2PollPendingForTest>>,
+    #[cfg(feature = "test-utils")]
+    p3_udp_receive_observer: Option<tokio::sync::mpsc::UnboundedSender<P3UdpReceivePendingForTest>>,
+    #[cfg(feature = "test-utils")]
+    rpc_result_observer: Option<tokio::sync::mpsc::UnboundedSender<RpcResultPendingForTest>>,
+    #[cfg(feature = "test-utils")]
+    websocket_handshake_observer:
+        Option<tokio::sync::mpsc::UnboundedSender<WebSocketHandshakePendingForTest>>,
+    #[cfg(feature = "test-utils")]
+    websocket_timed_receive_observer:
+        Option<tokio::sync::mpsc::UnboundedSender<WebSocketTimedReceivePendingForTest>>,
+    #[cfg(feature = "test-utils")]
+    websocket_reader_lock_observer:
+        Option<tokio::sync::mpsc::UnboundedSender<WebSocketReaderLockPendingForTest>>,
+    #[cfg(feature = "test-utils")]
+    websocket_reconnect_pool_observer:
+        Option<tokio::sync::mpsc::UnboundedSender<WebSocketReconnectPoolPendingForTest>>,
     #[cfg(feature = "test-utils")]
     tail_drain_observer:
         Option<tokio::sync::oneshot::Sender<crate::durable_host::tail_work::TailWorkTracker>>,

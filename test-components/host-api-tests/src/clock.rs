@@ -132,6 +132,34 @@ impl Clock for ClockImpl {
     }
 }
 
+#[agent_definition(mode = "ephemeral")]
+pub trait EphemeralClock {
+    fn new(name: String) -> Self;
+    fn sleep(&self, secs: u64) -> Result<(), String>;
+    async fn sleep_p3(&self, secs: u64) -> bool;
+}
+
+pub struct EphemeralClockImpl {
+    clock: ClockImpl,
+}
+
+#[agent_implementation]
+impl EphemeralClock for EphemeralClockImpl {
+    fn new(name: String) -> Self {
+        Self {
+            clock: ClockImpl::new(name),
+        }
+    }
+
+    fn sleep(&self, secs: u64) -> Result<(), String> {
+        self.clock.sleep(secs)
+    }
+
+    async fn sleep_p3(&self, secs: u64) -> bool {
+        self.clock.sleep_p3(secs).await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

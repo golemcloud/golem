@@ -1039,13 +1039,41 @@ mod monthly_deletion;
 mod monthly_entity;
 mod monthly_failure;
 mod monthly_health;
+#[path = "api/monthly_p3_http/peer.rs"]
+mod monthly_http_peer;
 mod monthly_lifecycle_regressions;
+mod monthly_p2_http;
+mod monthly_p2_http_body;
+mod monthly_p2_http_prefix;
+#[path = "api/monthly_p2_http_prefix/peer.rs"]
+mod monthly_p2_http_prefix_peer;
+mod monthly_p2_http_resend;
+#[path = "api/monthly_p2_http_resend/peer.rs"]
+mod monthly_p2_http_resend_peer;
+mod monthly_p2_http_retry_delay;
+#[path = "api/monthly_p2_http_retry_delay/peer.rs"]
+mod monthly_p2_http_retry_delay_peer;
+mod monthly_p2_http_skip;
+mod monthly_p2_input;
+mod monthly_p2_multi_poll;
+mod monthly_p2_poll;
+mod monthly_p2_sleep;
+mod monthly_p3_http;
+mod monthly_p3_http_body;
+mod monthly_p3_promise;
+mod monthly_p3_sleep;
+mod monthly_p3_udp;
+mod monthly_pending;
 mod monthly_preparation;
 mod monthly_replay;
+mod monthly_rpc;
+mod monthly_sleep;
 mod monthly_stale_target;
 mod monthly_storage;
 mod monthly_tail;
 mod monthly_tick;
+mod monthly_websocket;
+mod p2_ready;
 
 async fn monthly_memory_exhaustion_interrupts_silent_tcp(
     last_unique_id: &LastUniqueId,
