@@ -227,6 +227,13 @@ mod lease_timing_tests {
                 },
             ),
             (
+                "retry_max_delay",
+                EtcdConfig {
+                    retry_max_delay: Duration::MAX,
+                    ..EtcdConfig::default()
+                },
+            ),
+            (
                 "read_retry_timeout",
                 EtcdConfig {
                     read_retry_timeout: Duration::from_secs(26),
@@ -507,6 +514,12 @@ fn validate_timing_config(config: &ShardManagerConfig) -> anyhow::Result<Vec<Str
              against {:?}",
             etcd.retry_max_delay,
             etcd.retry_min_delay
+        );
+        anyhow::ensure!(
+            tokio::time::Instant::now()
+                .checked_add(etcd.retry_max_delay)
+                .is_some(),
+            "persistence.config.retry_max_delay is too large for a retry backoff"
         );
         anyhow::ensure!(
             etcd.read_retry_timeout

@@ -15,8 +15,9 @@
 use crate::durable_host::durable_stream::{
     DurableStreamCommit, DurableStreamStore, StreamStoreError,
 };
-use crate::services::activity::ActivityGate;
+use crate::services::activity::{ActivityGate, ActivityGuard};
 use futures::FutureExt;
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::future::Future;
 use std::sync::{Arc, Mutex};
 use tokio::sync::watch;
@@ -35,12 +36,53 @@ pub(super) struct DurableStreamProducerSlot {
 struct SlotState {
     responses: usize,
     producer: Option<Arc<DurableStreamStore>>,
-    deletion_load: Option<LoadResult>,
+    deletion_attempt: Option<watch::Receiver<DeletionProducerState>>,
     loading: Option<watch::Receiver<Option<LoadResult>>>,
     failure: Option<StreamStoreError>,
     retired: bool,
     retirement: Option<watch::Receiver<Option<Result<(), StreamStoreError>>>>,
     archival: Option<watch::Receiver<Option<Result<(), StreamStoreError>>>>,
+}
+
+#[derive(Clone, Default)]
+enum DeletionProducerState {
+    #[default]
+    Pending,
+    Ready {
+        producer: Arc<DurableStreamStore>,
+        activity: Arc<ActivityGate>,
+    },
+    Failed(WorkerExecutorError),
+    Finished,
+}
+
+pub(super) struct DeletionProducerAttempt {
+    state: watch::Sender<DeletionProducerState>,
+}
+
+pub(super) struct DeletionProducerAccess {
+    producer: Arc<DurableStreamStore>,
+    _activity: ActivityGuard,
+}
+
+impl DeletionProducerAccess {
+    pub(super) fn producer(&self) -> &Arc<DurableStreamStore> {
+        &self.producer
+    }
+}
+
+impl DeletionProducerAttempt {
+    pub(super) fn publish(&self, producer: Arc<DurableStreamStore>, activity: Arc<ActivityGate>) {
+        self.state
+            .send_replace(DeletionProducerState::Ready { producer, activity });
+    }
+
+    pub(super) fn finish(&self, result: &Result<(), WorkerExecutorError>) {
+        self.state.send_replace(match result {
+            Ok(()) => DeletionProducerState::Finished,
+            Err(error) => DeletionProducerState::Failed(error.clone()),
+        });
+    }
 }
 
 /// Keeps normal ephemeral archival behind the response and all of its stream readers.
@@ -132,20 +174,50 @@ impl DurableStreamProducerSlot {
         self.state_changed.notify_waiters();
     }
 
-    pub(super) fn publish_deletion_load(&self, result: LoadResult) {
-        self.state.lock().unwrap().deletion_load = Some(result);
+    pub(super) fn begin_deletion_attempt(&self) -> DeletionProducerAttempt {
+        let (attempt, state) = watch::channel(DeletionProducerState::Pending);
+        self.state.lock().unwrap().deletion_attempt = Some(state);
         self.state_changed.notify_waiters();
+        DeletionProducerAttempt { state: attempt }
     }
 
-    pub(super) async fn deletion_producer(&self) -> LoadResult {
-        loop {
+    pub(super) async fn deletion_producer(
+        &self,
+    ) -> Result<DeletionProducerAccess, WorkerExecutorError> {
+        let mut attempt = loop {
             let changed = self.state_changed.notified();
             tokio::pin!(changed);
             changed.as_mut().enable();
-            if let Some(result) = self.state.lock().unwrap().deletion_load.clone() {
-                return result;
+            if let Some(attempt) = self.state.lock().unwrap().deletion_attempt.clone() {
+                break attempt;
             }
             changed.await;
+        };
+        loop {
+            let state = attempt.borrow().clone();
+            match state {
+                DeletionProducerState::Pending => {}
+                DeletionProducerState::Ready { producer, activity } => {
+                    let activity = activity.try_enter().ok_or_else(|| {
+                        WorkerExecutorError::invalid_request(
+                            "Worker deletion no longer accepts stream controls",
+                        )
+                    })?;
+                    return Ok(DeletionProducerAccess {
+                        producer,
+                        _activity: activity,
+                    });
+                }
+                DeletionProducerState::Failed(error) => return Err(error),
+                DeletionProducerState::Finished => {
+                    return Err(WorkerExecutorError::invalid_request(
+                        "Worker deletion has finished",
+                    ));
+                }
+            }
+            attempt.changed().await.map_err(|_| {
+                WorkerExecutorError::runtime("Worker deletion attempt ended without a result")
+            })?;
         }
     }
 

@@ -630,7 +630,11 @@ impl LeaderElection {
         lease_id: i64,
         budget: Duration,
     ) -> Result<(), ShardManagerError> {
-        let deadline = Instant::now() + budget;
+        let deadline = Instant::now().checked_add(budget).ok_or_else(|| {
+            ShardManagerError::Internal(
+                "Leader fence confirmation budget exceeds the clock range".to_string(),
+            )
+        })?;
         let response = retry_retriable_until(
             "confirming the won leader key",
             || {

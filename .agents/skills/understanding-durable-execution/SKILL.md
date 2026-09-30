@@ -249,10 +249,12 @@ commit, then stop status writers. Only explicit interruption records a pending t
 Archival moves the oplog before removing the cached worker. The open oplog generation and its
 forwarding wrapper may be reused by the next worker, so ordinary retirement does not close their
 task admission or forwarding. Deletion claims ownership under the same owner-cleanup lock, then
-drains the resident stream producer before running maintenance on a private producer. It publishes
-that replacement through the producer slot before maintenance, and attachment controls arriving
-after retirement wait for that publication rather than using the retired store. Failed maintenance
-is drained before a retry; only deletion closes the oplog generation permanently.
+drains the resident stream producer before running maintenance on a private producer. Each deletion
+attempt publishes that replacement and an admission gate through the producer slot before
+maintenance. Producer controls arriving after retirement either join that attempt, holding an
+admission until the operation finishes, or receive its terminal failure; a retry has a fresh
+attempt. Deletion closes admission and drains those controls before poisoning the replacement.
+Only deletion closes the oplog generation permanently.
 
 Cold acquisition reserves one unresolved `Worker` in `ActiveAgents`. `initialize_with` owns one
 shared attempt independently of request cancellation. `finish_construction` prepares resolved data

@@ -589,10 +589,24 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let worker = Worker::<Ctx>::find_durable_stream_worker(self, &owned_agent_id)
             .await?
             .ok_or_else(|| WorkerExecutorError::worker_not_found(owned_agent_id.agent_id()))?;
+        let deleting_producer =
+            !control.operation.targets_consumer() && worker.deletion_owns_retirement().await;
+        if deleting_producer {
+            return worker
+                .control_durable_stream_attachment(control)
+                .await
+                .map(durable_stream_attachment_control_response::Result::Replayed);
+        }
         let scope = crate::worker::tasks::TaskScope::default();
-        scope
-            .bind(&worker.tasks)
-            .map_err(WorkerExecutorError::invalid_request)?;
+        if let Err(error) = scope.bind(&worker.tasks) {
+            if !control.operation.targets_consumer() && worker.deletion_owns_retirement().await {
+                return worker
+                    .control_durable_stream_attachment(control)
+                    .await
+                    .map(durable_stream_attachment_control_response::Result::Replayed);
+            }
+            return Err(WorkerExecutorError::invalid_request(error));
+        }
         scope
             .run(worker.control_durable_stream_attachment(control))
             .await

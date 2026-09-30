@@ -18,7 +18,7 @@ pub mod unavailable;
 
 use super::rdb::Rdb;
 use super::registry_service::RegistryService;
-use crate::components::{EnvVarBuilder, wait_for_startup_grpc};
+use crate::components::EnvVarBuilder;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::shardmanager;
@@ -26,7 +26,6 @@ use golem_api_grpc::proto::golem::shardmanager::v1::GetRoutingTableRequest;
 use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_service_client::ShardManagerServiceClient;
 use golem_common::model::RoutingTable;
 use std::collections::HashMap;
-use std::process::Child;
 use std::sync::Arc;
 use std::time::Duration;
 use tonic::codec::CompressionEncoding;
@@ -75,15 +74,6 @@ async fn new_client(host: &str, grpc_port: u16) -> ShardManagerServiceClient<Cha
         .expect("Failed to connect to golem-shard-manager")
         .send_compressed(CompressionEncoding::Gzip)
         .accept_compressed(CompressionEncoding::Gzip)
-}
-
-async fn wait_for_startup(
-    host: &str,
-    grpc_port: u16,
-    timeout: Duration,
-    child: Option<&mut Child>,
-) {
-    wait_for_startup_grpc(host, grpc_port, "golem-shard-manager", timeout, child).await
 }
 
 async fn env_vars(

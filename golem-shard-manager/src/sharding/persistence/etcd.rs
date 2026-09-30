@@ -119,13 +119,20 @@ impl EtcdRoutingTablePersistence {
 #[async_trait]
 impl RoutingTablePersistence for EtcdRoutingTablePersistence {
     async fn read(&self) -> Result<(ShardLeaseState, ExternalRevision), ShardManagerError> {
+        let deadline = Instant::now()
+            .checked_add(self.read_retry_timeout)
+            .ok_or_else(|| {
+                ShardManagerError::Internal(
+                    "Configured etcd read retry timeout exceeds the clock range".to_string(),
+                )
+            })?;
         let response = retry_retriable_until(
             "reading the shard lease state",
             || {
                 let mut kv = self.client.kv_client();
                 async move { Ok(kv.get(STATE_KEY, None).await?) }
             },
-            Instant::now() + self.read_retry_timeout,
+            deadline,
             self.retry_min_delay,
             self.retry_max_delay,
         )

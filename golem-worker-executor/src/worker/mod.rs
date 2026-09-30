@@ -3021,6 +3021,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
         };
         let started = matches!(outcome, DeleteOutcome::Started(_));
+        let producer_attempt =
+            started.then(|| self.durable_stream_producer.begin_deletion_attempt());
         drop(instance);
         drop(cleanup);
         if let Some(hook) = Ctx::worker_deletion_hook(&self.extra_deps()) {
@@ -3040,17 +3042,21 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             DeleteOutcome::AlreadyDeleting(_) => return Ok(Some(outcome)),
         }
 
+        let producer_attempt = producer_attempt.expect("started deletion has a producer attempt");
         let worker = self.clone();
         let sender = sender.expect("started deletion has a completion sender");
         tokio::spawn(async move {
-            let result = std::panic::AssertUnwindSafe(worker.run_deletion_attempt(retry_cleanup))
-                .catch_unwind()
-                .await
-                .unwrap_or_else(|_| {
-                    Err(WorkerExecutorError::runtime(
-                        "Worker deletion task panicked",
-                    ))
-                });
+            let result = std::panic::AssertUnwindSafe(
+                worker.run_deletion_attempt(retry_cleanup, &producer_attempt),
+            )
+            .catch_unwind()
+            .await
+            .unwrap_or_else(|_| {
+                Err(WorkerExecutorError::runtime(
+                    "Worker deletion task panicked",
+                ))
+            });
+            producer_attempt.finish(&result);
             let _ = sender.send(result);
         });
 
@@ -3061,6 +3067,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     async fn run_deletion_attempt(
         self: &Arc<Self>,
         retry_cleanup: bool,
+        producer_attempt: &durable_stream_producer::DeletionProducerAttempt,
     ) -> Result<(), WorkerExecutorError> {
         let interrupt_kind = InterruptKind::Interrupt(Timestamp::now_utc());
         if !self
@@ -3174,20 +3181,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             )
             .await
             {
-                Ok(producer) => {
-                    self.durable_stream_producer
-                        .publish_deletion_load(Ok(producer.clone()));
-                    producer
-                }
+                Ok(producer) => producer,
                 Err(error) => {
-                    self.durable_stream_producer
-                        .publish_deletion_load(Err(error.clone()));
                     let error = error.into_worker_executor_error(WorkerExecutorError::runtime);
                     return Err(self.deletion_step_failed(error).await);
                 }
             };
             let activity = crate::services::activity::ActivityGate::new();
             let guard = activity.try_enter().unwrap();
+            producer_attempt.publish(producer.clone(), activity.clone());
             let maintenance = std::panic::AssertUnwindSafe(guard.scope(async {
                 self.finalize_durable_stream_consumer_dependencies(&producer)
                     .await?;
@@ -3241,9 +3243,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     "Worker deletion maintenance panicked",
                 ))
             });
-            producer.poison();
             activity.close();
             activity.wait_drained().await;
+            producer.poison();
             producer.wait_durable_drained().await;
             self.state_actor.drain_lifecycle().await?;
             self.durable_stream_commit()(None).await;
@@ -7829,13 +7831,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 "durable stream attachment mapping does not match the producer key",
             ));
         }
-        let producer = if self.deletion_owns_retirement().await {
-            self.durable_stream_producer
-                .deletion_producer()
-                .await
-                .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?
+        let deletion_producer = if self.deletion_owns_retirement().await {
+            Some(self.durable_stream_producer.deletion_producer().await?)
         } else {
-            self.durable_stream_producer().await?
+            None
+        };
+        let producer = match &deletion_producer {
+            Some(access) => access.producer().clone(),
+            None => self.durable_stream_producer().await?,
         };
         producer
             .validate_handle(&mapping.handle)
