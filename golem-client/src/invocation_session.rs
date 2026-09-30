@@ -2070,13 +2070,11 @@ where
         let mut completion_failure = None;
         loop {
             if finished
-                && completion_failure.is_some()
                 && admitted_frames == 0
                 && pending_output.is_none()
+                && let Some(message) = completion_failure.take()
             {
-                return Err(SessionTransportError::Protocol(
-                    completion_failure.expect("checked above"),
-                ));
+                return Err(SessionTransportError::Protocol(message));
             }
             if finished && stdout_terminal && stderr_terminal {
                 if !matches!(result, Some(PublicInvocationResult::ToolFailure { .. })) {
