@@ -137,6 +137,7 @@ object SourceDiscovery {
     aliases: List[String],
     scope: Option[String],
     kind: Option[String],
+    channel: Option[String],
     syntax: String
   )
 
@@ -558,6 +559,7 @@ object SourceDiscovery {
           aliases = namedArg(args, "aliases").map(stringArrayTerm).getOrElse(Nil),
           scope = namedArg(args, "scope").flatMap(stringLit).filter(_.nonEmpty),
           kind = namedArg(args, "kind").flatMap(stringLit).filter(_.nonEmpty),
+          channel = namedArg(args, "channel").flatMap(stringLit).filter(_.nonEmpty),
           syntax = init.syntax
         )
       }

@@ -308,7 +308,7 @@ object AgentStreamSpec extends ZIOSpecDefault {
             AgentStream.fromPull[SchemaValue](() => Future.successful(Some(SchemaValue.StringValue("a"))))
           }
           val endpoint = inner.moveToSchemaValueStream(identity).take().get
-          val encoded  = endpoint.asInstanceOf[GuestSchemaValueStream.Native].value
+          val encoded  = endpoint.asInstanceOf[GuestSchemaValueStream.Native[?]].value
           val outer    = implicitly[FromSchema[AgentStream[String]]]
             .fromValue(SchemaValue.StreamValue(GuestSchemaValueStreamHandle.endpoint(endpoint)))
             .toOption

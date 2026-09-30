@@ -8,10 +8,10 @@ declare module 'golem:tool/underlying@0.1.0' {
   export class UnderlyingTool {
     /**
      * Admits one call to the pinned next layer. Calls on this capability may
-     * overlap. The stdout reader can be consumed before awaiting the result.
+     * overlap. Output readers can be consumed before awaiting the result.
      * Invoking after the owning handler returned traps.
      */
-    invoke(commandPath: string[], input: TypedSchemaValue, stdin: AsyncIterable<ByteStreamItem> | undefined): Promise<[UnderlyingInvokeResult, AsyncIterable<ByteStreamItem> | undefined]>;
+    invoke(commandPath: string[], input: TypedSchemaValue, stdin: AsyncIterable<ByteStreamItem> | undefined): Promise<[UnderlyingInvokeResult, AsyncIterable<ByteStreamItem> | undefined, AsyncIterable<ByteStreamItem> | undefined]>;
   }
   export class UnderlyingInvokeResult {
     /**

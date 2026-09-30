@@ -2950,6 +2950,7 @@ pub async fn test_component_stage(deps: &Deps) {
                 ToolDeploymentMetadata {
                     definition: Tool {
                         version: "1.0.0".to_string(),
+                        requires_filesystem: false,
                         commands: CommandTree {
                             nodes: vec![CommandNode {
                                 name: "grep".to_string(),
@@ -4992,6 +4993,7 @@ pub async fn test_http_agent_metadata_blob_roundtrip(deps: &Deps) {
 fn make_test_tool(name: &str, version: &str) -> Tool {
     Tool {
         version: version.to_string(),
+        requires_filesystem: false,
         commands: CommandTree {
             nodes: vec![CommandNode {
                 name: name.to_string(),

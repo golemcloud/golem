@@ -18,6 +18,7 @@ describe("typed Effect AI tool adapter", () => {
               .positional("file-name", Schema.String)
               .input({ required: true, mime: ["text/plain"] })
               .output({ mime: ["text/plain"] })
+              .stderr({ mime: ["text/plain"] })
               .returns(resultSchema),
           ),
         { doc: "Count lines in a file" },
@@ -26,11 +27,12 @@ describe("typed Effect AI tool adapter", () => {
     const encodedInput = Effect.runSync(
       compile(Schema.Struct({ profile: Schema.NullOr(Schema.String), "file-name": Schema.String })),
     )
-    const start = vi.fn<ToolTransport["start"]>((tool, path, input, stdin, stdout) =>
+    const start = vi.fn<ToolTransport["start"]>((tool, path, input, stdin, stdout, stderr) =>
       Effect.gen(function* () {
         expect(tool).toBe("registered-files")
         expect(path).toEqual(["count-lines"])
         expect(stdout).toBe(true)
+        expect(stderr).toBe(true)
         expect(yield* encodedInput.decode(input.value)).toEqual({
           profile: "test",
           "file-name": "notes.txt",
@@ -49,6 +51,9 @@ describe("typed Effect AI tool adapter", () => {
             yield { tag: "ok", val: new TextEncoder().encode("counted") } as const
             yield { tag: "ok", val: new TextEncoder().encode(" lines") } as const
           })(),
+          stderr: (async function* () {
+            yield { tag: "ok", val: new TextEncoder().encode("notice") } as const
+          })(),
           result: Effect.succeed({
             result: {
               graph: encodedResult.schemaGraph,
@@ -61,10 +66,14 @@ describe("typed Effect AI tool adapter", () => {
     )
 
     const toolkit = await Effect.runPromise(
-      typedToolkit(definition, [command(["count-lines"], { maxStdoutBytes: 8 })], {
-        lookupName: "registered-files",
-        transport: { start },
-      }),
+      typedToolkit(
+        definition,
+        [command(["count-lines"], { maxStdoutBytes: 8, maxStderrBytes: 4 })],
+        {
+          lookupName: "registered-files",
+          transport: { start },
+        },
+      ),
     )
     const handled = await Effect.runPromise(
       toolkit
@@ -85,6 +94,12 @@ describe("typed Effect AI tool adapter", () => {
         truncated: true,
         totalBytes: 13,
       },
+      stderr: {
+        data: "noti",
+        encoding: "utf8",
+        truncated: true,
+        totalBytes: 6,
+      },
     })
     expect(start).toHaveBeenCalledOnce()
   })
@@ -93,6 +108,8 @@ describe("typed Effect AI tool adapter", () => {
     const definition = toolDefinition("printer").body((body) => body.output())
     expect(() => typedToolkit(definition, [command(["missing"])])).toThrow(/non-callable command/)
     expect(() => typedToolkit(definition, [command()])).toThrow(/requires maxStdoutBytes/)
+    const diagnostics = toolDefinition("diagnostics").body((body) => body.stderr())
+    expect(() => typedToolkit(diagnostics, [command()])).toThrow(/requires maxStderrBytes/)
   })
 
   it("rejects the unsafe __proto__ model-facing name before toolkit assembly", () => {
@@ -135,7 +152,10 @@ describe("typed Effect AI tool adapter", () => {
   it("returns declared failures with fully drained stdout through the model envelope", async () => {
     const failureSchema = Schema.Struct({ reason: Schema.String })
     const definition = toolDefinition("fallible-printer").body((body) =>
-      body.output({ mime: ["application/octet-stream"] }).error("rejected", failureSchema),
+      body
+        .output({ mime: ["application/octet-stream"] })
+        .stderr({ mime: ["text/plain"] })
+        .error("rejected", failureSchema),
     )
     const encodedFailure = Effect.runSync(compile(failureSchema))
     let drained = false
@@ -146,6 +166,9 @@ describe("typed Effect AI tool adapter", () => {
             yield { tag: "ok", val: Uint8Array.from([0, 1]) } as const
             yield { tag: "ok", val: Uint8Array.from([2, 3]) } as const
             drained = true
+          })(),
+          stderr: (async function* () {
+            yield { tag: "ok", val: new TextEncoder().encode("diagnostic") } as const
           })(),
           result: Effect.fail({
             tag: "custom-error",
@@ -161,7 +184,9 @@ describe("typed Effect AI tool adapter", () => {
         }),
     }
     const toolkit = await Effect.runPromise(
-      typedToolkit(definition, [command([], { maxStdoutBytes: 3 })], { transport }),
+      typedToolkit(definition, [command([], { maxStdoutBytes: 3, maxStderrBytes: 5 })], {
+        transport,
+      }),
     )
 
     const handled = await Effect.runPromise(
@@ -177,6 +202,12 @@ describe("typed Effect AI tool adapter", () => {
         encoding: "base64",
         truncated: true,
         totalBytes: 4,
+      },
+      stderr: {
+        data: "diagn",
+        encoding: "utf8",
+        truncated: true,
+        totalBytes: 10,
       },
     })
   })
@@ -529,12 +560,17 @@ describe("typed Effect AI tool adapter", () => {
     expect(start).not.toHaveBeenCalled()
   })
 
-  it("represents declared stdout explicitly when the transport produces no iterable", async () => {
+  it("represents a declared empty stdout stream explicitly", async () => {
     const definition = toolDefinition("quiet-printer").body((body) =>
       body.output({ mime: ["text/plain"] }),
     )
     const transport: ToolTransport = {
-      start: () => Effect.succeed({ result: Effect.succeed({}), cancel: Effect.void }),
+      start: () =>
+        Effect.succeed({
+          stdout: (async function* () {})(),
+          result: Effect.succeed({}),
+          cancel: Effect.void,
+        }),
     }
     const toolkit = await Effect.runPromise(
       typedToolkit(definition, [command([], { maxStdoutBytes: 16 })], { transport }),

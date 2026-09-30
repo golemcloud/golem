@@ -1,0 +1,21 @@
+[package]
+name = "minimal-exports-component"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+harness = false
+
+[features]
+agent = []
+tool = []
+middleware = []
+
+[dependencies]
+golem-rust = { path = "../../../..", features = ["export_golem_agentic"] }
+middleware-definition = { path = "../definition" }
+
+[dev-dependencies]
+test-r = "3.0.9"

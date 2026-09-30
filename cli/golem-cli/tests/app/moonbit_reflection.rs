@@ -101,11 +101,9 @@ async fn deployed_moonbit_reflection_context() -> TestContext {
               "tool"
             }
             UnknownToolError(_, payload) => {
-              @model.drop_owned_capabilities(payload.value)
+              @model.drop_wit_capabilities(payload.value)
               "unknown"
             }
-            InvalidInput(message) => "input:\{message}"
-            MalformedRemoteOutput(message) => "output:\{message}"
           }
         }
 

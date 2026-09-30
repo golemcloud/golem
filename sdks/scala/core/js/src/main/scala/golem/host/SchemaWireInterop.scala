@@ -82,6 +82,23 @@ object SchemaWireInterop {
   def valueTreeToJsAsync(v: WitSchemaValueTree): Future[JsSchemaValueTree] =
     prepareValueTreeToJsAsync(v).map(_.commit())
 
+  /**
+   * Owns generated output streams, including those not reached if lowering
+   * fails.
+   */
+  def ownedValueTreeToJsAsync(v: WitSchemaValueTree): Future[JsSchemaValueTree] = {
+    val transaction = new AgentStreamOutputTransaction
+    v.valueNodes.foreach {
+      case WitSchemaValueNode.StreamValue(handle) => handle.withHandle(transaction.register)
+      case _                                      => ()
+    }
+    val result = Try(valueTreeToJsAsync(v)).fold(Future.failed, identity)
+    result.transformWith {
+      case Success(value) => transaction.closeUncommitted().map(_ => value)
+      case Failure(error) => transaction.rollback().flatMap(_ => Future.failed(error))
+    }
+  }
+
   private def prepareValueTreeToJsAsync(v: WitSchemaValueTree): Future[PreparedValueTree] = {
     preflightValueTree(v)
     val transferred = mutable.ListBuffer.empty[PreparedStream]
@@ -118,6 +135,11 @@ object SchemaWireInterop {
 
   def typedToJs(t: WitTypedSchemaValue): JsTypedSchemaValue =
     JsTypedSchemaValue(graphToJs(t.graph), valueTreeToJs(t.value))
+
+  def typedToJsAsync(t: WitTypedSchemaValue): Future[JsTypedSchemaValue] = {
+    val graph = graphToJs(t.graph)
+    ownedValueTreeToJsAsync(t.value).map(value => JsTypedSchemaValue(graph, value))
+  }
 
   def typedFromJs(j: JsTypedSchemaValue): WitTypedSchemaValue = {
     val graph =
@@ -732,8 +754,7 @@ object SchemaWireInterop {
       case Some(stream: GuestSchemaValueStream.Wrapped) =>
         transferred += new PreparedStream(stream)
         Future.successful(JsSchemaValueNode.streamValue(stream.raw.asInstanceOf[js.Any]))
-      case Some(stream: GuestSchemaValueStream.Native) =>
-        val source   = stream.value
+      case Some(stream: GuestSchemaValueStream.Native[?]) =>
         val prepared = new PreparedStream(stream)
         transferred += prepared
         val lifecycle = new NativeSchemaValueIteratorLifecycle(stream)
@@ -746,12 +767,12 @@ object SchemaWireInterop {
             lifecycle.begin() match {
               case Left(error) => FutureInterop.toPromise(Future.failed(error))
               case Right(_)    =>
-                val pulling = AgentStreamOwnership.capture(ownership)(source.pull()).flatMap {
+                val pulling = AgentStreamOwnership.capture(ownership)(stream.pull()).flatMap {
                   case None        => lifecycle.close().map(_ => doneResult)
                   case Some(value) =>
                     AgentStreamOwnership
                       .capture(ownership) {
-                        prepareValueTreeToJsAsync(SchemaWire.schemaValueToWit(value))
+                        prepareValueTreeToJsAsync(value)
                       }
                       .flatMap(lifecycle.accept)
                       .map(tree => js.Dynamic.literal("done" -> false, "value" -> tree).asInstanceOf[js.Object])
@@ -808,7 +829,7 @@ object SchemaWireInterop {
       }
   }
 
-  private final class NativeSchemaValueIteratorLifecycle(endpoint: GuestSchemaValueStream.Native) {
+  private final class NativeSchemaValueIteratorLifecycle(endpoint: GuestSchemaValueStream.Native[?]) {
     private var closed: Option[Future[Unit]] = None
     private var active                       = false
 
@@ -879,7 +900,7 @@ object SchemaWireInterop {
                   } else if (lifecycle.acceptItem())
                     Some(
                       AgentStreamOwnership.capture(endpoint.activeOwnership) {
-                        SchemaWire.schemaValueFromWit(valueTreeFromJs(result.value))
+                        valueTreeFromJs(result.value)
                       }
                     )
                   else {

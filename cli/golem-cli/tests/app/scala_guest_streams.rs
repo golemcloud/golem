@@ -49,12 +49,12 @@ async fn deployed_scala_streams_context() -> TestContext {
     )
     .unwrap();
     fs::write_str(ctx.cwd_path_join("provider/src/lib.rs"), indoc! {r#"
-        use golem_rust::{agent_definition, agent_implementation, IntoSchema, FromSchema};
+        use golem_rust::{agent_definition, agent_implementation, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema};
         use golem_rust::agentic::{AgentStream, spawn_local};
 
-        #[derive(IntoSchema, FromSchema)]
+        #[derive(IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
         pub struct Item { pub label: String, pub children: Vec<Item> }
-        #[derive(IntoSchema, FromSchema)]
+        #[derive(IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
         pub struct Bundle { pub optional: Option<AgentStream<Item>>, pub siblings: Vec<AgentStream<Item>> }
 
         #[agent_definition]

@@ -19,9 +19,9 @@ use crate::proto::golem::worker::{
     InputStreamEnd, InputStreamItem, InvocationAccepted, InvocationFailureKind,
     InvocationRejectionReason, InvocationRequest, InvocationResponse, InvocationSessionCompletion,
     InvocationSessionResult, ResumeAttach, ResumeOperation, StreamCancel, StreamCancelReason,
-    StreamCancelRole, StreamMappingRole, invocation_request, invocation_response,
-    invocation_session_completion, invocation_session_result, public_external_tool_result,
-    public_tool_error, public_tool_rpc_error,
+    StreamCancelRole, StreamMappingRole, ToolByteStreamRole, invocation_request,
+    invocation_response, invocation_session_completion, invocation_session_result,
+    public_external_tool_result, public_tool_error, public_tool_rpc_error,
 };
 use prost::Message;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -101,7 +101,7 @@ pub struct InvocationSessionState {
     has_result: bool,
     inputs: HashMap<u64, InputState>,
     outputs: HashMap<u64, OutputState>,
-    expected_tool: Option<(String, Vec<String>, bool, bool)>,
+    expected_tool: Option<(String, Vec<String>, bool, bool, bool)>,
     allows_no_result: bool,
 }
 
@@ -468,6 +468,7 @@ impl InvocationSessionState {
                             tool.command_path.clone(),
                             tool.stdin,
                             tool.stdout,
+                            tool.stderr,
                         ));
                         Ok(())
                     }
@@ -660,7 +661,7 @@ impl InvocationSessionState {
                 (None, Some(_)) | (Some(_), None) => {
                     return Err("invocation acceptance kind differs from its start".to_string());
                 }
-                (Some((tool_name, command_path, stdin, stdout)), Some(accepted_name)) => {
+                (Some((tool_name, command_path, stdin, stdout, stderr)), Some(accepted_name)) => {
                     if accepted_name != tool_name || &accepted.command_path != command_path {
                         return Err(
                             "external-tool acceptance target differs from its start".to_string()
@@ -677,7 +678,16 @@ impl InvocationSessionState {
                             .iter()
                             .filter(|m| m.role() == StreamMappingRole::Output)
                             .count()
-                            != usize::from(*stdout)
+                            != usize::from(*stdout) + usize::from(*stderr)
+                        || accepted.stream_mappings.iter().any(|mapping| {
+                            mapping.tool_byte_stream_role == Some(ToolByteStreamRole::Stdin as i32)
+                        }) != *stdin
+                        || accepted.stream_mappings.iter().any(|mapping| {
+                            mapping.tool_byte_stream_role == Some(ToolByteStreamRole::Stdout as i32)
+                        }) != *stdout
+                        || accepted.stream_mappings.iter().any(|mapping| {
+                            mapping.tool_byte_stream_role == Some(ToolByteStreamRole::Stderr as i32)
+                        }) != *stderr
                     {
                         return Err(
                             "external-tool acceptance byte streams differ from its start"
@@ -693,23 +703,34 @@ impl InvocationSessionState {
                 }
             }
         } else if let Some(tool_name) = &accepted.tool_name {
-            self.expected_tool = Some((
-                tool_name.clone(),
-                accepted.command_path.clone(),
-                accepted
-                    .stream_mappings
-                    .iter()
-                    .any(|m| m.role() == StreamMappingRole::Input),
-                accepted
-                    .stream_mappings
-                    .iter()
-                    .any(|m| m.role() == StreamMappingRole::Output),
-            ));
+            self.expected_tool =
+                Some((
+                    tool_name.clone(),
+                    accepted.command_path.clone(),
+                    accepted
+                        .stream_mappings
+                        .iter()
+                        .any(|m| m.role() == StreamMappingRole::Input),
+                    accepted.stream_mappings.iter().any(|m| {
+                        m.tool_byte_stream_role == Some(ToolByteStreamRole::Stdout as i32)
+                    }),
+                    accepted.stream_mappings.iter().any(|m| {
+                        m.tool_byte_stream_role == Some(ToolByteStreamRole::Stderr as i32)
+                    }),
+                ));
         } else if !accepted.command_path.is_empty() {
             return Err("agent-method acceptance contains external-tool fields".to_string());
         }
         if accepted.tool_name.is_some() && accepted.method_name.is_some() {
             return Err("external-tool acceptance contains an agent method".to_string());
+        }
+        if accepted.tool_name.is_none()
+            && accepted
+                .stream_mappings
+                .iter()
+                .any(|mapping| mapping.tool_byte_stream_role.is_some())
+        {
+            return Err("agent-method acceptance contains external-tool byte roles".to_string());
         }
         if self.resume {
             required_uuid(
@@ -1878,6 +1899,7 @@ fn validate_agent_id(agent_id: &AgentId, field: &str) -> Result<(), String> {
 fn validate_accepted_mappings(mappings: &[DurableStreamMapping]) -> Result<(), String> {
     let mut transport_stream_ids = HashSet::with_capacity(mappings.len());
     let mut durable_stream_ids = HashSet::with_capacity(mappings.len());
+    let mut tool_byte_stream_roles = HashSet::new();
     for mapping in mappings {
         if !transport_stream_ids.insert(mapping.transport_stream_id) {
             return Err(format!(
@@ -1892,6 +1914,18 @@ fn validate_accepted_mappings(mappings: &[DurableStreamMapping]) -> Result<(), S
         }
         if role == StreamMappingRole::Output && mapping.high_water.is_some() {
             return Err("output stream mapping cannot carry input high-water state".to_string());
+        }
+        if let Some(byte_role) = mapping.tool_byte_stream_role {
+            let byte_role = ToolByteStreamRole::try_from(byte_role)
+                .map_err(|_| "durable stream mapping has an invalid tool byte role".to_string())?;
+            if !tool_byte_stream_roles.insert(byte_role) {
+                return Err("invocation acceptance repeats a tool byte stream role".to_string());
+            }
+            if matches!(byte_role, ToolByteStreamRole::Stdin)
+                != matches!(role, StreamMappingRole::Input)
+            {
+                return Err("tool byte stream role conflicts with mapping direction".to_string());
+            }
         }
         if let Some(high_water) = &mapping.high_water {
             validate_durable_offset(&high_water.resulting_offset)?;
@@ -2448,6 +2482,7 @@ mod tests {
             }),
             high_water: None,
             role: role as i32,
+            tool_byte_stream_role: None,
         }
     }
 
@@ -2749,7 +2784,6 @@ mod tests {
         assert!(validate_accepted_handle(missing.handle.as_ref().unwrap()).is_err());
     }
 
-    // PROVISIONAL bug_finder reproducer — remove if the finding is rejected.
     #[test]
     fn durable_output_frames_require_identity_epoch_and_offset() {
         let mut state = InvocationSessionState::default();
@@ -4074,6 +4108,7 @@ mod tests {
                 }),
                 stdin: true,
                 stdout: true,
+                stderr: false,
                 fresh_owner: true,
                 expected_deployment_revision: None,
             }),
@@ -4088,8 +4123,16 @@ mod tests {
         accepted.tool_name = Some("shell".to_string());
         accepted.command_path = vec!["run".to_string()];
         accepted.stream_mappings = vec![
-            mapping(70, StreamMappingRole::Input),
-            mapping(71, StreamMappingRole::Output),
+            {
+                let mut mapping = mapping(70, StreamMappingRole::Input);
+                mapping.tool_byte_stream_role = Some(ToolByteStreamRole::Stdin as i32);
+                mapping
+            },
+            {
+                let mut mapping = mapping(71, StreamMappingRole::Output);
+                mapping.tool_byte_stream_role = Some(ToolByteStreamRole::Stdout as i32);
+                mapping
+            },
         ];
         state.validate_response(&acceptance).unwrap();
 
@@ -4189,10 +4232,11 @@ mod tests {
         state
             .validate_public_request(&resume_attach(Vec::new()))
             .unwrap();
-        let mut acceptance = resumed_acceptance(vec![
-            mapping(0, StreamMappingRole::Input),
-            mapping(1, StreamMappingRole::Output),
-        ]);
+        let mut stdin = mapping(0, StreamMappingRole::Input);
+        stdin.tool_byte_stream_role = Some(ToolByteStreamRole::Stdin as i32);
+        let mut stdout = mapping(1, StreamMappingRole::Output);
+        stdout.tool_byte_stream_role = Some(ToolByteStreamRole::Stdout as i32);
+        let mut acceptance = resumed_acceptance(vec![stdin, stdout]);
         let Some(invocation_response::Response::Accepted(accepted)) = &mut acceptance.response
         else {
             unreachable!()
@@ -4293,5 +4337,21 @@ mod tests {
             accepted.stream_mappings.clear();
         }
         assert!(state.validate_response(&acceptance).is_err());
+    }
+
+    #[test]
+    fn agent_acceptance_rejects_external_tool_byte_roles() {
+        let mut state = InvocationSessionState::default();
+        state
+            .validate_public_request(&resume_attach(Vec::new()))
+            .unwrap();
+        let mut stderr = mapping(9, StreamMappingRole::Output);
+        stderr.tool_byte_stream_role = Some(ToolByteStreamRole::Stderr as i32);
+
+        assert!(
+            state
+                .validate_response(&resumed_acceptance(vec![stderr]))
+                .is_err()
+        );
     }
 }

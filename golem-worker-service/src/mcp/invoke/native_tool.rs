@@ -8,8 +8,9 @@ use futures::StreamExt;
 use golem_api_grpc::invocation_session_protocol::InvocationSessionState;
 use golem_api_grpc::proto::golem::worker::{
     InputStreamEnd, InputStreamItem, InvocationAccepted, InvocationRequest, StreamCancel,
-    StreamCancelReason, StreamCancelRole, StreamMappingRole, input_stream_item, invocation_request,
-    invocation_response, invocation_session_completion, invocation_session_result,
+    StreamCancelReason, StreamCancelRole, ToolByteStreamRole, input_stream_item,
+    invocation_request, invocation_response, invocation_session_completion,
+    invocation_session_result,
 };
 use golem_common::model::IdempotencyKey;
 use golem_common::model::agent::{OwnerKind, Principal};
@@ -113,7 +114,8 @@ pub async fn invoke(
         )
         .map_err(|e| invalid(e.to_string()))?,
     };
-    let (sender, receiver) = mpsc::channel(2);
+    // One input frame may be in flight while cleanup needs room to cancel all three byte streams.
+    let (sender, receiver) = mpsc::channel(4);
     let session = worker_service
         .invoke_internal_tool_session_v1(
             PublicToolSessionStart {
@@ -127,6 +129,7 @@ pub async fn invoke(
                 input,
                 stdin: stdin.is_some(),
                 stdout: body.stdout.is_some(),
+                stderr: body.stderr.is_some(),
                 idempotency_key: key.value,
                 attempt_id: uuid::Uuid::new_v4(),
                 expected_deployment_revision: Some(deployment.deployment_revision),
@@ -138,9 +141,16 @@ pub async fn invoke(
         )
         .await
         .map_err(|e| invalid(format!("native tool admission failed: {e:?}")))?;
-    let (result, stdout) =
-        collect_session(session, sender, stdin, body.stdout.is_some(), cancellation).await?;
-    project_result(export, result, stdout)
+    let (result, stdout, stderr) = collect_session(
+        session,
+        sender,
+        stdin,
+        body.stdout.is_some(),
+        body.stderr.is_some(),
+        cancellation,
+    )
+    .await?;
+    project_result(export, result, stdout, stderr)
 }
 
 async fn collect_session(
@@ -148,8 +158,9 @@ async fn collect_session(
     sender: mpsc::Sender<InvocationRequest>,
     stdin: Option<Vec<u8>>,
     stdout_requested: bool,
+    stderr_requested: bool,
     cancellation: CancellationToken,
-) -> Result<(PublicExternalToolResult, Vec<u8>), ErrorData> {
+) -> Result<(PublicExternalToolResult, Vec<u8>, Vec<u8>), ErrorData> {
     let mut state = InvocationSessionState::default();
     state
         .validate_trusted_request(&session.initial_request)
@@ -157,14 +168,18 @@ async fn collect_session(
     let mut accepted: Option<InvocationAccepted> = None;
     let mut input_position = 0;
     let mut input_done = stdin.is_none();
+    let mut input_in_flight = false;
     let mut stdout_done = !stdout_requested;
+    let mut stderr_done = !stderr_requested;
     let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
     let mut stdout_error = None;
+    let mut stderr_error = None;
     let mut result = None;
     let outcome = async {
         loop {
-            let next_input = if !input_done { accepted.as_ref().and_then(|a| {
-                let mapping = a.stream_mappings.iter().find(|m| m.role() == StreamMappingRole::Input)?;
+            let next_input = if !input_done && !input_in_flight { accepted.as_ref().and_then(|a| {
+                let mapping = a.stream_mappings.iter().find(|m| m.tool_byte_stream_role == Some(ToolByteStreamRole::Stdin as i32))?;
                 let stream = mapping.transport_stream_id;
                 let durable_stream_id = mapping.handle.as_ref()?.stream_id;
                 let bytes = stdin.as_ref()?;
@@ -192,6 +207,7 @@ async fn collect_session(
                         Some(invocation_request::Request::InputItem(InputStreamItem { payload: Some(input_stream_item::Payload::PackedU8(bytes)), .. })) => input_position += bytes.len(),
                         _ => input_done = true,
                     }
+                    input_in_flight = !input_done;
                     permit.send(frame);
                 }
                 response = session.responses.next() => {
@@ -200,42 +216,76 @@ async fn collect_session(
                     state.validate_response(&response).map_err(invalid)?;
                     match response.response {
                         Some(invocation_response::Response::Accepted(a)) => {
-                            if a.stream_mappings.iter().any(|m| m.role() == StreamMappingRole::Input) != stdin.is_some() || a.stream_mappings.iter().any(|m| m.role() == StreamMappingRole::Output) != stdout_requested {
+                            let role_count = |role| a.stream_mappings.iter().filter(|m| m.tool_byte_stream_role == Some(role as i32)).count();
+                            if role_count(ToolByteStreamRole::Stdin) != usize::from(stdin.is_some())
+                                || role_count(ToolByteStreamRole::Stdout) != usize::from(stdout_requested)
+                                || role_count(ToolByteStreamRole::Stderr) != usize::from(stderr_requested)
+                                || a.stream_mappings.iter().any(|m| m.tool_byte_stream_role.is_none())
+                            {
                                 return Err(invalid("native byte stream mappings differ from the request"));
                             }
                             accepted = Some(a);
                         }
                         Some(invocation_response::Response::OutputItem(item)) => {
+                            let role = accepted.as_ref().and_then(|a| a.stream_mappings.iter().find(|m| m.transport_stream_id == item.transport_stream_id)).and_then(|m| m.tool_byte_stream_role).and_then(|role| ToolByteStreamRole::try_from(role).ok());
                             let bytes = if !item.packed_u8.is_empty() { item.packed_u8 } else {
                                 match item.value.map(SchemaValue::try_from).transpose().map_err(invalid)? {
                                     Some(SchemaValue::U8(byte)) => vec![byte],
-                                    _ => return Err(invalid("native stdout contains a non-byte value")),
+                                    _ => return Err(invalid("native tool output contains a non-byte value")),
                                 }
                             };
-                            if stdout.len() + bytes.len() > MAX_OUTPUT { return Err(invalid("native stdout exceeds the 16 MiB MCP limit")); }
-                            stdout.extend(bytes);
+                            match role {
+                                Some(ToolByteStreamRole::Stdout) => {
+                                    if stdout.len() + bytes.len() > MAX_OUTPUT { return Err(invalid("native stdout exceeds the 16 MiB MCP limit")); }
+                                    stdout.extend(bytes);
+                                }
+                                Some(ToolByteStreamRole::Stderr) => {
+                                    if stderr.len() + bytes.len() > MAX_OUTPUT { return Err(invalid("native stderr exceeds the 16 MiB MCP limit")); }
+                                    stderr.extend(bytes);
+                                }
+                                _ => return Err(invalid("native output frame has an unknown stream")),
+                            }
                         }
-                        Some(invocation_response::Response::OutputEnd(_)) => stdout_done = true,
-                        Some(invocation_response::Response::OutputError(error)) => { stdout_done = true; stdout_error = Some(error.details); }
+                        Some(invocation_response::Response::OutputEnd(end)) => {
+                            match accepted.as_ref().and_then(|a| a.stream_mappings.iter().find(|m| m.transport_stream_id == end.transport_stream_id)).and_then(|m| m.tool_byte_stream_role).and_then(|role| ToolByteStreamRole::try_from(role).ok()) {
+                                Some(ToolByteStreamRole::Stdout) => stdout_done = true,
+                                Some(ToolByteStreamRole::Stderr) => stderr_done = true,
+                                _ => return Err(invalid("native output end has an unknown stream")),
+                            }
+                        }
+                        Some(invocation_response::Response::OutputError(error)) => {
+                            match accepted.as_ref().and_then(|a| a.stream_mappings.iter().find(|m| m.transport_stream_id == error.transport_stream_id)).and_then(|m| m.tool_byte_stream_role).and_then(|role| ToolByteStreamRole::try_from(role).ok()) {
+                                Some(ToolByteStreamRole::Stdout) => { stdout_done = true; stdout_error = Some(error.details); }
+                                Some(ToolByteStreamRole::Stderr) => { stderr_done = true; stderr_error = Some(error.details); }
+                                _ => return Err(invalid("native output error has an unknown stream")),
+                            }
+                        }
                         Some(invocation_response::Response::StreamCancel(cancel)) => {
-                            if accepted.as_ref().is_some_and(|a| a.stream_mappings.iter().any(|m| m.role() == StreamMappingRole::Input && m.transport_stream_id == cancel.transport_stream_id)) { input_done = true; }
-                            else { stdout_done = true; stdout_error = Some("stdout cancelled".to_string()); }
+                            match accepted.as_ref().and_then(|a| a.stream_mappings.iter().find(|m| m.transport_stream_id == cancel.transport_stream_id)).and_then(|m| m.tool_byte_stream_role).and_then(|role| ToolByteStreamRole::try_from(role).ok()) {
+                                Some(ToolByteStreamRole::Stdin) => input_done = true,
+                                Some(ToolByteStreamRole::Stdout) => { stdout_done = true; stdout_error = Some("stdout cancelled".to_string()); }
+                                Some(ToolByteStreamRole::Stderr) => { stderr_done = true; stderr_error = Some("stderr cancelled".to_string()); }
+                                None => return Err(invalid("native cancellation has an unknown stream")),
+                            }
                         }
-                        Some(invocation_response::Response::InputAck(_)) => {},
+                        Some(invocation_response::Response::InputAck(_)) => input_in_flight = false,
                         Some(invocation_response::Response::Result(value)) => {
                             let Some(invocation_session_result::Result::ToolResult(value)) = value.result else { return Err(invalid("native tool returned an agent-method result")); };
                             result = Some(PublicExternalToolResult::try_from(value).map_err(invalid)?);
                         }
                         Some(invocation_response::Response::Finished(completion)) => {
+                            if !stdout_done || !stderr_done { return Err(invalid("native session completed before tool output")); }
                             if let Some(invocation_session_completion::Outcome::Failure(failure)) = completion.outcome {
-                                return Ok((PublicExternalToolResult::Failure(SerializableToolRpcError::RemoteInternalError(failure.message)), stdout));
+                                return Ok((PublicExternalToolResult::Failure(SerializableToolRpcError::RemoteInternalError(failure.message)), stdout, stderr));
                             }
-                            if !stdout_done { return Err(invalid("native session completed before stdout")); }
                             let result = result.ok_or_else(|| invalid("native tool completed without a result"))?;
                             if matches!(result, PublicExternalToolResult::Success(_)) && let Some(error) = stdout_error {
-                                return Ok((PublicExternalToolResult::Failure(SerializableToolRpcError::RemoteInternalError(error)), stdout));
+                                return Ok((PublicExternalToolResult::Failure(SerializableToolRpcError::RemoteInternalError(error)), stdout, stderr));
                             }
-                            return Ok((result, stdout));
+                            if matches!(result, PublicExternalToolResult::Success(_)) && let Some(error) = stderr_error {
+                                return Ok((PublicExternalToolResult::Failure(SerializableToolRpcError::RemoteInternalError(error)), stdout, stderr));
+                            }
+                            return Ok((result, stdout, stderr));
                         }
                         Some(invocation_response::Response::Rejected(rejected)) => return Err(invalid(rejected.error)),
                         _ => return Err(invalid("native tool attachment was revoked or returned an invalid frame")),
@@ -253,7 +303,10 @@ async fn collect_session(
                     accepted
                         .stream_mappings
                         .iter()
-                        .find(|m| m.role() == StreamMappingRole::Input && !input_done)
+                        .find(|m| {
+                            m.tool_byte_stream_role == Some(ToolByteStreamRole::Stdin as i32)
+                                && !input_done
+                        })
                         .map(|m| m.transport_stream_id),
                     StreamCancelRole::InputProducer,
                 ),
@@ -261,7 +314,21 @@ async fn collect_session(
                     accepted
                         .stream_mappings
                         .iter()
-                        .find(|m| m.role() == StreamMappingRole::Output && !stdout_done)
+                        .find(|m| {
+                            m.tool_byte_stream_role == Some(ToolByteStreamRole::Stdout as i32)
+                                && !stdout_done
+                        })
+                        .map(|m| m.transport_stream_id),
+                    StreamCancelRole::OutputConsumer,
+                ),
+                (
+                    accepted
+                        .stream_mappings
+                        .iter()
+                        .find(|m| {
+                            m.tool_byte_stream_role == Some(ToolByteStreamRole::Stderr as i32)
+                                && !stderr_done
+                        })
                         .map(|m| m.transport_stream_id),
                     StreamCancelRole::OutputConsumer,
                 ),
@@ -305,6 +372,7 @@ fn project_result(
     export: &CompiledMcpToolExport,
     result: PublicExternalToolResult,
     stdout: Vec<u8>,
+    stderr: Vec<u8>,
 ) -> Result<CallToolResult, ErrorData> {
     let (_, body) = export.command().map_err(invalid)?;
     let result = match result {
@@ -359,23 +427,35 @@ fn project_result(
         content.push(ContentBlock::text(value.to_string()));
     }
     if let Some(spec) = &body.stdout {
-        let mime = spec
-            .mime
-            .first()
-            .map(String::as_str)
-            .unwrap_or("application/octet-stream");
-        let projected = if spec.mime.iter().all(|mime| mime.starts_with("text/")) {
-            json!({"type":"text", "text": String::from_utf8(stdout).map_err(|_| invalid("stdout is not valid UTF-8"))?})
-        } else if mime.starts_with("image/") || mime.starts_with("audio/") {
-            json!({"type":if mime.starts_with("image/") {"image"} else {"audio"}, "data":STANDARD.encode(stdout), "mimeType":mime})
-        } else {
-            json!({"type":"resource", "resource":{"uri":format!("golem-tool://{}/stdout", export.mcp_name),"mimeType":mime,"blob":STANDARD.encode(stdout)}})
-        };
-        content.push(serde_json::from_value(projected).map_err(|e| invalid(e.to_string()))?);
+        content.push(project_channel(export, spec, stdout, "stdout")?);
+    }
+    if let Some(spec) = &body.stderr {
+        content.push(project_channel(export, spec, stderr, "stderr")?);
     }
     let mut result = CallToolResult::success(content);
     result.structured_content = structured_content;
     Ok(result)
+}
+
+fn project_channel(
+    export: &CompiledMcpToolExport,
+    spec: &golem_common::schema::tool::StreamSpec,
+    bytes: Vec<u8>,
+    channel: &'static str,
+) -> Result<ContentBlock, ErrorData> {
+    let mime = spec
+        .mime
+        .first()
+        .map(String::as_str)
+        .unwrap_or("application/octet-stream");
+    let projected = if spec.mime.iter().all(|mime| mime.starts_with("text/")) {
+        json!({"type":"text", "text": String::from_utf8(bytes).map_err(|_| invalid(format!("{channel} is not valid UTF-8")))?, "_meta":{"golem.cloud/tool-channel":channel}})
+    } else if mime.starts_with("image/") || mime.starts_with("audio/") {
+        json!({"type":if mime.starts_with("image/") {"image"} else {"audio"}, "data":STANDARD.encode(bytes), "mimeType":mime, "_meta":{"golem.cloud/tool-channel":channel}})
+    } else {
+        json!({"type":"resource", "resource":{"uri":format!("golem-tool://{}/{channel}", export.mcp_name),"mimeType":mime,"blob":STANDARD.encode(bytes)}, "_meta":{"golem.cloud/tool-channel":channel}})
+    };
+    serde_json::from_value(projected).map_err(|e| invalid(e.to_string()))
 }
 
 fn invalid(message: impl Into<String>) -> ErrorData {
@@ -460,7 +540,7 @@ mod tests {
         cancellation.cancel();
         let (sender, _receiver) = mpsc::channel(2);
 
-        let error = collect_session(empty_session(), sender, None, false, cancellation)
+        let error = collect_session(empty_session(), sender, None, false, false, cancellation)
             .await
             .unwrap_err();
 
@@ -468,9 +548,54 @@ mod tests {
         assert_eq!(error.message, "tool invocation cancelled");
     }
 
+    #[test]
+    #[timeout("5s")]
+    async fn cancellation_reserves_queue_capacity_for_all_three_open_byte_streams() {
+        use golem_api_grpc::proto::golem::worker::InvocationResponse;
+
+        let cancellation = CancellationToken::new();
+        let (mut session, accepted) = byte_session_with_outputs(true, true, true);
+        session.responses = Box::pin(
+            stream::once(async move {
+                Ok(InvocationResponse {
+                    response: Some(invocation_response::Response::Accepted(accepted)),
+                })
+            })
+            .chain(stream::pending()),
+        );
+        let (sender, mut receiver) = mpsc::channel(4);
+        let cancel = cancellation.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            cancel.cancel();
+        });
+
+        collect_session(session, sender, Some(vec![1]), true, true, cancellation)
+            .await
+            .unwrap_err();
+
+        let mut cancelled = Vec::new();
+        while let Ok(request) = receiver.try_recv() {
+            if let invocation_request::Request::StreamCancel(cancel) = request.request.unwrap() {
+                cancelled.push(cancel.transport_stream_id);
+            }
+        }
+        cancelled.sort_unstable();
+        assert_eq!(cancelled, [70, 71, 72]);
+    }
+
     fn byte_session(stdin: bool) -> (StartedPublicAgentSession, InvocationAccepted) {
+        byte_session_with_outputs(stdin, true, false)
+    }
+
+    fn byte_session_with_outputs(
+        stdin: bool,
+        stdout: bool,
+        stderr: bool,
+    ) -> (StartedPublicAgentSession, InvocationAccepted) {
         use golem_api_grpc::proto::golem::worker::{
             DurableStreamHandle, DurableStreamMapping, StreamInvocationIdentity, StreamMappingRole,
+            ToolByteStreamRole,
         };
         let mut session = empty_session();
         let Some(invocation_request::Request::Start(start)) =
@@ -480,7 +605,8 @@ mod tests {
         };
         let tool = start.external_tool.as_mut().unwrap();
         tool.stdin = stdin;
-        tool.stdout = true;
+        tool.stdout = stdout;
+        tool.stderr = stderr;
         let uuid = |n| golem_api_grpc::proto::golem::common::Uuid {
             high_bits: 0,
             low_bits: n,
@@ -489,9 +615,14 @@ mod tests {
         let environment = Some(golem_api_grpc::proto::golem::common::EnvironmentId {
             value: Some(uuid(3)),
         });
-        let mapping = |id, role| DurableStreamMapping {
+        let mapping = |id, byte_role| DurableStreamMapping {
             transport_stream_id: id,
-            role: role as i32,
+            role: match byte_role {
+                ToolByteStreamRole::Stdin => StreamMappingRole::Input,
+                ToolByteStreamRole::Stdout | ToolByteStreamRole::Stderr => {
+                    StreamMappingRole::Output
+                }
+            } as i32,
             handle: Some(DurableStreamHandle {
                 format_version: 1,
                 stream_id: Some(uuid(id)),
@@ -509,10 +640,17 @@ mod tests {
                 element_schema_fingerprint: vec![5; 32],
             }),
             high_water: None,
+            tool_byte_stream_role: Some(byte_role as i32),
         };
-        let mut mappings = vec![mapping(71, StreamMappingRole::Output)];
+        let mut mappings = Vec::new();
         if stdin {
-            mappings.push(mapping(70, StreamMappingRole::Input));
+            mappings.push(mapping(70, ToolByteStreamRole::Stdin));
+        }
+        if stdout {
+            mappings.push(mapping(71, ToolByteStreamRole::Stdout));
+        }
+        if stderr {
+            mappings.push(mapping(72, ToolByteStreamRole::Stderr));
         }
         let accepted = InvocationAccepted {
             agent_id: agent,
@@ -538,19 +676,42 @@ mod tests {
     }
 
     fn output_frame(bytes: Vec<u8>, sequence: u64) -> invocation_response::Response {
+        channel_output_frame(71, bytes, sequence)
+    }
+
+    fn channel_output_frame(
+        transport_stream_id: u64,
+        bytes: Vec<u8>,
+        sequence: u64,
+    ) -> invocation_response::Response {
         invocation_response::Response::OutputItem(
             golem_api_grpc::proto::golem::worker::OutputStreamItem {
-                transport_stream_id: 71,
+                transport_stream_id,
                 producer_sequence: sequence,
                 durable_stream_id: Some(golem_api_grpc::proto::golem::common::Uuid {
                     high_bits: 0,
-                    low_bits: 71,
+                    low_bits: transport_stream_id,
                 }),
                 durable_offset: durable_offset(sequence),
                 epoch: 1,
                 logical_item_count: bytes.len() as u64,
                 packed_u8: bytes,
                 ..Default::default()
+            },
+        )
+    }
+
+    fn output_end(transport_stream_id: u64, sequence: u64) -> invocation_response::Response {
+        invocation_response::Response::OutputEnd(
+            golem_api_grpc::proto::golem::worker::OutputStreamEnd {
+                transport_stream_id,
+                producer_sequence: sequence,
+                durable_stream_id: Some(golem_api_grpc::proto::golem::common::Uuid {
+                    high_bits: 0,
+                    low_bits: transport_stream_id,
+                }),
+                durable_offset: durable_offset(sequence),
+                epoch: 1,
             },
         )
     }
@@ -668,13 +829,66 @@ mod tests {
                 requests,
                 Some(expected_input),
                 true,
+                false,
                 CancellationToken::new()
             ),
             producer
         );
-        let (result, bytes) = result.unwrap();
+        let (result, bytes, stderr) = result.unwrap();
         assert!(matches!(result, PublicExternalToolResult::Success(_)));
         assert_eq!(bytes, [9, 10, 11, 12, 99]);
+        assert!(stderr.is_empty());
+    }
+
+    #[test]
+    #[timeout("5s")]
+    async fn stdout_and_stderr_are_collected_independently() {
+        use golem_api_grpc::proto::golem::worker::{
+            InvocationResponse, InvocationSessionCompletion, InvocationSessionResult,
+        };
+        let (mut session, accepted) = byte_session_with_outputs(false, true, true);
+        let result = InvocationSessionResult {
+            agent_id: accepted.agent_id.clone(),
+            component_revision: accepted.component_revision,
+            idempotency_key: accepted.idempotency_key.clone(),
+            result: Some(invocation_session_result::Result::ToolResult(
+                golem_api_grpc::proto::golem::worker::PublicExternalToolResult {
+                    result: Some(golem_api_grpc::proto::golem::worker::public_external_tool_result::Result::Success(
+                        golem_api_grpc::proto::golem::worker::PublicToolInvocationResult { result: None }
+                    )),
+                },
+            )),
+            ..Default::default()
+        };
+        let frames = vec![
+            invocation_response::Response::Accepted(accepted),
+            channel_output_frame(72, b"err".to_vec(), 0),
+            channel_output_frame(71, b"out".to_vec(), 0),
+            output_end(71, 3),
+            channel_output_frame(72, b"or".to_vec(), 3),
+            invocation_response::Response::Result(result),
+            output_end(72, 5),
+            invocation_response::Response::Finished(InvocationSessionCompletion {
+                outcome: Some(invocation_session_completion::Outcome::Success(
+                    Default::default(),
+                )),
+            }),
+        ];
+        session.responses = Box::pin(stream::iter(frames.into_iter().map(|response| {
+            Ok(InvocationResponse {
+                response: Some(response),
+            })
+        })));
+        let (sender, _receiver) = mpsc::channel(2);
+
+        let (result, stdout, stderr) =
+            collect_session(session, sender, None, true, true, CancellationToken::new())
+                .await
+                .unwrap();
+
+        assert!(matches!(result, PublicExternalToolResult::Success(_)));
+        assert_eq!(stdout, b"out");
+        assert_eq!(stderr, b"error");
     }
 
     #[test]
@@ -693,7 +907,7 @@ mod tests {
             })
         })));
         let (sender, mut receiver) = mpsc::channel(2);
-        let error = collect_session(session, sender, None, true, CancellationToken::new())
+        let error = collect_session(session, sender, None, true, false, CancellationToken::new())
             .await
             .unwrap_err();
         assert!(error.message.contains("16 MiB"), "{error:?}");
@@ -707,6 +921,43 @@ mod tests {
     }
 
     #[test]
+    #[timeout("5s")]
+    async fn stderr_limit_is_independent_and_open_outputs_are_cancelled() {
+        use golem_api_grpc::proto::golem::worker::InvocationResponse;
+        let (mut session, accepted) = byte_session_with_outputs(false, true, true);
+        let mut frames = vec![invocation_response::Response::Accepted(accepted)];
+        for sequence in (0..MAX_OUTPUT).step_by(INPUT_CHUNK) {
+            frames.push(channel_output_frame(
+                72,
+                vec![1; INPUT_CHUNK],
+                sequence as u64,
+            ));
+        }
+        frames.push(channel_output_frame(72, vec![2], MAX_OUTPUT as u64));
+        session.responses = Box::pin(stream::iter(frames.into_iter().map(|response| {
+            Ok(InvocationResponse {
+                response: Some(response),
+            })
+        })));
+        let (sender, mut receiver) = mpsc::channel(2);
+
+        let error = collect_session(session, sender, None, true, true, CancellationToken::new())
+            .await
+            .unwrap_err();
+
+        assert!(error.message.contains("stderr exceeds"), "{error:?}");
+        let mut cancelled = vec![];
+        while let Ok(request) = receiver.try_recv() {
+            let invocation_request::Request::StreamCancel(cancel) = request.request.unwrap() else {
+                panic!("expected cancellation")
+            };
+            cancelled.push(cancel.transport_stream_id);
+        }
+        cancelled.sort_unstable();
+        assert_eq!(cancelled, [71, 72]);
+    }
+
+    #[test]
     fn native_results_match_mcp_json_and_content_contracts() {
         use golem_common::model::tool::SerializableToolInvocationResult;
         use golem_common::schema::tool::{
@@ -715,6 +966,7 @@ mod tests {
         };
         let definition = NativeTool {
             version: "1.0.0".to_string(),
+            requires_filesystem: false,
             schema: SchemaGraph::empty(),
             commands: CommandTree {
                 nodes: vec![CommandNode {
@@ -732,6 +984,11 @@ mod tests {
                         stdout: Some(StreamSpec {
                             doc: Doc::default(),
                             mime: vec!["image/png".to_string()],
+                            required: false,
+                        }),
+                        stderr: Some(StreamSpec {
+                            doc: Doc::default(),
+                            mime: vec!["text/plain".to_string()],
                             required: false,
                         }),
                         result: Some(ResultSpec {
@@ -776,6 +1033,7 @@ mod tests {
                 result: Some(Box::new(value.clone())),
             }),
             vec![0, 255, 17],
+            b"warning".to_vec(),
         )
         .unwrap();
         assert_eq!(result.structured_content, Some(json!({"value":"hello"})));
@@ -783,6 +1041,25 @@ mod tests {
         assert_eq!(content[1]["type"], "image");
         assert_eq!(content[1]["data"], "AP8R");
         assert_eq!(content[1]["mimeType"], "image/png");
+        assert_eq!(content[1]["_meta"]["golem.cloud/tool-channel"], "stdout");
+        assert_eq!(content[2]["type"], "text");
+        assert_eq!(content[2]["text"], "warning");
+        assert_eq!(content[2]["_meta"]["golem.cloud/tool-channel"], "stderr");
+        assert_ne!(result.is_error, Some(true));
+        let resource = project_channel(
+            &export,
+            &StreamSpec {
+                doc: Doc::default(),
+                mime: vec!["application/octet-stream".to_string()],
+                required: false,
+            },
+            vec![1, 2],
+            "stderr",
+        )
+        .unwrap();
+        let resource = serde_json::to_value(resource).unwrap();
+        assert_eq!(resource["resource"]["uri"], "golem-tool://test/stderr");
+        assert_eq!(resource["_meta"]["golem.cloud/tool-channel"], "stderr");
         let hints = tool_metadata(&export).unwrap().annotations.unwrap();
         assert_eq!(
             (
@@ -804,6 +1081,7 @@ mod tests {
                 )),
             ))),
             vec![],
+            vec![],
         )
         .unwrap();
         assert_eq!(custom.is_error, Some(true));
@@ -816,17 +1094,20 @@ mod tests {
             .unwrap(),
             json!({"name": "example-error", "payload": "hello"})
         );
-        assert_eq!(
-            project_result(
-                &export,
-                PublicExternalToolResult::Failure(SerializableToolRpcError::RemoteInternalError(
-                    "execution failed".into()
-                )),
-                vec![]
-            )
-            .unwrap()
-            .is_error,
-            Some(true)
+        let failed = project_result(
+            &export,
+            PublicExternalToolResult::Failure(SerializableToolRpcError::RemoteInternalError(
+                "execution failed".into(),
+            )),
+            b"omitted stdout".to_vec(),
+            b"omitted stderr".to_vec(),
+        )
+        .unwrap();
+        assert_eq!(failed.is_error, Some(true));
+        assert_eq!(failed.content.len(), 1);
+        assert!(
+            serde_json::to_value(&failed.content[0]).unwrap()["_meta"].is_null(),
+            "failure must omit both output attachments"
         );
         assert_eq!(
             project_result(
@@ -834,6 +1115,7 @@ mod tests {
                 PublicExternalToolResult::Failure(SerializableToolRpcError::RemoteToolError(
                     Box::new(SerializableToolError::InvalidInput("bad argument".into()))
                 )),
+                vec![],
                 vec![]
             )
             .unwrap_err()

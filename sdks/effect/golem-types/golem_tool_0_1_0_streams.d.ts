@@ -3,7 +3,7 @@
  * granting access to ambient tool discovery or dispatch.
  */
 declare module 'golem:tool/streams@0.1.0' {
-  export class ToolStdoutWriter {
+  export class ToolOutputWriter {
     /**
      * @throws StreamWriteError
      */

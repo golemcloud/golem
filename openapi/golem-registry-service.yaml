@@ -13721,6 +13721,11 @@ components:
           allOf:
           - $ref: '#/components/schemas/StreamSpec'
           - nullable: true
+        stderr:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/StreamSpec'
+          - nullable: true
         result:
           nullable: true
           allOf:
@@ -20702,10 +20707,13 @@ components:
       type: object
       required:
       - version
+      - requires_filesystem
       - commands
       properties:
         version:
           type: string
+        requires_filesystem:
+          type: boolean
         commands:
           $ref: '#/components/schemas/CommandTree'
         schema:

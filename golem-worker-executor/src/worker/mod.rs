@@ -4157,6 +4157,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 input,
                 false,
                 false,
+                false,
                 None,
                 invocation_context,
                 principal,
@@ -4174,6 +4175,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         input: TypedSchemaValue,
         stdin: bool,
         stdout: bool,
+        stderr: bool,
         expected_deployment_revision: Option<DeploymentRevision>,
         invocation_context: InvocationContextStack,
         principal: Principal,
@@ -4271,6 +4273,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             input: Box::new(input),
             stdin,
             stdout,
+            stderr,
             activation,
             invocation_context,
             principal,
@@ -6232,7 +6235,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     .registrations
                     .iter()
                     .zip(&requested_handles)
-                    .filter(|((id, _), _)| roles[id] == SessionStreamRole::Input)
+                    .filter(|((id, _), _)| roles[id].direction() == SessionStreamRole::Input)
                     .map(|(_, handle)| handle.clone())
                     .collect()
             } else {
@@ -6788,7 +6791,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         if matches!(binding.source, StreamRecordReference::Foreign(_))
                             && !producer.owns_handle_identity(&mapping.handle)
                         {
-                            if mapping.role == SessionStreamRole::Input
+                            if mapping.role.direction() == SessionStreamRole::Input
                                 && streams
                                     .has_journaled_consumer_terminal(mapping)
                                     .await
@@ -6897,7 +6900,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             if matches!(binding.source, StreamRecordReference::Foreign(_))
                 && !producer.owns_handle_identity(&mapping.handle)
             {
-                if mapping.role == SessionStreamRole::Input
+                if mapping.role.direction() == SessionStreamRole::Input
                     && streams
                         .has_journaled_consumer_terminal(mapping)
                         .await
@@ -7906,7 +7909,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 reason,
                 details,
             } => {
-                let role_matches = match mapping.role {
+                let role_matches = match mapping.role.direction() {
                     SessionStreamRole::Input => matches!(
                         role,
                         golem_common::model::durable_stream::StreamCancelRole::InputProducer
@@ -7917,6 +7920,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         golem_common::model::durable_stream::StreamCancelRole::OutputProducer
                             | golem_common::model::durable_stream::StreamCancelRole::OutputConsumer
                     ),
+                    SessionStreamRole::ToolStdin
+                    | SessionStreamRole::ToolStdout
+                    | SessionStreamRole::ToolStderr => unreachable!(),
                 };
                 if !role_matches {
                     return Err(WorkerExecutorError::invalid_request(
@@ -7937,6 +7943,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         .map_err(|error| {
                             error.into_worker_executor_error(WorkerExecutorError::runtime)
                         })?
+                        .direction()
                         == SessionStreamRole::Output
                     && let Some(prepared) = self
                         .prepared_stream_session(&source.idempotency_key)

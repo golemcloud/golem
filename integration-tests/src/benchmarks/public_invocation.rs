@@ -288,6 +288,7 @@ impl PublicInvocationSession {
             token,
             InvocationSessionStateSnapshot {
                 delivered_output_cursors: BTreeMap::new(),
+                stable_stream_bindings: BTreeMap::new(),
                 pending_operation: Some(start),
                 session_token: None,
             },

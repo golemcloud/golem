@@ -236,3 +236,74 @@ pub impl[U : QuantityUnit] FromSchema for Quantity[U] with fn from_value(v) {
       )
   }
 }
+
+///|
+pub impl IntoWire for Url with fn append_wire(self, encoder) {
+  encoder.push(@types.UrlValue(self.value))
+}
+
+///|
+pub impl FromWire for Url with fn read_wire(reader, index) {
+  match wire_node(reader, index) {
+    @types.UrlValue(value) => Url::new(value)
+    _ => raise WireError::Invalid("expected URL value")
+  }
+}
+
+///|
+pub impl WireSchema for Url with fn append_wire_type(encoder) {
+  encoder.push(@types.UrlType(default_url_restrictions()))
+}
+
+///|
+pub impl IntoWire for Duration with fn append_wire(self, encoder) {
+  encoder.push(@types.DurationValue({ nanoseconds: self.nanoseconds, }))
+}
+
+///|
+pub impl FromWire for Duration with fn read_wire(reader, index) {
+  match wire_node(reader, index) {
+    @types.DurationValue(value) => Duration::new(value.nanoseconds)
+    _ => raise WireError::Invalid("expected duration value")
+  }
+}
+
+///|
+pub impl WireSchema for Duration with fn append_wire_type(encoder) {
+  encoder.push(@types.DurationType)
+}
+
+///|
+pub impl[U] IntoWire for Quantity[U] with fn append_wire(self, encoder) {
+  encoder.push(@types.QuantityValueNode(self.value()))
+}
+
+///|
+pub impl[U : QuantityUnit] FromWire for Quantity[U] with fn read_wire(
+  reader,
+  index,
+) {
+  match wire_node(reader, index) {
+    @types.QuantityValueNode(value) => {
+      guard unit_allowed((type_tag() : TypeTag[U]), value.unit) else {
+        raise WireError::Invalid("quantity unit is not allowed")
+      }
+      { mantissa: value.mantissa, scale: value.scale, unit: value.unit, }
+    }
+    _ => raise WireError::Invalid("expected quantity value")
+  }
+}
+
+///|
+pub impl[U : QuantityUnit] WireSchema for Quantity[U] with fn append_wire_type(
+  encoder,
+) {
+  encoder.push(
+    @types.QuantityType({
+      base_unit: U::base_unit(),
+      allowed_suffixes: U::allowed_suffixes(),
+      min: None,
+      max: None,
+    }),
+  )
+}

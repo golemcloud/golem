@@ -271,9 +271,10 @@ if (tool) {
 Canonical JSON records include every argument key; use `null` for an absent optional value.
 `invokeValue` accepts a schema-native value. Both forms validate against the discovered schema
 before opening RPC and check declared results after invocation. `startJson` and `startValue`
-expose stdout, result, `collect`, and cancellation for pending calls; use them when stdout is
-required. `collect()` settles both result and stdout and reports a result failure before a stdout
-failure. Consume or cancel every started call. `DynamicToolClient` accepts a caller-packed typed schema value without pretending to
+expose independent stdout and stderr streams, result, `collect`, and cancellation for pending
+calls; use them when either output is required. Drain every declared output concurrently with
+observing the result, or use `collect()` to settle all three. Result failures take precedence over
+output failures. Consume or cancel every started call. `DynamicToolClient` accepts a caller-packed typed schema value without pretending to
 know the deployed schema. Reflected output failures reject with `ToolRemoteOutputError`.
 
 ## Retrying user code
@@ -443,8 +444,29 @@ From `sdks/ts`, run `pnpm build` to build all TypeScript packages and
 
 Typed middleware declares installation parameters with `parameterSchema`; the decoded static type is available as `context.parameters`. Omit it for the normalized empty-record `{}` schema. Universal middleware uses the same option. The compile-backed forms are exercised in `tests/tool.test-d.ts` and `tests/tool-middleware.test.ts`.
 
-Typed underlying methods retain the convenient awaited call and add `.start(args)`. A started call exposes an independent `result` promise, optional `stdout`, and `cancel()`, so calls may overlap and their results and streams may be consumed in either order. Universal middleware uses `await underlying.invoke(...)` for the same started shape, or `underlying.invokeAndAwait(...)` for the convenience form.
+Typed underlying methods retain the convenient awaited call and add `.start(args)`. A started call exposes an independent `result` promise, optional `stdout` and `stderr`, and `cancel()`, so calls may overlap and their results and streams may be consumed in any order. Universal middleware uses `await underlying.invoke(...)` for the same started shape, or `underlying.invokeAndAwait(...)` for the convenience form.
 
 The underlying is revoked when the middleware handler returns: no new calls may start, but already admitted calls are not implicitly cancelled. Releasing an invocation result observer is disposal, not cancellation; call `cancel()` explicitly when intended. The SDK disposes abandoned observers and streams.
 
-For commands declaring stdout, the guest receives a host stdout writer. The SDK forwards the middleware's selected stdout to it concurrently with the result, finishes it on clean EOF, and fails it on forwarding errors. Authors return or select the readable stdout stream and do not write to or finish the host writer directly.
+For commands declaring stdout or stderr, the guest receives the matching host writers. The SDK forwards each middleware-selected output to its writer concurrently with the other output and the result, finishes it on clean EOF, and fails it on forwarding errors. Authors return or select the readable output streams and do not write to or finish the host writers directly.
+
+## Component bundling
+
+All TypeScript components use the same full `agent-guest` WIT world. The component Rollup
+configuration infers registration capabilities from the TypeScript program and generates static
+imports for agent, tool, middleware, and snapshot exports. Absent capabilities use small empty
+discovery/error implementations; no role or alternate world is selected.
+
+The application bundles the SDK's preserved runtime modules, rather than importing a complete
+SDK embedded in the wrapper. Rollup can therefore remove absent registries and agent snapshot,
+principal serialization, and lifecycle code. Unused builder registration methods are removed
+before linking because class methods cannot otherwise be tree-shaken. Opaque registration
+helpers and computed SDK access conservatively retain capabilities. Host modules remain external.
+
+After building the SDK and agent template, run `node scripts/measure-components.mjs` from this
+package to build the five capability fixtures, check their full-world ABI, and record JS,
+release/stripped, and preinitialized component sizes in `.component-measurements/sizes.json`.
+Pass a baseline full-SDK template WASM as the first argument to compare the old external-SDK
+build. The recorded timing is median end-to-end QuickJS preinitialization time (three runs),
+including Wasmtime compilation; it is not deployed invocation latency. The harness requires
+`wasm-rquickjs` and `wasm-tools` on PATH and is separate from the process-free unit suite.

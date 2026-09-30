@@ -27,7 +27,7 @@ import golem.runtime.annotations.{
 }
 import golem.runtime.http.DurableStreamSlotSource
 import golem.runtime.{AsyncImplementationMethod, MethodInvocation, OutputMetadata}
-import golem.schema.{SchemaGraph, SchemaTypeBody}
+import golem.schema.{AgentStream, SchemaGraph, SchemaTypeBody}
 import zio.blocks.schema.Schema
 import zio.test._
 
@@ -85,6 +85,16 @@ object AgentMetadataMacroSpec extends ZIOSpecDefault {
     class Id()
     def rpcCall(payload: String): Future[String]
     def rpcCallTrigger(payload: String): Unit
+  }
+
+  final case class ConcreteOnly(value: String)
+  final case class StreamEnvelope(values: Option[List[AgentStream[String]]])
+
+  @agentDefinition()
+  trait ConcreteOnlyClientAgent {
+    class Id(owner: ConcreteOnly, streams: StreamEnvelope)
+    def roundTrip(value: ConcreteOnly): Future[ConcreteOnly]
+    def consume(value: StreamEnvelope): Unit
   }
 
   @agentDefinition(mount = "/streams")
@@ -164,6 +174,15 @@ object AgentMetadataMacroSpec extends ZIOSpecDefault {
 
   override def spec: Spec[TestEnvironment, Any] =
     suite("AgentMetadataMacroSpec")(
+      test("compiler-emitted wire metadata equals dynamic metadata encoding") {
+        val compiled = AgentDefinitionMacro.generateWire[EchoAgent]
+        val dynamic  = golem.runtime.WireAgentMetadata.fromModel(echoMetadata)
+        assertTrue(
+          compiled == dynamic,
+          AgentDefinitionMacro
+            .generateWire[EphemeralAgent] == golem.runtime.WireAgentMetadata.fromModel(ephemeralMetadata)
+        )
+      },
       test("EchoAgent metadata exposes all method names") {
         val names = echoMetadata.methods.map(_.name).sorted
         assertTrue(
@@ -215,6 +234,15 @@ object AgentMetadataMacroSpec extends ZIOSpecDefault {
         val triggerMethod =
           agentType.methods.find(_.metadata.name == "rpcCallTrigger").get
         assertTrue(triggerMethod.invocation == MethodInvocation.FireAndForget)
+      },
+      test("wire client derivation does not require owned schema codecs") {
+        val client = AgentClientMacro.wireType[ConcreteOnlyClientAgent]
+        assertTrue(
+          client.metadata.name == "ConcreteOnlyClientAgent",
+          client.ctorContainsStream,
+          client.methods.find(_.name == "roundTrip").exists(!_.inputContainsStream),
+          client.methods.find(_.name == "consume").exists(_.inputContainsStream)
+        )
       },
       test("AgentImplementationMacro preserves method invocation kinds") {
         val awaitable =

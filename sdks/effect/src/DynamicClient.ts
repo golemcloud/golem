@@ -2,11 +2,15 @@
 import { Effect, Scope } from "effect"
 import type * as AgentHost from "golem:agent/host@2.0.0"
 import type * as CoreTypes from "golem:core/types@2.0.0"
-import { AgentIdentityError, rawPhantomId, type Identity } from "./AgentIdentity.js"
+import type { Identity } from "./AgentIdentity.js"
 import type { RemoteCallError } from "./Client.js"
 import { RpcClient } from "./host/RpcClient.js"
+import { AgentIdentityError } from "./internal/agentIdentityError.js"
+import { rawPhantomId } from "./internal/agentIdentityState.js"
 import { dynamicMethod } from "./internal/dynamicMethod.js"
 import { wrapHostThrow } from "./internal/rpc.js"
+
+export { AgentIdentityError } from "./internal/agentIdentityError.js"
 
 /** @since 1.6.0 @category models */
 export interface DynamicInvocation {

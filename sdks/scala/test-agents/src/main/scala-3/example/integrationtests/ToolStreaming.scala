@@ -97,17 +97,21 @@ final class ScalaToolStreamingCallerImpl(name: String) extends ScalaToolStreamin
     ScalaStreamingToolClient().stream("marker-echo", stdin) match {
       case Left(error)       => Future.failed(new IllegalStateException(s"failed to start Scala streaming tool: $error"))
       case Right(invocation) =>
-        invocation.stdout.read().flatMap {
-          case Right(Some(marker)) if marker.sameElements("scala-marker:".getBytes("UTF-8")) =>
-            release.success(())
-            val output = readAll(invocation.stdout, Vector(marker))
-            invocation.result.zip(output).flatMap {
-              case (Right(bytesRead), bytes) =>
-                Future.successful(ScalaStreamEvidence(new String(bytes, "UTF-8"), bytesRead))
-              case (Left(error), _) => Future.failed(new IllegalStateException(s"Scala tool failed: $error"))
+        invocation.stdout match {
+          case None         => Future.failed(new IllegalStateException("Scala streaming tool did not return declared stdout"))
+          case Some(stdout) =>
+            stdout.read().flatMap {
+              case Right(Some(marker)) if marker.sameElements("scala-marker:".getBytes("UTF-8")) =>
+                release.success(())
+                val output = readAll(stdout, Vector(marker))
+                invocation.result.zip(output).flatMap {
+                  case (Right(bytesRead), bytes) =>
+                    Future.successful(ScalaStreamEvidence(new String(bytes, "UTF-8"), bytesRead))
+                  case (Left(error), _) => Future.failed(new IllegalStateException(s"Scala tool failed: $error"))
+                }
+              case other =>
+                Future.failed(new IllegalStateException(s"expected live Scala marker before stdin EOF, got $other"))
             }
-          case other =>
-            Future.failed(new IllegalStateException(s"expected live Scala marker before stdin EOF, got $other"))
         }
     }
   }

@@ -166,7 +166,7 @@ pub fn[G, X] TaskGroup::spawn(
     no_wait~,
     allow_failure~,
   )
-  { value, coro }
+  { value, coro, }
 }
 
 ///|

@@ -169,6 +169,7 @@ export function buildUnionVariantCodec(
   );
   return {
     graph: { defs, root: t.variant(cases) },
+    concrete: { tag: 'variant', cases: memberCodecs.map((codec) => ({ codec })) },
     toValue: (value) => {
       const i = pick(value);
       if (i < 0 || i >= memberCodecs.length) {

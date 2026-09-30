@@ -24,7 +24,8 @@ import scala.annotation.StaticAnnotation
  */
 final class toolDefinition(
   val name: String = "",
-  val version: String = "0.0.0"
+  val version: String = "0.0.0",
+  val requiresFilesystem: Boolean = false
 ) extends StaticAnnotation
 
 /**
@@ -115,6 +116,7 @@ final class arg(
   val minLength: Int = -1,
   val maxLength: Int = -1,
   val direction: String = "",
+  val channel: String = "",
   val mime: Array[String] = null,
   val schemes: Array[String] = null,
   val min: Any = null,

@@ -27,12 +27,14 @@ export function adaptLegacyRawUnderlying(
         });
       }
       const stdout = resolved.stdout;
+      const stderr = resolved.stderr;
       return [
         {
           get: async () => (await carrier).result,
           cancel: () => undefined,
         },
         stdout === undefined ? undefined : encodeStdout(stdout),
+        stderr === undefined ? undefined : encodeStdout(stderr),
       ] as never;
     },
   };

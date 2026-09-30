@@ -2284,13 +2284,15 @@ impl NativeDurableHelper for NativeDurableHelperImpl {
 
 #[golem_native_tool::tool_definition(version = "1.0.0")]
 trait NativeTestTool {
+    #[arg(stderr, channel = "stderr")]
     async fn run(
         &self,
         context: &mut TestWorkerCtx,
         mode: String,
         cancellation: golem_native_tool::NativeToolCancellation,
         stdin: Option<golem_native_tool::NativeToolStdin>,
-        stdout: Option<golem_native_tool::NativeToolStdout>,
+        stdout: Option<golem_native_tool::NativeToolOutput>,
+        stderr: Option<golem_native_tool::NativeToolOutput>,
         principal: golem_native_tool::Principal,
     ) -> golem_native_tool::HostResult<()>;
 }
@@ -2305,7 +2307,8 @@ impl NativeTestTool for NativeTestToolImpl {
         mode: String,
         cancellation: golem_native_tool::NativeToolCancellation,
         mut stdin: Option<golem_native_tool::NativeToolStdin>,
-        mut stdout: Option<golem_native_tool::NativeToolStdout>,
+        mut stdout: Option<golem_native_tool::NativeToolOutput>,
+        mut stderr: Option<golem_native_tool::NativeToolOutput>,
         _principal: golem_native_tool::Principal,
     ) -> golem_native_tool::HostResult<()> {
         if mode != "read-counter" && ctx.is_live() {
@@ -2319,8 +2322,22 @@ impl NativeTestTool for NativeTestToolImpl {
                     .await
                     .map_err(anyhow::Error::msg)?;
             }
+            if let Some(stderr) = &mut stderr {
+                stderr
+                    .write(b"diagnostic:started".to_vec())
+                    .await
+                    .map_err(anyhow::Error::msg)?;
+            }
             cancellation.cancelled().await;
             return Ok(());
+        }
+
+        if let Some(mut stderr) = stderr {
+            stderr
+                .write(format!("diagnostic:{mode}").into_bytes())
+                .await
+                .map_err(anyhow::Error::msg)?;
+            stderr.finish().map_err(anyhow::Error::msg)?;
         }
 
         if let Some(mut stdout) = stdout {

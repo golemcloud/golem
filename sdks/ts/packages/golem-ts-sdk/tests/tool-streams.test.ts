@@ -38,6 +38,7 @@ describe('started tool invocations', () => {
     const result = new Promise<string>((resolve) => (finish = resolve));
     const invocation = startedToolInvocation(
       chunks(Uint8Array.of(1, 2)),
+      undefined,
       settleToolResult(result),
       vi.fn(),
     );
@@ -52,6 +53,7 @@ describe('started tool invocations', () => {
     const cancel = vi.fn();
     const invocation = startedToolInvocation(
       chunks(),
+      undefined,
       settleToolResult(Promise.resolve(undefined)),
       cancel,
     );
@@ -69,6 +71,7 @@ describe('started tool invocations', () => {
     try {
       const invocation = startedToolInvocation(
         chunks(),
+        undefined,
         settleToolResult(Promise.reject(failure)),
         vi.fn(),
       );
@@ -84,6 +87,7 @@ describe('started tool invocations', () => {
   it('collects stdout and result concurrently without deadlocking', async () => {
     const invocation = startedToolInvocation(
       chunks(Uint8Array.of(1), Uint8Array.of(2, 3)),
+      undefined,
       settleToolResult(Promise.resolve(42)),
       vi.fn(),
     );
@@ -99,12 +103,33 @@ describe('started tool invocations', () => {
     }
     const invocation = startedToolInvocation(
       failed(),
+      undefined,
       settleToolResult(Promise.resolve(undefined)),
       vi.fn(),
     );
     const read = invocation.stdout.getReader().read();
     await expect(read).rejects.toBeInstanceOf(ToolStreamError);
     await expect(read).rejects.toMatchObject({ failure });
+  });
+
+  it('closes a failed stderr attachment after collect rejects', async () => {
+    const closed = vi.fn();
+    async function* failedStderr() {
+      try {
+        yield { tag: 'err' as const, val: { tag: 'failed' as const, val: 'broken stderr' } };
+      } finally {
+        closed();
+      }
+    }
+    const invocation = startedToolInvocation(
+      undefined,
+      failedStderr(),
+      settleToolResult(Promise.resolve(undefined)),
+      vi.fn(),
+    );
+
+    await expect(invocation.collect()).rejects.toThrow('broken stderr');
+    expect(closed).toHaveBeenCalledOnce();
   });
 
   it('keeps stdout consumable after a structured result failure', async () => {
@@ -119,6 +144,7 @@ describe('started tool invocations', () => {
     const failure = new Error('structured result failed');
     const invocation = startedToolInvocation(
       stdout,
+      undefined,
       settleToolResult(Promise.reject(failure)),
       vi.fn(),
     );
@@ -142,6 +168,7 @@ describe('started tool invocations', () => {
     const failure = new Error('structured result failed');
     const invocation = startedToolInvocation(
       stdout,
+      undefined,
       settleToolResult(Promise.reject(failure)),
       vi.fn(),
     );
