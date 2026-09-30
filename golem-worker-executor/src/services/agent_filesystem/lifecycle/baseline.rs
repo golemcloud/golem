@@ -647,19 +647,16 @@ async fn holds_only_initial_files<Adapter: SandboxFilesystemAdapter>(
                 .iter()
                 .all(|entry| expected(&directory.join(&entry.name), entry.kind));
             // A directory that does not agree ends the read, so no other directory is read.
-            let pending = if agrees {
-                pending
-                    .into_iter()
-                    .chain(
-                        entries
-                            .into_iter()
-                            .filter(|entry| entry.kind == SandboxObjectKind::Directory)
-                            .map(|entry| directory.join(entry.name).into_boxed_path()),
-                    )
-                    .collect()
+            if agrees {
+                pending.extend(
+                    entries
+                        .into_iter()
+                        .filter(|entry| entry.kind == SandboxObjectKind::Directory)
+                        .map(|entry| directory.join(entry.name).into_boxed_path()),
+                );
             } else {
-                Vec::new()
-            };
+                pending.clear();
+            }
             Ok::<_, FilesystemStorageError>(Some((agrees, pending)))
         }
     })
