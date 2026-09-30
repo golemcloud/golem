@@ -2026,6 +2026,9 @@ pub struct TestExecutorOverrides {
     pub create_card_service: Option<Arc<CreateCardServiceFn>>,
     pub create_direct_invocation_auth: Option<Arc<CreateDirectInvocationAuthFn>>,
     pub environment_state_service: Option<Arc<dyn EnvironmentStateService>>,
+    /// Replaces the named quota service so tests can assert the owner environment used by
+    /// quota-token operations.
+    pub quota_service: Option<Arc<dyn QuotaService>>,
     /// Replaces configured account limits for the `TestWorkerCtx` bootstrap.
     pub resource_limits: Option<Arc<dyn ResourceLimits>>,
     pub native_tool_metadata: Option<golem_common::schema::tool::Tool>,
@@ -3369,7 +3372,9 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
         _config: &golem_worker_executor::services::golem_config::QuotaServiceConfig,
         _shutdown_token: tokio_util::sync::CancellationToken,
     ) -> Arc<dyn golem_worker_executor::services::quota::QuotaService> {
-        Arc::new(golem_worker_executor::services::quota::UnlimitedQuotaService)
+        self.overrides.quota_service.clone().unwrap_or_else(|| {
+            Arc::new(golem_worker_executor::services::quota::UnlimitedQuotaService)
+        })
     }
 
     fn create_worker_proxy(&self, golem_config: &GolemConfig) -> Arc<dyn WorkerProxy> {

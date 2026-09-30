@@ -64,6 +64,7 @@ pub mod scalability;
 pub mod scheduler_storage;
 pub mod scope_cards;
 pub mod tool_discovery;
+pub mod tool_runtime_bypass;
 pub mod tool_streaming;
 pub mod transactions;
 pub mod wasi;
@@ -135,6 +136,7 @@ tag_suite!(resource_limits, group1);
 tag_suite!(oplog_metrics, group1);
 tag_suite!(tool_discovery, group1);
 tag_suite!(mcp_stdout, group1);
+tag_suite!(tool_runtime_bypass, group1);
 tag_suite!(tool_streaming, group1);
 
 sequential_suite!(key_value_storage);
@@ -241,6 +243,18 @@ test_component!(
     "rate_limit_middleware",
     "golem_rate_limit_middleware_release",
     "golem:rate-limit-middleware"
+);
+test_component!(
+    tool_runtime_bypass_owner,
+    "tool_runtime_bypass_owner",
+    "golem_it_tool_runtime_bypass_owner_release",
+    "golem-it:tool-runtime-bypass-owner"
+);
+test_component!(
+    tool_runtime_bypass_provider,
+    "tool_runtime_bypass_provider",
+    "golem_it_tool_runtime_bypass_provider_release",
+    "golem-it:tool-runtime-bypass-provider"
 );
 test_component!(
     filesystem_tools,
