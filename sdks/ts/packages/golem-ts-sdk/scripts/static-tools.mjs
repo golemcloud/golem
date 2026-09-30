@@ -229,6 +229,19 @@ export function staticTools(config, runtime) {
       return node.elements.flatMap((item) =>
         ts.isSpreadElement(item) ? evaluate(item.expression, locals) : [evaluate(item, locals)],
       );
+    if (
+      ts.isNewExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      node.expression.text === 'Map' &&
+      checker
+        .getSymbolAtLocation(node.expression)
+        ?.declarations?.some((declaration) =>
+          program.isSourceFileDefaultLibrary(declaration.getSourceFile()),
+        )
+    ) {
+      const args = node.arguments?.map((arg) => evaluate(arg, locals)) ?? [];
+      return Reflect.construct(Map, args);
+    }
     if (ts.isPropertyAccessExpression(node))
       return evaluate(node.expression, locals)[node.name.text];
     if (ts.isArrowFunction(node) && !ts.isBlock(node.body))

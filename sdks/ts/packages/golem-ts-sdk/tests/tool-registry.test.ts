@@ -1458,6 +1458,43 @@ describe('tool guest exports', () => {
       expect(output.fail).not.toHaveBeenCalled();
     });
 
+    it('closes active stdin when an explicit stdout finish fails', async () => {
+      const iteratorReturn = vi.fn().mockResolvedValue({ done: true, value: undefined });
+      const stdin = {
+        [Symbol.asyncIterator]: () => ({
+          next: vi.fn(() => new Promise(() => {})),
+          return: iteratorReturn,
+        }),
+      };
+      const finishFailure = { tag: 'concurrent-operation' } as const;
+      toolDefinition('finish-failure-active-stdin')
+        .body((body) => body.stdin({ required: true }).stdout({ required: true }).returns(z.void()))
+        .implement({
+          'finish-failure-active-stdin': async (_, context) => {
+            void context.stdin.getReader().read();
+            await context.stdout.getWriter().close();
+            return ok(undefined);
+          },
+        });
+
+      const output = stdoutWriter();
+      output.finish.mockRejectedValue(finishFailure);
+      await expect(
+        tool.invoke(
+          'finish-failure-active-stdin',
+          [],
+          invocationInput('finish-failure-active-stdin'),
+          stdin,
+          output,
+          undefined,
+          { tag: 'anonymous' },
+        ),
+      ).rejects.toBe(finishFailure);
+      expect(output.finish).toHaveBeenCalledOnce();
+      expect(output.fail).not.toHaveBeenCalled();
+      expect(iteratorReturn).toHaveBeenCalledOnce();
+    });
+
     it('errors when stdin yields an empty chunk', async () => {
       async function* invalidInput() {
         yield { tag: 'ok' as const, val: new Uint8Array() };
@@ -1488,26 +1525,33 @@ describe('tool guest exports', () => {
 
     it('rejects writes through a retained writer after invocation', async () => {
       let writer: WritableStreamDefaultWriter<Uint8Array> | undefined;
+      let writerClosed: Promise<void> | undefined;
       toolDefinition('retained-writer')
         .body((body) => body.stdout({ required: true }).returns(z.void()))
         .implement({
           'retained-writer': async (_, context) => {
             writer = context.stdout.getWriter();
+            writerClosed = writer.closed;
+            void writerClosed.catch(() => {});
             await writer.write(new Uint8Array([1]));
             return ok(undefined);
           },
         });
 
+      const output = stdoutWriter();
       await tool.invoke(
         'retained-writer',
         [],
         invocationInput('retained-writer'),
         undefined,
-        stdoutWriter(),
+        output,
         undefined,
         { tag: 'anonymous' },
       );
+      await expect(writerClosed).rejects.toThrow('tool invocation completed');
       await expect(writer!.write(new Uint8Array([2]))).rejects.toThrow('tool invocation completed');
+      expect(output.finish).toHaveBeenCalledOnce();
+      expect(output.fail).not.toHaveBeenCalled();
     });
 
     it('preserves an explicitly failed stdout alongside structured success', async () => {
@@ -1567,6 +1611,42 @@ describe('tool guest exports', () => {
         expect(output.finish).not.toHaveBeenCalled();
       },
     );
+
+    it('closes active stdin after explicitly cancelling stdout', async () => {
+      const iteratorReturn = vi.fn().mockResolvedValue({ done: true, value: undefined });
+      const stdin = {
+        [Symbol.asyncIterator]: () => ({
+          next: vi.fn(() => new Promise(() => {})),
+          return: iteratorReturn,
+        }),
+      };
+      const failure = { tag: 'cancelled' } as const;
+      toolDefinition('cancel-stdout-active-stdin')
+        .body((body) => body.stdin({ required: true }).stdout({ required: true }).returns(z.void()))
+        .implement({
+          'cancel-stdout-active-stdin': async (_, context) => {
+            void context.stdin.getReader().read();
+            await context.stdout.getWriter().abort(new ToolStreamError(failure));
+            return ok(undefined);
+          },
+        });
+
+      const output = stdoutWriter();
+      await expect(
+        tool.invoke(
+          'cancel-stdout-active-stdin',
+          [],
+          invocationInput('cancel-stdout-active-stdin'),
+          stdin,
+          output,
+          undefined,
+          { tag: 'anonymous' },
+        ),
+      ).resolves.toEqual({ result: undefined });
+      expect(output.fail).toHaveBeenCalledWith(failure);
+      expect(output.finish).not.toHaveBeenCalled();
+      expect(iteratorReturn).toHaveBeenCalledOnce();
+    });
 
     it('preserves an explicitly failed stdout alongside a declared tool error', async () => {
       const reason = new Error('handler aborted stdout');
