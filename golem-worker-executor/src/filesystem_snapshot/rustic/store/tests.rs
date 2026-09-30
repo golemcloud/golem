@@ -5918,3 +5918,75 @@ async fn a_restore_builds_its_pool_with_the_restore_reader_threads() {
         (Some(listing(tree.path())), vec![NonZeroUsize::new(3)])
     );
 }
+
+#[test]
+#[timeout("120s")]
+async fn a_delete_dropped_in_its_prune_while_a_save_of_the_same_agent_runs_keeps_the_saved_snapshots()
+ {
+    // The first listing of the packs after the arm waits at the gate. That is the prune of the
+    // delete. The test drops the delete there, saves a new snapshot of the same agent, and then
+    // lets the prune of the dropped delete go on.
+    let hold_next_listing = Arc::new(AtomicBool::new(false));
+    let storage = ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), {
+        let hold_next_listing = hold_next_listing.clone();
+        move |op_label, path| {
+            if op_label == "list"
+                && path == "data"
+                && hold_next_listing.swap(false, Ordering::SeqCst)
+            {
+                Script::WaitForGate
+            } else {
+                Script::Pass
+            }
+        }
+    });
+    let store = store(
+        storage.clone(),
+        policy(LONG_DEADLINE, ALWAYS, Duration::ZERO),
+    );
+    let scope = new_scope();
+    let (kept_tree, new_tree) = (one_file_tree("kept"), fixture_tree());
+    save_each(&store, &scope, &["p-old"]).await;
+    store
+        .save(&scope, &name("p-kept"), kept_tree.path(), None)
+        .await
+        .unwrap();
+    hold_next_listing.store(true, Ordering::SeqCst);
+
+    let deleting = tokio::spawn({
+        let (store, scope) = (store.clone(), scope.clone());
+        async move { store.delete(&scope, &name("p-old")).await }
+    });
+    let held = eventually(|| prunes(&storage.calls()) >= 1).await;
+    deleting.abort();
+    let dropped = deleting.await;
+    let saved = store
+        .save(&scope, &name("p-new"), new_tree.path(), None)
+        .await;
+    storage.open_gate();
+    let ended = eventually(|| store.work_in_flight() == 0).await;
+    let deleted_again = store.delete(&scope, &name("p-none")).await;
+
+    assert!(
+        dropped.as_ref().is_err_and(|error| error.is_cancelled()),
+        "{dropped:?}"
+    );
+    assert_eq!(
+        (
+            held,
+            saved.is_ok(),
+            ended,
+            deleted_again.is_ok(),
+            restored_listing(&store, &scope, &name("p-kept")).await.ok(),
+            restored_listing(&store, &scope, &name("p-new")).await.ok(),
+        ),
+        (
+            true,
+            true,
+            true,
+            true,
+            Some(listing(kept_tree.path())),
+            Some(listing(new_tree.path())),
+        )
+    );
+}
