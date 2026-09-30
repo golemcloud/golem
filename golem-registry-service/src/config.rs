@@ -26,11 +26,52 @@ use golem_service_base::grpc::client::GrpcClientConfig;
 use golem_service_base::grpc::server::GrpcServerTlsConfig;
 use http::Uri;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write;
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use uuid::uuid;
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct BuiltinArtifactSource {
+    pub url: String,
+    #[serde(default)]
+    pub sha256: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct BuiltinArtifactsConfig {
+    #[serde(default)]
+    pub cache_dir: Option<PathBuf>,
+    pub artifacts: BTreeMap<String, BuiltinArtifactSource>,
+}
+
+impl BuiltinArtifactsConfig {
+    pub fn resolved_cache_dir(&self) -> anyhow::Result<PathBuf> {
+        match &self.cache_dir {
+            Some(path) => Ok(path.clone()),
+            None => {
+                let executable = std::env::current_exe().map_err(|error| {
+                    anyhow::anyhow!("failed to locate registry executable: {error}")
+                })?;
+                let parent = executable.parent().ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "registry executable '{}' has no parent directory",
+                        executable.display()
+                    )
+                })?;
+                Ok(parent.join("builtin-artifacts"))
+            }
+        }
+    }
+}
+
+impl Default for BuiltinArtifactsConfig {
+    fn default() -> Self {
+        serde_json::from_str(include_str!("../../builtin-artifacts.json"))
+            .expect("builtin-artifacts.json must match BuiltinArtifactsConfig")
+    }
+}
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct McpImportResolverConfig {
@@ -128,6 +169,8 @@ pub struct RegistryServiceConfig {
     #[serde(default)]
     pub builtin_plugins: BuiltinPluginsConfig,
     #[serde(default)]
+    pub builtin_artifacts: BuiltinArtifactsConfig,
+    #[serde(default)]
     pub deployment_events: DeploymentEventsConfig,
     #[serde(default)]
     pub security_scheme: SecuritySchemeConfig,
@@ -188,6 +231,16 @@ impl SafeDisplay for RegistryServiceConfig {
             &mut result,
             "builtin plugins: enabled={}",
             self.builtin_plugins.enabled(),
+        );
+        let _ = writeln!(
+            &mut result,
+            "builtin artifacts: cache_dir={}, configured={}",
+            self.builtin_artifacts
+                .cache_dir
+                .as_ref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| "<next to executable>".to_string()),
+            self.builtin_artifacts.artifacts.len(),
         );
 
         let _ = writeln!(&mut result, "deployment events:");
@@ -318,6 +371,7 @@ impl Default for RegistryServiceConfig {
             initial_accounts,
             initial_plans,
             builtin_plugins: BuiltinPluginsConfig::default(),
+            builtin_artifacts: BuiltinArtifactsConfig::default(),
             deployment_events: DeploymentEventsConfig::default(),
             security_scheme: SecuritySchemeConfig::default(),
             mcp_oauth: golem_mcp_import::oauth::Limits::default(),
@@ -710,11 +764,34 @@ pub fn make_config_loader() -> ConfigLoader<RegistryServiceConfig> {
 mod tests {
     use test_r::test;
 
-    use crate::config::{ComponentFileUploadConfig, RegistryServiceConfig, make_config_loader};
+    use crate::config::{
+        BuiltinArtifactsConfig, ComponentFileUploadConfig, RegistryServiceConfig,
+        make_config_loader,
+    };
 
     #[test]
     pub fn config_is_loadable() {
         make_config_loader().load().expect("Failed to load config");
+    }
+
+    #[test]
+    pub fn builtin_artifact_defaults_are_pinned() {
+        let config = BuiltinArtifactsConfig::default();
+        assert_eq!(config.artifacts.len(), 4);
+        for (artifact_id, source) in config.artifacts {
+            assert!(
+                source
+                    .url
+                    .starts_with("https://github.com/golemcloud/golem-builtins/releases/download/"),
+                "unexpected URL for {artifact_id}: {}",
+                source.url
+            );
+            assert_eq!(
+                source.sha256.as_deref().map(str::len),
+                Some(64),
+                "missing or invalid SHA-256 for {artifact_id}"
+            );
+        }
     }
 
     #[test]

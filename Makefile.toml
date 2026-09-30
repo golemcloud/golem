@@ -1623,9 +1623,9 @@ command = "miniserve"
 args = ["--interfaces", "127.0.0.1", "--port", "41357", "cli/schema.golem.cloud"]
 
 ## PLUGINS
-[tasks.build-plugins]
+[tasks.build-otlp-exporter]
 dependencies = ["build"]
-description = "Builds built-in plugins (requires golem CLI to be built first)"
+description = "Builds the built-in OTLP exporter (requires golem CLI to be built first)"
 script_runner = "@duckscript"
 script = '''
 # Resolve the cargo target directory robustly so this works even when the target
@@ -1638,8 +1638,12 @@ exec --fail-on-error ${golem} exec -P release copy
 cd ../..
 '''
 
+[tasks.build-plugins]
+dependencies = ["build-otlp-exporter"]
+description = "Builds all built-in plugins"
+
 ## BUILT-IN TOOLS
-[tasks.build-builtin-tools]
+[tasks.build-filesystem-tools]
 dependencies = ["wit"]
 description = "Builds the built-in filesystem tool component"
 script_runner = "@duckscript"
@@ -1651,6 +1655,50 @@ exec --fail-on-error ${golem} build -P release --force-build --yes
 exec --fail-on-error ${golem} exec -P release copy
 cd ../..
 '''
+
+[tasks.build-javascript-typescript-tools]
+dependencies = ["wit", "build-sdk-ts"]
+description = "Builds the bundled, Wizer-preinitialized JavaScript and TypeScript tool components"
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo build -p golem --bin golem
+golem = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/debug/golem"
+cd builtin-tools/js-ts-tools
+exec --fail-on-error npm ci --ignore-scripts --no-audit --no-fund
+exec --fail-on-error npm run verify:release
+exec --fail-on-error npm run build:upstream
+exec --fail-on-error npm run smoke:embedded
+exec --fail-on-error npm run typecheck
+exec --fail-on-error ${golem} build -P optimized --force-build --yes
+exec --fail-on-error ${golem} exec -P optimized copy
+cd ../..
+'''
+
+[tasks.build-javascript-tools]
+dependencies = ["build-javascript-typescript-tools"]
+description = "Builds the built-in JavaScript tool component"
+
+[tasks.build-typescript-tools]
+dependencies = ["build-javascript-typescript-tools"]
+description = "Builds the built-in TypeScript tool component"
+
+[tasks.build-builtin-tools]
+dependencies = ["build-filesystem-tools", "build-javascript-typescript-tools"]
+description = "Builds all built-in tool components"
+
+[tasks.publish-builtin-artifact]
+description = "Locally builds and manually publishes one immutable built-in component release"
+command = "node"
+args = [
+    "scripts/publish-builtin-artifact.mjs",
+    "${BUILTIN_COMPONENT}",
+    "${BUILTIN_VERSION}",
+]
+
+[tasks.check-builtin-artifacts]
+description = "Checks built-in artifact pins and rejects committed generated WASMs"
+command = "node"
+args = ["scripts/check-builtin-artifacts.mjs"]
 
 [tasks.component-size-report]
 description = "Builds representative components and assembles a local size and retention report"

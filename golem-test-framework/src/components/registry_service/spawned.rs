@@ -21,6 +21,8 @@ use async_trait::async_trait;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::plan::PlanId;
+use sha2::{Digest, Sha256};
+use std::io::Write;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
@@ -81,12 +83,12 @@ impl SpawnedRegistryService {
         let low_http_calls_plan_id = PlanId(uuid!("b3c4d5e6-f7a8-9012-bcde-f01234567890"));
         let low_rpc_calls_plan_id = PlanId(uuid!("c4d5e6f7-a8b9-0123-cdef-012345678901"));
 
-        let otlp_wasm = working_directory.join("../plugins/otlp-exporter.wasm");
-        let otlp_wasm_path = if otlp_wasm.exists() {
-            Some(otlp_wasm.as_path())
-        } else {
-            None
-        };
+        let repository_root = working_directory
+            .parent()
+            .expect("registry service working directory is inside the repository");
+        let builtin_artifact_cache_dir =
+            repository_root.join("target/integration-builtin-artifacts");
+        prepopulate_builtin_artifact_cache(repository_root, &builtin_artifact_cache_dir);
 
         let mut child = Command::new(executable)
             .current_dir(working_directory)
@@ -109,7 +111,7 @@ impl SpawnedRegistryService {
                     low_http_calls_plan_id,
                     low_rpc_calls_plan_id,
                     otlp,
-                    otlp_wasm_path,
+                    &builtin_artifact_cache_dir,
                 )
                 .await,
             )
@@ -150,6 +152,62 @@ impl SpawnedRegistryService {
             low_http_calls_plan_id,
             low_rpc_calls_plan_id,
             base_http_client: OnceCell::new(),
+        }
+    }
+}
+
+fn prepopulate_builtin_artifact_cache(repository_root: &Path, cache_dir: &Path) {
+    let manifest: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(repository_root.join("builtin-artifacts.json"))
+            .expect("failed to read builtin-artifacts.json"),
+    )
+    .expect("failed to parse builtin-artifacts.json");
+    let artifacts = manifest["artifacts"]
+        .as_object()
+        .expect("builtin-artifacts.json must contain an artifacts object");
+    let local_artifacts = [
+        ("filesystem_tools", "builtin-tools/filesystem-tools.wasm"),
+        ("javascript_tools", "builtin-tools/javascript-tools.wasm"),
+        ("otlp_exporter", "plugins/otlp-exporter.wasm"),
+        ("typescript_tools", "builtin-tools/typescript-tools.wasm"),
+    ];
+
+    std::fs::create_dir_all(cache_dir).expect("failed to create built-in artifact test cache");
+    for (artifact_id, relative_path) in local_artifacts {
+        let source = repository_root.join(relative_path);
+        if !source.is_file() {
+            continue;
+        }
+        let expected = artifacts[artifact_id]["sha256"]
+            .as_str()
+            .expect("default built-in artifacts must have a SHA-256");
+        let destination = cache_dir.join(format!("{expected}.wasm"));
+        if destination.is_file() {
+            continue;
+        }
+
+        let bytes = std::fs::read(&source)
+            .unwrap_or_else(|error| panic!("failed to read '{}': {error}", source.display()));
+        let actual = hex::encode(Sha256::digest(&bytes));
+        assert_eq!(
+            actual,
+            expected,
+            "locally built artifact '{}' does not match builtin-artifacts.json",
+            source.display()
+        );
+        let mut temporary = tempfile::NamedTempFile::new_in(cache_dir)
+            .expect("failed to create temporary built-in artifact cache file");
+        temporary
+            .write_all(&bytes)
+            .expect("failed to write temporary built-in artifact cache file");
+        match temporary.persist_noclobber(&destination) {
+            Ok(_) => {}
+            Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => panic!(
+                "failed to prepopulate built-in artifact '{}': {}",
+                destination.display(),
+                error.error
+            ),
         }
     }
 }

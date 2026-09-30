@@ -142,6 +142,8 @@ jobs:
         run: cargo make --profile ci check-reflection-conformance
       - name: Check configs are up to date
         run: cargo make --profile ci check-configs
+      - name: Check built-in artifact pins
+        run: cargo make --profile ci check-builtin-artifacts
       - name: Check WIT deps are synced
         run: cargo make --profile ci check-wit
       - name: Unit tests

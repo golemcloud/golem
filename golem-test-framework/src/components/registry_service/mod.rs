@@ -98,7 +98,7 @@ async fn env_vars(
     low_http_calls_plan_id: PlanId,
     low_rpc_calls_plan_id: PlanId,
     otlp: bool,
-    otlp_wasm_path: Option<&Path>,
+    builtin_artifact_cache_dir: &Path,
 ) -> HashMap<String, String> {
     let builder = EnvVarBuilder::golem_service(verbosity)
         .with_str("GOLEM__BLOB_STORAGE__TYPE", "LocalFileSystem")
@@ -466,16 +466,15 @@ async fn env_vars(
         //
         .with("GOLEM__GRPC__PORT", grpc_port.to_string())
         .with("GOLEM__HTTP_PORT", http_port.to_string())
+        .with(
+            "GOLEM__BUILTIN_ARTIFACTS__CACHE_DIR",
+            builtin_artifact_cache_dir.to_string_lossy().to_string(),
+        )
         .with_all(rdb.info().env("golem_registry", rdb_private_connection))
         .with_optional_otlp("registry_service", otlp);
 
-    let builder = if let Some(wasm_path) = otlp_wasm_path {
-        builder
-            .with_str("GOLEM__BUILTIN_PLUGINS__TYPE", "Enabled")
-            .with(
-                "GOLEM__BUILTIN_PLUGINS__OTLP_EXPORTER_WASM_PATH",
-                wasm_path.to_string_lossy().to_string(),
-            )
+    let builder = if otlp {
+        builder.with_str("GOLEM__BUILTIN_PLUGINS__TYPE", "Enabled")
     } else {
         builder
     };

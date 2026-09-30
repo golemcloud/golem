@@ -102,6 +102,14 @@ inherit_test_dep!(
     PrecompiledComponent
 );
 inherit_test_dep!(
+    #[tagged_as("javascript_tools")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("typescript_tools")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
     #[tagged_as("tool_streaming_ts_provider")]
     PrecompiledComponent
 );
@@ -959,7 +967,59 @@ async fn invoke_filesystem_tool(
         .command_index_by_path(&[])
         .expect("filesystem tool command exists");
     let input_schema = definition.canonical_input_record_schema(command_index)?;
-    let (_, input_value) = input.into_parts();
+    let (provided_schema, provided_value) = input.into_parts();
+    let SchemaType::Record {
+        fields: provided_fields,
+        ..
+    } = provided_schema.root
+    else {
+        anyhow::bail!("test tool input schema must be a record");
+    };
+    let SchemaValue::Record {
+        fields: provided_values,
+    } = provided_value
+    else {
+        anyhow::bail!("test tool input value must be a record");
+    };
+    anyhow::ensure!(
+        provided_fields.len() == provided_values.len(),
+        "test tool input schema/value field counts differ"
+    );
+    let mut values_by_name = BTreeMap::new();
+    for (field, value) in provided_fields.into_iter().zip(provided_values) {
+        anyhow::ensure!(
+            values_by_name.insert(field.name.clone(), value).is_none(),
+            "duplicate test tool input field '{}'",
+            field.name
+        );
+    }
+    let SchemaType::Record {
+        fields: canonical_fields,
+        ..
+    } = &input_schema.root
+    else {
+        anyhow::bail!("canonical tool input schema must be a record");
+    };
+    let mut canonical_values = Vec::with_capacity(canonical_fields.len());
+    for field in canonical_fields {
+        canonical_values.push(
+            values_by_name
+                .remove(&field.name)
+                .ok_or_else(|| anyhow::anyhow!("missing test tool input field '{}'", field.name))?,
+        );
+    }
+    anyhow::ensure!(
+        values_by_name.is_empty(),
+        "unexpected test tool input fields: {}",
+        values_by_name
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    let input_value = SchemaValue::Record {
+        fields: canonical_values,
+    };
     let output = executor
         .invoke_external_tool(
             worker_id,
@@ -1003,6 +1063,134 @@ async fn invoke_filesystem_tool_success(
         Ok(None) => anyhow::bail!("filesystem tool '{tool_name}' returned no value"),
         Err(error) => anyhow::bail!("filesystem tool '{tool_name}' failed: {error:?}"),
     }
+}
+
+fn cli_tool_input(args: &[&str]) -> TypedSchemaValue {
+    filesystem_tool_input(vec![
+        (
+            "cwd",
+            SchemaType::string(),
+            SchemaValue::String("/workspace".to_string()),
+        ),
+        (
+            "registry",
+            SchemaType::string(),
+            SchemaValue::String("https://registry.npmjs.org/".to_string()),
+        ),
+        (
+            "max-output-bytes",
+            SchemaType::f64(),
+            SchemaValue::F64(1_048_576.0),
+        ),
+        (
+            "args",
+            SchemaType::list(SchemaType::string()),
+            SchemaValue::List {
+                elements: args
+                    .iter()
+                    .map(|arg| SchemaValue::String((*arg).to_string()))
+                    .collect(),
+            },
+        ),
+    ])
+}
+
+fn assert_cli_result(
+    value: SchemaValue,
+    expected_version: &str,
+    expected_stdout: &str,
+) -> anyhow::Result<()> {
+    let SchemaValue::Record { fields } = value else {
+        anyhow::bail!("expected CLI result record, got {value:?}");
+    };
+    let [exit_code, version, overflowed, stdout, stderr] = fields.as_slice() else {
+        anyhow::bail!("expected five CLI result fields, got {fields:?}");
+    };
+    assert_eq!(exit_code, &SchemaValue::F64(0.0));
+    assert_eq!(overflowed, &SchemaValue::Bool(false));
+    assert_eq!(stderr, &SchemaValue::String(String::new()));
+    if expected_version.is_empty() {
+        let SchemaValue::String(actual_version) = version else {
+            anyhow::bail!("expected CLI version string, got {version:?}");
+        };
+        assert!(actual_version.starts_with('v'));
+        assert_eq!(stdout, &SchemaValue::String(format!("{actual_version}\n")));
+    } else {
+        assert_eq!(version, &SchemaValue::String(expected_version.to_string()));
+        assert_eq!(stdout, &SchemaValue::String(expected_stdout.to_string()));
+    }
+    Ok(())
+}
+
+async fn invoke_cli_tool_version(
+    executor: &TestWorkerExecutor,
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    environment_state: &TestEnvironmentStateService,
+    caller_component: &golem_common::model::component::ComponentDto,
+    provider: &PrecompiledComponent,
+    package_name: &str,
+    tool_name: &str,
+    expected_version: &str,
+    expected_stdout: &str,
+) -> anyhow::Result<()> {
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", provider.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    let definitions = metadata
+        .tools
+        .iter()
+        .map(|definition| {
+            let name = definition.name().expect("CLI tool has a root command");
+            (ToolName::try_from(name).unwrap(), definition.clone())
+        })
+        .collect::<BTreeMap<_, _>>();
+    let mut deployment = deployment_state(
+        context.account_id,
+        provider_component.id,
+        provider_component.revision,
+        package_name,
+        "ToolStreamingCaller",
+        metadata.tools,
+    );
+    for bindings in deployment.tool_bindings.values_mut() {
+        for binding in bindings.values_mut() {
+            binding.filesystem_access = ToolFilesystemAccess::Allowed;
+        }
+    }
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment),
+    );
+
+    let agent_id = agent_id!("ToolStreamingCaller", format!("{tool_name}-version"));
+    let worker_id = executor.start_agent(&caller_component.id, agent_id).await?;
+    let fingerprint = executor.get_worker_metadata(&worker_id).await?.fingerprint;
+    let principal = Principal::GolemUser(GolemUserPrincipal {
+        account_id: context.account_id,
+    });
+    let result = invoke_filesystem_tool_success(
+        executor,
+        &worker_id,
+        fingerprint,
+        principal,
+        &definitions,
+        tool_name,
+        cli_tool_input(&["--version"]),
+    )
+    .await?;
+    assert_cli_result(result, expected_version, expected_stdout)
 }
 
 fn assert_filesystem_tool_error(
@@ -10421,6 +10609,67 @@ async fn builtin_filesystem_tools_have_expected_behavior(
         filesystem_tools,
     )
     .await?;
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("10m")]
+async fn builtin_javascript_and_typescript_tools_run_in_sidecars(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    #[tagged_as("javascript_tools")] javascript_tools: &PrecompiledComponent,
+    #[tagged_as("typescript_tools")] typescript_tools: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state.clone()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+
+    for (provider, package, tool, version, stdout) in [
+        (javascript_tools, "golem:javascript-tools", "node", "", ""),
+        (
+            javascript_tools,
+            "golem:javascript-tools",
+            "npm",
+            "10.9.9",
+            "10.9.9\n",
+        ),
+        (
+            typescript_tools,
+            "golem:typescript-tools",
+            "tsc",
+            "5.9.2",
+            "Version 5.9.2\n",
+        ),
+    ] {
+        invoke_cli_tool_version(
+            &executor,
+            deps,
+            &context,
+            &environment_state,
+            &caller_component,
+            provider,
+            package,
+            tool,
+            version,
+            stdout,
+        )
+        .await?;
+    }
     Ok(())
 }
 

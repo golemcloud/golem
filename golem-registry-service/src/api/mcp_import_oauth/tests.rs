@@ -53,7 +53,9 @@ async fn operator_and_runtime_routes_authenticate_and_target_exact_import() {
     };
     let root = &config.initial_accounts["root"];
     let mut tasks = JoinSet::new();
-    let services = Services::new(&config, &mut tasks).await.unwrap();
+    let services = Services::new_without_component_builtins(&config, &mut tasks)
+        .await
+        .unwrap();
     let auth = AuthCtx::system();
     let app = services
         .application_service

@@ -1,0 +1,46 @@
+# Schema for IDEA:
+# $schema: https://schema.golem.cloud/app/golem/1.6.0-dev.9/golem.schema.json
+manifestVersion: 1.6.0
+app: js-ts-tools
+
+components:
+  golem:javascript-tools:
+    dir: javascript-tools
+    templates: ts
+    build:
+      - command: npm run build:upstream
+        dir: ..
+        sources:
+          - ../bundle-entries/npm-cli.mjs
+          - ../build-patches.mjs
+          - ../rollup.config.mjs
+          - ../scripts/build-private-assets.mjs
+          - ../package-lock.json
+        targets:
+          - ../generated/npm-assets.ts
+  golem:typescript-tools:
+    dir: typescript-tools
+    templates: ts
+    build:
+      - command: npm run build:upstream
+        dir: ..
+        sources:
+          - ../bundle-entries/tsc.mjs
+          - ../compat/inspector/index.js
+          - ../rollup.config.mjs
+          - ../scripts/build-private-assets.mjs
+          - ../package-lock.json
+        targets:
+          - ../generated/typescript-assets.ts
+
+environments:
+  local:
+    server: local
+    # The optimized TypeScript preset runs Wizer pre-initialization. These large embedded bundles
+    # must not be shipped with a non-preinitialized preset.
+    componentPresets: optimized
+
+customCommands:
+  copy:
+    - command: cp golem-temp/agents/golem_javascript_tools.wasm ../javascript-tools.wasm
+    - command: cp golem-temp/agents/golem_typescript_tools.wasm ../typescript-tools.wasm

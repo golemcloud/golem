@@ -36,6 +36,7 @@ colored = { workspace = true }
 comfy-table = { workspace = true }
 futures = { workspace = true }
 heck = { workspace = true }
+hex = { workspace = true }
 humantime-serde = { workspace = true }
 itertools = { workspace = true }
 log = { workspace = true }

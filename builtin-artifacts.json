@@ -1,0 +1,20 @@
+{
+  "artifacts": {
+    "filesystem_tools": {
+      "url": "https://github.com/golemcloud/golem-builtins/releases/download/filesystem-tools-v0.3.0/filesystem-tools.wasm",
+      "sha256": "c6721b82e5a237a68cf9d65f611a9502b50cc450aad0fa345038523d3bf20e7f"
+    },
+    "javascript_tools": {
+      "url": "https://github.com/golemcloud/golem-builtins/releases/download/javascript-tools-v0.1.0/javascript-tools.wasm",
+      "sha256": "44b3fd4881e20fb4527b7c35ebd95b590ca03700696a06d9baa4e59d7d98de31"
+    },
+    "otlp_exporter": {
+      "url": "https://github.com/golemcloud/golem-builtins/releases/download/otlp-exporter-v1.5.3/otlp-exporter.wasm",
+      "sha256": "270616e75963892b6464811b5a4fc89b3564620d65568fdbb15926c91c8ff913"
+    },
+    "typescript_tools": {
+      "url": "https://github.com/golemcloud/golem-builtins/releases/download/typescript-tools-v0.1.0/typescript-tools.wasm",
+      "sha256": "ee9552c4d15dcf2927f71fe525636504d016aaee040efa47c25ee4e481d969dc"
+    }
+  }
+}

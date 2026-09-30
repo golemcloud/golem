@@ -18,6 +18,7 @@ pub mod account_usage;
 pub mod agent_secret;
 pub mod application;
 pub mod auth;
+pub mod builtin_artifact;
 pub mod builtin_plugin_provisioner;
 pub mod builtin_tool_provisioner;
 pub mod card;
