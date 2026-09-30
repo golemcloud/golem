@@ -962,7 +962,7 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
             .map_err(storage_failure)
     }
 
-    async fn copy_scope(
+    async fn copy_all(
         &self,
         from: &AgentSnapshots,
         to: &AgentSnapshots,

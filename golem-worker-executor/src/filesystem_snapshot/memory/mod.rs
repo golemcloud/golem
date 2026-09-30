@@ -223,7 +223,7 @@ impl FilesystemSnapshotStore for InMemorySnapshotStore {
         Ok(())
     }
 
-    async fn copy_scope(
+    async fn copy_all(
         &self,
         from: &AgentSnapshots,
         to: &AgentSnapshots,

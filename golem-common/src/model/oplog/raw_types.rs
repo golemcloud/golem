@@ -363,8 +363,10 @@ impl SpanData {
 pub struct FilesystemSnapshotName(Box<str>);
 
 impl FilesystemSnapshotName {
-    const PERIODIC_PREFIX: &'static str = "p-";
-    const UPDATE_PREFIX: &'static str = "u-";
+    /// The prefix of the name of a periodic snapshot.
+    pub const PERIODIC_PREFIX: &'static str = "p-";
+    /// The prefix of the name of a manual-update snapshot.
+    pub const UPDATE_PREFIX: &'static str = "u-";
 
     /// Makes a new name for a periodic snapshot from a random UUID. Make the name before you
     /// write the snapshot record that holds it.

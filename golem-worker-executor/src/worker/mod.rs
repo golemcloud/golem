@@ -11304,7 +11304,7 @@ impl RunningWorker {
                 // A write that fails ends the start with its error. A fenced write has already
                 // retired the agent, and the update stays pending for the shard's new owner.
                 match parent
-                    .add_and_commit_oplog(OplogEntry::failed_update(target, Some(message)))
+                    .add_and_commit_oplog(OplogEntry::failed_update(target, Some(message.into())))
                     .await
                 {
                     Ok(_) => restart,
@@ -11314,7 +11314,7 @@ impl RunningWorker {
             filesystem_snapshots::BaselineFailure::FailVisibly(message) => {
                 WorkerExecutorError::failed_to_resume_worker(
                     parent.owned_agent_id.agent_id.clone(),
-                    WorkerExecutorError::invalid_request(message),
+                    WorkerExecutorError::invalid_request(String::from(message)),
                 )
             }
             filesystem_snapshots::BaselineFailure::Reconstruction => {

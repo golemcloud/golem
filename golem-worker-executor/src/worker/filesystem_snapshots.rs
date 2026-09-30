@@ -889,13 +889,13 @@ pub(crate) enum BaselineFailure {
     /// records a failed update with the message and restarts on the current revision.
     RecordFailedUpdate {
         target: ComponentRevision,
-        message: String,
+        message: Box<str>,
     },
     /// The same conflict on a lost shard. Nothing is written.
     ShardLost,
     /// A manual-update baseline that does not restore, and whose error allows no retry. The
     /// start fails with the message as a visible cause.
-    FailVisibly(String),
+    FailVisibly(Box<str>),
     /// Any other failure of the reconstruction.
     Reconstruction,
 }
@@ -925,12 +925,12 @@ pub(crate) fn classify_baseline_failure(
             } else {
                 BaselineFailure::RecordFailedUpdate {
                     target: *target_revision,
-                    message: conflict.to_string(),
+                    message: conflict.to_string().into_boxed_str(),
                 }
             }
         }
         (BaselineKind::ManualUpdate { .. }, Error::Baseline(error)) if !error.retryable => {
-            BaselineFailure::FailVisibly(error.to_string())
+            BaselineFailure::FailVisibly(error.to_string().into_boxed_str())
         }
         _ => BaselineFailure::Reconstruction,
     }
@@ -1427,11 +1427,11 @@ mod tests {
                 BaselineFailure::Reconstruction,
                 BaselineFailure::RecordFailedUpdate {
                     target: ComponentRevision::new(3).unwrap(),
-                    message: conflict.to_string(),
+                    message: conflict.to_string().into_boxed_str(),
                 },
                 BaselineFailure::ShardLost,
                 BaselineFailure::Reconstruction,
-                BaselineFailure::FailVisibly(restore(false).to_string()),
+                BaselineFailure::FailVisibly(restore(false).to_string().into_boxed_str()),
                 BaselineFailure::Reconstruction,
                 BaselineFailure::Reconstruction,
             ]
@@ -2199,12 +2199,12 @@ mod tests {
             self.memory.delete_all(agent).await
         }
 
-        async fn copy_scope(
+        async fn copy_all(
             &self,
             from: &AgentSnapshots,
             to: &AgentSnapshots,
         ) -> Result<(), crate::filesystem_snapshot::SnapshotStoreError> {
-            self.memory.copy_scope(from, to).await
+            self.memory.copy_all(from, to).await
         }
     }
 

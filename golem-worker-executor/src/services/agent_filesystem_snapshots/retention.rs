@@ -16,12 +16,8 @@
 //! kind, and deletes the rest of its kind that are older than its own.
 
 use crate::filesystem_snapshot::{SnapshotInfo, SnapshotName};
+use golem_common::model::oplog::FilesystemSnapshotName;
 use std::time::Duration;
-
-/// The prefix of the name of a periodic snapshot.
-const PERIODIC_PREFIX: &str = "p-";
-/// The prefix of the name of a manual-update snapshot.
-const UPDATE_PREFIX: &str = "u-";
 /// The largest difference between the clocks of two executors that retention allows for. A
 /// snapshot whose time is this close to the time of the own snapshot is neither counted nor
 /// deleted, because another executor gave it its time.
@@ -39,10 +35,13 @@ pub(super) fn victims(
     keep: usize,
     kept: Option<&SnapshotName>,
 ) -> Box<[SnapshotName]> {
-    let prefix = if own.as_str().starts_with(UPDATE_PREFIX) {
-        UPDATE_PREFIX
+    let prefix = if own
+        .as_str()
+        .starts_with(FilesystemSnapshotName::UPDATE_PREFIX)
+    {
+        FilesystemSnapshotName::UPDATE_PREFIX
     } else {
-        PERIODIC_PREFIX
+        FilesystemSnapshotName::PERIODIC_PREFIX
     };
     let margin = u64::try_from(CLOCK_SKEW_MARGIN.as_millis()).unwrap_or(u64::MAX);
     let older_than = own_info.created_at.to_millis().saturating_sub(margin);

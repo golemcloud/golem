@@ -3955,7 +3955,7 @@ async fn a_copy_fails_when_a_prune_removed_an_index_file_that_it_listed() {
     let copying = tokio::spawn({
         let store = store.clone();
         let (from, to) = (from.clone(), to.clone());
-        async move { store.copy_scope(&from, &to).await }
+        async move { store.copy_all(&from, &to).await }
     });
     let held = eventually(|| {
         storage
@@ -4012,7 +4012,7 @@ async fn a_copy_leaves_out_a_snapshot_file_that_a_delete_removed_after_the_listi
     let (from, to) = (new_scope(), new_scope());
     save_each(&store, &from, &["p-1"]).await;
 
-    let copied = store.copy_scope(&from, &to).await;
+    let copied = store.copy_all(&from, &to).await;
 
     assert!(copied.is_ok(), "{copied:?}");
     assert_eq!(
@@ -4047,7 +4047,7 @@ async fn a_copy_held_at_a_storage_call_stops_at_shut_down_and_makes_no_later_cal
     let mut copying = tokio::spawn({
         let store = store.clone();
         let (from, to) = (from.clone(), to.clone());
-        async move { store.copy_scope(&from, &to).await }
+        async move { store.copy_all(&from, &to).await }
     });
     let held = eventually(|| {
         storage
@@ -4584,7 +4584,7 @@ async fn delete_scope_and_copy_scope_after_shut_down_give_storage() {
     store.shut_down().await;
 
     let deleted = store.delete_all(&scope).await;
-    let copied = store.copy_scope(&scope, &other).await;
+    let copied = store.copy_all(&scope, &other).await;
 
     assert!(
         deleted

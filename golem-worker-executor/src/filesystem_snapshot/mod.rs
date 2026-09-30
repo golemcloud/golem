@@ -55,7 +55,7 @@ impl AgentSnapshots {
     }
 }
 
-/// The name of one filesystem snapshot in a scope.
+/// The name of one filesystem snapshot of an agent.
 ///
 /// A name has 1 to 64 characters, and each character is an ASCII letter, an ASCII digit, `-` or
 /// `_`. So a name can be one segment of a path, and it can be a label.
@@ -123,11 +123,12 @@ pub(crate) struct SnapshotInfo {
 
 /// How a save with a parent finds the files that did not change since the parent.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[allow(dead_code)]
 pub(crate) enum ChangeDetection {
     /// Compares each file with the parent by size and modification time.
     SizeMtime,
-    /// Reads every file.
+    /// Reads every file. A save without a parent reads every file too, so production gives no
+    /// parent instead of this variant.
+    #[allow(dead_code)]
     Full,
 }
 
@@ -189,7 +190,7 @@ impl std::error::Error for SnapshotStoreError {
     }
 }
 
-/// Keeps directory trees as named filesystem snapshots, one scope for each agent.
+/// Keeps directory trees as named filesystem snapshots, apart for each agent.
 ///
 /// A snapshot keeps the relative path and the kind of each entry below the tree. It also keeps the
 /// content of a file, the target of a symlink, the permission bits and the modification time. It
@@ -197,10 +198,10 @@ impl std::error::Error for SnapshotStoreError {
 /// the tree. An entry that is not a regular file, a directory or a symlink is outside this
 /// contract.
 ///
-/// One scope can have more than one writer at the same time, and no method locks. A delete of one
+/// The snapshots of one agent can have more than one writer at the same time, and no method locks. A delete of one
 /// name never damages a restore of another name. A restore of a name that is deleted at the same
 /// time gives the whole tree, `NotFound` or `Corrupt`. No method blocks the async runtime. `save`
-/// costs the bytes that changed since the last snapshot in the scope, plus one metadata read for
+/// costs the bytes that changed since the last snapshot of the agent, plus one metadata read for
 /// each file. `restore` costs the size of the tree. `stat` and `list` cost a few small reads.
 #[async_trait]
 pub(crate) trait FilesystemSnapshotStore: Send + Sync {
@@ -210,7 +211,7 @@ pub(crate) trait FilesystemSnapshotStore: Send + Sync {
     /// it returns, the name resolves to the whole tree, on every executor. An interrupted save
     /// publishes nothing and leaves the name free for a new attempt. A save is interrupted when it
     /// fails, when its process stops, or when the caller drops the call before it returns. It can
-    /// leave data that no snapshot uses, which a later save or delete in the scope removes.
+    /// leave data that no snapshot uses, which a later save or delete of the agent removes.
     ///
     /// The tree must not change while the call runs. The store reads it and locks nothing.
     /// Symlinks are read and not followed. A name that is already in use gives `AlreadyExists`
@@ -218,18 +219,18 @@ pub(crate) trait FilesystemSnapshotStore: Send + Sync {
     /// `tree` that is not a directory.
     ///
     /// The result gives the number of files, the size of the tree, and the time of the
-    /// snapshot. That time is later than the time of each snapshot that the scope held when the
+    /// snapshot. That time is later than the time of each snapshot that the agent had when the
     /// save started.
     ///
     /// `parent` names the snapshot that the save can compare with. With `SizeMtime`, the store can
     /// keep the content of the parent for a file whose size and modification time equal those of
     /// the same path in the parent, and then it does not read that file. So such a file that
     /// changed can keep the content of the parent. A store can also read each file. With `Full`,
-    /// the save reads every file. A parent that the scope does not hold gives a save that reads
+    /// the save reads every file. A parent that the agent does not have gives a save that reads
     /// every file.
     async fn save(
         &self,
-        scope: &AgentSnapshots,
+        agent: &AgentSnapshots,
         name: &SnapshotName,
         tree: &Path,
         parent: Option<(&SnapshotName, ChangeDetection)>,
@@ -250,7 +251,7 @@ pub(crate) trait FilesystemSnapshotStore: Send + Sync {
     /// not a directory, or that is not empty gives `Destination`, and the call writes nothing.
     async fn restore(
         &self,
-        scope: &AgentSnapshots,
+        agent: &AgentSnapshots,
         name: &SnapshotName,
         into: &Path,
     ) -> Result<SnapshotInfo, SnapshotStoreError>;
@@ -262,48 +263,50 @@ pub(crate) trait FilesystemSnapshotStore: Send + Sync {
     /// deleted. A snapshot whose metadata fails an integrity check gives `Corrupt`.
     async fn stat(
         &self,
-        scope: &AgentSnapshots,
+        agent: &AgentSnapshots,
         name: &SnapshotName,
     ) -> Result<Option<SnapshotInfo>, SnapshotStoreError>;
 
-    /// Gives every complete snapshot in the scope with its info, newest first.
+    /// Gives every complete snapshot of the agent with its info, newest first.
     ///
     /// The order follows `created_at`. Snapshots with the same `created_at` come in the reverse
     /// order of their names. Unfinished saves, deleted snapshots, and snapshots whose metadata
-    /// fails an integrity check are absent. The scope can change immediately after the call, so
-    /// the result shows one moment.
+    /// fails an integrity check are absent. The snapshots can change immediately after the call,
+    /// so the result shows one moment.
     async fn list(
         &self,
-        scope: &AgentSnapshots,
+        agent: &AgentSnapshots,
     ) -> Result<Box<[(SnapshotName, SnapshotInfo)]>, SnapshotStoreError>;
 
     /// Deletes one snapshot.
     ///
     /// The name stops resolving immediately, so no later restore of it can succeed. The call is
     /// idempotent: an unknown name, or a name that is already deleted, gives success. Every other
-    /// snapshot in the scope continues to work, also when it shares data with the deleted one.
+    /// snapshot of the agent continues to work, also when it shares data with the deleted one.
     /// Storage comes back after a grace period, and a restore that is already in progress is not
     /// disturbed.
     async fn delete(
         &self,
-        scope: &AgentSnapshots,
+        agent: &AgentSnapshots,
         name: &SnapshotName,
     ) -> Result<(), SnapshotStoreError>;
 
-    /// Removes a scope with all that is in it, including its own metadata.
+    /// Removes every snapshot of the agent, with all their data and metadata.
     ///
-    /// After the call, the scope is as unused as it was before its first save, and a later save
-    /// creates it again. The call is idempotent and needs no list of names. A save into the scope
-    /// at the same time is not cancelled, and can make the scope live again.
-    async fn delete_all(&self, scope: &AgentSnapshots) -> Result<(), SnapshotStoreError>;
+    /// After the call, the snapshots of the agent are as unused as they were before its first
+    /// save, and a later save starts them again. The call is idempotent and needs no list of
+    /// names. A save for the agent at the same time is not cancelled, and can start the snapshots
+    /// of the agent again.
+    async fn delete_all(&self, agent: &AgentSnapshots) -> Result<(), SnapshotStoreError>;
 
-    /// Copies every snapshot of the scope `from` into the empty scope `to`.
+    /// Copies every snapshot of the agent `from` to the agent `to`, which has none.
     ///
-    /// The scope `to` then has the same names, and each name gives the same tree and the same
-    /// info. The scope `from` does not change. The two scopes are independent afterwards, so a
-    /// save or a delete in one has no effect on the other. Only the data that `to` does not have
-    /// moves. A copy into a scope that is not empty is outside this contract.
-    async fn copy_scope(
+    /// The agent `to` then has the same names, and each name gives the same tree and the same
+    /// info. The snapshots of `from` do not change. The snapshots of the two agents are
+    /// independent afterwards, so a save or a delete for one has no effect on the other. Only the
+    /// data that `to` does not have moves. A copy to an agent that has snapshots is outside this
+    /// contract.
+    async fn copy_all(
         &self,
         from: &AgentSnapshots,
         to: &AgentSnapshots,

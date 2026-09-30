@@ -571,7 +571,7 @@ impl AgentFilesystemSnapshots {
         to: &AgentSnapshots,
     ) -> Result<(), SnapshotStoreError> {
         match &self.core {
-            Some(core) => core.store.copy_scope(from, to).await,
+            Some(core) => core.store.copy_all(from, to).await,
             None => Ok(()),
         }
     }

@@ -887,7 +887,7 @@ async fn a_copied_scope_has_the_same_names_infos_and_trees(open: OpenStore) {
         .unwrap();
     let source = store.list(&from).await.unwrap();
 
-    store.copy_scope(&from, &to).await.unwrap();
+    store.copy_all(&from, &to).await.unwrap();
 
     assert_eq!(
         (
@@ -923,7 +923,7 @@ async fn copied_scopes_are_independent(open: OpenStore) {
         .save(&from, &name("p-2"), tree.path(), None)
         .await
         .unwrap();
-    store.copy_scope(&from, &to).await.unwrap();
+    store.copy_all(&from, &to).await.unwrap();
 
     store.delete(&from, &name("p-1")).await.unwrap();
     store
@@ -961,7 +961,7 @@ async fn a_copy_of_an_unused_scope_leaves_the_target_unused(open: OpenStore) {
         .await
         .unwrap();
 
-    store.copy_scope(&new_scope(), &to).await.unwrap();
+    store.copy_all(&new_scope(), &to).await.unwrap();
 
     assert_eq!(listed_names(&*store, &to).await, Vec::<String>::new());
 }

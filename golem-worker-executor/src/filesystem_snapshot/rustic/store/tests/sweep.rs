@@ -356,7 +356,7 @@ pub(super) async fn run_case(
 ) -> Result<(), String> {
     let scope = new_scope();
     store(shared.clone(), policy(LONG_DEADLINE, NEVER, Duration::ZERO))
-        .copy_scope(prepared, &scope)
+        .copy_all(prepared, &scope)
         .await
         .map_err(|error| format!("the copy of the prepared scope failed: {error}"))?;
     let deletes = [0, 1].map(|who| {

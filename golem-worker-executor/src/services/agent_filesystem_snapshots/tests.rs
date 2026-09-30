@@ -292,12 +292,12 @@ impl FilesystemSnapshotStore for ScriptedStore {
         self.memory.delete_all(agent).await
     }
 
-    async fn copy_scope(
+    async fn copy_all(
         &self,
         from: &AgentSnapshots,
         to: &AgentSnapshots,
     ) -> Result<(), SnapshotStoreError> {
-        self.memory.copy_scope(from, to).await
+        self.memory.copy_all(from, to).await
     }
 }
 

@@ -370,11 +370,11 @@ impl FilesystemSnapshotStore for TestFilesystemSnapshotStore {
         self.inner.delete_all(agent).await
     }
 
-    async fn copy_scope(
+    async fn copy_all(
         &self,
         from: &AgentSnapshots,
         to: &AgentSnapshots,
     ) -> Result<(), SnapshotStoreError> {
-        self.inner.copy_scope(from, to).await
+        self.inner.copy_all(from, to).await
     }
 }
