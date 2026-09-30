@@ -228,15 +228,12 @@ private[golem] object SchemaRpcCodec {
       throw new RuntimeException(s"UUID high half ${uuid.highBits} out of range [0, $MaxU64]")
     if (uuid.lowBits < 0 || uuid.lowBits > MaxU64)
       throw new RuntimeException(s"UUID low half ${uuid.lowBits} out of range [0, $MaxU64]")
-    SchemaValue.RecordValue(
-      List(SchemaValue.U64Value((uuid.highBits & MaxU64).toLong), SchemaValue.U64Value((uuid.lowBits & MaxU64).toLong))
-    )
+    SchemaValue.UuidValue(uuid)
   }
 
   def decodeUuidOrThrow(value: SchemaValue): Uuid = value match {
-    case SchemaValue.RecordValue(List(SchemaValue.U64Value(hi), SchemaValue.U64Value(lo))) =>
-      Uuid(BigInt(hi) & MaxU64, BigInt(lo) & MaxU64)
-    case other => throw new RuntimeException(s"Expected a uuid record (two u64 fields), got $other")
+    case SchemaValue.UuidValue(uuid) => uuid
+    case other                       => throw new RuntimeException(s"Expected a uuid value, got $other")
   }
 
   // --- arguments (constructor + method input) -------------------------------

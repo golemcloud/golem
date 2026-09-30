@@ -215,6 +215,14 @@ pub trait OplogService: Debug + Send + Sync {
         agent_mode: AgentMode,
     ) -> OplogIndex;
 
+    async fn try_get_last_index(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+    ) -> Result<OplogIndex, String> {
+        Ok(self.get_last_index(owned_agent_id, agent_mode).await)
+    }
+
     /// Deletes the agent's oplog, in every layer. With `expected_epoch` - the epoch the caller's
     /// own handle asserts - only while that is still the epoch recorded for the oplog and this
     /// executor recorded it: otherwise nothing is deleted and the delete is refused with
@@ -264,6 +272,14 @@ pub trait OplogService: Debug + Send + Sync {
 
     /// Checks whether the oplog exists in the oplog, without opening it
     async fn exists(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) -> bool;
+
+    async fn try_exists(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+    ) -> Result<bool, String> {
+        Ok(self.exists(owned_agent_id, agent_mode).await)
+    }
 
     /// Scans the oplog for all workers belonging to the given component, in a paginated way.
     ///
@@ -672,18 +688,19 @@ pub struct OplogFence {
     pub actual_epoch: Option<ShardEpoch>,
 }
 
-/// Why an oplog write failed without taking the executor down.
+/// Why an oplog operation failed without taking the executor down.
 ///
 /// A `Fenced` write is not a storage failure - the storage is healthy and refused the write on
 /// purpose - so it is returned rather than retried or panicked on, and the worker that hit it is
-/// stopped and left to the shard's new owner. A storage failure never reaches this type: it keeps
-/// its fail-stop semantics inside the oplog implementation. `Payload` is an entry whose payload the
-/// caller-supplied builder could not produce - it failed to serialize, or was too large - and the
-/// add failures tests inject.
+/// stopped and left to the shard's new owner. Storage failures on execution-critical reads and
+/// writes keep their fail-stop semantics inside the oplog implementation. Fallible archive
+/// maintenance returns `Maintenance`, allowing the fenced cleanup to be retried without stopping
+/// the executor. `Payload` is an entry whose payload the caller-supplied builder could not produce.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum OplogError {
     Fenced(OplogFence),
     Payload(String),
+    Maintenance(String),
 }
 
 impl From<String> for OplogError {
@@ -701,6 +718,7 @@ impl From<OplogError> for WorkerExecutorError {
                 fence.actual_epoch.map(|epoch| epoch.0),
             ),
             OplogError::Payload(details) => WorkerExecutorError::runtime(details),
+            OplogError::Maintenance(details) => WorkerExecutorError::runtime(details),
         }
     }
 }
@@ -719,6 +737,7 @@ impl Display for OplogError {
                     .unwrap_or_else(|| "none".to_string())
             ),
             OplogError::Payload(details) => write!(f, "oplog payload error: {details}"),
+            OplogError::Maintenance(details) => write!(f, "oplog maintenance error: {details}"),
         }
     }
 }
@@ -830,6 +849,10 @@ pub trait Oplog: Any + Debug + Send + Sync {
     /// Returns the number of dropped entries.
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> u64;
 
+    async fn try_drop_prefix(&self, last_dropped_id: OplogIndex) -> Result<u64, String> {
+        Ok(self.drop_prefix(last_dropped_id).await)
+    }
+
     /// Commits the buffered entries to the oplog
     async fn commit(
         &self,
@@ -838,6 +861,10 @@ pub trait Oplog: Any + Debug + Send + Sync {
 
     /// Returns the current oplog index
     async fn current_oplog_index(&self) -> OplogIndex;
+
+    async fn try_current_oplog_index(&self) -> Result<OplogIndex, String> {
+        Ok(self.current_oplog_index().await)
+    }
 
     /// Returns actor-ordered lifecycle metadata including buffered raw appends. Absence is proven
     /// through the returned watermark; storage failures must not be reported as absence.
@@ -874,6 +901,14 @@ pub trait Oplog: Any + Debug + Send + Sync {
         self.read_exact(oplog_index, n).await
     }
 
+    async fn try_read_source(
+        &self,
+        oplog_index: OplogIndex,
+        n: u64,
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, String> {
+        Ok(self.read_source(oplog_index, n).await)
+    }
+
     /// Reads the entry at the given oplog index.
     async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
         self.read_exact(oplog_index, 1)
@@ -886,6 +921,10 @@ pub trait Oplog: Any + Debug + Send + Sync {
 
     /// Gets the total number of entries in the oplog
     async fn length(&self) -> u64;
+
+    async fn try_length(&self) -> Result<u64, String> {
+        Ok(self.length().await)
+    }
 
     /// Adds an entry to the oplog and immediately commits it
     async fn add_and_commit(&self, entry: OplogEntry) -> Result<OplogIndex, OplogError> {

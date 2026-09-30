@@ -867,7 +867,11 @@ fn matcher_matches_secret_reveal_request_payload() {
     });
 
     assert!(entry.matches(&Query::parse("reveal").unwrap()));
-    assert!(entry.matches(&Query::parse("request.secret_id.low-bits:291").unwrap()));
+    assert!(
+        entry.matches(
+            &Query::parse("request.secret_id:00000000-0000-0000-0000-000000000123").unwrap()
+        )
+    );
 }
 
 #[test]
@@ -989,7 +993,9 @@ fn matcher_matches_secret_revealed_response_payload() {
         span_attributes: None,
     });
 
-    assert!(entry.matches(&Query::parse("response.secret_id.low-bits:291").unwrap()));
+    assert!(entry.matches(
+        &Query::parse("response.secret_id:00000000-0000-0000-0000-000000000123").unwrap()
+    ));
     assert!(entry.matches(&Query::parse("response.pinned_revision:7").unwrap()));
     assert!(entry.matches(&Query::parse("response.audit.config_key:password").unwrap()));
 }

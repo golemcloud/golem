@@ -28,7 +28,7 @@
 
 use crate::schema::graph::{SchemaGraph, SchemaTypeDef, TypedSchemaValue};
 use crate::schema::metadata::{MetadataEnvelope, TypeId};
-use crate::schema::schema_type::{NamedFieldType, SchemaType, VariantCaseType};
+use crate::schema::schema_type::{SchemaType, VariantCaseType};
 use crate::schema::schema_value::{
     BinaryValuePayload, DurationValuePayload, SchemaValue, TextValuePayload, VariantValuePayload,
 };
@@ -454,6 +454,7 @@ pub fn value_kind(v: &SchemaValue) -> &'static str {
         SchemaValue::Binary(_) => "binary",
         SchemaValue::Path { .. } => "path",
         SchemaValue::Url { .. } => "url",
+        SchemaValue::Uuid(_) => "uuid",
         SchemaValue::Datetime { .. } => "datetime",
         SchemaValue::Duration(_) => "duration",
         SchemaValue::Quantity(_) => "quantity",
@@ -1069,74 +1070,24 @@ impl FromSchema for std::path::PathBuf {
     }
 }
 
-// A `uuid::Uuid` is modelled as a nominal record of two `u64`s (the high and
-// low 64-bit halves).
 impl IntoSchema for uuid::Uuid {
     fn type_id() -> TypeId {
         TypeId::new("uuid.Uuid")
     }
-    fn register_in(builder: &mut SchemaBuilder) -> SchemaType {
-        let id = <Self as IntoSchema>::type_id();
-        if builder.is_registered(&id) {
-            return SchemaType::ref_to(id);
-        }
-        builder.reserve(id.clone());
-        let body = SchemaType::record(vec![
-            NamedFieldType {
-                name: "high-bits".to_string(),
-                body: SchemaType::u64(),
-                metadata: MetadataEnvelope::default(),
-            },
-            NamedFieldType {
-                name: "low-bits".to_string(),
-                body: SchemaType::u64(),
-                metadata: MetadataEnvelope::default(),
-            },
-        ]);
-        builder.commit(
-            id.clone(),
-            Some("uuid".to_string()),
-            MetadataEnvelope::default(),
-            body,
-        );
-        SchemaType::ref_to(id)
+    fn register_in(_builder: &mut SchemaBuilder) -> SchemaType {
+        SchemaType::uuid()
     }
     fn to_value(&self) -> SchemaValue {
-        let (hi, lo) = self.as_u64_pair();
-        SchemaValue::Record {
-            fields: vec![SchemaValue::U64(hi), SchemaValue::U64(lo)],
-        }
+        SchemaValue::Uuid(*self)
     }
 }
 
 impl FromSchema for uuid::Uuid {
     fn from_value(v: &SchemaValue) -> Result<Self, FromSchemaError> {
         match v {
-            SchemaValue::Record { fields } if fields.len() == 2 => {
-                let hi = match &fields[0] {
-                    SchemaValue::U64(x) => *x,
-                    other => {
-                        return Err(FromSchemaError::shape_mismatch(
-                            "u64",
-                            value_kind(other),
-                            "Uuid.high-bits",
-                        ));
-                    }
-                };
-                let lo = match &fields[1] {
-                    SchemaValue::U64(x) => *x,
-                    other => {
-                        return Err(FromSchemaError::shape_mismatch(
-                            "u64",
-                            value_kind(other),
-                            "Uuid.low-bits",
-                        ));
-                    }
-                };
-                Ok(uuid::Uuid::from_u64_pair(hi, lo))
-            }
+            SchemaValue::Uuid(value) => Ok(*value),
             other => Err(FromSchemaError::shape_mismatch(
-                "record",
+                "uuid",
                 value_kind(other),
                 "Uuid",
             )),
