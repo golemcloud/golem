@@ -126,17 +126,24 @@ pub(super) struct RunningJob {
     pub(super) retention_stop: CancellationToken,
 }
 
+/// An admitted job.
+#[derive(Debug)]
+pub(super) struct Admitted {
+    pub(super) id: JobId,
+    /// Stops the deletes of the job after its save. It is a child of the stop of the job.
+    pub(super) retention_stop: CancellationToken,
+}
+
 /// Admits a job with `name` for `agent`, in the order room, delete of all snapshots, running job.
-/// `stop` stops the job, `retention_stop`, a child of `stop`, stops its deletes after its save,
-/// and `room` tells whether the volume has room for a capture.
+/// `stop` stops the job, and `room` tells whether the volume has room for a capture. The stop of
+/// the deletes of the job is made here, as a child of `stop`.
 pub(super) fn admit(
     state: &mut State,
     agent: &AgentSnapshots,
     name: &FilesystemSnapshotName,
     stop: CancellationToken,
-    retention_stop: CancellationToken,
     room: bool,
-) -> Result<JobId, Refusal> {
+) -> Result<Admitted, Refusal> {
     let running = state.jobs.get(agent).map(|job| RunningJob {
         id: job.id,
         retention_stop: job.retention_stop.clone(),
@@ -155,6 +162,7 @@ pub(super) fn admit(
     }
     state.last_job += 1;
     let id = state.last_job;
+    let retention_stop = stop.child_token();
     state.jobs.insert(
         agent.clone(),
         Job {
@@ -162,11 +170,11 @@ pub(super) fn admit(
             name: name.clone(),
             phase: JobPhase::Admitted,
             stop,
-            retention_stop,
+            retention_stop: retention_stop.clone(),
             waiters: 0,
         },
     );
-    Ok(id)
+    Ok(Admitted { id, retention_stop })
 }
 
 /// The job `id` has started saving: it got a slot of the uploads. The phase only moves forward.
@@ -505,9 +513,7 @@ mod tests {
         name: &FilesystemSnapshotName,
         room: bool,
     ) -> Result<JobId, Refusal> {
-        let stop = CancellationToken::new();
-        let retention_stop = stop.child_token();
-        admit(state, agent, name, stop, retention_stop, room)
+        admit(state, agent, name, CancellationToken::new(), room).map(|admitted| admitted.id)
     }
 
     fn admitted(state: &mut State, agent: &AgentSnapshots, name: &FilesystemSnapshotName) -> JobId {
@@ -881,17 +887,16 @@ mod tests {
     fn a_refused_admission_carries_the_retention_stop_of_the_running_job() {
         let mut state = State::default();
         let agent = agent_snapshots("retention-stop");
+        let other = agent_snapshots("stopped-with-the-job");
         let name = FilesystemSnapshotName::periodic();
         let stop = CancellationToken::new();
-        let retention_stop = stop.child_token();
-        let admitted = admit(
-            &mut state,
-            &agent,
-            &name,
-            stop.clone(),
-            retention_stop.clone(),
-            true,
-        );
+        let other_stop = CancellationToken::new();
+        let retention_stop = admit(&mut state, &agent, &name, stop.clone(), true)
+            .map(|admitted| admitted.retention_stop)
+            .ok();
+        let other_retention_stop = admit(&mut state, &other, &name, other_stop.clone(), true)
+            .map(|admitted| admitted.retention_stop)
+            .ok();
 
         let refusal = try_admit(&mut state, &agent, &name, true).err();
         if let Some(running) = refusal
@@ -900,14 +905,15 @@ mod tests {
         {
             running.retention_stop.cancel();
         }
+        other_stop.cancel();
 
-        assert!(admitted.is_ok());
         assert_eq!(
             refusal.map(|refusal| refusal.skip),
             Some(SnapshotSkip::UploadInFlight)
         );
-        assert!(retention_stop.is_cancelled());
+        assert!(retention_stop.is_some_and(|token| token.is_cancelled()));
         assert!(!stop.is_cancelled());
+        assert!(other_retention_stop.is_some_and(|token| token.is_cancelled()));
     }
 
     fn running(id: JobId) -> RunningJob {

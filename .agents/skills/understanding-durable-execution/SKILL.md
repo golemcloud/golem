@@ -717,8 +717,8 @@ Which history the new instance replays is decided in `Worker` construction (`wor
 `create_instance`, with `worker/snapshot_selection.rs::StartSelection::of`). The status keeps two
 automatic snapshot records: the last one, `last_automatic_snapshot` (an `AutomaticSnapshot` with
 its index, time, revision, filesystem snapshot name and confirmation), and
-`previous_usable_automatic_snapshot`, the newest usable one before it. A record is usable when it has no filesystem snapshot name, or when a
-`SnapshotConfirmed` entry confirms its name. A start takes the first of the two that is usable, has
+`previous_usable_automatic_snapshot`, the newest usable one before it. A record is usable when it
+has no filesystem snapshot name, or when a `SnapshotConfirmed` entry confirms its name. A start takes the first of the two that is usable, has
 the current revision, is not in the rejected set, is not unavailable for this start, and has no
 name when filesystem snapshots are disabled. It skips `INITIAL+1..=snapshot_idx`. No automatic
 record is used while an update is pending. Without a selected record, the last manual-update
@@ -761,11 +761,20 @@ confirmed snapshot, the record reuses its name and the confirmation comes with i
 (`Snapshot` then `SnapshotConfirmed`); the status then keeps the older usable record as the
 fallback. A manual update uploads its filesystem snapshot before it writes `PendingUpdate`
 (`worker/filesystem_snapshots.rs::update_snapshot`). When a
-periodic upload of the agent runs, the update waits for it to decide and end once, for at most
-`confirmation_wait`, and asks again; another refusal fails the update. A terminal interrupt ends
+periodic upload of the agent runs, the update first stops the deletes that the running job makes
+after its save (`retention_stop`, a child of the job's stop); the job still ends its save and its
+confirmation. The update then waits once for the end of the job, for at most `confirmation_wait`,
+and asks again; another refusal fails the update. A terminal interrupt ends
 that wait, or the upload of the update, and fails the update. The delete of the older update
 snapshots (`UpdateRetention::delete_older_snapshots`) runs after `PendingUpdate` commits, and it
 never deletes the snapshot of the last successful manual update, because a start restores that baseline without a fallback.
+
+Each store operation of the service holds a slot of `max_concurrent_uploads` while it runs: each
+store attempt of an upload (the `save`, and the `stat` of its own name after `AlreadyExists`),
+each delete of the older snapshots through its retries, each delete of a superseded snapshot, and
+each item of the clean-up queue. An upload gives its slot back before the wait for its next
+attempt; the discard of the capture and the confirmation hold no slot. A start waits only for a
+job that has started saving (it got its first slot) and has not decided.
 
 The upload job uploads the snapshot (`job.rs::upload`), then asks the worker for a confirmation
 (`Worker::confirm_as`, with the pure `worker/filesystem_snapshots.rs::owner_gate`). The worker
@@ -774,7 +783,8 @@ that checks that the record is still the status candidate. Otherwise the answer 
 store. `Superseded` (an update or a revert replaced the record) deletes it (`delete_superseded`); `Confirmed`
 deletes the older snapshots of its kind (`delete_older_snapshots`). A stop never waits for
 an upload. A shutdown ends a job also during its deletes, and so does a call of
-`AgentFilesystemSnapshots::delete_all_snapshots` for the agent of the job.
+`AgentFilesystemSnapshots::delete_all_snapshots` for the agent of the job, and a manual update of
+the agent ends its deletes.
 
 The next start confirms instead (`Worker::confirm_filesystem_snapshot_before_start`, called from
 `WaitingWorker::new` before it takes permits, with `AgentFilesystemSnapshots::prepare_start` for

@@ -28,7 +28,6 @@ use golem_common::model::oplog::FilesystemSnapshotName;
 use std::future::Future;
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 use tokio::sync::{OwnedSemaphorePermit, watch};
 
@@ -48,24 +47,32 @@ enum UploadOutcome {
 /// store call leaves the gauge right.
 struct UploadSlot {
     _permit: OwnedSemaphorePermit,
-    attempts: Arc<AtomicUsize>,
+    #[cfg(test)]
+    attempts: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl UploadSlot {
-    fn new(permit: OwnedSemaphorePermit, attempts: &Arc<AtomicUsize>) -> Self {
-        attempts.fetch_add(1, Ordering::SeqCst);
+    fn new(permit: OwnedSemaphorePermit, core: &Core) -> Self {
         crate::metrics::filesystem_snapshots::inc_uploads_in_progress();
+        #[cfg(test)]
+        core.upload_attempts
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        #[cfg(not(test))]
+        let _ = core;
         Self {
             _permit: permit,
-            attempts: Arc::clone(attempts),
+            #[cfg(test)]
+            attempts: Arc::clone(&core.upload_attempts),
         }
     }
 }
 
 impl Drop for UploadSlot {
     fn drop(&mut self) {
-        self.attempts.fetch_sub(1, Ordering::SeqCst);
         crate::metrics::filesystem_snapshots::dec_uploads_in_progress();
+        #[cfg(test)]
+        self.attempts
+            .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
     }
 }
 
@@ -247,7 +254,7 @@ async fn upload(
         || ticket.stop().is_cancelled() || futures::FutureExt::now_or_never(stop.clone()).is_some();
     let attempt = || async {
         let slot = match Arc::clone(&core.uploads).acquire_owned().await {
-            Ok(permit) => UploadSlot::new(permit, &core.upload_attempts),
+            Ok(permit) => UploadSlot::new(permit, core),
             Err(_) => {
                 // The slots are gone: the job stops, and the `select!` below ends the upload.
                 ticket.stop().cancel();

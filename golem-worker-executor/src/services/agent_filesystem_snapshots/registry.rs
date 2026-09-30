@@ -98,17 +98,10 @@ impl JobTicket {
         stop: CancellationToken,
         room: bool,
     ) -> Result<Self, Refusal> {
-        let retention_stop = stop.child_token();
-        let id = registry.apply(Transition::Admit, |state| {
-            rules::admit(
-                state,
-                agent,
-                name,
-                stop.clone(),
-                retention_stop.clone(),
-                room,
-            )
-        })?;
+        let rules::Admitted { id, retention_stop } = registry
+            .apply(Transition::Admit, |state| {
+                rules::admit(state, agent, name, stop.clone(), room)
+            })?;
         Ok(Self {
             registry: Arc::clone(registry),
             agent: agent.clone(),

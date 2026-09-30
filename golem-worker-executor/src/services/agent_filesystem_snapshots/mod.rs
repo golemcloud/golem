@@ -317,8 +317,9 @@ struct Core {
     shutdown: CancellationToken,
     /// The upload jobs, so that a shutdown can wait for them.
     jobs: TaskTracker,
-    /// The store attempts of uploads that hold a slot now. The gauge of the metrics adds these of
-    /// every service.
+    /// The store attempts of the uploads of this service that hold a slot now: a count of the
+    /// same attempts as the gauge of the metrics, which all services of the process share.
+    #[cfg(test)]
     upload_attempts: Arc<std::sync::atomic::AtomicUsize>,
 }
 
@@ -391,6 +392,7 @@ impl AgentFilesystemSnapshots {
                 cleanup,
                 shutdown,
                 jobs,
+                #[cfg(test)]
                 upload_attempts: Arc::default(),
             })),
         }
@@ -419,8 +421,9 @@ impl AgentFilesystemSnapshots {
     /// Asks for an upload of a manual-update snapshot of the agent `agent`. When an upload of
     /// the agent runs, the call stops the deletes that the running job makes after its save, waits
     /// once for the end of the job, for at most `confirmation_wait`, and asks again. The running
-    /// job still ends its save and its confirmation. A shutdown ends the wait like its limit does, and a terminal interrupt that
-    /// `interrupt` reports ends it with [`UpdateRefusal::Interrupted`].
+    /// job still ends its save and its confirmation. A shutdown ends the wait like its limit does,
+    /// and a terminal interrupt that `interrupt` reports ends it with
+    /// [`UpdateRefusal::Interrupted`].
     pub(crate) async fn admit_update(
         &self,
         agent: &AgentSnapshots,
