@@ -925,7 +925,7 @@ async fn a_crash_during_an_upload_restarts_with_the_tree_of_a_run_without_a_cras
         InvocationShape {
             not_finished_once: Vec::new(),
             starts_without_terminal: Vec::new(),
-            durable_calls_after_the_last_finished: Vec::new(),
+            durable_calls_between_invocations: Vec::new(),
             applied: operations.len(),
         }
     );
@@ -939,9 +939,10 @@ struct InvocationShape {
     not_finished_once: Vec<String>,
     /// The index of each durable-call `Start` without an `End` or a `Cancelled`.
     starts_without_terminal: Vec<u64>,
-    /// The index of each durable-call `Start`, `End` or `Cancelled` after the last
-    /// `AgentInvocationFinished`.
-    durable_calls_after_the_last_finished: Vec<u64>,
+    /// The index of each durable-call `Start`, `End` or `Cancelled` in a gap between
+    /// invocations: after an `AgentInvocationFinished` and before the next
+    /// `AgentInvocationStarted`, or the end.
+    durable_calls_between_invocations: Vec<u64>,
     /// The number of finished `apply` invocations.
     applied: usize,
 }
@@ -977,11 +978,6 @@ fn invocation_shape(oplog: &[OplogEntry]) -> InvocationShape {
             _ => None,
         })
         .collect::<std::collections::HashSet<_>>();
-    let last_finished = indexed()
-        .filter(|(_, entry)| matches!(entry, OplogEntry::AgentInvocationFinished { .. }))
-        .map(|(index, _)| index)
-        .last()
-        .unwrap_or(0);
     InvocationShape {
         not_finished_once: finished
             .into_iter()
@@ -994,17 +990,23 @@ fn invocation_shape(oplog: &[OplogEntry]) -> InvocationShape {
             })
             .map(|(index, _)| index)
             .collect(),
-        durable_calls_after_the_last_finished: indexed()
-            .filter(|(index, entry)| {
-                *index > last_finished
+        durable_calls_between_invocations: indexed()
+            .scan(false, |between, (index, entry)| {
+                let durable_call = *between
                     && matches!(
                         entry,
                         OplogEntry::Start { .. }
                             | OplogEntry::End { .. }
                             | OplogEntry::Cancelled { .. }
-                    )
+                    );
+                match entry {
+                    OplogEntry::AgentInvocationFinished { .. } => *between = true,
+                    OplogEntry::AgentInvocationStarted { .. } => *between = false,
+                    _ => {}
+                }
+                Some(durable_call.then_some(index))
             })
-            .map(|(index, _)| index)
+            .flatten()
             .collect(),
         applied: oplog
             .iter()
