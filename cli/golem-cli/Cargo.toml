@@ -134,6 +134,7 @@ axum = { workspace = true }
 expectrl = { workspace = true }
 goldenfile = { workspace = true }
 golem-common = { workspace = true, features = ["proptest"] }
+golem-native-tool = { workspace = true }
 log = { workspace = true }
 poem = { workspace = true, features = ["rustls"] }
 pretty_assertions = { workspace = true }

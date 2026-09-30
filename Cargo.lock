@@ -3750,6 +3750,7 @@ dependencies = [
  "golem-client",
  "golem-common",
  "golem-mcp-import",
+ "golem-native-tool",
  "golem-schema",
  "heck",
  "http 1.5.0",

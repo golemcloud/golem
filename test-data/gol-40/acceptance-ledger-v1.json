@@ -341,8 +341,15 @@
     },
     {
       "id": "SOURCE-NATIVE",
-      "status": "new integration boundary",
-      "remaining": "Generate, compile, and invoke ambient native clients in all five languages without a local provider selection."
+      "status": "new assertion",
+      "existingCoverage": [
+        {
+          "test": "rust_ambient_native_client_executes_through_golem",
+          "file": "cli/golem-cli/tests/app/agents.rs",
+          "oracle": "A deterministic catalog fixture shared by registry and executor is enabled only for the subprocess test; the test separately inspects the generated client artifact and absence of a local provider, then asserts hand-authored structured success, declared error, finite stdout/result tuple, granted-versus-ungranted authorization, and middleware-transformed output from CLI invocations through Golem."
+        }
+      ],
+      "remaining": "Add the same ambient native compile-and-invoke boundary for TypeScript, Scala, MoonBit, and Effect."
     },
     {
       "id": "SOURCE-MCP",
@@ -351,7 +358,7 @@
         {
           "test": "rust_mcp_clients_use_registry_credentials_and_replay_offline",
           "file": "cli/golem-cli/tests/app/mcp_import.rs",
-          "oracle": "Independent Axum MCP stub records headers, arguments, calls, and idempotency keys; generated source and offline CLI results are inspected separately."
+          "oracle": "Independent Axum MCP stub records headers, arguments, calls, and idempotency keys; generated source, cache markers, refreshed schema output, inaccessible-source diagnostics, and offline CLI results are inspected separately."
         },
         {
           "test": "dynamic_mcp_uses_effective_middleware_metadata_and_replays_pinned_host_leaf_offline",
@@ -399,9 +406,14 @@
           "test": "denied_bridge_feedback_does_not_invalidate_cache",
           "file": "golem-registry-service/src/services/mcp_import/tests.rs",
           "oracle": "Independent upstream request count remains one and cached name remains unchanged."
+        },
+        {
+          "test": "rust_mcp_clients_use_registry_credentials_and_replay_offline",
+          "file": "cli/golem-cli/tests/app/mcp_import.rs",
+          "oracle": "Independent upstream listing/call records, serialized bridge markers, generated source, and a generation-2 result prove unchanged cache reuse, explicit MCP schema refresh, recompilation, deployment, invocation of the new contract, and preservation of the last good client after an inaccessible refresh."
         }
       ],
-      "remaining": "Add one real rebuild/execute scenario for native catalog and MCP schema changes, cache hit/miss behavior, failures, and invocation of the new contract."
+      "remaining": "Extend the real rebuild/execute scenario with a native catalog metadata change; MCP cache hit/miss, inaccessible-source failure, regeneration, and invocation of the new MCP contract are covered."
     },
     {
       "id": "MCP-EXPORT-1",

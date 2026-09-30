@@ -1112,6 +1112,13 @@ impl TestContext {
         }
     }
 
+    fn enable_native_conformance_tool(&mut self) {
+        self.add_env_var(
+            golem_native_tool::conformance_fixture::TEST_FIXTURE_ENV,
+            "1",
+        );
+    }
+
     fn cd<P: AsRef<Path>>(&mut self, path: P) {
         self.working_dir = self.working_dir.join(path.as_ref());
     }

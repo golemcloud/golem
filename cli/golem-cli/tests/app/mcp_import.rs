@@ -5,6 +5,7 @@ use golem_cli::{fs, versions};
 use indoc::{formatdoc, indoc};
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use test_r::{test, timeout};
 
@@ -268,15 +269,18 @@ async fn exported_native_tool_roundtrips_through_import_middleware_and_replays_o
 #[timeout("15 minutes")]
 async fn rust_mcp_clients_use_registry_credentials_and_replay_offline() {
     let calls = Arc::new(Mutex::new(Vec::<(String, Value, String)>::new()));
-    let listings = Arc::new(Mutex::new(BTreeSet::<String>::new()));
+    let listings = Arc::new(Mutex::new(Vec::<String>::new()));
+    let refreshed_schema = Arc::new(AtomicBool::new(false));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let handler = axum::routing::post({
         let calls = calls.clone();
         let listings = listings.clone();
+        let refreshed_schema = refreshed_schema.clone();
         move |uri: Uri, headers: HeaderMap, axum::Json(body): axum::Json<Value>| {
             let calls = calls.clone();
             let listings = listings.clone();
+            let refreshed_schema = refreshed_schema.clone();
             async move {
                 let expected_auth = match uri.path() {
                     "/bearer" => "Bearer test-mcp-token",
@@ -292,8 +296,8 @@ async fn rust_mcp_clients_use_registry_credentials_and_replay_offline() {
                 }
                 let result = match body["method"].as_str() {
                     Some("tools/list") => {
-                        listings.lock().unwrap().insert(uri.path().to_string());
-                        json!({"tools":[{
+                        listings.lock().unwrap().push(uri.path().to_string());
+                        let mut tools = vec![json!({
                             "name":"lookup",
                             "inputSchema":{
                                 "type":"object", "properties":{"query":{"type":"string"},"limit":{"type":"integer"}},
@@ -303,21 +307,33 @@ async fn rust_mcp_clients_use_registry_credentials_and_replay_offline() {
                                 "type":"object", "properties":{"answer":{"type":"string"},"score":{"type":"integer"}},
                                 "required":["answer","score"], "additionalProperties":false
                             }
-                        }]})
+                        })];
+                        if uri.path() == "/bearer" && refreshed_schema.load(Ordering::SeqCst) {
+                            tools.push(json!({
+                                "name":"fresh",
+                                "inputSchema":{
+                                    "type":"object", "properties":{"token":{"type":"string"}},
+                                    "required":["token"], "additionalProperties":false
+                                },
+                                "outputSchema":{
+                                    "type":"object", "properties":{"generation":{"type":"integer"}},
+                                    "required":["generation"], "additionalProperties":false
+                                }
+                            }));
+                        }
+                        json!({"tools":tools})
                     }
                     Some("tools/call") => {
-                        if body["params"]["name"] != "lookup"
+                        let tool_name = body["params"]["name"].as_str();
+                        if !matches!(tool_name, Some("lookup" | "fresh"))
                             || headers
                                 .get("mcp-name")
                                 .and_then(|value| value.to_str().ok())
-                                != Some("lookup")
+                                != tool_name
                         {
                             return StatusCode::BAD_REQUEST.into_response();
                         }
                         let arguments = body["params"]["arguments"].clone();
-                        let Some(query) = arguments["query"].as_str().map(str::to_owned) else {
-                            return StatusCode::BAD_REQUEST.into_response();
-                        };
                         let Some(key) = headers
                             .get("idempotency-key")
                             .and_then(|value| value.to_str().ok())
@@ -325,10 +341,25 @@ async fn rust_mcp_clients_use_registry_credentials_and_replay_offline() {
                         else {
                             return StatusCode::BAD_REQUEST.into_response();
                         };
-                        calls
-                            .lock()
-                            .unwrap()
-                            .push((uri.path().into(), arguments, key.into()));
+                        calls.lock().unwrap().push((
+                            uri.path().into(),
+                            arguments.clone(),
+                            key.into(),
+                        ));
+                        if tool_name == Some("fresh") {
+                            if arguments["token"] != "second-contract" {
+                                return StatusCode::BAD_REQUEST.into_response();
+                            }
+                            return axum::Json(json!({
+                                "jsonrpc":"2.0",
+                                "id":body["id"],
+                                "result":{"structuredContent":{"generation":2},"content":[]}
+                            }))
+                            .into_response();
+                        }
+                        let Some(query) = arguments["query"].as_str().map(str::to_owned) else {
+                            return StatusCode::BAD_REQUEST.into_response();
+                        };
                         let content = match query.as_str() {
                             "empty" => json!([]),
                             "binary" => {
@@ -508,12 +539,37 @@ async fn rust_mcp_clients_use_registry_credentials_and_replay_offline() {
         assert!(!generated.contains(&format!("127.0.0.1:{port}")));
     }
     assert_eq!(
-        *listings.lock().unwrap(),
+        listings
+            .lock()
+            .unwrap()
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>(),
         BTreeSet::from(["/bearer".into(), "/basic".into()])
     );
     assert!(
         calls.lock().unwrap().is_empty(),
         "codegen only discovers tools"
+    );
+    let marker_before_cache_hit = bridge_marker_bytes(ctx.cwd_path());
+    let generated_before_cache_hit = generated_source_text(
+        &ctx.cwd_path_join("golem-temp/bridge-sdk/rust/internal/bearer-lookup-tool-guest-client"),
+    );
+    let cached_build = ctx.cli([flag::YES, cmd::BUILD]).await;
+    assert!(cached_build.success_or_dump());
+    assert_eq!(
+        bridge_marker_bytes(ctx.cwd_path()),
+        marker_before_cache_hit,
+        "an unchanged build must retain the same bridge marker"
+    );
+    assert_eq!(
+        generated_source_text(
+            &ctx.cwd_path_join(
+                "golem-temp/bridge-sdk/rust/internal/bearer-lookup-tool-guest-client",
+            )
+        ),
+        generated_before_cache_hit,
+        "an unchanged resolved source identity must retain the generated bridge"
     );
     let deployed = ctx.cli([flag::YES, cmd::DEPLOY]).await;
     assert!(deployed.success_or_dump());
@@ -591,7 +647,122 @@ async fn rust_mcp_clients_use_registry_credentials_and_replay_offline() {
         );
     }
 
+    let bearer_listings_before_refresh = listings
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|path| path.as_str() == "/bearer")
+        .count();
+    refreshed_schema.store(true, Ordering::SeqCst);
+    let refreshed = ctx.cli(["api", "mcp-import", "refresh", "0"]).await;
+    assert!(refreshed.success_or_dump());
+    assert!(refreshed.stdout_contains("bearer-fresh"));
+    assert_eq!(
+        listings
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|path| path.as_str() == "/bearer")
+            .count(),
+        bearer_listings_before_refresh + 1,
+        "refresh must fetch the selected import exactly once"
+    );
+
+    let manifest_path = ctx.cwd_path_join("golem.yaml");
+    let manifest = fs::read_to_string(&manifest_path).unwrap();
+    fs::write_str(
+        &manifest_path,
+        manifest.replace(
+            "tools: [bearer-lookup, basic-lookup]",
+            "tools: [bearer-lookup, basic-lookup, bearer-fresh]",
+        ),
+    )
+    .unwrap();
+    let cargo_path = ctx.cwd_path_join("Cargo.toml");
+    let cargo = fs::read_to_string(&cargo_path).unwrap();
+    fs::write_str(
+        &cargo_path,
+        cargo.replace(
+            "bearer-lookup-tool-guest-client =",
+            "bearer-fresh-tool-guest-client = { path = \"golem-temp/bridge-sdk/rust/internal/bearer-fresh-tool-guest-client\" }\nbearer-lookup-tool-guest-client =",
+        ),
+    )
+    .unwrap();
+    let source_path = ctx.cwd_path_join("src/counter_agent.rs");
+    let source = fs::read_to_string(&source_path).unwrap();
+    let source = source
+        .replace(
+            "use bearer_lookup_tool_guest_client::",
+            "use bearer_fresh_tool_guest_client::BearerFreshClient;\nuse bearer_lookup_tool_guest_client::",
+        )
+        .replace(
+            "fn status(&self) -> Vec<String>;",
+            "fn status(&self) -> Vec<String>;\n            async fn refreshed_contract(&self) -> i64;",
+        )
+        .replace(
+            "fn status(&self) -> Vec<String> { self.results.clone() }",
+            r#"fn status(&self) -> Vec<String> { self.results.clone() }
+            async fn refreshed_contract(&self) -> i64 {
+                BearerFreshClient::new()
+                    .bearer_fresh("second-contract".into())
+                    .await
+                    .unwrap()
+                    .collect()
+                    .await
+                    .unwrap()
+                    .result
+                    .structured
+                    .generation
+            }"#,
+        );
+    fs::write_str(&source_path, source).unwrap();
+
+    let rebuilt = ctx.cli([flag::YES, cmd::BUILD]).await;
+    assert!(rebuilt.success_or_dump());
+    let fresh_client =
+        ctx.cwd_path_join("golem-temp/bridge-sdk/rust/internal/bearer-fresh-tool-guest-client");
+    assert!(fresh_client.join("Cargo.toml").is_file());
+    assert!(generated_source_text(&fresh_client).contains("bearer-fresh"));
+    assert_ne!(
+        bridge_marker_bytes(ctx.cwd_path()),
+        marker_before_cache_hit,
+        "the refreshed projection must invalidate the bridge marker"
+    );
+    let redeployed = ctx.cli([flag::YES, cmd::DEPLOY]).await;
+    assert!(redeployed.success_or_dump());
+    let refreshed_output = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            "McpConsumer(\"refresh\")",
+            "refreshed_contract",
+        ])
+        .await;
+    assert!(refreshed_output.success_or_dump());
+    assert!(refreshed_output.stdout_contains("2"));
+    {
+        let calls = calls.lock().unwrap();
+        assert_eq!(calls.len(), 11);
+        assert_eq!(calls[10].0, "/bearer");
+        assert_eq!(calls[10].1, json!({"token":"second-contract"}));
+        assert!(calls[..10].iter().all(|call| call.2 != calls[10].2));
+    }
+
+    let fresh_source_before_unavailable = generated_source_text(&fresh_client);
     upstream.shutdown().await;
+    let unavailable_refresh = ctx.cli(["api", "mcp-import", "refresh", "0"]).await;
+    assert!(!unavailable_refresh.success());
+    assert!(
+        unavailable_refresh.stderr_contains("MCP_IMPORT_UPSTREAM_UNAVAILABLE")
+            || unavailable_refresh.stdout_contains("MCP_IMPORT_UPSTREAM_UNAVAILABLE"),
+        "refresh failure must explain that the MCP source is inaccessible"
+    );
+    assert_eq!(
+        generated_source_text(&fresh_client),
+        fresh_source_before_unavailable,
+        "a failed refresh must preserve the last generated client"
+    );
     ctx.server_process.take().unwrap().kill().await.unwrap();
     ctx.startup_ports = None;
     ctx.start_server().await;
@@ -616,7 +787,7 @@ async fn rust_mcp_clients_use_registry_credentials_and_replay_offline() {
             replayed.stdout_contains(format!("{prefix}:answer:/{prefix}:resource:{score}:[]:"))
         );
     }
-    assert_eq!(calls.lock().unwrap().len(), 10);
+    assert_eq!(calls.lock().unwrap().len(), 11);
 }
 
 fn write_roundtrip_manifest(
@@ -1052,4 +1223,21 @@ fn generated_source_text(root: &std::path::Path) -> String {
         }
     }
     result
+}
+
+fn bridge_marker_bytes(root: &std::path::Path) -> Vec<Vec<u8>> {
+    let marker_root = root.join("golem-temp/task-results");
+    let mut markers = std::fs::read_dir(marker_root)
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter_map(|entry| std::fs::read(entry.path()).ok())
+        .filter(|bytes| {
+            serde_json::from_slice::<Value>(bytes)
+                .ok()
+                .and_then(|value| value.get("kind").cloned())
+                == Some(Value::String("GenerateBridgeSdkMarkerHash".into()))
+        })
+        .collect::<Vec<_>>();
+    markers.sort();
+    markers
 }
