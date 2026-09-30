@@ -1168,6 +1168,10 @@ jobs:
           GOLEM_CLI: ${{ github.workspace }}/tmp/golem-cli-test-binaries/golem-cli
         run: ./build-components.sh ${{ matrix.chunk.name }}
 
+      - name: Fetch released built-in artifacts
+        if: matrix.chunk.name == 'rust-1'
+        run: cargo make --profile ci fetch-builtin-artifacts
+
       - name: Collect built WASMs
         env:
           EXPECTED_ARTIFACT: ${{ matrix.chunk.expected-artifact }}
@@ -1178,6 +1182,12 @@ jobs:
             cp "test-components/$EXPECTED_ARTIFACT" tmp/test-components-wasm/
           else
             cp test-components/*.wasm tmp/test-components-wasm/ 2>/dev/null || true
+          fi
+          if [[ "${{ matrix.chunk.name }}" == "rust-1" ]]; then
+            cp builtin-tools/filesystem-tools.wasm tmp/test-components-wasm/__builtin-filesystem-tools.wasm
+            cp builtin-tools/javascript-tools.wasm tmp/test-components-wasm/__builtin-javascript-tools.wasm
+            cp builtin-tools/typescript-tools.wasm tmp/test-components-wasm/__builtin-typescript-tools.wasm
+            cp plugins/otlp-exporter.wasm tmp/test-components-wasm/__builtin-otlp-exporter.wasm
           fi
           count=$(find tmp/test-components-wasm -maxdepth 1 -name '*.wasm' | wc -l)
           echo "Built $count WASM files in chunk ${{ matrix.chunk.name }}"

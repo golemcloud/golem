@@ -12,6 +12,7 @@ Built-in tool sources live under `builtin-tools/`; generated WASMs are ignored a
 - Build through the component's Golem manifest and focused root `cargo make` task. Do not invoke the language compiler as a substitute for the component build.
 - Keep JavaScript/TypeScript CLIs bundled into their components and use the `optimized` preset so Wizer pre-initializes them.
 - Validate descriptor names and versions against extracted component metadata before provisioning.
+- Treat component artifact versions and exported tool versions independently: bump the artifact for every byte change, and bump each tool coordinate whose implementation should move to the new component revision.
 - Never commit the generated WASM or add `include_bytes!`. Load `publishing-builtin-artifacts` to release changed bytes and update the release lock.
 - Preserve idempotent component reuse: tools backed by the same component use the same artifact ID, while published tool release coordinates remain immutable.
 

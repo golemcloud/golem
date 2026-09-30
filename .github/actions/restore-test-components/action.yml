@@ -15,4 +15,9 @@ runs:
         fail-on-cache-miss: true
     - name: Install test component WASMs
       shell: bash
-      run: cp -v tmp/test-components-wasm/*.wasm test-components/
+      run: |
+        cp -v tmp/test-components-wasm/*.wasm test-components/
+        cp -v tmp/test-components-wasm/__builtin-filesystem-tools.wasm builtin-tools/filesystem-tools.wasm
+        cp -v tmp/test-components-wasm/__builtin-javascript-tools.wasm builtin-tools/javascript-tools.wasm
+        cp -v tmp/test-components-wasm/__builtin-typescript-tools.wasm builtin-tools/typescript-tools.wasm
+        cp -v tmp/test-components-wasm/__builtin-otlp-exporter.wasm plugins/otlp-exporter.wasm

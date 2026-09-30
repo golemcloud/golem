@@ -7,12 +7,13 @@ description: Builds, validates, publishes, or updates immutable Golem built-in t
 
 Built-in component source and build logic stay in the `golem` repository. `golemcloud/golem-builtins` contains only its README and immutable GitHub Release assets. Never copy source there, commit generated WASMs to `golem`, or embed them in a service binary.
 
-Publishing is a manual local operation. Never add a publishing workflow, invoke the publisher from CI, or give CI credentials for `golemcloud/golem-builtins`. CI may validate pins and repository hygiene only.
+Publishing is a manual local operation. Never add a publishing workflow, invoke the publisher from CI, or give CI credentials for `golemcloud/golem-builtins`. CI may validate pins, fetch checksum-pinned public assets for tests, and check repository hygiene.
 
 ## Release Contract
 
 - Tag releases as `<component>-v<artifact-version>`. Artifact semver is independent of exported tool versions and must change whenever the bytes change.
 - Start a new component artifact at `0.0.1`. Until it defines a separate compatibility policy, increment the patch version for every byte-changing publication.
+- Published tool coordinates remain bound to their original component revision. When changed bytes must alter a tool's implementation, bump that exported tool's version too; unchanged coordinates continue using their immutable original revision.
 - Publish `<component>.wasm`, its `.sha256`, `provenance.json`, applicable licenses, and an SPDX SBOM when one is generated.
 - Existing tags and assets are immutable. Fixes require a new version; do not use replacement uploads.
 - Stable publication requires release-owner/legal approval and an authenticated local GitHub CLI session with write access to `golemcloud/golem-builtins`.

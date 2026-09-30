@@ -604,7 +604,7 @@ command = "cargo"
 args = ["test", "--manifest-path", "dev-tools/Cargo.toml", "--lib"]
 
 [tasks.worker-executor-tests]
-dependencies = ["wit"]
+dependencies = ["wit", "fetch-builtin-artifacts"]
 description = "Runs worker executor tests only"
 env = { "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_BACKTRACE" = "1", "RUST_LOG" = "info" }
 command = "cargo"
@@ -619,7 +619,7 @@ args = [
 ]
 
 [tasks.worker-executor-tests-misc]
-dependencies = ["wit"]
+dependencies = ["wit", "fetch-builtin-artifacts"]
 description = "Runs untagged, sequential storage, oplog blob archive, and service-specific worker-executor tests"
 env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script_runner = "@duckscript"
@@ -641,7 +641,7 @@ cargo-test-r run --package golem-worker-executor --test integration :tag:ignite_
 '''
 
 [tasks.worker-executor-tests-group1]
-dependencies = ["wit"]
+dependencies = ["wit", "fetch-builtin-artifacts"]
 description = "Runs worker executor tests only (group 1/4)"
 env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script_runner = "@duckscript"
@@ -650,7 +650,7 @@ exec --fail-on-error cargo-test-r run --package golem-worker-executor --test int
 '''
 
 [tasks.worker-executor-tests-group2]
-dependencies = ["wit"]
+dependencies = ["wit", "fetch-builtin-artifacts"]
 description = "Runs worker executor tests only (group 2/4)"
 env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script_runner = "@duckscript"
@@ -661,7 +661,7 @@ exec --fail-on-error cargo-test-r run --package golem-worker-executor --test int
 '''
 
 [tasks.worker-executor-tests-group3]
-dependencies = ["wit"]
+dependencies = ["wit", "fetch-builtin-artifacts"]
 description = "Runs worker executor tests only (group 3/4)"
 env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script_runner = "@duckscript"
@@ -670,7 +670,7 @@ exec --fail-on-error cargo-test-r run --package golem-worker-executor --test int
 '''
 
 [tasks.worker-executor-tests-group4]
-dependencies = ["wit"]
+dependencies = ["wit", "fetch-builtin-artifacts"]
 description = "Runs worker executor tests only (group 4/4)"
 env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script_runner = "@duckscript"
@@ -1687,6 +1687,81 @@ description = "Builds the built-in TypeScript tool component"
 dependencies = ["build-filesystem-tools", "build-javascript-typescript-tools"]
 description = "Builds all built-in tool components"
 
+[tasks.fetch-builtin-artifacts]
+description = "Downloads checksum-pinned built-in artifacts for local and CI tests"
+script_runner = "@duckscript"
+script = '''
+lock_text = readfile builtin-artifacts.lock.json
+lock = json_parse --collection ${lock_text}
+repository = map_get ${lock} repository
+artifacts = map_get ${lock} artifacts
+cache_dir = get_env BUILTIN_ARTIFACT_CACHE_DIR
+if is_empty ${cache_dir}
+    cache_dir = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/builtin-artifacts"
+end
+if not is_path_exists ${cache_dir}
+    mkdir ${cache_dir}
+end
+
+artifact_ids = array filesystem_tools javascript_tools otlp_exporter typescript_tools
+for artifact_id in ${artifact_ids}
+    entry = map_get ${artifacts} ${artifact_id}
+    component = map_get ${entry} component
+    version = map_get ${entry} version
+    sha256 = map_get ${entry} sha256
+    tag = set "${component}-v${version}"
+    url = set "https://github.com/${repository}/releases/download/${tag}/${component}.wasm"
+    cached = set "${cache_dir}/${sha256}.wasm"
+
+    if equals ${artifact_id} filesystem_tools
+        destination = set builtin-tools/filesystem-tools.wasm
+    elif equals ${artifact_id} javascript_tools
+        destination = set builtin-tools/javascript-tools.wasm
+    elif equals ${artifact_id} otlp_exporter
+        destination = set plugins/otlp-exporter.wasm
+    else
+        destination = set builtin-tools/typescript-tools.wasm
+    end
+
+    if not is_path_exists ${cached}
+        if is_path_exists ${destination}
+            local_sha256 = sha256sum ${destination}
+            if equals ${local_sha256} ${sha256}
+                cp ${destination} ${cached}
+            end
+        end
+    end
+
+    if is_path_exists ${cached}
+        actual = sha256sum ${cached}
+        if not equals ${actual} ${sha256}
+            rm ${cached}
+        end
+    end
+    if not is_path_exists ${cached}
+        temporary = set "${cached}.tmp"
+        if is_path_exists ${temporary}
+            rm ${temporary}
+        end
+        download = exec curl --fail --location --silent --show-error --output ${temporary} ${url}
+        if not equals ${download.code} 0
+            echo ${download.stderr}
+            trigger_error "failed to download built-in artifact '${artifact_id}' from ${url}"
+        end
+        actual = sha256sum ${temporary}
+        if not equals ${actual} ${sha256}
+            rm ${temporary}
+            trigger_error "downloaded built-in artifact '${artifact_id}' has SHA-256 ${actual}, expected ${sha256}"
+        end
+        mv ${temporary} ${cached}
+    end
+
+    cp ${cached} ${destination}
+end
+release --recursive ${lock}
+echo "downloaded checksum-pinned built-in artifacts into ${cache_dir}"
+'''
+
 [tasks.publish-builtin-artifact]
 description = "Locally builds and manually publishes one immutable built-in component release"
 script_runner = "@duckscript"
@@ -1712,7 +1787,7 @@ if equals ${component} otlp-exporter
     build_task = set build-otlp-exporter
     wasm = set plugins/otlp-exporter.wasm
     artifact_id = set otlp_exporter
-    exports_json = set "{\"plugin\":\"golem-otlp-exporter\",\"version\":\"1.5.3\"}"
+    exports_json = set "{\"plugin\":\"golem-otlp-exporter\",\"version\":\"1.5.4\"}"
     licenses = set LICENSE
     sbom = set ""
 elif equals ${component} filesystem-tools
