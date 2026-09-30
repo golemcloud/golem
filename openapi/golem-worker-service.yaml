@@ -1991,7 +1991,7 @@ paths:
       - Agent
       summary: Invoke a tool on an existing agent or a fresh ephemeral component owner
       description: |-
-        Uses normal invocation permissions, queueing and idempotency. Byte stdin and stdout
+        Uses normal invocation permissions, queueing and idempotency. Byte stdin, stdout and stderr
         require an attached invocation session rather than this scalar endpoint.
       parameters:
       - name: Idempotency-Key
@@ -3926,6 +3926,11 @@ components:
           - $ref: '#/components/schemas/StreamSpec'
           - nullable: true
         stdout:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/StreamSpec'
+          - nullable: true
+        stderr:
           nullable: true
           allOf:
           - $ref: '#/components/schemas/StreamSpec'
@@ -7596,6 +7601,8 @@ components:
       - hasStdin
       - hasStdout
       - declaresStdout
+      - hasStderr
+      - declaresStderr
       properties:
         commandPath:
           type: array
@@ -7612,6 +7619,14 @@ components:
         declaresStdout:
           type: boolean
           description: Whether the tool declares stdout support. Stdout bytes are not recorded in the oplog.
+        hasStderr:
+          type: boolean
+          description: |-
+            Whether a live stderr attachment was requested. Stderr bytes are not recorded in the
+            oplog.
+        declaresStderr:
+          type: boolean
+          description: Whether the tool declares stderr support. Stderr bytes are not recorded in the oplog.
     PublicTypedAgentConfigEntry:
       type: object
       title: PublicTypedAgentConfigEntry

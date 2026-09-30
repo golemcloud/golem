@@ -1582,7 +1582,7 @@ pub(crate) enum AttachmentRead {
 #[cfg(test)]
 mod tests {
     use super::super::{
-        ToolStdinEntry, ToolStdinWriterEntry, ToolStdoutEntry, ToolStdoutWriterEntry,
+        ToolOutputEntry, ToolOutputWriterEntry, ToolStdinEntry, ToolStdinWriterEntry,
     };
     use super::*;
     use test_r::test;
@@ -2012,7 +2012,7 @@ mod tests {
     #[test]
     async fn unconfigured_stdout_target_drop_publishes_only_abandonment() {
         let (producer, consumer, _) = pair(4);
-        let target = ToolStdoutEntry {
+        let target = ToolOutputEntry {
             producer: Some(producer),
             completion_only: false,
         };
@@ -2037,7 +2037,7 @@ mod tests {
     #[test]
     async fn unconfigured_stdout_rejection_publishes_bounded_failure_context() {
         let (producer, consumer, _) = pair(4);
-        let target = ToolStdoutEntry {
+        let target = ToolOutputEntry {
             producer: Some(producer),
             completion_only: false,
         };
@@ -2108,7 +2108,7 @@ mod tests {
         ));
 
         let (producer, reader, observer) = pair(4);
-        let target = ToolStdoutEntry {
+        let target = ToolOutputEntry {
             producer: Some(producer),
             completion_only: false,
         };
@@ -2124,7 +2124,7 @@ mod tests {
         ));
 
         let (producer, reader, observer) = pair(4);
-        let target = ToolStdoutEntry {
+        let target = ToolOutputEntry {
             producer: Some(producer),
             completion_only: false,
         };
@@ -2140,7 +2140,7 @@ mod tests {
         ));
 
         let (producer, reader, observer) = pair(4);
-        let writer: ToolStdoutWriterEntry = ToolStdoutEntry {
+        let writer: ToolOutputWriterEntry = ToolOutputEntry {
             producer: Some(producer),
             completion_only: false,
         }
@@ -2157,7 +2157,7 @@ mod tests {
         ));
 
         let (producer, reader, observer) = pair(4);
-        let writer: ToolStdoutWriterEntry = ToolStdoutEntry {
+        let writer: ToolOutputWriterEntry = ToolOutputEntry {
             producer: Some(producer),
             completion_only: false,
         }
@@ -2557,6 +2557,131 @@ mod tests {
         assert!(matches!(
             observer.wait_terminal().await,
             ByteStreamCloseCause::ConsumerCancelled
+        ));
+    }
+
+    #[test]
+    async fn cancelling_one_output_reader_does_not_affect_the_other_output() {
+        let (stdout, stdout_reader, stdout_observer) = pair(2);
+        let (stderr, stderr_reader, stderr_observer) = pair(2);
+        assert!(stdout.configure_live());
+        assert!(stderr.configure_live());
+        stdout.write(vec![1, 2]).await.unwrap();
+
+        let stdout_writer = stdout.writer();
+        let blocked_stdout = tokio::spawn(async move { stdout_writer.write(vec![3]).await });
+        wait_for_producer_operation(&stdout).await;
+        drop(stdout_reader);
+
+        assert!(matches!(
+            blocked_stdout.await.unwrap(),
+            Err(StreamWriteError::Closed(
+                ByteStreamCloseCause::ConsumerCancelled
+            ))
+        ));
+        assert!(matches!(
+            stdout_observer.wait_terminal().await,
+            ByteStreamCloseCause::ConsumerCancelled
+        ));
+
+        stderr.write(vec![9, 8]).await.unwrap();
+        stderr.finish().unwrap();
+        assert!(matches!(
+            stderr_reader.read_next().await,
+            AttachmentRead::Item(Ok(bytes)) if bytes == vec![9, 8]
+        ));
+        assert!(matches!(
+            stderr_reader.read_next().await,
+            AttachmentRead::End
+        ));
+        assert!(matches!(
+            stderr_observer.wait_terminal().await,
+            ByteStreamCloseCause::Finished
+        ));
+    }
+
+    #[test]
+    async fn stdout_and_stderr_make_progress_independently_above_live_capacity() {
+        let (stdout, stdout_reader, _) = pair(2);
+        let (stderr, stderr_reader, _) = pair(2);
+        assert!(stdout.configure_live());
+        assert!(stderr.configure_live());
+        stdout.write(vec![1, 2]).await.unwrap();
+        stderr.write(vec![9, 8]).await.unwrap();
+
+        let stdout_writer = stdout.writer();
+        let stderr_writer = stderr.writer();
+        let stdout_blocked = tokio::spawn(async move { stdout_writer.write(vec![3]).await });
+        let stderr_blocked = tokio::spawn(async move { stderr_writer.write(vec![7]).await });
+        wait_for_producer_operation(&stdout).await;
+        wait_for_producer_operation(&stderr).await;
+
+        assert!(matches!(
+            stderr_reader.read_next().await,
+            AttachmentRead::Item(Ok(bytes)) if bytes == vec![9, 8]
+        ));
+        stderr_blocked.await.unwrap().unwrap();
+        assert!(!stdout_blocked.is_finished());
+        assert!(matches!(
+            stdout_reader.read_next().await,
+            AttachmentRead::Item(Ok(bytes)) if bytes == vec![1, 2]
+        ));
+        stdout_blocked.await.unwrap().unwrap();
+
+        stdout.finish().unwrap();
+        stderr.finish().unwrap();
+        assert!(matches!(
+            stdout_reader.read_next().await,
+            AttachmentRead::Item(Ok(bytes)) if bytes == vec![3]
+        ));
+        assert!(matches!(
+            stderr_reader.read_next().await,
+            AttachmentRead::Item(Ok(bytes)) if bytes == vec![7]
+        ));
+    }
+
+    #[test]
+    async fn output_limits_and_shared_memory_admission_are_independent_constraints() {
+        let admitted = Arc::new(AtomicU64::new(0));
+        let memory = |admitted: Arc<AtomicU64>| {
+            AttachmentMemory::with_test_reservation(true, move |bytes| {
+                let admitted = admitted.clone();
+                async move {
+                    admitted
+                        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                            (current + bytes <= 6).then_some(current + bytes)
+                        })
+                        .ok()
+                        .map(|_| MemoryGrant::inert(bytes))
+                }
+            })
+        };
+        let (stdout, _stdout_reader, stdout_observer) =
+            attachment_pair(4, memory(admitted.clone()));
+        let (stderr, stderr_reader, stderr_observer) = attachment_pair(4, memory(admitted.clone()));
+        assert!(stdout.configure_completion());
+        assert!(stderr.configure_completion());
+
+        stdout.write(vec![1, 2, 3, 4]).await.unwrap();
+        let error = stderr.write(vec![9, 8, 7]).await.unwrap_err();
+        assert!(matches!(
+            error,
+            StreamWriteError::Closed(ByteStreamCloseCause::Failed(
+                ByteStreamFailure::ResourceExhausted
+            ))
+        ));
+        assert_eq!(stdout.attachment.activity().buffered_bytes, 4);
+        assert_eq!(stderr.attachment.activity().buffered_bytes, 0);
+        assert_eq!(admitted.load(Ordering::Acquire), 4);
+        assert!(stdout_observer.terminal_snapshot().is_none());
+        assert!(matches!(
+            stderr_observer.wait_terminal().await,
+            ByteStreamCloseCause::Failed(ByteStreamFailure::ResourceExhausted)
+        ));
+        assert!(stderr.publish_completion());
+        assert!(matches!(
+            stderr_reader.read_next().await,
+            AttachmentRead::Item(Err(ByteStreamFailure::ResourceExhausted))
         ));
     }
 

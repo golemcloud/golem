@@ -133,7 +133,7 @@ pub(all) struct DynamicToolClient {
 } derive(Eq, @debug.Debug)
 pub async fn DynamicToolClient::invoke_value(Self, Array[String], @schema_model.TypedSchemaValue, stdin? : @async-core.Stream[Byte]?) -> Result[@tool-core.InvocationResult, @tool.ToolError[ReflectedToolCustomError]]
 pub fn DynamicToolClient::new(String) -> Self
-pub fn DynamicToolClient::start_value(Self, Array[String], @schema_model.TypedSchemaValue, stdin? : @async-core.Stream[Byte]?, stdout? : Bool) -> Result[@tool.ToolInvocation[ReflectedToolCustomError], @tool.ToolError[ReflectedToolCustomError]]
+pub fn DynamicToolClient::start_value(Self, Array[String], @schema_model.TypedSchemaValue, stdin? : @async-core.Stream[Byte]?, stdout? : Bool, stderr? : Bool) -> Result[@tool.ToolInvocation[ReflectedToolCustomError], @tool.ToolError[ReflectedToolCustomError]]
 pub fn DynamicToolClient::trigger_value(Self, Array[String], @schema_model.TypedSchemaValue, stdin? : @async-core.Stream[Byte]?) -> Result[Unit, @tool.ToolError[ReflectedToolCustomError]]
 
 pub(all) struct FullAgentClient {
@@ -239,9 +239,10 @@ pub struct ReflectedToolInvocation {
   // private fields
 }
 pub fn ReflectedToolInvocation::cancel(Self) -> Unit
-pub async fn ReflectedToolInvocation::collect(Self) -> Result[(@schema_model.SchemaValue?, Bytes?), @tool.ToolError[ReflectedToolCustomError]]
+pub async fn ReflectedToolInvocation::collect(Self) -> Result[@tool.CollectedToolInvocation[@schema_model.SchemaValue?], @tool.ToolError[ReflectedToolCustomError]]
 pub fn ReflectedToolInvocation::drop(Self) -> Unit
 pub async fn ReflectedToolInvocation::get(Self) -> Result[@schema_model.SchemaValue?, @tool.ToolError[ReflectedToolCustomError]]
+pub fn ReflectedToolInvocation::stderr(Self) -> @async-core.Stream[Byte]?
 pub fn ReflectedToolInvocation::stdout(Self) -> @async-core.Stream[Byte]?
 
 pub(all) struct ScheduledInvocation {

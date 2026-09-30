@@ -160,6 +160,7 @@ private[macros] final class CompiledWireMetadata[C <: ToolMacroCore](val core: C
               constraints = m.constraints,
               stdin = c.stdin,
               stdout = c.stdout,
+              stderr = c.stderr,
               result = core.resultOf(m).map(r => ResultBuild(graph(r.okType), r.formatters, r.defaultFormatter)),
               errors = errors,
               annotations = m.annotations,

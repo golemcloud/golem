@@ -47,8 +47,19 @@ object WireToolSpec extends ZIOSpecDefault {
     def echo(value: Array[Byte], scalar: Byte): Array[Byte] = value
   }
 
-  private val uuidTool = WireToolMacro.handle[UuidTool, UuidToolImpl]
-  private val byteArrayTool = WireToolMacro.handle[ByteArrayTool, ByteArrayToolImpl]
+  @golem.runtime.annotations.toolDefinition(version = "1.0.0")
+  trait DualOutputTool {
+    @golem.runtime.annotations.arg("stderr", channel = "stderr")
+    def run(stdout: ToolOutputStream, stderr: ToolOutputStream): Unit
+  }
+
+  final class DualOutputToolImpl extends DualOutputTool {
+    def run(stdout: ToolOutputStream, stderr: ToolOutputStream): Unit = ()
+  }
+
+  private val uuidTool       = WireToolMacro.handle[UuidTool, UuidToolImpl]
+  private val byteArrayTool  = WireToolMacro.handle[ByteArrayTool, ByteArrayToolImpl]
+  private val dualOutputTool = WireToolMacro.handle[DualOutputTool, DualOutputToolImpl]
 
   private def rootBody(graph: SchemaGraph): SchemaTypeBody =
     RefResolution.resolveRef(graph, graph.root).toOption.get.body
@@ -56,6 +67,7 @@ object WireToolSpec extends ZIOSpecDefault {
   private def input(nodes: WitSchemaValueNode*): WireToolInput =
     WireToolInput(
       WitSchemaValueTree(nodes.toVector :+ WitSchemaValueNode.RecordValue(nodes.indices.toVector), nodes.length),
+      None,
       None,
       None,
       Principal.Anonymous
@@ -71,7 +83,9 @@ object WireToolSpec extends ZIOSpecDefault {
     test("compiled wire descriptor exactly matches the dynamic reflection descriptor") {
       assertTrue(
         echo.descriptor == ToolDefinitionMacro.metadata[ToolInvokerSpec.Echo].tryToTool.toOption.get,
-        git.descriptor == ToolDefinitionMacro.metadata[ToolInvokerSpec.Git].tryToTool.toOption.get
+        git.descriptor == ToolDefinitionMacro.metadata[ToolInvokerSpec.Git].tryToTool.toOption.get,
+        dualOutputTool.descriptor == ToolDefinitionMacro.metadata[DualOutputTool].tryToTool.toOption.get,
+        dualOutputTool.bindings.exists(binding => binding.stdout.isDefined && binding.stderr.isDefined)
       )
     },
     test("generated methods decode direct canonical positions and encode results") {
@@ -128,6 +142,7 @@ object WireToolSpec extends ZIOSpecDefault {
           ),
           None,
           None,
+          None,
           Principal.Anonymous
         )
       )
@@ -145,7 +160,7 @@ object WireToolSpec extends ZIOSpecDefault {
     },
     test("compiled byte arrays use list<u8> while scalar bytes remain s8") {
       val reflected = ToolReflection.fromWire(byteArrayTool.descriptor)
-      val body = reflected.commands(reflected.commandIndexByPath(List("echo")).get).body.get
+      val body      = reflected.commands(reflected.commandIndexByPath(List("echo")).get).body.get
       assertTrue(
         rootBody(body.positionals.fixed.head.tpe) == ListType(SchemaType(U8Type(None))),
         rootBody(body.positionals.fixed(1).tpe) == S8Type(None),
@@ -167,6 +182,7 @@ object WireToolSpec extends ZIOSpecDefault {
             ),
             4
           ),
+          None,
           None,
           None,
           Principal.Anonymous

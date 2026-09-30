@@ -554,7 +554,10 @@ describe('monomorphic tool middleware dispatch', () => {
     definition.middleware({
       name: 'stream-policy',
       implementation: {
-        streaming: async (_args, { underlying, stdin }) => underlying.streaming({ stdin }),
+        streaming: async (_args, { underlying, stdin }) => {
+          const started = await underlying.streaming.start({ stdin });
+          return { result: await started.result, stdout: started.stdout };
+        },
       },
     });
     const stdin = controllableStream(1, 2, 3);
@@ -627,7 +630,7 @@ describe('monomorphic tool middleware dispatch', () => {
     expect(unexpected.close).toHaveBeenCalledOnce();
 
     const undeclaredStdout = controllableStream(2);
-    absentResult = undeclaredStdout.stream;
+    absentResult = { stdout: undeclaredStdout.stream };
     await expect(
       invoke(
         'absent-policy',

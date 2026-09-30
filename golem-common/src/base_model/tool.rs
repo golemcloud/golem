@@ -735,11 +735,12 @@ pub struct ToolInvocationInput {
     pub stdin: Option<golem_schema::schema::SchemaValueStream>,
 }
 
-/// Internal result value. The stdout handle can be registered before the outcome is ready.
+/// Internal result value. Output handles can be registered before the outcome is ready.
 #[derive(Clone, Debug, golem_schema_derive::FromSchema)]
 pub struct ToolInvocationOutput {
     pub outcome: Result<SerializableToolInvocationResult, SerializableToolRpcError>,
     pub stdout: Option<golem_schema::schema::SchemaValueStream>,
+    pub stderr: Option<golem_schema::schema::SchemaValueStream>,
 }
 
 impl crate::schema::conversion::IntoSchema for ToolInvocationInput {
@@ -780,12 +781,17 @@ impl crate::schema::conversion::IntoSchema for ToolInvocationOutput {
         SchemaType::record(vec![
             NamedFieldType { name: "outcome".into(), body: Result::<SerializableToolInvocationResult, SerializableToolRpcError>::register_in(builder), metadata: Default::default() },
             NamedFieldType { name: "stdout".into(), body: SchemaType::option(SchemaType::stream(Some(SchemaType::u8()))), metadata: Default::default() },
+            NamedFieldType { name: "stderr".into(), body: SchemaType::option(SchemaType::stream(Some(SchemaType::u8()))), metadata: Default::default() },
         ])
     }
 
     fn to_value(&self) -> crate::schema::SchemaValue {
         crate::schema::SchemaValue::Record {
-            fields: vec![self.outcome.to_value(), self.stdout.to_value()],
+            fields: vec![
+                self.outcome.to_value(),
+                self.stdout.to_value(),
+                self.stderr.to_value(),
+            ],
         }
     }
 }

@@ -290,6 +290,14 @@ pub trait Streaming {
         chunk_size: u32,
         stdout: OutputStream,
     ) -> Result<StreamSummary, StreamingError>;
+
+    #[arg(diagnostics, channel = "stderr")]
+    async fn dual_reconstruct(
+        &self,
+        mode: String,
+        stdout: OutputStream,
+        diagnostics: OutputStream,
+    ) -> Result<StreamSummary, StreamingError>;
 }
 
 #[tool_definition(version = "1.0.0")]
@@ -299,6 +307,16 @@ pub trait CapableStreaming {
         path: String,
         stdin: InputStream,
         stdout: OutputStream,
+    ) -> Result<StreamSummary, StreamingError>;
+
+    #[arg(diagnostics, channel = "stderr")]
+    async fn dual_pressure(
+        &self,
+        path: String,
+        output_size: u64,
+        checkpoint_before_terminal: bool,
+        stdout: OutputStream,
+        diagnostics: OutputStream,
     ) -> Result<StreamSummary, StreamingError>;
 }
 
@@ -553,12 +571,13 @@ async fn run_nested_principal(
 
     let outer_class = principal_class(principal);
     let rpc = ToolRpc::create("streaming").expect("tool RPC creation failed");
-    let (nested_target, nested_stdout) = tool_host::create_stdout();
+    let (nested_target, nested_stdout) = tool_host::create_output();
     let nested = rpc.invoke_and_await(
         vec!["run".to_string()],
         raw_run_input("principal"),
         Some(pump_tool_stdin(nested_input(Vec::new()))),
         Some(nested_target),
+        None,
     );
     let (nested_result, nested_output) = (nested, async move {
         let mut output = Vec::new();
@@ -590,12 +609,13 @@ async fn run_nested_capable(bytes: Vec<u8>) -> Vec<u8> {
     use futures_concurrency::prelude::*;
 
     let rpc = ToolRpc::create("capable-streaming").expect("tool RPC creation failed");
-    let (stdout_target, nested_stdout) = tool_host::create_stdout();
+    let (stdout_target, nested_stdout) = tool_host::create_output();
     let nested = rpc.invoke_and_await(
         vec!["run-capable".to_string()],
         raw_capable_input("order:N:/capable-nested-inner.bin"),
         Some(pump_tool_stdin(nested_input(bytes))),
         Some(stdout_target),
+        None,
     );
     let (result, output) = (nested, async move {
         let mut stdout = nested_stdout;
@@ -618,12 +638,13 @@ async fn run_nested(
     use futures_concurrency::prelude::*;
 
     let rpc = ToolRpc::create("streaming").expect("tool RPC creation failed");
-    let (nested_target, mut nested_stdout) = tool_host::create_stdout();
+    let (nested_target, mut nested_stdout) = tool_host::create_output();
     let nested = rpc.invoke_and_await(
         vec!["run".to_string()],
         raw_run_input("marker-echo"),
         Some(golem_rust::agentic::pump_tool_stdin(stdin)),
         Some(nested_target),
+        None,
     );
     let forward = async move {
         let mut chunks_read = 0;
@@ -655,12 +676,13 @@ async fn run_nested_capable_parent_end(
     mut stdout: OutputStream,
 ) -> Result<StreamSummary, StreamingError> {
     let rpc = ToolRpc::create("capable-streaming").expect("tool RPC creation failed");
-    let (nested_target, nested_stdout) = tool_host::create_stdout();
+    let (nested_target, nested_stdout) = tool_host::create_output();
     let nested = rpc.async_invoke_and_await(
         &["run-capable".to_string()],
         raw_capable_input("/nested-capable-parent-end.bin"),
         Some(golem_rust::agentic::pump_tool_stdin(stdin)),
         Some(nested_target),
+        None,
     );
     drop(nested);
     drop(nested_stdout);
@@ -1088,6 +1110,45 @@ impl Streaming for StreamingImpl {
         Ok(format!("no-stream:{value}"))
     }
 
+    async fn dual_reconstruct(
+        &self,
+        mode: String,
+        mut stdout: OutputStream,
+        mut diagnostics: OutputStream,
+    ) -> Result<StreamSummary, StreamingError> {
+        announce_middleware_probe_effect(&format!("dual-reconstruct-{mode}")).await;
+        match mode.as_str() {
+            "before-either-output" => {}
+            "after-stdout-only" => {
+                stdout.write(b"stdout-first".to_vec()).await.unwrap();
+            }
+            "after-stderr-only" => {
+                diagnostics.write(b"stderr-first".to_vec()).await.unwrap();
+            }
+            "after-both-partial" => {
+                stdout.write(b"stdout-first".to_vec()).await.unwrap();
+                diagnostics.write(b"stderr-first".to_vec()).await.unwrap();
+            }
+            "after-stdout-terminal" => {
+                stdout.write(b"stdout-first".to_vec()).await.unwrap();
+                stdout.clone().finish().await.unwrap();
+            }
+            other => panic!("unknown dual-output reconstruction mode: {other}"),
+        }
+        wait_at_crash_checkpoint(&mode, &mode).await;
+        if mode != "after-stdout-terminal" {
+            stdout.write(b"stdout-last".to_vec()).await.unwrap();
+            stdout.finish().await.unwrap();
+        }
+        diagnostics.write(b"stderr-last".to_vec()).await.unwrap();
+        diagnostics.finish().await.unwrap();
+        Ok(StreamSummary {
+            chunks_read: 0,
+            bytes_read: 0,
+            output_closed: false,
+        })
+    }
+
     async fn echo_secret(
         &self,
         value: GuestSecretHandle,
@@ -1263,6 +1324,40 @@ impl CapableStreaming for CapableStreamingImpl {
             chunks_read,
             bytes_read: bytes.len() as u64,
             output_closed,
+        })
+    }
+
+    async fn dual_pressure(
+        &self,
+        path: String,
+        output_size: u64,
+        checkpoint_before_terminal: bool,
+        mut stdout: OutputStream,
+        mut diagnostics: OutputStream,
+    ) -> Result<StreamSummary, StreamingError> {
+        let file_bytes = vec![b'i'; output_size as usize];
+        write_owner_file(&path, &file_bytes)
+            .expect("dual-pressure tool must share the owner filesystem");
+        stdout
+            .write(vec![b'o'; output_size as usize])
+            .await
+            .expect("buffer dual-pressure stdout");
+        diagnostics
+            .write(vec![b'e'; output_size as usize])
+            .await
+            .expect("buffer dual-pressure stderr");
+        if checkpoint_before_terminal {
+            wait_at_crash_checkpoint(&stdout, "after-dual-output-before-terminal").await;
+        }
+        stdout.finish().await.expect("finish dual-pressure stdout");
+        diagnostics
+            .finish()
+            .await
+            .expect("finish dual-pressure stderr");
+        Ok(StreamSummary {
+            chunks_read: 0,
+            bytes_read: output_size,
+            output_closed: false,
         })
     }
 }

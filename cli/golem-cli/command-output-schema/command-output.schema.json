@@ -4219,7 +4219,7 @@
     },
     "CommandBody": {
       "type": "object",
-      "required": ["positionals", "options", "flags", "constraints", "stdin", "stdout", "result", "errors", "annotations"],
+      "required": ["positionals", "options", "flags", "constraints", "stdin", "stdout", "stderr", "result", "errors", "annotations"],
       "properties": {
         "positionals": { "$ref": "#/definitions/ToolPositionals" },
         "options": { "type": "array", "items": { "$ref": "#/definitions/ToolOptionSpec" } },
@@ -4227,6 +4227,7 @@
         "constraints": { "type": "array", "items": { "$ref": "#/definitions/ToolConstraint" } },
         "stdin": { "oneOf": [{ "$ref": "#/definitions/ToolStreamSpec" }, { "type": "null" }] },
         "stdout": { "oneOf": [{ "$ref": "#/definitions/ToolStreamSpec" }, { "type": "null" }] },
+        "stderr": { "oneOf": [{ "$ref": "#/definitions/ToolStreamSpec" }, { "type": "null" }] },
         "result": { "oneOf": [{ "$ref": "#/definitions/ToolResultSpec" }, { "type": "null" }] },
         "errors": { "type": "array", "items": { "$ref": "#/definitions/ToolErrorCase" } },
         "annotations": { "oneOf": [{ "$ref": "#/definitions/CommandAnnotations" }, { "type": "null" }] }
@@ -5132,7 +5133,7 @@
       "oneOf": [
         {
           "type": "object",
-          "required": ["type", "commandPath", "hasStdin", "hasStdout", "declaresStdout"],
+          "required": ["type", "commandPath", "hasStdin", "hasStdout", "declaresStdout", "hasStderr", "declaresStderr"],
           "properties": {
             "type": { "const": "Tool" },
             "commandPath": { "type": "array", "items": { "type": "string" } },
@@ -5144,6 +5145,14 @@
             "declaresStdout": {
               "type": "boolean",
               "description": "Whether the tool declares stdout support. Stdout bytes are not recorded in the oplog."
+            },
+            "hasStderr": {
+              "type": "boolean",
+              "description": "Whether a live stderr attachment was requested. Stderr bytes are not recorded in the oplog."
+            },
+            "declaresStderr": {
+              "type": "boolean",
+              "description": "Whether the tool declares stderr support. Stderr bytes are not recorded in the oplog."
             }
           },
           "additionalProperties": false

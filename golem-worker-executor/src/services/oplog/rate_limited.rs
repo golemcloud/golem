@@ -17,7 +17,7 @@ use crate::model::ExecutionStatus;
 use crate::services::oplog::{
     CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, Oplog, OplogAddReceipt,
     OplogCloseCompletion, OplogError, OplogLifecycleGuard, OplogService, OrderedOplogStart,
-    ReservedRawStartBuilder,
+    RawOplogPayloadDownloadError, ReservedRawStartBuilder,
 };
 use crate::services::resource_limits::{AtomicResourceEntry, ResourceLimits};
 use arc_swap::ArcSwap;
@@ -282,6 +282,16 @@ impl Oplog for RateLimitedOplog {
         md5_hash: Vec<u8>,
     ) -> Result<Vec<u8>, String> {
         self.inner.download_raw_payload(payload_id, md5_hash).await
+    }
+
+    async fn download_raw_payload_classified(
+        &self,
+        payload_id: PayloadId,
+        md5_hash: Vec<u8>,
+    ) -> Result<Vec<u8>, RawOplogPayloadDownloadError> {
+        self.inner
+            .download_raw_payload_classified(payload_id, md5_hash)
+            .await
     }
 
     fn enqueue_add_pair(
@@ -648,6 +658,18 @@ impl OplogService for RateLimitedOplogService {
     ) -> Result<Vec<u8>, String> {
         self.inner
             .download_raw_payload(owned_agent_id, agent_mode, payload_id, md5_hash)
+            .await
+    }
+
+    async fn download_raw_payload_classified(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        payload_id: PayloadId,
+        md5_hash: Vec<u8>,
+    ) -> Result<Vec<u8>, RawOplogPayloadDownloadError> {
+        self.inner
+            .download_raw_payload_classified(owned_agent_id, agent_mode, payload_id, md5_hash)
             .await
     }
 }

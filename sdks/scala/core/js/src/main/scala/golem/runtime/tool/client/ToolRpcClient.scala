@@ -29,6 +29,9 @@ import golem.tool._
 import scala.concurrent.Future
 import scala.scalajs.js
 import scala.scalajs.js.JSConverters._
+import scala.util.{Failure, Success}
+import zio.blocks.async.*
+import zio.blocks.streams.internal.StreamError
 
 /**
  * Entry point generated typed tool clients use to obtain the RPC transport of
@@ -79,7 +82,7 @@ object ToolRpcClient {
 private[golem] final class JsWireToolRpcTransport(
   rpc: ToolHostApi.RawToolRpc,
   encode: WitTypedSchemaValue => Future[JsTypedSchemaValue] = SchemaWireInterop.typedToJsAsync,
-  createStdout: () => (ToolHostApi.RawToolStdout, ToolHostApi.RawByteStream) = () => ToolHostApi.createStdout()
+  createOutput: () => (ToolHostApi.RawToolOutput, ToolHostApi.RawByteStream) = () => ToolHostApi.createOutput()
 ) extends WireToolRpcTransport {
   private implicit val ec: scala.concurrent.ExecutionContext = ToolInvokerRuntime.executionContext
 
@@ -87,16 +90,19 @@ private[golem] final class JsWireToolRpcTransport(
     commandPath: List[String],
     input: WitTypedSchemaValue,
     stdin: Option[ToolInputStream],
-    stdout: Boolean
+    stdout: Boolean,
+    stderr: Boolean
   ): Either[WireToolRpcFailure, WireToolRpcStarted] = {
     var observer  = Option.empty[ToolHostApi.RawToolFutureInvokeResult]
     var cancelled = false
     try {
-      val stdoutEndpoints = if (stdout) Some(createStdout()) else None
+      val stdoutEndpoints = if (stdout) Some(createOutput()) else None
+      val stderrEndpoints = if (stderr) Some(createOutput()) else None
       val stdoutStream    = stdoutEndpoints.map(e => new JsToolInputStream(e._2))
+      val stderrStream    = stderrEndpoints.map(e => new JsToolInputStream(e._2))
       val pumpTransport   = new JsToolRpcTransport(rpc)
       val encoded         = encode(input).recoverWith { case error =>
-        Future.sequence(stdoutStream.toList.map(_.close())).flatMap(_ => Future.failed(error))
+        Future.sequence((stdoutStream.toList ++ stderrStream.toList).map(_.close())).flatMap(_ => Future.failed(error))
       }
       val result = encoded.flatMap { jsInput =>
         val stdinEndpoints = stdin.map(_ => ToolHostApi.createStdin())
@@ -105,7 +111,8 @@ private[golem] final class JsWireToolRpcTransport(
           commandPath.toJSArray,
           jsInput,
           stdinEndpoints.map(_._2).orUndefined,
-          stdoutEndpoints.map(_._1).orUndefined
+          stdoutEndpoints.map(_._1).orUndefined,
+          stderrEndpoints.map(_._1).orUndefined
         )
         observer = Some(started)
         if (cancelled) started.cancel()
@@ -119,6 +126,7 @@ private[golem] final class JsWireToolRpcTransport(
       Right(
         WireToolRpcStarted(
           stdoutStream,
+          stderrStream,
           result,
           () => { cancelled = true; observer.foreach(_.cancel()) }
         )
@@ -148,7 +156,8 @@ private[golem] final class JsToolRpcTransport(rpc: ToolHostApi.RawToolRpc) exten
     commandPath: List[String],
     input: TypedSchemaValue,
     stdin: Option[ToolInputStream],
-    stdout: Boolean
+    stdout: Boolean,
+    stderr: Boolean
   ): Either[ToolRpcFailure, ToolRpcStarted] = {
     val prepared = encodeInput(input)
 
@@ -158,17 +167,20 @@ private[golem] final class JsToolRpcTransport(rpc: ToolHostApi.RawToolRpc) exten
       case Right(jsInput) =>
         try {
           val stdinEndpoints  = stdin.map(_ => ToolHostApi.createStdin())
-          val stdoutEndpoints = if (stdout) Some(ToolHostApi.createStdout()) else None
+          val stdoutEndpoints = if (stdout) Some(ToolHostApi.createOutput()) else None
+          val stderrEndpoints = if (stderr) Some(ToolHostApi.createOutput()) else None
           stdinEndpoints.foreach { case (writer, _, closed) => pump(stdin.get, writer, closed) }
           val observer = rpc.asyncInvokeAndAwait(
             commandPath.toJSArray,
             jsInput,
             stdinEndpoints.map(_._2).orUndefined,
-            stdoutEndpoints.map(_._1).orUndefined
+            stdoutEndpoints.map(_._1).orUndefined,
+            stderrEndpoints.map(_._1).orUndefined
           )
           Right(
             ToolRpcStarted(
               stdoutEndpoints.map(e => new JsToolInputStream(e._2)),
+              stderrEndpoints.map(e => new JsToolInputStream(e._2)),
               awaitFutureResult(observer),
               () => observer.cancel()
             )
@@ -210,19 +222,46 @@ private[golem] final class JsToolRpcTransport(rpc: ToolHostApi.RawToolRpc) exten
     writer: ToolHostApi.RawToolStdinWriter,
     closed: ToolHostApi.RawToolStdinClosed
   ): Unit = {
-    val closedF              = FutureInterop.fromPromise(closed.waitClosed()).map(_ => false)
-    def loop(): Future[Unit] =
-      Future.firstCompletedOf(List(source.read().map(Some(_)), closedF.map(_ => None))).flatMap {
-        case None                                      => source.cancel().recover { case _ => () }
-        case Some(Right(None))                         => FutureInterop.fromPromise(writer.finish())
-        case Some(Right(Some(bytes))) if bytes.isEmpty => loop()
-        case Some(Right(Some(bytes)))                  =>
-          FutureInterop
-            .fromPromise(writer.write(js.typedarray.Uint8Array.from(bytes.map(_.toShort).toJSArray)))
-            .flatMap(_ => loop())
-        case Some(Left(failure)) => FutureInterop.fromPromise(writer.fail(encodeFailure(failure)))
+    object End
+    val acquisition                                                = source.stream.startAsync.start
+    val reader                                                     = acquisition.toFuture
+    val hostClosed: Future[Option[Either[ByteStreamFailure, Any]]] =
+      FutureInterop.fromPromise(closed.waitClosed()).map(_ => None)
+
+    def cleanup(): Future[Unit] =
+      reader.value match {
+        case Some(Success(active)) => active.close().toFuture
+        case Some(Failure(_))      => Future.successful(())
+        case None                  =>
+          acquisition.cancel()
+          source.cancel().recover { case _ => () }
       }
-    loop().recover { case _ => () }
+
+    def loop(): Future[Unit] =
+      Future
+        .firstCompletedOf(
+          List(
+            reader
+              .flatMap(_.read[Any](End).toFuture)
+              .map(value => Option(Right(value): Either[ByteStreamFailure, Any]))
+              .recover { case error: StreamError => Option(Left(error.value.asInstanceOf[ByteStreamFailure])) },
+            hostClosed
+          )
+        )
+        .flatMap {
+          case None                                                    => source.cancel().recover { case _ => () }
+          case Some(Right(value)) if value.asInstanceOf[AnyRef] eq End => FutureInterop.fromPromise(writer.finish())
+          case Some(Right(byte: Byte))                                 =>
+            FutureInterop
+              .fromPromise(writer.write(js.typedarray.Uint8Array.from(js.Array((byte & 0xff).toShort))))
+              .flatMap(_ => loop())
+          case Some(Left(failure)) => FutureInterop.fromPromise(writer.fail(encodeFailure(failure)))
+          case Some(Right(other))  => Future.failed(new IllegalStateException(s"unexpected stdin stream value: $other"))
+        }
+    loop().transformWith {
+      case Success(_)     => cleanup()
+      case Failure(error) => cleanup().transformWith(_ => Future.failed(error))
+    }.recover { case _ => () }
     ()
   }
 
@@ -248,13 +287,16 @@ private[golem] final class JsToolRpcTransport(rpc: ToolHostApi.RawToolRpc) exten
     }
 
   private def decodeResult(result: JsInvocationResult): Either[ToolRpcFailure, ToolInvokeResult] =
-    try
-      Right(
-        ToolInvokeResult(
-          result.result.toOption.map(js => SchemaWire.typedSchemaValueFromWit(SchemaWireInterop.typedFromJs(js)))
+    try {
+      if (result.stdout.isDefined || result.stderr.isDefined)
+        Left(ToolRpcFailure.ProtocolError("tool result unexpectedly contained output streams"))
+      else
+        Right(
+          ToolInvokeResult(
+            result.result.toOption.map(js => SchemaWire.typedSchemaValueFromWit(SchemaWireInterop.typedFromJs(js)))
+          )
         )
-      )
-    catch {
+    } catch {
       case t: Throwable =>
         Left(ToolRpcFailure.ProtocolError(s"failed to decode tool result: ${String.valueOf(t.getMessage)}"))
     }

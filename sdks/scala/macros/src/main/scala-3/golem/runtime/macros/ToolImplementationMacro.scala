@@ -132,6 +132,7 @@ private[macros] class ToolImplementationAssembler(val core: ToolMacroCore) {
       case core.ParamBindingIR.PrincipalB => '{ ToolParamDecoder.PrincipalParam }
       case core.ParamBindingIR.StdinB     => '{ ToolParamDecoder.StdinParam }
       case core.ParamBindingIR.StdoutB    => '{ ToolParamDecoder.StdoutParam }
+      case core.ParamBindingIR.StderrB    => '{ ToolParamDecoder.StderrParam }
     })
 
     '{
@@ -140,9 +141,9 @@ private[macros] class ToolImplementationAssembler(val core: ToolMacroCore) {
         ${ Expr(path) },
         (ctx: ToolInvocationContext) =>
           ToolInvokerRuntime.decodeArgs(ctx, $decoders) match {
-            case Left(error)              => Future.successful(Left(error))
-            case Right((args, stdoutOpt)) =>
-              ${ callAndEncode[Trait](m, implE, 'args, 'stdoutOpt) }
+            case Left(error)                         => Future.successful(Left(error))
+            case Right((args, stdoutOpt, stderrOpt)) =>
+              ${ callAndEncode[Trait](m, implE, 'args, 'stdoutOpt, 'stderrOpt) }
           },
         ${ Expr(acceptedPaths) }
       )
@@ -171,7 +172,8 @@ private[macros] class ToolImplementationAssembler(val core: ToolMacroCore) {
     m: core.MethodIR,
     implE: Expr[Trait],
     argsE: Expr[Vector[Any]],
-    stdoutE: Expr[Option[ToolOutputStream]]
+    stdoutE: Expr[Option[ToolOutputStream]],
+    stderrE: Expr[Option[ToolOutputStream]]
   ): Expr[Future[Either[ToolInvokeError[TypedSchemaValue], ToolInvokeResult]]] = {
     val pos  = m.sym.pos.getOrElse(Position.ofMacroExpansion)
     val call = callTerm[Trait](m, implE, argsE)
@@ -181,12 +183,12 @@ private[macros] class ToolImplementationAssembler(val core: ToolMacroCore) {
         if (m.shape.async)
           '{
             ${ call.asExprOf[Future[Unit]] }
-              .map(_ => ToolInvokerRuntime.encodeUnit($stdoutE))(ToolInvokerRuntime.executionContext)
+              .map(_ => ToolInvokerRuntime.encodeUnit($stdoutE, $stderrE))(ToolInvokerRuntime.executionContext)
           }
         else
           '{
             ${ call.asExprOf[Unit] }
-            Future.successful(ToolInvokerRuntime.encodeUnit($stdoutE))
+            Future.successful(ToolInvokerRuntime.encodeUnit($stdoutE, $stderrE))
           }
 
       case core.ReturnKind.Value(tpe) =>
@@ -203,14 +205,14 @@ private[macros] class ToolImplementationAssembler(val core: ToolMacroCore) {
             if (m.shape.async)
               '{
                 ${ call.asExprOf[Future[t]] }
-                  .map(v => ToolInvokerRuntime.encodeSuccess[t](v, $into, $stdoutE))(
+                  .map(v => ToolInvokerRuntime.encodeSuccess[t](v, $into, $stdoutE, $stderrE))(
                     ToolInvokerRuntime.executionContext
                   )
               }
             else
               '{
                 Future.successful(
-                  ToolInvokerRuntime.encodeSuccess[t](${ call.asExprOf[t] }, $into, $stdoutE)
+                  ToolInvokerRuntime.encodeSuccess[t](${ call.asExprOf[t] }, $into, $stdoutE, $stderrE)
                 )
               }
         }
@@ -238,7 +240,7 @@ private[macros] class ToolImplementationAssembler(val core: ToolMacroCore) {
                           case Left(error) =>
                             Left(ToolInvokerRuntime.customError[e](error, schema))
                           case Right(value) =>
-                            ToolInvokerRuntime.encodeSuccess[t](value, $into, $stdoutE)
+                            ToolInvokerRuntime.encodeSuccess[t](value, $into, $stdoutE, $stderrE)
                         }(ToolInvokerRuntime.executionContext)
                       }
                     else
@@ -249,7 +251,7 @@ private[macros] class ToolImplementationAssembler(val core: ToolMacroCore) {
                             Future.successful(Left(ToolInvokerRuntime.customError[e](error, schema)))
                           case Right(value) =>
                             Future.successful(
-                              ToolInvokerRuntime.encodeSuccess[t](value, $into, $stdoutE)
+                              ToolInvokerRuntime.encodeSuccess[t](value, $into, $stdoutE, $stderrE)
                             )
                         }
                       }
@@ -260,7 +262,7 @@ private[macros] class ToolImplementationAssembler(val core: ToolMacroCore) {
                     val schema = $tes
                     ${ call.asExprOf[Future[Either[e, Unit]]] }.map {
                       case Left(error) => Left(ToolInvokerRuntime.customError[e](error, schema))
-                      case Right(_)    => ToolInvokerRuntime.encodeUnit($stdoutE)
+                      case Right(_)    => ToolInvokerRuntime.encodeUnit($stdoutE, $stderrE)
                     }(ToolInvokerRuntime.executionContext)
                   }
                 else
@@ -270,7 +272,7 @@ private[macros] class ToolImplementationAssembler(val core: ToolMacroCore) {
                       case Left(error) =>
                         Future.successful(Left(ToolInvokerRuntime.customError[e](error, schema)))
                       case Right(_) =>
-                        Future.successful(ToolInvokerRuntime.encodeUnit($stdoutE))
+                        Future.successful(ToolInvokerRuntime.encodeUnit($stdoutE, $stderrE))
                     }
                   }
             }

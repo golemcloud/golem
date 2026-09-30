@@ -61,6 +61,7 @@ message CommandBody {
   optional ResultSpec result = 7;
   repeated ErrorCase errors = 8;
   optional CommandAnnotations annotations = 9;
+  optional StreamSpec stderr = 10;
 }
 
 message CommandAnnotations {

@@ -43,21 +43,19 @@ def doubledStream(input: AgentStream[Long]): AgentStream[Long] =
   input.map(_ * 2)
 ```
 
-Build a demand-driven producer with `AgentStream.fromPull`. The pull function runs only after
-downstream demand, which provides back-pressure. Return `None` for normal close and fail the future
-for a producer failure. Supply `onFinalize` to release producer resources on completion, failure,
-or explicit close.
+Build a demand-driven producer from a ZIO Blocks `Stream`. The stream runs only after downstream
+demand, which provides back-pressure. Use a typed value such as `Either[E, A]` for recoverable
+failures; the Golem protocol treats defects as fatal producer failures. Attach `ensuringAsync` when
+the producer owns resources that must be released on completion, failure, or explicit close.
 
 ```scala
-var next = 0L
-val output = AgentStream.fromPull(
-  () =>
-    if next == 3 then Future.successful(None)
-    else
-      val value = next
-      next += 1
-      Future.successful(Some(value)),
-  () => Future.successful(())
+import zio.blocks.async.*
+import zio.blocks.streams.Stream
+
+val output = AgentStream.fromStream(
+  Stream
+    .fromIterable(List(0L, 1L, 2L))
+    .ensuringAsync(Async.fromFuture(releaseProducerResources()))
 )
 ```
 
@@ -83,7 +81,7 @@ Definition-derived and generated guest clients accept and return `AgentStream` r
 
 ```scala
 val target = StreamingAgentClient.get("main")
-val input  = AgentStream.fromPull(/* demand-driven source */)
+val input  = AgentStream.fromStream(Stream.fromIterable(values))
 val result: Future[AgentStream[Long]] = target.doubled(input)
 ```
 

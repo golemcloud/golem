@@ -5,13 +5,14 @@ import { loadFixture } from "./check.mjs";
 const [providerPath, clientPath] = process.argv.slice(2);
 const { linked: provider } = await loadFixture(providerPath);
 let invocations = 0;
-globalThis.__capabilityToolInvoke = (name, path, input, stdin, stdout) => {
+globalThis.__capabilityToolInvoke = (name, path, input, stdin, stdout, stderr) => {
   invocations++;
   assert.equal(name, "echo");
   assert.deepEqual(path, []);
   assert.equal(stdin, undefined);
   assert.equal(stdout, undefined);
-  return provider.golemTool010Guest.invoke(name, path, input, stdin, stdout, {
+  assert.equal(stderr, undefined);
+  return provider.golemTool010Guest.invoke(name, path, input, stdin, stdout, stderr, {
     tag: "anonymous",
   });
 };

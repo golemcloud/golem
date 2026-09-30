@@ -134,6 +134,7 @@ fn body(
         constraints: value.constraints.into_iter().map(constraint).collect(),
         stdin: value.stdin,
         stdout: value.stdout,
+        stderr: value.stderr,
         result: value.result.map(|v| ExtendedResultSpec {
             type_: graph(v.type_, defs),
             doc: v.doc,
@@ -293,6 +294,7 @@ mod tests {
                                 mime: vec!["application/json".into()],
                                 required: true,
                             }),
+                            stderr: None,
                             result: Some(native::ResultSpec {
                                 type_: SchemaType::ref_to(named.clone()),
                                 doc: doc.clone(),

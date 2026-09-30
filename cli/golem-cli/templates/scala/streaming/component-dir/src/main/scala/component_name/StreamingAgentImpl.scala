@@ -4,6 +4,7 @@ import golem.runtime.annotations.agentImplementation
 import golem.schema.AgentStream
 import golem.config.Config
 import golem.streams.{DurableStreamProducer, DurableStreams}
+import zio.blocks.streams.Stream
 
 import scala.annotation.unused
 import scala.concurrent.Future
@@ -17,18 +18,12 @@ final class StreamingAgentImpl(
   private var cancelledProducers = 0
 
   private def stream[A](values: List[A]): AgentStream[A] = {
-    val remaining = values.iterator
-    var completed = false
-    AgentStream.fromPull(
-      () =>
-        Future.successful {
-          if (remaining.hasNext) Some(remaining.next())
-          else {
-            completed = true
-            None
-          }
-        },
-      () => Future.successful(if (!completed) cancelledProducers += 1)
+    var emitted = 0
+    AgentStream.fromStream(
+      Stream
+        .fromIterable(values)
+        .tapEach(_ => emitted += 1)
+        .ensuring(if (emitted < values.length) cancelledProducers += 1)
     )
   }
 

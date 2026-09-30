@@ -9,6 +9,7 @@ test "concrete client decoding does not consult a supplied result graph" {
   let result : Result[Array[Result[UInt, String]]?, ToolError[NoToolError]] = decode_wire_result_value({
       result: Some(payload),
       stdout: None,
+      stderr: None,
     },
   )
   guard result is Ok(Some([Ok(17U), Err("no")])) else {
@@ -25,6 +26,7 @@ test "concrete client rejects mismatched values and out-of-bounds children" {
       value: { value_nodes: [@types.StringValue("17")], root: 0, },
     }),
     stdout: None,
+    stderr: None,
   })
   assert_true(wrong is Err(Rpc(Protocol(_))))
   let invalid_child : Result[Array[UInt], ToolError[NoToolError]] = decode_wire_result_value({
@@ -33,6 +35,7 @@ test "concrete client rejects mismatched values and out-of-bounds children" {
         value: { value_nodes: [@types.ListValue([19])], root: 0, },
       }),
       stdout: None,
+      stderr: None,
     },
   )
   assert_true(invalid_child is Err(Rpc(Protocol(_))))

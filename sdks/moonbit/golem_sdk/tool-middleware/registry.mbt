@@ -166,7 +166,8 @@ pub async fn invoke_registered_tool_middleware_wire(
   stdin : @async-core.Stream[
     Result[FixedArray[Byte], @toolStreams.ByteStreamFailure],
   ]?,
-  stdout : @toolStreams.ToolStdoutWriter?,
+  stdout : @toolStreams.ToolOutputWriter?,
+  stderr : @toolStreams.ToolOutputWriter?,
   principal : @agentCommon.Principal,
   underlying : UnderlyingTool,
 ) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
@@ -184,7 +185,7 @@ pub async fn invoke_registered_tool_middleware_wire(
   })
   let invocation = RawToolInvocation::from_wit(
     context, tool_name, tool_metadata, decoded_parameters, command_path, input, stdin,
-    stdout, principal,
+    stdout, stderr, principal,
   )
   let parameter_schema = match
     tool_middleware_state.descriptors.get(middleware_name) {
@@ -203,6 +204,7 @@ pub async fn invoke_registered_tool_middleware_wire(
     None => return Err(@types.ToolError::InvalidToolName(middleware_name))
   }
   let host_stdout = invocation.take_host_stdout()
+  let host_stderr = invocation.take_host_stderr()
   let authored = invoker(invocation, underlying)
   let final_result = match authored {
     Ok(result) =>
@@ -217,27 +219,52 @@ pub async fn invoke_registered_tool_middleware_wire(
         Some(writer) => writer.drop()
         None => ()
       }
+      match host_stderr {
+        Some(writer) => writer.drop()
+        None => ()
+      }
       context.revoke()
       Err(error)
     }
     Ok(result) => {
-      match host_stdout {
-        None => ()
-        Some(writer) => pump_final_stdout(result.stdout, writer)
-      }
+      @async-core.with_task_group(async fn(group) {
+        let stdout_pump = host_stdout.map(writer => {
+          group.spawn(() => pump_final_output(result.stdout, writer))
+        })
+        let stderr_pump = host_stderr.map(writer => {
+          group.spawn(() => pump_final_output(result.stderr, writer))
+        })
+        match stdout_pump {
+          Some(pump) => ignore(pump.wait())
+          None => ()
+        }
+        match stderr_pump {
+          Some(pump) => ignore(pump.wait())
+          None => ()
+        }
+      })
       context.revoke()
-      match host_stdout {
-        None => Ok(result)
-        Some(_) => Ok({ result: result.result, stdout: None, })
-      }
+      Ok({
+        result: result.result,
+        stdout: if host_stdout is Some(_) {
+          None
+        } else {
+          result.stdout
+        },
+        stderr: if host_stderr is Some(_) {
+          None
+        } else {
+          result.stderr
+        },
+      })
     }
   }
 }
 
 ///|
-async fn pump_final_stdout(
+async fn pump_final_output(
   source : @async-core.Stream[Byte]?,
-  writer : @toolStreams.ToolStdoutWriter,
+  writer : @toolStreams.ToolOutputWriter,
 ) -> Unit {
   defer writer.drop()
   match source {
@@ -304,6 +331,7 @@ async fn invoke_registered_tool_middleware(
     command_path,
     input,
     stdin.map(byte_stream_items),
+    None,
     None,
     principal,
     underlying,

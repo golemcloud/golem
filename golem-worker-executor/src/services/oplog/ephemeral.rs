@@ -23,7 +23,7 @@ use crate::services::oplog::reader::{
 use crate::services::oplog::{
     CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, Oplog, OplogAddReceipt,
     OplogCloseCompletion, OplogError, OplogService, OrderedOplogStart, PendingUpload,
-    ReservedRawStartBuilder, downcast_oplog,
+    RawOplogPayloadDownloadError, ReservedRawStartBuilder, downcast_oplog,
 };
 use async_trait::async_trait;
 use futures::FutureExt;
@@ -1080,6 +1080,21 @@ impl Oplog for EphemeralOplog {
     ) -> Result<Vec<u8>, String> {
         self.primary_service
             .download_raw_payload(&self.owned_agent_id, self.agent_mode, payload_id, md5_hash)
+            .await
+    }
+
+    async fn download_raw_payload_classified(
+        &self,
+        payload_id: PayloadId,
+        md5_hash: Vec<u8>,
+    ) -> Result<Vec<u8>, RawOplogPayloadDownloadError> {
+        self.primary_service
+            .download_raw_payload_classified(
+                &self.owned_agent_id,
+                self.agent_mode,
+                payload_id,
+                md5_hash,
+            )
             .await
     }
 }

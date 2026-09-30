@@ -1995,7 +1995,7 @@ paths:
       - Agent
       summary: Invoke a tool on an existing agent or a fresh ephemeral component owner
       description: |-
-        Uses normal invocation permissions, queueing and idempotency. Byte stdin and stdout
+        Uses normal invocation permissions, queueing and idempotency. Byte stdin, stdout and stderr
         require an attached invocation session rather than this scalar endpoint.
       operationId: invoke_tool
       parameters:
@@ -16175,6 +16175,11 @@ components:
           allOf:
           - $ref: '#/components/schemas/StreamSpec'
           - nullable: true
+        stderr:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/StreamSpec'
+          - nullable: true
         result:
           nullable: true
           allOf:
@@ -19858,11 +19863,21 @@ components:
         declaresStdout:
           description: Whether the tool declares stdout support. Stdout bytes are not recorded in the oplog.
           type: boolean
+        hasStderr:
+          description: |-
+            Whether a live stderr attachment was requested. Stderr bytes are not recorded in the
+            oplog.
+          type: boolean
+        declaresStderr:
+          description: Whether the tool declares stderr support. Stderr bytes are not recorded in the oplog.
+          type: boolean
       required:
       - commandPath
       - hasStdin
       - hasStdout
       - declaresStdout
+      - hasStderr
+      - declaresStderr
     PublicTypedAgentConfigEntry:
       title: PublicTypedAgentConfigEntry
       description: |-

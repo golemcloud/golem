@@ -363,6 +363,7 @@ declare module 'golem:tool/common@0.1.0' {
     constraints: Constraint[];
     stdin?: StreamSpec;
     stdout?: StreamSpec;
+    stderr?: StreamSpec;
     result?: ResultSpec;
     errors: ErrorCase[];
     annotations?: CommandAnnotations;
@@ -423,10 +424,12 @@ declare module 'golem:tool/common@0.1.0' {
     parameterSchema: SchemaGraph;
   };
   /**
-   * Invocation contract — shared between guest and host.
+   * Invocation contract — shared between guest and host. Both attachment
+   * fields must be absent: output bytes use the writers supplied to the guest.
    */
   export type InvocationResult = {
     result?: TypedSchemaValue;
     stdout?: AsyncIterable<number>;
+    stderr?: AsyncIterable<number>;
   };
 }

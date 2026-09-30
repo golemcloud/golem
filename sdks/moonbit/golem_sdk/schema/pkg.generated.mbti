@@ -250,6 +250,7 @@ pub impl FromWire for Char
 pub impl FromWire for Int
 pub impl FromWire for Int64
 pub impl FromWire for UInt
+pub impl FromWire for UInt16
 pub impl FromWire for UInt64
 pub impl FromWire for Float
 pub impl FromWire for Double
@@ -316,6 +317,7 @@ pub impl IntoWire for Char
 pub impl IntoWire for Int
 pub impl IntoWire for Int64
 pub impl IntoWire for UInt
+pub impl IntoWire for UInt16
 pub impl IntoWire for UInt64
 pub impl IntoWire for Float
 pub impl IntoWire for Double
@@ -355,6 +357,7 @@ pub impl WireSchema for Char
 pub impl WireSchema for Int
 pub impl WireSchema for Int64
 pub impl WireSchema for UInt
+pub impl WireSchema for UInt16
 pub impl WireSchema for UInt64
 pub impl WireSchema for Float
 pub impl WireSchema for Double

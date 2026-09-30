@@ -121,6 +121,7 @@ pub struct ToolOperationMetadata {
     pub attachment_count: usize,
     pub stdin: Option<ToolAttachmentMetadata>,
     pub stdout: Option<ToolAttachmentMetadata>,
+    pub stderr: Option<ToolAttachmentMetadata>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -222,6 +223,7 @@ struct RegisteredOperation {
     acquisition_error: Option<String>,
     stdin: Option<AttachmentController>,
     stdout: Option<AttachmentController>,
+    stderr: Option<AttachmentController>,
 }
 
 struct OperationLease {
@@ -368,6 +370,7 @@ impl OwnerToolOperations {
                     acquisition_error: None,
                     stdin: None,
                     stdout: None,
+                    stderr: None,
                 },
             );
             winner_tx
@@ -454,6 +457,7 @@ impl OwnerToolOperations {
                                     .stdin
                                     .iter()
                                     .chain(operation.stdout.iter())
+                                    .chain(operation.stderr.iter())
                                     .cloned(),
                             );
                         }
@@ -621,6 +625,7 @@ impl OwnerToolOperations {
                     .stdin
                     .iter()
                     .chain(operation.stdout.iter())
+                    .chain(operation.stderr.iter())
                     .cloned()
             })
             .collect::<Vec<_>>();
@@ -713,10 +718,15 @@ impl OwnerToolOperations {
                     }
                 },
                 attachment_count: usize::from(operation.stdin.is_some())
-                    + usize::from(operation.stdout.is_some()),
+                    + usize::from(operation.stdout.is_some())
+                    + usize::from(operation.stderr.is_some()),
                 stdin: operation.stdin.as_ref().map(AttachmentController::metadata),
                 stdout: operation
                     .stdout
+                    .as_ref()
+                    .map(AttachmentController::metadata),
+                stderr: operation
+                    .stderr
                     .as_ref()
                     .map(AttachmentController::metadata),
             })
@@ -945,6 +955,7 @@ impl OwnerToolOperation {
         &self,
         stdin: Option<AttachmentController>,
         stdout: Option<AttachmentController>,
+        stderr: Option<AttachmentController>,
     ) -> bool {
         let mut state = self.owner.state.lock().unwrap();
         let operation = state
@@ -953,17 +964,19 @@ impl OwnerToolOperation {
             .expect("owner tool operation must remain registered");
         if operation.winner.is_terminal() {
             drop(state);
-            for attachment in stdin.iter().chain(stdout.iter()) {
+            for attachment in stdin.iter().chain(stdout.iter()).chain(stderr.iter()) {
                 attachment.fence_owner();
             }
             return false;
         }
         operation.stdin = stdin;
         operation.stdout = stdout;
+        operation.stderr = stderr;
         tracing::debug!(
             operation_id = self.id,
             has_stdin = operation.stdin.is_some(),
             has_stdout = operation.stdout.is_some(),
+            has_stderr = operation.stderr.is_some(),
             "Attached tool operation streams"
         );
         true
@@ -1003,6 +1016,7 @@ impl OwnerToolOperation {
                 .stdin
                 .iter()
                 .chain(operation.stdout.iter())
+                .chain(operation.stderr.iter())
                 .cloned()
                 .collect::<Vec<_>>()
         };
@@ -1097,6 +1111,7 @@ impl OwnerToolOperation {
                         .stdin
                         .iter()
                         .chain(operation.stdout.iter())
+                        .chain(operation.stderr.iter())
                         .cloned()
                         .collect::<Vec<_>>()
                 })
@@ -1385,6 +1400,7 @@ impl OwnerToolOperation {
                 .stdin
                 .iter()
                 .chain(operation.stdout.iter())
+                .chain(operation.stderr.iter())
                 .cloned()
                 .collect::<Vec<_>>()
         };
@@ -1455,6 +1471,7 @@ impl OwnerToolOperation {
                                     .stdin
                                     .iter()
                                     .chain(operation.stdout.iter())
+                                    .chain(operation.stderr.iter())
                                     .cloned(),
                             );
                         }

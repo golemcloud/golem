@@ -1631,6 +1631,7 @@ fn tool_predispatch_rejection_payload_roundtrips_with_selected_error() {
         input_decode_failure: Some(ToolInputDecodeFailure::InvalidSchemaValue),
         has_stdin: true,
         has_stdout: false,
+        has_stderr: true,
         call_mode: EntityCallMode::Asynchronous,
         error,
     };
@@ -1663,6 +1664,7 @@ fn named_custom_tool_error_payload_roundtrips() {
         input_decode_failure: None,
         has_stdin: false,
         has_stdout: false,
+        has_stderr: false,
         call_mode: EntityCallMode::Synchronous,
         error: error.clone(),
     };
@@ -1681,7 +1683,7 @@ fn named_custom_tool_error_payload_roundtrips() {
 }
 
 #[test]
-fn tool_operation_terminal_is_schema_native_and_excludes_stdout() {
+fn tool_operation_terminal_is_schema_native_and_excludes_output_attachments() {
     let terminal = SerializableToolOperationTerminal {
         body_execution: SerializableEntityBodyExecution::Skipped,
         result: Err(SerializableToolRpcError::ResourceExhausted(

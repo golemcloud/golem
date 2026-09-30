@@ -164,7 +164,7 @@ From your component (or shared workspace) `Cargo.toml`:
 - `serde` / `serde_json` — serialization
 - Optional: `golem-wasi-http` — advanced HTTP client alternative
 
-To enable AI features, add the relevant golem-ai provider crate as a dependency (e.g., `golem-ai-llm-openai`). 
+To enable AI features, add the relevant golem-ai provider crate as a dependency (e.g., `golem-ai-llm-openai`).
 
 ## Key Constraints
 
@@ -201,4 +201,3 @@ If you see `This action requires confirmation, but the current shell is non-inte
 - Full docs: https://learn.golem.cloud
 - golem-rust SDK: https://docs.rs/golem-rust
 <!-- golem-managed:guide:rust:end -->
-

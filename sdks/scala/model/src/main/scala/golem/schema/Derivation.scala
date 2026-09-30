@@ -664,7 +664,7 @@ private[golem] object Derivation {
                     if (isByteArray(reflect))
                       SchemaValue.ListValue(values.toList.map {
                         case DV.Primitive(PrimitiveValue.Byte(value)) => SchemaValue.U8Value(value & 0xff)
-                        case other => throw SchemaEncodeError(s"expected byte value in byte array, found: $other")
+                        case other                                    => throw SchemaEncodeError(s"expected byte value in byte array, found: $other")
                       })
                     else SchemaValue.ListValue(values.toList.map(v => dynamicToSchemaValue(elemRef, v)))
                   case other => throw SchemaEncodeError(s"expected sequence dynamic value, found: $other")

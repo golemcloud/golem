@@ -415,6 +415,8 @@ fn entity_attribution_public_protobuf_and_json_roundtrip() {
                 has_stdin: false,
                 has_stdout: true,
                 declares_stdout: true,
+                has_stderr: true,
+                declares_stderr: true,
             },
         )),
     };

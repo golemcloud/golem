@@ -41,6 +41,7 @@ object ToolReflectionSpec extends ZIOSpecDefault {
       Nil,
       None,
       None,
+      None,
       Some(WitResultSpec(schema.root, doc, Nil, "")),
       errorName.toList.map(name => WitErrorCase(name, doc, ErrorKind.RuntimeError, 1, Some(schema.root))),
       None
@@ -305,22 +306,22 @@ object ToolReflectionSpec extends ZIOSpecDefault {
     },
     test("stream failures remain recoverable for reflected calls") {
       val broken = new ToolInputStream {
-        override def read(): Future[Either[ByteStreamFailure, Option[Array[Byte]]]] =
-          Future.successful(Left(ByteStreamFailure.Failed("broken")))
+        override val stream   = zio.blocks.streams.Stream.fail(ByteStreamFailure.Failed("broken"))
+        override def cancel() = Future.successful(())
       }
       val terminal: Future[Either[ToolError[NamedToolError], Option[SchemaValue]]] = Future.successful(Right(None))
-      val invocation                                                               = ReflectedToolInvocation(Some(broken), terminal, () => ())
+      val invocation                                                               = ReflectedToolInvocation(Some(broken), None, terminal, () => ())
       ZIO.fromFuture(_ => invocation.collect()(using ExecutionContext.global)).map { result =>
         assertTrue(result.left.toOption.exists(_.isInstanceOf[ToolError.Rpc]))
       }
     },
     test("declared tool errors win after stdout failure while both channels settle") {
       val broken = new ToolInputStream {
-        override def read(): Future[Either[ByteStreamFailure, Option[Array[Byte]]]] =
-          Future.successful(Left(ByteStreamFailure.Failed("broken")))
+        override val stream   = zio.blocks.streams.Stream.fail(ByteStreamFailure.Failed("broken"))
+        override def cancel() = Future.successful(())
       }
       val terminal   = Promise[Either[ToolError[NamedToolError], Option[SchemaValue]]]()
-      val invocation = ReflectedToolInvocation(Some(broken), terminal.future, () => ())
+      val invocation = ReflectedToolInvocation(Some(broken), None, terminal.future, () => ())
       val collected  = invocation.collect()(using ExecutionContext.global)
       val payload    = TypedSchemaValue(stringGraph, StringValue("details"))
       terminal.success(Left(ToolError.Tool(NamedToolError("declared", payload))))

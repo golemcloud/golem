@@ -491,7 +491,7 @@ export function staticTools(config, runtime) {
             ? `{codec:${codecSource(codec, declarations)},graph:${literal(metadata().graph(codec.graph))}}`
             : 'undefined';
         commands.push(
-          `{path:${literal(commandPath)},aliases:${literal(aliases)},nested:${node.subcommands.length > 0},input:{codec:${input},graph:${literal(metadata().graph(inputGraph))}},result:${typed(node.body.result?.codec)},errors:{${node.body.errors.map((e) => `${literal(e.name)}:${typed(e.payloadCodec)}`).join(',')}},stdin:${literal(node.body.stdin)},stdout:${literal(node.body.stdout)}}`,
+          `{path:${literal(commandPath)},aliases:${literal(aliases)},nested:${node.subcommands.length > 0},input:{codec:${input},graph:${literal(metadata().graph(inputGraph))}},result:${typed(node.body.result?.codec)},errors:{${node.body.errors.map((e) => `${literal(e.name)}:${typed(e.payloadCodec)}`).join(',')}},stdin:${literal(node.body.stdin)},stdout:${literal(node.body.stdout)},stderr:${literal(node.body.stderr)}}`,
         );
       }
       for (const child of node.subcommands)

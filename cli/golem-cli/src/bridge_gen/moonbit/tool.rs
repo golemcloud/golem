@@ -331,7 +331,9 @@ impl MoonBitToolBridgeGenerator {
         let error_type = self.error_type(command_index, body);
         let success_type = self.success_type(body)?;
         let has_stdout = body.stdout.is_some();
-        let client_success_type = if has_stdout {
+        let has_stderr = body.stderr.is_some();
+        let has_output = has_stdout || has_stderr;
+        let client_success_type = if has_output {
             format!("@tool.TypedToolInvocation[{success_type}, {error_type}]")
         } else {
             success_type.clone()
@@ -342,7 +344,7 @@ impl MoonBitToolBridgeGenerator {
         writer.line("#warnings(\"-unused_try\")");
         writer.line(format!(
             "pub {}fn {}::{}(self : {}{}) -> Result[{}, @tool.ToolError[{}]] {{",
-            if has_stdout { "" } else { "async " },
+            if has_output { "" } else { "async " },
             client.struct_name,
             method_name,
             client.struct_name,
@@ -399,18 +401,20 @@ impl MoonBitToolBridgeGenerator {
                     .context("missing error enum")?,
             )
         };
-        if has_stdout {
+        if has_output {
             writer.line("let input = try @model.typed_schema_value_to_wit(input) catch {");
             writer.indent();
             writer.line("error => return Err(@tool.tool_protocol_error(\"failed to encode tool input: \" + repr(error)))");
             writer.dedent();
             writer.line("}");
             writer.line(format!(
-                "match self.client.start({path}, input, {stdin}, true, {error_decoder}) {{"
+                "match self.client.start({path}, input, {stdin}, {has_stdout}, {has_stderr}, {error_decoder}) {{"
             ));
             writer.indent();
             writer.line("Err(error) => Err(error)");
-            writer.line("Ok(invocation) => @tool.typed_invocation(invocation, fn(result) {");
+            writer.line(format!(
+                "Ok(invocation) => @tool.typed_invocation(invocation, {has_stdout}, {has_stderr}, fn(result) {{"
+            ));
             writer.indent();
             self.result_decode(writer, body, true)?;
             writer.dedent();
@@ -1010,6 +1014,7 @@ mod tests {
             constraints: vec![],
             stdin: None,
             stdout: None,
+            stderr: None,
             result: None,
             errors: vec![],
             annotations: None,

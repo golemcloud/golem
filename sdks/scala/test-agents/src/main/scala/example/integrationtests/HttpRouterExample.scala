@@ -8,6 +8,7 @@ import golem.config.{AgentConfig, Config}
 import golem.runtime.annotations.*
 import golem.runtime.http.*
 import golem.schema.AgentStream
+import zio.blocks.streams.Stream
 import scala.concurrent.Future
 import scala.scalajs.js
 import scala.scalajs.js.annotation.JSImport
@@ -33,18 +34,12 @@ trait ScalaWebsite extends BaseAgent with AgentConfig[WebsiteConfig] {
 
 @agentImplementation()
 final class ScalaWebsiteImpl(config: Config[WebsiteConfig]) extends ScalaWebsite {
-  private def text(value: String): HttpResponse = {
-    var remaining: Option[Array[Byte]] = Some(value.getBytes("UTF-8"))
+  private def text(value: String): HttpResponse =
     HttpResponse(
       UShort(200),
       List(HttpHeader.ascii("content-type", "text/plain")),
-      AgentStream.fromPull { () =>
-        val next = remaining
-        remaining = None
-        Future.successful(next)
-      }
+      AgentStream.fromStream(Stream.succeed(value.getBytes("UTF-8")))
     )
-  }
 
   private val handler: HttpHandler.Handler = request =>
     request.path match {
@@ -86,7 +81,7 @@ final class ScalaWebsiteImpl(config: Config[WebsiteConfig]) extends ScalaWebsite
           HttpResponse(
             UShort(status),
             List(HttpHeader.ascii("content-length", "17")),
-            AgentStream.fromPull(() => Future.failed(new IllegalStateException("body must not be polled")))
+            AgentStream.fromStream(Stream.die(new IllegalStateException("body must not be polled")))
           )
         )
       case "/scala/invalid-head" => Future.successful(text("invalid").copy(status = UShort(99)))

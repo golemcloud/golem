@@ -97,6 +97,7 @@ private[tool] object ToolEncoding {
       constraints = body.constraints.map(encodeConstraint),
       stdin = body.stdin,
       stdout = body.stdout,
+      stderr = body.stderr,
       result = body.result.map(encodeResult(_, encoder)),
       errors = body.errors.map(encodeError(_, encoder)),
       annotations = body.annotations

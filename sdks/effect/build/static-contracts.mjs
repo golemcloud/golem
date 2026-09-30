@@ -637,9 +637,9 @@ export function staticContracts(runtime, publicEntries) {
         return `__Effect.succeed(((codec)=>({...codec,decodeTyped:v=>codec.decode(v.value,()=>(${check})(v.graph))}))(${wire}))`
       }
       if (clientOptions !== undefined)
-        return `{path:${literal(key ? key.split("/") : [])},fields:${literal(body.args.map((a) => a.name))},stdout:${!!body.model.stdout},input:__Effect.succeed(${input}),output:${encode(body.model.output, body.output)},errors:[${body.errors.map(({ spec, codec }) => `{name:${literal(spec.name)},codec:${encode(spec.schema, codec)}}`).join(",")}]}`
+        return `{path:${literal(key ? key.split("/") : [])},fields:${literal(body.args.map((a) => a.name))},stdout:${!!body.model.stdout},stderr:${!!body.model.stderr},input:__Effect.succeed(${input}),output:${encode(body.model.output, body.output)},errors:[${body.errors.map(({ spec, codec }) => `{name:${literal(spec.name)},codec:${encode(spec.schema, codec)}}`).join(",")}]}`
       const check = emitGraphCheck(body.input.schemaGraph, declarations)
-      return `[${literal(key)},{model:${literal({ stdin: body.model.stdin, stdout: body.model.stdout })},decodeInput:input=>${input}.decode(input.value,()=>(${check})(input.graph)),output:${encode(body.model.output, body.output)},errors:[${body.errors.map(({ spec, codec }) => `{spec:${literal({ name: spec.name })},codec:${encode(spec.schema, codec)}}`).join(",")}]}]`
+      return `[${literal(key)},{model:${literal({ stdin: body.model.stdin, stdout: body.model.stdout, stderr: body.model.stderr })},decodeInput:input=>${input}.decode(input.value,()=>(${check})(input.graph)),output:${encode(body.model.output, body.output)},errors:[${body.errors.map(({ spec, codec }) => `{spec:${literal({ name: spec.name })},codec:${encode(spec.schema, codec)}}`).join(",")}]}]`
     })
     if (clientOptions !== undefined)
       return `(()=>{${declarations.join("\n")}return __toolClient(${literal(definition.name)},[${bodies.join(",")}],${clientOptions})})()`

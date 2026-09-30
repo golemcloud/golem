@@ -19,6 +19,7 @@ import golem.schema.SchemaValue._
 import golem.schema.wire.SchemaWire
 import golem.tool._
 import golem.tool.wire._
+import zio.blocks.async.*
 import zio.blocks.schema.json.Json
 
 import scala.concurrent.{ExecutionContext, Future}
@@ -44,29 +45,39 @@ private[reflection] object ToolReflectionFailures {
 
   def collect[A](
     stdout: Option[ToolInputStream],
+    stderr: Option[ToolInputStream],
     result: Future[Either[ToolError[NamedToolError], A]]
-  )(implicit ec: ExecutionContext): Future[Either[ToolError[NamedToolError], (A, Array[Byte])]] = {
-    def drain(stream: ToolInputStream, chunks: Vector[Array[Byte]]): Future[Array[Byte]] =
-      stream.read().flatMap {
-        case Right(Some(bytes)) => drain(stream, chunks :+ bytes)
-        case Right(None)        => Future.successful(chunks.flatten.toArray)
-        case Left(failure)      => Future.failed(new ToolStreamException(failure))
+  )(implicit ec: ExecutionContext): Future[Either[ToolError[NamedToolError], CollectedToolInvocation[A]]] = {
+    def drain(stream: ToolInputStream): Future[Array[Byte]] =
+      stream.stream.runCollectAsync.toFuture.flatMap {
+        case Left(failure) => Future.failed(new ToolStreamException(failure))
+        case Right(bytes)  => Future.successful(bytes.toArray)
       }
     val terminal = result.map(Right(_): Either[Throwable, Either[ToolError[NamedToolError], A]]).recover { case error =>
       Left(error)
     }
-    val output = stdout
-      .fold(Future.successful(Array.emptyByteArray))(drain(_, Vector.empty))
-      .map(Right(_): Either[Throwable, Array[Byte]])
-      .recover { case error => Left(error) }
-    terminal.zip(output).map {
-      case (Right(Left(error @ ToolError.Tool(_))), _) => Left(error)
-      case (Left(error), _)                            => Left(protocol(error))
-      case (_, Left(error))                            => Left(protocol(error))
-      case (Right(value), Right(bytes))                => value.map(_ -> bytes)
+    def collectOutput(output: Option[ToolInputStream]): Future[Either[Throwable, Option[Array[Byte]]]] =
+      output
+        .fold(Future.successful(Option.empty[Array[Byte]]))(stream => drain(stream).map(Some(_)))
+        .map(Right(_): Either[Throwable, Option[Array[Byte]]])
+        .recover { case error => Left(error) }
+
+    terminal.zip(collectOutput(stdout)).zip(collectOutput(stderr)).map {
+      case ((Right(Left(error)), _), _)                          => Left(error)
+      case ((Left(error), _), _)                                 => Left(protocol(error))
+      case ((_, Left(error)), _)                                 => Left(protocol(error))
+      case ((_, _), Left(error))                                 => Left(protocol(error))
+      case ((Right(Right(value)), Right(stdout)), Right(stderr)) =>
+        Right(CollectedToolInvocation(value, stdout, stderr))
     }
   }
 }
+
+final case class CollectedToolInvocation[+A](
+  result: A,
+  stdout: Option[Array[Byte]],
+  stderr: Option[Array[Byte]]
+)
 
 /**
  * A selected argument in the canonical input record of a discovered command.
@@ -405,11 +416,11 @@ final class ToolCommand private[reflection] (
   ): Future[Either[ToolError[NamedToolError], Option[SchemaValue]]] = {
     if (body.isEmpty)
       return Future.successful(Left(ToolError.InvalidInput("selected command is a namespace and cannot be invoked")))
-    if (body.exists(_.stdout.exists(_.required)))
-      return Future.successful(Left(ToolError.InvalidInput("command requires caller-readable stdout")))
+    if (body.exists(callable => callable.stdout.exists(_.required) || callable.stderr.exists(_.required)))
+      return Future.successful(Left(ToolError.InvalidInput("command requires caller-readable output")))
     startValue(value, stdin) match {
       case Left(error)    => Future.successful(Left(error))
-      case Right(started) => started.collect().map(_.map(_._1))
+      case Right(started) => started.collect().map(_.map(_.result))
     }
   }
 
@@ -439,9 +450,13 @@ final class ToolCommand private[reflection] (
       for {
         input     <- checkedInput(value)
         transport <- ToolRpcClient.tryTransport(tool.lookupName).left.map(mapFailure)
-        started   <- transport.start(path, input, stdin, body.exists(_.stdout.nonEmpty)).left.map(mapFailure)
+        started   <- transport
+                     .start(path, input, stdin, body.exists(_.stdout.nonEmpty), body.exists(_.stderr.nonEmpty))
+                     .left
+                     .map(mapFailure)
       } yield ReflectedToolInvocation(
         started.stdout,
+        started.stderr,
         ToolReflectionFailures.recover(started.result.map(_.left.map(mapFailure).flatMap(decodeResult))),
         started.cancel
       )
@@ -454,6 +469,7 @@ final class ToolCommand private[reflection] (
     packJson(value).flatMap(startValue(_, stdin)).map { started =>
       ReflectedToolJsonInvocation(
         started.stdout,
+        started.stderr,
         ToolReflectionFailures.recover(started.result.map(_.flatMap {
           case None         => Right(None)
           case Some(output) =>
@@ -469,8 +485,8 @@ final class ToolCommand private[reflection] (
   ): Either[ToolError[NamedToolError], Unit] = ToolReflectionFailures.attempt {
     if (body.isEmpty)
       Left(ToolError.InvalidInput("selected command is a namespace and cannot be invoked"))
-    else if (body.exists(_.stdout.exists(_.required)))
-      Left(ToolError.InvalidInput("command requires caller-readable stdout"))
+    else if (body.exists(callable => callable.stdout.exists(_.required) || callable.stderr.exists(_.required)))
+      Left(ToolError.InvalidInput("command requires caller-readable output"))
     else if (body.exists(_.stdin.exists(_.required)) && stdin.isEmpty)
       Left(ToolError.InvalidInput("command requires stdin"))
     else
@@ -485,24 +501,26 @@ final class ToolCommand private[reflection] (
 
 final case class ReflectedToolInvocation(
   stdout: Option[ToolInputStream],
+  stderr: Option[ToolInputStream],
   result: Future[Either[ToolError[NamedToolError], Option[SchemaValue]]],
   cancel: () => Unit
 ) {
   def collect()(implicit
     ec: ExecutionContext
-  ): Future[Either[ToolError[NamedToolError], (Option[SchemaValue], Array[Byte])]] =
-    ToolReflectionFailures.collect(stdout, result)
+  ): Future[Either[ToolError[NamedToolError], CollectedToolInvocation[Option[SchemaValue]]]] =
+    ToolReflectionFailures.collect(stdout, stderr, result)
 }
 
 final case class ReflectedToolJsonInvocation(
   stdout: Option[ToolInputStream],
+  stderr: Option[ToolInputStream],
   result: Future[Either[ToolError[NamedToolError], Option[Json]]],
   cancel: () => Unit
 ) {
   def collect()(implicit
     ec: ExecutionContext
-  ): Future[Either[ToolError[NamedToolError], (Option[Json], Array[Byte])]] =
-    ToolReflectionFailures.collect(stdout, result)
+  ): Future[Either[ToolError[NamedToolError], CollectedToolInvocation[Option[Json]]]] =
+    ToolReflectionFailures.collect(stdout, stderr, result)
 }
 
 /** Fully dynamic tool calls accept only caller-packed values. */
@@ -538,14 +556,16 @@ final class DynamicToolClient(val toolName: String) {
     path: List[String],
     input: TypedSchemaValue,
     stdin: Option[ToolInputStream] = None,
-    stdout: Boolean = false
+    stdout: Boolean = false,
+    stderr: Boolean = false
   ): Either[ToolError[NamedToolError], DynamicToolInvocation] =
     ToolReflectionFailures.attempt(
       for {
         transport <- ToolRpcClient.tryTransport(toolName).left.map(mapFailure)
-        started   <- transport.start(path, input, stdin, stdout).left.map(mapFailure)
+        started   <- transport.start(path, input, stdin, stdout, stderr).left.map(mapFailure)
       } yield DynamicToolInvocation(
         started.stdout,
+        started.stderr,
         ToolReflectionFailures.recover(started.result.map(_.left.map(mapFailure))),
         started.cancel
       )
@@ -561,11 +581,12 @@ final class DynamicToolClient(val toolName: String) {
 
 final case class DynamicToolInvocation(
   stdout: Option[ToolInputStream],
+  stderr: Option[ToolInputStream],
   result: Future[Either[ToolError[NamedToolError], ToolInvokeResult]],
   cancel: () => Unit
 ) {
   def collect()(implicit
     ec: ExecutionContext
-  ): Future[Either[ToolError[NamedToolError], (ToolInvokeResult, Array[Byte])]] =
-    ToolReflectionFailures.collect(stdout, result)
+  ): Future[Either[ToolError[NamedToolError], CollectedToolInvocation[ToolInvokeResult]]] =
+    ToolReflectionFailures.collect(stdout, stderr, result)
 }

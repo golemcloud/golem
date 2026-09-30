@@ -62,6 +62,7 @@ final case class WitCommandBody(
   constraints: List[WitConstraint],
   stdin: Option[StreamSpec],
   stdout: Option[StreamSpec],
+  stderr: Option[StreamSpec],
   result: Option[WitResultSpec],
   errors: List[WitErrorCase],
   annotations: Option[CommandAnnotations]

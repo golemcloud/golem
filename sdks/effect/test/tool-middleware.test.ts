@@ -51,9 +51,32 @@ const gate = () => {
   return { wait, open }
 }
 
+const cancelledWriter = () => ({
+  write: vi.fn(async () => {
+    throw { tag: "closed", val: { tag: "consumer-cancelled" } }
+  }),
+  finish: vi.fn(async () => undefined),
+  fail: vi.fn(async () => undefined),
+})
+
+const collectingWriter = () => {
+  const bytes: number[] = []
+  return {
+    bytes,
+    writer: {
+      write: vi.fn(async (chunk: Uint8Array) => {
+        bytes.push(...chunk)
+      }),
+      finish: vi.fn(async () => undefined),
+      fail: vi.fn(async () => undefined),
+    },
+  }
+}
+
 const underlyingResult = (
   result?: ReturnType<typeof wire>,
   stdout?: AsyncIterable<ByteStreamItem>,
+  stderr?: AsyncIterable<ByteStreamItem>,
 ) =>
   [
     {
@@ -62,10 +85,104 @@ const underlyingResult = (
       [Symbol.dispose]: vi.fn(),
     },
     stdout,
+    stderr,
   ] as const
 
 describe("typed tool middleware", () => {
   beforeEach(resetMiddlewares)
+
+  it.each(["stdout", "stderr"] as const)(
+    "lets typed %s cancellation close locally while its sibling finishes",
+    async (cancelled) => {
+      const definition = toolDefinition("dual-output").body((body) => body.output().stderr())
+      const stdoutClosed = vi.fn()
+      const stderrClosed = vi.fn()
+      typed({
+        name: `typed-cancel-${cancelled}`,
+        parameters: Schema.Struct({}),
+        presented: definition,
+        handler: {
+          dualOutput: (_input, { stdout, stderr }) =>
+            Effect.all(
+              [
+                stdout!(
+                  Stream.fromIterable([Uint8Array.of(1)]).pipe(
+                    Stream.ensuring(Effect.sync(stdoutClosed)),
+                  ),
+                ),
+                stderr!(
+                  Stream.fromIterable([Uint8Array.of(10), Uint8Array.of(20)]).pipe(
+                    Stream.ensuring(Effect.sync(stderrClosed)),
+                  ),
+                ),
+              ],
+              { concurrency: "unbounded" },
+            ).pipe(Effect.as(undefined)),
+        },
+      })
+      const sibling = collectingWriter()
+      const rejected = cancelledWriter()
+      const stdoutWriter = cancelled === "stdout" ? rejected : sibling.writer
+      const stderrWriter = cancelled === "stderr" ? rejected : sibling.writer
+
+      await expect(
+        toolMiddlewareGuest.invokeToolMiddleware(
+          `typed-cancel-${cancelled}`,
+          "dual-output",
+          metadata,
+          wire(Schema.Struct({}), {}),
+          [],
+          wire(Schema.Struct({}), {}),
+          undefined,
+          stdoutWriter as never,
+          stderrWriter as never,
+          { tag: "anonymous" },
+          { invoke: vi.fn() } as never,
+        ),
+      ).rejects.toMatchObject({ tag: "closed" })
+      expect(sibling.bytes).toEqual(cancelled === "stdout" ? [10, 20] : [1])
+      expect(sibling.writer.finish).toHaveBeenCalledOnce()
+      expect(stdoutClosed).toHaveBeenCalledOnce()
+      expect(stderrClosed).toHaveBeenCalledOnce()
+    },
+  )
+
+  it.each(["stdout", "stderr"] as const)(
+    "lets universal %s cancellation close locally while its sibling finishes",
+    async (cancelled) => {
+      const stdout = tracked(1)
+      const stderr = tracked(10, 20)
+      universal({
+        name: `universal-cancel-${cancelled}`,
+        parameters: Schema.Struct({}),
+        handler: () => Effect.succeed({ stdout: stdout.iterable, stderr: stderr.iterable }),
+      })
+      const sibling = collectingWriter()
+      const rejected = cancelledWriter()
+      const stdoutWriter = cancelled === "stdout" ? rejected : sibling.writer
+      const stderrWriter = cancelled === "stderr" ? rejected : sibling.writer
+
+      await expect(
+        toolMiddlewareGuest.invokeToolMiddleware(
+          `universal-cancel-${cancelled}`,
+          "target",
+          metadata,
+          wire(Schema.Struct({}), {}),
+          [],
+          wire(Schema.Void, undefined),
+          undefined,
+          stdoutWriter as never,
+          stderrWriter as never,
+          { tag: "anonymous" },
+          { invoke: vi.fn() } as never,
+        ),
+      ).rejects.toMatchObject({ tag: "closed" })
+      expect(sibling.bytes).toEqual(cancelled === "stdout" ? [10, 20] : [1])
+      expect(sibling.writer.finish).toHaveBeenCalledOnce()
+      expect(stdout.close).toHaveBeenCalledOnce()
+      expect(stderr.close).toHaveBeenCalledOnce()
+    },
+  )
 
   it("exports and decodes author-declared installation parameters", async () => {
     const definition = toolDefinition("configured").body((body) => body.returns(Schema.String))
@@ -585,6 +702,7 @@ describe("typed tool middleware", () => {
           return [
             { get: async () => undefined, cancel, [Symbol.dispose]: dispose },
             byteItems(stdout.iterable),
+            undefined,
           ] as const
         },
       } as never,
@@ -646,6 +764,7 @@ describe("typed tool middleware", () => {
             [Symbol.dispose]: dispose,
           },
           undefined,
+          undefined,
         ],
       } as never,
     )
@@ -698,6 +817,7 @@ describe("typed tool middleware", () => {
             [Symbol.dispose]: dispose,
           },
           undefined,
+          undefined,
         ],
       } as never,
     )
@@ -736,7 +856,9 @@ describe("typed tool middleware", () => {
       undefined,
       undefined,
       { tag: "anonymous" },
-      { invoke: async () => [{ get, cancel, [Symbol.dispose]: dispose }, undefined] } as never,
+      {
+        invoke: async () => [{ get, cancel, [Symbol.dispose]: dispose }, undefined, undefined],
+      } as never,
     )
     await result.completion
     expect(dispose).toHaveBeenCalledOnce()
@@ -1232,6 +1354,7 @@ describe("typed tool middleware", () => {
             yield { tag: "ok" as const, val: Uint8Array.of(index + 1) }
             pulled[index]!.open()
           })(),
+          undefined,
         ] as const
       }),
     }
@@ -1250,6 +1373,7 @@ describe("typed tool middleware", () => {
       wire(Schema.Struct({}), {}),
       undefined,
       writer,
+      undefined,
       { tag: "anonymous" },
       wrapped as never,
     )

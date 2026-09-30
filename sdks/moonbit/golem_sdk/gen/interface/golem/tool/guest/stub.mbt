@@ -7,7 +7,8 @@ pub(all) struct Handlers {
     Array[String],
     @types.TypedSchemaValue,
     @async-core.Stream[Result[FixedArray[Byte], @streams.ByteStreamFailure]]?,
-    @streams.ToolStdoutWriter?,
+    @streams.ToolOutputWriter?,
+    @streams.ToolOutputWriter?,
     @common0.Principal,
     @async-core.TaskGroup[Unit],
   ) -> Result[@common.InvocationResult, @types.ToolError]
@@ -40,14 +41,15 @@ pub async fn invoke(
   stdin : @async-core.Stream[
     Result[FixedArray[Byte], @streams.ByteStreamFailure],
   ]?,
-  stdout : @streams.ToolStdoutWriter?,
+  stdout : @streams.ToolOutputWriter?,
+  stderr : @streams.ToolOutputWriter?,
   principal : @common0.Principal,
   background_group : @async-core.TaskGroup[Unit],
 ) -> Result[@common.InvocationResult, @types.ToolError] {
   match handlers.val {
     Some(h) =>
       (h.invoke)(
-        tool_name, command_path, input, stdin, stdout, principal, background_group,
+        tool_name, command_path, input, stdin, stdout, stderr, principal, background_group,
       )
     None => {
       @model.drop_wit_capabilities(input.value)
@@ -55,6 +57,9 @@ pub async fn invoke(
         reader.drop_sync()
       }
       if stdout is Some(writer) {
+        writer.drop()
+      }
+      if stderr is Some(writer) {
         writer.drop()
       }
       Err(@types.ToolError::InvalidToolName(tool_name))

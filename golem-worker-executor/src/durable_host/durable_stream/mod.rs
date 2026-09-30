@@ -285,6 +285,7 @@ pub enum NestedStreamWrite {
 pub enum ProducerOutputSource {
     New(ProducerRegistrationRequest),
     Existing(DurableStreamHandle),
+    Registered(DurableStreamHandle, StreamRecordReference),
 }
 
 /// Associates a transport output slot with its durable producer source.
@@ -292,6 +293,7 @@ pub struct ProducerOutputRegistration {
     pub transport_stream_id: u64,
     pub source: ProducerOutputSource,
     pub cancellation_epoch: Option<u64>,
+    pub role: SessionStreamRole,
 }
 
 /// A cancellation whose oplog record is durable but whose postcommit publication is pending.

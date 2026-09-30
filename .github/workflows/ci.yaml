@@ -116,7 +116,7 @@ jobs:
         uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: 17
+          java-version: 21
       - name: Setup SBT
         uses: sbt/setup-sbt@v1
       - uses: ./.github/actions/restore-binaries
@@ -409,7 +409,7 @@ jobs:
         uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: 17
+          java-version: 21
 
       - name: Setup SBT
         uses: sbt/setup-sbt@v1
@@ -427,6 +427,14 @@ jobs:
       - name: Install MoonBit SDK tools dependencies
         working-directory: sdks/moonbit/golem_sdk_tools
         run: moon update
+
+      - name: Install Golem MoonBit wit-bindgen
+        run: ./scripts/install-wit-bindgen.sh
+        working-directory: sdks/moonbit/golem_sdk
+
+      - name: Generate MoonBit WIT bindings
+        run: ./scripts/regen-bindings.sh
+        working-directory: sdks/moonbit/golem_sdk
 
       - name: Sync WIT dependencies
         run: cargo make wit
@@ -573,7 +581,7 @@ jobs:
         uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: 17
+          java-version: 21
 
       - name: Setup SBT
         uses: sbt/setup-sbt@v1
@@ -679,7 +687,7 @@ jobs:
         uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: 17
+          java-version: 21
 
       - name: Setup SBT
         uses: sbt/setup-sbt@v1
@@ -767,6 +775,12 @@ jobs:
       - name: Update MoonBit workspace dependencies
         run: moon update
         working-directory: sdks/moonbit
+      - name: Install Golem MoonBit wit-bindgen
+        run: ./scripts/install-wit-bindgen.sh
+        working-directory: sdks/moonbit/golem_sdk
+      - name: Generate and verify MoonBit WIT bindings
+        run: ./scripts/check-generated-bindings.sh
+        working-directory: sdks/moonbit/golem_sdk
       - name: Check SDK
         run: find . -name moon.pkg -exec dirname {} \; | xargs moon check --target wasm
         working-directory: sdks/moonbit/golem_sdk
@@ -1051,6 +1065,16 @@ jobs:
         run: moon update
         working-directory: sdks/moonbit
 
+      - name: Install Golem MoonBit wit-bindgen
+        if: matrix.chunk.needs-moonbit
+        run: ./scripts/install-wit-bindgen.sh
+        working-directory: sdks/moonbit/golem_sdk
+
+      - name: Generate MoonBit WIT bindings
+        if: matrix.chunk.needs-moonbit
+        run: ./scripts/regen-bindings.sh
+        working-directory: sdks/moonbit/golem_sdk
+
       - name: Install wasm-tools
         if: matrix.chunk.needs-moonbit
         run: cargo binstall --force --locked wasm-tools@1.248.0
@@ -1086,7 +1110,7 @@ jobs:
         uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: 17
+          java-version: 21
 
       - name: Setup SBT for Scala components
         if: matrix.chunk.needs-scala

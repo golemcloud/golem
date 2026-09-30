@@ -636,6 +636,7 @@ fn lower_body(body: ExtendedCommandBody<WireTypeRef>) -> Result<tool::CommandBod
             .collect::<Result<_, _>>()?,
         stdin: body.stdin.as_ref().map(Into::into),
         stdout: body.stdout.as_ref().map(Into::into),
+        stderr: body.stderr.as_ref().map(Into::into),
         result: body.result.map(|r| tool::ResultSpec {
             type_: r.type_.index,
             doc: (&r.doc).into(),

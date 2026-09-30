@@ -28,12 +28,14 @@ final case class WireToolInput(
   value: WitSchemaValueTree,
   stdin: Option[ToolInputStream],
   stdout: Option[ToolOutputStream],
+  stderr: Option[ToolOutputStream],
   principal: Principal
 )
 
 final case class WireToolBinding(
   paths: List[List[String]],
   stdout: Option[StreamSpec],
+  stderr: Option[StreamSpec],
   invoke: WireToolInput => Future[Either[WitToolError, Option[WitTypedSchemaValue]]]
 )
 
@@ -48,6 +50,10 @@ final case class WireToolImplementation(descriptor: WitTool, bindings: List[Wire
         reject(input, WitToolError.InvalidInput("unexpected stdout stream"))
       case Some(binding) if binding.stdout.exists(_.required) && input.stdout.isEmpty =>
         reject(input, WitToolError.InvalidInput("tool invocation did not contain declared stdout stream"))
+      case Some(binding) if binding.stderr.isEmpty && input.stderr.isDefined =>
+        reject(input, WitToolError.InvalidInput("unexpected stderr stream"))
+      case Some(binding) if binding.stderr.exists(_.required) && input.stderr.isEmpty =>
+        reject(input, WitToolError.InvalidInput("tool invocation did not contain declared stderr stream"))
       case Some(binding) =>
         try binding.invoke(input)
         catch {

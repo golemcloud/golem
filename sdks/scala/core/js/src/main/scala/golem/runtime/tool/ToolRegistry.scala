@@ -62,6 +62,7 @@ private[golem] object ToolRegistry {
       WitTypedSchemaValue,
       Option[ToolInputStream],
       Option[ToolOutputStream],
+      Option[ToolOutputStream],
       Principal
     ) => Future[Either[WitToolError, ToolInvocationResult]]
 
@@ -69,7 +70,7 @@ private[golem] object ToolRegistry {
     extended: Option[ExtendedToolType],
     encoded: WitTool,
     invoker: Option[ToolInvoker],
-    commandStdout: List[String] => Option[Option[StreamSpec]]
+    commandOutputs: List[String] => Option[(Option[StreamSpec], Option[StreamSpec])]
   )
 
   private val entries: mutable.LinkedHashMap[String, Entry] = mutable.LinkedHashMap.empty
@@ -99,8 +100,8 @@ private[golem] object ToolRegistry {
     val name = handle.descriptor.commands.nodes.head.name
     if (entries.contains(name))
       throw new IllegalArgumentException(s"duplicate tool registration for tool name: $name")
-    val stdout = handle.bindings.flatMap(binding => binding.paths.map(_ -> binding.stdout)).toMap
-    entries.update(name, Entry(None, handle.descriptor, Some(invoker), stdout.get))
+    val outputs = handle.bindings.flatMap(binding => binding.paths.map(_ -> (binding.stdout, binding.stderr))).toMap
+    entries.update(name, Entry(None, handle.descriptor, Some(invoker), outputs.get))
   }
 
   private def registerInner(tool: ExtendedToolType, invoker: Option[ToolInvoker]): Unit = {
@@ -118,7 +119,11 @@ private[golem] object ToolRegistry {
         Some(tool),
         encoded,
         invoker,
-        path => tool.commandIndexByPath(path).flatMap(index => tool.commands(index).body).map(_.stdout)
+        path =>
+          tool
+            .commandIndexByPath(path)
+            .flatMap(index => tool.commands(index).body)
+            .map(body => (body.stdout, body.stderr))
       )
     )
   }
@@ -136,8 +141,8 @@ private[golem] object ToolRegistry {
   def getInvoker(name: String): Option[ToolInvoker] =
     entries.get(name).flatMap(_.invoker)
 
-  def getCommandStdout(name: String, path: List[String]): Option[Option[StreamSpec]] =
-    entries.get(name).flatMap(_.commandStdout(path))
+  def getCommandOutputs(name: String, path: List[String]): Option[(Option[StreamSpec], Option[StreamSpec])] =
+    entries.get(name).flatMap(_.commandOutputs(path))
 
   private[golem] def clearForTests(): Unit =
     entries.clear()

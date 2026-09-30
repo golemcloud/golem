@@ -42,6 +42,14 @@ pub fn[E, M] ToolInvokeError::map_tool(
 }
 
 ///|
+/// Named output streams returned by a middleware command that exposes both
+/// stdout and stderr.
+pub(all) struct ToolOutputStreams {
+  stdout : @async-core.Stream[Byte]
+  stderr : @async-core.Stream[Byte]
+}
+
+///|
 pub struct UnderlyingTool {
   priv ownership : OwnershipContext
   priv invoke : async (
@@ -58,6 +66,7 @@ priv struct UnderlyingObserver {
     @underlying.UnderlyingError,
   ]
   stdout : @async-core.Stream[Byte]?
+  stderr : @async-core.Stream[Byte]?
   cancel : () -> Unit
   drop : () -> Unit
 }
@@ -69,11 +78,19 @@ priv struct UnderlyingObserver {
 pub struct UnderlyingInvocation[T, E] {
   priv get_result : async () -> Result[T, ToolInvokeError[E]]
   priv stdout_stream : @async-core.Stream[Byte]?
+  priv stderr_stream : @async-core.Stream[Byte]?
   priv cancel_call : () -> Unit
   priv drop_observer : () -> Unit
   priv state : Ref[UnderlyingInvocationState]
   priv result_lock : @async-core.Mutex
   priv cached_result : Ref[Result[T, ToolInvokeError[E]]?]
+}
+
+///|
+pub(all) struct CollectedUnderlyingInvocation[T] {
+  result : T
+  stdout : @async-core.Stream[Byte]?
+  stderr : @async-core.Stream[Byte]?
 }
 
 ///|
@@ -100,10 +117,70 @@ pub async fn[T, E] UnderlyingInvocation::get(
 }
 
 ///|
+/// Drains both outputs concurrently with terminal observation and returns
+/// replayable streams. This is the result-first path for middleware APIs whose
+/// return shape includes output streams.
+pub async fn[T, E] UnderlyingInvocation::get_buffering_outputs(
+  self : UnderlyingInvocation[T, E],
+) -> Result[CollectedUnderlyingInvocation[T], ToolInvokeError[E]] {
+  let collect = async fn(source : @async-core.Stream[Byte]?) {
+    match source {
+      None => Ok(None)
+      Some(source) => {
+        let bytes : Array[Byte] = []
+        defer source.drop()
+        try {
+          for ;; {
+            match source.read(65536) {
+              Some(chunk) => bytes.append(chunk)
+              None => break
+            }
+          }
+          Ok(Some(bytes))
+        } catch {
+          error => Err(repr(error))
+        }
+      }
+    }
+  }
+  let replay = fn(bytes : Array[Byte]?) {
+    bytes.map(bytes => {
+      @async-core.Stream::produce(async fn(sink) {
+        ignore(sink.write_all(bytes[:]))
+        sink.close()
+      })
+    })
+  }
+  @async-core.with_task_group(async fn(group) {
+    let stdout = group.spawn(() => collect(self.stdout()))
+    let stderr = group.spawn(() => collect(self.stderr()))
+    let result = self.get()
+    let stdout = stdout.wait()
+    let stderr = stderr.wait()
+    match result {
+      Err(error) => Err(error)
+      Ok(result) =>
+        match (stdout, stderr) {
+          (Err(message), _) | (_, Err(message)) => Err(InvalidResult(message))
+          (Ok(stdout), Ok(stderr)) =>
+            Ok({ result, stdout: replay(stdout), stderr: replay(stderr), })
+        }
+    }
+  })
+}
+
+///|
 pub fn[T, E] UnderlyingInvocation::stdout(
   self : UnderlyingInvocation[T, E],
 ) -> @async-core.Stream[Byte]? {
   self.stdout_stream
+}
+
+///|
+pub fn[T, E] UnderlyingInvocation::stderr(
+  self : UnderlyingInvocation[T, E],
+) -> @async-core.Stream[Byte]? {
+  self.stderr_stream
 }
 
 ///|
@@ -140,11 +217,25 @@ fn new_underlying_tool(
         input,
         stdin.map(failure_aware_byte_stream),
       )
+      let (terminal, stdout, stderr) = match result {
+        Ok(result) => (Ok(result.result), result.stdout, result.stderr)
+        Err(error) => (Err(error), None, None)
+      }
       {
         get: async fn() {
-          result.map_err(error => @underlying.UnderlyingError::ToolError(error))
+          terminal
+          .map(result => {
+            let structured : @toolCommon.InvocationResult = {
+              result,
+              stdout: None,
+              stderr: None,
+            }
+            structured
+          })
+          .map_err(error => @underlying.UnderlyingError::ToolError(error))
         },
-        stdout: None,
+        stdout,
+        stderr,
         cancel: fn() {  },
         drop: fn() {  },
       }
@@ -176,12 +267,15 @@ pub fn UnderlyingTool::from_wit(
   let underlying : UnderlyingTool = {
     ownership: OwnershipContext::new(fn() { raw.drop() }),
     invoke: async fn(command_path, input, stdin) {
-      let (observer, stdout) = raw.invoke(command_path, input, stdin)
+      let (observer, stdout, stderr) = raw.invoke(command_path, input, stdin)
       {
         get: async fn() {
-          observer.get().map(value => { result: value, stdout: None, })
+          observer
+          .get()
+          .map(value => { result: value, stdout: None, stderr: None, })
         },
         stdout: stdout.map(failure_aware_byte_stream),
+        stderr: stderr.map(failure_aware_byte_stream),
         cancel: () => observer.cancel(),
         drop: () => observer.drop(),
       }
@@ -253,6 +347,19 @@ pub async fn[E] UnderlyingTool::invoke_with(
   }
   let observer = (self.invoke)(command_path.copy(), wire_input, wire_stdin)
   defer (observer.drop)()
+  if observer.stdout is Some(_) || observer.stderr is Some(_) {
+    match observer.stdout {
+      Some(stdout) => stdout.drop_sync()
+      None => ()
+    }
+    match observer.stderr {
+      Some(stderr) => stderr.drop_sync()
+      None => ()
+    }
+    return Err(
+      InvalidResult("output-bearing underlying invocations must use start_with"),
+    )
+  }
   let wire_result = match (observer.get)() {
     Ok(value) => {
       let combined : @toolCommon.InvocationResult = {
@@ -260,6 +367,10 @@ pub async fn[E] UnderlyingTool::invoke_with(
         stdout: match observer.stdout {
           Some(stdout) => Some(stdout)
           None => value.stdout
+        },
+        stderr: match observer.stderr {
+          Some(stderr) => Some(stderr)
+          None => value.stderr
         },
       }
       combined
@@ -352,6 +463,7 @@ pub async fn[T, E] UnderlyingTool::start_with(
   }
   Ok({
     stdout_stream: observer.stdout,
+    stderr_stream: observer.stderr,
     cancel_call: observer.cancel,
     drop_observer: close,
     state,
@@ -499,6 +611,34 @@ pub fn[T : @schema.FromSchema, E] decode_result_with_stdout(
 }
 
 ///|
+pub fn[T : @schema.FromSchema, E] decode_result_with_stderr(
+  result : OwnedInvocationResult,
+) -> Result[(T, @async-core.Stream[Byte]), ToolInvokeError[E]] {
+  let result = match result.take_for_projection() {
+    Ok(result) => result
+    Err(message) => return Err(InvalidResult(message))
+  }
+  match @toolCore.project_result_with_stderr(result) {
+    Ok(projected) => Ok(projected)
+    Err(message) => Err(InvalidResult(message))
+  }
+}
+
+///|
+pub fn[T : @schema.FromSchema, E] decode_result_with_outputs(
+  result : OwnedInvocationResult,
+) -> Result[(T, ToolOutputStreams), ToolInvokeError[E]] {
+  let result = match result.take_for_projection() {
+    Ok(result) => result
+    Err(message) => return Err(InvalidResult(message))
+  }
+  match @toolCore.project_result_with_outputs(result) {
+    Ok((value, stdout, stderr)) => Ok((value, { stdout, stderr, }))
+    Err(message) => Err(InvalidResult(message))
+  }
+}
+
+///|
 pub fn[T : @schema.FromSchema, E] decode_result_value(
   result : OwnedInvocationResult,
 ) -> Result[T, ToolInvokeError[E]] {
@@ -522,6 +662,34 @@ pub fn[E] decode_result_stdout_only(
   }
   match @toolCore.project_result_stdout_only(result) {
     Ok(stdout) => Ok(stdout)
+    Err(message) => Err(InvalidResult(message))
+  }
+}
+
+///|
+pub fn[E] decode_result_stderr_only(
+  result : OwnedInvocationResult,
+) -> Result[@async-core.Stream[Byte], ToolInvokeError[E]] {
+  let result = match result.take_for_projection() {
+    Ok(result) => result
+    Err(message) => return Err(InvalidResult(message))
+  }
+  match @toolCore.project_result_stderr_only(result) {
+    Ok(stderr) => Ok(stderr)
+    Err(message) => Err(InvalidResult(message))
+  }
+}
+
+///|
+pub fn[E] decode_result_outputs_only(
+  result : OwnedInvocationResult,
+) -> Result[ToolOutputStreams, ToolInvokeError[E]] {
+  let result = match result.take_for_projection() {
+    Ok(result) => result
+    Err(message) => return Err(InvalidResult(message))
+  }
+  match @toolCore.project_result_outputs_only(result) {
+    Ok((stdout, stderr)) => Ok({ stdout, stderr, })
     Err(message) => Err(InvalidResult(message))
   }
 }

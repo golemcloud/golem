@@ -125,7 +125,10 @@ pub(all) struct AuditLogConstructor {
   name : String
 }
 pub impl @schema.FromSchema for AuditLogConstructor
+pub impl @schema.FromWire for AuditLogConstructor
 pub impl @schema.IntoSchema for AuditLogConstructor
+pub impl @schema.IntoWire for AuditLogConstructor
+pub impl @schema.WireSchema for AuditLogConstructor
 
 type CanonicalBigBound
 pub fn CanonicalBigBound::canonical_big_bound(UInt64?) -> Result[Unit, CanonicalGrepError]
@@ -200,7 +203,7 @@ pub async fn CanonicalGitStashClient::pop(Self, String?, UInt?) -> Result[Unit, 
 pub async fn CanonicalGitStashClient::stash(Self, String, Bool) -> Result[Unit, @tool.ToolError[CanonicalStashError]]
 
 type CanonicalGrep
-pub fn CanonicalGrep::canonical_grep(Bool, CanonicalGrepColorMode, String, Array[String], UInt?, Array[@schema.Path], @async-core.Stream[Byte], @tool.ProviderStdout) -> Result[Array[CanonicalGrepHit], CanonicalGrepError]
+pub fn CanonicalGrep::canonical_grep(Bool, CanonicalGrepColorMode, String, Array[String], UInt?, Array[@schema.Path], @async-core.Stream[Byte], @tool.ProviderOutput) -> Result[Array[CanonicalGrepHit], CanonicalGrepError]
 pub fn CanonicalGrep::replace(Bool, CanonicalGrepColorMode, String, String, Array[@schema.Path]) -> Result[UInt64, CanonicalGrepError]
 
 pub(all) struct CanonicalGrepClient {
@@ -209,6 +212,7 @@ pub(all) struct CanonicalGrepClient {
 pub fn CanonicalGrepClient::canonical_grep(Self, Bool, CanonicalGrepColorMode, String, Array[String], UInt?, Array[@schema.Path], @async-core.Stream[Byte]) -> Result[@tool.TypedToolInvocation[Array[CanonicalGrepHit], CanonicalGrepError], @tool.ToolError[CanonicalGrepError]]
 pub fn CanonicalGrepClient::drop(Self) -> Unit
 pub fn CanonicalGrepClient::new() -> Self
+pub fn CanonicalGrepClient::new_for(String) -> Self
 pub async fn CanonicalGrepClient::replace(Self, CanonicalGrepColorMode, Bool, String, String, Array[@schema.Path]) -> Result[UInt64, @tool.ToolError[CanonicalGrepError]]
 
 pub(all) enum CanonicalGrepColorMode {
@@ -375,7 +379,7 @@ pub fn MoonBitReflectionTest::echo(String) -> String
 pub fn MoonBitReflectionTest::optional(String?) -> String
 
 type MoonBitStreaming
-pub async fn MoonBitStreaming::stream(String, @async-core.Stream[Byte], @tool.ProviderStdout) -> UInt64
+pub async fn MoonBitStreaming::stream(String, @async-core.Stream[Byte], @tool.ProviderOutput) -> UInt64
 
 type MoonBitToolReflectionCaller
 pub async fn MoonBitToolReflectionCaller::agent_round_trip(Self) -> String

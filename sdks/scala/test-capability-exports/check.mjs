@@ -160,6 +160,7 @@ export async function checkFixture(path, capabilities) {
       toolInput("héllo"),
       undefined,
       undefined,
+      undefined,
       anonymous,
     );
     assert.equal(
@@ -173,13 +174,14 @@ export async function checkFixture(path, capabilities) {
         toolInput("x"),
         undefined,
         undefined,
+        undefined,
         anonymous,
       ),
       errorTag("invalid-command-path"),
     );
   } else {
     await assert.rejects(
-      tool.invoke("echo", [], toolInput("x"), undefined, undefined, anonymous),
+      tool.invoke("echo", [], toolInput("x"), undefined, undefined, undefined, anonymous),
       errorTag("invalid-tool-name"),
     );
   }
@@ -225,6 +227,7 @@ export async function checkFixture(path, capabilities) {
           root: 0,
         },
       },
+      undefined,
       undefined,
       undefined,
       anonymous,

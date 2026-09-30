@@ -2,7 +2,7 @@ use crate::tool::definition::{build_tool_definition_ir, parse_version, strip_hel
 use crate::tool::helpers::{
     fresh_internal_ident, normalize_sdk_paths_in_item_trait, resolve_generated_sdk_paths,
 };
-use crate::tool::ir::ToolDefinitionIr;
+use crate::tool::ir::{OutputChannelIr, ToolDefinitionIr};
 use proc_macro::TokenStream;
 use proc_macro2::Span;
 use quote::{ToTokens, format_ident, quote};
@@ -264,10 +264,10 @@ fn is_optional_stdin(ty: &Type) -> bool {
     optional_type_is(ty, "NativeToolStdin")
 }
 fn is_stdout(ty: &Type) -> bool {
-    terminal_type_is(ty, "NativeToolStdout")
+    terminal_type_is(ty, "NativeToolOutput")
 }
 fn is_optional_stdout(ty: &Type) -> bool {
-    optional_type_is(ty, "NativeToolStdout")
+    optional_type_is(ty, "NativeToolOutput")
 }
 
 fn synthesize_native_invoke(
@@ -290,6 +290,14 @@ fn synthesize_native_invoke(
                     #( || __invocation.command_path.as_slice() == [#aliases] )*
             }
         };
+        let output_channel = |param: &crate::tool::ir::ParamIr| {
+            command
+                .args
+                .iter()
+                .find(|arg| arg.param == param.ident)
+                .and_then(|arg| arg.output_channel)
+                .unwrap_or(OutputChannelIr::Stdout)
+        };
         let decode = command.params.iter().map(|param| {
             let ident = &param.ident;
             let ty = &param.ty;
@@ -303,9 +311,15 @@ fn synthesize_native_invoke(
             } else if is_optional_stdin(ty) {
                 quote! { let #ident = __invocation.stdin.take(); }
             } else if is_stdout(ty) {
-                quote! { let #ident = match __invocation.stdout.take() { Some(value) => value, None => return Ok(Err(golem_native_tool::NativeToolRpcError::InvalidInput("tool invocation did not contain declared stdout stream".to_string()))) }; }
+                match output_channel(param) {
+                    OutputChannelIr::Stdout => quote! { let #ident = match __invocation.stdout.take() { Some(value) => value, None => return Ok(Err(golem_native_tool::NativeToolRpcError::InvalidInput("tool invocation did not contain declared stdout stream".to_string()))) }; },
+                    OutputChannelIr::Stderr => quote! { let #ident = match __invocation.stderr.take() { Some(value) => value, None => return Ok(Err(golem_native_tool::NativeToolRpcError::InvalidInput("tool invocation did not contain declared stderr stream".to_string()))) }; },
+                }
             } else if is_optional_stdout(ty) {
-                quote! { let #ident = __invocation.stdout.take(); }
+                match output_channel(param) {
+                    OutputChannelIr::Stdout => quote! { let #ident = __invocation.stdout.take(); },
+                    OutputChannelIr::Stderr => quote! { let #ident = __invocation.stderr.take(); },
+                }
             } else { quote! {
                 let #ident = {
                     let __index = match __fields.iter().position(|value| value.name == #field) { Some(index) => index, None => return Ok(Err(golem_native_tool::NativeToolRpcError::InvalidInput(format!("missing canonical tool input field `{}`", #field)))) };

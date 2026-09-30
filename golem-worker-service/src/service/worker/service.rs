@@ -639,6 +639,7 @@ pub struct PublicToolSessionStart {
     pub input: PublicTypedValue,
     pub stdin: bool,
     pub stdout: bool,
+    pub stderr: bool,
     pub idempotency_key: String,
     pub attempt_id: uuid::Uuid,
     pub expected_deployment_revision: Option<DeploymentRevision>,
@@ -2549,6 +2550,7 @@ impl WorkerService {
                 input: Some(input),
                 stdin: start.stdin,
                 stdout: start.stdout,
+                stderr: start.stderr,
                 fresh_owner,
                 expected_deployment_revision: start
                     .expected_deployment_revision
@@ -3124,6 +3126,7 @@ impl WorkerService {
                 input,
                 stdin: false,
                 stdout: false,
+                stderr: false,
                 fresh_owner,
                 expected_deployment_revision: None,
             }),

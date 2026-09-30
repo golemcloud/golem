@@ -236,6 +236,7 @@ async fn local_registration_rejects_foreign_coordinate_without_committing() {
                     transport_stream_id: 0,
                     source: ProducerOutputSource::New(request),
                     cancellation_epoch: None,
+                    role: SessionStreamRole::Output,
                 }],
                 None,
             )
@@ -6164,11 +6165,13 @@ async fn result_plan_preserves_mixed_output_order_and_replays() {
                 transport_stream_id: 31,
                 source: ProducerOutputSource::New(request.clone()),
                 cancellation_epoch: None,
+                role: SessionStreamRole::Output,
             },
             ProducerOutputRegistration {
                 transport_stream_id: 12,
                 source: ProducerOutputSource::Existing(existing.clone()),
                 cancellation_epoch: None,
+                role: SessionStreamRole::Output,
             },
         ]
     };
@@ -6271,12 +6274,14 @@ async fn reverted_result_replay_preserves_foreign_handles_without_live_authority
                         transport_stream_id: 31,
                         source: ProducerOutputSource::New(request.clone()),
                         cancellation_epoch,
+                        role: SessionStreamRole::Output,
                     });
                 }
                 outputs.push(ProducerOutputRegistration {
                     transport_stream_id: 12,
                     source: ProducerOutputSource::Existing(handle),
                     cancellation_epoch,
+                    role: SessionStreamRole::Output,
                 });
                 outputs
             };
@@ -6506,11 +6511,13 @@ async fn result_registration_cancels_outputs_before_publishing_the_result() {
                         None => ProducerOutputSource::New(request.clone()),
                     },
                     cancellation_epoch: Some(7),
+                    role: SessionStreamRole::Output,
                 },
                 ProducerOutputRegistration {
                     transport_stream_id: 29,
                     source: ProducerOutputSource::Existing(existing.clone()),
                     cancellation_epoch: Some(7),
+                    role: SessionStreamRole::Output,
                 },
             ]
         };
@@ -6582,11 +6589,13 @@ async fn result_plan_rejects_duplicate_new_coordinates_before_committing() {
             transport_stream_id: 1,
             source: ProducerOutputSource::New(request.clone()),
             cancellation_epoch: None,
+            role: SessionStreamRole::Output,
         },
         ProducerOutputRegistration {
             transport_stream_id: 2,
             source: ProducerOutputSource::New(request),
             cancellation_epoch: None,
+            role: SessionStreamRole::Output,
         },
     ];
 

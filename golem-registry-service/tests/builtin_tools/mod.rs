@@ -202,7 +202,7 @@ async fn changed_component_creates_a_revision_without_repointing_the_old_release
     let mut first_wasm = wasm;
     let mut replacements = 0;
     for offset in 0..first_wasm.len().saturating_sub(5) {
-        if &first_wasm[offset..offset + 5] == b"0.2.1" {
+        if &first_wasm[offset..offset + 5] == b"0.3.0" {
             first_wasm[offset..offset + 5].copy_from_slice(b"7.2.0");
             replacements += 1;
         }
@@ -285,7 +285,7 @@ async fn same_artifact_adds_missing_tool_with_complete_metadata_and_is_retry_saf
     .expect("build the filesystem tool component before running this test");
     let mut replacements = 0;
     for offset in 0..wasm.len().saturating_sub(5) {
-        if &wasm[offset..offset + 5] == b"0.2.1" {
+        if &wasm[offset..offset + 5] == b"0.3.0" {
             wasm[offset..offset + 5].copy_from_slice(b"8.2.0");
             replacements += 1;
         }

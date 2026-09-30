@@ -55,19 +55,19 @@ static BUILTIN_TOOLS: &[BuiltinToolDescriptor] = &[
     BuiltinToolDescriptor {
         component_name: "filesystem-tools",
         tool_name: "read-file",
-        release_version: "0.2.1",
+        release_version: "0.3.0",
         wasm_bytes: include_bytes!("../../../builtin-tools/filesystem-tools.wasm"),
     },
     BuiltinToolDescriptor {
         component_name: "filesystem-tools",
         tool_name: "write-file",
-        release_version: "0.2.1",
+        release_version: "0.3.0",
         wasm_bytes: include_bytes!("../../../builtin-tools/filesystem-tools.wasm"),
     },
     BuiltinToolDescriptor {
         component_name: "filesystem-tools",
         tool_name: "edit-file",
-        release_version: "0.2.1",
+        release_version: "0.3.0",
         wasm_bytes: include_bytes!("../../../builtin-tools/filesystem-tools.wasm"),
     },
 ];

@@ -59,12 +59,12 @@ class ToolCallProjectionCodegenSpec extends munit.FunSuite {
     assert(content.contains("def __await_echo[B <: _root_.golem.tool.ToolCallBackend]"), content)
     assert(content.contains("backend.awaitNoStdout"), content)
     assert(content.contains("backend.startNoStdout"), content)
-    assert(content.contains("backend.startValueStdout"), content)
+    assert(content.contains("backend.startOutputs"), content)
     assert(content.contains("ToolCallPreparation.prepareInput"), content)
     assert(content.contains("ToolCallPreparation.decodeValue"), content)
   }
 
-  test("shared projection selects all three started result families") {
+  test("shared projection selects no-output and all four output channel combinations") {
     val source =
       """|package example
          |import golem.runtime.annotations._
@@ -74,6 +74,10 @@ class ToolCallProjectionCodegenSpec extends munit.FunSuite {
          |  def noStdout(): String
          |  def stdoutOnly(stdout: ToolOutputStream): Unit
          |  def valueStdout(stdout: ToolOutputStream): String
+         |  @arg("stderr", channel = "stderr")
+         |  def stderrOnly(stderr: ToolOutputStream): Unit
+         |  @arg("stderr", channel = "stderr")
+         |  def both(stdout: ToolOutputStream, stderr: ToolOutputStream): String
          |}
          |""".stripMargin
     val discovered = SourceDiscovery.discover(Seq(SourceDiscovery.SourceInput("Shapes.scala", source)))
@@ -81,14 +85,14 @@ class ToolCallProjectionCodegenSpec extends munit.FunSuite {
     val content    = ToolCallProjectionCodegen.generate(projection.tools).files.head.content
 
     assert(content.contains("backend.StartedNoStdout[_root_.scala.Nothing, _root_.java.lang.String]"), content)
-    assert(content.contains("backend.StartedStdoutOnly[_root_.scala.Nothing]"), content)
     assert(
-      content.contains("backend.StartedValueStdout[_root_.scala.Nothing, _root_.java.lang.String]"),
+      content.contains("backend.StartedOutputs[_root_.scala.Nothing, _root_.java.lang.String]"),
       content
     )
     assert(content.contains("backend.startNoStdout"), content)
-    assert(content.contains("backend.startStdoutOnly"), content)
-    assert(content.contains("backend.startValueStdout"), content)
+    assert(content.contains("stdout = true, stderr = false"), content)
+    assert(content.contains("stdout = false, stderr = true"), content)
+    assert(content.contains("stdout = true, stderr = true"), content)
   }
 
   test("distinct error types whose names mangle identically retain distinct codecs") {

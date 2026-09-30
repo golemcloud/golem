@@ -75,6 +75,7 @@ async fn only_implemented_capabilities_are_live() {
         .unwrap(),
         None,
         None,
+        None,
         Principal::Anonymous,
     )
     .await;

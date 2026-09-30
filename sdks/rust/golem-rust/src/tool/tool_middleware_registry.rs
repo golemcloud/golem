@@ -31,6 +31,7 @@ pub type ToolMiddlewareInvoker = fn(
     TypedSchemaValue,
     Option<InputStream>,
     Option<OutputStream>,
+    Option<OutputStream>,
     Principal,
     UnderlyingTool,
 ) -> ToolMiddlewareInvokeFuture;
@@ -179,6 +180,7 @@ mod tests {
         _input: TypedSchemaValue,
         _stdin: Option<InputStream>,
         _stdout: Option<OutputStream>,
+        _stderr: Option<OutputStream>,
         _principal: Principal,
         _underlying: UnderlyingTool,
     ) -> ToolMiddlewareInvokeFuture {
@@ -186,6 +188,7 @@ mod tests {
             Ok(InvocationResult {
                 result: None,
                 stdout: None,
+                stderr: None,
             })
         })
     }
@@ -266,6 +269,7 @@ mod tests {
                     Ok(crate::tool::wire::InvocationResult {
                         result: Some(crate::encode_typed_schema_value_owned(value).unwrap()),
                         stdout: None,
+                        stderr: None,
                     })
                 })
             }))
@@ -284,6 +288,7 @@ mod tests {
                     .unwrap(),
                 vec!["echo".to_string()],
                 value,
+                None,
                 None,
                 None,
                 Principal::Anonymous,
