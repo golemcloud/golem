@@ -6569,11 +6569,13 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                     worker.with_exclusions(|exclusions| exclusions.persisted_rejections())
                 {
                     let metadata = worker.get_initial_worker_metadata();
+                    let status = worker.get_non_detached_last_known_status().await;
                     worker
                         .worker_service()
                         .reject_periodic_snapshots(
                             &metadata.owned_agent_id(),
                             metadata.fingerprint,
+                            &status,
                             &rejected,
                         )
                         .await?;

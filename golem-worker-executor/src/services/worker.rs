@@ -27,6 +27,7 @@ use crate::services::stream_session_index::StreamSessionIndexService;
 use crate::storage::keyvalue::{
     KeyValueStorage, KeyValueStorageLabelledApi, KeyValueStorageNamespace,
 };
+use crate::worker::snapshot_selection::kept_rejections;
 use crate::worker::status::calculate_last_known_status_with_checkpoint_reader;
 use crate::worker::status::fold_invocation_result_entries;
 use async_trait::async_trait;
@@ -66,18 +67,18 @@ const INVOCATION_RESULT_INDEX_FIELD_PREFIX: &str = "ir:";
 
 /// The stored rejected automatic snapshot entries after `new` joins `current`, in index order, or
 /// `None` when `current` holds each entry of `new`.
-fn merged(current: Vec<OplogIndex>, new: &HashSet<OplogIndex>) -> Option<Vec<OplogIndex>> {
+/// The stored rejected entries after `new` joins `current`, as [`kept_rejections`] keeps them for
+/// `status`, or `None` when they equal `current`.
+fn merged(
+    current: Vec<OplogIndex>,
+    status: &AgentStatusRecord,
+    new: &HashSet<OplogIndex>,
+) -> Option<Vec<OplogIndex>> {
     let current = current
         .into_iter()
         .collect::<std::collections::BTreeSet<_>>();
-    (!new.iter().all(|index| current.contains(index))).then(|| {
-        current
-            .into_iter()
-            .chain(new.iter().copied())
-            .collect::<std::collections::BTreeSet<_>>()
-            .into_iter()
-            .collect()
-    })
+    let kept = kept_rejections(status, current.iter().chain(new).copied());
+    (kept != current).then(|| kept.into_iter().collect())
 }
 
 fn status_received_card_transfer_field(transfer_id: &uuid::Uuid) -> String {
@@ -422,12 +423,14 @@ pub trait WorkerService: Send + Sync {
     }
 
     /// Adds `oplog_indexes` to the stored rejected automatic snapshot entries of the incarnation
-    /// `fingerprint`. The stored set only grows, and each set of one incarnation is apart from
-    /// the sets of the others.
+    /// `fingerprint`, and keeps only the entries that a start of `status` can still select, as
+    /// [`kept_rejections`] says. So the stored set holds at most two entries. Each set of one
+    /// incarnation is apart from the sets of the others. A write that changes nothing is skipped.
     async fn reject_periodic_snapshots(
         &self,
         _owned_agent_id: &OwnedAgentId,
         _fingerprint: AgentFingerprint,
+        _status: &AgentStatusRecord,
         _oplog_indexes: &HashSet<OplogIndex>,
     ) -> Result<(), WorkerExecutorError> {
         Err(WorkerExecutorError::runtime(
@@ -1805,6 +1808,7 @@ impl WorkerService for DefaultWorkerService {
         &self,
         owned_agent_id: &OwnedAgentId,
         fingerprint: AgentFingerprint,
+        status: &AgentStatusRecord,
         oplog_indexes: &HashSet<OplogIndex>,
     ) -> Result<(), WorkerExecutorError> {
         let namespace = Self::rejected_periodic_snapshots_namespace(&owned_agent_id.agent_id);
@@ -1826,7 +1830,7 @@ impl WorkerService for DefaultWorkerService {
                 }
                 None => Vec::new(),
             };
-            let Some(merged) = merged(current_indexes, oplog_indexes) else {
+            let Some(merged) = merged(current_indexes, status, oplog_indexes) else {
                 return Ok(());
             };
             let encoded = serialize(&merged).map_err(WorkerExecutorError::runtime)?;
@@ -2795,23 +2799,27 @@ mod tests {
     }
 
     #[test]
-    fn merged_rejections_are_in_index_order_and_nothing_when_each_is_stored() {
+    fn merged_rejections_are_in_index_order_keep_only_candidates_and_nothing_when_unchanged() {
         let index = OplogIndex::from_u64;
+        let status = with_candidates(7, Some(3));
         assert_eq!(
             [
-                merged(vec![index(7), index(3)], &HashSet::from([index(5)])),
+                merged(vec![index(7)], &status, &HashSet::from([index(3)])),
                 merged(
                     vec![index(3), index(7)],
+                    &status,
                     &HashSet::from([index(7), index(3)])
                 ),
-                merged(Vec::new(), &HashSet::new()),
-                merged(Vec::new(), &HashSet::from([index(2), index(1)])),
+                merged(Vec::new(), &status, &HashSet::new()),
+                merged(Vec::new(), &status, &HashSet::from([index(5)])),
+                merged(vec![index(3), index(5)], &status, &HashSet::new()),
             ],
             [
-                Some(vec![index(3), index(5), index(7)]),
+                Some(vec![index(3), index(7)]),
                 None,
                 None,
-                Some(vec![index(1), index(2)]),
+                None,
+                Some(vec![index(3)]),
             ]
         );
     }
@@ -2863,17 +2871,71 @@ mod tests {
         assert!(result.last_known_status.is_some());
     }
 
+    /// A status whose two candidates for a start are the automatic snapshot entries `last` and
+    /// `previous`.
+    fn with_candidates(last: u64, previous: Option<u64>) -> AgentStatusRecord {
+        AgentStatusRecord {
+            last_automatic_snapshot: Some(golem_common::model::AutomaticSnapshot {
+                index: OplogIndex::from_u64(last),
+                timestamp: Timestamp::from(1_000),
+                component_revision: ComponentRevision::INITIAL,
+                files: golem_common::model::SnapshotFiles::Unnamed,
+            }),
+            previous_usable_automatic_snapshot: previous.map(|previous| {
+                golem_common::model::UsableAutomaticSnapshot {
+                    index: OplogIndex::from_u64(previous),
+                    component_revision: ComponentRevision::INITIAL,
+                    filesystem_snapshot: None,
+                }
+            }),
+            ..AgentStatusRecord::default()
+        }
+    }
+
+    #[test]
+    async fn the_stored_rejections_keep_only_the_candidates_of_the_status_of_the_write() {
+        let (service, _, owned_agent_id) = index_test_service(BTreeMap::new());
+        let fingerprint = AgentFingerprint::new();
+        let stored = || service.get_rejected_periodic_snapshots(&owned_agent_id, fingerprint);
+
+        service
+            .reject_periodic_snapshots(
+                &owned_agent_id,
+                fingerprint,
+                &with_candidates(12, Some(7)),
+                &HashSet::from([OplogIndex::from_u64(7), OplogIndex::from_u64(3)]),
+            )
+            .await
+            .unwrap();
+        let before = stored().await.unwrap();
+        service
+            .reject_periodic_snapshots(
+                &owned_agent_id,
+                fingerprint,
+                &with_candidates(20, Some(12)),
+                &HashSet::from([OplogIndex::from_u64(20)]),
+            )
+            .await
+            .unwrap();
+        let after = stored().await.unwrap();
+
+        assert_eq!(before, HashSet::from([OplogIndex::from_u64(7)]));
+        assert_eq!(after, HashSet::from([OplogIndex::from_u64(20)]));
+    }
+
     #[test]
     async fn rejected_periodic_snapshots_are_exact_indexes_and_incarnation_scoped() {
         let (service, _, owned_agent_id) = index_test_service(BTreeMap::new());
         let first = AgentFingerprint::new();
         let second = AgentFingerprint::new();
         let expected = HashSet::from([OplogIndex::from_u64(7), OplogIndex::from_u64(12)]);
+        let status = with_candidates(12, Some(7));
 
         service
             .reject_periodic_snapshots(
                 &owned_agent_id,
                 first,
+                &status,
                 &HashSet::from([OplogIndex::from_u64(12)]),
             )
             .await
@@ -2882,6 +2944,7 @@ mod tests {
             .reject_periodic_snapshots(
                 &owned_agent_id,
                 first,
+                &status,
                 &HashSet::from([OplogIndex::from_u64(7)]),
             )
             .await
@@ -4121,6 +4184,7 @@ mod tests {
                 .reject_periodic_snapshots(
                     &owned_agent_id,
                     fingerprint,
+                    &with_candidates(status.oplog_idx.into(), None),
                     &HashSet::from([status.oplog_idx]),
                 )
                 .await

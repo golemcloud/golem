@@ -881,10 +881,17 @@ impl TestWorkerExecutor {
             .get(&owned_agent_id)
             .await?
             .ok_or_else(|| anyhow!("no metadata for {owned_agent_id}"))?;
+        let worker = self
+            .additional_test_deps
+            .try_get_worker(&owned_agent_id)
+            .await
+            .ok_or_else(|| anyhow!("worker is not loaded: {owned_agent_id}"))?;
+        let status = worker.get_non_detached_last_known_status().await;
         worker_service
             .reject_periodic_snapshots(
                 &owned_agent_id,
                 metadata.initial_worker_metadata.fingerprint,
+                &status,
                 &indexes.into_iter().collect(),
             )
             .await?;

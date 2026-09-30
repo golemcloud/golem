@@ -26,7 +26,7 @@ use golem_common::model::oplog::{FilesystemSnapshotName, OplogIndex};
 use golem_common::model::{
     AgentStatusRecord, AutomaticSnapshot, PendingUpdateKind, SnapshotFiles, UsableAutomaticSnapshot,
 };
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 
 /// The automatic snapshot entries that the starts of one agent exclude.
 #[derive(Debug, Default)]
@@ -215,6 +215,30 @@ fn passes(
 /// Gives the component revision at the start of the replay: the revision of the selected
 /// automatic snapshot entry, else the target of a pending snapshot-based update, else the revision
 /// of the manual-update baseline.
+/// The rejected automatic snapshot entries of `rejected` that a start of `status` can still meet:
+/// the entries that are one of its two candidates, `last_automatic_snapshot` and
+/// `previous_usable_automatic_snapshot`. A start never selects another entry, so a stored
+/// rejection of one is dropped.
+pub(crate) fn kept_rejections(
+    status: &AgentStatusRecord,
+    rejected: impl IntoIterator<Item = OplogIndex>,
+) -> BTreeSet<OplogIndex> {
+    let candidates = [
+        status
+            .last_automatic_snapshot
+            .as_ref()
+            .map(|last| last.index),
+        status
+            .previous_usable_automatic_snapshot
+            .as_ref()
+            .map(|previous| previous.index),
+    ];
+    rejected
+        .into_iter()
+        .filter(|index| candidates.contains(&Some(*index)))
+        .collect()
+}
+
 fn component_revision_for_replay(
     status: &AgentStatusRecord,
     filter: AutomaticSnapshotFilter<'_>,
@@ -501,6 +525,49 @@ mod tests {
             ],
             [Some(name), None, None, None]
         );
+    }
+
+    fn indexes(indexes: &[u64]) -> BTreeSet<OplogIndex> {
+        indexes.iter().copied().map(OplogIndex::from_u64).collect()
+    }
+
+    #[test]
+    fn only_the_candidates_of_a_start_stay_rejected() {
+        let both = status(Some(FilesystemSnapshotName::periodic()), true, Some(None));
+        let last_only = status(Some(FilesystemSnapshotName::periodic()), true, None);
+
+        assert_eq!(
+            [
+                kept_rejections(&both, indexes(&[3, 5, 10, 11])),
+                kept_rejections(&last_only, indexes(&[5, 10])),
+                kept_rejections(&AgentStatusRecord::default(), indexes(&[5, 10])),
+            ],
+            [indexes(&[5, 10]), indexes(&[10]), indexes(&[])]
+        );
+    }
+
+    #[test]
+    fn a_new_snapshot_entry_moves_the_candidates_and_an_older_rejection_drops_out() {
+        let name = FilesystemSnapshotName::periodic();
+        let before = status(Some(name.clone()), true, Some(None));
+        let rejected = kept_rejections(&before, indexes(&[5, 10]));
+        let after = AgentStatusRecord {
+            last_automatic_snapshot: Some(AutomaticSnapshot {
+                index: OplogIndex::from_u64(20),
+                timestamp: Timestamp::from(2_000),
+                component_revision: revision(2),
+                files: SnapshotFiles::Unconfirmed(FilesystemSnapshotName::periodic()),
+            }),
+            previous_usable_automatic_snapshot: Some(UsableAutomaticSnapshot {
+                index: OplogIndex::from_u64(10),
+                component_revision: revision(2),
+                filesystem_snapshot: Some(name),
+            }),
+            ..before.clone()
+        };
+
+        assert_eq!(rejected, indexes(&[5, 10]));
+        assert_eq!(kept_rejections(&after, rejected), indexes(&[10]));
     }
 
     fn selection_index(selection: &StartSelection) -> Option<u64> {
