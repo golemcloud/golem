@@ -331,9 +331,7 @@ impl Agent {
         })
         .await
     }
-}
 
-impl Agent {
     /// Waits until the oplog holds a failed update, and gives the details of each one.
     async fn failed_updates(&self, executor: &TestWorkerExecutor) -> anyhow::Result<Vec<String>> {
         eventually(Duration::from_secs(60), || async {
@@ -342,9 +340,7 @@ impl Agent {
         })
         .await
     }
-}
 
-impl Agent {
     /// Applies `operation` and waits until the snapshot record that it wrote is confirmed. Gives
     /// the index of the record and its name.
     async fn apply_and_confirm(
@@ -414,6 +410,52 @@ impl Agent {
                 .then_some(()))
         })
         .await
+    }
+
+    /// Asks for a manual update to a new revision with `files`, and waits until the oplog holds
+    /// one more update outcome. Gives the new component.
+    async fn manual_update(
+        &self,
+        executor: &TestWorkerExecutor,
+        files: Vec<IFSEntry>,
+    ) -> anyhow::Result<ComponentDto> {
+        let outcomes = self.update_results(executor).await?.len();
+        let updated = executor
+            .update_component_with_files(
+                &self.component.id,
+                AGENT_TYPE,
+                "it_initial_file_system_release",
+                files,
+            )
+            .await?;
+        executor
+            .manual_update_worker(&self.worker_id, updated.revision, false)
+            .await?;
+        eventually(Duration::from_secs(60), || async {
+            Ok((self.update_results(executor).await?.len() > outcomes).then_some(()))
+        })
+        .await?;
+        Ok(updated)
+    }
+
+    /// The outcome of each update in the oplog, in oplog order.
+    async fn update_results(&self, executor: &TestWorkerExecutor) -> anyhow::Result<Vec<String>> {
+        Ok(executor
+            .get_oplog(&self.worker_id, OplogIndex::INITIAL)
+            .await?
+            .into_iter()
+            .filter_map(|entry| match entry.entry {
+                PublicOplogEntry::SuccessfulUpdate(updated) => {
+                    Some(format!("updated to {:?}", updated.target_revision))
+                }
+                PublicOplogEntry::FailedUpdate(failed) => Some(format!(
+                    "failed to update to {:?}: {}",
+                    failed.target_revision,
+                    failed.details.unwrap_or_default()
+                )),
+                _ => None,
+            })
+            .collect())
     }
 }
 
@@ -1676,25 +1718,13 @@ impl Agent {
                             Ok((agent, results))
                         }
                         Step::ManualUpdate(set) => {
-                            let before = agent.update_results(executor).await?.len();
-                            let updated = executor
-                                .update_component_with_files(
-                                    &agent.component.id,
-                                    AGENT_TYPE,
-                                    "it_initial_file_system_release",
-                                    declaration_set(*set),
-                                )
-                                .await?;
-                            executor
-                                .manual_update_worker(&agent.worker_id, updated.revision, false)
-                                .await?;
-                            let outcome = eventually(Duration::from_secs(60), || async {
-                                let outcomes = agent.update_results(executor).await?;
-                                Ok((outcomes.len() > before)
-                                    .then(|| outcomes.last().cloned())
-                                    .flatten())
-                            })
-                            .await?;
+                            let updated =
+                                agent.manual_update(executor, declaration_set(*set)).await?;
+                            let outcome = agent
+                                .update_results(executor)
+                                .await?
+                                .pop()
+                                .ok_or_else(|| anyhow!("the update has no outcome"))?;
                             results.push(outcome);
                             Ok((
                                 Agent {
@@ -1708,26 +1738,6 @@ impl Agent {
                 },
             )
             .await
-    }
-
-    /// The outcome of each update in the oplog, in oplog order.
-    async fn update_results(&self, executor: &TestWorkerExecutor) -> anyhow::Result<Vec<String>> {
-        Ok(executor
-            .get_oplog(&self.worker_id, OplogIndex::INITIAL)
-            .await?
-            .into_iter()
-            .filter_map(|entry| match entry.entry {
-                PublicOplogEntry::SuccessfulUpdate(updated) => {
-                    Some(format!("updated to {:?}", updated.target_revision))
-                }
-                PublicOplogEntry::FailedUpdate(failed) => Some(format!(
-                    "failed to update to {:?}: {}",
-                    failed.target_revision,
-                    failed.details.unwrap_or_default()
-                )),
-                _ => None,
-            })
-            .collect())
     }
 }
 
@@ -2415,34 +2425,6 @@ async fn a_named_manual_update_record_fails_a_start_without_filesystem_snapshots
         "{metadata:?}"
     );
     Ok(())
-}
-
-impl Agent {
-    /// Asks for a manual update to a new revision with `files`, and waits until the oplog holds
-    /// one more update outcome. Gives the new component.
-    async fn manual_update(
-        &self,
-        executor: &TestWorkerExecutor,
-        files: Vec<IFSEntry>,
-    ) -> anyhow::Result<ComponentDto> {
-        let outcomes = self.update_results(executor).await?.len();
-        let updated = executor
-            .update_component_with_files(
-                &self.component.id,
-                AGENT_TYPE,
-                "it_initial_file_system_release",
-                files,
-            )
-            .await?;
-        executor
-            .manual_update_worker(&self.worker_id, updated.revision, false)
-            .await?;
-        eventually(Duration::from_secs(60), || async {
-            Ok((self.update_results(executor).await?.len() > outcomes).then_some(()))
-        })
-        .await?;
-        Ok(updated)
-    }
 }
 
 #[test]
