@@ -438,6 +438,14 @@ jobs:
         working-directory: sdks/moonbit/golem_sdk_tools
         run: moon update
 
+      - name: Install Golem MoonBit wit-bindgen
+        run: ./scripts/install-wit-bindgen.sh
+        working-directory: sdks/moonbit/golem_sdk
+
+      - name: Generate MoonBit WIT bindings
+        run: ./scripts/regen-bindings.sh
+        working-directory: sdks/moonbit/golem_sdk
+
       - name: Sync WIT dependencies
         run: cargo make wit
 
@@ -1070,6 +1078,16 @@ jobs:
         if: matrix.chunk.needs-moonbit
         run: moon update
         working-directory: sdks/moonbit
+
+      - name: Install Golem MoonBit wit-bindgen
+        if: matrix.chunk.needs-moonbit
+        run: ./scripts/install-wit-bindgen.sh
+        working-directory: sdks/moonbit/golem_sdk
+
+      - name: Generate MoonBit WIT bindings
+        if: matrix.chunk.needs-moonbit
+        run: ./scripts/regen-bindings.sh
+        working-directory: sdks/moonbit/golem_sdk
 
       - name: Install wasm-tools
         if: matrix.chunk.needs-moonbit
