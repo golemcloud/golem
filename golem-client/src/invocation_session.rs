@@ -2069,10 +2069,16 @@ where
         let mut finished = false;
         let mut completion_failure = None;
         loop {
+            if finished
+                && completion_failure.is_some()
+                && admitted_frames == 0
+                && pending_output.is_none()
+            {
+                return Err(SessionTransportError::Protocol(
+                    completion_failure.expect("checked above"),
+                ));
+            }
             if finished && stdout_terminal && stderr_terminal {
-                if let Some(message) = completion_failure {
-                    return Err(SessionTransportError::Protocol(message));
-                }
                 if !matches!(result, Some(PublicInvocationResult::ToolFailure { .. })) {
                     if let Some(outcome) = stdout_failure {
                         return Err(SessionTransportError::Protocol(format!("native stdout failed: {outcome:?}")));
@@ -2307,18 +2313,23 @@ where
                             let _ = cancel_input.send(true);
                         }
                         ServerFrame::Message(PublicServerMessage::InvocationFinished { outcome, .. }) => {
-                            if has_stdout && !stdout_admission.1 {
-                                return Err(SessionTransportError::Protocol(
-                                    "native invocation finished before stdout".to_string(),
-                                ));
-                            }
-                            if has_stderr && !stderr_admission.1 {
-                                return Err(SessionTransportError::Protocol(
-                                    "native invocation finished before stderr".to_string(),
-                                ));
-                            }
-                            if let PublicInvocationOutcome::Failure { code, message } = outcome {
-                                completion_failure = Some(format!("{}: {message}", code.as_str()));
+                            match outcome {
+                                PublicInvocationOutcome::Success => {
+                                    if has_stdout && !stdout_admission.1 {
+                                        return Err(SessionTransportError::Protocol(
+                                            "native invocation finished before stdout".to_string(),
+                                        ));
+                                    }
+                                    if has_stderr && !stderr_admission.1 {
+                                        return Err(SessionTransportError::Protocol(
+                                            "native invocation finished before stderr".to_string(),
+                                        ));
+                                    }
+                                }
+                                PublicInvocationOutcome::Failure { code, message } => {
+                                    completion_failure =
+                                        Some(format!("{}: {message}", code.as_str()));
+                                }
                             }
                             finished = true;
                         }
@@ -4396,6 +4407,7 @@ mod tests {
 
     async fn verify_native_tool_session_rejects_completion_before_output(
         role: PublicByteStreamRole,
+        completion_failure: bool,
     ) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -4451,7 +4463,14 @@ mod tests {
             socket
                 .send(Message::Text(
                     encode_text(&PublicServerMessage::InvocationFinished {
-                        outcome: PublicInvocationOutcome::Success,
+                        outcome: if completion_failure {
+                            PublicInvocationOutcome::Failure {
+                                code: golem_common::model::invocation_session_public::PublicErrorCode::InternalError,
+                                message: "worker failed".to_string(),
+                            }
+                        } else {
+                            PublicInvocationOutcome::Success
+                        },
                         version: 1,
                     })
                     .unwrap()
@@ -4494,20 +4513,41 @@ mod tests {
             PublicByteStreamRole::Stderr => "stderr",
             PublicByteStreamRole::Stdin => unreachable!(),
         };
-        assert!(matches!(
-            error,
-            SessionTransportError::Protocol(message)
-                if message == format!("native invocation finished before {channel}")
-        ));
+        let expected = if completion_failure {
+            "internal-error: worker failed".to_string()
+        } else {
+            format!("native invocation finished before {channel}")
+        };
+        assert!(matches!(error, SessionTransportError::Protocol(message) if message == expected));
         server.await.unwrap();
     }
 
     #[test]
     async fn native_tool_session_rejects_completion_before_output_terminal() {
-        verify_native_tool_session_rejects_completion_before_output(PublicByteStreamRole::Stdout)
-            .await;
-        verify_native_tool_session_rejects_completion_before_output(PublicByteStreamRole::Stderr)
-            .await;
+        verify_native_tool_session_rejects_completion_before_output(
+            PublicByteStreamRole::Stdout,
+            false,
+        )
+        .await;
+        verify_native_tool_session_rejects_completion_before_output(
+            PublicByteStreamRole::Stderr,
+            false,
+        )
+        .await;
+    }
+
+    #[test]
+    async fn native_tool_session_preserves_failure_before_single_output_terminal() {
+        verify_native_tool_session_rejects_completion_before_output(
+            PublicByteStreamRole::Stdout,
+            true,
+        )
+        .await;
+        verify_native_tool_session_rejects_completion_before_output(
+            PublicByteStreamRole::Stderr,
+            true,
+        )
+        .await;
     }
 
     async fn verify_native_tool_session_cancels_open_streams(output_failure: bool) {
@@ -4829,7 +4869,7 @@ mod tests {
     }
 
     #[test]
-    async fn full_stdout_queue_drains_both_outputs_before_completion_failure() {
+    async fn admitted_output_drains_before_failure_with_both_terminals_missing() {
         use tokio::io::AsyncReadExt;
 
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -4886,20 +4926,6 @@ mod tests {
                 .await;
             }
             send_native_binary(&mut socket, 13, 0, "stderr-0", b"E").await;
-            for channel in [12, 13] {
-                socket
-                    .send(Message::Text(
-                        encode_text(&PublicServerMessage::StreamCancel {
-                            channel,
-                            reason: golem_common::model::invocation_session_public::PublicServerCancelReason::InvocationFailed,
-                            version: 1,
-                        })
-                        .unwrap()
-                        .into(),
-                    ))
-                    .await
-                    .unwrap();
-            }
             socket
                 .send(Message::Text(
                     encode_text(&PublicServerMessage::InvocationFinished {

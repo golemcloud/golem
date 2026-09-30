@@ -44,6 +44,7 @@ use golem_client::invocation_session::{
 };
 use golem_client::model::{
     NativeToolDescribeRequest, NativeToolInvocationMode, NativeToolInvocationRequest,
+    NativeToolResult,
 };
 use golem_common::base_model::environment_tool_grant::{
     EnvironmentToolGrantCreation, EnvironmentToolGrantDeletion,
@@ -496,6 +497,7 @@ impl ToolCommandHandler {
                 idempotency_key: key,
                 result,
             };
+            let failed = public_tool_failed(&view.result);
             if report_destination == LiveReportDestination::Stderr {
                 let format = if self.ctx.format() == Format::Text {
                     Format::PrettyJson
@@ -511,12 +513,13 @@ impl ToolCommandHandler {
                         view,
                     )?
                 );
-                return Ok(());
+                return finish_tool_report(failed);
             }
             if report_destination == LiveReportDestination::Suppress {
-                return finish_suppressed_live_report(&view.result);
+                return finish_tool_report(failed);
             }
-            return self.ctx.log_handler().log_output(view);
+            self.ctx.log_handler().log_output(view)?;
+            return finish_tool_report(failed);
         }
         let mode = if args.lookup {
             NativeToolInvocationMode::Lookup
@@ -554,9 +557,11 @@ impl ToolCommandHandler {
             )
             .await
             .map_service_error()?;
+        let failed = native_tool_result_failed(response.result.as_ref());
         self.ctx
             .log_handler()
-            .log_output(ToolInvokeView { response })
+            .log_output(ToolInvokeView { response })?;
+        finish_tool_report(failed)
     }
 
     async fn cmd_list(&self) -> anyhow::Result<()> {
@@ -853,8 +858,16 @@ fn live_report_destination(raw_stdout: bool, raw_stderr: bool) -> LiveReportDest
     }
 }
 
-fn finish_suppressed_live_report(result: &PublicInvocationResult) -> anyhow::Result<()> {
-    if matches!(result, PublicInvocationResult::ToolFailure { .. }) {
+fn public_tool_failed(result: &PublicInvocationResult) -> bool {
+    matches!(result, PublicInvocationResult::ToolFailure { .. })
+}
+
+fn native_tool_result_failed(result: Option<&NativeToolResult>) -> bool {
+    matches!(result, Some(NativeToolResult::Failure(_)))
+}
+
+fn finish_tool_report(failed: bool) -> anyhow::Result<()> {
+    if failed {
         Err(anyhow!(PipedExitCode(1)))
     } else {
         Ok(())
@@ -864,15 +877,17 @@ fn finish_suppressed_live_report(result: &PublicInvocationResult) -> anyhow::Res
 #[cfg(test)]
 mod tests {
     use super::{
-        LiveReportDestination, finish_suppressed_live_report, live_report_destination,
-        public_typed_value,
+        LiveReportDestination, finish_tool_report, live_report_destination,
+        native_tool_result_failed, public_tool_failed, public_typed_value,
     };
     use crate::error::PipedExitCode;
     use crate::log::{
         Output, RawOutputReservation, TracingSuppression, TracingWriter, reservation_aware_output,
         tracing_writer,
     };
+    use golem_client::model::{NativeToolFailure, NativeToolResult, NativeToolSuccess};
     use golem_common::model::invocation_session_public::PublicInvocationResult;
+    use golem_common::model::tool::SerializableToolRpcError;
     use golem_common::schema::{
         NamedFieldType, SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue,
     };
@@ -949,21 +964,40 @@ mod tests {
     }
 
     #[test]
-    fn suppressed_live_report_uses_failure_exit_status() {
-        assert!(
-            finish_suppressed_live_report(&PublicInvocationResult::ToolSuccess { result: None })
-                .is_ok()
-        );
-        let error = finish_suppressed_live_report(&PublicInvocationResult::ToolFailure {
+    fn observed_structured_tool_failure_uses_failure_exit_status() {
+        let public_success = PublicInvocationResult::ToolSuccess { result: None };
+        let public_failure = PublicInvocationResult::ToolFailure {
             code: "custom-error".to_string(),
             message: Some("broken".to_string()),
             custom_error: None,
-        })
-        .unwrap_err();
+        };
+        let native_success = NativeToolResult::Success(NativeToolSuccess { result: None });
+        let native_failure = NativeToolResult::Failure(NativeToolFailure {
+            error: SerializableToolRpcError::ProtocolError("broken".to_string()),
+        });
+
+        assert!(!public_tool_failed(&public_success));
+        assert!(public_tool_failed(&public_failure));
+        assert!(!native_tool_result_failed(Some(&native_success)));
+        assert!(native_tool_result_failed(Some(&native_failure)));
+        assert!(!native_tool_result_failed(None));
+        assert!(finish_tool_report(false).is_ok());
+        let error = finish_tool_report(true).unwrap_err();
         assert_eq!(
             error.downcast_ref::<PipedExitCode>().map(|exit| exit.0),
             Some(1)
         );
+
+        for (raw_stdout, raw_stderr) in [(true, false), (false, true), (true, true)] {
+            let _destination = live_report_destination(raw_stdout, raw_stderr);
+            assert_eq!(
+                finish_tool_report(public_tool_failed(&public_failure))
+                    .unwrap_err()
+                    .downcast_ref::<PipedExitCode>()
+                    .map(|exit| exit.0),
+                Some(1)
+            );
+        }
     }
 
     #[test]
