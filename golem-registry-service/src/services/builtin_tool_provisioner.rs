@@ -49,11 +49,12 @@ use uuid::Uuid;
 const SYSTEM_APP_NAME: &str = "golem-system";
 const SYSTEM_ENV_NAME: &str = "builtin-tools";
 
-#[derive(Clone, Copy)]
-pub struct BuiltinToolFile {
-    pub archive_path: &'static str,
-    pub target_path: &'static str,
-    pub permissions: AgentFilePermissions,
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct BuiltinToolFile {
+    archive_path: String,
+    target_path: String,
+    permissions: AgentFilePermissions,
 }
 
 #[derive(Clone, Copy)]
@@ -63,7 +64,7 @@ pub struct BuiltinToolDescriptor {
     pub release_version: &'static str,
     pub wasm_bytes: &'static [u8],
     pub files_archive_bytes: Option<&'static [u8]>,
-    pub files: &'static [BuiltinToolFile],
+    pub files_manifest_bytes: Option<&'static [u8]>,
 }
 
 static BUILTIN_TOOLS: &[BuiltinToolDescriptor] = &[
@@ -73,7 +74,7 @@ static BUILTIN_TOOLS: &[BuiltinToolDescriptor] = &[
         release_version: "0.3.0",
         wasm_bytes: include_bytes!("../../../builtin-tools/filesystem-tools.wasm"),
         files_archive_bytes: None,
-        files: &[],
+        files_manifest_bytes: None,
     },
     BuiltinToolDescriptor {
         component_name: "filesystem-tools",
@@ -81,7 +82,7 @@ static BUILTIN_TOOLS: &[BuiltinToolDescriptor] = &[
         release_version: "0.3.0",
         wasm_bytes: include_bytes!("../../../builtin-tools/filesystem-tools.wasm"),
         files_archive_bytes: None,
-        files: &[],
+        files_manifest_bytes: None,
     },
     BuiltinToolDescriptor {
         component_name: "filesystem-tools",
@@ -89,7 +90,7 @@ static BUILTIN_TOOLS: &[BuiltinToolDescriptor] = &[
         release_version: "0.3.0",
         wasm_bytes: include_bytes!("../../../builtin-tools/filesystem-tools.wasm"),
         files_archive_bytes: None,
-        files: &[],
+        files_manifest_bytes: None,
     },
 ];
 
@@ -484,21 +485,32 @@ async fn upload_component(
 fn descriptor_files(
     descriptor: &BuiltinToolDescriptor,
 ) -> anyhow::Result<BTreeMap<ArchiveFilePath, AgentFileOptions>> {
-    if !descriptor.files.is_empty() && descriptor.files_archive_bytes.is_none() {
+    let files = descriptor
+        .files_manifest_bytes
+        .map(serde_json::from_slice::<Vec<BuiltinToolFile>>)
+        .transpose()
+        .map_err(|error| {
+            anyhow::anyhow!(
+                "invalid file manifest for built-in tool '{}@{}': {error}",
+                descriptor.tool_name,
+                descriptor.release_version
+            )
+        })?
+        .unwrap_or_default();
+    if !files.is_empty() && descriptor.files_archive_bytes.is_none() {
         anyhow::bail!(
             "built-in tool '{}@{}' maps files without an embedded ZIP archive",
             descriptor.tool_name,
             descriptor.release_version
         );
     }
-    descriptor
-        .files
+    files
         .iter()
         .map(|file| {
             Ok((
-                ArchiveFilePath::from_either_str(file.archive_path).map_err(anyhow::Error::msg)?,
+                ArchiveFilePath::from_either_str(&file.archive_path).map_err(anyhow::Error::msg)?,
                 AgentFileOptions {
-                    target_path: AgentFilePath::from_abs_str(file.target_path)
+                    target_path: AgentFilePath::from_abs_str(&file.target_path)
                         .map_err(anyhow::Error::msg)?,
                     permissions: file.permissions,
                 },
