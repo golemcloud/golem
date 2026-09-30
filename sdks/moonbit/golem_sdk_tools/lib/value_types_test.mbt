@@ -73,7 +73,15 @@ test "parse simple enum (all unit cases)" {
   )
   debug_inspect(
     types[0].kind,
-    content="SimpleEnum([\"Low\", \"Medium\", \"High\"])",
+    content=(
+      #|SimpleEnum(
+      #|  [
+      #|    { source_name: "Low", name: "Low" },
+      #|    { source_name: "Medium", name: "Medium" },
+      #|    { source_name: "High", name: "High" },
+      #|  ],
+      #|)
+    ),
   )
 }
 
@@ -100,9 +108,9 @@ test "parse enum with mixed unit and payload cases" {
     content=(
       #|VariantEnum(
       #|  [
-      #|    ("Circle", Single(Simple("Double"))),
-      #|    ("Square", Single(Simple("Double"))),
-      #|    ("None_", None),
+      #|    ({ source_name: "Circle", name: "Circle" }, Single(Simple("Double"))),
+      #|    ({ source_name: "Square", name: "Square" }, Single(Simple("Double"))),
+      #|    ({ source_name: "None_", name: "None_" }, None),
       #|  ],
       #|)
     ),
@@ -131,9 +139,9 @@ test "parse enum with multi-field positional case" {
     content=(
       #|VariantEnum(
       #|  [
-      #|    ("Circle", Single(Simple("Double"))),
+      #|    ({ source_name: "Circle", name: "Circle" }, Single(Simple("Double"))),
       #|    (
-      #|      "Rectangle",
+      #|      { source_name: "Rectangle", name: "Rectangle" },
       #|      Multi(
       #|        [("field0", Simple("Double")), ("field1", Simple("Double"))],
       #|        false,
@@ -167,9 +175,12 @@ test "parse enum with labelled fields" {
     content=(
       #|VariantEnum(
       #|  [
-      #|    ("Circle", Multi([("radius", Simple("Double"))], true)),
       #|    (
-      #|      "Rect",
+      #|      { source_name: "Circle", name: "Circle" },
+      #|      Multi([("radius", Simple("Double"))], true),
+      #|    ),
+      #|    (
+      #|      { source_name: "Rect", name: "Rect" },
       #|      Multi(
       #|        [("width", Simple("Double")), ("height", Simple("Double"))],
       #|        true,
@@ -218,7 +229,15 @@ test "multiple types in one file" {
   )
   debug_inspect(
     types[1].kind,
-    content="SimpleEnum([\"Red\", \"Green\", \"Blue\"])",
+    content=(
+      #|SimpleEnum(
+      #|  [
+      #|    { source_name: "Red", name: "Red" },
+      #|    { source_name: "Green", name: "Green" },
+      #|    { source_name: "Blue", name: "Blue" },
+      #|  ],
+      #|)
+    ),
   )
 }
 
@@ -260,7 +279,16 @@ test "types across multiple files" {
   )
   debug_inspect(
     types[1].kind,
-    content="SimpleEnum([\"North\", \"South\", \"East\", \"West\"])",
+    content=(
+      #|SimpleEnum(
+      #|  [
+      #|    { source_name: "North", name: "North" },
+      #|    { source_name: "South", name: "South" },
+      #|    { source_name: "East", name: "East" },
+      #|    { source_name: "West", name: "West" },
+      #|  ],
+      #|)
+    ),
   )
 }
 
@@ -351,9 +379,12 @@ test "parse variant enum with cross-package payload" {
     content=(
       #|VariantEnum(
       #|  [
-      #|    ("Created", Single(Simple("@types.Info"))),
       #|    (
-      #|      "Updated",
+      #|      { source_name: "Created", name: "Created" },
+      #|      Single(Simple("@types.Info")),
+      #|    ),
+      #|    (
+      #|      { source_name: "Updated", name: "Updated" },
       #|      Multi(
       #|        [
       #|          ("field0", Simple("@types.Info")),
@@ -362,7 +393,7 @@ test "parse variant enum with cross-package payload" {
       #|        false,
       #|      ),
       #|    ),
-      #|    ("Deleted", None),
+      #|    ({ source_name: "Deleted", name: "Deleted" }, None),
       #|  ],
       #|)
     ),

@@ -18,6 +18,35 @@ impl QuantityUnit for TestBytesUnit with fn allowed_suffixes() {
 }
 
 ///|
+#warnings("-struct_never_constructed")
+struct DigestText {} derive(Debug, Eq)
+
+///|
+impl TextSpec for DigestText with fn type_id() {
+  "test.DigestText"
+}
+
+///|
+impl TextSpec for DigestText with fn languages() {
+  []
+}
+
+///|
+impl TextSpec for DigestText with fn min_length() {
+  Some(8U)
+}
+
+///|
+impl TextSpec for DigestText with fn max_length() {
+  Some(64U)
+}
+
+///|
+impl TextSpec for DigestText with fn regex() {
+  Some("^[a-f0-9]+$")
+}
+
+///|
 fn[T : IntoSchema + FromSchema] rich_roundtrip(v : T) -> T raise {
   let typed = try_into_typed_schema_value(v)
   let wit = @model.typed_schema_value_to_wit(typed)
@@ -38,14 +67,18 @@ test "direct rich wire codecs preserve units and reject invalid quantity units" 
       @types.UrlValue("https://example.com/a"),
       @types.DurationValue({ nanoseconds: -42L, }),
       @types.QuantityValueNode({ mantissa: 1500L, scale: 1, unit: "kb", }),
-      @types.TupleValue([0, 1, 2]),
+      @types.TextValue({ text: "deadbeef", language: None, }),
+      @types.TupleValue([0, 1, 2, 3]),
     ],
-    root: 3,
+    root: 4,
   }
-  let result : (Url, Duration, Quantity[TestBytesUnit]) = from_wire(tree)
+  let result : (Url, Duration, Quantity[TestBytesUnit], Text[DigestText]) = from_wire(
+    tree,
+  )
   assert_eq(result.0, Url::new("https://example.com/a"))
   assert_eq(result.1, Duration::new(-42L))
   assert_eq(result.2, Quantity::new(1500L, 1, "kb"))
+  assert_eq(result.3, Text::new("deadbeef"))
   assert_eq(into_wire(result), tree)
   let invalid : @types.SchemaValueTree = {
     value_nodes: [
@@ -71,6 +104,10 @@ test "rich type round-trips" {
   assert_eq(
     rich_roundtrip(Url::new("https://example.com")),
     Url::new("https://example.com"),
+  )
+  assert_eq(
+    rich_roundtrip((Text::new("deadbeef") : Text[DigestText])),
+    (Text::new("deadbeef") : Text[DigestText]),
   )
   assert_eq(
     rich_roundtrip(@types.Datetime::{
@@ -105,6 +142,20 @@ test "rich schema shapes" {
     Url::register_in(@model.SchemaBuilder::new()).body,
     content=(
       #|Url({ allowed_schemes: None, allowed_hosts: None })
+    ),
+  )
+  let text_tag : TypeTag[Text[DigestText]] = type_tag()
+  debug_inspect(
+    register_in_with(@model.SchemaBuilder::new(), text_tag).body,
+    content=(
+      #|Text(
+      #|  {
+      #|    languages: None,
+      #|    min_length: Some(8),
+      #|    max_length: Some(64),
+      #|    regex: Some("^[a-f0-9]+$"),
+      #|  },
+      #|)
     ),
   )
   let datetime_tag : TypeTag[@types.Datetime] = type_tag()

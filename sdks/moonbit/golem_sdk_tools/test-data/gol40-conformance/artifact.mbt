@@ -6,10 +6,39 @@ pub(all) struct ArtifactRequest {
 }
 
 ///|
+#warnings("-struct_never_constructed")
+struct DigestText {}
+
+///|
+impl @schema.TextSpec for DigestText with type_id() {
+  "gol40.DigestText"
+}
+
+///|
+impl @schema.TextSpec for DigestText with languages() {
+  []
+}
+
+///|
+impl @schema.TextSpec for DigestText with min_length() {
+  Some(8U)
+}
+
+///|
+impl @schema.TextSpec for DigestText with max_length() {
+  Some(64U)
+}
+
+///|
+impl @schema.TextSpec for DigestText with regex() {
+  Some("^[a-f0-9]+$")
+}
+
+///|
 #derive.golem_schema
 pub(all) struct ArtifactReport {
   artifactId : UInt64
-  digest : String
+  digest : @schema.Text[DigestText]
   labels : Map[String, String]
   warnings : Array[String]
 }
@@ -23,27 +52,23 @@ pub(all) struct ValidationFailure {
 }
 
 ///|
-#derive.golem_schema
-pub(all) struct RenderFailure {
-  stage : String
-  code : UInt
-}
-
-///|
 enum ArtifactError {
   /// Request validation failed.
   #derive.error(kind="usage-error", exit_code="2")
   InvalidRequest(ValidationFailure)
   /// Renderer failed.
   #derive.error(kind="runtime-error", exit_code="70")
-  RenderFailed(RenderFailure)
+  RenderFailed(stage~ : String, code~ : UInt)
 }
 
 ///|
 #derive.golem_schema
 pub(all) enum ArtifactStatus {
+  #derive.case(name="queued")
   Queued
+  #derive.case(name="ready")
   Ready
+  #derive.case(name="failed")
   Failed
 }
 
@@ -51,7 +76,7 @@ pub(all) enum ArtifactStatus {
 /// Build and inspect artifacts.
 /// A deliberately asymmetric conformance tool.
 #derive.example("artifact --region eu-west-1 render src/main.wasm --format json", title="Render")
-#derive.tool("artifact", version="1.0.0")
+#derive.tool("artifact", version="1.0.0", alias="art")
 struct Artifact {}
 
 ///|
@@ -59,8 +84,8 @@ struct Artifact {}
 /// Build an artifact and return a structured report.
 #derive.example("artifact render src/main.wasm --format json --tag release --define opt=3 --checksum", title="Release build")
 #derive.command(alias="build", subtree="ArtifactRender")
-#derive.arg("region", scope="global", short="r", alias="location", value_name="REGION", default="eu-west-1", env="ARTIFACT_REGION", doc="Execution region")
-#derive.arg("trace", scope="global", short="t", alias="diagnostics", kind="flag", negatable=true, default="false", doc="Emit trace details")
+#derive.arg("region", scope="root-global", short="r", alias="location", value_name="REGION", default="eu-west-1", env="ARTIFACT_REGION", doc="Execution region")
+#derive.arg("trace", scope="root-global", short="t", alias="diagnostics", kind="flag", negatable=true, default="false", doc="Emit trace details")
 pub fn Artifact::render(region : String, trace : Bool) -> Unit {
   ignore(region)
   ignore(trace)
@@ -100,9 +125,9 @@ pub async fn ArtifactRender::render(
   color : String?,
   checksum : Bool,
   verbose : UInt,
-  stdin : @asyncCore.Stream[Byte],
+  stdin : @asyncCore.Stream[Byte]?,
   stdout : @tool.ProviderOutput,
-  stderr : @tool.ProviderOutput,
+  stderr : @tool.ProviderOutput?,
   principal : @tool.Principal,
 ) -> Result[ArtifactReport, ArtifactError] {
   ignore(profile)

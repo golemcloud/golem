@@ -398,8 +398,9 @@ pub(all) struct ToolConstraintInfo {
 
 pub(all) struct ToolErrorCaseInfo {
   name : String
-  payload : ParamType?
+  payload : VariantPayload
   payload_label : String?
+  payload_field_labels : Array[Bool]
   kind : String
   exit_code : String?
   description : String
@@ -421,6 +422,7 @@ pub(all) enum ToolHiddenType {
 pub(all) struct ToolInfo {
   source_name : String
   name : String
+  aliases : Array[String]
   version : String?
   requires_filesystem : Bool
   description : String
@@ -469,6 +471,8 @@ pub(all) enum ToolParamType {
   QuestionOptionalPublic(ParamType)
   Hidden(ToolHiddenType)
   LabelledHidden(ToolHiddenType)
+  OptionalHidden(ToolHiddenType)
+  LabelledOptionalHidden(ToolHiddenType)
 } derive(Eq, @debug.Debug)
 
 pub(all) struct ToolResultInfo {
@@ -481,6 +485,11 @@ pub(all) struct UniversalToolMiddlewareInfo {
   handler_name : String
 } derive(Eq, @debug.Debug)
 
+pub(all) struct ValueCase {
+  source_name : String
+  name : String
+} derive(Eq, @debug.Debug)
+
 pub(all) struct ValueTypeInfo {
   name : String
   kind : ValueTypeKind
@@ -488,8 +497,8 @@ pub(all) struct ValueTypeInfo {
 
 pub(all) enum ValueTypeKind {
   Record(Array[(String, ParamType)])
-  SimpleEnum(Array[String])
-  VariantEnum(Array[(String, VariantPayload)])
+  SimpleEnum(Array[ValueCase])
+  VariantEnum(Array[(ValueCase, VariantPayload)])
 } derive(Eq, @debug.Debug)
 
 pub(all) enum VariantPayload {

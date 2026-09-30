@@ -1,4 +1,9 @@
 ///|
+fn value_case(name : String) -> ValueCase {
+  { source_name: name, name, }
+}
+
+///|
 test "generate impls for simple struct" {
   let types : Array[ValueTypeInfo] = [
     {
@@ -19,7 +24,14 @@ test "generate impls for simple struct" {
 ///|
 test "generate impls for simple enum" {
   let types : Array[ValueTypeInfo] = [
-    { name: "Priority", kind: SimpleEnum(["Low", "Medium", "High"]), },
+    {
+      name: "Priority",
+      kind: SimpleEnum([
+        value_case("Low"),
+        value_case("Medium"),
+        value_case("High"),
+      ]),
+    },
   ]
   let impls = generate_value_type_impls(types)
   let output = @formatter.impls_to_string(impls)
@@ -37,15 +49,15 @@ test "generate impls for variant enum" {
     {
       name: "Shape",
       kind: VariantEnum([
-        ("Circle", Single(Simple("Double"))),
+        (value_case("Circle"), Single(Simple("Double"))),
         (
-          "Rectangle",
+          value_case("Rectangle"),
           Multi(
             [("field0", Simple("Double")), ("field1", Simple("Double"))],
             false,
           ),
         ),
-        ("Point", VariantPayload::None),
+        (value_case("Point"), VariantPayload::None),
       ]),
     },
   ]
@@ -65,8 +77,8 @@ test "generated variant wire decoder validates payload presence" {
     {
       name: "Shape",
       kind: VariantEnum([
-        ("Circle", Single(Simple("Double"))),
-        ("Point", VariantPayload::None),
+        (value_case("Circle"), Single(Simple("Double"))),
+        (value_case("Point"), VariantPayload::None),
       ]),
     },
   ]
@@ -92,15 +104,15 @@ test "generate impls for variant enum with labelled fields" {
     {
       name: "Event",
       kind: VariantEnum([
-        ("Created", Single(Simple("String"))),
+        (value_case("Created"), Single(Simple("String"))),
         (
-          "Updated",
+          value_case("Updated"),
           Multi(
             [("title", Simple("String")), ("priority", Simple("Int"))],
             true,
           ),
         ),
-        ("Deleted", VariantPayload::None),
+        (value_case("Deleted"), VariantPayload::None),
       ]),
     },
   ]
@@ -143,8 +155,8 @@ test "generate impls for variant enum with cross-package payload" {
     {
       name: "Event",
       kind: VariantEnum([
-        ("Created", Single(Simple("@types.Info"))),
-        ("Deleted", VariantPayload::None),
+        (value_case("Created"), Single(Simple("@types.Info"))),
+        (value_case("Deleted"), VariantPayload::None),
       ]),
     },
   ]

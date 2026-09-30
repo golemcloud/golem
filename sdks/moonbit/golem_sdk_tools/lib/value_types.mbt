@@ -7,11 +7,18 @@ pub(all) enum VariantPayload {
 } derive(Debug, Eq)
 
 ///|
+/// A MoonBit enum constructor and its independently authored schema case name.
+pub(all) struct ValueCase {
+  source_name : String
+  name : String
+} derive(Debug, Eq)
+
+///|
 /// Discriminates between the three supported custom type shapes: record, simple enum, and variant enum.
 pub(all) enum ValueTypeKind {
   Record(Array[(String, ParamType)])
-  SimpleEnum(Array[String])
-  VariantEnum(Array[(String, VariantPayload)])
+  SimpleEnum(Array[ValueCase])
+  VariantEnum(Array[(ValueCase, VariantPayload)])
 } derive(Debug, Eq)
 
 ///|
@@ -142,12 +149,46 @@ fn parse_type_desc(
       Record(result)
     }
     Variant(constrs) => {
-      let cases : Array[(String, VariantPayload)] = []
+      let cases : Array[(ValueCase, VariantPayload)] = []
       let constr_arr = constrs.to_array()
       for constr in constr_arr {
-        let case_name = constr.name.name
-        let payload = parse_constr_payload(case_name, constr.args)
-        cases.push((case_name, payload))
+        let source_name = constr.name.name
+        let case_name : Ref[String?] = Ref(None)
+        for attr in constr.attrs {
+          match derive_props(attr, "case") {
+            Some(props) => {
+              if case_name.val is Some(_) {
+                raise AgentParseError(
+                  "Duplicate #derive.case on enum case '\{source_name}'",
+                )
+              }
+              for prop in props {
+                match prop_string(prop) {
+                  Some((None | Some("name"), value)) =>
+                    if case_name.val is None {
+                      case_name.val = Some(value)
+                    } else {
+                      raise AgentParseError(
+                        "Duplicate schema case name on enum case '\{source_name}'",
+                      )
+                    }
+                  _ =>
+                    raise AgentParseError(
+                      "Malformed or unknown #derive.case property on enum case '\{source_name}'",
+                    )
+                }
+              }
+            }
+            None => ()
+          }
+        }
+        let payload = parse_constr_payload(source_name, constr.args)
+        cases.push(
+          (
+            { source_name, name: case_name.val.unwrap_or(source_name), },
+            payload,
+          ),
+        )
       }
       let mut all_unit = true
       for pair in cases {
@@ -160,7 +201,7 @@ fn parse_type_desc(
         }
       }
       if all_unit {
-        let names : Array[String] = []
+        let names : Array[ValueCase] = []
         for pair in cases {
           names.push(pair.0)
         }
@@ -251,10 +292,10 @@ fn validate_no_multimodal_in_value_kind(
       for c in cases {
         match c.1 {
           None => ()
-          Single(pt) => check(c.0, pt)
+          Single(pt) => check(c.0.name, pt)
           Multi(items, _) =>
             for it in items {
-              check("\{c.0}.\{it.0}", it.1)
+              check("\{c.0.name}.\{it.0}", it.1)
             }
         }
       }

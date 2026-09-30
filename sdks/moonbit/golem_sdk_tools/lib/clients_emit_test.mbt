@@ -694,9 +694,12 @@ test "generate_client_code - recursively stream-bearing methods are awaited only
     {
       name: "NestedVariant",
       kind: @lib.ValueTypeKind::VariantEnum([
-        ("Empty", @lib.VariantPayload::None),
         (
-          "One",
+          @lib.ValueCase::{ source_name: "Empty", name: "Empty", },
+          @lib.VariantPayload::None,
+        ),
+        (
+          @lib.ValueCase::{ source_name: "One", name: "One", },
           @lib.VariantPayload::Single(
             @lib.ParamType::ResultType(
               @lib.ParamType::Simple("String"),
@@ -705,7 +708,7 @@ test "generate_client_code - recursively stream-bearing methods are awaited only
           ),
         ),
         (
-          "Many",
+          @lib.ValueCase::{ source_name: "Many", name: "Many", },
           @lib.VariantPayload::Multi(
             [
               (
@@ -732,7 +735,7 @@ test "generate_client_code - recursively stream-bearing methods are awaited only
       name: "RecursiveCycle",
       kind: @lib.ValueTypeKind::VariantEnum([
         (
-          "Again",
+          @lib.ValueCase::{ source_name: "Again", name: "Again", },
           @lib.VariantPayload::Single(
             @lib.ParamType::Optional(@lib.ParamType::Simple("RecursiveStart")),
           ),

@@ -18,21 +18,11 @@ Principal and owner observations and complete stream tuples need a deployed host
 for the executor matrix rather than being represented by an SDK echo or a source-text-only runtime
 claim.
 
-Several fields cannot currently be emitted exactly by MoonBit's public derive surface and are therefore
-kept as explicit blockers rather than normalized differences:
-
-- `#derive.tool` has no alias property and a namespace-only root has no command method on which to
-  place `#derive.command(alias=...)`, so the root `art` alias cannot be emitted;
-- namespace-only root globals (`region` and `trace`) can only be attached to the `render` subtree
-  mount; the wire descriptor therefore places them on `render`, not the namespace-only root;
-- the SDK has schema-model support for constrained `text`, but no user-facing value wrapper, so
-  `ArtifactReport.digest` is emitted as `string` rather than constrained `text`.
-- MoonBit enum constructors must start uppercase and schema derives preserve constructor spelling,
-  so `ArtifactStatus` emits `Queued | Ready | Failed`, not the lowercase contract cases.
-- typed error cases accept at most one MoonBit payload, so `render-failed` uses the named
-  `RenderFailure` record instead of the contract's inline record.
-- provider stream parameters are always emitted with `required = true`; the fixture cannot express
-  CONTRACT-1's optional stdin and stderr declarations.
+The fixture uses the public MoonBit authoring surface for the complete CONTRACT-1 metadata:
+namespace-root aliases and globals, constrained text, authored enum case names, inline error-record
+payloads, and independently optional stdin/stderr declarations. The metadata assertion compares the
+generated descriptor projection exactly; it does not normalize language-specific differences or use
+legacy metadata carriers.
 
 ## Existing terminal coverage mapped for SDK-TERMINALS
 

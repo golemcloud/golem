@@ -1675,17 +1675,106 @@ test "wire client orders inherited globals before leaf globals and fields" {
 }
 
 ///|
+test "multi-field errors preserve each constructor field's label mode" {
+  let source =
+    #|#derive.tool
+    #|struct Runner {}
+    #|
+    #|enum RunError {
+    #|  #derive.error(kind="runtime-error")
+    #|  Failed(String, code~ : UInt)
+    #|}
+    #|
+    #|pub fn Runner::run() -> Result[Unit, RunError] { Ok(()) }
+  let tools = @lib.parse_tools([("mixed-error.mbt", source)])
+  let error = tools[0].commands[0].errors[0]
+  assert_eq(error.payload_field_labels, [false, true])
+  let registration = @formatter.impls_to_string(
+    @lib.generate_tool_registration(tools),
+  )
+  assert_true(
+    registration.contains(
+      "Failed(__golem_error_payload_0, code=__golem_error_payload_1)",
+    ),
+  )
+  let clients = @formatter.impls_to_string(
+    @lib.generate_tool_client_code(tools),
+  )
+  assert_true(
+    clients.contains(
+      "Failed(__golem_error_payload_0, code=__golem_error_payload_1)",
+    ),
+  )
+}
+
+///|
+test "multi-field error synthetic names do not collide with authored labels" {
+  let source =
+    #|#derive.tool
+    #|struct Runner {}
+    #|
+    #|enum RunError {
+    #|  #derive.error(kind="runtime-error")
+    #|  Failed(String, field0~ : UInt)
+    #|}
+    #|
+    #|pub fn Runner::run() -> Result[Unit, RunError] { Ok(()) }
+  let tools = @lib.parse_tools([("colliding-error.mbt", source)])
+  let registration = @formatter.impls_to_string(
+    @lib.generate_tool_registration(tools),
+  )
+  assert_false(registration.contains("Failed(field0, field0~)"))
+  let clients = @formatter.impls_to_string(
+    @lib.generate_tool_client_code(tools),
+  )
+  assert_false(clients.contains("Failed(field0, field0~)"))
+}
+
+///|
+test "multi-field error labels do not collide with generated locals" {
+  let source =
+    #|#derive.tool
+    #|struct Runner {}
+    #|
+    #|enum RunError {
+    #|  #derive.error(kind="runtime-error")
+    #|  Failed(__golem_error_schema~ : String, code~ : UInt)
+    #|}
+    #|
+    #|pub fn Runner::run() -> Result[Unit, RunError] { Ok(()) }
+  let tools = @lib.parse_tools([("local-collision-error.mbt", source)])
+  let registration = @formatter.impls_to_string(
+    @lib.generate_tool_registration(tools),
+  )
+  let compact_registration = registration
+    .split(" ")
+    .join("")
+    .split("\n")
+    .join("")
+  assert_true(
+    compact_registration.contains(
+      "Failed(__golem_error_schema=__golem_error_payload_0,code=__golem_error_payload_1",
+    ),
+  )
+}
+
+///|
 test "GOL-40 artifact fixture preserves rich metadata and client call shape" {
   let package_info = @lib.PackageInfo::{
     rel_path: "gol40-conformance",
     dir: "test-data/gol40-conformance",
   }
-  let tools = @lib.parse_tools(@lib.scan_package(package_info).files) catch {
+  let files = @lib.scan_package(package_info).files
+  let tools = @lib.parse_tools(files) catch {
     error => fail("GOL-40 fixture did not parse: " + repr(error))
+  }
+  let value_types = @lib.parse_value_types(files) catch {
+    error => fail("GOL-40 value metadata did not parse: " + repr(error))
   }
   assert_eq(tools.length(), 2)
   let artifact = canonical_tool(tools, "artifact")
   assert_eq(artifact.version, Some("1.0.0"))
+  assert_eq(artifact.aliases, ["art"])
   assert_eq(
     artifact.description,
     "Build and inspect artifacts.\n A deliberately asymmetric conformance tool.",
@@ -1700,6 +1789,10 @@ test "GOL-40 artifact fixture preserves rich metadata and client call shape" {
   assert_eq(mount.aliases, ["build"])
   assert_eq(mount.subtree, Some("ArtifactRender"))
   assert_eq(mount.params.map(param => param.0), ["region", "trace"])
+  assert_eq(mount.args.map(arg => arg.scope), [
+    Some("root-global"),
+    Some("root-global"),
+  ])
   let render_tool = canonical_tool(tools, "artifact-render")
   let render = canonical_command(render_tool, "render")
   assert_eq(render.aliases, ["build"])
@@ -1711,10 +1804,42 @@ test "GOL-40 artifact fixture preserves rich metadata and client call shape" {
     "profile", "request", "inputs", "format", "tag", "define", "color", "checksum",
     "verbose", "stdin", "stdout", "stderr", "principal",
   ])
-  assert_true(render.params.any(param => param.1 is @lib.Hidden(InputStream)))
+  assert_true(
+    render.params.any(param => param.1 is @lib.OptionalHidden(InputStream)),
+  )
   assert_true(render.params.any(param => param.1 is @lib.Hidden(OutputStream)))
-  assert_true(render.params.any(param => param.1 is @lib.Hidden(ErrorStream)))
+  assert_true(
+    render.params.any(param => param.1 is @lib.OptionalHidden(ErrorStream)),
+  )
   assert_true(render.params.any(param => param.1 is @lib.Hidden(Principal)))
+  let report = value_types
+    .iter()
+    .find_first(type_ => type_.name == "ArtifactReport")
+    .unwrap()
+  guard report.kind is @lib.ValueTypeKind::Record(report_fields) else {
+    fail("ArtifactReport did not emit record metadata")
+  }
+  assert_eq(
+    report_fields[1],
+    (
+      "digest",
+      @lib.ParamType::Parameterized("@schema.Text", [
+        @lib.ParamType::Simple("DigestText"),
+      ]),
+    ),
+  )
+  let status_type = value_types
+    .iter()
+    .find_first(type_ => type_.name == "ArtifactStatus")
+    .unwrap()
+  assert_eq(
+    status_type.kind,
+    @lib.ValueTypeKind::SimpleEnum([
+      @lib.ValueCase::{ source_name: "Queued", name: "queued", },
+      @lib.ValueCase::{ source_name: "Ready", name: "ready", },
+      @lib.ValueCase::{ source_name: "Failed", name: "failed", },
+    ]),
+  )
   assert_eq(render.constraints.map(constraint => constraint.kind), [
     "requires_all", "implies", "forbids",
   ])
@@ -1727,6 +1852,17 @@ test "GOL-40 artifact fixture preserves rich metadata and client call shape" {
       ("RenderFailed", "runtime-error", Some("70")),
     ],
   )
+  assert_eq(
+    render.errors[1].payload,
+    @lib.VariantPayload::Multi(
+      [
+        ("stage", @lib.ParamType::Simple("String")),
+        ("code", @lib.ParamType::Simple("UInt")),
+      ],
+      true,
+    ),
+  )
+  assert_eq(render.errors[1].payload_field_labels, [true, true])
   let status = canonical_command(render_tool, "status")
   assert_eq(status.aliases, ["show"])
   assert_eq(status.read_only, Some(true))
@@ -1739,6 +1875,7 @@ test "GOL-40 artifact fixture preserves rich metadata and client call shape" {
     },
   )
   assert_true(registration.contains("name: \"artifact\""))
+  assert_true(registration.contains("aliases: [\"art\"]"))
   assert_true(registration.contains("name: \"render\""))
   assert_true(registration.contains("name: \"status\""))
   assert_true(registration.contains("@toolCommon.Constraint::RequiresAll"))
@@ -1746,7 +1883,34 @@ test "GOL-40 artifact fixture preserves rich metadata and client call shape" {
   assert_true(registration.contains("@toolCommon.Constraint::Forbids"))
   assert_true(registration.contains("stdout: Some("))
   assert_true(registration.contains("stderr: Some("))
+  let compact_registration = registration
+    .split(" ")
+    .join("")
+    .split("\n")
+    .join("")
+  assert_true(
+    compact_registration.contains("mime:[\"application/wasm\"],required:false"),
+  )
+  assert_true(
+    compact_registration.contains(
+      "mime:[\"text/plain;charset=utf-8\"],required:true",
+    ),
+  )
+  assert_true(
+    compact_registration.contains(
+      "mime:[\"application/octet-stream\"],required:false",
+    ),
+  )
+  assert_true(compact_registration.contains("RecordType([{name:\"stage\""))
   assert_true(registration.contains("principal : @tool.Principal"))
+  let value_impls = @formatter.impls_to_string(
+    @lib.generate_value_type_impls(
+      value_types,
+      type_id_prefix="gol40-conformance",
+    ),
+  )
+  assert_true(value_impls.contains("@schema.TypeTag[@schema.Text[DigestText]]"))
+  assert_true(value_impls.contains("Enum([\"queued\", \"ready\", \"failed\"])"))
   let clients = @formatter.impls_to_string(
     @lib.generate_tool_client_code(tools) catch {
       error => fail("GOL-40 client generation failed: " + repr(error))

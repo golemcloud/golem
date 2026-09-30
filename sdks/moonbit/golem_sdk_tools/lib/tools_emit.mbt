@@ -469,23 +469,38 @@ fn project_command(
       )
     }
     match parameter {
-      Hidden(hidden) | LabelledHidden(hidden) => {
+      Hidden(hidden)
+      | LabelledHidden(hidden)
+      | OptionalHidden(hidden)
+      | LabelledOptionalHidden(hidden) => {
         let info = arg_info(command, source)
         validate_hidden_attrs(info, hidden, source)
+        let optional = parameter is OptionalHidden(_) ||
+          parameter is LabelledOptionalHidden(_)
+        let hidden_type = match hidden {
+          InputStream => Parameterized("@asyncCore.Stream", [Simple("Byte")])
+          OutputStream | ErrorStream => Simple("@tool.ProviderOutput")
+          Principal => Simple("@tool.Principal")
+        }
         projected.push({
           source,
           canonical: source,
           aliases: [],
-          type_: None,
+          type_: if optional {
+            Some(Optional(hidden_type))
+          } else {
+            None
+          },
           value_type: None,
           placement: Hidden(hidden),
-          call_suffix: if parameter is LabelledHidden(_) {
+          call_suffix: if parameter is LabelledHidden(_) ||
+            parameter is LabelledOptionalHidden(_) {
             "~"
           } else {
             ""
           },
           info,
-          required: true,
+          required: !optional,
         })
       }
       Public(original)
@@ -757,6 +772,36 @@ fn project_command(
     )
   }
   projected
+}
+
+///|
+fn root_global_args(
+  tool : ToolInfo,
+  plans : Array[Array[ProjectedToolArg]],
+) -> Array[ProjectedToolArg] raise ToolEmitError {
+  let result : Array[ProjectedToolArg] = []
+  for index, command in tool.commands {
+    for arg in plans[index] {
+      if arg.info.flat_map(info => info.scope) == Some("root-global") {
+        if command.subtree is None {
+          emit_fail(
+            "root-global argument '" +
+            arg.source +
+            "' must belong to a subtree command",
+          )
+        }
+        if result.any(existing => {
+            projected_arg_identity_names(existing).any(name => {
+              projected_arg_identity_names(arg).contains(name)
+            })
+          }) {
+          emit_fail("Duplicate namespace-root global '" + arg.canonical + "'")
+        }
+        result.push(arg)
+      }
+    }
+  }
+  result
 }
 
 ///|
@@ -1216,9 +1261,39 @@ fn emit_error_cases(
       },
     )
     let payload = match error.payload {
-      Some(pt) =>
+      VariantPayload::None => "None"
+      Single(pt) =>
         "Some(" + graph(pt, wire~) + (if wire { ".index)" } else { ")" })
-      None => "None"
+      Multi(fields, _) => {
+        let field_schemas = fields.map(field => {
+          let field_graph = graph(field.1, wire~)
+          if wire {
+            "{ name: \"" +
+            escape_string_lit(field.0) +
+            "\", body: (" +
+            field_graph +
+            ").index, metadata: @schema.empty_wire_metadata() }"
+          } else {
+            "@model.field(\"" +
+            escape_string_lit(field.0) +
+            "\", (" +
+            field_graph +
+            ").root)"
+          }
+        })
+        if wire {
+          "Some(__golem_schema.push(@types.SchemaTypeBody::RecordType([" +
+          field_schemas.join(", ") +
+          "])))"
+        } else {
+          let graphs = fields.map(field => graph(field.1)).join(", ")
+          "Some(@model.SchemaGraph::{ defs: @model.merge_graph_defs([" +
+          graphs +
+          "]), root: @model.schema_type(@model.SchemaTypeBody::Record([" +
+          field_schemas.join(", ") +
+          "])) })"
+        }
+      }
     }
     "{ name: \"" +
     escape_string_lit(moonbit_name_to_kebab_case(error.name)) +
@@ -1254,13 +1329,18 @@ fn emit_errors(command : ToolCommandInfo) -> String {
 ///|
 fn emit_stream(command : ToolCommandInfo, hidden : ToolHiddenType) -> String {
   for pair in command.params {
-    if pair.1 == Hidden(hidden) || pair.1 == LabelledHidden(hidden) {
+    if pair.1 == Hidden(hidden) ||
+      pair.1 == LabelledHidden(hidden) ||
+      pair.1 == OptionalHidden(hidden) ||
+      pair.1 == LabelledOptionalHidden(hidden) {
       let info = arg_info(command, pair.0)
       return "Some({ doc: " +
         emit_doc(info.flat_map(i => i.doc).unwrap_or(""), []) +
         ", mime: " +
         emit_strings(info.map(i => i.mimes).unwrap_or([])) +
-        ", required: true })"
+        ", required: " +
+        (pair.1 == Hidden(hidden) || pair.1 == LabelledHidden(hidden)).to_string() +
+        " })"
     }
   }
   "None"
@@ -1731,7 +1811,10 @@ fn emit_descriptor(
     ", commands: [\n",
   )
   let root = tool.root_command
-  let root_args = root.map(i => plans[i]).unwrap_or([])
+  let root_args = root
+    .map(i => plans[i])
+    .unwrap_or([])
+    .concat(root_global_args(tool, plans))
   let globals_options = root_args
     .filter(a => a.placement is GlobalOption)
     .map(arg => emit_option(arg))
@@ -1753,7 +1836,7 @@ fn emit_descriptor(
     .unwrap_or("None")
   let root_aliases = root
     .map(i => emit_strings(tool.commands[i].aliases))
-    .unwrap_or("[]")
+    .unwrap_or(emit_strings(tool.aliases))
   buf.write_string(
     "    { name: \"" +
     escape_string_lit(tool.name) +
@@ -1861,7 +1944,10 @@ fn emit_descriptor(
 ///|
 fn output_stream_source(command : ToolCommandInfo) -> String? {
   for pair in command.params {
-    if pair.1 == Hidden(OutputStream) || pair.1 == LabelledHidden(OutputStream) {
+    if pair.1 == Hidden(OutputStream) ||
+      pair.1 == LabelledHidden(OutputStream) ||
+      pair.1 == OptionalHidden(OutputStream) ||
+      pair.1 == LabelledOptionalHidden(OutputStream) {
       return Some(pair.0)
     }
   }
@@ -1871,7 +1957,10 @@ fn output_stream_source(command : ToolCommandInfo) -> String? {
 ///|
 fn error_stream_source(command : ToolCommandInfo) -> String? {
   for pair in command.params {
-    if pair.1 == Hidden(ErrorStream) || pair.1 == LabelledHidden(ErrorStream) {
+    if pair.1 == Hidden(ErrorStream) ||
+      pair.1 == LabelledHidden(ErrorStream) ||
+      pair.1 == OptionalHidden(ErrorStream) ||
+      pair.1 == LabelledOptionalHidden(ErrorStream) {
       return Some(pair.0)
     }
   }
@@ -1881,7 +1970,10 @@ fn error_stream_source(command : ToolCommandInfo) -> String? {
 ///|
 fn input_stream_source(command : ToolCommandInfo) -> String? {
   for pair in command.params {
-    if pair.1 == Hidden(InputStream) || pair.1 == LabelledHidden(InputStream) {
+    if pair.1 == Hidden(InputStream) ||
+      pair.1 == LabelledHidden(InputStream) ||
+      pair.1 == OptionalHidden(InputStream) ||
+      pair.1 == LabelledOptionalHidden(InputStream) {
       return Some(pair.0)
     }
   }
@@ -1903,17 +1995,78 @@ fn emit_empty_invocation(command : ToolCommandInfo) -> String {
 }
 
 ///|
+fn error_payload_binding_name(index : Int) -> String {
+  "__golem_error_payload_" + index.to_string()
+}
+
+///|
+fn error_payload_binding_names(
+  fields : Array[(String, ParamType)],
+) -> Array[String] {
+  let names : Array[String] = []
+  for index, _ in fields {
+    names.push(error_payload_binding_name(index))
+  }
+  names
+}
+
+///|
+fn error_payload_bindings(error : ToolErrorCaseInfo) -> String {
+  guard error.payload is Multi(fields, _) else { return "" }
+  let bindings : Array[String] = []
+  for index, field in fields {
+    let binding = error_payload_binding_name(index)
+    bindings.push(
+      if error.payload_field_labels.get(index) == Some(true) {
+        field.0 + "=" + binding
+      } else {
+        binding
+      },
+    )
+  }
+  bindings.join(", ")
+}
+
+///|
 fn emit_custom_error(command : ToolCommandInfo, error_value : String) -> String {
   let cases = command.errors.map(error => {
-    let (pattern, payload) = match (error.payload, error.payload_label) {
-      (Some(_), Some(label)) => (error.name + "(" + label + "~)", label)
-      (Some(_), None) => (error.name + "(__golem_payload)", "__golem_payload")
-      (None, _) => (error.name, "()")
+    let (pattern, payload) = match error.payload {
+      VariantPayload::None => (error.name, "@tool.encode_wire_result(())")
+      Single(_) => {
+        let binding = error.payload_label.unwrap_or("__golem_payload")
+        (
+          error.name +
+          "(" +
+          binding +
+          (if error.payload_label is Some(_) { "~" } else { "" }) +
+          ")",
+          "@tool.encode_wire_result(" + binding + ")",
+        )
+      }
+      Multi(fields, _) => {
+        let bindings = error_payload_bindings(error)
+        let schema_fields = fields.map(field => {
+          "{ name: \"" +
+          escape_string_lit(field.0) +
+          "\", body: @schema.append_wire_type_with(__golem_error_schema, (@schema.TypeTag::{  } : @schema.TypeTag[" +
+          emit_type(field.1) +
+          "])), metadata: @schema.empty_wire_metadata() }"
+        })
+        let values = error_payload_binding_names(fields).join(", ")
+        (
+          error.name + "(" + bindings + ")",
+          "{ let __golem_error_schema = @schema.WireTypeEncoder::new(); let __golem_error_root = __golem_error_schema.push(@types.SchemaTypeBody::RecordType([" +
+          schema_fields.join(", ") +
+          "])); @types.TypedSchemaValue::{ graph: { type_nodes: __golem_error_schema.nodes, defs: __golem_error_schema.defs, root: __golem_error_root }, value: @schema.into_wire_record_async([" +
+          values +
+          "]) } }",
+        )
+      }
     }
     pattern +
-    " => { let payload = @tool.encode_wire_result(" +
+    " => { let payload = " +
     payload +
-    ") catch { @asyncCore.Cancelled::Cancelled as error => raise error\n@types.ToolError::InvalidResult(message) => return Err(@types.ToolError::InvalidResult(message))\nerror => raise error }\nErr(@types.ToolError::CustomError({ name: \"" +
+    " catch { @asyncCore.Cancelled::Cancelled as error => raise error\n@types.ToolError::InvalidResult(message) => return Err(@types.ToolError::InvalidResult(message))\nerror => raise error }\nErr(@types.ToolError::CustomError({ name: \"" +
     escape_string_lit(moonbit_name_to_kebab_case(error.name)) +
     "\", payload })) }"
   })
@@ -1924,19 +2077,33 @@ fn emit_custom_error(command : ToolCommandInfo, error_value : String) -> String 
 fn emit_raised_error_capture(command : ToolCommandInfo) -> String {
   command.errors
   .map(error => {
-    match (error.payload, error.payload_label) {
-      (Some(_), Some(label)) =>
+    match error.payload {
+      VariantPayload::None => error.name + " => Err(" + error.name + ")"
+      Single(_) => {
+        let binding = error.payload_label.unwrap_or("payload")
+        let suffix = if error.payload_label is Some(_) { "~" } else { "" }
         error.name +
         "(" +
-        label +
-        "~) => Err(" +
+        binding +
+        suffix +
+        ") => Err(" +
         error.name +
         "(" +
-        label +
-        "~))"
-      (Some(_), None) =>
-        error.name + "(payload) => Err(" + error.name + "(payload))"
-      (None, _) => error.name + " => Err(" + error.name + ")"
+        binding +
+        suffix +
+        "))"
+      }
+      Multi(_, _) => {
+        let bindings = error_payload_bindings(error)
+        error.name +
+        "(" +
+        bindings +
+        ") => Err(" +
+        error.name +
+        "(" +
+        bindings +
+        "))"
+      }
     }
   })
   .join("\n")
@@ -2114,6 +2281,7 @@ fn emit_context_invoker(
       .concat(plans[index].filter(arg => arg.placement is GlobalFlag))
     })
     .unwrap_or([])
+    .concat(root_global_args(tool, plans))
   let root_globals = ancestor_globals.concat(
     without_captured_args(
       own_globals,
@@ -2165,9 +2333,12 @@ fn emit_context_invoker(
     }
     let fields = direct_input_args(args, inherited)
     let required_attachments = args.filter(arg => {
-      arg.placement is Hidden(InputStream) ||
-      arg.placement is Hidden(OutputStream) ||
-      arg.placement is Hidden(ErrorStream)
+      arg.required &&
+      (
+        arg.placement is Hidden(InputStream) ||
+        arg.placement is Hidden(OutputStream) ||
+        arg.placement is Hidden(ErrorStream)
+      )
     })
     let preflight = StringBuilder()
     for arg in required_attachments {
@@ -2286,23 +2457,35 @@ fn emit_context_invoker(
     for arg in args {
       match arg.placement {
         Hidden(InputStream) =>
-          buf.write_string(
-            "    let " +
-            arg.source +
-            " = match __golem_stdin {\n      Some(__golem_stream) => __golem_stream\n      None => return @tool.reject_undecoded_invocation(__golem_stdin, @types.ToolError::InvalidInput(\"required stdin stream is missing\"))\n    }\n",
-          )
+          if arg.required {
+            buf.write_string(
+              "    let " +
+              arg.source +
+              " = match __golem_stdin {\n      Some(__golem_stream) => __golem_stream\n      None => return @tool.reject_undecoded_invocation(__golem_stdin, @types.ToolError::InvalidInput(\"required stdin stream is missing\"))\n    }\n",
+            )
+          } else {
+            buf.write_string("    let " + arg.source + " = __golem_stdin\n")
+          }
         Hidden(OutputStream) =>
-          buf.write_string(
-            "    let " +
-            arg.source +
-            " = match __golem_stdout {\n      Some(__golem_output) => __golem_output\n      None => return @tool.reject_undecoded_invocation(__golem_stdin, @types.ToolError::InvalidInput(\"required stdout stream is missing\"))\n    }\n",
-          )
+          if arg.required {
+            buf.write_string(
+              "    let " +
+              arg.source +
+              " = match __golem_stdout {\n      Some(__golem_output) => __golem_output\n      None => return @tool.reject_undecoded_invocation(__golem_stdin, @types.ToolError::InvalidInput(\"required stdout stream is missing\"))\n    }\n",
+            )
+          } else {
+            buf.write_string("    let " + arg.source + " = __golem_stdout\n")
+          }
         Hidden(ErrorStream) =>
-          buf.write_string(
-            "    let " +
-            arg.source +
-            " = match __golem_stderr {\n      Some(__golem_output) => __golem_output\n      None => return @tool.reject_undecoded_invocation(__golem_stdin, @types.ToolError::InvalidInput(\"required stderr stream is missing\"))\n    }\n",
-          )
+          if arg.required {
+            buf.write_string(
+              "    let " +
+              arg.source +
+              " = match __golem_stderr {\n      Some(__golem_output) => __golem_output\n      None => return @tool.reject_undecoded_invocation(__golem_stdin, @types.ToolError::InvalidInput(\"required stderr stream is missing\"))\n    }\n",
+            )
+          } else {
+            buf.write_string("    let " + arg.source + " = __golem_stderr\n")
+          }
         _ => ()
       }
     }
@@ -2384,19 +2567,60 @@ fn emit_tool_error_schema(
     " with to_error_payload_value(self) {\n  match self {\n",
   )
   for error in errors {
-    let (pattern, payload) = match (error.payload, error.payload_label) {
-      (Some(_), Some(label)) => (error.name + "(" + label + "~)", label)
-      (Some(_), None) => (error.name + "(__golem_payload)", "__golem_payload")
-      (None, _) => (error.name, "()")
+    let (pattern, payload) = match error.payload {
+      VariantPayload::None =>
+        (error.name, "@schema.try_into_typed_schema_value(())")
+      Single(_) => {
+        let binding = error.payload_label.unwrap_or("__golem_payload")
+        (
+          error.name +
+          "(" +
+          binding +
+          (if error.payload_label is Some(_) { "~" } else { "" }) +
+          ")",
+          "@schema.try_into_typed_schema_value(" + binding + ")",
+        )
+      }
+      Multi(fields, _) => {
+        let bindings = error_payload_bindings(error)
+        let graphs = fields.map(field => {
+          "@schema.into_schema_graph((@schema.TypeTag::{  } : @schema.TypeTag[" +
+          emit_type(field.1) +
+          "]))"
+        })
+        let schema_fields : Array[String] = []
+        for index, field in fields {
+          schema_fields.push(
+            "@model.field(\"" +
+            escape_string_lit(field.0) +
+            "\", (" +
+            graphs[index] +
+            ").root)",
+          )
+        }
+        let values = error_payload_binding_names(fields).map(name => {
+          "@schema.to_value_as(" + name + ")"
+        })
+        (
+          error.name + "(" + bindings + ")",
+          "@model.TypedSchemaValue::{ graph: { defs: @model.merge_graph_defs([" +
+          graphs.join(", ") +
+          "]), root: @model.schema_type(@model.SchemaTypeBody::Record([" +
+          schema_fields.join(", ") +
+          "])) }, value: @model.SchemaValue::Record([" +
+          values.join(", ") +
+          "]) }",
+        )
+      }
     }
     buf.write_string(
       "    " +
       pattern +
       " => try { Ok((\"" +
       escape_string_lit(moonbit_name_to_kebab_case(error.name)) +
-      "\", @schema.try_into_typed_schema_value(" +
+      "\", " +
       payload +
-      "))) } catch { __golem_error => Err(__golem_error.to_string()) }\n",
+      ")) } catch { __golem_error => Err(__golem_error.to_string()) }\n",
     )
   }
   buf.write_string("  }\n}\n\n")
@@ -2406,23 +2630,68 @@ fn emit_tool_error_schema(
     " with from_error_payload_value(__golem_name, __golem_value) {\n  match __golem_name {\n",
   )
   for error in errors {
-    let payload_type = error.payload.map(emit_type).unwrap_or("Unit")
-    let error_value = match (error.payload, error.payload_label) {
-      (Some(_), Some(label)) => error.name + "(" + label + "=__golem_payload)"
-      (Some(_), None) => error.name + "(__golem_payload)"
-      (None, _) => error.name
+    let wire_name = escape_string_lit(moonbit_name_to_kebab_case(error.name))
+    match error.payload {
+      VariantPayload::None | Single(_) => {
+        let payload_type = match error.payload {
+          VariantPayload::None => "Unit"
+          Single(pt) => emit_type(pt)
+          Multi(_, _) => abort("unreachable")
+        }
+        let error_value = match error.payload {
+          VariantPayload::None => error.name
+          Single(_) =>
+            error.name +
+            "(" +
+            error.payload_label.map(label => label + "=").unwrap_or("") +
+            "__golem_payload)"
+          Multi(_, _) => abort("unreachable")
+        }
+        buf.write_string(
+          "    \"" +
+          wire_name +
+          "\" => {\n      let __golem_decoded : " +
+          payload_type +
+          "? = try { Some(@schema.from_value_as(__golem_value.value)) } catch { _ => None }\n      if __golem_decoded is Some(__golem_payload) { return Ok(" +
+          error_value +
+          ") }\n      Err(\"remote tool error payload is malformed for case `" +
+          wire_name +
+          "`\")\n    }\n",
+        )
+      }
+      Multi(fields, _) => {
+        let decode_lines = StringBuilder()
+        for index, field in fields {
+          decode_lines.write_string(
+            "      let " +
+            error_payload_binding_name(index) +
+            " : " +
+            emit_type(field.1) +
+            " = @schema.from_value_as(@schema.record_field(__golem_fields, " +
+            index.to_string() +
+            ", \"" +
+            wire_name +
+            "\"))\n",
+          )
+        }
+        let args = error_payload_bindings(error)
+        buf.write_string(
+          "    \"" +
+          wire_name +
+          "\" => try {\n      let __golem_fields = @schema.expect_record(__golem_value.value, \"" +
+          wire_name +
+          "\")\n" +
+          decode_lines.to_string() +
+          "      Ok(" +
+          error.name +
+          "(" +
+          args +
+          "))\n    } catch { _ => Err(\"remote tool error payload is malformed for case `" +
+          wire_name +
+          "`\") }\n",
+        )
+      }
     }
-    buf.write_string(
-      "    \"" +
-      escape_string_lit(moonbit_name_to_kebab_case(error.name)) +
-      "\" => {\n      let __golem_decoded : " +
-      payload_type +
-      "? = try { Some(@schema.from_value_as(__golem_value.value)) } catch { _ => None }\n      if __golem_decoded is Some(__golem_payload) { return Ok(" +
-      error_value +
-      ") }\n      Err(\"remote tool error payload is malformed for case `" +
-      escape_string_lit(moonbit_name_to_kebab_case(error.name)) +
-      "`\")\n    }\n",
-    )
   }
   buf.write_string(
     "    _ => Err(\"unknown remote tool error case `\" + __golem_name + \"`\")\n  }\n}\n\n",
@@ -2693,7 +2962,12 @@ fn emit_tool_client_method(
   let mut stdin = "None"
   for arg in args {
     match arg.placement {
-      Hidden(InputStream) => stdin = "Some(" + arg.source + ")"
+      Hidden(InputStream) =>
+        stdin = if arg.required {
+          "Some(" + arg.source + ")"
+        } else {
+          arg.source
+        }
       _ => ()
     }
   }
@@ -2801,6 +3075,9 @@ fn emit_client_scope(
       )
     })
     .unwrap_or([])
+    .concat(
+      without_captured_args(root_global_args(current, plans), captured_names),
+    )
   if current.root_command is Some(index) {
     let args = without_captured_args(
       client_args(plans[index], []),

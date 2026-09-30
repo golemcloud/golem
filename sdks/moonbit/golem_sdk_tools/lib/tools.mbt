@@ -18,6 +18,8 @@ pub(all) enum ToolParamType {
   QuestionOptionalPublic(ParamType)
   Hidden(ToolHiddenType)
   LabelledHidden(ToolHiddenType)
+  OptionalHidden(ToolHiddenType)
+  LabelledOptionalHidden(ToolHiddenType)
 } derive(Debug, Eq)
 
 ///|
@@ -82,8 +84,9 @@ pub(all) struct ToolResultInfo {
 ///|
 pub(all) struct ToolErrorCaseInfo {
   name : String
-  payload : ParamType?
+  payload : VariantPayload
   payload_label : String?
+  payload_field_labels : Array[Bool]
   kind : String
   exit_code : String?
   description : String
@@ -118,6 +121,7 @@ pub(all) struct ToolCommandInfo {
 pub(all) struct ToolInfo {
   source_name : String
   name : String
+  aliases : Array[String]
   version : String?
   requires_filesystem : Bool
   description : String
@@ -411,6 +415,20 @@ fn command_props(attr : @attribute.Attribute) -> Array[@attribute.Prop]? {
 }
 
 ///|
+fn tool_props(attr : @attribute.Attribute) -> Array[@attribute.Prop]? {
+  guard attr.raw.has_prefix("#derive.tool(") else {
+    return derive_props(attr, "tool")
+  }
+  let prefix = "#derive.tool"
+  let repaired = rewrite_command_alias_label(attr.raw)
+  let reparsed = @attribute.Attribute::new(
+    loc=attr.loc,
+    ("derive", Some("tool"), repaired[prefix.length():].to_owned()),
+  )
+  derive_props(reparsed, "tool")
+}
+
+///|
 fn arg_props(attr : @attribute.Attribute) -> Array[@attribute.Prop]? {
   guard attr.raw.has_prefix("#derive.arg(") else {
     return derive_props(attr, "arg")
@@ -697,7 +715,9 @@ fn parse_arg(
     abort("")
   }
   if scope.val is Some(s) &&
-    !["global", "positional", "option", "flag", "tail"].contains(s) {
+    !["global", "root-global", "positional", "option", "flag", "tail"].contains(
+      s,
+    ) {
     tool_fail("Invalid argument scope '" + s + "'")
   }
   if kind.val is Some(k) &&
@@ -880,6 +900,15 @@ fn hidden_or_public(ty : @syntax.Type) -> ToolParamType raise ToolParseError {
     Simple("@tool.ProviderOutput") => Hidden(OutputStream)
     Parameterized("@asyncCore.Stream" | "Stream", [_]) => Hidden(InputStream)
     Parameterized("@asyncCore.Sink" | "Sink", [_]) => Hidden(OutputStream)
+    Optional(inner) =>
+      match inner {
+        Simple("@tool.ProviderOutput") => OptionalHidden(OutputStream)
+        Parameterized("@asyncCore.Stream" | "Stream", [_]) =>
+          OptionalHidden(InputStream)
+        Parameterized("@asyncCore.Sink" | "Sink", [_]) =>
+          OptionalHidden(OutputStream)
+        _ => Public(pt)
+      }
     Simple(name) if name == "Principal" ||
       name == "InputStream" ||
       name == "OutputStream" ||
@@ -896,8 +925,11 @@ fn labelled(parameter : ToolParamType) -> ToolParamType {
   match parameter {
     Public(type_) => LabelledPublic(type_)
     Hidden(type_) => LabelledHidden(type_)
-    LabelledPublic(_) | QuestionOptionalPublic(_) | LabelledHidden(_) =>
-      parameter
+    OptionalHidden(type_) => LabelledOptionalHidden(type_)
+    LabelledPublic(_)
+    | QuestionOptionalPublic(_)
+    | LabelledHidden(_)
+    | LabelledOptionalHidden(_) => parameter
   }
 }
 
@@ -907,7 +939,10 @@ fn question_optional(
 ) -> ToolParamType raise ToolParseError {
   match parameter {
     Public(type_) => QuestionOptionalPublic(Optional(type_))
-    Hidden(_) | LabelledHidden(_) => {
+    Hidden(_)
+    | LabelledHidden(_)
+    | OptionalHidden(_)
+    | LabelledOptionalHidden(_) => {
       tool_fail("Hidden SDK parameters cannot use question-optional syntax")
       abort("")
     }
@@ -949,19 +984,44 @@ fn parse_error_cases(
   }
   let result : Array[ToolErrorCaseInfo] = []
   for c in constrs {
-    let (payload, payload_label) : (ParamType?, String?) = match c.args {
-      None => (None, None)
+    let payload_label : Ref[String?] = Ref(None)
+    let payload_field_labels : Array[Bool] = []
+    let payload : VariantPayload = match c.args {
+      None => VariantPayload::None
       Some(ps) => {
         let a = ps.to_array()
-        if a.length() > 1 {
-          tool_fail(
-            "Error case '" + c.name.name + "' may have at most one payload",
-          )
-        }
         if a.length() == 0 {
-          (None, None)
+          VariantPayload::None
+        } else if a.length() == 1 {
+          payload_label.val = a[0].label.map(label => label.name)
+          Single(tool_type(a[0].ty))
         } else {
-          (Some(tool_type(a[0].ty)), a[0].label.map(label => label.name))
+          let fields : Array[(String, ParamType)] = []
+          let mut any_labelled = false
+          let used_names = a.filter_map(param => {
+            param.label.map(label => label.name)
+          })
+          for index, param in a {
+            payload_field_labels.push(param.label is Some(_))
+            let field_name = match param.label {
+              Some(label) => {
+                any_labelled = true
+                label.name
+              }
+              None => {
+                let mut synthetic_index = index
+                let mut candidate = "field" + synthetic_index.to_string()
+                while used_names.contains(candidate) {
+                  synthetic_index += 1
+                  candidate = "field" + synthetic_index.to_string()
+                }
+                used_names.push(candidate)
+                candidate
+              }
+            }
+            fields.push((field_name, tool_type(param.ty)))
+          }
+          Multi(fields, any_labelled)
         }
       }
     }
@@ -1033,7 +1093,8 @@ fn parse_error_cases(
     result.push({
       name: c.name.name,
       payload,
-      payload_label,
+      payload_label: payload_label.val,
+      payload_field_labels,
       kind,
       exit_code,
       description: tool_doc(c.doc),
@@ -1239,9 +1300,15 @@ fn parse_command(
           params[i] = match (param.1, channel) {
             (Hidden(OutputStream), "stdout") => param
             (LabelledHidden(OutputStream), "stdout") => param
+            (OptionalHidden(OutputStream), "stdout") => param
+            (LabelledOptionalHidden(OutputStream), "stdout") => param
             (Hidden(OutputStream), "stderr") => (param.0, Hidden(ErrorStream))
             (LabelledHidden(OutputStream), "stderr") =>
               (param.0, LabelledHidden(ErrorStream))
+            (OptionalHidden(OutputStream), "stderr") =>
+              (param.0, OptionalHidden(ErrorStream))
+            (LabelledOptionalHidden(OutputStream), "stderr") =>
+              (param.0, LabelledOptionalHidden(ErrorStream))
             _ => {
               tool_fail(
                 "channel is only valid on @tool.ProviderOutput parameters",
@@ -1262,8 +1329,14 @@ fn parse_command(
   for p in params {
     match p.1 {
       Hidden(InputStream) | LabelledHidden(InputStream) => input_streams += 1
+      OptionalHidden(InputStream) | LabelledOptionalHidden(InputStream) =>
+        input_streams += 1
       Hidden(OutputStream) | LabelledHidden(OutputStream) => output_streams += 1
+      OptionalHidden(OutputStream) | LabelledOptionalHidden(OutputStream) =>
+        output_streams += 1
       Hidden(ErrorStream) | LabelledHidden(ErrorStream) => error_streams += 1
+      OptionalHidden(ErrorStream) | LabelledOptionalHidden(ErrorStream) =>
+        error_streams += 1
       _ => ()
     }
   }
@@ -1395,14 +1468,14 @@ pub fn parse_tools(
             Some((Some("derive"), "error")) =>
               tool_fail("#derive.error must annotate an error case")
             Some((Some("derive"), "example")) =>
-              if !decl.attrs.any(attr => derive_props(attr, "tool") is Some(_)) {
+              if !decl.attrs.any(attr => tool_props(attr) is Some(_)) {
                 tool_fail(
                   "#derive.example must annotate a #derive.tool struct, public tool method, or error case",
                 )
               }
             _ => ()
           }
-          match derive_props(attr, "tool") {
+          match tool_props(attr) {
             Some(props) => {
               if by_source.contains(decl.tycon) {
                 tool_fail(
@@ -1419,6 +1492,7 @@ pub fn parse_tools(
               let mut name : String? = None
               let mut version : String? = None
               let mut requires_filesystem = false
+              let aliases : Array[String] = []
               for p in props {
                 match (prop_string(p), prop_bool(p)) {
                   (Some((None, v)), _) =>
@@ -1433,6 +1507,8 @@ pub fn parse_tools(
                     } else {
                       tool_fail("Duplicate tool version")
                     }
+                  (Some((Some("alias" | "tool_alias"), v)), _) =>
+                    aliases.push(v)
                   (_, Some(("requires_filesystem", value))) =>
                     requires_filesystem = value
                   _ =>
@@ -1445,6 +1521,13 @@ pub fn parse_tools(
               }
               let wire = name.unwrap_or(moonbit_name_to_kebab_case(decl.tycon))
               require_tool_identifier(wire, "tool", "tool " + decl.tycon)
+              for alias_name in aliases {
+                require_tool_identifier(
+                  alias_name,
+                  "tool alias",
+                  "tool " + decl.tycon,
+                )
+              }
               if by_wire.get(wire) is Some(existing) {
                 tool_fail(
                   "Duplicate tool wire name '" +
@@ -1461,6 +1544,7 @@ pub fn parse_tools(
               result.push({
                 source_name: decl.tycon,
                 name: wire,
+                aliases,
                 version,
                 requires_filesystem,
                 description: tool_doc(decl.doc),
@@ -1617,7 +1701,10 @@ pub fn parse_tools(
                 )
               }
             }
-            Hidden(_) | LabelledHidden(_) =>
+            Hidden(_)
+            | LabelledHidden(_)
+            | OptionalHidden(_)
+            | LabelledOptionalHidden(_) =>
               tool_fail(
                 "Subtree methods cannot declare hidden stream or principal parameters",
               )

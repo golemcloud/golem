@@ -159,6 +159,19 @@ pub impl[U : QuantityUnit] IntoSchema for Quantity[U]
 pub impl[U] IntoWire for Quantity[U]
 pub impl[U : QuantityUnit] WireSchema for Quantity[U]
 
+pub struct Text[S] {
+  value : String
+  language : String?
+} derive(Eq, @debug.Debug)
+pub fn[S] Text::language(Self[S]) -> String?
+pub fn[S] Text::new(String, language? : String) -> Self[S]
+pub fn[S] Text::value(Self[S]) -> String
+pub impl[S] FromSchema for Text[S]
+pub impl[S] FromWire for Text[S]
+pub impl[S : TextSpec] IntoSchema for Text[S]
+pub impl[S] IntoWire for Text[S]
+pub impl[S : TextSpec] WireSchema for Text[S]
+
 pub(all) struct TypeTag[T] {
 }
 
@@ -342,6 +355,14 @@ pub(open) trait QuantityUnit {
   fn type_id() -> String
   fn base_unit() -> String
   fn allowed_suffixes() -> Array[String]
+}
+
+pub(open) trait TextSpec {
+  fn type_id() -> String
+  fn languages() -> Array[String]
+  fn min_length() -> UInt?
+  fn max_length() -> UInt?
+  fn regex() -> String?
 }
 
 pub(open) trait WireSchema {
