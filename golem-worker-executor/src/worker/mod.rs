@@ -5376,18 +5376,21 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
             _ => filesystem_snapshots::InstanceView::Other,
         };
-        if !filesystem_snapshots::owner_gate(
+        let gate = filesystem_snapshots::owner_gate(
             instance,
             &who,
             self.interrupts.terminal_pending(),
             self.last_known_status_detached.load(Ordering::Acquire),
             self.owner_retirement_requested.is_cancelled(),
-            || {
-                self.shard_service()
-                    .check_admission(&self.owned_agent_id.agent_id)
-                    .is_ok()
-            },
-        ) {
+        );
+        // The admission reads the clock and the shard assignment, so it is asked last, and only
+        // when the gate needs it.
+        let owner = gate == filesystem_snapshots::OwnerGate::NeedsAdmission
+            && self
+                .shard_service()
+                .check_admission(&self.owned_agent_id.agent_id)
+                .is_ok();
+        if !owner {
             return agent_filesystem_snapshots::ConfirmOutcome::Deferred;
         }
         let on_confirmed: state_actor::OnConfirmed = match who {

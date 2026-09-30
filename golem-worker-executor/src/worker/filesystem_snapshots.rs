@@ -988,18 +988,27 @@ pub(crate) enum InstanceView {
     Other,
 }
 
-/// Whether `who` may write a confirmation record now: only as the owner of the agent. A running
-/// instance needs the generation of its capture. A start needs its own attempt and no pending
-/// terminal interrupt. Both need an attached status, no retirement of the owner, and the
-/// admission of the shard, which is asked last.
+/// What the owner gate says before the admission of the shard.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum OwnerGate {
+    /// The confirmer may not write a confirmation record. Nobody asks the admission.
+    Refused,
+    /// The confirmer may write the confirmation record when the shard still admits the agent.
+    /// The caller asks the admission last.
+    NeedsAdmission,
+}
+
+/// Whether `who` may write a confirmation record now, before the admission of the shard: only
+/// as the owner of the agent. A running instance needs the generation of its capture. A start
+/// needs its own attempt and no pending terminal interrupt. Both need an attached status and no
+/// retirement of the owner.
 pub(crate) fn owner_gate(
     instance: InstanceView,
     who: &Confirmer,
     terminal_pending: bool,
     detached: bool,
     retiring: bool,
-    admitted: impl FnOnce() -> bool,
-) -> bool {
+) -> OwnerGate {
     let owner = match (instance, who) {
         (InstanceView::Running { generation_matches }, Confirmer::Running(_)) => generation_matches,
         (InstanceView::WaitingForPermit(attempt), Confirmer::Start(start)) => {
@@ -1007,7 +1016,11 @@ pub(crate) fn owner_gate(
         }
         _ => false,
     };
-    owner && !detached && !retiring && admitted()
+    if owner && !detached && !retiring {
+        OwnerGate::NeedsAdmission
+    } else {
+        OwnerGate::Refused
+    }
 }
 
 #[cfg(test)]
@@ -1148,7 +1161,7 @@ mod tests {
     }
 
     #[test]
-    async fn only_the_owner_of_the_agent_passes_the_gate_and_the_admission_is_asked_last() {
+    async fn only_the_owner_of_the_agent_passes_the_gate_before_the_admission() {
         let (mark, _) = marks();
         let attempt = Uuid::new_v4();
         let running = Confirmer::Running(mark);
@@ -1156,72 +1169,93 @@ mod tests {
         let matching = InstanceView::Running {
             generation_matches: true,
         };
-        let gate = |instance, who: &Confirmer, terminal, detached, retiring, admitted: bool| {
-            owner_gate(instance, who, terminal, detached, retiring, || admitted)
-        };
 
         assert_eq!(
             [
-                gate(matching, &running, false, false, false, true),
-                gate(matching, &running, true, false, false, true),
-                gate(
+                owner_gate(matching, &running, false, false, false),
+                owner_gate(matching, &running, true, false, false),
+                owner_gate(
                     InstanceView::Running {
                         generation_matches: false
                     },
                     &running,
                     false,
                     false,
-                    false,
-                    true
+                    false
                 ),
-                gate(matching, &start, false, false, false, true),
-                gate(
+                owner_gate(matching, &start, false, false, false),
+                owner_gate(
                     InstanceView::WaitingForPermit(attempt),
                     &start,
                     false,
                     false,
-                    false,
-                    true
+                    false
                 ),
-                gate(
+                owner_gate(
                     InstanceView::WaitingForPermit(attempt),
                     &start,
                     true,
                     false,
-                    false,
-                    true
+                    false
                 ),
-                gate(
+                owner_gate(
                     InstanceView::WaitingForPermit(Uuid::new_v4()),
                     &start,
                     false,
                     false,
-                    false,
-                    true
+                    false
                 ),
-                gate(
+                owner_gate(
                     InstanceView::WaitingForPermit(attempt),
                     &running,
                     false,
                     false,
-                    false,
-                    true
+                    false
                 ),
-                gate(InstanceView::Other, &running, false, false, false, true),
-                gate(matching, &running, false, true, false, true),
-                gate(matching, &running, false, false, true, true),
-                gate(matching, &running, false, false, false, false),
+                owner_gate(InstanceView::Other, &running, false, false, false),
+                owner_gate(matching, &running, false, true, false),
+                owner_gate(matching, &running, false, false, true),
             ],
             [
-                true, true, false, false, true, false, false, false, false, false, false, false
+                OwnerGate::NeedsAdmission,
+                OwnerGate::NeedsAdmission,
+                OwnerGate::Refused,
+                OwnerGate::Refused,
+                OwnerGate::NeedsAdmission,
+                OwnerGate::Refused,
+                OwnerGate::Refused,
+                OwnerGate::Refused,
+                OwnerGate::Refused,
+                OwnerGate::Refused,
+                OwnerGate::Refused,
             ]
         );
-        let mut asked = false;
-        owner_gate(InstanceView::Other, &running, false, false, false, || {
-            asked = true;
-            true
-        });
-        assert!(!asked);
+    }
+
+    #[test]
+    async fn an_earlier_refusal_of_the_gate_leaves_the_admission_unasked() {
+        let (mark, _) = marks();
+        let running = Confirmer::Running(mark);
+        let matching = InstanceView::Running {
+            generation_matches: true,
+        };
+
+        let refusals = [
+            owner_gate(InstanceView::Other, &running, false, false, false),
+            owner_gate(
+                InstanceView::Running {
+                    generation_matches: false,
+                },
+                &running,
+                false,
+                false,
+                false,
+            ),
+            owner_gate(matching, &running, false, true, false),
+            owner_gate(matching, &running, false, false, true),
+        ];
+
+        assert_eq!(refusals, [OwnerGate::Refused; 4]);
     }
 
     fn manual(

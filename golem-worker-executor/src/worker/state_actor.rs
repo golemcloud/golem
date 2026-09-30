@@ -907,30 +907,36 @@ fn confirmed_with_name(status: &AgentStatusRecord, name: &FilesystemSnapshotName
     })
 }
 
-/// Decides a confirmation job before its append, after its first commit. Gives the reply of a job
-/// that appends nothing, or `None` when the job appends the confirmation record. `admitted` tells
-/// whether this executor still admits work of the agent; it is asked last.
+/// What a confirmation job does before its append, after its first commit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BeforeAppend {
+    /// The job appends nothing and replies this. Nobody asks the admission.
+    Reply(ConfirmOutcome),
+    /// The job appends the confirmation record when this executor still admits work of the
+    /// agent, and replies `Deferred` otherwise. The job asks the admission last.
+    NeedsAdmission,
+}
+
+/// Decides a confirmation job before its append, after its first commit, over the status and
+/// before the admission of the shard.
 fn confirmation_before_append(
     detached: bool,
     status: &AgentStatusRecord,
     name: &FilesystemSnapshotName,
-    admitted: impl FnOnce() -> bool,
-) -> Option<ConfirmOutcome> {
+) -> BeforeAppend {
     if detached {
-        Some(ConfirmOutcome::Deferred)
+        BeforeAppend::Reply(ConfirmOutcome::Deferred)
     } else if confirmed_with_name(status, name) {
-        Some(ConfirmOutcome::Confirmed)
+        BeforeAppend::Reply(ConfirmOutcome::Confirmed)
     } else if status
         .last_automatic_snapshot
         .as_ref()
         .and_then(|last| last.files.name())
         != Some(name)
     {
-        Some(ConfirmOutcome::Superseded)
-    } else if !admitted() {
-        Some(ConfirmOutcome::Deferred)
+        BeforeAppend::Reply(ConfirmOutcome::Superseded)
     } else {
-        None
+        BeforeAppend::NeedsAdmission
     }
 }
 
@@ -982,6 +988,8 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
         {
             return ConfirmOutcome::Deferred;
         }
+        // The admission reads the clock and the shard assignment, so it is asked last, and only
+        // when the decision needs it.
         let admitted = || {
             self.deps
                 .shard_service()
@@ -992,10 +1000,10 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
             self.detached.load(Ordering::Acquire),
             &self.last_known_status.load(),
             &name,
-            admitted,
         ) {
-            Some(reply) => reply,
-            None => {
+            BeforeAppend::Reply(reply) => reply,
+            BeforeAppend::NeedsAdmission if !admitted() => ConfirmOutcome::Deferred,
+            BeforeAppend::NeedsAdmission => {
                 match self
                     .oplog
                     .add(OplogEntry::snapshot_confirmed(name.clone()))
@@ -1560,29 +1568,28 @@ mod tests {
 
     #[test]
     fn a_confirmation_job_appends_only_for_the_unconfirmed_candidate_of_an_admitted_agent() {
-        use super::{ConfirmOutcome, confirmation_before_append};
+        use super::{BeforeAppend, ConfirmOutcome, confirmation_before_append};
         use golem_common::model::oplog::FilesystemSnapshotName;
         let name = FilesystemSnapshotName::periodic();
         let other = FilesystemSnapshotName::periodic();
 
         let cases = [
-            confirmation_before_append(true, &with_candidate(Some(&name), false), &name, || true),
-            confirmation_before_append(false, &with_candidate(Some(&name), true), &name, || false),
-            confirmation_before_append(false, &with_candidate(Some(&other), false), &name, || true),
-            confirmation_before_append(false, &with_candidate(None, false), &name, || true),
-            confirmation_before_append(false, &with_candidate(Some(&name), false), &name, || false),
-            confirmation_before_append(false, &with_candidate(Some(&name), false), &name, || true),
+            confirmation_before_append(true, &with_candidate(Some(&name), false), &name),
+            confirmation_before_append(false, &with_candidate(Some(&name), true), &name),
+            confirmation_before_append(false, &with_candidate(Some(&other), false), &name),
+            confirmation_before_append(false, &with_candidate(None, false), &name),
+            confirmation_before_append(false, &with_candidate(Some(&name), false), &name),
         ];
 
+        // Each reply before the last case appends nothing and leaves the admission unasked.
         assert_eq!(
             cases,
             [
-                Some(ConfirmOutcome::Deferred),
-                Some(ConfirmOutcome::Confirmed),
-                Some(ConfirmOutcome::Superseded),
-                Some(ConfirmOutcome::Superseded),
-                Some(ConfirmOutcome::Deferred),
-                None,
+                BeforeAppend::Reply(ConfirmOutcome::Deferred),
+                BeforeAppend::Reply(ConfirmOutcome::Confirmed),
+                BeforeAppend::Reply(ConfirmOutcome::Superseded),
+                BeforeAppend::Reply(ConfirmOutcome::Superseded),
+                BeforeAppend::NeedsAdmission,
             ]
         );
     }
