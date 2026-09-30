@@ -2150,7 +2150,7 @@ mod tests {
     struct SpacedStore {
         memory: crate::filesystem_snapshot::InMemorySnapshotStore,
         times: crate::filesystem_snapshot::SpacedTimes,
-        deleted: watch::Sender<Vec<String>>,
+        deleted: watch::Sender<Vec<Box<str>>>,
     }
 
     #[async_trait::async_trait]
@@ -2223,7 +2223,7 @@ mod tests {
         ) -> Result<(), crate::filesystem_snapshot::SnapshotStoreError> {
             self.memory.delete(agent, name).await?;
             self.deleted
-                .send_modify(|deleted| deleted.push(name.as_str().to_string()));
+                .send_modify(|deleted| deleted.push(Box::from(name.as_str())));
             Ok(())
         }
 
@@ -2305,6 +2305,6 @@ mod tests {
         .and_then(Result::ok)
         .map(|deleted| deleted.clone());
 
-        assert_eq!(deleted, Some(vec![older[0].as_str().to_string()]));
+        assert_eq!(deleted, Some(vec![Box::from(older[0].as_str())]));
     }
 }

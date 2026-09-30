@@ -27,6 +27,12 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use test_r::test;
 
+/// The name of one save and the content of its tree.
+type SavedTree = (Box<str>, Box<[u8]>);
+
+/// The parent of one save, by name, with its change detection.
+type SavedParent = Option<(Box<str>, ChangeDetection)>;
+
 /// A store over the in-memory store that a test can make fail, hold and count.
 #[derive(Default)]
 struct ScriptedStore {
@@ -56,10 +62,10 @@ struct ScriptedStore {
     /// When set, each restore fails.
     restores_fail: std::sync::atomic::AtomicBool,
     /// The names that the saves were given, with the content of the tree of each call.
-    saved: Mutex<Vec<(String, Vec<u8>)>>,
+    saved: Mutex<Vec<SavedTree>>,
     /// The parent of each save.
-    parents: Mutex<Vec<Option<(String, ChangeDetection)>>>,
-    deletes: Mutex<Vec<String>>,
+    parents: Mutex<Vec<SavedParent>>,
+    deletes: Mutex<Vec<Box<str>>>,
     all_deletes: AtomicUsize,
     restores_now: AtomicUsize,
     most_restores_at_once: AtomicUsize,
@@ -124,7 +130,7 @@ impl ScriptedStore {
             .lock()
             .unwrap()
             .iter()
-            .map(|(_, content)| content.clone())
+            .map(|(_, content)| content.to_vec())
             .collect()
     }
 
@@ -133,7 +139,7 @@ impl ScriptedStore {
             .lock()
             .unwrap()
             .iter()
-            .map(|(name, _)| name.clone())
+            .map(|(name, _)| name.to_string())
             .collect()
     }
 
@@ -189,11 +195,11 @@ impl FilesystemSnapshotStore for ScriptedStore {
         self.saved
             .lock()
             .unwrap()
-            .push((name.as_str().to_string(), content));
+            .push((Box::from(name.as_str()), content.into_boxed_slice()));
         self.parents
             .lock()
             .unwrap()
-            .push(parent.map(|(name, detection)| (name.as_str().to_string(), detection)));
+            .push(parent.map(|(name, detection)| (Box::from(name.as_str()), detection)));
         if self.saves_fail_for_good.load(Ordering::SeqCst) {
             return Err(SnapshotStoreError::Source(std::io::Error::other(
                 "the tree cannot be read",
@@ -279,7 +285,7 @@ impl FilesystemSnapshotStore for ScriptedStore {
             self.failed_deletes.fetch_add(1, Ordering::SeqCst);
             return Err(retryable("the delete failed"));
         }
-        self.deletes.lock().unwrap().push(name.as_str().to_string());
+        self.deletes.lock().unwrap().push(Box::from(name.as_str()));
         self.memory.delete(agent, name).await
     }
 
@@ -701,7 +707,10 @@ async fn after_older_uploads(outcome: ConfirmOutcome) -> (Vec<String>, String, b
     admission.submit(capture(b"newest", &discarded), None, confirmer(&confirm));
     ended(&snapshots, &agent).await;
 
-    let deletes = store.deletes.lock().unwrap()[deletes_before..].to_vec();
+    let deletes = store.deletes.lock().unwrap()[deletes_before..]
+        .iter()
+        .map(|name| name.to_string())
+        .collect::<Vec<_>>();
     let held = store
         .memory
         .stat(&agent, &store_name(&name).unwrap())
@@ -1367,7 +1376,7 @@ fn a_cancelled_confirmation_deletes_nothing() {
                 .deletes
                 .lock()
                 .unwrap()
-                .contains(&name.as_str().to_string())
+                .contains(&Box::from(name.as_str()))
         );
         assert!(store.memory.list(&agent).await.unwrap().is_empty());
     })
@@ -1558,7 +1567,10 @@ fn a_name_whose_save_failed_is_never_given_to_another_capture() {
         let trees_of_names = store.saved.lock().unwrap().iter().fold(
             BTreeMap::<String, std::collections::BTreeSet<Vec<u8>>>::new(),
             |mut names, (name, tree)| {
-                names.entry(name.clone()).or_default().insert(tree.clone());
+                names
+                    .entry(name.to_string())
+                    .or_default()
+                    .insert(tree.to_vec());
                 names
             },
         );
@@ -1636,7 +1648,7 @@ fn a_parent_reaches_the_store_with_its_detection() {
         assert_eq!(
             store.parents.lock().unwrap().clone(),
             vec![Some((
-                parent.as_str().to_string(),
+                Box::from(parent.as_str()),
                 ChangeDetection::SizeMtime
             ))]
         );
@@ -1700,7 +1712,10 @@ fn an_update_retention_keeps_the_own_snapshot_and_the_newest_older_updates() {
             .into_iter()
             .collect::<std::collections::BTreeSet<_>>();
         assert_eq!(kept, expected);
-        assert_eq!(*store.deletes.lock().unwrap(), vec![updates[0].clone()]);
+        assert_eq!(
+            *store.deletes.lock().unwrap(),
+            vec![Box::from(updates[0].as_str())]
+        );
     })
 }
 
@@ -1945,7 +1960,7 @@ fn the_delete_of_a_superseded_snapshot_waits_for_a_slot_of_the_uploads() {
         );
         assert_eq!(
             *store.deletes.lock().unwrap(),
-            vec![name.as_str().to_string()]
+            vec![Box::from(name.as_str())]
         );
     })
 }

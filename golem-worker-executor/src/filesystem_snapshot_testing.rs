@@ -37,24 +37,24 @@ use tokio::sync::watch;
 struct Faults {
     failing_saves: AtomicUsize,
     save_delay: Mutex<Duration>,
-    failing_restore_names: Mutex<std::collections::HashSet<String>>,
+    failing_restore_names: Mutex<std::collections::HashSet<Box<str>>>,
     /// The directory of the tree of each save, in the order of the saves.
-    trees: Mutex<Vec<std::path::PathBuf>>,
+    trees: Mutex<Vec<Box<Path>>>,
     /// The time that the store adds to the time of each later save.
     clock_offset: Mutex<Duration>,
     /// The time of each saved name, with the offset of its save.
-    times: Mutex<std::collections::HashMap<String, golem_common::model::Timestamp>>,
+    times: Mutex<std::collections::HashMap<Box<str>, golem_common::model::Timestamp>>,
     saves: AtomicUsize,
     /// The hold of the next save, when a test asked for one.
     hold: Mutex<Option<SaveHold>>,
-    restored: Mutex<Vec<String>>,
+    restored: Mutex<Vec<Box<str>>>,
     /// The names of the restores that gave a tree, in the order of their ends.
-    completed_restores: Mutex<Vec<String>>,
+    completed_restores: Mutex<Vec<Box<str>>>,
 }
 
 /// The store side of a held save: the save reports its name, then waits for the release.
 struct SaveHold {
-    started: watch::Sender<Option<String>>,
+    started: watch::Sender<Option<Box<str>>>,
     released: watch::Receiver<bool>,
 }
 
@@ -62,7 +62,7 @@ impl SaveHold {
     /// Reports `name` as the held save, and waits until the test releases the save or drops its
     /// [`HeldSave`].
     async fn hold(mut self, name: &SnapshotName) {
-        self.started.send_replace(Some(name.as_str().to_string()));
+        self.started.send_replace(Some(Box::from(name.as_str())));
         let _ = self.released.wait_for(|released| *released).await;
     }
 }
@@ -70,14 +70,14 @@ impl SaveHold {
 /// The test side of a held save, which [`TestFilesystemSnapshotStore::hold_next_save`] gives.
 /// The save stays held until [`HeldSave::release`] or a drop of this value.
 pub struct HeldSave {
-    started: watch::Receiver<Option<String>>,
+    started: watch::Receiver<Option<Box<str>>>,
     released: watch::Sender<bool>,
 }
 
 impl HeldSave {
     /// The name of the held save, once it started.
     pub fn name(&self) -> Option<String> {
-        self.started.borrow().clone()
+        self.started.borrow().as_deref().map(String::from)
     }
 
     /// Lets the held save go on.
@@ -148,7 +148,9 @@ impl TestFilesystemSnapshotStore {
             .trees
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .clone()
+            .iter()
+            .map(|tree| tree.to_path_buf())
+            .collect()
     }
 
     /// Moves the clock of the store forward by `by`: each later save gets a time that much later,
@@ -180,7 +182,7 @@ impl TestFilesystemSnapshotStore {
             .failing_restore_names
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .insert(name.to_string());
+            .insert(Box::from(name));
     }
 
     /// The number of saves that started.
@@ -194,7 +196,9 @@ impl TestFilesystemSnapshotStore {
             .restored
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .clone()
+            .iter()
+            .map(|name| name.to_string())
+            .collect()
     }
 
     /// The names of the restores that gave a tree, in the order of their ends.
@@ -203,7 +207,9 @@ impl TestFilesystemSnapshotStore {
             .completed_restores
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .clone()
+            .iter()
+            .map(|name| name.to_string())
+            .collect()
     }
 
     /// The names of the snapshots of the agent, newest first.
@@ -251,7 +257,7 @@ impl FilesystemSnapshotStore for TestFilesystemSnapshotStore {
             .trees
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .push(tree.to_path_buf());
+            .push(Box::from(tree));
         let hold = self
             .faults
             .hold
@@ -294,7 +300,7 @@ impl FilesystemSnapshotStore for TestFilesystemSnapshotStore {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .insert(
-                name.as_str().to_string(),
+                Box::from(name.as_str()),
                 golem_common::model::Timestamp::from(
                     info.created_at.to_millis().saturating_add(millis),
                 ),
@@ -312,7 +318,7 @@ impl FilesystemSnapshotStore for TestFilesystemSnapshotStore {
             .restored
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .push(name.as_str().to_string());
+            .push(Box::from(name.as_str()));
         if self
             .faults
             .failing_restore_names
@@ -329,7 +335,7 @@ impl FilesystemSnapshotStore for TestFilesystemSnapshotStore {
             .completed_restores
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .push(name.as_str().to_string());
+            .push(Box::from(name.as_str()));
         Ok(restored)
     }
 

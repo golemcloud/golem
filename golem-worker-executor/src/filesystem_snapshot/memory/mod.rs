@@ -242,7 +242,7 @@ impl FilesystemSnapshotStore for InMemorySnapshotStore {
 /// name before it, so that retention sees times far apart.
 #[cfg(test)]
 #[derive(Default)]
-pub(crate) struct SpacedTimes(Mutex<HashMap<String, Timestamp>>);
+pub(crate) struct SpacedTimes(Mutex<HashMap<Box<str>, Timestamp>>);
 
 #[cfg(test)]
 impl SpacedTimes {
@@ -256,7 +256,7 @@ impl SpacedTimes {
         let mut times = self.0.lock().unwrap_or_else(PoisonError::into_inner);
         let count = times.len() as u64;
         let created_at = *times
-            .entry(name.as_str().to_string())
+            .entry(Box::from(name.as_str()))
             .or_insert_with(|| Timestamp::from(Self::FIRST_MILLIS + count * Self::SPACING_MILLIS));
         SnapshotInfo { created_at, ..info }
     }
