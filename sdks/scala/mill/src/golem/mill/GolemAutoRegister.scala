@@ -54,9 +54,7 @@ trait GolemAutoRegister extends ScalaJSConfigModule {
 
   private final case class GuestArtifact(fileName: String)
 
-  private val AgentGuestArtifact               = GuestArtifact("agent_guest.wasm")
-  private val ToolMiddlewareGuestArtifact      = GuestArtifact("tool_middleware_guest.wasm")
-  private val AgentToolMiddlewareGuestArtifact = GuestArtifact("agent_tool_middleware_guest.wasm")
+  private val AgentGuestArtifact = GuestArtifact("agent_guest.wasm")
 
   // ─── Private helpers ────────────────────────────────────────────────────────
 
@@ -128,14 +126,6 @@ trait GolemAutoRegister extends ScalaJSConfigModule {
       .getOrElse(moduleDir / ".generated" / AgentGuestArtifact.fileName)
   }
 
-  /** Where the pure tool middleware guest runtime wasm should be written. */
-  def golemToolMiddlewareGuestWasmFile: os.Path =
-    golemAgentGuestWasmFile / os.up / ToolMiddlewareGuestArtifact.fileName
-
-  /** Where the combined agent and tool middleware guest runtime wasm should be written. */
-  def golemAgentToolMiddlewareGuestWasmFile: os.Path =
-    golemAgentGuestWasmFile / os.up / AgentToolMiddlewareGuestArtifact.fileName
-
   // ─── Tasks ──────────────────────────────────────────────────────────────────
 
   /** Ensures the base guest runtime wasm exists; writes the embedded resource if missing or out-of-date. */
@@ -145,29 +135,11 @@ trait GolemAutoRegister extends ScalaJSConfigModule {
     result
   }
 
-  /** Ensures the pure tool middleware guest runtime wasm exists and is up-to-date. */
-  def golemEnsureToolMiddlewareGuestWasm(): Command[PathRef] = Task.Command {
-    val (result, wrote) = ensureGuestWasm(ToolMiddlewareGuestArtifact, golemToolMiddlewareGuestWasmFile)
-    if (wrote) Task.log.info(s"[golem] Wrote embedded ${ToolMiddlewareGuestArtifact.fileName} to ${result.path}")
-    result
-  }
-
-  /** Ensures the combined agent and tool middleware guest runtime wasm exists and is up-to-date. */
-  def golemEnsureAgentToolMiddlewareGuestWasm(): Command[PathRef] = Task.Command {
-    val (result, wrote) =
-      ensureGuestWasm(AgentToolMiddlewareGuestArtifact, golemAgentToolMiddlewareGuestWasmFile)
-    if (wrote)
-      Task.log.info(s"[golem] Wrote embedded ${AgentToolMiddlewareGuestArtifact.fileName} to ${result.path}")
-    result
-  }
-
   /**
-   * Prepares the app directory for golem-cli by ensuring every role runtime exists and is up-to-date.
+   * Prepares the app directory for golem-cli by ensuring the guest runtime exists and is up-to-date.
    */
   def golemPrepare(): Command[Unit] = Task.Command {
     golemEnsureAgentGuestWasm()
-    golemEnsureToolMiddlewareGuestWasm()
-    golemEnsureAgentToolMiddlewareGuestWasm()
     ()
   }
 

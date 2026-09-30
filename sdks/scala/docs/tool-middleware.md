@@ -12,7 +12,9 @@ For each `@toolDefinition` trait, the sbt and Mill plugins generate these middle
 - `<Tool>Middleware`: the transparent middleware surface;
 - `<Tool>Middleware.Adapter[U]`: the same presented surface with a different expected underlying type `U`.
 
-Every generated middleware method takes its underlying as the first parameter and returns `Future[Either[ToolInvokeError[E], A]]`. Global arguments, command arguments, and `Principal` follow the generated projection for that command. Declared stdin becomes a `ToolMiddlewareInputHandle`; declared stdout is carried by the successful result as a `ToolMiddlewareOutputHandle`.
+Every generated middleware method takes its underlying as the first parameter and returns `Future[Either[ToolInvokeError[E], A]]`. Global arguments, command arguments, and `Principal` follow the generated projection for that command. Declared stdin becomes a `ToolMiddlewareInputHandle`; declared stdout and stderr are carried independently by the successful result as `ToolMiddlewareOutputHandle`s and must be drained concurrently.
+
+Installation parameters are statically typed. Extend `<Tool>Middleware.WithParameters[P]` (or `UniversalToolMiddleware.WithParameters[P]`) and use `UniversalToolMiddlewareInvocation[P]`; monomorphic generated handlers receive `parameters: P` immediately after the underlying. `P` must have a `zio.blocks.schema.Schema`. The no-configuration universal form uses `UniversalToolMiddlewareInvocation[ToolMiddleware.NoParameters]`. See the compile fixture linked above for both forms.
 
 ### Transparent middleware
 
@@ -33,7 +35,7 @@ final class MiddlewareFixtureTransparent extends MiddlewareFixtureToolMiddleware
     value: String,
     principal: Principal
   ): Future[Either[ToolInvokeError[MiddlewareFixtureError], String]] =
-    underlying.call(config, value)
+    underlying.call(config, value).toMiddlewareResult
 }
 ```
 
@@ -55,6 +57,7 @@ final class MiddlewareFixtureAdapter
   ): Future[Either[ToolInvokeError[MiddlewareFixtureError], String]] =
     underlying
       .execute(value)
+      .toMiddlewareResult
       .map {
         case Right(length) => Right(s"$config:$length")
         case Left(error)   =>
@@ -76,6 +79,7 @@ import golem.runtime.annotations.universalToolMiddleware
 import golem.schema.TypedSchemaValue
 import golem.tool.{
   ToolInvokeError,
+  ToolMiddleware,
   ToolMiddlewareResult,
   UniversalToolMiddleware,
   UniversalToolMiddlewareInvocation,
@@ -87,7 +91,7 @@ import scala.concurrent.Future
 @universalToolMiddleware(name = "middleware-fixture-universal")
 final class MiddlewareFixtureUniversal extends UniversalToolMiddleware {
   def invoke(
-    invocation: UniversalToolMiddlewareInvocation,
+    invocation: UniversalToolMiddlewareInvocation[ToolMiddleware.NoParameters],
     underlying: UniversalToolUnderlying
   ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolMiddlewareResult]] =
     underlying.invoke(invocation.commandPath, invocation.input, invocation.stdin)
@@ -117,12 +121,18 @@ Return these errors in `Left` when rejecting an invocation deliberately. A monom
 
 The supplied underlying is affine and valid only during its middleware invocation:
 
-- Sequential calls are allowed. A middleware may await one call and then invoke the underlying again, for example to retry.
-- Calls must not overlap. Start the next call only after the previous call's `Future` settles.
-- Do not store, return, capture for later, or otherwise let the underlying escape. It is revoked when the middleware invocation settles.
-- Overlapping or post-invocation calls fail with `ToolUnderlyingMisuseException`; this is SDK misuse, not a `ToolInvokeError` returned by the wrapped tool.
+- Convenience calls return `ToolUnderlyingInvocation`; call `.toMiddlewareResult` for the former await-the-whole-call behavior.
+- Calls may overlap. Each invocation has an independent admission, result, stdout, stderr, `cancel`, and `drop` handle, so middleware can fan out and observe completions in any order.
+- Sequential and concurrent `get()` calls share one lazy host observation and return the cached terminal result, including errors. This does not duplicate or rewind either output.
+- Do not store, return, capture for later, or otherwise let the underlying escape. It is revoked when the middleware handler returns.
+- Revocation at handler return prevents new admissions but does not implicitly cancel admitted calls. Cleanup requests disposal of their observers; when observation is pending, disposal waits for it to settle.
+- Dropping an observer releases observation; it is not cancellation. Invoke its `cancel` callback only when cancellation is intended.
 
-The SDK waits for an active underlying call before revoking the handle and cleaning up the invocation.
+Underlying `ToolInvokeError.Cancelled` and `ToolInvokeError.ResourceExhausted` remain distinguishable to middleware code. They become `ConstraintViolation` only when forwarded as the middleware's own wire result. Dropping an unobserved admission disposes it immediately without starting a host `get`.
+
+For structural-subtype and nominal compatibility, every inner tool error must be declared by the expected tool with a compatible payload. Expected-only errors are allowed; inner-only errors are rejected. Strict equality requires matching error vocabularies.
+
+Post-invocation admission fails with `ToolUnderlyingMisuseException`; this is SDK misuse, not a `ToolInvokeError` returned by the wrapped tool.
 
 ## Stream transfer and cleanup
 
@@ -132,23 +142,22 @@ The handles follow the same invocation ownership:
 
 - Passing the invocation's stdin to an underlying call transfers it exactly once. If it is never forwarded, the SDK closes it when the middleware settles.
 - Forwarding the same stream twice is SDK misuse.
-- Stdout returned from underlying calls is tracked. Intermediate, abandoned, malformed, or error-path stdout is closed best-effort.
-- Only the stdout selected in the middleware's final successful result is transferred to the caller; it remains open for the caller.
-- Cleanup is identity-based and idempotent, including when the same stdout handle appears more than once.
+- Stdout and stderr returned from underlying calls are tracked independently. Intermediate, abandoned, malformed, or error-path outputs are closed best-effort.
+- Only the outputs selected in the middleware's final successful result are transferred to the caller; they remain open for the caller.
+- Cleanup is identity-based and idempotent, including when the same output handle appears more than once.
 
-## Choosing a component role
+The guest ABI supplies independent stdout and stderr writers for commands that declare them. The SDK copies each selected final output into its matching writer while the structured result is pending, calls `finish` after clean EOF, and calls `fail` if forwarding fails. Middleware receives only the transfer-oriented handles above; it must not finish or fail the host writers itself.
 
-Use the component template matching the exports and host access the component needs:
+## Component template
 
-| Template | Base artifact | Use when | Ambient tool host |
-|---|---|---|---|
-| `scala` | `agent_guest.wasm` | The component contains ordinary agents or tools, but no middleware export | Available |
-| `scala-tool-middleware` | `tool_middleware_guest.wasm` | The component contains only tool middleware | Not imported |
-| `scala-agent-tool-middleware` | `agent_tool_middleware_guest.wasm` | The component combines ordinary agents/tools and middleware | Available |
+Use the `scala` component template for ordinary agents and tools, standalone middleware, and
+components combining them. Its `agent_guest.wasm` base artifact exports all three discovery and
+invocation interfaces and imports the ambient tool host. Categories the component does not define
+return empty discovery lists. The invocation-scoped `underlying` capability remains the way to
+advance the pinned middleware chain; ambient tool calls do not bypass runtime permission checks.
 
-A pure middleware component cannot invoke ambient tools through an ordinary generated `<Tool>Client`; its final WASM intentionally has no `golem:tool/host@0.1.0` import. It can call only the invocation-scoped underlying supplied to the middleware method. Use the combined role only when the same component genuinely needs both export surfaces and ambient tool access.
-
-The three artifacts are generated from the same WIT/build matrix and embedded byte-for-byte in both sbt and Mill plugins. `golemPrepare` refreshes all three `.generated/*.wasm` files by content hash, while `golem-cli` selects the one named by the component template.
+The artifact is embedded byte-for-byte in both sbt and Mill plugins. `golemPrepare` refreshes the
+`.generated/agent_guest.wasm` file by content hash.
 
 ## Future client design
 

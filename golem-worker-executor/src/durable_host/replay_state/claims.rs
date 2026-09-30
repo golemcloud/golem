@@ -1,4 +1,6 @@
 use super::*;
+use golem_common::model::entity::{AgentEntity, EntityInvocationPlanReference};
+use golem_common::schema::TypedSchemaValue;
 
 #[derive(Debug, Clone)]
 pub(crate) enum RequestClaimIdentity {
@@ -428,6 +430,11 @@ pub(crate) enum ReplayStartClaimOutcome {
     },
     ReplayEnded,
     DeletedRegion,
+    /// No matching `Start` remains, but the issuing Store already continued live locally (an
+    /// incomplete entity past a deleted region or a replay target that grew after it went live)
+    /// while the shared cursor still replays other owners' records. The call is a new live call of
+    /// that Store; its local live continuation is idempotent to re-enter.
+    StoreAlreadyLive,
 }
 
 impl ReplayState {
@@ -457,6 +464,9 @@ impl ReplayState {
                     "matching Start belongs to a deleted replay region".to_string(),
                 ))
             }
+            ReplayStartClaimOutcome::StoreAlreadyLive => {
+                unreachable!("strict claims are never issued on behalf of a live Store")
+            }
         }
     }
 
@@ -467,36 +477,77 @@ impl ReplayState {
         &self,
         claim: StartClaim,
     ) -> Result<ReplayStartClaimOutcome, WorkerExecutorError> {
+        self.claim_start_for_store_observed(claim, false, |_, _| {})
+            .await
+    }
+
+    /// [`Self::claim_start_or_replay_end`] issued on behalf of a Store whose own liveness is
+    /// `store_live`. Replay admission of a Store that already continued live locally still claims
+    /// while unclaimed retained `Start`s exist, so that a late owner adopts its recorded `Start`
+    /// instead of appending a duplicate; when no `Start` matches before the replay target, the
+    /// call is reported as [`ReplayStartClaimOutcome::StoreAlreadyLive`] rather than divergence.
+    pub(crate) async fn claim_start_for_store(
+        &self,
+        claim: StartClaim,
+        store_live: bool,
+    ) -> Result<ReplayStartClaimOutcome, WorkerExecutorError> {
+        self.claim_start_for_store_observed(claim, store_live, |_, _| {})
+            .await
+    }
+
+    /// Shared claim loop of the wrappers above: claims on behalf of a Store whose own liveness is
+    /// `store_live` and notifies `on_claim` of every accepted claim inside the owned cursor
+    /// operation.
+    pub(crate) async fn claim_start_for_store_observed(
+        &self,
+        claim: StartClaim,
+        store_live: bool,
+        on_claim: impl Fn(OplogIndex, &OplogEntry) + Clone + Send + Sync + 'static,
+    ) -> Result<ReplayStartClaimOutcome, WorkerExecutorError> {
+        enum Missing {
+            ReplayEnded,
+            DeletedRegion,
+            StoreAlreadyLive,
+        }
         loop {
             let progress = self.cursor.progress.notified();
             tokio::pin!(progress);
             progress.as_mut().enable();
 
             let owned_claim = claim.clone();
-            let (claimed, blocked_on_completion_delivery, replay_ended, deleted_region) = self
+            let on_claim = on_claim.clone();
+            let (claimed, blocked_on_completion_delivery, missing) = self
                 .run_owned_cursor_op(move |state| async move {
                     state
                         .with_tx(async |tx| match tx.claim_start(&owned_claim).await {
                             Ok(StartClaimAttempt::Claimed(handle, entry)) => {
-                                Ok((Some((handle, entry)), false, false, false))
+                                on_claim(handle.start_idx(), &entry);
+                                Ok((Some((handle, entry)), false, None))
                             }
                             Ok(StartClaimAttempt::Blocked) => {
-                                Ok((None, tx.blocked_on_completion_delivery, false, false))
+                                Ok((None, tx.blocked_on_completion_delivery, None))
                             }
                             Ok(StartClaimAttempt::Missing) if tx.cursor.is_live() => {
-                                Ok((None, false, true, false))
+                                Ok((None, false, Some(Missing::ReplayEnded)))
                             }
-                            Ok(StartClaimAttempt::Missing)
-                                if tx.deleted_region_contains_start(&owned_claim).await? =>
-                            {
-                                Ok((None, false, false, true))
+                            Ok(StartClaimAttempt::Missing) if store_live => {
+                                Ok((None, false, Some(Missing::StoreAlreadyLive)))
                             }
                             Ok(StartClaimAttempt::Missing) => {
-                                Err(WorkerExecutorError::unexpected_oplog_entry(
-                                    owned_claim.expected_description(),
-                                    "no matching Start between the replay cursor and the replay target"
-                                        .to_string(),
-                                ))
+                                match tx.deleted_region_contains_start(&owned_claim).await? {
+                                    Some(index) if index > tx.cursor.last_replayed_index() => {
+                                        // The entity's atomic mask is installed before its body
+                                        // starts. A host subtask must not publish local liveness
+                                        // before the guest consumes the retained atomic Begin.
+                                        Ok((None, true, None))
+                                    }
+                                    Some(_) => Ok((None, false, Some(Missing::DeletedRegion))),
+                                    None => Err(WorkerExecutorError::unexpected_oplog_entry(
+                                        owned_claim.expected_description(),
+                                        "no matching Start between the replay cursor and the replay target"
+                                            .to_string(),
+                                    )),
+                                }
                             }
                             Ok(StartClaimAttempt::MissingSettling { .. }) => unreachable!(
                                 "ordinary Start claims never enter missing-scope settlement"
@@ -512,11 +563,13 @@ impl ReplayState {
                     entry: claimed.1,
                 });
             }
-            if replay_ended {
-                return Ok(ReplayStartClaimOutcome::ReplayEnded);
-            }
-            if deleted_region {
-                return Ok(ReplayStartClaimOutcome::DeletedRegion);
+            match missing {
+                Some(Missing::ReplayEnded) => return Ok(ReplayStartClaimOutcome::ReplayEnded),
+                Some(Missing::DeletedRegion) => return Ok(ReplayStartClaimOutcome::DeletedRegion),
+                Some(Missing::StoreAlreadyLive) => {
+                    return Ok(ReplayStartClaimOutcome::StoreAlreadyLive);
+                }
+                None => {}
             }
             debug_assert!(blocked_on_completion_delivery);
             progress.await;
@@ -629,6 +682,7 @@ impl ReplayState {
     /// awaiter behind it could sleep on until `switch_to_live`. The only un-drained terminals the
     /// cursor may leave at its head are then the dedicated-positional-consumer pairs (manual
     /// durability, `GolemApiFork`).
+    #[cfg(test)]
     pub async fn claim_scope_start(
         &self,
         expected_function_name: &HostFunctionName,
@@ -833,14 +887,28 @@ impl ReplayState {
     /// Claims a custom durable invocation root and marks it as a logical subtree. Descendant
     /// custom invocations recorded under this owner are drained while the root resolution is
     /// awaited, because replay returns the root's persisted result without executing its body.
-    pub async fn claim_custom_start_matching_invocation_id(
+    ///
+    /// Reports [`CustomStartClaimOutcome::ReplayEnded`] when no `Start` carries the invocation id
+    /// and the cursor has already reached the replay target, and
+    /// [`CustomStartClaimOutcome::StoreAlreadyLive`] when no `Start` carries it and the claiming
+    /// Store's own liveness `store_live` already holds. A custom invocation admitted after the
+    /// live transition while unclaimed retained `Start`s exist (see
+    /// `WorkerState::durable_call_is_live`) uses this to adopt its retained `Start` or fall back
+    /// to recording a new one. A missing id while replay is still positioned before the target
+    /// and the Store is not live remains strict divergence.
+    pub(crate) async fn claim_custom_start_for_store(
         &self,
         expected_function_name: &HostFunctionName,
         expected_function_type: &DurableFunctionType,
         expected_parent_start_index: Option<OplogIndex>,
         expected_invocation_id: uuid::Uuid,
         expected_request: &HostRequest,
-    ) -> Result<ClaimedConcurrentStart, WorkerExecutorError> {
+        store_live: bool,
+    ) -> Result<CustomStartClaimOutcome, WorkerExecutorError> {
+        enum Missing {
+            ReplayEnded,
+            StoreAlreadyLive,
+        }
         let (handle, entry) = loop {
             let progress = self.cursor.progress.notified();
             tokio::pin!(progress);
@@ -849,7 +917,7 @@ impl ReplayState {
             let expected_function_name = expected_function_name.clone();
             let expected_function_type = expected_function_type.clone();
             let expected_request = expected_request.clone();
-            let (claimed, blocked_on_completion_delivery) = self
+            let (claimed, blocked_on_completion_delivery, missing) = self
                 .run_owned_cursor_op(move |state| async move {
                     state
                         .with_tx(async |tx| {
@@ -931,7 +999,8 @@ impl ReplayState {
                                         "custom durable invocation ID {expected_invocation_id} is reused by Starts {candidate_index} and {duplicate_index}"
                                     )));
                                 }
-                                if candidate_index <= tx.cursor.last_replayed_index()
+                                let retained = tx.st.retained_starts.contains_key(&candidate_index);
+                                if (candidate_index <= tx.cursor.last_replayed_index() && !retained)
                                     || tx.st.claimed_starts.contains(&candidate_index)
                                 {
                                     return Err(WorkerExecutorError::runtime(format!(
@@ -1018,6 +1087,12 @@ impl ReplayState {
                                     ),
                                 }
                             }
+                            OplogEntryLookupResult::NotFound { .. } if tx.cursor.is_live() => {
+                                return Ok((None, false, Some(Missing::ReplayEnded)));
+                            }
+                            OplogEntryLookupResult::NotFound { .. } if store_live => {
+                                return Ok((None, false, Some(Missing::StoreAlreadyLive)));
+                            }
                             OplogEntryLookupResult::NotFound { .. } => {
                                 return Err(WorkerExecutorError::unexpected_oplog_entry(
                                     format!(
@@ -1035,13 +1110,20 @@ impl ReplayState {
                             let root = result.0.start_idx();
                             tx.register_custom_subtree_root(root);
                         }
-                        Ok((result, tx.blocked_on_completion_delivery))
+                        Ok((result, tx.blocked_on_completion_delivery, None))
                     })
                     .await
             })
             .await?;
             if let Some(claimed) = claimed {
                 break claimed;
+            }
+            match missing {
+                Some(Missing::ReplayEnded) => return Ok(CustomStartClaimOutcome::ReplayEnded),
+                Some(Missing::StoreAlreadyLive) => {
+                    return Ok(CustomStartClaimOutcome::StoreAlreadyLive);
+                }
+                None => {}
             }
             debug_assert!(blocked_on_completion_delivery);
             progress.await;
@@ -1055,13 +1137,24 @@ impl ReplayState {
         else {
             unreachable!("claim_start only claims Start entries");
         };
-        Ok(ClaimedConcurrentStart {
+        Ok(CustomStartClaimOutcome::Claimed(ClaimedConcurrentStart {
             handle,
             function_name,
             durable_function_type,
             timestamp,
-        })
+        }))
     }
+}
+
+/// Outcome of [`ReplayState::claim_custom_start_for_store`].
+pub(crate) enum CustomStartClaimOutcome {
+    Claimed(ClaimedConcurrentStart),
+    /// No `Start` carries the requested invocation id and the cursor is at the replay target: the
+    /// invocation is new and must be recorded live.
+    ReplayEnded,
+    /// No `Start` carries the requested invocation id before the replay target, but the claiming
+    /// Store already continued live locally, so the invocation is new for that Store.
+    StoreAlreadyLive,
 }
 
 /// The `parent_start_index` a durable call's `Start` entry is recorded with when the caller does
@@ -1137,7 +1230,11 @@ fn request_claim_identity_matches(
                         .map_err(|error| {
                             format!("failed to decode entity invocation request metadata: {error}")
                         })?;
-                Ok(expected.matches(&metadata, &request.input))
+                Ok(ambient_tool_invocation_identity_matches(
+                    expected,
+                    &metadata,
+                    &request.input,
+                ))
             }
             HostRequest::GolemToolInvocationRejected(request) => Ok(request.attempt_ordinal
                 == expected.rejected.attempt_ordinal
@@ -1147,21 +1244,64 @@ fn request_claim_identity_matches(
                 && request.input_decode_failure == expected.rejected.input_decode_failure
                 && request.has_stdin == expected.rejected.has_stdin
                 && request.has_stdout == expected.rejected.has_stdout
+                && request.has_stderr == expected.rejected.has_stderr
                 && request.call_mode == expected.rejected.call_mode),
             _ => Ok(false),
         },
     }
 }
 
+fn ambient_tool_invocation_identity_matches(
+    expected: &EntityInvocationRequestIdentity,
+    request: &EntityInvocationRequest,
+    input: &TypedSchemaValue,
+) -> bool {
+    let (None, AgentEntity::Tool(expected_tool), EntityInvocationPlanReference::Root { plan }) =
+        (&expected.plan_position, &expected.entity, &request.plan)
+    else {
+        return expected.matches(request, input);
+    };
+    let Some(final_position) = plan.len().checked_sub(1) else {
+        return false;
+    };
+    let Ok(final_layer) = plan.layer(final_position as u32) else {
+        return false;
+    };
+    if final_layer.activation().entity() != AgentEntity::Tool(expected_tool.clone()) {
+        return false;
+    }
+
+    let mut layer_identity = expected.clone();
+    layer_identity.entity = request.entity.clone();
+    layer_identity.matches(request, input)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use golem_common::model::AgentId;
+    use golem_common::model::account::{AccountEmail, AccountId};
+    use golem_common::model::agent::{AgentPrincipal, AgentTypeName, Principal};
+    use golem_common::model::component::{ComponentId, ComponentName, ComponentRevision};
+    use golem_common::model::deployment::DeploymentRevision;
     use golem_common::model::entity::{
-        EntityCallMode, ToolInputDecodeFailure, ToolInvocationRejectedIdentity,
+        AgentEntity, EntityActivation, EntityActivationPolicy, EntityCallMode,
+        EntityInvocationDescriptor, EntityInvocationPlan, EntityInvocationPlanLayer,
+        EntityInvocationPlanPositionIdentity, EntityInvocationPlanReference,
+        EntityInvocationRequest, ExecutableTarget, FilesystemCapability, ToolInputDecodeFailure,
+        ToolInvocationDescriptor, ToolInvocationRejectedIdentity, ToolMiddlewareName,
+        ToolOutputContract,
     };
-    use golem_common::model::oplog::HostRequestGolemToolInvocationRejected;
+    use golem_common::model::json::NormalizedJsonValue;
     use golem_common::model::oplog::payload::types::SerializableToolRpcError;
-    use golem_common::model::tool::ToolName;
+    use golem_common::model::oplog::{
+        HostRequestEntityInvocation, HostRequestGolemToolInvocationRejected,
+    };
+    use golem_common::model::tool::{
+        CompiledToolBinding, ConfigKeyScope, SecretKeyScope, ToolBindingOwner,
+        ToolFilesystemAccess, ToolName, ToolProvisionConfig, ToolSource,
+    };
+    use golem_common::schema::tool::{CommandTree, Tool};
     use golem_common::schema::{SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue};
     use test_r::test;
 
@@ -1170,6 +1310,254 @@ mod tests {
             SchemaGraph::anonymous(SchemaType::string()),
             SchemaValue::String(value.to_string()),
         )
+    }
+
+    fn tool_definition() -> Tool {
+        Tool {
+            version: "1.0.0".to_string(),
+            requires_filesystem: false,
+            commands: CommandTree { nodes: Vec::new() },
+            schema: SchemaGraph::empty(),
+        }
+    }
+
+    fn tool_activation(name: &str) -> EntityActivation {
+        let component_id = ComponentId::new();
+        let component_revision = ComponentRevision::try_from(7_u64).unwrap();
+        let deployment_revision = DeploymentRevision::try_from(11_u64).unwrap();
+        EntityActivation::new(
+            ExecutableTarget::new(component_id, component_revision),
+            deployment_revision,
+            EntityActivationPolicy::Tool {
+                mcp_import: None,
+                provision: ToolProvisionConfig::default(),
+                binding: Box::new(CompiledToolBinding {
+                    deployment_revision,
+                    release_id: None,
+                    owner: ToolBindingOwner::AgentType {
+                        agent_type_name: AgentTypeName("Example".to_string()),
+                    },
+                    tool_name: ToolName::try_from(name).unwrap(),
+                    version: "1.0.0".to_string(),
+                    metadata_version: "0.1.0".to_string(),
+                    metadata_digest: Default::default(),
+                    account_id: AccountId::new(),
+                    account_email: AccountEmail::new("owner@example.com"),
+                    parameters: NormalizedJsonValue::new(serde_json::json!({})),
+                    config_keys_readable: ConfigKeyScope::All,
+                    secret_keys_readable: SecretKeyScope::All,
+                    secret_keys_revealable: SecretKeyScope::All,
+                    filesystem_access: ToolFilesystemAccess::Unset,
+                    source: ToolSource::Component {
+                        component_id,
+                        component_revision,
+                        component_name: ComponentName("tools:test".to_string()),
+                    },
+                }),
+            },
+            FilesystemCapability::Incapable,
+        )
+        .unwrap()
+    }
+
+    fn middleware_activation(name: &str) -> EntityActivation {
+        EntityActivation::new(
+            ExecutableTarget::new(
+                ComponentId::new(),
+                ComponentRevision::try_from(9_u64).unwrap(),
+            ),
+            DeploymentRevision::try_from(12_u64).unwrap(),
+            EntityActivationPolicy::ToolMiddleware {
+                middleware_name: ToolMiddlewareName::try_from(name).unwrap(),
+                provision: ToolProvisionConfig::default(),
+                config_keys_readable: ConfigKeyScope::All,
+                secret_keys_readable: SecretKeyScope::All,
+                secret_keys_revealable: SecretKeyScope::All,
+                filesystem_access: ToolFilesystemAccess::Unset,
+            },
+            FilesystemCapability::Incapable,
+        )
+        .unwrap()
+    }
+
+    fn accepted_tool_claim_and_recording() -> (
+        RequestClaimIdentity,
+        EntityInvocationRequest,
+        TypedSchemaValue,
+    ) {
+        let recorded_input = input("needle");
+        let calling_principal = Principal::Agent(AgentPrincipal {
+            agent_id: AgentId {
+                component_id: ComponentId::new(),
+                agent_id: "Example(\"owner\")".to_string(),
+            },
+        });
+        let operation = EntityInvocationDescriptor::Tool(ToolInvocationDescriptor {
+            attempt_ordinal: 4,
+            command_path: vec!["search".to_string()],
+            args: golem_common::model::card::ToolInvocationPattern::from_command_and_args(
+                &[],
+                &["recorded"],
+            )
+            .unwrap()
+            .args,
+            has_stdin: true,
+            has_stdout: false,
+            declares_stdout: false,
+            has_stderr: true,
+            declares_stderr: true,
+            output_contract: ToolOutputContract {
+                result: None,
+                errors: Vec::new(),
+            },
+        });
+        let request = EntityInvocationRequest {
+            entity: AgentEntity::ToolMiddleware(ToolMiddlewareName::try_from("audit").unwrap()),
+            calling_principal: calling_principal.clone(),
+            call_mode: EntityCallMode::Synchronous,
+            operation: operation.clone(),
+            principal: calling_principal.clone(),
+            plan: EntityInvocationPlanReference::Root {
+                plan: EntityInvocationPlan::new(vec![
+                    EntityInvocationPlanLayer::Middleware {
+                        activation: middleware_activation("audit"),
+                        parameters: input("settings"),
+                        expected_definition: None,
+                        presented_definition: None,
+                        next_effective_definition: tool_definition(),
+                        compatibility: None,
+                    },
+                    EntityInvocationPlanLayer::Tool {
+                        activation: tool_activation("grep"),
+                    },
+                ])
+                .unwrap(),
+            },
+            assume_idempotence: true,
+        };
+        let accepted = EntityInvocationRequestIdentity {
+            entity: AgentEntity::Tool(ToolName::try_from("grep").unwrap()),
+            calling_principal,
+            call_mode: request.call_mode,
+            operation: (&operation).into(),
+            plan_position: None,
+            input: recorded_input.clone(),
+        };
+        let rejected = ToolInvocationRejectedIdentity {
+            attempt_ordinal: 4,
+            tool_name: ToolName::try_from("grep").unwrap(),
+            command_path: vec!["search".to_string()],
+            input: Some(recorded_input.clone()),
+            input_decode_failure: None,
+            has_stdin: true,
+            has_stdout: false,
+            has_stderr: true,
+            call_mode: EntityCallMode::Synchronous,
+        };
+        (
+            RequestClaimIdentity::ToolInvocation(Box::new(ToolInvocationClaimIdentity {
+                accepted: Some(accepted),
+                rejected,
+            })),
+            request,
+            recorded_input,
+        )
+    }
+
+    fn serialized_entity_request(
+        metadata: &EntityInvocationRequest,
+        input: TypedSchemaValue,
+    ) -> HostRequest {
+        HostRequest::EntityInvocation(HostRequestEntityInvocation {
+            metadata: desert_rust::serialize_to_byte_vec(metadata).unwrap(),
+            input,
+            stream_session_idempotency_key: IdempotencyKey::new("claim-stream-session".to_string()),
+        })
+    }
+
+    #[test]
+    fn ambient_root_tool_claim_matches_recorded_leaf_and_keeps_other_identity_strict() {
+        let (expected, request, recorded_input) = accepted_tool_claim_and_recording();
+        let recorded = serialized_entity_request(&request, recorded_input.clone());
+        assert!(request_claim_identity_matches(&recorded, &expected).unwrap());
+
+        let mut wrong_leaf = request.clone();
+        wrong_leaf.plan = EntityInvocationPlanReference::Root {
+            plan: EntityInvocationPlan::new(vec![
+                EntityInvocationPlanLayer::Middleware {
+                    activation: middleware_activation("audit"),
+                    parameters: input("settings"),
+                    expected_definition: None,
+                    presented_definition: None,
+                    next_effective_definition: tool_definition(),
+                    compatibility: None,
+                },
+                EntityInvocationPlanLayer::Tool {
+                    activation: tool_activation("sed"),
+                },
+            ])
+            .unwrap(),
+        };
+        assert!(
+            !request_claim_identity_matches(
+                &serialized_entity_request(&wrong_leaf, recorded_input.clone()),
+                &expected,
+            )
+            .unwrap()
+        );
+        assert!(
+            !request_claim_identity_matches(
+                &serialized_entity_request(&request, input("different")),
+                &expected,
+            )
+            .unwrap()
+        );
+
+        let mut wrong_principal = request.clone();
+        wrong_principal.calling_principal = Principal::Agent(AgentPrincipal {
+            agent_id: AgentId {
+                component_id: ComponentId::new(),
+                agent_id: "Example(\"other\")".to_string(),
+            },
+        });
+        assert!(
+            !request_claim_identity_matches(
+                &serialized_entity_request(&wrong_principal, recorded_input.clone()),
+                &expected,
+            )
+            .unwrap()
+        );
+
+        let mut descendant = request.clone();
+        descendant.entity = AgentEntity::Tool(ToolName::try_from("grep").unwrap());
+        descendant.plan = EntityInvocationPlanReference::Descendant {
+            root_start_index: OplogIndex::from_u64(31),
+            position: 1,
+        };
+        assert!(
+            !request_claim_identity_matches(
+                &serialized_entity_request(&descendant, recorded_input.clone()),
+                &expected,
+            )
+            .unwrap()
+        );
+
+        let mut descendant_expected = expected.clone();
+        let RequestClaimIdentity::ToolInvocation(identity) = &mut descendant_expected else {
+            unreachable!();
+        };
+        identity.accepted.as_mut().unwrap().plan_position =
+            Some(EntityInvocationPlanPositionIdentity {
+                root_start_index: OplogIndex::from_u64(31),
+                position: 2,
+            });
+        assert!(
+            !request_claim_identity_matches(
+                &serialized_entity_request(&descendant, recorded_input),
+                &descendant_expected,
+            )
+            .unwrap()
+        );
     }
 
     #[test]
@@ -1186,6 +1574,7 @@ mod tests {
                     input_decode_failure: None,
                     has_stdin: true,
                     has_stdout: false,
+                    has_stderr: true,
                     call_mode: EntityCallMode::Asynchronous,
                 },
             }));
@@ -1198,6 +1587,7 @@ mod tests {
                 input_decode_failure: None,
                 has_stdin: true,
                 has_stdout: false,
+                has_stderr: true,
                 call_mode: EntityCallMode::Asynchronous,
                 error: SerializableToolRpcError::Denied("recorded decision".to_string()),
             });
@@ -1217,10 +1607,22 @@ mod tests {
             .unwrap()
         );
 
-        let HostRequest::GolemToolInvocationRejected(mut mismatched) = request else {
+        let HostRequest::GolemToolInvocationRejected(mut mismatched) = request.clone() else {
             unreachable!();
         };
         mismatched.has_stdout = true;
+        assert!(
+            !request_claim_identity_matches(
+                &HostRequest::GolemToolInvocationRejected(mismatched),
+                &expected,
+            )
+            .unwrap()
+        );
+
+        let HostRequest::GolemToolInvocationRejected(mut mismatched) = request.clone() else {
+            unreachable!();
+        };
+        mismatched.has_stderr = false;
         assert!(
             !request_claim_identity_matches(
                 &HostRequest::GolemToolInvocationRejected(mismatched),
@@ -1243,6 +1645,7 @@ mod tests {
                     input_decode_failure: Some(ToolInputDecodeFailure::InvalidSchemaGraph),
                     has_stdin: false,
                     has_stdout: false,
+                    has_stderr: false,
                     call_mode: EntityCallMode::Synchronous,
                 },
             }));
@@ -1255,6 +1658,7 @@ mod tests {
                 input_decode_failure: Some(ToolInputDecodeFailure::InvalidSchemaValue),
                 has_stdin: false,
                 has_stdout: false,
+                has_stderr: false,
                 call_mode: EntityCallMode::Synchronous,
                 error: SerializableToolRpcError::RemoteInternalError(
                     "selected error is not claim identity".to_string(),

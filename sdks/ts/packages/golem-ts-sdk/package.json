@@ -1,6 +1,21 @@
 {
   "name": "@golemcloud/golem-ts-sdk",
   "type": "module",
+  "sideEffects": [
+    "./dist/index.mjs",
+    "./dist/runtime/index.mjs",
+    "./dist/runtime/middleware.mjs",
+    "./dist/runtime/schema/arktype.mjs",
+    "./dist/runtime/schema/effect.mjs",
+    "./dist/runtime/schema/valibot.mjs",
+    "./dist/runtime/schema/zod.mjs",
+    "./src/index.ts",
+    "./src/schema/arktype.ts",
+    "./src/schema/effect.ts",
+    "./src/schema/valibot.ts",
+    "./src/schema/zod.ts",
+    "./tests/components/**"
+  ],
   "version": "0.0.0",
   "publishConfig": {
     "access": "public"
@@ -24,10 +39,15 @@
       "import": "./dist/reflection.mjs",
       "types": "./dist/reflection.d.mts"
     },
+    "./http-router": {
+      "import": "./dist/http-router.mjs",
+      "types": "./dist/http-router.d.mts"
+    },
     "./middleware": {
       "import": "./dist/middleware.mjs",
       "types": "./dist/middleware.d.mts"
-    }
+    },
+    "./component": "./dist/component.mjs"
   },
   "typesVersions": {
     "*": {
@@ -39,6 +59,9 @@
       ],
       "golem:agent/host@2.0.0": [
         "types/golem_agent_2_0_0_host.d.ts"
+      ],
+      "golem:agent/durable-streams@2.0.0": [
+        "types/golem_agent_2_0_0_durable_streams.d.ts"
       ],
       "golem:core/types@2.0.0": [
         "types/golem_core_2_0_0_types.d.ts"
@@ -55,6 +78,7 @@
     "lint:fix": "eslint . --ext .ts,.tsx,.mjs --fix",
     "generate-dts": "node ./scripts/generate-dts.mjs",
     "build": "pnpm run generate-dts && rollup --failAfterWarnings -c",
+    "check:package": "node ./scripts/check-package.mjs",
     "clean": "node ./scripts/clean.mjs",
     "clean-test-data": "node ../../scripts/clean-test-data.mjs",
     "test": "pnpm run typecheck && pnpm run clean-test-data && vitest run",
@@ -70,10 +94,15 @@
   "license": "SEE LICENSE IN LICENSE",
   "description": "",
   "dependencies": {
-    "@noble/hashes": "^1.8.0"
+    "@noble/hashes": "^1.8.0",
+    "terser": "^5.46.2"
+  },
+  "peerDependencies": {
+    "typescript": "^5.8.3"
   },
   "devDependencies": {
     "@eslint/js": "^9.33.0",
+    "@golemcloud/http-contract": "file:../../../http-contract",
     "arktype": "^2.1.0",
     "effect": "^3.10.0",
     "valibot": "^1.0.0",

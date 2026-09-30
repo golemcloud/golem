@@ -35,7 +35,9 @@ httpApi:
 
 Define exactly one of `subdomain` or `domain` on each deployment. Prefer `subdomain` for built-in `server: local` and `server: cloud` environments. Use `domain` when you need a full custom domain. `subdomain` cannot be used with custom server environments — those must use `domain`.
 
-Do not use `localServer.customRequestPort: 0` in the manifest. Port `0` is only allowed when passed directly as `--custom-request-port 0` to `golem server run`; manifest deployment domains require stable nonzero ports.
+Do not use `localServer.customRequestPort: 0` in the manifest. Port `0` is only allowed when passed directly as `--custom-request-port 0` to `golem server run`; manifest deployment domains require stable nonzero ports. The local server routes requests by matching their `Host` header against the expanded `<subdomain>.localhost:<port>`, so the running server must bind the same port the manifest expands to: `golem server run` warns when its `--custom-request-port` differs from the manifest value, and such deployments are not reachable until the two match.
+
+`<subdomain>.localhost` resolves only on the machine running the local server, regardless of `localServer.routerAddr` (the HTTP API listener binds all interfaces). To call a local deployment from another machine, use `domain` with a host name that resolves there instead of `subdomain`.
 
 ### Agent Options
 
@@ -77,14 +79,15 @@ golem api security-scheme create my-oidc \
 | Facebook | `facebook` |
 | Microsoft | `microsoft` |
 | GitLab | `gitlab` |
-| Custom OIDC | `custom` (requires `--issuer-url`) |
+| Custom OIDC | `custom` (requires `--custom-provider-name` and `--custom-issuer-url`) |
 
 For a custom OIDC provider:
 
 ```shell
 golem api security-scheme create my-custom-oidc \
   --provider-type custom \
-  --issuer-url "https://auth.example.com" \
+  --custom-provider-name "My OIDC" \
+  --custom-issuer-url "https://auth.example.com" \
   --client-id "YOUR_CLIENT_ID" \
   --client-secret "YOUR_CLIENT_SECRET" \
   --redirect-url "https://app.example.com/auth/callback" \
@@ -204,7 +207,7 @@ After configuring `golem.yaml`, deploy. Always use `--yes` to avoid interactive 
 ```shell
 golem deploy --yes                     # Deploy all components and HTTP API
 golem deploy --yes --reset             # Deploy and delete all previously created agents
-golem deploy --yes --try-update-agents # Deploy and update running agents
+golem deploy --yes --update-agents auto # Deploy and update running agents
 ```
 
 ## Auto-Generated OpenAPI

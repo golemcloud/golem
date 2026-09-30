@@ -101,7 +101,7 @@ export function appendGraftedSubtree(
 export function normalizeExtendedTool(tool: ExtendedToolType): ExtendedToolType {
   const root = cloneCommandTree(tool.root);
   normalizeCommand(root, new Map(), [], new Set(), new Set());
-  const normalized = new ExtendedToolType(tool.version, root);
+  const normalized = new ExtendedToolType(tool.version, root, tool.requiresFilesystem);
   validateExtendedTool(normalized);
   return normalized;
 }

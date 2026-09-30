@@ -14,22 +14,27 @@
 
 use crate::storage::indexed::{
     IndexedStorage, IndexedStorageError, IndexedStorageMetaNamespace, IndexedStorageNamespace,
-    ScanCursor, ScanResume,
+    ScanResume,
 };
 use async_trait::async_trait;
 use golem_common::model::AgentId;
+use golem_common::model::ShardEpoch;
 use regex::Regex;
 use std::collections::{BTreeMap, BinaryHeap};
 use std::ops::Bound::Included;
+use std::sync::Arc;
 #[cfg(test)]
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 #[derive(Debug)]
 pub struct InMemoryIndexedStorage {
-    data: scc::HashMap<String, BTreeMap<u64, Vec<u8>>>,
+    data: Arc<scc::HashMap<String, BTreeMap<u64, Vec<u8>>>>,
+    /// The writer generation recorded per key. An append that asserts an epoch holds this entry
+    /// while it writes `data`, which is what makes the check and the insert one step.
+    key_epochs: Arc<scc::HashMap<String, ShardEpoch>>,
     #[cfg(test)]
-    read_count: AtomicU64,
+    read_count: Arc<AtomicU64>,
 }
 
 impl Default for InMemoryIndexedStorage {
@@ -41,10 +46,66 @@ impl Default for InMemoryIndexedStorage {
 impl InMemoryIndexedStorage {
     pub fn new() -> Self {
         Self {
-            data: scc::HashMap::new(),
+            data: Arc::new(scc::HashMap::new()),
+            key_epochs: Arc::new(scc::HashMap::new()),
             #[cfg(test)]
-            read_count: AtomicU64::new(0),
+            read_count: Arc::new(AtomicU64::new(0)),
         }
+    }
+
+    /// Refuses unless `record` holds exactly `expected`; an absent record refuses too. The same
+    /// terms as the SQL backends' check.
+    fn check_record(
+        &self,
+        key: &str,
+        expected: ShardEpoch,
+        record: &scc::hash_map::Entry<'_, String, ShardEpoch>,
+    ) -> Result<(), IndexedStorageError> {
+        let stored = match record {
+            scc::hash_map::Entry::Occupied(occupied) => Some(*occupied.get()),
+            scc::hash_map::Entry::Vacant(_) => None,
+        };
+        match stored {
+            Some(epoch) if epoch == expected => Ok(()),
+            actual => Err(IndexedStorageError::Fenced {
+                key: key.to_string(),
+                expected,
+                actual,
+            }),
+        }
+    }
+
+    /// Inserts `pairs` under `composite_key`, all or nothing, after checking `expected_epoch`
+    /// against the key's record. The record's entry is held until the insert is done.
+    async fn append_checked(
+        &self,
+        composite_key: String,
+        key: &str,
+        pairs: &[(u64, Vec<u8>)],
+        expected_epoch: Option<ShardEpoch>,
+        primary_oplog_insert: bool,
+    ) -> Result<(), IndexedStorageError> {
+        let _record = match expected_epoch {
+            None => None,
+            Some(expected) => {
+                let record = self.key_epochs.entry_async(composite_key.clone()).await;
+                self.check_record(key, expected, &record)?;
+                Some(record)
+            }
+        };
+
+        let mut entry = self.data.entry_async(composite_key).await.or_default();
+        if pairs.iter().any(|(id, _)| entry.contains_key(id)) {
+            return Err(if primary_oplog_insert {
+                IndexedStorageError::Conflict("Key already exists".to_string())
+            } else {
+                IndexedStorageError::Other("Key already exists".to_string())
+            });
+        }
+        for (id, value) in pairs {
+            entry.get_mut().insert(*id, value.clone());
+        }
+        Ok(())
     }
 
     #[cfg(test)]
@@ -64,6 +125,17 @@ impl InMemoryIndexedStorage {
             } => {
                 let mode = super::agent_mode_prefix(agent_mode);
                 format!("{mode}/oplog/{component_id}/{agent_name}/{key}")
+            }
+            IndexedStorageNamespace::StagedOpLog {
+                agent_id:
+                    AgentId {
+                        component_id,
+                        agent_id: agent_name,
+                    },
+                agent_mode,
+            } => {
+                let mode = super::agent_mode_prefix(agent_mode);
+                format!("{mode}/staged-oplog/{component_id}/{agent_name}/{key}")
             }
             IndexedStorageNamespace::CompressedOpLog {
                 agent_id:
@@ -150,49 +222,6 @@ impl IndexedStorage for InMemoryIndexedStorage {
         Ok(self.data.contains_async(&composite_key).await)
     }
 
-    async fn scan(
-        &self,
-        _svc_name: &'static str,
-        _api_name: &'static str,
-        namespace: IndexedStorageMetaNamespace,
-        prefix: Option<&str>,
-        cursor: ScanCursor,
-        count: u64,
-    ) -> Result<(ScanCursor, Vec<String>), IndexedStorageError> {
-        let mut result = Vec::new();
-        let matcher = Self::match_key(namespace, prefix);
-        let mut idx = 0;
-        let mut has_more = false;
-
-        self.data
-            .iter_async(|key, _| {
-                idx += 1;
-                if idx > cursor {
-                    if let Some(matched) = matcher(key) {
-                        result.push(matched);
-
-                        if (result.len() as u64) == count {
-                            has_more = true;
-                            false
-                        } else {
-                            true
-                        }
-                    } else {
-                        true
-                    }
-                } else {
-                    true
-                }
-            })
-            .await;
-
-        if has_more {
-            Ok((idx, result))
-        } else {
-            Ok((0, result))
-        }
-    }
-
     async fn scan_stable(
         &self,
         _svc_name: &'static str,
@@ -242,24 +271,153 @@ impl IndexedStorage for InMemoryIndexedStorage {
         key: &str,
         id: u64,
         value: Vec<u8>,
+        expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
-        let primary_oplog_insert = matches!(&namespace, IndexedStorageNamespace::OpLog { .. });
+        let primary_oplog_insert = matches!(
+            &namespace,
+            IndexedStorageNamespace::OpLog { .. } | IndexedStorageNamespace::StagedOpLog { .. }
+        );
         let composite_key = Self::composite_key(namespace, key);
-        let mut entry = self
-            .data
-            .entry_async(composite_key.clone())
-            .await
-            .or_default();
-        if let std::collections::btree_map::Entry::Vacant(e) = entry.entry(id) {
-            e.insert(value.to_vec());
-            Ok(())
-        } else if primary_oplog_insert {
-            Err(IndexedStorageError::Conflict(
-                "Key already exists".to_string(),
-            ))
-        } else {
-            Err(IndexedStorageError::Other("Key already exists".to_string()))
+        self.append_checked(
+            composite_key,
+            key,
+            &[(id, value)],
+            expected_epoch,
+            primary_oplog_insert,
+        )
+        .await
+    }
+
+    async fn append_many(
+        &self,
+        _svc_name: &'static str,
+        _api_name: &'static str,
+        _entity_name: &'static str,
+        namespace: &IndexedStorageNamespace,
+        key: &str,
+        pairs: Arc<[(u64, bytes::Bytes)]>,
+        expected_epoch: Option<ShardEpoch>,
+    ) -> Result<(), IndexedStorageError> {
+        // Nothing to write is nothing to fence, as on every other backend.
+        if pairs.is_empty() {
+            return Ok(());
         }
+        let primary_oplog_insert = matches!(
+            namespace,
+            IndexedStorageNamespace::OpLog { .. } | IndexedStorageNamespace::StagedOpLog { .. }
+        );
+        let composite_key = Self::composite_key(namespace.clone(), key);
+        let pairs: Vec<(u64, Vec<u8>)> = pairs
+            .iter()
+            .map(|(id, value)| (*id, value.to_vec()))
+            .collect();
+        self.append_checked(
+            composite_key,
+            key,
+            &pairs,
+            expected_epoch,
+            primary_oplog_insert,
+        )
+        .await
+    }
+
+    async fn set_key_epoch(
+        &self,
+        _svc_name: &'static str,
+        _api_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        epoch: ShardEpoch,
+    ) -> Result<(), IndexedStorageError> {
+        let composite_key = Self::composite_key(namespace, key);
+        match self.key_epochs.entry_async(composite_key).await {
+            scc::hash_map::Entry::Vacant(vacant) => {
+                vacant.insert_entry(epoch);
+                Ok(())
+            }
+            scc::hash_map::Entry::Occupied(mut occupied) => {
+                let stored = *occupied.get();
+                if epoch >= stored {
+                    *occupied.get_mut() = epoch;
+                    Ok(())
+                } else {
+                    Err(IndexedStorageError::Fenced {
+                        key: key.to_string(),
+                        expected: epoch,
+                        actual: Some(stored),
+                    })
+                }
+            }
+        }
+    }
+
+    async fn delete_with_epoch(
+        &self,
+        _svc_name: &'static str,
+        _api_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        expected_epoch: Option<ShardEpoch>,
+    ) -> Result<(), IndexedStorageError> {
+        let composite_key = Self::composite_key(namespace, key);
+        // The record's guard first and held across the data removal, in the order an append takes
+        // them, so nobody can record a new generation between the check and the deletes.
+        let record = self.key_epochs.entry_async(composite_key.clone()).await;
+        if let Some(expected) = expected_epoch {
+            // Neither a record nor entries: already gone, most often by an earlier attempt of
+            // this same deletion (see the trait).
+            if matches!(record, scc::hash_map::Entry::Vacant(_))
+                && !self.data.contains_async(&composite_key).await
+            {
+                return Ok(());
+            }
+            self.check_record(key, expected, &record)?;
+        }
+        self.data.remove_async(&composite_key).await;
+        if let scc::hash_map::Entry::Occupied(occupied) = record {
+            let _ = occupied.remove();
+        }
+        Ok(())
+    }
+
+    async fn move_if_absent(
+        &self,
+        _svc_name: &'static str,
+        _api_name: &'static str,
+        source_namespace: IndexedStorageNamespace,
+        source_key: &str,
+        target_namespace: IndexedStorageNamespace,
+        target_key: &str,
+        expected_last_id: u64,
+    ) -> Result<bool, IndexedStorageError> {
+        let source = Self::composite_key(source_namespace, source_key);
+        let target = Self::composite_key(target_namespace, target_key);
+        if self.data.contains_async(&target).await {
+            return Ok(false);
+        }
+        let source_entries = self
+            .data
+            .read_async(&source, |_, entries| entries.clone())
+            .await
+            .ok_or_else(|| IndexedStorageError::Other("source index is missing".to_string()))?;
+        if expected_last_id == 0
+            || source_entries.len() as u64 != expected_last_id
+            || source_entries.keys().copied().ne(1..=expected_last_id)
+        {
+            return Err(IndexedStorageError::Other(
+                "source index is empty, gapped, or has an unexpected tip".to_string(),
+            ));
+        }
+        if self
+            .data
+            .insert_async(target, source_entries)
+            .await
+            .is_err()
+        {
+            return Ok(false);
+        }
+        self.data.remove_async(&source).await;
+        Ok(true)
     }
 
     async fn length(
@@ -417,7 +575,8 @@ mod tests {
     use test_r::test;
 
     use crate::storage::indexed::{
-        IndexedStorageLabelledApi, IndexedStorageMetaNamespace, IndexedStorageNamespace,
+        IndexedStorage, IndexedStorageError, IndexedStorageLabelledApi,
+        IndexedStorageMetaNamespace, IndexedStorageNamespace, ScanResume,
     };
     use assert2::check;
     use golem_common::model::AgentId;
@@ -435,6 +594,304 @@ mod tests {
             .clone()
     }
 
+    fn staged_namespace() -> IndexedStorageNamespace {
+        IndexedStorageNamespace::StagedOpLog {
+            agent_id: test_agent_id(),
+            agent_mode: golem_common::model::agent::AgentMode::Durable,
+        }
+    }
+
+    fn primary_namespace() -> IndexedStorageNamespace {
+        IndexedStorageNamespace::OpLog {
+            agent_id: test_agent_id(),
+            agent_mode: golem_common::model::agent::AgentMode::Durable,
+        }
+    }
+
+    #[test]
+    async fn staged_publication_is_atomic_validated_and_hidden() {
+        let storage = super::InMemoryIndexedStorage::new();
+        for (id, value) in [(1, b"one"), (2, b"two")] {
+            storage
+                .append(
+                    "test",
+                    "append",
+                    "entry",
+                    staged_namespace(),
+                    "stage",
+                    id,
+                    value.to_vec(),
+                    None,
+                )
+                .await
+                .unwrap();
+        }
+        assert_eq!(
+            storage
+                .scan_stable(
+                    "test",
+                    "scan",
+                    IndexedStorageMetaNamespace::Oplog {
+                        agent_mode: golem_common::model::agent::AgentMode::Durable,
+                    },
+                    None,
+                    None,
+                    100,
+                )
+                .await
+                .unwrap()
+                .1,
+            Vec::<String>::new()
+        );
+        assert!(
+            storage
+                .move_if_absent(
+                    "test",
+                    "publish",
+                    staged_namespace(),
+                    "stage",
+                    primary_namespace(),
+                    "target",
+                    2
+                )
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            storage
+                .read(
+                    "test",
+                    "read",
+                    "entry",
+                    IndexedStorageNamespace::OpLog {
+                        agent_id: test_agent_id(),
+                        agent_mode: golem_common::model::agent::AgentMode::Durable
+                    },
+                    "target",
+                    1,
+                    2
+                )
+                .await
+                .unwrap(),
+            vec![(1, b"one".to_vec()), (2, b"two".to_vec())]
+        );
+        assert!(
+            !storage
+                .exists("test", "exists", staged_namespace(), "stage")
+                .await
+                .unwrap()
+        );
+
+        for (key, pairs, tip) in [
+            ("empty", vec![], 1),
+            ("gap", vec![(1, b"one".to_vec()), (3, b"three".to_vec())], 3),
+            ("tip", vec![(1, b"one".to_vec())], 2),
+        ] {
+            for (id, value) in pairs {
+                storage
+                    .append(
+                        "test",
+                        "append",
+                        "entry",
+                        staged_namespace(),
+                        key,
+                        id,
+                        value,
+                        None,
+                    )
+                    .await
+                    .unwrap();
+            }
+            assert!(
+                storage
+                    .move_if_absent(
+                        "test",
+                        "publish",
+                        staged_namespace(),
+                        key,
+                        primary_namespace(),
+                        key,
+                        tip
+                    )
+                    .await
+                    .is_err()
+            );
+            assert!(
+                !storage
+                    .exists(
+                        "test",
+                        "exists",
+                        IndexedStorageNamespace::OpLog {
+                            agent_id: test_agent_id(),
+                            agent_mode: golem_common::model::agent::AgentMode::Durable
+                        },
+                        key
+                    )
+                    .await
+                    .unwrap()
+            );
+        }
+    }
+
+    #[test]
+    async fn staged_publication_never_overwrites_and_has_one_concurrent_winner() {
+        let storage = std::sync::Arc::new(super::InMemoryIndexedStorage::new());
+        for stage in ["first", "second"] {
+            storage
+                .append(
+                    "test",
+                    "append",
+                    "entry",
+                    staged_namespace(),
+                    stage,
+                    1,
+                    stage.as_bytes().to_vec(),
+                    None,
+                )
+                .await
+                .unwrap();
+        }
+        let a = {
+            let storage = storage.clone();
+            tokio::spawn(async move {
+                storage
+                    .move_if_absent(
+                        "test",
+                        "publish",
+                        staged_namespace(),
+                        "first",
+                        primary_namespace(),
+                        "target",
+                        1,
+                    )
+                    .await
+                    .unwrap()
+            })
+        };
+        let b = {
+            let storage = storage.clone();
+            tokio::spawn(async move {
+                storage
+                    .move_if_absent(
+                        "test",
+                        "publish",
+                        staged_namespace(),
+                        "second",
+                        primary_namespace(),
+                        "target",
+                        1,
+                    )
+                    .await
+                    .unwrap()
+            })
+        };
+        assert_ne!(a.await.unwrap(), b.await.unwrap());
+        let before = storage
+            .read(
+                "test",
+                "read",
+                "entry",
+                IndexedStorageNamespace::OpLog {
+                    agent_id: test_agent_id(),
+                    agent_mode: golem_common::model::agent::AgentMode::Durable,
+                },
+                "target",
+                1,
+                1,
+            )
+            .await
+            .unwrap();
+        assert!(
+            !storage
+                .move_if_absent(
+                    "test",
+                    "publish",
+                    staged_namespace(),
+                    if before[0].1 == b"first" {
+                        "second"
+                    } else {
+                        "first"
+                    },
+                    primary_namespace(),
+                    "target",
+                    1
+                )
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            storage
+                .read(
+                    "test",
+                    "read",
+                    "entry",
+                    IndexedStorageNamespace::OpLog {
+                        agent_id: test_agent_id(),
+                        agent_mode: golem_common::model::agent::AgentMode::Durable
+                    },
+                    "target",
+                    1,
+                    1
+                )
+                .await
+                .unwrap(),
+            before
+        );
+
+        storage
+            .append(
+                "test",
+                "append",
+                "entry",
+                staged_namespace(),
+                "third",
+                1,
+                b"staged".to_vec(),
+                None,
+            )
+            .await
+            .unwrap();
+        let publish = {
+            let storage = storage.clone();
+            tokio::spawn(async move {
+                storage
+                    .move_if_absent(
+                        "test",
+                        "publish",
+                        staged_namespace(),
+                        "third",
+                        primary_namespace(),
+                        "ordinary-race",
+                        1,
+                    )
+                    .await
+                    .unwrap()
+            })
+        };
+        let append = {
+            let storage = storage.clone();
+            tokio::spawn(async move {
+                storage
+                    .append(
+                        "test",
+                        "append",
+                        "entry",
+                        IndexedStorageNamespace::OpLog {
+                            agent_id: test_agent_id(),
+                            agent_mode: golem_common::model::agent::AgentMode::Durable,
+                        },
+                        "ordinary-race",
+                        1,
+                        b"ordinary".to_vec(),
+                        None,
+                    )
+                    .await
+                    .is_ok()
+            })
+        };
+        assert_ne!(publish.await.unwrap(), append.await.unwrap());
+    }
+
     #[test]
     async fn scan_stable_pages_in_order_and_hands_a_key_back_once() {
         let storage = super::InMemoryIndexedStorage::new();
@@ -450,6 +907,7 @@ mod tests {
                 key,
                 1,
                 &100,
+                None,
             )
             .await
             .unwrap();
@@ -486,6 +944,24 @@ mod tests {
     }
 
     #[test]
+    async fn scan_stable_rejects_marker_containing_nul() {
+        let storage = super::InMemoryIndexedStorage::new();
+        let result = storage
+            .with("test", "test")
+            .scan_stable(
+                IndexedStorageMetaNamespace::Oplog {
+                    agent_mode: golem_common::model::agent::AgentMode::Durable,
+                },
+                None,
+                Some(ScanResume::Marker("invalid\0marker".to_string())),
+                2,
+            )
+            .await;
+
+        assert!(matches!(result, Err(IndexedStorageError::InvalidResume(_))));
+    }
+
+    #[test]
     async fn closest_exact_match() {
         let storage = super::InMemoryIndexedStorage::new();
         let api = storage.with_entity("test", "test", "test");
@@ -499,6 +975,7 @@ mod tests {
             key,
             1,
             &100,
+            None,
         )
         .await
         .unwrap();
@@ -510,6 +987,7 @@ mod tests {
             key,
             2,
             &200,
+            None,
         )
         .await
         .unwrap();
@@ -521,6 +999,7 @@ mod tests {
             key,
             3,
             &300,
+            None,
         )
         .await
         .unwrap();
@@ -532,6 +1011,7 @@ mod tests {
             key,
             4,
             &400,
+            None,
         )
         .await
         .unwrap();
@@ -565,6 +1045,7 @@ mod tests {
             key,
             1,
             &100,
+            None,
         )
         .await
         .unwrap();
@@ -576,6 +1057,7 @@ mod tests {
             key,
             2,
             &200,
+            None,
         )
         .await
         .unwrap();
@@ -587,6 +1069,7 @@ mod tests {
             key,
             3,
             &300,
+            None,
         )
         .await
         .unwrap();
@@ -598,6 +1081,7 @@ mod tests {
             key,
             4,
             &400,
+            None,
         )
         .await
         .unwrap();
@@ -631,6 +1115,7 @@ mod tests {
             key,
             10,
             &100,
+            None,
         )
         .await
         .unwrap();
@@ -642,6 +1127,7 @@ mod tests {
             key,
             20,
             &200,
+            None,
         )
         .await
         .unwrap();
@@ -653,6 +1139,7 @@ mod tests {
             key,
             30,
             &300,
+            None,
         )
         .await
         .unwrap();
@@ -664,6 +1151,7 @@ mod tests {
             key,
             40,
             &400,
+            None,
         )
         .await
         .unwrap();
@@ -697,6 +1185,7 @@ mod tests {
             key,
             10,
             &100,
+            None,
         )
         .await
         .unwrap();
@@ -708,6 +1197,7 @@ mod tests {
             key,
             20,
             &200,
+            None,
         )
         .await
         .unwrap();
@@ -719,6 +1209,7 @@ mod tests {
             key,
             30,
             &300,
+            None,
         )
         .await
         .unwrap();
@@ -730,6 +1221,7 @@ mod tests {
             key,
             40,
             &400,
+            None,
         )
         .await
         .unwrap();
@@ -764,6 +1256,7 @@ mod tests {
             key,
             10,
             &100,
+            None,
         )
         .await
         .unwrap();
@@ -775,6 +1268,7 @@ mod tests {
             key,
             20,
             &200,
+            None,
         )
         .await
         .unwrap();
@@ -786,6 +1280,7 @@ mod tests {
             key,
             30,
             &300,
+            None,
         )
         .await
         .unwrap();
@@ -797,6 +1292,7 @@ mod tests {
             key,
             40,
             &400,
+            None,
         )
         .await
         .unwrap();
@@ -831,6 +1327,7 @@ mod tests {
             key,
             10,
             &100,
+            None,
         )
         .await
         .unwrap();
@@ -842,6 +1339,7 @@ mod tests {
             key,
             20,
             &200,
+            None,
         )
         .await
         .unwrap();
@@ -874,6 +1372,7 @@ mod tests {
             key,
             10,
             &100,
+            None,
         )
         .await
         .unwrap();
@@ -885,6 +1384,7 @@ mod tests {
             key,
             20,
             &200,
+            None,
         )
         .await
         .unwrap();
@@ -917,6 +1417,7 @@ mod tests {
             key,
             1,
             &100,
+            None,
         )
         .await
         .unwrap();
@@ -928,6 +1429,7 @@ mod tests {
             key,
             2,
             &200,
+            None,
         )
         .await
         .unwrap();
@@ -939,6 +1441,7 @@ mod tests {
             key,
             3,
             &300,
+            None,
         )
         .await
         .unwrap();
@@ -950,6 +1453,7 @@ mod tests {
             key,
             4,
             &400,
+            None,
         )
         .await
         .unwrap();

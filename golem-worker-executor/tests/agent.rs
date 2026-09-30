@@ -19,7 +19,7 @@ use golem_common::model::agent::AgentMode;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
 use golem_common::model::worker::AgentConfigEntryDto;
-use golem_common::model::{AgentId, IdempotencyKey};
+use golem_common::model::{AgentId, IdempotencyKey, OwnedAgentId};
 use golem_common::schema::SchemaValue;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
@@ -165,6 +165,8 @@ async fn streaming_schedule_is_rejected_without_creating_or_queueing_a_worker(
                 expected_callee_fingerprint: None,
                 durable_input_mappings: Vec::new(),
                 scope_card: None,
+                origin_invocation: None,
+                external_tool: None,
             })
             .await
             .expect_err("scheduled streaming invocation must be rejected");
@@ -245,6 +247,8 @@ async fn invocation_classification_uses_the_existing_workers_component_revision(
             expected_callee_fingerprint: None,
             durable_input_mappings: Vec::new(),
             scope_card: None,
+            origin_invocation: None,
+            external_tool: None,
         })
         .await
         .expect_err("the old streaming schema must still reject scheduling");
@@ -630,6 +634,8 @@ async fn immediate_scheduled_ephemeral_invocation_reuses_completed_result(
             expected_callee_fingerprint: None,
             durable_input_mappings: Vec::new(),
             scope_card: None,
+            origin_invocation: None,
+            external_tool: None,
         })
         .await?;
 
@@ -683,6 +689,8 @@ async fn ephemeral_invocation_lookup_does_not_create_unknown_agent(
             expected_callee_fingerprint: None,
             durable_input_mappings: Vec::new(),
             scope_card: None,
+            origin_invocation: None,
+            external_tool: None,
         })
         .await?;
     assert_eq!(executor.get_worker_metadata_opt(&worker_id).await?, None);
@@ -744,6 +752,8 @@ async fn scheduled_ephemeral_invocation_uses_schedule_time_component_revision(
             expected_callee_fingerprint: None,
             durable_input_mappings: Vec::new(),
             scope_card: None,
+            origin_invocation: None,
+            external_tool: None,
         })
         .await?;
 
@@ -862,5 +872,151 @@ async fn create_oplog_entry_persists_ephemeral_agent_mode(
         .expect("Expected a Create entry at the start of the oplog");
 
     assert_eq!(create_entry.agent_mode, AgentMode::Ephemeral);
+    Ok(())
+}
+
+#[test]
+#[timeout("60s")]
+#[tracing::instrument]
+async fn archived_ephemeral_agent_remains_observable_and_can_be_deleted(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("constructor_parameter_echo_unnamed")]
+    constructor_parameter_echo_unnamed: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(
+            &context.default_environment_id,
+            constructor_parameter_echo_unnamed,
+        )
+        .store()
+        .await?;
+    let logical_agent_id = agent_id!("EphemeralEchoAgent", "archived-delete");
+
+    let result = executor
+        .invoke_and_await_agent(&component, &logical_agent_id, "changeAndGet", data_value!())
+        .await?;
+    let final_agent_id = result.agent_id().clone();
+    assert_eq!(result.into_typed::<String>()?, "archived-delete!");
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &final_agent_id);
+
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while executor.worker_is_cached(&owned_agent_id).await {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+
+    let metadata = executor.get_worker_metadata(&final_agent_id).await?;
+    assert_eq!(metadata.agent_id, final_agent_id);
+    assert!(
+        !executor
+            .get_oplog(&final_agent_id, OplogIndex::INITIAL)
+            .await?
+            .is_empty()
+    );
+
+    executor.delete_worker(&final_agent_id).await?;
+    assert_eq!(
+        executor.get_worker_metadata_opt(&final_agent_id).await?,
+        None
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("120s")]
+#[tracing::instrument]
+async fn fork_publication_retry_preserves_independent_state_across_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::model::durable_stream::StreamSessionRecord;
+    use golem_common::schema::FromSchema;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = crate::fork::start_with_local_resume(deps, &context, true).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .store()
+        .await?;
+    let source = agent_id!("RpcCounter", "fork-retry");
+    let source_id = executor.start_agent(&component.id, source.clone()).await?;
+    executor
+        .invoke_and_await_agent(&component, &source, "inc_by", data_value!(5u64))
+        .await?;
+    let prefix = executor.get_oplog(&source_id, OplogIndex::INITIAL).await?;
+    let cut = prefix.last().unwrap().oplog_index;
+    let target = golem_common::phantom_agent_id!("RpcCounter", uuid::Uuid::new_v4(), "fork-retry");
+    let target_id = AgentId::from_agent_id(component.id, &target).map_err(anyhow::Error::msg)?;
+    let error = executor
+        .fork_worker(&source_id, &target.to_string(), cut)
+        .await
+        .expect_err("injected lost response");
+    assert!(
+        error.to_string().contains("lost fork resume response"),
+        "{error}"
+    );
+    executor
+        .fork_worker(&source_id, &target.to_string(), cut)
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &source, "inc_by", data_value!(11u64))
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &target, "inc_by", data_value!(2u64))
+        .await?;
+    // Retrying after the target has run must not overwrite it with the old prefix.
+    executor
+        .fork_worker(&source_id, &target.to_string(), cut)
+        .await?;
+    assert!(
+        executor
+            .fork_worker(&source_id, &target.to_string(), cut.previous())
+            .await
+            .is_err()
+    );
+    drop(executor);
+    let executor = crate::fork::start_with_local_resume(deps, &context, false).await?;
+    executor
+        .fork_worker(&source_id, &target.to_string(), cut)
+        .await?;
+    let actual = executor
+        .invoke_and_await_agent(&component, &target, "get_value", data_value!())
+        .await?
+        .into_typed::<u64>()?;
+    assert_eq!(actual, 7);
+    let actual = executor
+        .invoke_and_await_agent(&component, &source, "get_value", data_value!())
+        .await?
+        .into_typed::<u64>()?;
+    assert_eq!(actual, 16);
+    let fork_history = executor.get_oplog(&target_id, OplogIndex::INITIAL).await?;
+    let markers = fork_history
+        .iter()
+        .filter_map(|entry| {
+            let PublicOplogEntry::StreamSession(record) = &entry.entry else {
+                return None;
+            };
+            let StreamSessionRecord::ForkCut(cut) =
+                StreamSessionRecord::from_value(record.record.value()).ok()?
+            else {
+                return None;
+            };
+            Some((entry.oplog_index, cut))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(markers.len(), 1);
+    assert_eq!(markers[0].0, cut.next());
+    assert_eq!(markers[0].1.cut_index, cut);
+    assert_eq!(
+        markers[0].1.creation_fingerprint,
+        executor.get_worker_metadata(&target_id).await?.fingerprint
+    );
     Ok(())
 }

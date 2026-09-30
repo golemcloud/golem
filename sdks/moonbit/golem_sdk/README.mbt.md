@@ -218,14 +218,41 @@ let current : Result[String, @tool.ToolError[WeatherError]] =
 client.drop()
 ```
 
-Parameters typed as `@tool.Principal`, `@asyncCore.Stream[Byte]`, or `@tool.ProviderStdout` are
-provided by the runtime and omitted from typed client inputs. An input stream becomes a client
-parameter. A declared provider stdout becomes part of the generated result type. Providers can
-write with `write_all`/`write_all_bytes`, select successful completion with `finish`, or select a
-typed `@tool.ToolStreamError` terminal with `fail`. Returning normally also finishes an open
-stdout; dropping it while still open selects `Abandoned`. See the
+Parameters typed as `@tool.Principal` or `@tool.ProviderOutput` are provided by the runtime and
+omitted from typed client inputs; select stderr with `#derive.arg("parameter-name", channel="stderr")`.
+An `@asyncCore.Stream[Byte]` input becomes a client parameter. Either declared output selects the
+started-invocation result shape, with independent optional stdout/stderr streams, structured result,
+collection, and cancellation. Providers can write with `write_all`/`write_all_bytes`, select
+successful completion with `finish`, or select a typed `@tool.ToolStreamError` terminal with
+`fail`. Returning normally also finishes open outputs; dropping one while still open selects
+`Abandoned` for that channel. See the
 [`golem_sdk_tools` documentation](https://mooncakes.io/docs/#/golemcloud/golem_sdk_tools/) and the
 canonical `grep`/`git` examples for the complete annotation surface.
+
+#### Call a tool discovered at runtime
+
+`@reflection.get_tool_type(name)` returns the tool descriptor visible to the caller. Select a
+command with `tool.command(path)`; path segments may use command aliases, and the returned
+`ToolCommand.path()` contains their canonical names. Its `arguments()`, `input_schema()`, and `result()`
+describe the selected command. Supply every canonical input field in declaration order. An absent
+optional argument is an option value of `None`, while a defaulted argument carries its default.
+
+Discovery returns opaque immutable snapshots. Array and graph accessors return defensive copies,
+and a snapshot changes only after explicit rediscovery. Use `SchemaRef::typed_value` to validate a
+schema-native value and create the self-contained graph required by a fully dynamic invocation.
+
+Use `command.pack_json(input)` and `command.invoke_json(input)` for canonical JSON, or
+`command.invoke_value(input)` for schema-native values. The command validates inputs locally before
+opening RPC and validates declared results after invocation. `start_value` returns an invocation
+whose `stdout`, `stderr`, `collect`, `get`, and `cancel` methods handle pending and streaming calls.
+A command with either required output must use `start_value`; `collect` drains both outputs
+concurrently while awaiting its result. `trigger_value` is available only when the command does not
+require caller-readable stdout or stderr.
+
+`@reflection.DynamicToolClient::new(name)` accepts a caller-packed `TypedSchemaValue` and a
+command path when no descriptor is available. It cannot validate the input or output against a
+deployed schema. Reflected and dynamic calls return `Result` errors, including malformed remote
+output; generated `WeatherClient` methods keep their ordinary typed call behavior.
 
 ### 5. Define a tool middleware component
 
@@ -273,12 +300,20 @@ fn main {
 
 In a pure middleware component, the `#derive.tool` declarations, signatures, and annotations
 describe the typed tool shape for code generation. Their method bodies are not registered or
-invoked as ordinary tool implementations. A handler may make zero, one, or multiple
-**sequential** calls through its `underlying` argument. For example, a retry can call the same
-generated method again after an error. Overlapping calls are rejected.
+invoked as ordinary tool implementations. A handler may make zero, one, or multiple calls through
+its `underlying` argument. The awaited generated methods are convenient for forwarding and retry.
+For overlap/fan-out, generated `start_<command>` methods return independent
+`@toolMiddleware.UnderlyingInvocation` values: call `get()` for the typed result, inspect
+`stdout()`, call `cancel()` explicitly to cancel, and call `drop()` only to release observation.
 
 A **universal middleware** handles any runtime-provided tool shape and forwards the opaque wire
 carriers without rebuilding them:
+
+Both middleware forms support typed static installation parameters. Add `parameters="Type"` to
+the derive annotation; `Type` must implement `IntoSchema` and `FromSchema`. A monomorphic handler
+then receives `parameters : Type` immediately after `underlying`, while a universal handler receives
+it before `invocation`. Without the option, the installation schema is the normalized empty record
+and no handler parameter is added.
 
 ```moonbit nocheck
 ///|
@@ -317,25 +352,40 @@ options(
 )
 ```
 
-Select the pure component template in `golem.yaml`:
+Select the default component template in `golem.yaml`:
 
 ```yaml
 components:
   myorg:message-middlewares:
-    templates: moonbit-tool-middleware
+    templates: moonbit
     dir: message_middlewares
 ```
 
-Then run `golem build`. The build uses the `tool-middleware` code-generation role, embeds the
-`tool-middleware-guest` world, and creates a `.tool-middleware.wasm` component. Generated startup
-code registers every declared middleware when the component loads. Do not import `tool` or use
-`ToolClient` in a pure package: pure middleware has no ambient `golem:tool/host` dispatch, and the
-runtime-provided `underlying` capability is its only path to the next inner layer.
+Then run `golem build`. The build uses the single code-generation path and `agent-guest` world.
+Generated startup code registers every declared middleware when the component loads, while unused
+agent and tool discovery returns empty lists. The world imports ambient `golem:tool/host`, but the
+runtime-provided `underlying` capability remains the only path to the next pinned middleware layer;
+ambient calls remain subject to runtime permissions.
 
 The underlying capability and invocation streams belong to one middleware invocation. Generated
-wrappers enforce once-only transfer, sequential use, cleanup, and revocation when the handler
-returns, but MoonBit itself does not provide affine type-system guarantees. Return only the final
-stdout stream; abandoned or unforwarded streams are cleaned up by the SDK.
+wrappers enforce once-only transfer, cleanup, and revocation when the handler returns, but MoonBit
+itself does not provide affine type-system guarantees. Return only the final stdout stream;
+abandoned or unforwarded streams are cleaned up by the SDK.
+
+Sequential and concurrent `get()` calls on an underlying observer share one host observation and
+return the cached terminal result, including errors. This does not duplicate or rewind stdout.
+`Cancelled` and `ResourceExhausted` remain distinguishable to middleware code; they become
+`ConstraintViolation` only when forwarded as the middleware's own wire result.
+
+For structural-subtype and nominal compatibility, every inner tool error must be declared by the
+expected tool with a compatible payload. Expected-only errors are allowed; inner-only errors are
+rejected. Strict equality requires matching error vocabularies.
+
+Handler return revokes new underlying admissions but does not implicitly cancel admitted calls;
+observer disposal is likewise not cancellation. Commands declaring stdout receive a host writer at
+the guest boundary. Generated dispatch forwards the selected readable stdout into it concurrently
+with the result, finishes it after clean EOF, and fails it on forwarding errors; middleware authors
+return the readable stream and never operate the writer directly.
 
 Presented and expected tool declarations must currently be in the middleware's own MoonBit
 package. A qualified or cross-package reference is rejected with:
@@ -375,14 +425,42 @@ Use `golem build` and `golem deploy` with a `golem.yaml` application manifest. S
 ## Features
 
 - **Agent registry** — register multiple agent types in a single component via `#derive.agent`
+- **HTTP routers** — named ephemeral routers, incremental byte streams, immutable files, and OpenAPI providers; ordinary durable agents can expose live files
 - **Custom data types** — `#derive.golem_schema` implements every nexessary trait to use custom data types on the public interface of your agents
 - **Agent-to-agent RPC** — auto-generated client stubs (`CounterClient`); stream-bearing methods are awaited, while stream-free methods also support fire-and-forget and scheduled invocations
+- **Runtime reflection** — discover agent types, pack reflected schemas, define caller-codec clients, or invoke direct `SchemaValue`s
 - **Agent tools** — code-first tool descriptors, command trees, constraints, custom errors, runtime dispatch, and typed tool RPC clients via `#derive.tool`
 - **Tool middleware** — monomorphic policy/adapter middleware and universal transparent middleware with invocation-scoped underlying capabilities
 - **Multimodal input** — accept mixed text, binary, and custom modality data via `#derive.multimodal` and `@multimodal.Multimodal[T]`
 - **Logging** — structured logging via `@logging.with_name("my-agent")` with level filtering
 - **Tracing** — span-based tracing via `@context.with_span(...)` with attributes
 - **Host API** - exports Golem's host API
+- **Semantic retries** — install policies in the host or interpret them around user code locally
+
+### Local semantic retries
+
+`@api.retry_local` interprets a Golem `RetryPolicy` around arbitrary asynchronous code without
+installing it as an executor policy. The property callback runs for every failure, and the final
+operation error is returned unchanged when the policy gives up:
+
+```moonbit nocheck
+///|
+let policy = try! @api.Policy::exponential(@api.Duration::millis(100), 2.0)
+  .max_retries(4)
+  .only_when(
+    @api.Predicate::eq(@api.Props::error_type(), @api.Value::text("transient")),
+  )
+  .to_raw()
+
+///|
+let result = @api.retry_local(policy, () => call_remote_service(), properties=error => {
+  [("error-type", @api.PredicateValue::Text(error.kind()))]
+})
+```
+
+Unlike retry policies installed with `set_named_policy`, local retries are ordinary user-space
+attempts. They do not create executor `RetryAttempt` oplog entries and do not survive recovery as
+one host-managed retry sequence.
 
 ## Packages
 
@@ -397,6 +475,8 @@ Use `golem build` and `golem deploy` with a `golem.yaml` application manifest. S
 | `logging` | Structured logging with named loggers and level filtering |
 | `context` | Span-based tracing and invocation context |
 | `rpc` | Agent-to-agent RPC helpers |
+| `http` | Canonical `HttpRequest`, `HttpResponse`, `HttpHeader`, `openapi_json`, and outbound WASI HTTP |
+| `reflection` | Runtime discovery, reflected JSON packing, caller-defined static clients, and fully dynamic value invocation |
 | `tool-core` | Host-neutral tool descriptors, schemas, canonical input handling, and error model |
 | `tool` | Ordinary tool registry, dispatch, help rendering, and ambient typed RPC client runtime |
 | `tool-middleware` | Host-neutral middleware registry, opaque invocation carriers, typed/universal underlying capabilities, and ownership enforcement |

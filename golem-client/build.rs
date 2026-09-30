@@ -236,6 +236,14 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "golem_common::model::deployment::DeploymentPlanComponentEntry",
             ),
             (
+                "DeploymentPlanMcpImportEntry",
+                "golem_common::model::deployment::DeploymentPlanMcpImportEntry",
+            ),
+            (
+                "McpImportDeployment",
+                "golem_common::model::mcp_import::McpImportDeployment",
+            ),
+            (
                 "DeploymentSummary",
                 "golem_common::model::deployment::DeploymentSummary",
             ),
@@ -243,6 +251,7 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "DeployedRegisteredTool",
                 "golem_common::model::tool::DeployedRegisteredTool",
             ),
+            ("Tool", "golem_common::schema::tool::Tool"),
             ("ToolSource", "golem_common::model::tool::ToolSource"),
             ("RegisteredToolMiddleware", "golem_common::model::tool_middleware::RegisteredToolMiddleware"),
             ("ToolMiddlewareSource", "golem_common::model::tool_middleware::ToolMiddlewareSource"),
@@ -501,6 +510,14 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "AgentUpdateMode",
                 "golem_common::model::worker::AgentUpdateMode",
             ),
+            (
+                "SerializableToolRpcError",
+                "golem_common::model::tool::SerializableToolRpcError",
+            ),
+            (
+                "SerializableToolError",
+                "golem_common::model::tool::SerializableToolError",
+            ),
             // oplog
             ("OplogCursor", "golem_common::model::oplog::OplogCursor"),
             (
@@ -512,6 +529,10 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "golem_common::model::oplog::PublicOplogEntryWithIndex",
             ),
             // http_api_deployment
+            (
+                "HttpApiDeploymentScheme",
+                "golem_common::model::http_api_deployment::HttpApiDeploymentScheme",
+            ),
             (
                 "HttpApiDeployment",
                 "golem_common::model::http_api_deployment::HttpApiDeployment",
@@ -601,6 +622,7 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
             ("MetadataEnvelope", "golem_common::schema::MetadataEnvelope"),
             ("Role", "golem_common::schema::Role"),
             ("TypeId", "golem_common::schema::TypeId"),
+            ("Tool", "golem_common::schema::tool::Tool"),
         ],
         &[
             "/v1/components/{component_id}/workers/{agent_name}/connect",

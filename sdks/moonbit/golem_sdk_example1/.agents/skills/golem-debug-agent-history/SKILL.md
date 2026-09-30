@@ -30,7 +30,7 @@ If neither `--from` nor `--query` is provided, the entire oplog is streamed.
 
 ### Output
 
-Each text entry is printed with its index (e.g. `#00042:`) followed by a labeled header and fields. In structured formats (`json`, `yaml`, `toon`), `agent oplog` emits one output document per entry with `$type: "agent.oplog"`, `index`, and `entry`; parse stdout as a sequence of documents, not as one array or object. The entry types rendered are:
+Each text entry is printed with its index (e.g. `#00042:`) followed by a labeled header and fields. In structured formats (`json`, `yaml`, `toon`), `agent oplog` emits one output document per entry with `$type: "agent.oplog"`, `index`, `attribution`, and `entry`; parse stdout as a sequence of documents, not as one array or object. The entry types rendered are:
 
 | Entry | Description |
 |-------|-------------|
@@ -63,7 +63,6 @@ Each text entry is printed with its index (e.g. `#00042:`) followed by a labeled
 | `INTERRUPTED` / `EXITED` | Agent interrupted or exited |
 | `NOP` | No-operation marker |
 | `JUMP` | Oplog jump — shows from/to indices |
-| `STORAGE USAGE UPDATE` | Filesystem storage usage change |
 
 ### Examples
 

@@ -61,6 +61,12 @@ export type ParamInputType<P extends MethodParam> =
 export type MethodInput<Input extends MethodParams> = {
   readonly [K in keyof Input]: ParamInputType<Input[K]>
 }
+/** Caller-supplied constructor parameters omit principals injected by the host. @since 1.6.0 @category models */
+export type CallerInput<Input extends MethodParams> = {
+  readonly [K in keyof Input as Input[K] extends PrincipalInputSchema ? never : K]: ParamInputType<
+    Input[K]
+  >
+}
 
 /** @since 1.6.0 @category models */
 export type ReadOnlyOption = {
@@ -362,6 +368,21 @@ export const compileParamBindings = <Input extends MethodParams>(
     }
   })
 
+/** Compile only caller-supplied constructor fields; principal fields are supplied by the host. @since 1.6.0 @category operations */
+export const compileCallerParamBindings = <Input extends MethodParams>(
+  context: string,
+  input: Input,
+): Effect.Effect<CompiledInputCodec<Input>, UnsupportedSchemaError> =>
+  compileParamBindings(
+    context,
+    Object.fromEntries(
+      Object.entries(input).filter(
+        ([, param]) =>
+          isElementSpec(param) || isMultimodal(param) || !isPrincipal(param as Schema.Top),
+      ),
+    ) as Input,
+  )
+
 /** @since 1.6.0 @category models */
 export interface MethodCodec<
   I extends MethodParams,
@@ -374,6 +395,9 @@ export interface MethodCodec<
   readonly schemaGraph: CoreTypes.SchemaGraph
   readonly inputCodec: CompiledInputCodec<I>
   readonly outputCodec: WitCodec<Schema.Top> | undefined
+  readonly encodeOutput:
+    | ((value: unknown) => Effect.Effect<CoreTypes.SchemaValueTree, Schema.SchemaError, any>)
+    | undefined
   readonly inputSchema: AgentCommon.InputSchema
   readonly outputSchema: AgentCommon.OutputSchema
   readonly errorWrapped: boolean
@@ -462,6 +486,13 @@ export const compileMethodSpec = <
         outputCodec && outputType
           ? { ...outputCodec, graph: { defs: graph.defs, root: outputType } }
           : undefined,
+      encodeOutput:
+        outputCodec === undefined
+          ? undefined
+          : (value) =>
+              Effect.flatMap(Schema.encodeEffect(outputCodec.codec)(value), (encoded) =>
+                Effect.promise((signal) => schemaValueToWitAsync(encoded, signal)),
+              ),
       inputSchema,
       outputSchema: outputRoot === undefined ? { tag: "unit" } : { tag: "single", val: outputRoot },
       errorWrapped,
@@ -499,6 +530,34 @@ export const invokeSchemaValue = <
   handler: (input: MethodInput<I>) => Effect.Effect<MethodSuccessType<S>, E["Type"], R>,
   input: CoreTypes.SchemaValueTree,
 ): Effect.Effect<CoreTypes.SchemaValueTree | undefined, Schema.SchemaError | E["Type"], R> =>
+  invokeWireValue(
+    inputCodec,
+    outputCodec === undefined
+      ? undefined
+      : (value) =>
+          Effect.flatMap(Schema.encodeEffect(outputCodec.codec)(value), (encoded) =>
+            Effect.promise((signal) => schemaValueToWitAsync(encoded, signal)),
+          ),
+    options,
+    handler,
+    input,
+  )
+
+/** Invoke with concrete wire operations supplied by a generated contract. */
+export const invokeWireValue = <
+  I extends MethodParams,
+  S extends MethodSuccess,
+  E extends Schema.Top,
+  R,
+>(
+  inputCodec: Pick<CompiledInputCodec<I>, "decode">,
+  encodeOutput:
+    | ((value: unknown) => Effect.Effect<CoreTypes.SchemaValueTree, Schema.SchemaError, any>)
+    | undefined,
+  options: { readonly errorWrapped: boolean; readonly successVoid: boolean },
+  handler: (input: MethodInput<I>) => Effect.Effect<MethodSuccessType<S>, E["Type"], R>,
+  input: CoreTypes.SchemaValueTree,
+): Effect.Effect<CoreTypes.SchemaValueTree | undefined, Schema.SchemaError | E["Type"], R> =>
   Effect.gen(function* () {
     const decoded = yield* inputCodec.decode(input)
     if (options.errorWrapped) {
@@ -508,13 +567,11 @@ export const invokeSchemaValue = <
           onSuccess: (success) => Result.succeed(options.successVoid ? {} : success),
         }),
       )
-      const value = yield* Schema.encodeEffect(outputCodec!.codec)(result)
-      return yield* Effect.promise(() => schemaValueToWitAsync(value))
+      return yield* encodeOutput!(result)
     }
     const success = yield* handler(decoded)
-    if (outputCodec === undefined) return undefined
-    const value = yield* Schema.encodeEffect(outputCodec.codec)(success)
-    return yield* Effect.promise(() => schemaValueToWitAsync(value))
+    if (encodeOutput === undefined) return undefined
+    return yield* encodeOutput(success)
   })
 
 /** Convenience wrapper around {@link invokeSchemaValue}. @since 1.6.0 @category operations */

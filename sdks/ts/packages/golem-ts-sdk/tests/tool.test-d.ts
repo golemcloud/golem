@@ -869,6 +869,7 @@ const grepMiddlewareImplementation: ToolMiddlewareImplementation<typeof grepDef>
     void principal;
     // @ts-expect-error middleware stdout is returned by the caller-side projection
     void context.stdout;
+    // @ts-expect-error output-bearing underlying commands must use start
     return context.underlying.grep({ ...args, stdin });
   },
   replace: async (args, { underlying }) => underlying.replace(args),
@@ -896,6 +897,7 @@ const inferredGrepMiddleware = grepDef.middleware({
       void context.stdout;
       // @ts-expect-error typed underlying calls enforce presented command arguments
       void context.underlying.replace({ pattern: args.pattern });
+      // @ts-expect-error output-bearing underlying commands must use start
       return context.underlying.grep({ ...args, stdin });
     },
     replace: async (args, { underlying }) => underlying.replace(args),
@@ -931,6 +933,7 @@ type OptionalMiddlewareContext = Parameters<
 const optionalMiddlewareContextWithoutStdin: OptionalMiddlewareContext = {
   principal: undefined as never,
   underlying: undefined as never,
+  parameters: {},
 };
 void optionalMiddlewareContextWithoutStdin;
 
@@ -1043,6 +1046,11 @@ const mappedAdapterError = ToolInvokeError.tool(err('backend-failed', { code: 1 
 );
 const mappedAdapterCause:
   | { readonly tag: 'tool'; readonly error: ToolErr<'denied'> }
+  | { readonly tag: 'protocol-error'; readonly val: string }
+  | { readonly tag: 'denied'; readonly val: string }
+  | { readonly tag: 'internal-error'; readonly val: string }
+  | { readonly tag: 'cancelled' }
+  | { readonly tag: 'resource-exhausted'; readonly val: string }
   | { readonly tag: 'invalid-tool-name'; readonly val: string }
   | { readonly tag: 'invalid-command-path'; readonly val: string[] }
   | { readonly tag: 'invalid-input'; readonly val: string }
@@ -1093,7 +1101,11 @@ const universalMiddleware = universalToolMiddleware({
     const sdkPrincipal: Principal = principal;
     const wireTool: WireTool = toolMetadata;
     const wireInput: WireTypedSchemaValue = input;
-    const wireResult: Promise<WireInvocationResult> = underlying.invoke(
+    const started = await underlying.invoke(commandPath, wireInput, stdin);
+    const wireResult: Promise<WireInvocationResult> = started.result;
+    started.cancel();
+    const wireStdout: AsyncIterable<number> | undefined = started.stdout;
+    const awaitedWireResult: Promise<WireInvocationResult> = underlying.invokeAndAwait(
       commandPath,
       wireInput,
       stdin,
@@ -1107,6 +1119,8 @@ const universalMiddleware = universalToolMiddleware({
     void stream;
     void sdkPrincipal;
     void wireTool;
+    void wireStdout;
+    void awaitedWireResult;
     void (undefined as unknown as UniversalUnderlyingErrors);
     // @ts-expect-error the underlying resource does not accept a replacement principal
     void underlying.invoke(commandPath, input, stdin, principal);

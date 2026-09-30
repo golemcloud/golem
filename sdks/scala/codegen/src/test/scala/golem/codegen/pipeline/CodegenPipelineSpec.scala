@@ -58,6 +58,65 @@ class CodegenPipelineSpec extends munit.FunSuite {
   private def discover(sources: SourceDiscovery.SourceInput*): SourceDiscovery.Result =
     SourceDiscovery.discover(sources)
 
+  test("guest export roots follow implementations, including every mixed capability combination") {
+    val middleware = SourceDiscovery.SourceInput(
+      "Middleware.scala",
+      """package example
+        |import golem.runtime.annotations._
+        |@universalToolMiddleware(name = "pass-through")
+        |final class PassThrough extends golem.tool.UniversalToolMiddleware
+        |""".stripMargin
+    )
+    for {
+      agents      <- List(false, true)
+      tools       <- List(false, true)
+      middlewares <- List(false, true)
+    } {
+      val sources = List(
+        if (agents) Some(agentSource) else None,
+        if (tools) Some(toolSource) else None,
+        if (middlewares) Some(middleware) else None
+      ).flatten
+      val exports = CodegenPipeline
+        .run(discover(sources: _*), Some("example"), rpcEnabled = true)
+        .autoRegister
+        .get
+        .files
+        .find(_.relativePath.endsWith("RegisterAgents.scala"))
+        .get
+        .content
+      assertEquals(exports.contains("Guest.golemAgent200Guest"), agents)
+      assertEquals(exports.contains("Guest.SaveSnapshot.save()"), agents)
+      assertEquals(exports.contains("Guest.LoadSnapshot.load("), agents)
+      assertEquals(exports.contains("Guest.golemTool010Guest"), tools)
+      assertEquals(exports.contains("ToolMiddlewareGuest.golemTool010ToolMiddlewareGuest"), middlewares)
+      List("golemAgent200Guest", "golemTool010Guest", "golemTool010ToolMiddlewareGuest", "saveSnapshot", "loadSnapshot")
+        .foreach(name => assert(exports.contains(s"""@JSExportTopLevel("$name")"""), exports))
+    }
+  }
+
+  test("client-only traits and middleware tool projections do not retain local guest implementations") {
+    val source = SourceDiscovery.SourceInput(
+      "Client.scala",
+      """package example
+        |import golem.runtime.annotations._
+        |@agentDefinition("remote")
+        |trait Remote { class Id(val id: String); def call(): String }
+        |@toolDefinition(name = "remote-tool")
+        |trait RemoteTool { def echo(value: String): String }
+        |@toolMiddleware(name = "transparent")
+        |final class Transparent extends RemoteToolMiddleware
+        |""".stripMargin
+    )
+    val generated = CodegenPipeline.run(discover(source), Some("example"), rpcEnabled = true)
+    val exports   = generated.autoRegister.get.files.find(_.relativePath.endsWith("RegisterAgents.scala")).get.content
+    assert(!exports.contains("Guest.golemAgent200Guest"), exports)
+    assert(!exports.contains("Guest.golemTool010Guest"), exports)
+    assert(!exports.contains("Guest.SaveSnapshot"), exports)
+    assert(exports.contains("ToolMiddlewareGuest.golemTool010ToolMiddlewareGuest"), exports)
+    assert(generated.rpc.files.exists(_.relativePath.endsWith("RemoteToolClient.scala")))
+  }
+
   test("pipeline with both auto-register and rpc enabled") {
     val discovered = discover(agentSource)
     val result     = CodegenPipeline.run(discovered, Some("example"), rpcEnabled = true)
@@ -200,6 +259,45 @@ class CodegenPipelineSpec extends munit.FunSuite {
     val initializer = autoRegister.files.find(_.relativePath.endsWith("RegisterAgents.scala")).get.content
     assert(initializer.contains("private var registered = false"), initializer)
     assert(initializer.contains("if (!registered)"), initializer)
+  }
+
+  test("auto-register preserves and resolves structured middleware parameter types") {
+    val source = SourceDiscovery.SourceInput(
+      "ParameterizedMiddleware.scala",
+      """|package example.middleware
+         |import external.parameters.ImportedParameters
+         |import golem.runtime.annotations._
+         |import golem.tool.UniversalToolMiddleware
+         |
+         |@toolDefinition(name = "presented", version = "1.0.0")
+         |trait Presented { def call(value: String): String }
+         |@toolDefinition(name = "expected", version = "1.0.0")
+         |trait Expected { def call(value: String): String }
+         |
+         |@toolMiddleware(name = "map")
+         |final class MapParameters extends PresentedMiddleware.WithParameters[Map[String, Int]]
+         |@toolMiddleware(name = "tuple-adapter")
+         |final class TupleParameters
+         |    extends PresentedMiddleware.AdapterWithParameters[ExpectedUnderlying, (String, Int)]
+         |@universalToolMiddleware(name = "imported")
+         |final class Imported extends UniversalToolMiddleware.WithParameters[ImportedParameters]
+         |""".stripMargin
+    )
+    val content = CodegenPipeline
+      .run(discover(source), Some("example"), rpcEnabled = true)
+      .autoRegister
+      .get
+      .files
+      .find(_.relativePath.endsWith("__GolemAutoRegister_example_middleware.scala"))
+      .get
+      .content
+
+    assert(content.contains("Map[String, Int]"), content)
+    assert(content.contains("(String, Int)"), content)
+    assert(content.contains("external.parameters.ImportedParameters"), content)
+    assert(content.contains("registerTransparentWithParameters"), content)
+    assert(content.contains("registerAdapterWithParameters"), content)
+    assert(content.contains("registerUniversalWithParameters"), content)
   }
 
   test("pure universal middleware generates registration without agent or tool implementations") {
@@ -1681,12 +1779,29 @@ class CodegenPipelineSpec extends munit.FunSuite {
 
     assertEquals(
       result.rpc.files.map(_.relativePath),
-      Seq("example/GrepClient.scala", "example/GrepMiddleware.scala")
+      Seq("example/GrepCallProjection.scala", "example/GrepClient.scala", "example/GrepMiddleware.scala")
     )
     assert(result.rpc.files.last.content.contains("trait GrepUnderlying"))
     assert(
       result.rpc.files.last.content.contains("trait GrepMiddleware extends GrepMiddleware.Adapter[GrepUnderlying]")
     )
+  }
+
+  test("pipeline rejects an existing object that collides with the generated call projection") {
+    val source = SourceDiscovery.SourceInput(
+      "ProjectionCollision.scala",
+      """|package example
+         |import golem.runtime.annotations._
+         |@toolDefinition(name = "grep")
+         |trait Grep { def run(): String }
+         |object GrepCallProjection
+         |""".stripMargin
+    )
+
+    val error = intercept[CodegenPipeline.PipelineException] {
+      CodegenPipeline.run(discover(source), None, rpcEnabled = true)
+    }
+    assert(error.getMessage.contains("GrepCallProjection"), error.getMessage)
   }
 
   test("pipeline rejects ambiguous flattened middleware methods") {
@@ -1791,7 +1906,7 @@ class CodegenPipelineSpec extends munit.FunSuite {
     assert(result.rpc.files.nonEmpty)
     val content = result.rpc.files.head.content
     assert(content.contains("newPhantom"), s"ephemeral agent should have newPhantom:\n$content")
-    assert(!content.contains("getPhantom"), s"ephemeral agent should not accept an explicit phantom ID:\n$content")
+    assert(content.contains("getPhantom"), s"ephemeral agent should accept an explicit phantom ID:\n$content")
     assert(!content.contains("def get("), s"ephemeral agent should not have get:\n$content")
   }
 

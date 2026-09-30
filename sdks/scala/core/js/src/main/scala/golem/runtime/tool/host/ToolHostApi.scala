@@ -21,7 +21,14 @@ import golem.host.js.JsComponentId
 import golem.host.js.schema.JsTypedSchemaValue
 import golem.host.js.tool.{JsInvocationResult, JsTool, JsToolError}
 import golem.runtime.tool.ToolImplementationRuntime
-import golem.tool.{ByteStreamCloseCause, ByteStreamFailure, StreamWriteError, ToolRpcFailure}
+import golem.tool.{
+  ByteStreamCloseCause,
+  ByteStreamFailure,
+  StreamWriteError,
+  ToolRpcFailure,
+  WireCustomToolError,
+  WireToolRpcFailure
+}
 import golem.tool.wire.WitTool
 
 import scala.annotation.unused
@@ -95,7 +102,7 @@ private[golem] object ToolHostApi {
     def getAllTools(): js.Array[JsRegisteredTool]           = js.native
     def getTool(name: String): js.UndefOr[JsRegisteredTool] = js.native
     def createStdin(): js.Array[js.Any]                     = js.native
-    def createStdout(): js.Array[js.Any]                    = js.native
+    def createOutput(): js.Array[js.Any]                    = js.native
   }
 
   def createStdin(): (RawToolStdinWriter, RawToolStdin, RawToolStdinClosed) = {
@@ -107,9 +114,9 @@ private[golem] object ToolHostApi {
     )
   }
 
-  def createStdout(): (RawToolStdout, RawByteStream) = {
-    val endpoints = ToolHostModule.createStdout()
-    (endpoints(0).asInstanceOf[RawToolStdout], endpoints(1).asInstanceOf[RawByteStream])
+  def createOutput(): (RawToolOutput, RawByteStream) = {
+    val endpoints = ToolHostModule.createOutput()
+    (endpoints(0).asInstanceOf[RawToolOutput], endpoints(1).asInstanceOf[RawByteStream])
   }
 
   @js.native
@@ -130,7 +137,7 @@ private[golem] object ToolHostApi {
   @js.native
   sealed trait RawToolStdin extends js.Object
   @js.native
-  sealed trait RawToolStdout extends js.Object
+  sealed trait RawToolOutput extends js.Object
   @js.native
   sealed trait RawToolStdinWriter extends js.Object {
     def write(bytes: js.typedarray.Uint8Array): js.Promise[Unit] = js.native
@@ -142,7 +149,7 @@ private[golem] object ToolHostApi {
     @JSName("wait") def waitClosed(): js.Promise[js.Any] = js.native
   }
   @js.native
-  sealed trait RawToolStdoutWriter extends js.Object {
+  sealed trait RawToolOutputWriter extends js.Object {
     def write(bytes: js.typedarray.Uint8Array): js.Promise[Unit] = js.native
     def finish(): js.Promise[Unit]                               = js.native
     def fail(reason: js.Any): js.Promise[Unit]                   = js.native
@@ -150,12 +157,13 @@ private[golem] object ToolHostApi {
 
   @js.native
   @JSImport("golem:tool/host@0.1.0", "ToolRpc")
-  final class RawToolRpc(@unused toolName: String) extends js.Object {
+  final class RawToolRpc(toolName: String) extends js.Object {
     def invokeAndAwait(
       commandPath: js.Array[String],
       input: JsTypedSchemaValue,
       stdin: js.UndefOr[RawToolStdin],
-      stdout: js.UndefOr[RawToolStdout]
+      stdout: js.UndefOr[RawToolOutput],
+      stderr: js.UndefOr[RawToolOutput]
     ): js.Promise[JsInvocationResult] = js.native
 
     def invoke(
@@ -168,8 +176,15 @@ private[golem] object ToolHostApi {
       commandPath: js.Array[String],
       input: JsTypedSchemaValue,
       stdin: js.UndefOr[RawToolStdin],
-      stdout: js.UndefOr[RawToolStdout]
+      stdout: js.UndefOr[RawToolOutput],
+      stderr: js.UndefOr[RawToolOutput]
     ): RawToolFutureInvokeResult = js.native
+  }
+
+  @js.native
+  @JSImport("golem:tool/host@0.1.0", "ToolRpc")
+  object RawToolRpc extends js.Object {
+    def create(toolName: String): RawToolRpc = js.native
   }
 
   @js.native
@@ -256,6 +271,34 @@ private[golem] object ToolHostApi {
       }
     } else {
       ToolRpcFailure.ProtocolError(String.valueOf(thrown))
+    }
+  }
+
+  /**
+   * Decodes an RPC rejection without constructing recursive schema-model
+   * values.
+   */
+  def decodeWireRpcFailure(thrown: Any): WireToolRpcFailure = {
+    val rawTag = variantTag(thrown)
+    rawTag match {
+      case Some("protocol-error")        => WireToolRpcFailure.ProtocolError(String.valueOf(variantValue(thrown).orNull))
+      case Some("denied")                => WireToolRpcFailure.Denied(String.valueOf(variantValue(thrown).orNull))
+      case Some("not-found")             => WireToolRpcFailure.NotFound(String.valueOf(variantValue(thrown).orNull))
+      case Some("remote-internal-error") =>
+        WireToolRpcFailure.RemoteInternalError(String.valueOf(variantValue(thrown).orNull))
+      case Some("cancelled")          => WireToolRpcFailure.Cancelled
+      case Some("resource-exhausted") =>
+        WireToolRpcFailure.ResourceExhausted(String.valueOf(variantValue(thrown).orNull))
+      case Some("remote-tool-error") =>
+        try
+          ToolWireInterop.toolErrorFromJs(thrown.asInstanceOf[JsToolRpcErrorTool].value) match {
+            case golem.tool.wire.WitToolError.CustomError(error) =>
+              WireToolRpcFailure.RemoteToolError(WireCustomToolError(error.name, error.payload))
+            case other => WireToolRpcFailure.InvalidRemoteToolError(other.productPrefix)
+          }
+        catch { case error: Throwable => WireToolRpcFailure.InvalidRemoteToolError(String.valueOf(error.getMessage)) }
+      case Some(other) => WireToolRpcFailure.ProtocolError(s"unknown rpc error `$other`")
+      case None        => WireToolRpcFailure.ProtocolError("malformed rpc error")
     }
   }
 }

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { ByteStreamFailure, ByteStreamItem } from 'golem:tool/host@0.1.0';
+import type { ByteStreamFailure, ByteStreamItem } from 'golem:tool/streams@0.1.0';
 
 export type ToolInputStream = ReadableStream<Uint8Array>;
 
@@ -37,10 +37,11 @@ export type SettledToolResult<Result> =
   | { readonly status: 'rejected'; readonly reason: unknown };
 
 export interface StartedToolInvocation<Result> {
-  readonly stdout: ReadableStream<Uint8Array>;
+  readonly stdout?: ReadableStream<Uint8Array>;
+  readonly stderr?: ReadableStream<Uint8Array>;
   readonly result: Promise<Result>;
   cancel(): void;
-  collect(): Promise<{ result: Result; stdout: Uint8Array }>;
+  collect(): Promise<{ result: Result; stdout?: Uint8Array; stderr?: Uint8Array }>;
 }
 
 export function settleToolResult<Result>(
@@ -86,21 +87,33 @@ export function resultFromSettledToolResult<Result>(
 }
 
 export function startedToolInvocation<Result>(
-  stdout: AsyncIterable<ByteStreamItem>,
+  stdout: AsyncIterable<ByteStreamItem> | undefined,
+  stderr: AsyncIterable<ByteStreamItem> | undefined,
   settledResult: Promise<SettledToolResult<Result>>,
   cancel: () => void,
 ): StartedToolInvocation<Result> {
-  const stream = readableToolStdout(stdout);
+  const stdoutStream = stdout && readableToolOutput(stdout, 'stdout');
+  const stderrStream = stderr && readableToolOutput(stderr, 'stderr');
   return {
-    stdout: stream,
+    stdout: stdoutStream,
+    stderr: stderrStream,
     get result() {
       return resultFromSettledToolResult(settledResult);
     },
     cancel,
     async collect() {
-      const [resultOutcome, stdoutOutcome] = await Promise.all([
+      const [resultOutcome, stdoutOutcome, stderrOutcome] = await Promise.all([
         settledResult,
-        settleToolResult(collectReadableStream(stream)),
+        settleToolResult(
+          stdoutStream === undefined
+            ? Promise.resolve(undefined)
+            : collectReadableStream(stdoutStream),
+        ),
+        settleToolResult(
+          stderrStream === undefined
+            ? Promise.resolve(undefined)
+            : collectReadableStream(stderrStream),
+        ),
       ]);
       if (resultOutcome.status === 'rejected') {
         throw resultOutcome.reason;
@@ -108,23 +121,43 @@ export function startedToolInvocation<Result>(
       if (stdoutOutcome.status === 'rejected') {
         throw stdoutOutcome.reason;
       }
-      return { result: resultOutcome.value, stdout: stdoutOutcome.value };
+      if (stderrOutcome.status === 'rejected') {
+        throw stderrOutcome.reason;
+      }
+      return {
+        result: resultOutcome.value,
+        stdout: stdoutOutcome.value,
+        stderr: stderrOutcome.value,
+      };
     },
   };
 }
 
-function readableToolStdout(source: AsyncIterable<ByteStreamItem>): ReadableStream<Uint8Array> {
+function readableToolOutput(
+  source: AsyncIterable<ByteStreamItem>,
+  channel: 'stdout' | 'stderr',
+): ReadableStream<Uint8Array> {
   const iterator = source[Symbol.asyncIterator]();
   return new ReadableStream({
     async pull(controller) {
       const next = await iterator.next();
       if (next.done) return controller.close();
       if (next.value.tag === 'err') {
+        try {
+          await iterator.return?.();
+        } catch {
+          // Preserve the attachment failure.
+        }
         controller.error(new ToolStreamError(next.value.val));
         return;
       }
       if (next.value.val.byteLength === 0) {
-        controller.error(new Error('tool stdout produced an empty chunk'));
+        try {
+          await iterator.return?.();
+        } catch {
+          // Preserve the empty-chunk failure.
+        }
+        controller.error(new Error(`tool ${channel} produced an empty chunk`));
         return;
       }
       controller.enqueue(next.value.val);

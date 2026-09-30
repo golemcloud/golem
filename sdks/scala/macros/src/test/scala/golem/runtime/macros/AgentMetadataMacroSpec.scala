@@ -16,9 +16,18 @@
 
 package golem.runtime.macros
 
-import golem.runtime.annotations.{agentDefinition, description, prompt, DurabilityMode}
+import golem.runtime.annotations.{
+  agentDefinition,
+  description,
+  durableStreams,
+  durableStreamSlot,
+  endpoint,
+  prompt,
+  DurabilityMode
+}
+import golem.runtime.http.DurableStreamSlotSource
 import golem.runtime.{AsyncImplementationMethod, MethodInvocation, OutputMetadata}
-import golem.schema.{SchemaGraph, SchemaTypeBody}
+import golem.schema.{AgentStream, SchemaGraph, SchemaTypeBody}
 import zio.blocks.schema.Schema
 import zio.test._
 
@@ -78,6 +87,57 @@ object AgentMetadataMacroSpec extends ZIOSpecDefault {
     def rpcCallTrigger(payload: String): Unit
   }
 
+  final case class ConcreteOnly(value: String)
+  final case class StreamEnvelope(values: Option[List[AgentStream[String]]])
+
+  @agentDefinition()
+  trait ConcreteOnlyClientAgent {
+    class Id(owner: ConcreteOnly, streams: StreamEnvelope)
+    def roundTrip(value: ConcreteOnly): Future[ConcreteOnly]
+    def consume(value: StreamEnvelope): Unit
+  }
+
+  @agentDefinition(mount = "/streams")
+  trait DurableStreamAgent {
+    class Id()
+
+    @endpoint(method = "POST", path = "/plain")
+    def plain(value: String): Future[String]
+
+    @endpoint(method = "POST", path = "/process")
+    @durableStreamSlot(
+      endpointMethod = "POST",
+      endpointPath = "/process",
+      source = "input",
+      slot = "request",
+      name = "body",
+      contentType = "application/json"
+    )
+    @durableStreamSlot(
+      endpointMethod = "POST",
+      endpointPath = "/process",
+      source = "output",
+      slot = "response",
+      name = "result",
+      contentType = "text/plain"
+    )
+    @durableStreams(
+      endpointMethod = "POST",
+      endpointPath = "/process",
+      allowExternalWrites = true,
+      allowStreamDelete = false,
+      allowInvocationDelete = false,
+      maxConcurrentReadersPerStream = 8,
+      maxAppendRequestsPerSecondPerStream = 25
+    )
+    def process(value: String): Future[String]
+
+    @endpoint(method = "POST", path = "/defaults")
+    @durableStreamSlot(source = "input", slot = "value")
+    @durableStreams()
+    def defaults(value: String): Future[String]
+  }
+
   private final class EphemeralAgentImpl extends EphemeralAgent {
     override def ping(): Future[String] = Future.successful("pong")
   }
@@ -102,6 +162,7 @@ object AgentMetadataMacroSpec extends ZIOSpecDefault {
     override def rpcCall(payload: String): Future[String] = Future.successful(payload)
     override def rpcCallTrigger(payload: String): Unit    = ()
   })
+  private val durableStreamMetadata = AgentMacros.agentMetadata[DurableStreamAgent]
 
   /**
    * The effective root body of a graph, dereferencing a top-level named ref.
@@ -113,6 +174,15 @@ object AgentMetadataMacroSpec extends ZIOSpecDefault {
 
   override def spec: Spec[TestEnvironment, Any] =
     suite("AgentMetadataMacroSpec")(
+      test("compiler-emitted wire metadata equals dynamic metadata encoding") {
+        val compiled = AgentDefinitionMacro.generateWire[EchoAgent]
+        val dynamic  = golem.runtime.WireAgentMetadata.fromModel(echoMetadata)
+        assertTrue(
+          compiled == dynamic,
+          AgentDefinitionMacro
+            .generateWire[EphemeralAgent] == golem.runtime.WireAgentMetadata.fromModel(ephemeralMetadata)
+        )
+      },
       test("EchoAgent metadata exposes all method names") {
         val names = echoMetadata.methods.map(_.name).sorted
         assertTrue(
@@ -165,6 +235,15 @@ object AgentMetadataMacroSpec extends ZIOSpecDefault {
           agentType.methods.find(_.metadata.name == "rpcCallTrigger").get
         assertTrue(triggerMethod.invocation == MethodInvocation.FireAndForget)
       },
+      test("wire client derivation does not require owned schema codecs") {
+        val client = AgentClientMacro.wireType[ConcreteOnlyClientAgent]
+        assertTrue(
+          client.metadata.name == "ConcreteOnlyClientAgent",
+          client.ctorContainsStream,
+          client.methods.find(_.name == "roundTrip").exists(!_.inputContainsStream),
+          client.methods.find(_.name == "consume").exists(_.inputContainsStream)
+        )
+      },
       test("AgentImplementationMacro preserves method invocation kinds") {
         val awaitable =
           rpcImplType.methods.collectFirst {
@@ -172,6 +251,30 @@ object AgentMetadataMacroSpec extends ZIOSpecDefault {
               m
           }
         assertTrue(awaitable.isDefined)
+      },
+      test("durable stream annotations are grouped into their selected endpoint") {
+        val process  = durableStreamMetadata.methods.find(_.name == "process").get.httpEndpoints.head.durableStreams.get
+        val defaults =
+          durableStreamMetadata.methods.find(_.name == "defaults").get.httpEndpoints.head.durableStreams.get
+        val plain = durableStreamMetadata.methods.find(_.name == "plain").get.httpEndpoints.head
+        assertTrue(
+          process.slots.map(_.source) == List(
+            DurableStreamSlotSource.Input("request"),
+            DurableStreamSlotSource.Output("response")
+          ),
+          process.slots.map(_.name) == List(Some("body"), Some("result")),
+          process.slots.map(_.contentType) == List(Some("application/json"), Some("text/plain")),
+          process.allowExternalWrites.contains(true),
+          process.allowStreamDelete.contains(false),
+          process.allowInvocationDelete.contains(false),
+          process.load.flatMap(_.maxConcurrentReadersPerStream).contains(8),
+          process.load.flatMap(_.maxAppendRequestsPerSecondPerStream).contains(25),
+          defaults.allowExternalWrites.isEmpty,
+          defaults.allowStreamDelete.isEmpty,
+          defaults.allowInvocationDelete.isEmpty,
+          defaults.load.isEmpty,
+          plain.durableStreams.isEmpty
+        )
       }
     )
 }

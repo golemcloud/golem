@@ -31,7 +31,7 @@ counter.schedule_increment(Datetime {
 
 // Schedule with arguments
 let reporter = ReportAgentClient::get("daily".to_string());
-reporter.schedule_generate_report(
+reporter.schedule_generate_report( 
     "summary".to_string(),
     Datetime { seconds: tomorrow_midnight, nanoseconds: 0 }
 );

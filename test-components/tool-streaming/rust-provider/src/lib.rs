@@ -1,13 +1,237 @@
-use golem_rust::agentic::{InputStream, OutputStream, Principal, pump_tool_stdin, spawn_local};
+use golem_rust::agentic::{
+    AgentStream, InputStream, OutputStream, Principal, pump_tool_stdin, spawn_local,
+};
 use golem_rust::golem_agentic::golem::tool::host::{self as tool_host, ByteStreamFailure, ToolRpc};
+use golem_rust::secrets::GuestSecretHandle;
 use golem_rust::{
-    FromSchema, IntoSchema, IntoTypedSchemaValue, ToolError, tool_definition, tool_implementation,
+    FromSchema, FromWire, IntoSchema, IntoTypedSchemaValue, IntoWire, ToolError, WireSchema,
+    decode_schema_value, encode_schema_graph, tool_definition, tool_implementation,
 };
 use wasi::filesystem::types::{DescriptorFlags, OpenFlags, PathFlags};
 
 const MARKER: &[u8] = b"marker:";
 
-#[derive(Debug, Clone, IntoSchema, FromSchema)]
+#[tool_definition(version = "1.0.0")]
+pub trait MiddlewareProbe {
+    async fn apply(&self, value: String) -> String;
+}
+
+#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
+pub struct SecretPolicyObservation {
+    pub label: String,
+    pub config_resolved: bool,
+    pub configured_secret_revealed: bool,
+    pub input_secret_revealed: bool,
+}
+
+#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
+pub struct SecretPolicyEvidence {
+    pub middleware: Vec<SecretPolicyObservation>,
+    pub leaf_revealed: bool,
+}
+
+#[tool_definition(version = "1.0.0")]
+pub trait SecretPolicyProbe {
+    async fn inspect(&self, value: GuestSecretHandle) -> SecretPolicyEvidence;
+}
+
+fn reveal_string(value: &GuestSecretHandle) -> Result<String, String> {
+    let graph =
+        golem_rust::schema::try_into_schema_graph::<String>().map_err(|error| error.to_string())?;
+    let expected = encode_schema_graph(&graph).map_err(|error| error.to_string())?;
+    let value = value
+        .with_handle(|handle| {
+            golem_rust::bindings::golem::secrets::reveal::reveal(handle, &expected)
+        })
+        .ok_or_else(|| "secret handle was transferred".to_string())?
+        .map_err(|error| format!("{error:?}"))?;
+    let value = decode_schema_value(value).map_err(|error| error.to_string())?;
+    String::from_value(&value).map_err(|error| error.to_string())
+}
+
+struct SecretPolicyProbeImpl;
+
+#[tool_implementation]
+impl SecretPolicyProbe for SecretPolicyProbeImpl {
+    async fn inspect(&self, value: GuestSecretHandle) -> SecretPolicyEvidence {
+        SecretPolicyEvidence {
+            middleware: Vec::new(),
+            leaf_revealed: reveal_string(&value).is_ok(),
+        }
+    }
+}
+
+struct MiddlewareProbeImpl;
+
+#[tool_implementation]
+impl MiddlewareProbe for MiddlewareProbeImpl {
+    async fn apply(&self, value: String) -> String {
+        if value.starts_with("early-child(")
+            || value.starts_with("race-cancelled(")
+            || value.starts_with("race-detached(")
+        {
+            let _ = golem_rust::generate_idempotency_key();
+            if value.starts_with("early-child(")
+                && std::env::var("PROVIDER_PROMISE_CHECKPOINT_PORT").is_ok()
+            {
+                wait_at_promise_checkpoint("middleware-early-child").await;
+                return format!("leaf({value})");
+            }
+            let checkpoint = if value.starts_with("early-child(") {
+                "middleware-early-child"
+            } else if value.starts_with("race-cancelled(") {
+                "middleware-race-cancelled"
+            } else {
+                "middleware-race-detached"
+            };
+            wait_at_crash_checkpoint(&value, checkpoint).await;
+            if value == "early-child(fail-after-parent)" {
+                panic!("nested middleware child trap after parent return");
+            }
+        }
+        if value.starts_with("partial-completed(") || value.starts_with("partial-pending(") {
+            announce_middleware_probe_effect(&value).await;
+            if value.starts_with("partial-pending(") {
+                wait_at_crash_checkpoint(&value, "middleware-partial-pending").await;
+            }
+        }
+        format!("leaf({value})")
+    }
+}
+
+async fn announce_middleware_probe_effect(value: &str) {
+    use futures_concurrency::prelude::*;
+    use golem_rust::wasip3::http::{client, types};
+    use golem_rust::wasip3::wit_future;
+
+    let port = std::env::var("MIDDLEWARE_PROBE_EFFECT_PORT")
+        .expect("middleware probe effect port is configured");
+    let headers = types::Fields::from_list(&[]).expect("valid effect fields");
+    let (trailers_tx, trailers_rx) = wit_future::new(|| Ok(None));
+    let (request, transmit) = types::Request::new(headers, None, trailers_rx, None);
+    request
+        .set_method(&types::Method::Post)
+        .expect("set effect method");
+    request
+        .set_scheme(Some(&types::Scheme::Http))
+        .expect("set effect scheme");
+    request
+        .set_authority(Some(&format!("127.0.0.1:{port}")))
+        .expect("set effect authority");
+    request
+        .set_path_with_query(Some(&format!("/{value}")))
+        .expect("set effect path");
+    let send = async move { client::send(request).await.expect("send probe effect") };
+    let finish = async move {
+        trailers_tx
+            .write(Ok(None))
+            .await
+            .expect("finish effect trailers");
+        transmit.await.expect("transmit probe effect");
+    };
+    let (response, ()) = (send, finish).join().await;
+    assert_eq!(response.get_status_code(), 204);
+}
+
+#[derive(Debug, Clone, IntoSchema, FromSchema, FromWire, IntoWire, WireSchema)]
+pub struct TypedOutputItem {
+    pub ordinal: u32,
+    pub label: String,
+    pub asymmetric_extra: u64,
+}
+
+#[tool_definition(version = "1.0.0")]
+pub trait TypedOutputStream {
+    async fn produce(&self, tag: String) -> AgentStream<TypedOutputItem>;
+}
+
+struct TypedOutputStreamImpl;
+
+#[tool_implementation]
+impl TypedOutputStream for TypedOutputStreamImpl {
+    async fn produce(&self, tag: String) -> AgentStream<TypedOutputItem> {
+        let (mut writer, output) = AgentStream::new();
+        spawn_local(async move {
+            writer
+                .write_one(TypedOutputItem {
+                    ordinal: 11,
+                    label: format!("{tag}-first"),
+                    asymmetric_extra: 1_001,
+                })
+                .await
+                .expect("write first typed tool output item");
+            if std::env::var("PROVIDER_PROMISE_CHECKPOINT_PORT").is_ok() {
+                wait_at_promise_checkpoint("typed-output-after-first").await;
+            } else {
+                wait_at_crash_checkpoint(&tag, "typed-output-after-first").await;
+            }
+            writer
+                .write_all([
+                    TypedOutputItem {
+                        ordinal: 29,
+                        label: format!("{tag}-second"),
+                        asymmetric_extra: 2_003,
+                    },
+                    TypedOutputItem {
+                        ordinal: 47,
+                        label: format!("{tag}-third"),
+                        asymmetric_extra: 4_009,
+                    },
+                ])
+                .await
+                .expect("write remaining typed tool output items");
+        });
+        output
+    }
+}
+
+#[derive(Debug, Clone, IntoSchema, FromSchema, FromWire, IntoWire, WireSchema)]
+pub struct TypedInputItem {
+    pub label: String,
+    pub ordinal: u32,
+}
+
+#[derive(Debug, Clone, IntoSchema, FromSchema, FromWire, IntoWire, WireSchema)]
+pub struct TypedInputEvidence {
+    pub label: String,
+    pub ordinal: u32,
+}
+
+#[tool_definition(version = "1.0.0")]
+pub trait TypedInputStream {
+    async fn consume(&self, input: AgentStream<TypedInputItem>) -> Vec<TypedInputEvidence>;
+}
+
+struct TypedInputStreamImpl;
+
+#[tool_implementation]
+impl TypedInputStream for TypedInputStreamImpl {
+    async fn consume(&self, mut input: AgentStream<TypedInputItem>) -> Vec<TypedInputEvidence> {
+        let first = input
+            .next()
+            .await
+            .expect("read first typed tool input item")
+            .expect("typed tool input has a first item");
+        wait_at_promise_checkpoint("typed-input-provider-consumed-first").await;
+        let mut evidence = vec![TypedInputEvidence {
+            label: first.label,
+            ordinal: first.ordinal,
+        }];
+        while let Some(item) = input
+            .next()
+            .await
+            .expect("read remaining typed tool input item")
+        {
+            evidence.push(TypedInputEvidence {
+                label: item.label,
+                ordinal: item.ordinal,
+            });
+        }
+        evidence
+    }
+}
+
+#[derive(Debug, Clone, IntoSchema, FromSchema, FromWire, IntoWire, WireSchema)]
 pub struct StreamSummary {
     pub chunks_read: u32,
     pub bytes_read: u64,
@@ -18,6 +242,12 @@ pub struct StreamSummary {
 pub enum StreamingError {
     #[tool_error(kind = "runtime-error", exit_code = 7)]
     Declared { bytes_read: u64 },
+}
+
+#[derive(Debug, Clone, ToolError)]
+pub enum SecretEchoError {
+    #[tool_error(kind = "runtime-error", exit_code = 8)]
+    Returned { value: GuestSecretHandle },
 }
 
 #[derive(IntoSchema)]
@@ -42,6 +272,12 @@ pub trait Streaming {
 
     async fn no_stream(&self, value: String) -> Result<String, StreamingError>;
 
+    async fn echo_secret(
+        &self,
+        value: GuestSecretHandle,
+        fail: bool,
+    ) -> Result<GuestSecretHandle, SecretEchoError>;
+
     async fn optional_streams(
         &self,
         stdin: Option<InputStream>,
@@ -54,6 +290,14 @@ pub trait Streaming {
         chunk_size: u32,
         stdout: OutputStream,
     ) -> Result<StreamSummary, StreamingError>;
+
+    #[arg(diagnostics, channel = "stderr")]
+    async fn dual_reconstruct(
+        &self,
+        mode: String,
+        stdout: OutputStream,
+        diagnostics: OutputStream,
+    ) -> Result<StreamSummary, StreamingError>;
 }
 
 #[tool_definition(version = "1.0.0")]
@@ -63,6 +307,16 @@ pub trait CapableStreaming {
         path: String,
         stdin: InputStream,
         stdout: OutputStream,
+    ) -> Result<StreamSummary, StreamingError>;
+
+    #[arg(diagnostics, channel = "stderr")]
+    async fn dual_pressure(
+        &self,
+        path: String,
+        output_size: u64,
+        checkpoint_before_terminal: bool,
+        stdout: OutputStream,
+        diagnostics: OutputStream,
     ) -> Result<StreamSummary, StreamingError>;
 }
 
@@ -168,6 +422,52 @@ async fn stream_through_http(
     })
 }
 
+async fn record_native_order_external_effect() {
+    use futures_concurrency::prelude::*;
+    use golem_rust::wasip3::http::{client, types};
+    use golem_rust::wasip3::wit_future;
+
+    let port =
+        std::env::var("NATIVE_ORDER_HTTP_PORT").expect("NATIVE_ORDER_HTTP_PORT is configured");
+    let headers = types::Fields::from_list(&[]).expect("valid native-order HTTP fields");
+    let (trailers_tx, trailers_rx) = wit_future::new(|| Ok(None));
+    let (request, transmit) = types::Request::new(headers, None, trailers_rx, None);
+    request
+        .set_method(&types::Method::Post)
+        .expect("set native-order HTTP method");
+    request
+        .set_scheme(Some(&types::Scheme::Http))
+        .expect("set native-order HTTP scheme");
+    request
+        .set_authority(Some(&format!("127.0.0.1:{port}")))
+        .expect("set native-order HTTP authority");
+    request
+        .set_path_with_query(Some("/"))
+        .expect("set native-order HTTP path");
+    let receive_response = async move {
+        client::send(request)
+            .await
+            .expect("send native-order HTTP request")
+    };
+    let finish_request = async move {
+        trailers_tx
+            .write(Ok(None))
+            .await
+            .expect("finish native-order HTTP request");
+        transmit.await.expect("transmit native-order HTTP request");
+    };
+    let (response, ()) = (receive_response, finish_request).join().await;
+    assert_eq!(response.get_status_code(), 204);
+    let (response_done_tx, response_done_rx) = wit_future::new(|| Ok(()));
+    let (body, trailers) = types::Response::consume_body(response, response_done_rx);
+    response_done_tx
+        .write(Ok(()))
+        .await
+        .expect("finish native-order HTTP response");
+    drop(body);
+    drop(trailers);
+}
+
 fn raw_run_input(mode: &str) -> golem_rust::schema::wit::wire::TypedSchemaValue {
     let value = RawRunInput {
         mode: mode.to_string(),
@@ -198,13 +498,60 @@ fn nested_input(bytes: Vec<u8>) -> InputStream {
 }
 
 fn launch_retained_crash_child() {
-    ToolRpc::new("streaming")
+    ToolRpc::create("streaming")
+        .expect("tool RPC creation failed")
         .invoke(
             &["run".to_string()],
             raw_run_input("hold-capable-terminal-child"),
             Some(pump_tool_stdin(nested_input(Vec::new()))),
         )
         .expect("launch retained incapable crash-checkpoint child");
+}
+
+fn launch_atomic_idempotency_child() {
+    ToolRpc::create("streaming")
+        .expect("tool RPC creation failed")
+        .invoke(
+            &["run".to_string()],
+            raw_run_input("atomic-idempotency-child"),
+            Some(pump_tool_stdin(nested_input(Vec::new()))),
+        )
+        .expect("launch atomic idempotency child");
+}
+
+async fn send_idempotent_effect() {
+    use futures_concurrency::prelude::*;
+    use golem_rust::wasip3::http::{client, types};
+    use golem_rust::wasip3::wit_future;
+
+    let port =
+        std::env::var("IDEMPOTENCY_EFFECT_PORT").expect("IDEMPOTENCY_EFFECT_PORT is configured");
+    let headers = types::Fields::from_list(&[]).expect("valid effect fields");
+    let (trailers_tx, trailers_rx) = wit_future::new(|| Ok(None));
+    let (request, transmit) = types::Request::new(headers, None, trailers_rx, None);
+    request
+        .set_method(&types::Method::Post)
+        .expect("set effect method");
+    request
+        .set_scheme(Some(&types::Scheme::Http))
+        .expect("set effect scheme");
+    request
+        .set_authority(Some(&format!("127.0.0.1:{port}")))
+        .expect("set effect authority");
+    request
+        .set_path_with_query(Some("/effect"))
+        .expect("set effect path");
+    let receive_response =
+        async move { client::send(request).await.expect("send idempotent effect") };
+    let finish_request = async move {
+        trailers_tx
+            .write(Ok(None))
+            .await
+            .expect("finish effect request");
+        transmit.await.expect("transmit effect request");
+    };
+    let (response, ()) = (receive_response, finish_request).join().await;
+    assert_eq!(response.get_status_code(), 200);
 }
 
 fn principal_class(principal: &Principal) -> &'static str {
@@ -223,13 +570,14 @@ async fn run_nested_principal(
     use futures_concurrency::prelude::*;
 
     let outer_class = principal_class(principal);
-    let rpc = ToolRpc::new("streaming");
-    let (nested_target, nested_stdout) = tool_host::create_stdout();
+    let rpc = ToolRpc::create("streaming").expect("tool RPC creation failed");
+    let (nested_target, nested_stdout) = tool_host::create_output();
     let nested = rpc.invoke_and_await(
         vec!["run".to_string()],
         raw_run_input("principal"),
         Some(pump_tool_stdin(nested_input(Vec::new()))),
         Some(nested_target),
+        None,
     );
     let (nested_result, nested_output) = (nested, async move {
         let mut output = Vec::new();
@@ -260,13 +608,14 @@ async fn run_nested_principal(
 async fn run_nested_capable(bytes: Vec<u8>) -> Vec<u8> {
     use futures_concurrency::prelude::*;
 
-    let rpc = ToolRpc::new("capable-streaming");
-    let (stdout_target, nested_stdout) = tool_host::create_stdout();
+    let rpc = ToolRpc::create("capable-streaming").expect("tool RPC creation failed");
+    let (stdout_target, nested_stdout) = tool_host::create_output();
     let nested = rpc.invoke_and_await(
         vec!["run-capable".to_string()],
         raw_capable_input("order:N:/capable-nested-inner.bin"),
         Some(pump_tool_stdin(nested_input(bytes))),
         Some(stdout_target),
+        None,
     );
     let (result, output) = (nested, async move {
         let mut stdout = nested_stdout;
@@ -288,13 +637,14 @@ async fn run_nested(
 ) -> Result<StreamSummary, StreamingError> {
     use futures_concurrency::prelude::*;
 
-    let rpc = ToolRpc::new("streaming");
-    let (nested_target, mut nested_stdout) = tool_host::create_stdout();
+    let rpc = ToolRpc::create("streaming").expect("tool RPC creation failed");
+    let (nested_target, mut nested_stdout) = tool_host::create_output();
     let nested = rpc.invoke_and_await(
         vec!["run".to_string()],
         raw_run_input("marker-echo"),
         Some(golem_rust::agentic::pump_tool_stdin(stdin)),
         Some(nested_target),
+        None,
     );
     let forward = async move {
         let mut chunks_read = 0;
@@ -325,13 +675,14 @@ async fn run_nested_capable_parent_end(
     stdin: InputStream,
     mut stdout: OutputStream,
 ) -> Result<StreamSummary, StreamingError> {
-    let rpc = ToolRpc::new("capable-streaming");
-    let (nested_target, nested_stdout) = tool_host::create_stdout();
+    let rpc = ToolRpc::create("capable-streaming").expect("tool RPC creation failed");
+    let (nested_target, nested_stdout) = tool_host::create_output();
     let nested = rpc.async_invoke_and_await(
         &["run-capable".to_string()],
         raw_capable_input("/nested-capable-parent-end.bin"),
         Some(golem_rust::agentic::pump_tool_stdin(stdin)),
         Some(nested_target),
+        None,
     );
     drop(nested);
     drop(nested_stdout);
@@ -490,6 +841,50 @@ async fn wait_at_crash_checkpoint<T>(_retained: &T, name: &str) {
     .await;
 }
 
+async fn wait_at_promise_checkpoint(name: &str) {
+    use futures_concurrency::prelude::*;
+    use golem_rust::wasip3::http::{client, types};
+    use golem_rust::wasip3::{wit_future, wit_stream};
+
+    let promise = golem_rust::create_promise();
+    let port = std::env::var("PROVIDER_PROMISE_CHECKPOINT_PORT")
+        .expect("provider promise checkpoint port is configured");
+    let headers = types::Fields::from_list(&[]).expect("valid checkpoint fields");
+    let (mut body_tx, body_rx) = wit_stream::new();
+    let (trailers_tx, trailers_rx) = wit_future::new(|| Ok(None));
+    let (request, transmit) = types::Request::new(headers, Some(body_rx), trailers_rx, None);
+    request
+        .set_method(&types::Method::Post)
+        .expect("set checkpoint method");
+    request
+        .set_scheme(Some(&types::Scheme::Http))
+        .expect("set checkpoint scheme");
+    request
+        .set_authority(Some(&format!("127.0.0.1:{port}")))
+        .expect("set checkpoint authority");
+    request
+        .set_path_with_query(Some(&format!("/{name}")))
+        .expect("set checkpoint path");
+    let payload = promise.oplog_idx.to_string().into_bytes();
+    let send = async move {
+        client::send(request)
+            .await
+            .expect("send checkpoint request")
+    };
+    let finish = async move {
+        assert!(body_tx.write_all(payload).await.is_empty());
+        drop(body_tx);
+        trailers_tx
+            .write(Ok(None))
+            .await
+            .expect("finish checkpoint trailers");
+        transmit.await.expect("transmit checkpoint request");
+    };
+    let (response, ()) = (send, finish).join().await;
+    assert_eq!(response.get_status_code(), 204);
+    golem_rust::await_promise(&promise).await;
+}
+
 fn append_owner_file(path: &str, bytes: &[u8]) -> Result<(), String> {
     let (root, _) = wasi::filesystem::preopens::get_directories()
         .into_iter()
@@ -640,6 +1035,10 @@ impl Streaming for StreamingImpl {
                 let _ = golem_rust::generate_idempotency_key();
                 wait_at_crash_checkpoint(&stdout, "capable-terminal-retained-child").await;
             }
+            "atomic-idempotency-child" => {
+                let _ = golem_rust::generate_idempotency_key();
+                send_idempotent_effect().await;
+            }
             "historical-reconstruction-gate" => {
                 while let Some(item) = stdin.next().await {
                     if let Ok(chunk) = item {
@@ -677,7 +1076,6 @@ impl Streaming for StreamingImpl {
         }
 
         if mode == "declared-error" {
-            let _ = stdout.finish().await;
             return Err(StreamingError::Declared {
                 bytes_read: summary.bytes_read,
             });
@@ -699,7 +1097,68 @@ impl Streaming for StreamingImpl {
         if value == "hold-attempt-identity" {
             wait_at_crash_checkpoint(&value, "attempt-identity-accepted").await;
         }
+        if value == "native-error" {
+            append_owner_file("/native-tool-order.log", b"E")
+                .expect("append native declared-error invocation order");
+            return Err(StreamingError::Declared { bytes_read: 0 });
+        }
+        if value == "native-order" {
+            record_native_order_external_effect().await;
+            append_owner_file("/native-tool-order.log", b"T")
+                .expect("append native external tool invocation order");
+        }
         Ok(format!("no-stream:{value}"))
+    }
+
+    async fn dual_reconstruct(
+        &self,
+        mode: String,
+        mut stdout: OutputStream,
+        mut diagnostics: OutputStream,
+    ) -> Result<StreamSummary, StreamingError> {
+        announce_middleware_probe_effect(&format!("dual-reconstruct-{mode}")).await;
+        match mode.as_str() {
+            "before-either-output" => {}
+            "after-stdout-only" => {
+                stdout.write(b"stdout-first".to_vec()).await.unwrap();
+            }
+            "after-stderr-only" => {
+                diagnostics.write(b"stderr-first".to_vec()).await.unwrap();
+            }
+            "after-both-partial" => {
+                stdout.write(b"stdout-first".to_vec()).await.unwrap();
+                diagnostics.write(b"stderr-first".to_vec()).await.unwrap();
+            }
+            "after-stdout-terminal" => {
+                stdout.write(b"stdout-first".to_vec()).await.unwrap();
+                stdout.clone().finish().await.unwrap();
+            }
+            other => panic!("unknown dual-output reconstruction mode: {other}"),
+        }
+        wait_at_crash_checkpoint(&mode, &mode).await;
+        if mode != "after-stdout-terminal" {
+            stdout.write(b"stdout-last".to_vec()).await.unwrap();
+            stdout.finish().await.unwrap();
+        }
+        diagnostics.write(b"stderr-last".to_vec()).await.unwrap();
+        diagnostics.finish().await.unwrap();
+        Ok(StreamSummary {
+            chunks_read: 0,
+            bytes_read: 0,
+            output_closed: false,
+        })
+    }
+
+    async fn echo_secret(
+        &self,
+        value: GuestSecretHandle,
+        fail: bool,
+    ) -> Result<GuestSecretHandle, SecretEchoError> {
+        if fail {
+            Err(SecretEchoError::Returned { value })
+        } else {
+            Ok(value)
+        }
     }
 
     async fn optional_streams(
@@ -849,6 +1308,12 @@ impl CapableStreaming for CapableStreamingImpl {
                 .expect("capable terminal checkpoint must share the owner filesystem");
             launch_retained_crash_child();
             bytes.clone()
+        } else if path == "atomic-idempotency-parent" {
+            golem_rust::atomically_async(|| async {
+                launch_atomic_idempotency_child();
+            })
+            .await;
+            bytes.clone()
         } else {
             write_owner_file(&path, &bytes).expect("capable tool must share the owner filesystem");
             bytes.clone()
@@ -859,6 +1324,40 @@ impl CapableStreaming for CapableStreamingImpl {
             chunks_read,
             bytes_read: bytes.len() as u64,
             output_closed,
+        })
+    }
+
+    async fn dual_pressure(
+        &self,
+        path: String,
+        output_size: u64,
+        checkpoint_before_terminal: bool,
+        mut stdout: OutputStream,
+        mut diagnostics: OutputStream,
+    ) -> Result<StreamSummary, StreamingError> {
+        let file_bytes = vec![b'i'; output_size as usize];
+        write_owner_file(&path, &file_bytes)
+            .expect("dual-pressure tool must share the owner filesystem");
+        stdout
+            .write(vec![b'o'; output_size as usize])
+            .await
+            .expect("buffer dual-pressure stdout");
+        diagnostics
+            .write(vec![b'e'; output_size as usize])
+            .await
+            .expect("buffer dual-pressure stderr");
+        if checkpoint_before_terminal {
+            wait_at_crash_checkpoint(&stdout, "after-dual-output-before-terminal").await;
+        }
+        stdout.finish().await.expect("finish dual-pressure stdout");
+        diagnostics
+            .finish()
+            .await
+            .expect("finish dual-pressure stderr");
+        Ok(StreamSummary {
+            chunks_read: 0,
+            bytes_read: output_size,
+            output_closed: false,
         })
     }
 }

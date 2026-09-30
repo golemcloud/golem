@@ -43,14 +43,15 @@ Counter.implement({
 Read-only metadata may be `true` or `{ cache }`; principal-aware caching is derived from a declared
 `PrincipalSchema` input. Public modules are namespaces from
 the root (`Agent`, `Client`, `Config`, `Durability`, `Snapshot`, `Tool`, etc.); only
-`defineAgent`, `defineConfig`, and `method` are flat DSL aliases. Database adapters and standalone
+`defineAgent`, `defineAgentClient`, `defineConfig`, and `method` are flat DSL aliases. Database adapters and standalone
 middleware use the documented sub-imports. `internal/*` and `host/*` are not public imports.
 
 ## Typed clients
 
 Keep a definition in a module without calling `.implement` when another component only needs its
 client. Durable definitions expose `client.get`, `getPhantom`, and `newPhantom`; ephemeral
-definitions expose `newPhantom`. Calls, triggers, and schedules take one typed input object.
+definitions expose `getPhantom` and `newPhantom`, but not ordinary `get`. Calls, triggers, and
+schedules take one typed input object.
 
 ```ts
 const program = Effect.scoped(
@@ -70,8 +71,47 @@ schema contains a live stream is rejected because streams require an awaited inv
 ephemeral call returns `{ metadata, value }`, and an ephemeral trigger/schedule exposes invocation
 metadata. Config overrides are passed as the second argument to `client.get`/`newPhantom`.
 
+Use `defineAgentClient` for caller-owned clients. A full client definition has a declared name,
+constructor schema, lifecycle mode, and methods; it exposes `agentId` and `client` factories without
+registering an implementation. A method-only `{ methods }` definition has neither factory nor
+identity constructor; it binds without discovery and assumes durable result semantics. An
+unimplemented `defineAgent` spec remains usable as a shared implementation/caller definition.
+`identity.client(clientDefinition)` validates the declared name and constructor schema before opening RPC.
+`Client.bind(identity, clientDefinition)` and `DynamicClient.bind(identity)` remain lower-level functions.
+
+```ts
+import { Effect, Schema } from "effect"
+import { AgentIdentity, defineAgentClient, method } from "@golemcloud/effect-golem"
+import type * as CoreTypes from "golem:core/types@2.0.0"
+
+const Target = defineAgentClient({
+  name: "Target",
+  id: { name: Schema.String },
+  methods: { echo: method({ input: { message: Schema.String }, success: Schema.String }) },
+})
+
+const calls = (inputTree: CoreTypes.SchemaValueTree) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const identity = yield* Target.agentId({ name: "main" })
+      const full = yield* identity.client(Target)
+      const first = yield* full.echo({ message: "full" })
+      const methods = defineAgentClient({ methods: Target.methods })
+      const second = yield* (yield* identity.client(methods)).echo({ message: "method only" })
+      const parsed = yield* AgentIdentity.parse(identity.encoded)
+      const dynamic = yield* parsed.dynamicClient()
+      const raw = yield* dynamic.method("echo").invoke(inputTree)
+      // Dynamic methods accept native SchemaValueTree inputs and return metadata plus native values.
+      return { first, second, raw }
+    }),
+  )
+```
+
+Complete ephemeral specs require a phantom ID for `agentId(input, phantomId)` and reject generic
+existing-ID binding. Address known or fresh phantoms through their factories instead.
+
 For runtime-selected targets, use `Reflection.getAgentType(name)`,
-`getAgentTypeByAgentId(id)`, or `getAllAgentTypes`. Each immutable registration exposes
+`getAgentTypeByAgentId(parsedIdentity)`, or `getAllAgentTypes`. Each immutable registration exposes
 constructor/method `SchemaRef` values with JSON/value validation and JSON Schema rendering.
 Narrow `type.mode` to select its lifecycle factory:
 
@@ -84,19 +124,40 @@ const invokeCounter = Effect.scoped(
     const type = yield* Reflection.getAgentType("Counter")
     if (type === undefined || type.mode !== "durable") return undefined
     const client = yield* type.client.get({ name: "main" })
-    const increment = yield* client.method("increment")
-    return yield* increment.invoke({})
+    const add = yield* client.method("add")
+    return yield* add.invoke({ by: 1 })
   }),
 )
 ```
 
 Reflected invocation results contain metadata and, for non-unit outputs, `value`.
 Ephemeral `newPhantom` returns a client whose actual identity arrives in invocation metadata;
-durable `newPhantom` returns `{ client, agentId, phantomId }`. `invokeValue`, `triggerValue`,
+`getPhantom(input, phantomId)` addresses a known phantom without offering ordinary existing-ID
+binding. Durable `newPhantom` returns `{ client, agentId, phantomId }`, with a parsed `agentId`.
+Durable reflected types also bind through `Client.bind(identity, reflectedType)` after name and
+constructor validation. Discovery misses remain `undefined`; host and malformed-schema failures
+enter the typed error channel. `invokeValue`, `triggerValue`,
 and `scheduleValue` accept native WIT schema-value trees when JSON cannot represent capabilities.
-`DynamicClient.fromAgentId(id)` binds without discovery and uses value-only methods; callers
-must supply the correct remote contract. Both APIs use scopes and fiber interruption and expose
+`parsedIdentity.dynamicClient()` binds without discovery and uses value-only methods; callers
+must supply the correct remote method definitions. Both APIs use scopes and fiber interruption and expose
 the same structured remote-call errors as typed clients.
+
+The four client approaches are: Normal RPC through the ordinary client for a shared source
+definition; method-only or full caller-defined static clients; discovered clients backed by an
+immutable deployed schema snapshot; and fully dynamic schema-native clients for existing durable
+identities. Method-only clients do not own
+identity, lifecycle, mode, or config declarations. Full clients own those declarations and the
+matching durable, phantom, or ephemeral factories. Dynamic clients neither discover nor create.
+
+Normal RPC and caller-defined static clients encode through their local schemas before opening RPC;
+full binding also checks the declared name and constructor shape. Discovered clients apply all
+snapshot restrictions and validate
+declared result cardinality and shape. The host remains authoritative for visibility,
+authorization, effective configuration, durable identity resolution, and deployed input schemas.
+Typed inputs use `Schema.optional(...)` normally. Canonical reflected JSON records contain every
+field and use `null` for an absent option. Wide integers are decimal strings: duration is
+`{ nanoseconds: "..." }` and quantity uses a decimal-string `mantissa`; integers through 32 bits
+remain numbers. Streams and opaque capabilities require `*Value` APIs and transfer ownership once.
 
 ## Configuration and opaque secrets
 
@@ -205,6 +266,150 @@ cleanup. A downstream drop stops future source pulls and eventually calls the pr
 later invocation. Terminal errors are not transported; model recoverable failures as stream items
 (for example `Result<T, E>`). Streams cannot be snapshotted, triggered, or scheduled.
 
+## Effect HTTP routers
+
+`HttpRouter.define` registers a parameterless ephemeral HTTP router, without snapshots or an
+ordinary agent client. Supply a real Effect application factory; it runs inside each request's
+scope. Normal typed agent clients remain available inside handlers:
+
+```ts
+import { Effect, Layer } from "effect"
+import { HttpRouter as Routes, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
+import { Http, HttpRouter } from "@golemcloud/effect-golem"
+
+const routes = Layer.mergeAll(
+  Routes.add(
+    "GET",
+    "/count",
+    Effect.gen(function* () {
+      const counter = yield* Counter.client.get({ name: "web" })
+      return HttpServerResponse.text(String(yield* counter.value({})))
+    }),
+  ),
+  Routes.add(
+    "POST",
+    "/echo",
+    Effect.gen(function* () {
+      const request = yield* HttpServerRequest.HttpServerRequest
+      return HttpServerResponse.stream(request.stream)
+    }),
+  ),
+)
+
+HttpRouter.define("Web", {
+  mount: Http.mount("/web"),
+  static: [{ route: "/assets/*", path: "/public/$1" }],
+}).implement(Routes.toHttpEffect(routes))
+```
+
+The framework sees mount-relative URLs. `yield* HttpRouter.request` exposes the original scheme,
+authority, path, optional query, ordered byte headers, and the same single-consumer body. An absent
+query is `undefined`; a present empty query is `""`. Explicit `text`, `json`, and `arrayBuffer`
+accessors buffer with Effect's `HttpIncomingMessage.MaxBodySize`; ordinary stream handlers do not.
+Normalized Effect headers cannot represent every original occurrence. For repeated response
+fields or opaque bytes, apply `HttpRouter.withRawHeaders(response, headers)` after response
+combinators. Those overrides survive pre-response hooks. Effect cookies become separate
+`set-cookie` occurrences.
+
+For an Effect `HttpApi`, use `HttpApiBuilder.layer` and `HttpRouter.toHttpEffect` for the application,
+and a lazy `openApi: Effect.sync(() => OpenApi.fromApi(Api))` provider on the same definition.
+Provide the application's normal Effect layers, including the `HttpPlatform`, `FileSystem`,
+`Path`, and `Etag` requirements of `HttpApiBuilder`; static file mappings themselves are served
+by Golem, not those layers. OpenAPI paths stay mount-relative. The shared TypeScript serializer
+preserves the generated document; the host validates its semantics and handles mount composition.
+The optional `handlerMethod` and `openapiProviderMethod` change ordinary metadata method names.
+Use `.register()` instead of `.implement(...)` for static-only or provider-only routers.
+
+Static mappings use `{ route, path }` objects. Files must also be included in the component's
+deployment. For a regular durable non-phantom agent, use
+`Http.mount("/files/{id}", { exposeFiles: [{ route: "/*", path: "/data/$1" }] })` to expose its
+filesystem. Mapping parsing and metadata compilation are shared with the TypeScript SDK.
+
+Request resources stay scoped through response consumption. Endpoints decoded during a request
+are adopted by that request even when their streams are transformed. HEAD and 204/205/304 never
+start body programs; they release already-acquired endpoints and request resources. Put eager
+application resources in `Effect.acquireRelease`/`Effect.addFinalizer`, not solely in an unopened
+stream's `ensuring`. Scope finalizers receive the response's success, failure, or interruption.
+Effect `Respondable` failures retain their HTTP responses, including HttpApi validation failures.
+Other application failures remain invocation failures; router misses and request parsing failures become
+404 and 400 responses. A late body failure must not be interpreted as successful invocation EOF.
+Raw response bodies other than `Uint8Array`, response `FormData`, and WebSocket upgrades are not
+supported by this adapter.
+
+**Runtime limitation:** local Effect interruption joins finalizers, but current host epoch
+interruption does not deliver cooperative cancellation to JavaScript. The P3 output pump also
+cannot interrupt a pending first pull. These paths require runtime work and deployed acceptance
+tests; unit tests and artifact checks do not establish HTTP lifecycle conformance.
+
+## External Durable Streams
+
+`DurableStreams.readJson(schema, options)` and `readBytes(options)` return lazy native Effect
+streams. They read finite host batches, starting with catch-up and following with long-poll
+(default) or SSE. Offsets and cursors are opaque. `offset: "now"` is resolved once per stream
+execution; an empty live batch is not EOF, and a closed batch emits its payload before EOF.
+Each execution of a local stream starts at its configured offset. Native agent-stream forwarding
+works without an iterator or Promise adapter.
+
+Each Stream execution acquires one journaled reader resource and releases it at EOF, failure,
+interruption, or downstream termination. Writers acquire one journaled resource in the caller's
+Effect scope; keep that scope open through appends and retries. Constructors record immutable
+connection descriptors and the borrowed secret's pinned identity without making HTTP requests
+or revealing plaintext. Reads carry only checkpoint/transport/content-type; appends carry only
+payload/sequence/close. Repeated attempts reuse the same resource.
+
+Scope interruption returns promptly. If a finite WIT attempt is still in flight, actual resource
+disposal waits for its Promise to settle, because the method still borrows the native handle.
+No new operations may start after scope exit; interrupting an append within an open writer scope
+still permits `retryPending` on the same resource.
+
+Before passing a host-dependent stream to an agent method (or returning it through an agent-stream
+schema), capture its services within the invocation:
+
+```ts
+const forward = Effect.gen(function* () {
+  const source = DurableStreams.readBytes({ url })
+  const context = yield* Effect.context<Stream.Services<typeof source>>()
+  return yield* sink.collect({ bytes: source.pipe(Stream.provideContext(context)) })
+})
+```
+
+```ts
+import { Effect, Schema, Stream } from "effect"
+import { DurableStreams, defineConfig } from "@golemcloud/effect-golem"
+
+class StreamConfig extends defineConfig("Stream.Config", {
+  bearer: Schema.Redacted(Schema.String),
+}) {}
+
+const roundtrip = Effect.gen(function* () {
+  const cfg = yield* StreamConfig
+  const auth = yield* cfg.bearer.borrow // opaque handle; does not reveal the token
+  const options = { url: "https://streams.example/events", auth }
+  const writer = yield* DurableStreams.makeJsonWriter(Schema.String, options)
+  yield* writer.append(["first", "last"], { close: true })
+  return yield* DurableStreams.readJson(Schema.String, options).pipe(Stream.runCollect)
+}).pipe(Effect.scoped)
+```
+
+Writers serialize concurrent effects and retain one immutable producer ID/epoch/sequence, body,
+and close flag after a failed or interrupted append. New data is rejected while `hasPending` is
+true: explicitly run `writer.retryPending` to resolve the same request. `writer.close` consumes
+a sequence too. The pending operation also retains its automatic retry budget and interrupted
+backoff; an explicit retry does not reset either. A receipt's `nextOffset` may be absent on a duplicate acknowledgement; there is
+no duplicate boolean. Finite host attempts have bounded retries (`maxRetries`, `retryDelayMs`,
+`timeoutMs`) and honor Retry-After. Fiber cancellation stops waiting but does not prove the remote
+append was cancelled; its retained request must still be resolved.
+
+JSON uses the SDK's schema codecs and canonical JSON representation. Arrays inside a message
+stay arrays. The default codec rejects unsafe integers rather than rounding them. For exact
+unquoted 64-bit integers, use `WitTypes.Uint64` with deterministic `decode: BigInt` / `encode: String`
+callbacks; callbacks receive one complete message and schema validation still applies.
+
+Producer identity generation uses the runtime's durable randomness. Replay must reproduce the
+same construction and operation order; a fork retains its producer identity and must not be
+treated as an independent producer. These stateful writer objects and live readers are not
+snapshot values. Unit-test host fakes validate SDK state transitions, not executor crash recovery.
+
 ## Generated Effect bridges
 
 Effect components receive Effect-native guest clients for their manifest `dependencies.agents`
@@ -234,8 +439,8 @@ service requirements flow through the Effect environment; the agent dispatcher s
 services. Stream-free methods also expose `.trigger(...)` and `.schedule(...)`, with cancelable
 scheduling. Streaming methods cannot be triggered or scheduled.
 
-Generated tool clients expose Effect stdin/stdout streams and an Effect result. Consume stdout and
-the result concurrently when the tool can block writing its output:
+Generated tool clients expose independent Effect stdin/stdout/stderr streams and an Effect result.
+Consume both declared outputs and the result concurrently when the tool can block writing output:
 
 ```ts
 import { Effect, Stream } from "effect"
@@ -282,7 +487,7 @@ external bridges support agents; tool bridges are guest-only.
 
 `Tool.toolDefinition(name)` builds nested, typed commands. `.implement(...)` registers a tool guest;
 `Tool.client(definition)` derives a camel-cased Effect client. Bodies define positional/named input,
-declared errors, a structured return, and optional stdin/stdout byte streams.
+declared errors, a structured return, and optional stdin/stdout/stderr byte streams.
 
 ```ts
 import { Effect, Schema } from "effect"
@@ -304,6 +509,32 @@ Use `Tool.err(name, value)` for a declared tool error and `Tool.ok(value)` where
 carrier is needed. Tool clients cancel the host future and close owned streams when their scope
 ends.
 
+For a tool selected at runtime, `Reflection.getToolType(name)` and `getAllToolTypes` discover
+caller-visible registrations. The selected command exposes its canonical path, aliases, ordered
+arguments, input schema, result schema, and child commands. Namespace-only nodes remain visible
+but have no callable body.
+
+```ts
+import { Effect } from "effect"
+import { Reflection } from "@golemcloud/effect-golem"
+
+const call = Effect.gen(function* () {
+  const tool = yield* Reflection.getToolType("echo")
+  if (tool) {
+    const command = tool.client.command([])
+    return yield* command.invokeJson({ message: "hello" })
+  }
+})
+```
+
+`invokeJson` and `invokeValue` validate inputs before opening RPC and check declared outputs.
+Canonical JSON records include every argument key; use `null` for absent optional values.
+`startJson` and `startValue` expose scoped stdout, stderr, result, concurrent collection, and
+cancellation for pending calls. Use them when either output is required and drain both outputs
+concurrently. `Reflection.DynamicToolClient` accepts a
+caller-packed value when the deployed schema is unavailable and does not infer validation rules.
+Reflected failures are typed Effect errors, including `ToolReflectionError` for malformed output.
+
 `WitTypes.PermissionCard({ polymorphic })` represents a permission card. Cards are opaque affine
 capabilities: successful encoding transfers the exact handle across agent RPC, tool calls, and
 middleware. The sender must not inspect or reuse a transferred card. Transactional graph encoding
@@ -315,29 +546,34 @@ possible. The SDK intentionally has no card inspection, wallet, derivation, or i
 Standalone middleware imports only the middleware-safe entry point:
 
 ```ts
-import { universal } from "@golemcloud/effect-golem/middleware"
+import { NoParameters, universal } from "@golemcloud/effect-golem/middleware"
 
 universal({
   name: "audit",
+  parameters: NoParameters,
   handler: (invocation, underlying) =>
     underlying.invoke(invocation.commandPath, invocation.input, invocation.stdin),
 })
 ```
 
-`universal` transparently handles any tool using wire values. `typed({ presented, expected?,
-handler })` projects typed input/output/error and a definition-derived `context.underlying` client;
+`universal` transparently handles any tool using wire values. Every middleware declares an Effect
+Schema for installation `parameters`; decoded values are available as `invocation.parameters` or
+typed-handler `context.parameters`. `NoParameters` is the explicit empty-record schema.
+`typed({ parameters, presented, expected?, handler })` projects typed input/output/error and a definition-derived `context.underlying` client;
 it can present a different definition from the wrapped tool. Both support aliases, docs, and a
-per-invocation Effect `layer`. Underlying access and streams are affine, sequential, and valid only
-for that invocation.
+per-invocation Effect `layer`. Underlying access and streams are affine and valid only for that
+invocation.
 
-There are three build worlds:
+`parameters` must be a static Effect `Schema` (streams, secrets, and other installation-time-ineligible capabilities are rejected). `underlying.start(...)` and typed command `.start(...)` return scoped started invocations whose `get`, optional `stdout` and `stderr`, and `cancel` effects are independent. Calls may overlap; consume both outputs and `get` concurrently when needed. Scope closure disposes the observer and owned streams but does **not** cancel the tool call—run `started.cancel` explicitly to cancel it.
 
-- `agent-guest`: agents plus tool guests (`@golemcloud/effect-golem`)
-- `tool-middleware-guest`: standalone middleware (`@golemcloud/effect-golem/middleware`)
-- `agent-tool-middleware-guest`: combined agent/tool/middleware component
+When a handler returns, the underlying rejects new admissions but does not implicitly cancel calls already admitted. Cleanup releases their observers after pending observation is safe. For a command declaring stdout or stderr, return/select each stream with the matching typed `context.stdout`/`context.stderr` callback (or universal result field). The SDK forwards each into its host-provided writer concurrently, calls `finish` after clean EOF, and calls `fail` on forwarding failure; middleware never owns those writers directly.
 
-The SDK and templates support all three worlds. The CLI accepts middleware metadata and manifest
-attachment; runtime traversal and invocation behavior remain separate deployment concerns.
+The single `agent-guest` build world exports agents, tools, snapshots, and tool middleware. It
+supports ordinary, standalone-middleware, and combined components; discovery returns empty lists
+for categories a component does not define. Middleware authoring APIs remain available from
+`@golemcloud/effect-golem/middleware`, and invocation-scoped underlying access still advances the
+pinned middleware chain. The CLI accepts middleware metadata and manifest attachment; runtime
+traversal and invocation behavior remain separate deployment concerns.
 
 ## Durability 1.6
 
@@ -379,8 +615,22 @@ until the final parity matrix passes.
 
 ## Build and verify in the monorepo
 
+The base WASM retains the single full `agent-guest` world and a shared Effect runtime.
+The CLI's Rollup configuration uses `@golemcloud/effect-golem/build` to discover retained
+capability modules without executing user code, then generates a static entrypoint. Agent,
+tool, and middleware hooks import their implementations only when needed; absent capabilities
+have explicit empty discovery and error bodies. No roles or world selection are required.
+The component bundle includes only reachable SDK code and adapters, rather than importing
+the full SDK from the base WASM. `capabilities.json` beside the bundle records the selection.
+Selection is conservative: a retained definition can keep its capability even when its
+registration is conditional or never executed.
+
 Prerequisites are Node/npm, Rust with `wasm32-wasip2`, `wasm-rquickjs`, WASI SDK, and Golem's normal
 build prerequisites. From `sdks/effect`:
+
+The private `sdks/http-contract` source package is installed by `npm ci` and bundled by this SDK's
+build. No TypeScript SDK installation or sibling SDK build is required. Published packages contain
+the helper code and declarations, not a runtime dependency on that private package.
 
 ```nu
 npm ci
@@ -391,15 +641,14 @@ npm test
 npm run build
 npm run build:bundle
 $env.WASI_SDK_PATH = "/opt/wasi-sdk"
-npm run build-agent-template # builds all three worlds
+npm run build-agent-template # builds the default world
 npm run check:dts
 npm run check:contracts
 npm run check:artifacts
 ```
 
-`build-agent-template` creates/checks `agent_guest.wasm`, `tool_middleware_guest.wasm`, and
-`agent_tool_middleware_guest.wasm`. `check:artifacts` compares committed/generated provenance and
-fails on stale world artifacts.
+`build-agent-template` creates/checks `agent_guest.wasm`. `check:artifacts` compares
+committed/generated provenance and fails on stale artifacts.
 
 Canonical WIT dependencies live at repository-root `wit/deps`; never edit `sdks/effect/wit/deps`
 by hand. From the repository root:
@@ -407,14 +656,66 @@ by hand. From the repository root:
 ```nu
 cargo make wit          # mirror canonical WIT into every SDK
 cd sdks/effect
-npm run generate-dts    # regenerate declarations for all three worlds
+npm run generate-dts    # regenerate declarations for the default world
 npm run check:dts       # fail if generated declarations drift
 npm run check:artifacts # fail if bundles/templates/WASM drift
 ```
 
-For a focused real-runtime check, build all three templates first, then run the relevant harness
+For a focused real-runtime check, build the default template first, then run the relevant harness
 case under `integration-test`. Unit tests use injectable host-service layers under `src/host`; they
 do not replace a real WASM integration check.
+
+### Durable Streams runtime fixture
+
+The focused `durable-streams` harness case starts an in-process HTTP peer on an ephemeral local
+port. Run it with a local worker executor exposing `golem:agent/durable-streams@2.0.0`; no Docker
+or external stream server is needed. The peer commits the first JSON append but drops its
+response, checks the retry's identical producer tuple/body/close, and acknowledges the duplicate
+without an offset. The bytes writer appends and then closes on the same resource; the reader
+follows an opaque checkpoint across two batches. The case verifies exact JSON/byte payloads
+and eleven authenticated HTTP requests, including the cancellation check below.
+
+`cancelRead` starts a scoped native read whose response the peer holds. A separate control read
+confirms that the HTTP request arrived before the guest interrupts the fiber. Interruption must
+finish within two seconds with no defect, before the guest asks the peer to release its response.
+The peer bounds the hold to ten seconds. `readAfterCancel` then reads through a fresh resource in
+the same agent instance, checking that delayed resource cleanup did not leave the guest unusable.
+
+`durable-streams.golem.yaml` builds only the fixture and its native-stream sink. It provisions the
+test-only secret `durableStreamToken`. Each method borrows that capability once and shares it
+between append and read without revealing it. After building fresh SDK bundles and all templates,
+run from `sdks/effect/integration-test` against a local Golem server:
+
+```sh
+npm ci
+export GOLEM_APP_MANIFEST_PATH="$PWD/durable-streams.golem.yaml"
+golem --local --yes build
+golem --local --yes deploy
+npm run test:integration -- --filter '^durable-streams$' --no-infra --no-server --no-build
+```
+
+To prepare the consumer without the Golem CLI, bundle only its entrypoint and inject it directly
+(from `sdks/effect/integration-test`):
+
+```sh
+(cd components/agents && \
+  GOLEM_APP_ROOT="$PWD/../.." GOLEM_TEMP="$PWD/../../golem-temp" \
+  GOLEM_COMPONENT_NAME=effect-golem-durable-streams \
+  GOLEM_COMPONENT_ENTRY=./src/durable-streams-agent.ts \
+  npx --no rollup -- -c ../../rollup.config.component.mjs)
+mkdir -p golem-temp/agents
+wasm-rquickjs inject-js --input ../wasm/agent_guest.wasm \
+  --js golem-temp/ts-dist/effect-golem-durable-streams/main.js \
+  --output golem-temp/agents/effect_golem_durable_streams.dynamic.wasm
+```
+
+Expected results are `[["first", "a,b"], ["last"]]` and `[3, 249, 17]`. `forwardBytes` consumes
+the external source in a separate agent through native Preview 3 stream RPC. The cancellation
+and subsequent invocation return `[29]` and `[41, 203]`. The harness creates
+fresh peer state and agent names on every run. This case exercises real host calls and uncertain
+acknowledgements, not executor crash recovery. Restart/replay acceptance additionally needs peer
+request counters and oplog inspection; returning the same values alone does not prove HTTP was
+not repeated. The unit reconstruction test only checks the SDK's deterministic-call assumptions.
 
 ## Packaging and release convention
 

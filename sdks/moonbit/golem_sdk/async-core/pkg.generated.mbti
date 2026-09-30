@@ -89,7 +89,7 @@ pub struct Sink[X] {
   // private fields
 }
 pub async fn[X] Sink::close(Self[X]) -> Unit
-pub fn[X] Sink::from_callbacks(async (ArrayView[X]) -> Int, async () -> Unit, () -> Bool, ((X) -> Unit)?) -> Self[X]
+pub fn[X] Sink::from_callbacks(async (ArrayView[X]) -> Int, async () -> Unit, () -> Bool, ((X) -> Unit)?, write_window_size? : Int) -> Self[X]
 pub fn[X] Sink::is_open(Self[X]) -> Bool
 pub async fn[X] Sink::write(Self[X], ArrayView[X]) -> Int
 pub async fn[X] Sink::write_all(Self[X], ArrayView[X]) -> Bool
@@ -108,6 +108,7 @@ pub fn[X] Stream::produce(async (Sink[X]) -> Unit, cleanup? : (X) -> Unit, on_un
 pub async fn[X] Stream::read(Self[X], Int) -> FixedArray[X]?
 pub async fn[X] Stream::reject(Self[X], (X) -> Unit) -> Unit noraise
 pub fn[X] Stream::take_producer(Self[X]) -> (async (Sink[X]) -> Unit)?
+pub fn[X] Stream::transfer(Self[X]) -> Self[X]
 
 pub struct Task[X] {
   // private fields

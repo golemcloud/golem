@@ -12,7 +12,7 @@ Both `golem` and `golem-cli` can be used — all commands below work with either
 By default, `agent invoke` streams the agent's stdout, stderr, and log channels live while the invocation runs:
 
 ```shell
-golem agent invoke <AGENT_TYPE_NAME> <AGENT_NAME> <FUNCTION_NAME> [ARGUMENTS...]
+golem agent invoke <AGENT_ID> <FUNCTION_NAME> [ARGUMENTS...]
 ```
 
 ### Streaming flags
@@ -66,7 +66,7 @@ golem agent invoke ... --logs-only
 Connect to a running agent and live stream its stdout, stderr, and log channels via WebSocket. The stream reconnects automatically if the connection drops.
 
 ```shell
-golem agent stream <AGENT_TYPE_NAME> <AGENT_NAME>
+golem agent stream <AGENT_ID>
 ```
 
 This is useful for observing an agent that is already running or will be invoked separately.

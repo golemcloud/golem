@@ -20,7 +20,7 @@ fn run_attachment_async(body : async () -> Unit) -> Unit raise {
 ///|
 fn assert_encoded_source_failure(
   error : ToolStreamError,
-  expected : @toolHost.ByteStreamFailure,
+  expected : @toolStreams.ByteStreamFailure,
 ) -> Unit raise {
   run_attachment_async(async fn() {
     let closes = Ref(0)
@@ -53,19 +53,19 @@ fn assert_encoded_source_failure(
 test "stdin preserves known tool stream failure variants" {
   assert_encoded_source_failure(
     ToolStreamError::Cancelled,
-    @toolHost.ByteStreamFailure::Cancelled,
+    @toolStreams.ByteStreamFailure::Cancelled,
   )
   assert_encoded_source_failure(
     ToolStreamError::Abandoned,
-    @toolHost.ByteStreamFailure::Abandoned,
+    @toolStreams.ByteStreamFailure::Abandoned,
   )
   assert_encoded_source_failure(
     ToolStreamError::ResourceExhausted,
-    @toolHost.ByteStreamFailure::ResourceExhausted,
+    @toolStreams.ByteStreamFailure::ResourceExhausted,
   )
   assert_encoded_source_failure(
     ToolStreamError::Failed("source failed"),
-    @toolHost.ByteStreamFailure::Failed("source failed"),
+    @toolStreams.ByteStreamFailure::Failed("source failed"),
   )
 }
 
@@ -107,7 +107,7 @@ test "stdin preserves task cancellation as stream cancellation" {
     guard encoded.read(1) is Some(items) && items.length() == 1 else {
       fail("expected one encoded stdin cancellation")
     }
-    assert_true(items[0] is Err(@toolHost.ByteStreamFailure::Cancelled))
+    assert_true(items[0] is Err(@toolStreams.ByteStreamFailure::Cancelled))
     encoded.drop_sync()
     assert_eq(closes.val, 1)
   })
@@ -149,7 +149,7 @@ test "cancelling a stdin producer publishes cancellation and closes its source" 
     guard encoded.read(1) is Some(items) && items.length() == 1 else {
       fail("cancelled stdin producer did not publish one terminal")
     }
-    assert_true(items[0] is Err(@toolHost.ByteStreamFailure::Cancelled))
+    assert_true(items[0] is Err(@toolStreams.ByteStreamFailure::Cancelled))
     assert_eq(closes.val, 1)
     encoded.drop()
   })
@@ -171,7 +171,7 @@ test "stdin maps unknown source errors to generic failure" {
     guard encoded.read(1) is Some(items) && items.length() == 1 else {
       fail("expected one encoded stdin failure")
     }
-    guard items[0] is Err(@toolHost.ByteStreamFailure::Failed(message)) else {
+    guard items[0] is Err(@toolStreams.ByteStreamFailure::Failed(message)) else {
       fail("expected a generic encoded stdin failure")
     }
     assert_true(message.contains("UnknownSourceFailure"))
@@ -183,19 +183,19 @@ test "stdin maps unknown source errors to generic failure" {
 ///|
 test "host stream failures retain their SDK identity" {
   assert_eq(
-    stream_failure(@toolHost.ByteStreamFailure::Cancelled),
+    stream_failure(@toolStreams.ByteStreamFailure::Cancelled),
     ToolStreamError::Cancelled,
   )
   assert_eq(
-    stream_failure(@toolHost.ByteStreamFailure::Abandoned),
+    stream_failure(@toolStreams.ByteStreamFailure::Abandoned),
     ToolStreamError::Abandoned,
   )
   assert_eq(
-    stream_failure(@toolHost.ByteStreamFailure::ResourceExhausted),
+    stream_failure(@toolStreams.ByteStreamFailure::ResourceExhausted),
     ToolStreamError::ResourceExhausted,
   )
   assert_eq(
-    stream_failure(@toolHost.ByteStreamFailure::Failed("host failed")),
+    stream_failure(@toolStreams.ByteStreamFailure::Failed("host failed")),
     ToolStreamError::Failed("host failed"),
   )
 }
@@ -205,14 +205,14 @@ test "byte stream surfaces a host terminal failure" {
   run_attachment_async(async fn() {
     let mut read = false
     let source : @async-core.Stream[
-      Result[FixedArray[Byte], @toolHost.ByteStreamFailure],
+      Result[FixedArray[Byte], @toolStreams.ByteStreamFailure],
     ] = @async-core.Stream::from_source(
       fn(_) {
         if read {
           None
         } else {
           read = true
-          Some([Err(@toolHost.ByteStreamFailure::ResourceExhausted)])
+          Some([Err(@toolStreams.ByteStreamFailure::ResourceExhausted)])
         }
       },
       () => (),
@@ -236,7 +236,7 @@ test "byte stream retains unread bytes between bounded reads" {
   run_attachment_async(async fn() {
     let mut read = false
     let source : @async-core.Stream[
-      Result[FixedArray[Byte], @toolHost.ByteStreamFailure],
+      Result[FixedArray[Byte], @toolStreams.ByteStreamFailure],
     ] = @async-core.Stream::from_source(
       fn(_) {
         if read {
@@ -262,7 +262,7 @@ test "byte stream skips empty successful host items" {
   run_attachment_async(async fn() {
     let mut reads = 0
     let source : @async-core.Stream[
-      Result[FixedArray[Byte], @toolHost.ByteStreamFailure],
+      Result[FixedArray[Byte], @toolStreams.ByteStreamFailure],
     ] = @async-core.Stream::from_source(
       fn(_) {
         reads += 1

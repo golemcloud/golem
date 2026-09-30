@@ -29,7 +29,8 @@ mod tests {
         ToolErrorSchema, get_tool_invoker_by_name,
     };
     use golem_rust::{
-        FromSchema, IntoSchema, Quantity, QuantityUnit, tool_definition, tool_implementation,
+        FromSchema, FromWire, IntoSchema, IntoWire, Quantity, QuantityUnit, WireSchema,
+        tool_definition, tool_implementation,
     };
     use golem_rust_macro::ToolError;
     use std::collections::BTreeMap;
@@ -52,15 +53,402 @@ mod tests {
             .expect("command path resolves");
         let model = CanonicalInputModel::from_fields(tool.canonical_input_fields(command_index))
             .expect("canonical input model builds");
-        let input = golem_rust::TypedSchemaValue::new(
-            model.record_schema,
-            golem_rust::SchemaValue::Record { fields: values },
-        );
+        let params = model
+            .fields
+            .iter()
+            .zip(values)
+            .map(|(field, value)| (field.name.as_str(), value))
+            .collect();
+        let input = golem_rust::agentic::build_canonical_input(&model, params)
+            .expect("canonical input builds");
         golem_rust::encode_typed_schema_value(&input).expect("typed schema value encodes")
     }
 
     fn anonymous_principal() -> golem_rust::agentic::Principal {
         golem_rust::agentic::Principal::Anonymous
+    }
+
+    #[test]
+    async fn direct_error_metadata_and_decoding_do_not_call_model_codecs() {
+        use golem_rust::agentic::DirectToolError;
+        use golem_rust::schema::wit::{direct, wire};
+
+        #[derive(Debug, PartialEq, FromWire, IntoWire, WireSchema)]
+        struct Payload {
+            code: u16,
+            notes: Vec<Option<Result<String, bool>>>,
+        }
+
+        impl IntoSchema for Payload {
+            fn type_id() -> golem_rust::schema::TypeId {
+                panic!("direct metadata must not request a model type id")
+            }
+
+            fn register_in(_: &mut golem_rust::schema::SchemaBuilder) -> golem_rust::SchemaType {
+                panic!("direct metadata must not construct a model")
+            }
+
+            fn to_value(&self) -> golem_rust::SchemaValue {
+                panic!("direct encoding must not construct a model")
+            }
+        }
+
+        impl FromSchema for Payload {
+            fn from_value(
+                _: &golem_rust::SchemaValue,
+            ) -> Result<Self, golem_rust::schema::FromSchemaError> {
+                panic!("direct decoding must not construct a model")
+            }
+        }
+
+        #[derive(Debug, PartialEq, ToolError)]
+        enum Failure {
+            /// Retry with a different input.
+            #[tool_error(kind = "usage-error", exit_code = 17)]
+            Rejected(Payload),
+            #[tool_error(kind = "runtime-error", exit_code = 29)]
+            Delayed { details: Payload },
+            #[tool_error(kind = "runtime-error", exit_code = 31)]
+            Empty,
+        }
+
+        let mut builder = direct::WireSchemaBuilder::default();
+        let cases = Failure::wire_error_cases(&mut builder);
+        assert_eq!(
+            cases
+                .iter()
+                .map(|case| case.name.as_str())
+                .collect::<Vec<_>>(),
+            ["rejected", "delayed", "empty"]
+        );
+        assert_eq!(cases[0].exit_code, 17);
+        assert!(matches!(
+            cases[0].kind,
+            golem_rust::schema::tool::wit::wire::ErrorKind::UsageError
+        ));
+        assert_eq!(cases[0].doc.summary, "Retry with a different input.");
+        assert!(cases[2].payload.is_none());
+        let graph = builder.finish(cases[0].payload.unwrap());
+        assert_eq!(graph.defs.len(), 1);
+        for case in &cases[..2] {
+            assert!(matches!(
+                graph.type_nodes[case.payload.unwrap() as usize].body,
+                wire::SchemaTypeBody::RefType(0)
+            ));
+        }
+        let payload = Payload {
+            code: 513,
+            notes: vec![Some(Err(true)), None, Some(Ok("retry".into()))],
+        };
+        let failure = Failure::Delayed { details: payload };
+        let (name, encoded) = failure.direct_error_payload().await.unwrap();
+        assert_eq!(name, "delayed");
+        assert_eq!(encoded.graph.defs.len(), 1);
+        assert_eq!(
+            Failure::from_direct_error_payload(&name, encoded.value).unwrap(),
+            Some(failure)
+        );
+        assert_eq!(
+            Failure::from_direct_error_payload("empty", direct::encode(&()).unwrap()).unwrap(),
+            Some(Failure::Empty)
+        );
+        assert!(
+            Failure::from_direct_error_payload("empty", direct::encode(&false).unwrap()).is_err()
+        );
+        assert!(
+            Failure::from_direct_error_payload("rejected", direct::encode(&()).unwrap()).is_err()
+        );
+        assert_eq!(
+            Failure::from_direct_error_payload("unknown", direct::encode(&()).unwrap()).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn direct_input_consumes_named_record_and_unbound_globals_without_model_traits() {
+        use golem_rust::agentic::DirectToolInput;
+        use golem_rust::schema::wit::{direct, wire};
+
+        #[derive(IntoWire, WireSchema)]
+        struct Input {
+            target: String,
+            inherited: Vec<Option<String>>,
+        }
+
+        let make_input = || wire::TypedSchemaValue {
+            graph: direct::schema::<Input>(),
+            value: direct::encode(&Input {
+                target: "leaf-value".to_string(),
+                inherited: vec![None, Some("ancestor-value".to_string())],
+            })
+            .unwrap(),
+        };
+        let mut input = DirectToolInput::new(make_input()).unwrap();
+        assert_eq!(input.take::<String>("target").unwrap(), "leaf-value");
+        input.finish().unwrap();
+
+        let mut invalid = make_input();
+        let definition = invalid.graph.defs[0].body as usize;
+        let wire::SchemaTypeBody::RecordType(fields) =
+            &mut invalid.graph.type_nodes[definition].body
+        else {
+            panic!("expected named record");
+        };
+        fields[1].metadata.aliases.push("target".to_string());
+        assert!(
+            DirectToolInput::new(invalid)
+                .err()
+                .unwrap()
+                .contains("ambiguous")
+        );
+
+        let mut invalid = make_input();
+        let inherited = invalid
+            .value
+            .value_nodes
+            .iter_mut()
+            .find(|node| matches!(node, wire::SchemaValueNode::ListValue(_)))
+            .unwrap();
+        *inherited = wire::SchemaValueNode::ListValue(vec![999]);
+        let mut input = DirectToolInput::new(invalid).unwrap();
+        assert_eq!(input.take::<String>("target").unwrap(), "leaf-value");
+        assert!(input.finish().unwrap_err().contains("out of bounds"));
+    }
+
+    #[test]
+    fn direct_input_structurally_adapts_option_carriers_through_references() {
+        use golem_rust::agentic::DirectToolInput;
+        use golem_rust::schema::wit::{direct, wire};
+
+        #[derive(IntoWire, WireSchema)]
+        struct OptionalInput {
+            value: Option<String>,
+        }
+
+        #[derive(IntoWire, WireSchema)]
+        struct BareInput {
+            value: String,
+        }
+
+        #[derive(Debug, PartialEq)]
+        struct CustomMaybe(Option<String>);
+
+        impl FromWire for CustomMaybe {
+            fn read_wire(
+                reader: &mut direct::WireReader,
+                index: wire::ValueNodeIndex,
+            ) -> Result<Self, direct::WireError> {
+                Option::<String>::read_wire(reader, index).map(Self)
+            }
+        }
+
+        impl WireSchema for CustomMaybe {
+            fn append_schema(builder: &mut direct::WireSchemaBuilder) -> wire::TypeNodeIndex {
+                let (definition, fresh) =
+                    builder.reserve("test.CustomMaybe".to_string(), Some("custom-maybe".into()));
+                if fresh {
+                    let inner = Option::<String>::append_schema(builder);
+                    builder.commit(definition, inner);
+                }
+                builder.reference(definition)
+            }
+        }
+
+        fn reference_field(graph: &mut wire::SchemaGraph) {
+            let record = graph.defs[0].body as usize;
+            let wire::SchemaTypeBody::RecordType(fields) = &graph.type_nodes[record].body else {
+                panic!("expected named record")
+            };
+            let body = fields[0].body;
+            let definition = graph.defs.len() as wire::DefIndex;
+            graph.defs.push(wire::SchemaTypeDef {
+                id: "test.FieldCarrier".to_string(),
+                name: Some("field-carrier".to_string()),
+                body,
+            });
+            let reference = graph.type_nodes.len() as wire::TypeNodeIndex;
+            graph.type_nodes.push(wire::SchemaTypeNode {
+                body: wire::SchemaTypeBody::RefType(definition),
+                metadata: direct::empty_metadata(),
+            });
+            let wire::SchemaTypeBody::RecordType(fields) = &mut graph.type_nodes[record].body
+            else {
+                unreachable!()
+            };
+            fields[0].body = reference;
+        }
+
+        let optional = |value| {
+            let mut graph = direct::schema::<OptionalInput>();
+            reference_field(&mut graph);
+            wire::TypedSchemaValue {
+                graph,
+                value: direct::encode(&OptionalInput { value }).unwrap(),
+            }
+        };
+        let mut input = DirectToolInput::new(optional(Some("present".to_string()))).unwrap();
+        assert_eq!(
+            input.take_any_adapted::<String>(&["value"]).unwrap(),
+            "present"
+        );
+        input.finish().unwrap();
+
+        let error = DirectToolInput::new(optional(None))
+            .unwrap()
+            .take_any_adapted::<String>(&["value"])
+            .unwrap_err();
+        assert!(error.contains("absent"));
+
+        let mut graph = direct::schema::<BareInput>();
+        reference_field(&mut graph);
+        let mut input = DirectToolInput::new(wire::TypedSchemaValue {
+            graph,
+            value: direct::encode(&BareInput {
+                value: "wrapped".to_string(),
+            })
+            .unwrap(),
+        })
+        .unwrap();
+        assert_eq!(
+            input.take_any_adapted::<CustomMaybe>(&["value"]).unwrap(),
+            CustomMaybe(Some("wrapped".to_string()))
+        );
+        input.finish().unwrap();
+
+        let mut cyclic = direct::schema::<BareInput>();
+        let record = cyclic.defs[0].body as usize;
+        let definition = cyclic.defs.len() as wire::DefIndex;
+        let reference = cyclic.type_nodes.len() as wire::TypeNodeIndex;
+        cyclic.defs.push(wire::SchemaTypeDef {
+            id: "test.Cycle".to_string(),
+            name: None,
+            body: reference,
+        });
+        cyclic.type_nodes.push(wire::SchemaTypeNode {
+            body: wire::SchemaTypeBody::RefType(definition),
+            metadata: direct::empty_metadata(),
+        });
+        let wire::SchemaTypeBody::RecordType(fields) = &mut cyclic.type_nodes[record].body else {
+            unreachable!()
+        };
+        fields[0].body = reference;
+        let error = DirectToolInput::new(wire::TypedSchemaValue {
+            graph: cyclic,
+            value: direct::encode(&BareInput {
+                value: "cycle".to_string(),
+            })
+            .unwrap(),
+        })
+        .err()
+        .unwrap();
+        assert!(error.contains("reference cycle"));
+    }
+
+    #[tool_definition]
+    trait RefinedTextDirectRoundTrip {
+        #[arg(value = "positional", regex = "[a-z]+")]
+        #[arg(items = "option", regex = "[a-z]+")]
+        #[arg(maybe = "option", regex = "[a-z]+")]
+        fn echo(&self, value: String, items: Vec<String>, maybe: Option<String>) -> String;
+    }
+
+    struct RefinedTextDirectRoundTripImpl;
+
+    #[tool_implementation]
+    impl RefinedTextDirectRoundTrip for RefinedTextDirectRoundTripImpl {
+        fn echo(&self, value: String, items: Vec<String>, maybe: Option<String>) -> String {
+            format!("{value}:{}:{}", items.join("/"), maybe.unwrap_or_default())
+        }
+    }
+
+    #[test]
+    async fn guest_invoke_decodes_refined_text_in_scalar_list_and_option() {
+        use golem_rust::schema::{SchemaValue, TextValuePayload};
+        let text = |value: &str| {
+            SchemaValue::Text(TextValuePayload {
+                text: value.to_string(),
+                language: None,
+            })
+        };
+        let tool =
+            <RefinedTextDirectRoundTripImpl as RefinedTextDirectRoundTrip>::__tool_descriptor();
+        let input = encoded_input(
+            &tool,
+            &["echo"],
+            vec![
+                text("scalar"),
+                SchemaValue::List {
+                    elements: vec![text("first"), text("second")],
+                },
+                SchemaValue::Option {
+                    inner: Some(Box::new(text("optional"))),
+                },
+            ],
+        );
+        let result = RefinedTextDirectRoundTripImpl::__tool_invoke(
+            vec!["echo".to_string()],
+            input,
+            None,
+            None,
+            None,
+            anonymous_principal(),
+        )
+        .await
+        .unwrap()
+        .result
+        .unwrap();
+        assert_eq!(
+            golem_rust::schema::wit::direct::decode::<String>(result.value).unwrap(),
+            "scalar:first/second:optional",
+        );
+    }
+
+    type RequiredMaybeString = Option<String>;
+
+    #[tool_definition]
+    trait AliasedOptionDirectRoundTrip {
+        #[arg(value = "option", required = true)]
+        fn echo(&self, value: RequiredMaybeString) -> String;
+    }
+
+    struct AliasedOptionDirectRoundTripImpl;
+
+    #[tool_implementation]
+    impl AliasedOptionDirectRoundTrip for AliasedOptionDirectRoundTripImpl {
+        fn echo(&self, value: RequiredMaybeString) -> String {
+            value.unwrap_or_default()
+        }
+    }
+
+    #[test]
+    async fn guest_invoke_preserves_option_carrier_hidden_by_type_alias() {
+        let tool =
+            <AliasedOptionDirectRoundTripImpl as AliasedOptionDirectRoundTrip>::__tool_descriptor();
+        let input = encoded_input(
+            &tool,
+            &["echo"],
+            vec![golem_rust::SchemaValue::Option {
+                inner: Some(Box::new(golem_rust::SchemaValue::String(
+                    "aliased".to_string(),
+                ))),
+            }],
+        );
+        let result = AliasedOptionDirectRoundTripImpl::__tool_invoke(
+            vec!["echo".to_string()],
+            input,
+            None,
+            None,
+            None,
+            anonymous_principal(),
+        )
+        .await
+        .unwrap()
+        .result
+        .unwrap();
+        assert_eq!(
+            golem_rust::schema::wit::direct::decode::<String>(result.value).unwrap(),
+            "aliased",
+        );
     }
 
     #[tool_definition]
@@ -112,6 +500,7 @@ mod tests {
             input,
             None,
             None,
+            None,
             anonymous_principal(),
         )
         .await
@@ -120,6 +509,68 @@ mod tests {
             &result.result.expect("stream presence mask is returned"),
         )
         .expect("stream presence mask decodes");
+        assert_eq!(u32::from_value(result.value()).unwrap(), 0);
+    }
+
+    #[tool_definition]
+    trait DualOutputRoundTrip {
+        #[arg(diagnostics, channel = "stderr")]
+        async fn outputs(
+            &self,
+            stdout: Option<golem_rust::agentic::OutputStream>,
+            diagnostics: Option<golem_rust::agentic::OutputStream>,
+        ) -> u32;
+    }
+
+    struct DualOutputRoundTripImpl;
+
+    #[tool_implementation]
+    impl DualOutputRoundTrip for DualOutputRoundTripImpl {
+        async fn outputs(
+            &self,
+            stdout: Option<golem_rust::agentic::OutputStream>,
+            diagnostics: Option<golem_rust::agentic::OutputStream>,
+        ) -> u32 {
+            (u32::from(stdout.is_some()) << 1) | (u32::from(diagnostics.is_some()) << 2)
+        }
+    }
+
+    #[test]
+    async fn output_channel_selector_projects_and_dispatches_independently() {
+        let tool = <DualOutputRoundTripImpl as DualOutputRoundTrip>::__tool_descriptor();
+        let command_index = tool
+            .command_index_by_path(&["outputs".to_string()])
+            .expect("outputs command exists");
+        let body = tool.commands[command_index]
+            .body
+            .as_ref()
+            .expect("outputs has a body");
+        assert_eq!(
+            body.stdout.as_ref().map(|stream| stream.required),
+            Some(false)
+        );
+        assert_eq!(
+            body.stderr.as_ref().map(|stream| stream.required),
+            Some(false)
+        );
+
+        let input = encoded_input(&tool, &["outputs"], Vec::new());
+        let invoker = get_tool_invoker_by_name("dual-output-round-trip")
+            .expect("dual output implementation registers an invoker");
+        let result = invoker(
+            vec!["outputs".to_string()],
+            input,
+            None,
+            None,
+            None,
+            anonymous_principal(),
+        )
+        .await
+        .expect("optional outputs may both be absent");
+        let result = golem_rust::decode_typed_schema_value(
+            &result.result.expect("output presence mask is returned"),
+        )
+        .expect("output presence mask decodes");
         assert_eq!(u32::from_value(result.value()).unwrap(), 0);
     }
 
@@ -184,9 +635,9 @@ mod tests {
     #[test]
     fn imported_user_principal_parameter_is_schema_input() {
         mod user_principal_schema {
-            use golem_rust::{FromSchema, IntoSchema};
+            use golem_rust::{FromSchema, FromWire, IntoSchema, IntoWire, WireSchema};
 
-            #[derive(IntoSchema, FromSchema)]
+            #[derive(IntoSchema, FromSchema, WireSchema, IntoWire, FromWire)]
             pub struct Principal {
                 pub id: String,
             }
@@ -257,7 +708,7 @@ mod tests {
     impl GrepMiddleware for GrepMiddlewareShape {
         async fn grep(
             &self,
-            underlying: &mut GrepUnderlying,
+            underlying: &GrepUnderlying,
             case_sensitive: bool,
             pattern: String,
             files: Vec<String>,
@@ -273,7 +724,7 @@ mod tests {
     impl GrepMiddleware<RemoteUnderlying> for GrepAdapterShape {
         async fn grep(
             &self,
-            _underlying: &mut RemoteUnderlying,
+            _underlying: &RemoteUnderlying,
             _case_sensitive: bool,
             _pattern: String,
             _files: Vec<String>,
@@ -289,7 +740,7 @@ mod tests {
     impl PrincipalAutoInjectedRoundTripMiddleware for PrincipalMiddlewareShape {
         async fn whoami(
             &self,
-            underlying: &mut PrincipalAutoInjectedRoundTripUnderlying,
+            underlying: &PrincipalAutoInjectedRoundTripUnderlying,
             _principal: golem_rust::tool::Principal,
             name: String,
         ) -> Result<String, golem_rust::tool::ToolInvokeError<std::convert::Infallible>> {
@@ -304,7 +755,7 @@ mod tests {
     impl GeneratedNameCollisionToolMiddleware for GeneratedNameCollisionMiddlewareShape {
         async fn echo(
             &self,
-            proxied: &mut GeneratedNameCollisionToolUnderlying,
+            proxied: &GeneratedNameCollisionToolUnderlying,
             underlying: String,
             __param_values: String,
             __value: String,
@@ -338,7 +789,7 @@ mod tests {
     impl GeneratedRawNameCollisionToolMiddleware for GeneratedRawNameCollisionMiddlewareShape {
         async fn echo(
             &self,
-            proxied: &mut GeneratedRawNameCollisionToolUnderlying,
+            proxied: &GeneratedRawNameCollisionToolUnderlying,
             r#underlying: String,
             r#__param_values: String,
             r#__value: String,
@@ -678,7 +1129,7 @@ mod tests {
     impl GitMiddleware for GitMiddlewareShape {
         async fn commit(
             &self,
-            underlying: &mut GitUnderlying,
+            underlying: &GitUnderlying,
             message: String,
             config: BTreeMap<String, String>,
         ) -> Result<(), golem_rust::tool::ToolInvokeError<CommitError>> {
@@ -687,7 +1138,7 @@ mod tests {
 
         async fn remote__add(
             &self,
-            underlying: &mut GitUnderlying,
+            underlying: &GitUnderlying,
             verbose: bool,
             name: String,
             url: String,
@@ -697,7 +1148,7 @@ mod tests {
 
         async fn remote__remove(
             &self,
-            underlying: &mut GitUnderlying,
+            underlying: &GitUnderlying,
             verbose: bool,
             name: String,
         ) -> Result<(), golem_rust::tool::ToolInvokeError<RemoteError>> {
@@ -712,7 +1163,7 @@ mod tests {
     impl OuterMiddleware for OuterMiddlewareShape {
         async fn mid__inner__leaf(
             &self,
-            underlying: &mut OuterUnderlying,
+            underlying: &OuterUnderlying,
             verbose: bool,
             name: String,
         ) -> Result<(), golem_rust::tool::ToolInvokeError<RemoteError>> {
@@ -736,13 +1187,12 @@ mod tests {
     impl MiddlewareStreamSurfaceMiddleware for MiddlewareStreamShape {
         async fn copy(
             &self,
-            underlying: &mut MiddlewareStreamSurfaceUnderlying,
+            underlying: &MiddlewareStreamSurfaceUnderlying,
             input: golem_rust::tool::InputStream,
-        ) -> Result<
-            (String, golem_rust::tool::InputStream),
-            golem_rust::tool::ToolInvokeError<RemoteError>,
-        > {
-            underlying.copy(input).await
+            _output: golem_rust::tool::OutputStream,
+        ) -> Result<String, golem_rust::tool::ToolInvokeError<RemoteError>> {
+            let invocation = underlying.start_copy(input).await?;
+            invocation.get().await
         }
 
         fn __golem_tool_middleware_annotation() {}
@@ -784,7 +1234,7 @@ impl Policy {
 impl EchoMiddleware for Policy {
     async fn echo(
         &self,
-        underlying: &mut EchoUnderlying,
+        underlying: &EchoUnderlying,
         value: String,
     ) -> Result<String, golem_rust::tool::ToolInvokeError<std::convert::Infallible>> {
         underlying.echo(value).await
@@ -807,8 +1257,8 @@ impl EchoMiddleware for Policy {
             r#"
 use golem_rust::{universal_tool_middleware, TypedSchemaValue};
 use golem_rust::tool::{
-    InputStream, InvocationResult, Principal, RawCustomToolError, Tool, ToolInvokeError,
-    UnderlyingTool,
+    InputStream, InvocationResult, OutputStream, Principal, RawCustomToolError, Tool,
+    ToolInvokeError, UnderlyingTool,
 };
 
 #[universal_tool_middleware(name = "audit")]
@@ -818,10 +1268,14 @@ async fn audit(
     command_path: Vec<String>,
     input: TypedSchemaValue,
     stdin: Option<InputStream>,
+    stdout: Option<OutputStream>,
+    stderr: Option<OutputStream>,
     _principal: Principal,
-    mut underlying: UnderlyingTool,
+    underlying: UnderlyingTool,
 ) -> Result<InvocationResult, ToolInvokeError<RawCustomToolError>> {
-    underlying.invoke(command_path, input, stdin).await
+    underlying
+        .invoke_forwarding_outputs(command_path, input, stdin, stdout, stderr)
+        .await
 }
 "#,
         );
@@ -829,49 +1283,6 @@ async fn audit(
         assert!(
             output.status.success(),
             "a valid universal middleware must compile:\n{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-
-    #[test]
-    fn pure_middleware_feature_compiles_generated_definition_and_authoring_surfaces() {
-        let output = cargo_tool_crate_with_dependency(
-            "pure-middleware-generated-surfaces",
-            "pure-middleware-generated-surfaces",
-            r#"
-use golem_rust::{tool_definition, tool_middleware};
-
-#[tool_definition]
-trait Echo {
-    fn echo(&self, value: String) -> String;
-}
-
-struct Policy;
-
-impl Policy {
-    fn new() -> Self {
-        Self
-    }
-}
-
-#[tool_middleware(name = "pure-policy", constructor = Policy::new)]
-impl EchoMiddleware for Policy {
-    async fn echo(
-        &self,
-        underlying: &mut EchoUnderlying,
-        value: String,
-    ) -> Result<String, golem_rust::tool::ToolInvokeError<std::convert::Infallible>> {
-        underlying.echo(value).await
-    }
-}
-"#,
-            "check",
-            "golem-rust = { path = PATH, features = [\"export_golem_tool_middleware\"] }",
-        );
-
-        assert!(
-            output.status.success(),
-            "the pure middleware feature must compile generated descriptors, clients, proxies, and authoring adapters:\n{}",
             String::from_utf8_lossy(&output.stderr)
         );
     }
@@ -999,6 +1410,43 @@ impl EchoMiddleware for Policy {
     }
 
     #[tool_definition]
+    trait OptionalCaptureChild {
+        fn leaf(&self, count: u32, name: String) -> Result<(), RemoteError>;
+    }
+
+    struct OptionalCaptureChildSubtree;
+
+    #[tool_definition]
+    trait OptionalCaptureParent {
+        #[command(subtree = OptionalCaptureChild, name = "optional-capture-child")]
+        #[arg(count = "global", required = false)]
+        fn child(&self, count: u32) -> OptionalCaptureChildSubtree;
+    }
+
+    fn generated_subtree_optional_capture_typechecks() {
+        let client = OptionalCaptureParentClient::default().child(7);
+        let _: &str = &client.inherited_prefix[0].name;
+    }
+
+    #[test]
+    fn optional_parent_field_keeps_its_carrier_when_child_redeclares() {
+        let tool = __golem_tool_descriptor_for_OptionalCaptureParent(&mut ToolBuildCtx::new())
+            .expect("optional subtree descriptor builds");
+        let child = tool
+            .node_index_by_path(&["optional-capture-child".to_string()])
+            .expect("subtree command exists");
+        let field = tool
+            .canonical_input_fields(child)
+            .into_iter()
+            .find(|field| field.name == "count")
+            .expect("parent count field exists");
+        assert!(matches!(
+            field.schema.root,
+            golem_rust::SchemaType::Option { .. }
+        ));
+    }
+
+    #[tool_definition]
     trait SameTraitGlobalRoundTrip {
         #[arg(verbose = "global", kind = "flag")]
         fn same_trait_global_round_trip(
@@ -1052,6 +1500,7 @@ impl EchoMiddleware for Policy {
             input,
             None,
             None,
+            None,
             anonymous_principal(),
         )
         .await
@@ -1079,6 +1528,7 @@ impl EchoMiddleware for Policy {
         let err = invoker(
             vec!["fail".to_string()],
             input,
+            None,
             None,
             None,
             anonymous_principal(),
@@ -1132,6 +1582,7 @@ impl EchoMiddleware for Policy {
         let err = invoker(
             vec!["fail".to_string()],
             input,
+            None,
             None,
             None,
             anonymous_principal(),
@@ -1189,6 +1640,7 @@ impl EchoMiddleware for Policy {
             input,
             None,
             None,
+            None,
             anonymous_principal(),
         )
         .await
@@ -1243,6 +1695,7 @@ impl EchoMiddleware for Policy {
             input,
             None,
             None,
+            None,
             anonymous_principal(),
         )
         .await
@@ -1260,7 +1713,7 @@ impl EchoMiddleware for Policy {
         assert_eq!(payload, "declared-payload");
     }
 
-    #[derive(Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+    #[derive(Debug, Eq, PartialEq, IntoSchema, FromSchema, WireSchema, IntoWire, FromWire)]
     struct CustomPlainReturn {
         name: String,
     }
@@ -1294,6 +1747,7 @@ impl EchoMiddleware for Policy {
         let result = invoker(
             vec!["custom-plain".to_string()],
             input,
+            None,
             None,
             None,
             anonymous_principal(),
@@ -1340,7 +1794,7 @@ impl EchoMiddleware for Policy {
             vec![golem_rust::SchemaValue::String("alice".to_string())],
         );
 
-        let result = invoker(vec![], input, None, None, anonymous_principal())
+        let result = invoker(vec![], input, None, None, None, anonymous_principal())
             .await
             .expect("guest invocation dispatches the trait default method body");
         let result = result.result.expect("plain return is encoded as a result");
@@ -1379,7 +1833,7 @@ impl EchoMiddleware for Policy {
         };
 
         let result = instance
-            .__tool_invoke_on(vec![], input, None, None, anonymous_principal())
+            .__tool_invoke_on(vec![], input, None, None, None, anonymous_principal())
             .await
             .expect("instance invocation succeeds");
         let result = result.result.expect("plain return is encoded as a result");
@@ -1389,23 +1843,24 @@ impl EchoMiddleware for Policy {
     }
 
     #[test]
-    fn stdout_tool_result_shape_compiles() {
+    fn tool_output_result_shape_compiles() {
         let output = cargo_check_tool_crate(
-            "stdout-tool-result-shape",
+            "tool-output-result-shape",
             r#"
-use golem_rust::agentic::{ToolInvocation, ToolInvocationStdout};
+use golem_rust::agentic::{ToolInvocation, ToolInvocationOutput};
 use std::convert::Infallible;
 
-fn stdout(invocation: ToolInvocation<(), Infallible>) -> ToolInvocationStdout {
+fn stdout(invocation: ToolInvocation<(), Infallible>) -> Option<ToolInvocationOutput> {
     invocation.stdout
 }
 
-async fn consume(_stdout: ToolInvocationStdout) {}
+async fn consume(_output: ToolInvocationOutput) {}
 
-fn consume_result_and_stdout_concurrently(invocation: ToolInvocation<(), Infallible>) {
+fn consume_result_and_outputs_concurrently(invocation: ToolInvocation<(), Infallible>) {
     let result = invocation.result();
-    let output = consume(invocation.stdout);
-    let _ = (result, output);
+    let stdout = invocation.stdout.map(consume);
+    let stderr = invocation.stderr.map(consume);
+    let _ = (result, stdout, stderr);
 }
 "#,
         );
@@ -1553,7 +2008,7 @@ impl AsyncTool for AsyncToolImpl {
     }
 
     #[test]
-    fn generated_tool_client_requires_schema_decodable_error_type() {
+    fn generated_tool_client_requires_direct_decodable_error_type() {
         let output = cargo_check_tool_crate(
             "tool-client-error-schema-bound",
             r#"
@@ -1587,16 +2042,14 @@ trait ManualErrorTool {
 
         assert!(
             !output.status.success(),
-            "a tool client error type that implements ToolErrorSchema but not Schema must fail to compile\nstdout:\n{}\nstderr:\n{}",
+            "a tool client error type without DirectToolError must fail to compile\nstdout:\n{}\nstderr:\n{}",
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr),
         );
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(
-            stderr.contains("Schema")
-                || stderr.contains("FromSchema")
-                || stderr.contains("IntoSchema"),
-            "expected the compile error to mention the schema decodability bound, got:\n{stderr}",
+            stderr.contains("DirectToolError"),
+            "expected the compile error to mention the direct decodability bound, got:\n{stderr}",
         );
     }
 
@@ -1710,9 +2163,9 @@ fn check_stdout_is_returned_not_passed(
     client: &StreamToolClient,
     input: golem_rust::agentic::InputStream,
 ) {
-    let invocation: Result<golem_rust::agentic::ToolInvocation<String, RemoteError>, golem_rust::agentic::ToolError<RemoteError>> =
-        client.copy(input);
-    let _ = invocation;
+    assert_future_output::<_, Result<golem_rust::agentic::ToolInvocation<String, RemoteError>, golem_rust::agentic::ToolError<RemoteError>>>(
+        client.copy(input),
+    );
 }
 
 fn check_subtree_client_shape() {
@@ -2185,8 +2638,6 @@ mod golem_rust {
                 pub use golem_rust_actual::golem_agentic::golem::tool::*;
 
                 pub mod host {
-                    pub use golem_rust_actual::golem_agentic::golem::tool::host::{ToolStdin, ToolStdout, ToolStdoutWriter};
-
                     #[derive(Clone, Debug)]
                     pub struct ToolRpc;
 
@@ -2213,21 +2664,19 @@ mod golem_rust {
             }
         }
 
-        pub async fn invoke_and_await_infallible(
+        pub async fn invoke_and_await_direct_infallible(
             _rpc: &ambient_tool_rpc::AmbientToolRpc,
             _command_path: &[String],
-            input: &crate::golem_rust::TypedSchemaValue,
-            _stdin: Option<crate::golem_rust::golem_agentic::golem::tool::host::ToolStdin>,
-            _stdout: Option<crate::golem_rust::golem_agentic::golem::tool::host::ToolStdout>,
-        ) -> Result<InvocationResult, ToolError<std::convert::Infallible>> {
-            crate::LAST_INPUT.with(|slot| *slot.borrow_mut() = Some(input.clone()));
-            Ok(InvocationResult {
-                result: Some(
-                    crate::golem_rust::IntoTypedSchemaValue::into_typed_schema_value(
-                        &"ok".to_string(),
-                    )
-                    .unwrap(),
-                ),
+            input: crate::golem_rust::schema::wit::wire::TypedSchemaValue,
+            _stdin: Option<golem_rust_actual::golem_agentic::golem::tool::host::ToolStdin>,
+            _stdout: Option<golem_rust_actual::golem_agentic::golem::tool::host::ToolOutput>,
+            _stderr: Option<golem_rust_actual::golem_agentic::golem::tool::host::ToolOutput>,
+        ) -> Result<DirectInvocationResult, ToolError<std::convert::Infallible>> {
+            crate::LAST_INPUT.with(|slot| *slot.borrow_mut() = Some(crate::golem_rust::decode_typed_schema_value_owned(input).unwrap()));
+            let tree = crate::golem_rust::schema::wit::direct::encode("ok").unwrap();
+            Ok(DirectInvocationResult {
+                root: Some(tree.root),
+                snapshot: std::rc::Rc::new(crate::golem_rust::schema::wit::direct::WireSnapshot::new(tree.value_nodes)),
             })
         }
     }
@@ -2275,7 +2724,9 @@ fn duplicate_canonical_param_uses_last_staged_value() {
 
     assert_eq!(
         fields[0],
-        golem_rust::SchemaValue::U32(2),
+        golem_rust::SchemaValue::Option {
+            inner: Some(Box::new(golem_rust::SchemaValue::U32(2))),
+        },
         "when two client arguments map to the same canonical inherited global, the generated client must preserve the pre-optimization BTreeMap::insert overwrite semantics",
     );
 }
@@ -2317,8 +2768,6 @@ mod golem_rust {
                 pub use golem_rust_actual::golem_agentic::golem::tool::*;
 
                 pub mod host {
-                    pub use golem_rust_actual::golem_agentic::golem::tool::host::{ToolStdin, ToolStdout, ToolStdoutWriter};
-
                     #[derive(Clone, Debug)]
                     pub struct ToolRpc;
 
@@ -2345,21 +2794,19 @@ mod golem_rust {
             }
         }
 
-        pub async fn invoke_and_await_infallible(
+        pub async fn invoke_and_await_direct_infallible(
             _rpc: &ambient_tool_rpc::AmbientToolRpc,
             _command_path: &[String],
-            input: &crate::golem_rust::TypedSchemaValue,
-            _stdin: Option<crate::golem_rust::golem_agentic::golem::tool::host::ToolStdin>,
-            _stdout: Option<crate::golem_rust::golem_agentic::golem::tool::host::ToolStdout>,
-        ) -> Result<InvocationResult, ToolError<std::convert::Infallible>> {
-            crate::LAST_INPUT.with(|slot| *slot.borrow_mut() = Some(input.clone()));
-            Ok(InvocationResult {
-                result: Some(
-                    crate::golem_rust::IntoTypedSchemaValue::into_typed_schema_value(
-                        &"ok".to_string(),
-                    )
-                    .unwrap(),
-                ),
+            input: crate::golem_rust::schema::wit::wire::TypedSchemaValue,
+            _stdin: Option<golem_rust_actual::golem_agentic::golem::tool::host::ToolStdin>,
+            _stdout: Option<golem_rust_actual::golem_agentic::golem::tool::host::ToolOutput>,
+            _stderr: Option<golem_rust_actual::golem_agentic::golem::tool::host::ToolOutput>,
+        ) -> Result<DirectInvocationResult, ToolError<std::convert::Infallible>> {
+            crate::LAST_INPUT.with(|slot| *slot.borrow_mut() = Some(crate::golem_rust::decode_typed_schema_value_owned(input).unwrap()));
+            let tree = crate::golem_rust::schema::wit::direct::encode("ok").unwrap();
+            Ok(DirectInvocationResult {
+                root: Some(tree.root),
+                snapshot: std::rc::Rc::new(crate::golem_rust::schema::wit::direct::WireSnapshot::new(tree.value_nodes)),
             })
         }
     }
@@ -2412,10 +2859,17 @@ fn duplicate_canonical_param_uses_last_staged_value_after_prior_removal() {
         panic!("expected client input to be a record");
     };
 
-    assert_eq!(fields[0], golem_rust::SchemaValue::U32(99));
+    assert_eq!(
+        fields[0],
+        golem_rust::SchemaValue::Option {
+            inner: Some(Box::new(golem_rust::SchemaValue::U32(99))),
+        },
+    );
     assert_eq!(
         fields[1],
-        golem_rust::SchemaValue::U32(3),
+        golem_rust::SchemaValue::Option {
+            inner: Some(Box::new(golem_rust::SchemaValue::U32(3))),
+        },
         "last staged duplicate canonical value must still win after packing an earlier canonical field",
     );
     assert_eq!(
@@ -2632,6 +3086,7 @@ fn check_sparse_nested_capture_set() {
             input,
             None,
             None,
+            None,
             anonymous_principal(),
         )
         .await
@@ -2659,6 +3114,7 @@ fn check_sparse_nested_capture_set() {
         let result = invoker(
             vec!["k".to_string(), "leaf".to_string()],
             input,
+            None,
             None,
             None,
             anonymous_principal(),
@@ -2722,6 +3178,7 @@ fn check_sparse_nested_capture_set() {
             input,
             None,
             None,
+            None,
             anonymous_principal(),
         )
         .await
@@ -2732,6 +3189,58 @@ fn check_sparse_nested_capture_set() {
         let result = golem_rust::decode_typed_schema_value(&result).expect("result decodes");
         let value = String::from_value(result.value()).expect("result schema matches String");
         assert_eq!(value, "child:7:aliased-subtree");
+    }
+
+    #[tool_definition]
+    trait SubtreeAliasSiblingIsolation {
+        fn sibling(&self, count: u32, format: String) -> String;
+
+        #[arg(count = "global", aliases = ["format"])]
+        #[command(subtree = AliasChildRoundTrip)]
+        fn alias_child_round_trip(&self, count: u32) -> AliasChildRoundTripSubtree;
+    }
+
+    struct SubtreeAliasSiblingIsolationImpl;
+
+    #[tool_implementation]
+    impl SubtreeAliasSiblingIsolation for SubtreeAliasSiblingIsolationImpl {
+        fn sibling(&self, count: u32, format: String) -> String {
+            format!("{count}:{format}")
+        }
+
+        fn alias_child_round_trip(&self, _count: u32) -> AliasChildRoundTripSubtree {
+            AliasChildRoundTripSubtree
+        }
+    }
+
+    #[test]
+    async fn subtree_aliases_do_not_shadow_sibling_fields() {
+        let tool =
+            <SubtreeAliasSiblingIsolationImpl as SubtreeAliasSiblingIsolation>::__tool_descriptor();
+        let input = encoded_input(
+            &tool,
+            &["sibling"],
+            vec![
+                golem_rust::SchemaValue::U32(7),
+                golem_rust::SchemaValue::String("plain".to_string()),
+            ],
+        );
+
+        let result = SubtreeAliasSiblingIsolationImpl::__tool_invoke(
+            vec!["sibling".to_string()],
+            input,
+            None,
+            None,
+            None,
+            anonymous_principal(),
+        )
+        .await
+        .expect("an alias owned by a different command path must not shadow sibling fields");
+        let result = result.result.expect("plain return is encoded as a result");
+        assert_eq!(
+            golem_rust::schema::wit::direct::decode::<String>(result.value).unwrap(),
+            "7:plain",
+        );
     }
 
     #[tool_definition]
@@ -2783,6 +3292,7 @@ fn check_sparse_nested_capture_set() {
         let result = invoker(
             vec!["alias-child".to_string(), "leaf".to_string()],
             input,
+            None,
             None,
             None,
             anonymous_principal(),
@@ -2852,6 +3362,7 @@ fn check_sparse_nested_capture_set() {
             input,
             None,
             None,
+            None,
             anonymous_principal(),
         )
         .await
@@ -2894,6 +3405,7 @@ fn check_sparse_nested_capture_set() {
         let result = invoker(
             vec!["leaf".to_string()],
             input,
+            None,
             None,
             None,
             anonymous_principal(),
@@ -2956,6 +3468,7 @@ fn check_sparse_nested_capture_set() {
             input,
             None,
             None,
+            None,
             anonymous_principal(),
         )
         .await
@@ -3015,6 +3528,7 @@ fn check_sparse_nested_capture_set() {
             input,
             None,
             None,
+            None,
             anonymous_principal(),
         )
         .await
@@ -3069,6 +3583,7 @@ fn check_sparse_nested_capture_set() {
         let result = invoker(
             vec!["leaf".to_string()],
             input,
+            None,
             None,
             None,
             anonymous_principal(),
@@ -3237,7 +3752,7 @@ fn check_sparse_nested_capture_set() {
             .expect("matching inferred bool global re-declaration is valid");
     }
 
-    #[derive(Clone, Debug, IntoSchema, FromSchema)]
+    #[derive(Clone, Debug, IntoSchema, FromSchema, WireSchema, IntoWire, FromWire)]
     struct RecursiveNode {
         next: Option<Box<RecursiveNode>>,
     }
@@ -4542,9 +5057,9 @@ trait GoodTool {
         let output = cargo_check_tool_crate(
             "inferred-tail-custom-item-min-unused-option",
             r#"
-use golem_rust::{tool_definition, FromSchema, IntoSchema, ToolError};
+use golem_rust::{tool_definition, FromSchema, FromWire, IntoSchema, IntoWire, ToolError, WireSchema};
 
-#[derive(Clone, IntoSchema, FromSchema)]
+#[derive(Clone, IntoSchema, FromSchema, WireSchema, IntoWire, FromWire)]
 struct Item {
     value: String,
 }
@@ -6397,7 +6912,7 @@ use golem_rust::agentic::{InputStream, invoke_and_await_infallible, pump_tool_st
 use golem_rust::golem_agentic::golem::tool::host::ToolRpc;
 
 fn forward_stdin(rpc: &ToolRpc, input: &golem_rust::TypedSchemaValue, stdin: InputStream) {
-    let _ = invoke_and_await_infallible(rpc, &[], input, Some(pump_tool_stdin(stdin)), None);
+    let _ = invoke_and_await_infallible(rpc, &[], input, Some(pump_tool_stdin(stdin)), None, None);
 }
 "#,
         );
@@ -6613,12 +7128,12 @@ impl UnusedParamTool for UnusedParamToolImpl {
         let output = cargo_check_tool_crate(
             "user-principal-value-type",
             r#"
-use golem_rust::{tool_definition, tool_implementation, FromSchema, IntoSchema};
+use golem_rust::{tool_definition, tool_implementation, FromSchema, FromWire, IntoSchema, IntoWire, WireSchema};
 
 mod domain {
     use super::*;
 
-    #[derive(IntoSchema, FromSchema)]
+    #[derive(IntoSchema, FromSchema, WireSchema, IntoWire, FromWire)]
     pub struct Principal {
         pub id: String,
     }
@@ -6658,12 +7173,12 @@ fn build_client() {
         let output = cargo_check_tool_crate(
             "bug-finder-domain-principal-input",
             r#"
-use golem_rust::{tool_definition, tool_implementation, FromSchema, IntoSchema};
+use golem_rust::{tool_definition, tool_implementation, FromSchema, FromWire, IntoSchema, IntoWire, WireSchema};
 
 mod domain {
     use super::*;
 
-    #[derive(IntoSchema, FromSchema)]
+    #[derive(IntoSchema, FromSchema, WireSchema, IntoWire, FromWire)]
     pub struct Principal {
         pub id: String,
     }
@@ -6703,9 +7218,9 @@ fn compile_client_and_impl() {
         let output = cargo_check_tool_crate(
             "bug-finder-local-principal-input",
             r#"
-use golem_rust::{tool_definition, tool_implementation, FromSchema, IntoSchema};
+use golem_rust::{tool_definition, tool_implementation, FromSchema, FromWire, IntoSchema, IntoWire, WireSchema};
 
-#[derive(IntoSchema, FromSchema)]
+#[derive(IntoSchema, FromSchema, WireSchema, IntoWire, FromWire)]
 pub struct Principal {
     pub id: String,
 }
@@ -6748,7 +7263,7 @@ use golem_rust::agentic::invoke_and_await_infallible;
 use golem_rust::golem_agentic::golem::tool::host::ToolRpc;
 
 fn call_tool(rpc: &ToolRpc, input: &golem_rust::TypedSchemaValue) {
-    let _ = invoke_and_await_infallible(rpc, &[], input, None, None);
+    let _ = invoke_and_await_infallible(rpc, &[], input, None, None, None);
 }
 "#,
         );
@@ -6786,7 +7301,8 @@ impl Guest for Component {
         _command_path: Vec<String>,
         _input: TypedSchemaValue,
         _stdin: Option<InputStream>,
-        _stdout: Option<golem_rust::golem_agentic::golem::tool::host::ToolStdoutWriter>,
+        _stdout: Option<golem_rust::golem_agentic::golem::tool::streams::ToolOutputWriter>,
+        _stderr: Option<golem_rust::golem_agentic::golem::tool::streams::ToolOutputWriter>,
         _principal: Principal,
     ) -> Result<InvocationResult, ToolError> {
         unimplemented!()
@@ -6935,6 +7451,54 @@ impl BadTool for BadToolImpl {
                     "expected a two-element fixed list",
                 )),
             }
+        }
+    }
+
+    impl golem_rust::WireSchema for FixedPair {
+        fn append_schema(builder: &mut golem_rust::schema::wit::direct::WireSchemaBuilder) -> i32 {
+            let element = <u32 as golem_rust::WireSchema>::append_schema(builder);
+            builder.push(
+                golem_rust::schema::wit::wire::SchemaTypeBody::FixedListType(
+                    golem_rust::schema::wit::wire::FixedListSpec { element, length: 2 },
+                ),
+            )
+        }
+    }
+
+    impl golem_rust::IntoWire for FixedPair {
+        fn write_wire(
+            &self,
+            writer: &mut golem_rust::schema::wit::direct::WireWriter,
+        ) -> Result<i32, golem_rust::schema::wit::direct::WireError> {
+            let first = 1u32.write_wire(writer)?;
+            let second = 2u32.write_wire(writer)?;
+            Ok(writer.push(
+                golem_rust::schema::wit::wire::SchemaValueNode::FixedListValue(vec![first, second]),
+            ))
+        }
+    }
+
+    impl golem_rust::FromWire for FixedPair {
+        fn read_wire(
+            reader: &mut golem_rust::schema::wit::direct::WireReader,
+            index: i32,
+        ) -> Result<Self, golem_rust::schema::wit::direct::WireError> {
+            let golem_rust::schema::wit::wire::SchemaValueNode::FixedListValue(values) =
+                reader.take(index)?
+            else {
+                return Err(golem_rust::schema::wit::direct::WireError::Shape(
+                    "fixed list",
+                ));
+            };
+            if values.len() != 2 {
+                return Err(golem_rust::schema::wit::direct::WireError::Shape(
+                    "fixed list length",
+                ));
+            }
+            for value in values {
+                let _ = <u32 as golem_rust::FromWire>::read_wire(reader, value)?;
+            }
+            Ok(FixedPair)
         }
     }
 

@@ -1,0 +1,108 @@
+name: "durable-streams"
+settings:
+  golem_server:
+    custom_request_port: 9006
+steps:
+  - id: "create-project"
+    create_project:
+      name: test-app
+    verify:
+      build: true
+
+  - id: "add-durable-stream-agents"
+    prompt:
+      rust: &durable-stream-prompt >
+        In test-app, add two durable agents and expose them in the local HTTP API at
+        localhost:{{custom_request_port}}. The exact localhost deployment is required so agents
+        can consume its plain-HTTP URL through the SDK's loopback exception. `DurablePipe` has one
+        string identity named `name`, mounted at `/durable/{name}`. Add a POST `/uppercase` method
+        named `uppercase` that accepts a string AgentStream parameter named `input` and returns a
+        string AgentStream. It must transform items lazily to uppercase. Configure the Durable
+        Streams route so the input slot is publicly named `inbox`, the `$result` output slot is
+        publicly named `outbox`, external writes and stream/invocation deletion are enabled, the
+        live-reader limit is 8, and the append limit is 25 per second.
+
+        Add `DurableConsumer`, also with one string identity, mounted at
+        `/durable-consumer/{name}`. Its normal, externally invokable method `consume_url` in Rust
+        and MoonBit or `consumeUrl` in TypeScript, Effect, and Scala accepts a protocol-compatible
+        Durable Streams URL string. Do not expose that method as an HTTP endpoint. It must use this
+        language SDK's external Durable Streams JSON reader, consume string messages incrementally
+        until closure, and return them as a list/array. Do not parse this URL with a generic HTTP
+        client and do not use typed agent RPC for the consumer. Keep generic agent-to-agent
+        streaming separate. Make the project build and deploy successfully. Do not run bug_finder
+        or delegate review; the harness performs external verification.
+      ts: *durable-stream-prompt
+      effect: *durable-stream-prompt
+      scala: *durable-stream-prompt
+      moonbit: *durable-stream-prompt
+    expectedSkills:
+      rust:
+        - "golem-durable-streams-rust"
+      ts:
+        - "golem-durable-streams-ts"
+      effect:
+        - "golem-durable-streams-effect"
+      scala:
+        - "golem-durable-streams-scala"
+      moonbit:
+        - "golem-durable-streams-moonbit"
+    verify:
+      build: true
+      deploy: true
+
+  - id: "create-explicit-session"
+    http:
+      url: "http://localhost:{{custom_request_port}}/durable/main/uppercase/invocations/harness-session"
+      method: "PUT"
+    expect:
+      status: 201
+
+  - id: "append-and-close-input"
+    http:
+      url: "http://localhost:{{custom_request_port}}/durable/main/uppercase/invocations/harness-session/streams/inbox"
+      method: "POST"
+      headers:
+        Content-Type: "application/json"
+        Producer-Id: "harness-producer"
+        Producer-Epoch: "0"
+        Producer-Seq: "0"
+        Stream-Closed: "true"
+      body: '["alpha","Beta","durable stream"]'
+    expect:
+      status: 200
+      header_contains:
+        Producer-Epoch: "0"
+        Producer-Seq: "0"
+        Stream-Closed: "true"
+
+  - id: "read-output-over-http"
+    http:
+      url: "http://localhost:{{custom_request_port}}/durable/main/uppercase/invocations/harness-session/streams/outbox?offset=-1"
+      method: "GET"
+    retry:
+      attempts: 20
+      delay: 1
+    expect:
+      status: 200
+      header_contains:
+        Content-Type: "application/json"
+        Stream-Closed: "true"
+        Stream-Up-To-Date: "true"
+      body_json:
+        - path: "$"
+          equals: ["ALPHA", "BETA", "DURABLE STREAM"]
+
+  - id: "consume-compatible-url-from-agent"
+    invoke_json:
+      agent: 'DurableConsumer("reader")'
+      method:
+        rust: "consume_url"
+        ts: "consumeUrl"
+        effect: "consumeUrl"
+        scala: "consumeUrl"
+        moonbit: "consume_url"
+      args: '"http://localhost:{{custom_request_port}}/durable/main/uppercase/invocations/harness-session/streams/outbox"'
+    expect:
+      result_json:
+        - path: "$"
+          equals: ["ALPHA", "BETA", "DURABLE STREAM"]

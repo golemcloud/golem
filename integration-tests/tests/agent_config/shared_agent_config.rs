@@ -213,7 +213,7 @@ async fn agent_fails_on_missing_environment_secret_value(
 
     assert_matches!(
         response,
-        Err(golem_client::Error::Item(WorkerError::Error500(_)))
+        Err(golem_client::Error::Item(WorkerError::Error400(_)))
     );
 
     Ok(())

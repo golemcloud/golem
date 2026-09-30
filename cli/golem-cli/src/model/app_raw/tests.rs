@@ -12,7 +12,7 @@ use golem_common::base_model::retry_policy::{
     ApiPropertySubstring, ApiRetryPolicy, ApiRetryPolicyPair, ApiTextValue, ApiTimeBoxPolicy,
 };
 use golem_common::model::agent::AgentTypeName;
-use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath};
+use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath, ComponentName};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentName;
 use golem_common::model::quota::{
@@ -20,6 +20,7 @@ use golem_common::model::quota::{
     ResourceName, ResourceRateLimit, TimePeriod,
 };
 use golem_common::model::security_scheme::SecuritySchemeName;
+use golem_common::model::tool::ToolName;
 use indexmap::IndexMap;
 use proptest::prelude::*;
 use proptest::string::string_regex;
@@ -98,6 +99,10 @@ fn arb_map_merge_mode_model() -> BoxedStrategy<MapMergeMode> {
     .boxed()
 }
 
+fn arb_guest_language_model() -> BoxedStrategy<GuestLanguage> {
+    prop::sample::select(GuestLanguage::iter().collect::<Vec<_>>()).boxed()
+}
+
 fn arb_vec_merge_mode_model() -> BoxedStrategy<VecMergeMode> {
     prop_oneof![
         Just(VecMergeMode::Append),
@@ -129,6 +134,55 @@ fn arb_config_key_scope_model() -> BoxedStrategy<ManifestConfigKeyScope> {
     .boxed()
 }
 
+fn arb_tool_middleware_installation_model() -> BoxedStrategy<ToolMiddlewareInstallation> {
+    let shortcut = (arb_tool_name(), arb_opt(arb_semver())).prop_map(|(name, version)| {
+        ToolMiddlewareInstallation::Shortcut(match version {
+            Some(version) => format!("{name}@{version}"),
+            None => name,
+        })
+    });
+    let structured = (
+        arb_tool_name(),
+        arb_opt(arb_semver()),
+        arb_json_value(),
+        arb_opt(
+            arb_ident()
+                .prop_map(|name| format!("{name}@example.com"))
+                .boxed(),
+        ),
+        arb_opt(arb_secret_key_scope_model()),
+        arb_opt(arb_secret_key_scope_model()),
+        prop_oneof![
+            Just(ToolFilesystemAccess::Unset),
+            Just(ToolFilesystemAccess::Allowed),
+            Just(ToolFilesystemAccess::Denied),
+        ],
+    )
+        .prop_map(
+            |(
+                name,
+                version,
+                parameters,
+                account,
+                secret_keys_readable,
+                secret_keys_revealable,
+                filesystem_access,
+            )| {
+                ToolMiddlewareInstallation::Structured(ToolMiddlewareInstallationStruct {
+                    name: ToolMiddlewareName::try_from(name).unwrap(),
+                    version,
+                    parameters: NormalizedJsonValue::new(parameters),
+                    account,
+                    secret_keys_readable,
+                    secret_keys_revealable,
+                    filesystem_access,
+                })
+            },
+        );
+
+    prop_oneof![shortcut, structured].boxed()
+}
+
 fn arb_tool_binding_model() -> BoxedStrategy<ToolBinding> {
     (
         arb_opt(arb_semver()),
@@ -149,6 +203,15 @@ fn arb_tool_binding_model() -> BoxedStrategy<ToolBinding> {
         arb_opt(arb_secret_key_scope_model()),
         arb_opt(Just(SecretKeyMergeMode::Intersect).boxed()),
         arb_opt(arb_secret_key_scope_model()),
+        arb_opt(prop::collection::vec(arb_tool_middleware_installation_model(), 0..=3).boxed()),
+        arb_opt(
+            prop_oneof![
+                Just(ToolMiddlewareMergeMode::Prepend),
+                Just(ToolMiddlewareMergeMode::Append),
+                Just(ToolMiddlewareMergeMode::Replace),
+            ]
+            .boxed(),
+        ),
     )
         .prop_map(
             |(
@@ -162,6 +225,8 @@ fn arb_tool_binding_model() -> BoxedStrategy<ToolBinding> {
                 secret_keys_readable,
                 secret_keys_revealable_merge_mode,
                 secret_keys_revealable,
+                middleware,
+                middleware_merge_mode,
             )| ToolBinding {
                 version,
                 parameters_merge_mode,
@@ -174,8 +239,8 @@ fn arb_tool_binding_model() -> BoxedStrategy<ToolBinding> {
                 secret_keys_revealable_merge_mode,
                 secret_keys_revealable,
                 filesystem_access: None,
-                middleware: None,
-                middleware_merge_mode: None,
+                middleware,
+                middleware_merge_mode,
             },
         )
         .boxed()
@@ -345,6 +410,21 @@ fn arb_initial_component_file_model() -> BoxedStrategy<InitialComponentFile> {
         .boxed()
 }
 
+fn arb_component_config_schema_model() -> BoxedStrategy<ComponentConfigSchema> {
+    arb_ident()
+        .prop_map(|name| ComponentConfigSchema {
+            schema: golem_common::schema::SchemaGraph::anonymous(
+                golem_common::schema::SchemaType::string(),
+            ),
+            declarations: vec![golem_common::schema::agent::AgentConfigDeclarationSchema {
+                source: golem_common::model::agent::AgentConfigSource::Local,
+                path: vec![name],
+                value_type: golem_common::schema::SchemaType::string(),
+            }],
+        })
+        .boxed()
+}
+
 fn arb_component_preset_model() -> BoxedStrategy<ComponentPreset> {
     (
         any::<bool>(),
@@ -364,6 +444,7 @@ fn arb_component_preset_model() -> BoxedStrategy<ComponentPreset> {
             prop::collection::vec(arb_ident(), 0..=3),
         ),
         (
+            arb_opt(arb_component_config_schema_model()),
             arb_opt(arb_json_value()),
             arb_opt(arb_map_merge_mode_model()),
             arb_opt(arb_string_index_map_model()),
@@ -374,6 +455,10 @@ fn arb_component_preset_model() -> BoxedStrategy<ComponentPreset> {
             arb_opt(arb_vec_merge_mode_model()),
             arb_opt(prop::collection::vec(arb_initial_component_file_model(), 0..=2).boxed()),
         ),
+        (
+            arb_opt(arb_map_merge_mode_model()),
+            arb_opt(arb_tool_bindings_model()),
+        ),
     )
         .prop_map(
             |(
@@ -381,8 +466,9 @@ fn arb_component_preset_model() -> BoxedStrategy<ComponentPreset> {
                 component_wasm,
                 output_wasm,
                 (build_merge_mode, build, custom_commands, clean),
-                (config, env_merge_mode, env),
+                (config_schema, config, env_merge_mode, env),
                 (plugins_merge_mode, plugins, files_merge_mode, files),
+                (tools_merge_mode, tools),
             )| ComponentPreset {
                 default: is_default.then_some(Marker),
                 component_wasm,
@@ -392,6 +478,7 @@ fn arb_component_preset_model() -> BoxedStrategy<ComponentPreset> {
                 build,
                 custom_commands,
                 clean,
+                config_schema,
                 config,
                 initial_card: None,
                 env_merge_mode,
@@ -400,6 +487,8 @@ fn arb_component_preset_model() -> BoxedStrategy<ComponentPreset> {
                 plugins,
                 files_merge_mode,
                 files,
+                tools_merge_mode,
+                tools,
             },
         )
         .boxed()
@@ -407,7 +496,7 @@ fn arb_component_preset_model() -> BoxedStrategy<ComponentPreset> {
 
 fn arb_component_template_model() -> BoxedStrategy<ComponentTemplate> {
     (
-        arb_token_list_model(),
+        (arb_token_list_model(), arb_opt(arb_guest_language_model())),
         arb_opt(arb_ident()),
         arb_opt(arb_ident()),
         (
@@ -424,6 +513,7 @@ fn arb_component_template_model() -> BoxedStrategy<ComponentTemplate> {
             prop::collection::vec(arb_ident(), 0..=3),
         ),
         (
+            arb_opt(arb_component_config_schema_model()),
             arb_opt(arb_json_value()),
             arb_opt(arb_map_merge_mode_model()),
             arb_opt(arb_string_index_map_model()),
@@ -434,20 +524,26 @@ fn arb_component_template_model() -> BoxedStrategy<ComponentTemplate> {
             arb_opt(arb_vec_merge_mode_model()),
             arb_opt(prop::collection::vec(arb_initial_component_file_model(), 0..=2).boxed()),
         ),
+        (
+            arb_opt(arb_map_merge_mode_model()),
+            arb_opt(arb_tool_bindings_model()),
+        ),
         prop::collection::vec((arb_ident(), arb_component_preset_model()), 0..=2)
             .prop_map(IndexMap::from_iter),
     )
         .prop_map(
             |(
-                templates,
+                (templates, guest_language),
                 component_wasm,
                 output_wasm,
                 (build_merge_mode, build, custom_commands, clean),
-                (config, env_merge_mode, env),
+                (config_schema, config, env_merge_mode, env),
                 (plugins_merge_mode, plugins, files_merge_mode, files),
+                (tools_merge_mode, tools),
                 presets,
             )| ComponentTemplate {
                 templates,
+                guest_language,
                 component_wasm,
                 output_wasm,
                 dependencies: ComponentDependencies::default(),
@@ -455,6 +551,7 @@ fn arb_component_template_model() -> BoxedStrategy<ComponentTemplate> {
                 build,
                 custom_commands,
                 clean,
+                config_schema,
                 config,
                 initial_card: None,
                 env_merge_mode,
@@ -463,6 +560,8 @@ fn arb_component_template_model() -> BoxedStrategy<ComponentTemplate> {
                 plugins,
                 files_merge_mode,
                 files,
+                tools_merge_mode,
+                tools,
                 presets,
             },
         )
@@ -489,6 +588,7 @@ fn arb_component_model() -> BoxedStrategy<Component> {
             prop::collection::vec(arb_ident(), 0..=3),
         ),
         (
+            arb_opt(arb_component_config_schema_model()),
             arb_opt(arb_json_value()),
             arb_opt(arb_map_merge_mode_model()),
             arb_opt(arb_string_index_map_model()),
@@ -498,6 +598,10 @@ fn arb_component_model() -> BoxedStrategy<Component> {
             arb_opt(prop::collection::vec(arb_plugin_installation_model(), 0..=2).boxed()),
             arb_opt(arb_vec_merge_mode_model()),
             arb_opt(prop::collection::vec(arb_initial_component_file_model(), 0..=2).boxed()),
+        ),
+        (
+            arb_opt(arb_map_merge_mode_model()),
+            arb_opt(arb_tool_bindings_model()),
         ),
         prop::collection::vec((arb_ident(), arb_component_preset_model()), 0..=2)
             .prop_map(IndexMap::from_iter),
@@ -509,8 +613,9 @@ fn arb_component_model() -> BoxedStrategy<Component> {
                 component_wasm,
                 output_wasm,
                 (build_merge_mode, build, custom_commands, clean),
-                (config, env_merge_mode, env),
+                (config_schema, config, env_merge_mode, env),
                 (plugins_merge_mode, plugins, files_merge_mode, files),
+                (tools_merge_mode, tools),
                 presets,
             )| Component {
                 templates,
@@ -522,6 +627,7 @@ fn arb_component_model() -> BoxedStrategy<Component> {
                 build,
                 custom_commands,
                 clean,
+                config_schema,
                 config,
                 initial_card: None,
                 env_merge_mode,
@@ -530,6 +636,8 @@ fn arb_component_model() -> BoxedStrategy<Component> {
                 plugins,
                 files_merge_mode,
                 files,
+                tools_merge_mode,
+                tools,
                 presets,
             },
         )
@@ -863,9 +971,15 @@ fn arb_http_api_deployment_model() -> BoxedStrategy<HttpApiDeployment> {
             0..=3,
         )
         .prop_map(IndexMap::from_iter),
+        prop::bool::ANY,
     )
         .prop_map(
-            |(domain, webhook_url, openapi_endpoint, agents)| HttpApiDeployment {
+            |(domain, webhook_url, openapi_endpoint, agents, use_http)| HttpApiDeployment {
+                scheme: Some(if use_http {
+                    golem_common::model::http_api_deployment::HttpApiDeploymentScheme::Http
+                } else {
+                    golem_common::model::http_api_deployment::HttpApiDeploymentScheme::Https
+                }),
                 domain: Some(Domain(format!("{domain}.example.com")).into()),
                 subdomain: None,
                 webhook_url,
@@ -902,11 +1016,43 @@ fn arb_mcp_deployment_model() -> BoxedStrategy<McpDeployment> {
             0..=3,
         )
         .prop_map(IndexMap::from_iter),
+        prop::collection::vec(
+            (
+                arb_tool_name().prop_map(|name| ToolName::try_from(name).unwrap()),
+                (
+                    arb_ident().prop_map(ComponentName),
+                    arb_opt(arb_ident()),
+                    prop_oneof![
+                        Just((None, None)),
+                        prop::collection::vec(arb_ident(), 0..=2)
+                            .prop_map(|include| (Some(include), None)),
+                        prop::collection::vec(arb_ident(), 0..=2)
+                            .prop_map(|exclude| (None, Some(exclude))),
+                    ],
+                )
+                    .prop_map(
+                        |(owner_component, security_scheme, (include, exclude))| {
+                            McpDeploymentToolOptions {
+                                owner_component,
+                                security_scheme,
+                                include,
+                                exclude,
+                            }
+                        },
+                    ),
+            ),
+            0..=3,
+        )
+        .prop_map(IndexMap::from_iter),
     )
-        .prop_map(|(domain, agents)| McpDeployment {
+        .prop_map(|(domain, agents, tools)| McpDeployment {
             domain: Some(Domain(format!("{domain}.example.com")).into()),
             subdomain: None,
             agents,
+            tools,
+        })
+        .prop_filter("MCP deployments require an agent or tool", |deployment| {
+            !deployment.agents.is_empty() || !deployment.tools.is_empty()
         })
         .boxed()
 }
@@ -921,8 +1067,64 @@ fn arb_mcp_model() -> BoxedStrategy<Mcp> {
     )
     .prop_map(|deployments| Mcp {
         deployments: IndexMap::from_iter(deployments),
+        imports: IndexMap::new(),
     })
     .boxed()
+}
+
+#[test]
+fn mcp_imports_serde_and_schema_preserve_order_and_shapes() {
+    let yaml = r#"
+mcp:
+  imports:
+    prod:
+      - url: https://first.example.com/mcp
+        auth:
+          bearer: "{{ MCP_TOKEN }}"
+        prefix: first
+        include: ["read_*", "list_*"]
+      - url: https://second.example.com/mcp
+        auth:
+          basic:
+            user: alice
+            password: "{{ MCP_PASSWORD }}"
+        exclude: ["delete_*"]
+        version: "2025-03-26"
+      - url: https://third.example.com/mcp
+        securityScheme: oauth
+"#;
+    let value: serde_json::Value = serde_yaml::from_str(yaml).unwrap();
+    assert!(JSON_SCHEMA_VALIDATOR.is_valid(&value));
+    let app: Application = serde_yaml::from_str(yaml).unwrap();
+    let imports = &app.mcp.unwrap().imports[&EnvironmentName("prod".into())];
+    assert_eq!(imports.len(), 3);
+    assert_eq!(imports[0].prefix.as_deref(), Some("first"));
+    assert_eq!(imports[1].version.as_deref(), Some("2025-03-26"));
+}
+
+#[test]
+fn mcp_imports_schema_and_semantic_validation_reject_conflicting_fields() {
+    for extra in [
+        serde_json::json!({ "auth": {} }),
+        serde_json::json!({ "auth": { "bearer": "token", "basic": { "user": "u", "password": "p" } } }),
+        serde_json::json!({ "auth": { "bearer": "token" }, "securityScheme": "oauth" }),
+        serde_json::json!({ "include": [], "exclude": [] }),
+    ] {
+        let mut import = serde_json::json!({ "url": "http://internal.example/mcp" });
+        import
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        let manifest = serde_json::json!({ "mcp": { "imports": { "prod": [import.clone()] } } });
+        assert!(!JSON_SCHEMA_VALIDATOR.is_valid(&manifest));
+        let input: golem_common::model::mcp_import::McpImportDeployment =
+            serde_json::from_value(import).unwrap();
+        assert!(
+            input
+                .into_parts(golem_common::model::environment::EnvironmentId::new())
+                .is_err()
+        );
+    }
 }
 
 fn arb_bridge_sdk_language_targets() -> BoxedStrategy<BridgeSdkLanguageTargets> {
@@ -1318,6 +1520,94 @@ prop_compose! {
 }
 
 #[test]
+fn schema_and_serde_require_explicit_mcp_tool_owner_component() {
+    let mut value = serde_json::json!({"mcp":{"deployments":{"local":[{
+        "subdomain":"mcp", "agents":{"Counter":{}},
+        "tools":{"files":{"ownerComponent":"app:owner","include":["read **"]}}
+    }]}}});
+    assert!(JSON_SCHEMA_VALIDATOR.is_valid(&value));
+    let parsed = serde_json::from_value::<Application>(value.clone()).unwrap();
+    let mcp = parsed.mcp.unwrap();
+    let options = &mcp.deployments.values().next().unwrap()[0].tools;
+    assert_eq!(
+        options.values().next().unwrap().owner_component.0,
+        "app:owner"
+    );
+    value["mcp"]["deployments"]["local"][0]["tools"]["files"]
+        .as_object_mut()
+        .unwrap()
+        .remove("ownerComponent");
+    assert!(!JSON_SCHEMA_VALIDATOR.is_valid(&value));
+    assert!(serde_json::from_value::<Application>(value).is_err());
+}
+
+#[test]
+fn schema_and_serde_accept_inherited_component_config_schema() {
+    let config_schema = serde_json::to_value(
+        arb_component_config_schema_model()
+            .new_tree(&mut proptest::test_runner::TestRunner::deterministic())
+            .unwrap()
+            .current(),
+    )
+    .unwrap();
+    let value = serde_json::json!({
+        "app": "test-app",
+        "componentTemplates": {"configured": {
+            "configSchema": config_schema,
+            "presets": {"custom": {"configSchema": config_schema}}
+        }},
+        "components": {"app:main": {
+            "templates": "configured", "componentWasm": "main.wasm",
+            "presets": {"custom": {"configSchema": config_schema}}
+        }}
+    });
+    assert!(JSON_SCHEMA_VALIDATOR.is_valid(&value));
+    serde_json::from_value::<Application>(value).unwrap();
+}
+
+#[test]
+fn schema_and_serde_accept_component_template_guest_language() {
+    for language in GuestLanguage::iter() {
+        let value = serde_json::json!({
+            "app": "test-app",
+            "componentTemplates": {"custom": {"guestLanguage": language.id()}}
+        });
+        assert!(JSON_SCHEMA_VALIDATOR.is_valid(&value), "{}", language.id());
+        let app = serde_json::from_value::<Application>(value.clone()).unwrap();
+        assert_eq!(
+            app.component_templates["custom"].guest_language,
+            Some(language)
+        );
+        assert_eq!(serde_json::to_value(&app).unwrap(), value);
+    }
+}
+
+#[test]
+fn schema_and_serde_reject_unknown_component_template_guest_language() {
+    for language in ["typescript", "TypeScript", "java"] {
+        let value = serde_json::json!({
+            "app": "test-app",
+            "componentTemplates": {"custom": {"guestLanguage": language}}
+        });
+        assert!(!JSON_SCHEMA_VALIDATOR.is_valid(&value), "{language}");
+        assert!(
+            serde_json::from_value::<Application>(value).is_err(),
+            "{language}"
+        );
+    }
+}
+
+#[test]
+fn schema_and_serde_reject_component_guest_language() {
+    let value = serde_json::json!({
+        "app": "test-app",
+        "components": {"app:main": {"componentWasm": "main.wasm", "guestLanguage": "ts"}}
+    });
+    assert!(!JSON_SCHEMA_VALIDATOR.is_valid(&value));
+    assert!(serde_json::from_value::<Application>(value).is_err());
+}
+
+#[test]
 fn schema_is_loadable_and_validates_empty_app() {
     let app = Application {
         app: Some("app-name".to_string()),
@@ -1325,6 +1615,39 @@ fn schema_is_loadable_and_validates_empty_app() {
     };
 
     assert!(JSON_SCHEMA_VALIDATOR.is_valid(&serde_json::to_value(&app).unwrap()));
+}
+
+#[test]
+fn http_api_scheme_schema_and_serde_agree() {
+    use golem_common::model::http_api_deployment::HttpApiDeploymentScheme;
+    let mut json = serde_json::json!({"app": "test", "httpApi": {"deployments": {
+        "local": [{"domain": "localhost:9006", "agents": {}}]
+    }}});
+    for (value, expected) in [
+        (None, None),
+        (Some("http"), Some(HttpApiDeploymentScheme::Http)),
+        (Some("https"), Some(HttpApiDeploymentScheme::Https)),
+    ] {
+        if let Some(value) = value {
+            json["httpApi"]["deployments"]["local"][0]["scheme"] = value.into();
+        }
+        assert!(JSON_SCHEMA_VALIDATOR.is_valid(&json));
+        let app: Application = serde_json::from_value(json.clone()).unwrap();
+        let deployment = app
+            .http_api
+            .unwrap()
+            .deployments
+            .into_values()
+            .next()
+            .unwrap()
+            .remove(0);
+        assert_eq!(deployment.scheme, expected);
+    }
+    for value in ["ftp", "HTTP", "https://example.com"] {
+        json["httpApi"]["deployments"]["local"][0]["scheme"] = value.into();
+        assert!(!JSON_SCHEMA_VALIDATOR.is_valid(&json));
+        assert!(serde_json::from_value::<Application>(json.clone()).is_err());
+    }
 }
 
 #[test]
@@ -1451,6 +1774,103 @@ fn manifest_loading_accepts_wildcard_and_escaped_tool_binding_paths() {
         "# };
 
     Application::from_yaml_str(source).expect("valid scopes should load");
+}
+
+#[test]
+fn middleware_secret_scopes_preserve_omitted_empty_wildcard_and_concrete_values() {
+    let installations: Vec<ToolMiddlewareInstallation> = serde_yaml::from_str(
+        r#"
+- audit
+- name: audit
+  secretKeysReadable: []
+  secretKeysRevealable: "*"
+- name: audit
+  secretKeysReadable: ['credentials.github\=token']
+  secretKeysRevealable: ['"database url".password']
+"#,
+    )
+    .unwrap();
+
+    let common = installations
+        .into_iter()
+        .map(ToolMiddlewareInstallation::into_common)
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+
+    assert_eq!(common[0].secret_keys_readable, None);
+    assert_eq!(common[0].secret_keys_revealable, None);
+    assert_eq!(
+        common[1].secret_keys_readable,
+        Some(golem_common::model::tool::SecretKeyScope::Keys(
+            BTreeSet::new()
+        ))
+    );
+    assert_eq!(
+        common[1].secret_keys_revealable,
+        Some(golem_common::model::tool::SecretKeyScope::All)
+    );
+    assert_eq!(
+        common[2].secret_keys_readable,
+        Some(golem_common::model::tool::SecretKeyScope::Keys(
+            BTreeSet::from(
+                [golem_common::model::agent_secret::CanonicalAgentSecretPath(
+                    vec!["credentials".to_string(), "githubToken".to_string(),]
+                )]
+            )
+        ))
+    );
+    assert_eq!(
+        common[2].secret_keys_revealable,
+        Some(golem_common::model::tool::SecretKeyScope::Keys(
+            BTreeSet::from(
+                [golem_common::model::agent_secret::CanonicalAgentSecretPath(
+                    vec!["databaseUrl".to_string(), "password".to_string(),]
+                )]
+            )
+        ))
+    );
+}
+
+#[test]
+fn middleware_secret_scopes_reject_invalid_values_and_unknown_fields() {
+    for yaml in [
+        "name: audit\nsecretKeysReadable: anything\n",
+        "name: audit\nsecretKeysRevealable: ['*']\n",
+        "name: audit\nsecretKeysReadable: ['credentials\\']\n",
+        "name: audit\nsecretKeysReadble: []\n",
+    ] {
+        assert!(
+            serde_yaml::from_str::<ToolMiddlewareInstallation>(yaml).is_err(),
+            "middleware installation unexpectedly accepted:\n{yaml}"
+        );
+    }
+}
+
+#[test]
+fn schema_validates_middleware_secret_scopes() {
+    let valid = serde_json::json!({
+        "app": "test-app",
+        "environments": {
+            "local": {
+                "server": "local",
+                "tools": {
+                    "middleware": [
+                        {
+                            "name": "audit",
+                            "secretKeysReadable": [],
+                            "secretKeysRevealable": "*"
+                        }
+                    ]
+                }
+            }
+        }
+    });
+    assert!(JSON_SCHEMA_VALIDATOR.is_valid(&valid));
+
+    let mut invalid = valid;
+    invalid["environments"]["local"]["tools"]["middleware"][0]["secretKeysReadable"] =
+        serde_json::json!(["*"]);
+    assert!(!JSON_SCHEMA_VALIDATOR.is_valid(&invalid));
 }
 
 #[test]

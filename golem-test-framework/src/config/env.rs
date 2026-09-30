@@ -99,6 +99,7 @@ pub struct EnvBasedTestDependenciesConfig {
     pub quiet: bool,
     pub redis_host: String,
     pub redis_port: u16,
+    pub registry_http_port: u16,
     pub redis_key_prefix: String,
     pub golem_repo_root: PathBuf,
     pub unique_network_id: String,
@@ -116,6 +117,12 @@ impl EnvBasedTestDependenciesConfig {
 
         if let Some(redis_port) = opt_env_var("REDIS_PORT") {
             self.redis_port = redis_port.parse().expect("Failed to parse REDIS_PORT");
+        }
+
+        if let Some(registry_http_port) = opt_env_var("REGISTRY_HTTP_PORT") {
+            self.registry_http_port = registry_http_port
+                .parse()
+                .expect("Failed to parse REGISTRY_HTTP_PORT");
         }
 
         if let Some(redis_key_prefix) = opt_env_var("REDIS_KEY_PREFIX") {
@@ -243,6 +250,7 @@ impl Default for EnvBasedTestDependenciesConfig {
             quiet: false,
             redis_host: "localhost".to_string(),
             redis_port: 6379,
+            registry_http_port: 8081,
             redis_key_prefix: "".to_string(),
             golem_repo_root: PathBuf::from(".."),
             unique_network_id: Uuid::new_v4().to_string(),
@@ -322,7 +330,7 @@ impl EnvBasedTestDependencies {
             SpawnedRegistryService::new(
                 &config.debug_targets_dirs().join("golem-registry-service"),
                 &config.golem_repo_root.join("golem-registry-service"),
-                8081,
+                config.registry_http_port,
                 9091,
                 rdb,
                 Some(component_compilation_service),
@@ -900,14 +908,20 @@ impl RedisControl for EnvBasedTestDependencies {
 #[allow(async_fn_in_trait)]
 #[test_r::hosted_rpc]
 pub trait WorkerExecutorClusterControl {
-    async fn kill_all(&self);
+    async fn kill_all_and_wait(&self, timeout_millis: u64) -> Result<(), String>;
     async fn restart_all(&self);
     async fn restart_all_with_env_vars(&self, vars: Vec<(String, String)>);
     async fn stop(&self, idx: u16);
     async fn start(&self, idx: u16);
+    async fn pause(&self, idx: u16);
+    async fn resume(&self, idx: u16);
     async fn started_indices(&self) -> Vec<u16>;
     async fn stopped_indices(&self) -> Vec<u16>;
     async fn is_running(&self, idx: u16) -> bool;
+    /// Whether the executor at `idx` answers its gRPC health check right now. Stricter than
+    /// [`Self::is_running`]: a process that is aborting still counts as running until the OS has
+    /// finished with it, but it no longer serves.
+    async fn is_serving(&self, idx: u16) -> bool;
     async fn cluster_size(&self) -> u16;
 
     async fn stop_shard_manager(&self);
@@ -926,8 +940,13 @@ impl EnvBasedTestDependencies {
 }
 
 impl WorkerExecutorClusterControl for EnvBasedTestDependencies {
-    async fn kill_all(&self) {
-        self.worker_executor_cluster.kill_all().await;
+    async fn kill_all_and_wait(&self, timeout_millis: u64) -> Result<(), String> {
+        let deadline =
+            tokio::time::Instant::now() + std::time::Duration::from_millis(timeout_millis);
+        self.worker_executor_cluster
+            .kill_all_and_wait(deadline)
+            .await
+            .map_err(|error| format!("{error:#}"))
     }
 
     async fn restart_all(&self) {
@@ -954,6 +973,14 @@ impl WorkerExecutorClusterControl for EnvBasedTestDependencies {
         self.worker_executor_cluster.start(usize::from(idx)).await;
     }
 
+    async fn pause(&self, idx: u16) {
+        self.worker_executor_cluster.pause(usize::from(idx)).await;
+    }
+
+    async fn resume(&self, idx: u16) {
+        self.worker_executor_cluster.resume(usize::from(idx)).await;
+    }
+
     async fn started_indices(&self) -> Vec<u16> {
         self.worker_executor_cluster
             .started_indices()
@@ -978,6 +1005,19 @@ impl WorkerExecutorClusterControl for EnvBasedTestDependencies {
             return false;
         };
         worker_executor.is_running().await
+    }
+
+    async fn is_serving(&self, idx: u16) -> bool {
+        let worker_executors = self.worker_executor_cluster.to_vec();
+        let Some(worker_executor) = worker_executors.get(usize::from(idx)).cloned() else {
+            return false;
+        };
+        crate::components::is_serving_grpc(
+            &worker_executor.grpc_host(),
+            worker_executor.grpc_port(),
+            Duration::from_secs(5),
+        )
+        .await
     }
 
     async fn cluster_size(&self) -> u16 {

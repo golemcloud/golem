@@ -136,6 +136,21 @@
       "$ref": "#/definitions/api.domain.register"
     },
     {
+      "$ref": "#/definitions/api.mcp-import.authorize"
+    },
+    {
+      "$ref": "#/definitions/api.mcp-import.complete"
+    },
+    {
+      "$ref": "#/definitions/api.mcp-import.disconnect"
+    },
+    {
+      "$ref": "#/definitions/api.mcp-import.status"
+    },
+    {
+      "$ref": "#/definitions/api.mcp-import.tools"
+    },
+    {
       "$ref": "#/definitions/api.security-scheme.create"
     },
     {
@@ -232,6 +247,12 @@
     { "$ref": "#/definitions/tool.middleware.grant.delete" },
     { "$ref": "#/definitions/tool.middleware.grant.restore" },
     {
+      "$ref": "#/definitions/tool.invoke"
+    },
+    {
+      "$ref": "#/definitions/tool.invoke-session"
+    },
+    {
       "$ref": "#/definitions/deploy.environment-setup-plan"
     },
     {
@@ -310,7 +331,7 @@
       "$ref": "#/definitions/secret.list"
     },
     {
-      "$ref": "#/definitions/secret.update-value"
+      "$ref": "#/definitions/secret.update"
     }
   ],
   "definitions": {
@@ -2118,6 +2139,101 @@
       },
       "additionalProperties": false
     },
+    "api.mcp-import.authorize": {
+      "type": "object",
+      "description": "Single structured output document emitted by `golem api mcp-import authorize`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "api mcp-import authorize",
+      "required": ["$type", "authorizationUrl", "deploymentRevision", "importIndex"],
+      "properties": {
+        "$type": { "const": "api.mcp-import.authorize" },
+        "deploymentRevision": { "type": ["integer", "null"], "minimum": 0, "description": "Null when authorizing the selected manifest declaration before deployment." },
+        "importIndex": { "type": "integer", "minimum": 0 },
+        "authorizationUrl": { "type": "string", "format": "uri" }
+      },
+      "additionalProperties": false
+    },
+    "api.mcp-import.complete": {
+      "allOf": [
+        { "$ref": "#/definitions/McpImportOAuthStatusOutput" },
+        { "properties": { "$type": { "const": "api.mcp-import.complete" } } }
+      ],
+      "description": "Single structured output document emitted by `golem api mcp-import complete`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "api mcp-import complete"
+    },
+    "api.mcp-import.disconnect": {
+      "allOf": [
+        { "$ref": "#/definitions/McpImportOAuthStatusOutput" },
+        { "properties": { "$type": { "const": "api.mcp-import.disconnect" } } }
+      ],
+      "description": "Single structured output document emitted by `golem api mcp-import disconnect`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "api mcp-import disconnect"
+    },
+    "api.mcp-import.status": {
+      "allOf": [
+        { "$ref": "#/definitions/McpImportOAuthStatusOutput" },
+        { "properties": { "$type": { "const": "api.mcp-import.status" } } }
+      ],
+      "description": "Single structured output document emitted by `golem api mcp-import status`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "api mcp-import status"
+    },
+    "api.mcp-import.tools": {
+      "type": "object",
+      "description": "Projected metadata for an individual import before native and earlier-import precedence.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "api mcp-import tools",
+      "x-golem-commands": ["api mcp-import tools", "api mcp-import refresh"],
+      "required": ["$type", "environmentId", "deploymentRevision", "importIndex", "protocolVersion", "tools", "diagnostics"],
+      "properties": {
+        "$type": { "const": "api.mcp-import.tools" },
+        "environmentId": { "type": "string", "format": "uuid" },
+        "deploymentRevision": { "type": "integer", "minimum": 0 },
+        "importIndex": { "type": "integer", "minimum": 0 },
+        "protocolVersion": { "type": "string" },
+        "tools": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["upstreamName", "digest", "definition"],
+            "properties": {
+              "upstreamName": { "type": "string" },
+              "digest": { "type": "string" },
+              "definition": { "$ref": "#/definitions/Tool" }
+            },
+            "additionalProperties": false
+          }
+        },
+        "diagnostics": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["upstreamName", "reason"],
+            "properties": {
+              "upstreamName": { "type": "string" },
+              "reason": { "type": "string" }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "McpImportOAuthStatusOutput": {
+      "type": "object",
+      "required": ["$type", "environmentId", "deploymentRevision", "importIndex", "securityScheme", "status"],
+      "properties": {
+        "$type": { "enum": ["api.mcp-import.complete", "api.mcp-import.disconnect", "api.mcp-import.status"] },
+        "environmentId": { "type": "string", "format": "uuid" },
+        "deploymentRevision": { "type": ["integer", "null"], "minimum": 0, "description": "Null when inspecting or managing the selected manifest declaration before deployment." },
+        "importIndex": { "type": "integer", "minimum": 0 },
+        "securityScheme": { "type": "string" },
+        "status": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
     "api.deployment.get": {
       "type": "object",
       "description": "Single structured output document emitted by `golem api deployment get`.",
@@ -2133,6 +2249,7 @@
         "agents",
         "webhooksPrefix",
         "openapiEndpointPrefix",
+        "scheme",
         "createdAt"
       ],
       "properties": {
@@ -2166,6 +2283,9 @@
         },
         "openapiEndpointPrefix": {
           "type": "string"
+        },
+        "scheme": {
+          "enum": ["http", "https"]
         },
         "createdAt": {
           "type": "string"
@@ -2306,6 +2426,7 @@
         "agents",
         "webhooksPrefix",
         "openapiEndpointPrefix",
+        "scheme",
         "createdAt"
       ],
       "properties": {
@@ -2336,6 +2457,9 @@
         },
         "openapiEndpointPrefix": {
           "type": "string"
+        },
+        "scheme": {
+          "enum": ["http", "https"]
         },
         "createdAt": {
           "type": "string"
@@ -2398,6 +2522,7 @@
       "x-golem-command": "api security-scheme create",
       "required": [
         "$type",
+        "action",
         "id",
         "revision",
         "name",
@@ -2410,6 +2535,11 @@
       "properties": {
         "$type": {
           "const": "api.security-scheme.create"
+        },
+        "action": {
+          "description": "Whether the security scheme was created, or an existing one was updated (`--update-existing`).",
+          "type": "string",
+          "enum": ["created", "updated"]
         },
         "id": {
           "type": "string"
@@ -2990,6 +3120,7 @@
     "ComponentLayerProperties": {
       "type": "object",
       "required": [
+        "guestLanguage",
         "componentWasm",
         "outputWasm",
         "dependencyAgents",
@@ -2997,13 +3128,16 @@
         "build",
         "customCommands",
         "clean",
+        "configSchema",
         "config",
         "env",
         "plugins",
-        "files"
+        "files",
+        "toolBindings"
       ],
       "properties": {
         "appliedLayers": { "type": "array", "items": { "type": "string" } },
+        "guestLanguage": { "$ref": "#/definitions/ComponentLayerOptionalGuestLanguageProperty" },
         "componentWasm": { "$ref": "#/definitions/ComponentLayerOptionalStringProperty" },
         "outputWasm": { "$ref": "#/definitions/ComponentLayerOptionalStringProperty" },
         "dependencyAgents": { "$ref": "#/definitions/ComponentLayerDependencyReferenceVecProperty" },
@@ -3012,6 +3146,7 @@
         "build": { "$ref": "#/definitions/ComponentLayerBuildCommandVecProperty" },
         "customCommands": { "$ref": "#/definitions/ComponentLayerCustomCommandsMapProperty" },
         "clean": { "$ref": "#/definitions/ComponentLayerStringVecProperty" },
+        "configSchema": { "$ref": "#/definitions/ComponentLayerConfigSchemaProperty" },
         "config": { "$ref": "#/definitions/ComponentLayerJsonProperty" },
         "envMergeMode": { "$ref": "#/definitions/MapMergeMode" },
         "env": { "$ref": "#/definitions/ComponentLayerStringMapProperty" },
@@ -3019,7 +3154,72 @@
         "plugins": { "$ref": "#/definitions/ComponentLayerManifestPluginVecProperty" },
         "filesMergeMode": { "$ref": "#/definitions/VecMergeMode" },
         "files": { "$ref": "#/definitions/ComponentLayerManifestFileVecProperty" },
-        "initialCard": { "$ref": "#/definitions/ComponentLayerManifestInitialCardProperty" }
+        "initialCard": { "$ref": "#/definitions/ComponentLayerManifestInitialCardProperty" },
+        "toolBindings": { "$ref": "#/definitions/ComponentLayerToolBindingsProperty" }
+      },
+      "additionalProperties": false
+    },
+    "ComponentLayerConfigSchemaProperty": {
+      "type": "object",
+      "required": ["value", "trace"],
+      "properties": {
+        "value": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/definitions/ComponentConfigSchema" }
+          ]
+        },
+        "trace": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/ComponentLayerConfigSchemaTraceElem" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "ComponentLayerConfigSchemaTraceElem": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["type", "id", "value"],
+          "properties": {
+            "type": { "const": "override" },
+            "id": { "$ref": "#/definitions/ComponentLayerId" },
+            "selection": { "type": "string" },
+            "value": { "$ref": "#/definitions/ComponentConfigSchema" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type", "id"],
+          "properties": {
+            "type": { "const": "skip" },
+            "id": { "$ref": "#/definitions/ComponentLayerId" },
+            "selection": { "type": "string" }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "ComponentConfigSchema": {
+      "type": "object",
+      "required": ["schema"],
+      "properties": {
+        "schema": { "$ref": "#/definitions/SchemaGraph" },
+        "declarations": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/AgentConfigDeclarationSchema" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "AgentConfigDeclarationSchema": {
+      "type": "object",
+      "required": ["source", "path", "value_type"],
+      "properties": {
+        "source": { "type": "string", "enum": ["Local", "Secret"] },
+        "path": { "type": "array", "items": { "type": "string" } },
+        "value_type": { "$ref": "#/definitions/SchemaType" }
       },
       "additionalProperties": false
     },
@@ -3068,6 +3268,36 @@
       "required": ["componentCustomPresets"],
       "properties": { "componentCustomPresets": { "type": "string" } },
       "additionalProperties": false
+    },
+    "ComponentLayerOptionalGuestLanguageProperty": {
+      "type": "object",
+      "required": ["value", "trace"],
+      "properties": {
+        "value": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/definitions/GuestLanguage" }
+          ]
+        },
+        "trace": { "type": "array", "items": { "$ref": "#/definitions/ComponentLayerOptionalGuestLanguageTraceElem" } }
+      },
+      "additionalProperties": false
+    },
+    "ComponentLayerOptionalGuestLanguageTraceElem": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["type", "id", "value"],
+          "properties": {
+            "type": { "const": "override" },
+            "id": { "$ref": "#/definitions/ComponentLayerId" },
+            "selection": { "type": "string" },
+            "value": { "$ref": "#/definitions/GuestLanguage" }
+          },
+          "additionalProperties": false
+        },
+        { "$ref": "#/definitions/ComponentLayerOptionalStringSkipTraceElem" }
+      ]
     },
     "ComponentLayerOptionalStringProperty": {
       "type": "object",
@@ -3492,6 +3722,150 @@
       },
       "additionalProperties": false
     },
+    "ComponentLayerToolBindingsProperty": {
+      "type": "object",
+      "required": ["value", "trace"],
+      "properties": {
+        "value": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/definitions/ToolBindingState" }
+        },
+        "trace": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/ComponentLayerToolBindingsTraceElem" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "ComponentLayerToolBindingsTraceElem": {
+      "oneOf": [
+        { "$ref": "#/definitions/ComponentLayerToolBindingsUpsertTraceElem" },
+        { "$ref": "#/definitions/ComponentLayerToolBindingsReplaceTraceElem" },
+        { "$ref": "#/definitions/ComponentLayerToolBindingsRemoveTraceElem" }
+      ]
+    },
+    "ComponentLayerToolBindingsUpsertTraceElem": {
+      "type": "object",
+      "required": ["type", "id", "bindings"],
+      "properties": {
+        "type": { "const": "upsert" },
+        "id": { "$ref": "#/definitions/ComponentLayerId" },
+        "selection": { "type": "string" },
+        "bindings": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/definitions/ManifestToolBinding" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "ComponentLayerToolBindingsReplaceTraceElem": {
+      "type": "object",
+      "required": ["type", "id", "bindings"],
+      "properties": {
+        "type": { "const": "replace" },
+        "id": { "$ref": "#/definitions/ComponentLayerId" },
+        "selection": { "type": "string" },
+        "bindings": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/definitions/ManifestToolBinding" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "ComponentLayerToolBindingsRemoveTraceElem": {
+      "type": "object",
+      "required": ["type", "id", "removedNames"],
+      "properties": {
+        "type": { "const": "remove" },
+        "id": { "$ref": "#/definitions/ComponentLayerId" },
+        "selection": { "type": "string" },
+        "removedNames": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    },
+    "ToolBindingState": {
+      "type": "object",
+      "required": [
+        "version",
+        "parameters",
+        "account",
+        "configKeysReadable",
+        "secretKeysReadable",
+        "secretKeysRevealable",
+        "filesystemAccess",
+        "middleware",
+        "middlewareMergeMode"
+      ],
+      "properties": {
+        "version": { "type": ["string", "null"] },
+        "parameters": { "type": "object" },
+        "account": { "type": ["string", "null"] },
+        "configKeysReadable": { "type": "array", "items": { "$ref": "#/definitions/ManifestConfigKeyScope" } },
+        "secretKeysReadable": { "type": "array", "items": { "$ref": "#/definitions/ManifestSecretKeyScope" } },
+        "secretKeysRevealable": { "type": "array", "items": { "$ref": "#/definitions/ManifestSecretKeyScope" } },
+        "filesystemAccess": { "$ref": "#/definitions/ToolFilesystemAccess" },
+        "middleware": {
+          "oneOf": [
+            { "type": "array", "items": { "$ref": "#/definitions/ManifestToolMiddlewareInstallation" } },
+            { "type": "null" }
+          ]
+        },
+        "middlewareMergeMode": {
+          "oneOf": [
+            { "$ref": "#/definitions/ToolMiddlewareMergeMode" },
+            { "type": "null" }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "ManifestToolBinding": {
+      "type": "object",
+      "properties": {
+        "version": { "type": "string" },
+        "parametersMergeMode": { "$ref": "#/definitions/MapMergeMode" },
+        "parameters": { "type": "object" },
+        "account": { "type": "string" },
+        "secretKeysReadableMergeMode": { "const": "intersect" },
+        "secretKeysReadable": { "$ref": "#/definitions/ManifestSecretKeyScope" },
+        "secretKeysRevealableMergeMode": { "const": "intersect" },
+        "secretKeysRevealable": { "$ref": "#/definitions/ManifestSecretKeyScope" },
+        "middleware": { "type": "array", "items": { "$ref": "#/definitions/ManifestToolMiddlewareInstallation" } },
+        "middlewareMergeMode": { "$ref": "#/definitions/ToolMiddlewareMergeMode" }
+      },
+      "additionalProperties": false
+    },
+    "ManifestToolMiddlewareInstallation": {
+      "oneOf": [
+        { "type": "string" },
+        {
+          "type": "object",
+          "required": ["name", "parameters", "filesystemAccess"],
+          "properties": {
+            "name": { "type": "string" },
+            "version": { "type": "string" },
+            "parameters": { "$ref": "#/definitions/JsonValue" },
+            "account": { "type": "string" },
+            "secretKeysReadable": { "$ref": "#/definitions/ManifestSecretKeyScope" },
+            "secretKeysRevealable": { "$ref": "#/definitions/ManifestSecretKeyScope" },
+            "filesystemAccess": { "$ref": "#/definitions/ToolFilesystemAccess" }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "ManifestSecretKeyScope": {
+      "oneOf": [
+        { "type": "string" },
+        { "type": "array", "items": { "type": "string" } }
+      ]
+    },
+    "ManifestConfigKeyScope": {
+      "oneOf": [
+        { "type": "string" },
+        { "type": "array", "items": { "type": "string" } }
+      ]
+    },
     "ComponentLayerJsonProperty": {
       "type": "object",
       "required": ["value", "trace"],
@@ -3741,7 +4115,7 @@
     },
     "GuestLanguage": {
       "type": "string",
-      "enum": ["TypeScript", "Rust", "Scala", "MoonBit"]
+      "enum": ["TypeScript", "Effect", "Rust", "Scala", "MoonBit"]
     },
     "ComponentView": {
       "type": "object",
@@ -3778,7 +4152,7 @@
     },
     "ToolDeploymentMetadata": {
       "type": "object",
-      "required": ["definition", "provision", "environmentBinding", "agentBindings"],
+      "required": ["definition", "provision", "environmentBinding", "componentBindings", "agentBindings"],
       "properties": {
         "definition": { "$ref": "#/definitions/Tool" },
         "provision": { "$ref": "#/definitions/ToolProvisionConfig" },
@@ -3787,6 +4161,10 @@
             { "$ref": "#/definitions/ToolBindingInput" },
             { "type": "null" }
           ]
+        },
+        "componentBindings": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/definitions/ToolBindingInput" }
         },
         "agentBindings": {
           "type": "object",
@@ -3797,9 +4175,10 @@
     },
     "Tool": {
       "type": "object",
-      "required": ["version", "commands", "schema"],
+      "required": ["version", "requires_filesystem", "commands", "schema"],
       "properties": {
         "version": { "type": "string" },
+        "requires_filesystem": { "type": "boolean" },
         "commands": { "$ref": "#/definitions/CommandTree" },
         "schema": { "$ref": "#/definitions/SchemaGraph" }
       },
@@ -3840,7 +4219,7 @@
     },
     "CommandBody": {
       "type": "object",
-      "required": ["positionals", "options", "flags", "constraints", "stdin", "stdout", "result", "errors", "annotations"],
+      "required": ["positionals", "options", "flags", "constraints", "stdin", "stdout", "stderr", "result", "errors", "annotations"],
       "properties": {
         "positionals": { "$ref": "#/definitions/ToolPositionals" },
         "options": { "type": "array", "items": { "$ref": "#/definitions/ToolOptionSpec" } },
@@ -3848,6 +4227,7 @@
         "constraints": { "type": "array", "items": { "$ref": "#/definitions/ToolConstraint" } },
         "stdin": { "oneOf": [{ "$ref": "#/definitions/ToolStreamSpec" }, { "type": "null" }] },
         "stdout": { "oneOf": [{ "$ref": "#/definitions/ToolStreamSpec" }, { "type": "null" }] },
+        "stderr": { "oneOf": [{ "$ref": "#/definitions/ToolStreamSpec" }, { "type": "null" }] },
         "result": { "oneOf": [{ "$ref": "#/definitions/ToolResultSpec" }, { "type": "null" }] },
         "errors": { "type": "array", "items": { "$ref": "#/definitions/ToolErrorCase" } },
         "annotations": { "oneOf": [{ "$ref": "#/definitions/CommandAnnotations" }, { "type": "null" }] }
@@ -4211,12 +4591,32 @@
     },
     "ToolMiddlewareInstallation": {
       "type": "object",
-      "required": ["name", "version", "parameters", "account", "filesystemAccess"],
+      "required": [
+        "name",
+        "version",
+        "parameters",
+        "account",
+        "secretKeysReadable",
+        "secretKeysRevealable",
+        "filesystemAccess"
+      ],
       "properties": {
         "name": { "type": "string" },
         "version": { "type": ["string", "null"] },
         "parameters": {},
         "account": { "type": ["string", "null"] },
+        "secretKeysReadable": {
+          "oneOf": [
+            { "$ref": "#/definitions/SecretKeyScope" },
+            { "type": "null" }
+          ]
+        },
+        "secretKeysRevealable": {
+          "oneOf": [
+            { "$ref": "#/definitions/SecretKeyScope" },
+            { "type": "null" }
+          ]
+        },
         "filesystemAccess": { "$ref": "#/definitions/ToolFilesystemAccess" }
       },
       "additionalProperties": false
@@ -4511,6 +4911,17 @@
             "ttlNanos": { "type": "integer", "minimum": 0 }
           },
           "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type", "importIndex", "upstreamToolName", "reason"],
+          "properties": {
+            "type": { "const": "McpImportDiscovery" },
+            "importIndex": { "type": ["integer", "null"], "minimum": 0, "maximum": 4294967295 },
+            "upstreamToolName": { "type": ["string", "null"] },
+            "reason": { "type": "string" }
+          },
+          "additionalProperties": false
         }
       ]
     },
@@ -4722,7 +5133,7 @@
       "oneOf": [
         {
           "type": "object",
-          "required": ["type", "commandPath", "hasStdin", "hasStdout", "declaresStdout"],
+          "required": ["type", "commandPath", "hasStdin", "hasStdout", "declaresStdout", "hasStderr", "declaresStderr"],
           "properties": {
             "type": { "const": "Tool" },
             "commandPath": { "type": "array", "items": { "type": "string" } },
@@ -4734,6 +5145,14 @@
             "declaresStdout": {
               "type": "boolean",
               "description": "Whether the tool declares stdout support. Stdout bytes are not recorded in the oplog."
+            },
+            "hasStderr": {
+              "type": "boolean",
+              "description": "Whether a live stderr attachment was requested. Stderr bytes are not recorded in the oplog."
+            },
+            "declaresStderr": {
+              "type": "boolean",
+              "description": "Whether the tool declares stderr support. Stderr bytes are not recorded in the oplog."
             }
           },
           "additionalProperties": false
@@ -4771,9 +5190,6 @@
         { "$ref": "#/definitions/PublicOplogEntryDeactivatePlugin" },
         { "$ref": "#/definitions/PublicOplogEntryRevert" },
         { "$ref": "#/definitions/PublicOplogEntryCancelPendingInvocation" },
-        { "$ref": "#/definitions/PublicOplogEntryStartSpan" },
-        { "$ref": "#/definitions/PublicOplogEntryFinishSpan" },
-        { "$ref": "#/definitions/PublicOplogEntrySetSpanAttribute" },
         { "$ref": "#/definitions/PublicOplogEntryBeginRemoteTransaction" },
         { "$ref": "#/definitions/PublicOplogEntryPreCommitRemoteTransaction" },
         { "$ref": "#/definitions/PublicOplogEntryPreRollbackRemoteTransaction" },
@@ -4827,11 +5243,12 @@
     },
     "PublicOplogEntryCreate": {
       "type": "object",
-      "required": ["type", "timestamp", "agentId", "agentMode", "componentRevision", "env", "createdBy", "environmentId", "componentSize", "initialTotalLinearMemorySize", "initialActivePlugins", "localAgentConfig", "instanceId"],
+      "required": ["type", "timestamp", "agentId", "ownerKind", "agentMode", "componentRevision", "env", "createdBy", "environmentId", "componentSize", "initialTotalLinearMemorySize", "initialActivePlugins", "localAgentConfig", "instanceId"],
       "properties": {
         "type": { "const": "Create" },
         "timestamp": { "type": "string" },
         "agentId": { "$ref": "#/definitions/AgentId" },
+        "ownerKind": { "type": "string", "enum": ["component-agent", "ephemeral-external-tool"] },
         "agentMode": { "$ref": "#/definitions/AgentMode" },
         "componentRevision": { "type": "integer", "minimum": 0 },
         "env": { "type": "object", "additionalProperties": { "type": "string" } },
@@ -4849,7 +5266,7 @@
     },
     "PublicOplogEntryStart": {
       "type": "object",
-      "required": ["type", "timestamp", "parentStartIndex", "functionName", "invocationId", "observationalOwner", "request", "durableFunctionType"],
+      "required": ["type", "timestamp", "parentStartIndex", "functionName", "invocationId", "observationalOwner", "request", "durableFunctionType", "spanStarted"],
       "properties": {
         "type": { "const": "Start" },
         "timestamp": { "type": "string" },
@@ -4858,30 +5275,34 @@
         "invocationId": { "type": ["string", "null"] },
         "observationalOwner": { "type": ["integer", "null"], "minimum": 0 },
         "request": { "oneOf": [{ "$ref": "#/definitions/TypedSchemaValue" }, { "type": "null" }] },
-        "durableFunctionType": { "$ref": "#/definitions/PublicDurableFunctionType" }
+        "durableFunctionType": { "$ref": "#/definitions/PublicDurableFunctionType" },
+        "spanStarted": { "oneOf": [{ "$ref": "#/definitions/PublicSpanStarted" }, { "type": "null" }] }
       },
       "additionalProperties": false
     },
     "PublicOplogEntryEnd": {
       "type": "object",
-      "required": ["type", "timestamp", "startIndex", "response", "forcedCommit"],
+      "required": ["type", "timestamp", "startIndex", "response", "forcedCommit", "spanFinished", "spanAttributes"],
       "properties": {
         "type": { "const": "End" },
         "timestamp": { "type": "string" },
         "startIndex": { "type": "integer", "minimum": 0 },
         "response": { "oneOf": [{ "$ref": "#/definitions/TypedSchemaValue" }, { "type": "null" }] },
-        "forcedCommit": { "type": "boolean" }
+        "forcedCommit": { "type": "boolean" },
+        "spanFinished": { "oneOf": [{ "$ref": "#/definitions/PublicSpanFinished" }, { "type": "null" }] },
+        "spanAttributes": { "oneOf": [{ "$ref": "#/definitions/PublicSpanAttributes" }, { "type": "null" }] }
       },
       "additionalProperties": false
     },
     "PublicOplogEntryCancelled": {
       "type": "object",
-      "required": ["type", "timestamp", "startIndex", "partial"],
+      "required": ["type", "timestamp", "startIndex", "partial", "spanFinished"],
       "properties": {
         "type": { "const": "Cancelled" },
         "timestamp": { "type": "string" },
         "startIndex": { "type": "integer", "minimum": 0 },
-        "partial": { "oneOf": [{ "$ref": "#/definitions/TypedSchemaValue" }, { "type": "null" }] }
+        "partial": { "oneOf": [{ "$ref": "#/definitions/TypedSchemaValue" }, { "type": "null" }] },
+        "spanFinished": { "oneOf": [{ "$ref": "#/definitions/PublicSpanFinished" }, { "type": "null" }] }
       },
       "additionalProperties": false
     },
@@ -4892,12 +5313,7 @@
         "type": { "const": "AgentInvocationStarted" },
         "timestamp": { "type": "string" },
         "invocation": { "$ref": "#/definitions/PublicAgentInvocation" },
-        "walletPin": {
-          "oneOf": [
-            { "$ref": "#/definitions/PublicInvocationWalletPin" },
-            { "type": "null" }
-          ]
-        }
+        "walletPin": { "$ref": "#/definitions/PublicInvocationWalletPin" }
       },
       "additionalProperties": false
     },
@@ -5001,8 +5417,17 @@
     },
     "PublicOplogEntryLog": {
       "type": "object",
-      "required": ["type", "timestamp", "level", "context", "message"],
-      "properties": { "type": { "const": "Log" }, "timestamp": { "type": "string" }, "level": { "$ref": "#/definitions/LogLevel" }, "context": { "type": "string" }, "message": { "type": "string" } },
+      "required": ["type", "timestamp", "level", "context", "message", "traceContext"],
+      "properties": { "type": { "const": "Log" }, "timestamp": { "type": "string" }, "level": { "$ref": "#/definitions/LogLevel" }, "context": { "type": "string" }, "message": { "type": "string" }, "traceContext": { "oneOf": [{ "$ref": "#/definitions/LogTraceContext" }, { "type": "null" }] } },
+      "additionalProperties": false
+    },
+    "LogTraceContext": {
+      "type": "object",
+      "required": ["traceId", "spanId"],
+      "properties": {
+        "traceId": { "type": "string" },
+        "spanId": { "type": "string" }
+      },
       "additionalProperties": false
     },
     "PublicOplogEntryActivatePlugin": {
@@ -5027,24 +5452,6 @@
       "type": "object",
       "required": ["type", "timestamp", "idempotencyKey"],
       "properties": { "type": { "const": "CancelPendingInvocation" }, "timestamp": { "type": "string" }, "idempotencyKey": { "type": "string" } },
-      "additionalProperties": false
-    },
-    "PublicOplogEntryStartSpan": {
-      "type": "object",
-      "required": ["type", "timestamp", "spanId", "attributes"],
-      "properties": { "type": { "const": "StartSpan" }, "timestamp": { "type": "string" }, "spanId": { "type": "string" }, "parentId": { "type": ["string", "null"] }, "linkedContext": { "type": ["string", "null"] }, "attributes": { "type": "array", "items": { "$ref": "#/definitions/PublicAttribute" } } },
-      "additionalProperties": false
-    },
-    "PublicOplogEntryFinishSpan": {
-      "type": "object",
-      "required": ["type", "timestamp", "spanId"],
-      "properties": { "type": { "const": "FinishSpan" }, "timestamp": { "type": "string" }, "spanId": { "type": "string" } },
-      "additionalProperties": false
-    },
-    "PublicOplogEntrySetSpanAttribute": {
-      "type": "object",
-      "required": ["type", "timestamp", "spanId", "key", "value"],
-      "properties": { "type": { "const": "SetSpanAttribute" }, "timestamp": { "type": "string" }, "spanId": { "type": "string" }, "key": { "type": "string" }, "value": { "$ref": "#/definitions/PublicAttributeValue" } },
       "additionalProperties": false
     },
     "PublicOplogEntryBeginRemoteTransaction": {
@@ -5173,7 +5580,7 @@
     "PublicOplogEntryCardInstalled": {
       "type": "object",
       "required": ["type", "timestamp", "queuedEventIndex", "cardId", "walletGeneration"],
-      "properties": { "type": { "const": "CardInstalled" }, "timestamp": { "type": "string" }, "queuedEventIndex": { "type": ["integer", "null"], "minimum": 0 }, "cardId": { "$ref": "#/definitions/CardId" }, "walletGeneration": { "type": ["integer", "null"], "minimum": 0 } },
+      "properties": { "type": { "const": "CardInstalled" }, "timestamp": { "type": "string" }, "queuedEventIndex": { "type": ["integer", "null"], "minimum": 0 }, "cardId": { "$ref": "#/definitions/CardId" }, "walletGeneration": { "type": "integer", "minimum": 0 } },
       "additionalProperties": false
     },
     "PublicOplogEntryCardInstallFailed": {
@@ -5185,37 +5592,37 @@
     "PublicOplogEntryCardRevoked": {
       "type": "object",
       "required": ["type", "timestamp", "queuedEventIndex", "cardId", "walletGeneration"],
-      "properties": { "type": { "const": "CardRevoked" }, "timestamp": { "type": "string" }, "queuedEventIndex": { "type": "integer", "minimum": 0 }, "cardId": { "$ref": "#/definitions/CardId" }, "walletGeneration": { "type": ["integer", "null"], "minimum": 0 } },
+      "properties": { "type": { "const": "CardRevoked" }, "timestamp": { "type": "string" }, "queuedEventIndex": { "type": "integer", "minimum": 0 }, "cardId": { "$ref": "#/definitions/CardId" }, "walletGeneration": { "type": "integer", "minimum": 0 } },
       "additionalProperties": false
     },
     "PublicOplogEntryCardExpired": {
       "type": "object",
       "required": ["type", "timestamp", "cardId", "walletGeneration"],
-      "properties": { "type": { "const": "CardExpired" }, "timestamp": { "type": "string" }, "cardId": { "$ref": "#/definitions/CardId" }, "walletGeneration": { "type": ["integer", "null"], "minimum": 0 } },
+      "properties": { "type": { "const": "CardExpired" }, "timestamp": { "type": "string" }, "cardId": { "$ref": "#/definitions/CardId" }, "walletGeneration": { "type": "integer", "minimum": 0 } },
       "additionalProperties": false
     },
     "PublicOplogEntryCardDerived": {
       "type": "object",
       "required": ["type", "timestamp", "cardId", "parentIds", "walletGeneration"],
-      "properties": { "type": { "const": "CardDerived" }, "timestamp": { "type": "string" }, "cardId": { "$ref": "#/definitions/CardId" }, "parentIds": { "type": "array", "items": { "$ref": "#/definitions/CardId" } }, "walletGeneration": { "type": ["integer", "null"], "minimum": 0 } },
+      "properties": { "type": { "const": "CardDerived" }, "timestamp": { "type": "string" }, "cardId": { "$ref": "#/definitions/CardId" }, "parentIds": { "type": "array", "items": { "$ref": "#/definitions/CardId" } }, "walletGeneration": { "type": "integer", "minimum": 0 } },
       "additionalProperties": false
     },
     "PublicOplogEntryCardTransferStarted": {
       "type": "object",
       "required": ["type", "timestamp", "transferId", "cardId", "targetHolder", "sourceWalletGeneration"],
-      "properties": { "type": { "const": "CardTransferStarted" }, "timestamp": { "type": "string" }, "transferId": { "type": "string", "format": "uuid" }, "cardId": { "$ref": "#/definitions/CardId" }, "targetHolder": { "$ref": "#/definitions/CardHolder" }, "sourceWalletGeneration": { "type": ["integer", "null"], "minimum": 0 } },
+      "properties": { "type": { "const": "CardTransferStarted" }, "timestamp": { "type": "string" }, "transferId": { "type": "string", "format": "uuid" }, "cardId": { "$ref": "#/definitions/CardId" }, "targetHolder": { "$ref": "#/definitions/CardHolder" }, "sourceWalletGeneration": { "type": "integer", "minimum": 0 } },
       "additionalProperties": false
     },
     "PublicOplogEntryCardTransferred": {
       "type": "object",
       "required": ["type", "timestamp", "transferId", "sourceCardId", "installedCardId", "targetHolder", "targetWalletGeneration"],
-      "properties": { "type": { "const": "CardTransferred" }, "timestamp": { "type": "string" }, "transferId": { "type": "string", "format": "uuid" }, "sourceCardId": { "oneOf": [{ "$ref": "#/definitions/CardId" }, { "type": "null" }] }, "installedCardId": { "$ref": "#/definitions/CardId" }, "targetHolder": { "$ref": "#/definitions/CardHolder" }, "targetWalletGeneration": { "type": ["integer", "null"], "minimum": 0 } },
+      "properties": { "type": { "const": "CardTransferred" }, "timestamp": { "type": "string" }, "transferId": { "type": "string", "format": "uuid" }, "sourceCardId": { "$ref": "#/definitions/CardId" }, "installedCardId": { "$ref": "#/definitions/CardId" }, "targetHolder": { "$ref": "#/definitions/CardHolder" }, "targetWalletGeneration": { "type": "integer", "minimum": 0 } },
       "additionalProperties": false
     },
     "PublicOplogEntryCardRevokedCascade": {
       "type": "object",
       "required": ["type", "timestamp", "revokedCardIds", "localWalletGeneration"],
-      "properties": { "type": { "const": "CardRevokedCascade" }, "timestamp": { "type": "string" }, "revokedCardIds": { "type": "array", "items": { "$ref": "#/definitions/CardId" } }, "localWalletGeneration": { "type": ["integer", "null"], "minimum": 0 } },
+      "properties": { "type": { "const": "CardRevokedCascade" }, "timestamp": { "type": "string" }, "revokedCardIds": { "type": "array", "items": { "$ref": "#/definitions/CardId" } }, "localWalletGeneration": { "type": "integer", "minimum": 0 } },
       "additionalProperties": false
     },
     "PublicOplogEntryCardTransferConfirmed": {
@@ -5238,6 +5645,7 @@
       "oneOf": [
         { "$ref": "#/definitions/PublicAgentInvocationAgentInitialization" },
         { "$ref": "#/definitions/PublicAgentInvocationAgentMethodInvocation" },
+        { "$ref": "#/definitions/PublicAgentInvocationExternalTool" },
         { "type": "object", "required": ["type"], "properties": { "type": { "const": "SaveSnapshot" } }, "additionalProperties": false },
         { "type": "object", "required": ["type", "snapshot"], "properties": { "type": { "const": "LoadSnapshot" }, "snapshot": { "$ref": "#/definitions/PublicSnapshotData" } }, "additionalProperties": false },
         { "type": "object", "required": ["type", "idempotencyKey"], "properties": { "type": { "const": "ProcessOplogEntries" }, "idempotencyKey": { "type": "string" } }, "additionalProperties": false },
@@ -5256,14 +5664,27 @@
       "properties": { "type": { "const": "AgentMethodInvocation" }, "idempotencyKey": { "type": "string" }, "methodName": { "type": "string" }, "functionInput": { "$ref": "#/definitions/TypedSchemaValue" }, "traceId": { "type": "string" }, "traceStates": { "type": "array", "items": { "type": "string" } }, "invocationContext": { "$ref": "#/definitions/PublicInvocationContext" } },
       "additionalProperties": false
     },
+    "PublicAgentInvocationExternalTool": {
+      "type": "object",
+      "required": ["type", "idempotencyKey", "toolName", "commandPath", "input", "traceId", "traceStates", "invocationContext"],
+      "properties": { "type": { "const": "ExternalTool" }, "idempotencyKey": { "type": "string" }, "toolName": { "type": "string" }, "commandPath": { "type": "array", "items": { "type": "string" } }, "input": { "$ref": "#/definitions/TypedSchemaValue" }, "traceId": { "type": "string" }, "traceStates": { "type": "array", "items": { "type": "string" } }, "invocationContext": { "$ref": "#/definitions/PublicInvocationContext" } },
+      "additionalProperties": false
+    },
     "PublicAgentInvocationResult": {
       "oneOf": [
         { "type": "object", "required": ["type", "output"], "properties": { "type": { "const": "AgentInitialization" }, "output": { "$ref": "#/definitions/TypedSchemaValue" } }, "additionalProperties": false },
         { "type": "object", "required": ["type", "output"], "properties": { "type": { "const": "AgentMethod" }, "output": { "$ref": "#/definitions/TypedSchemaValue" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "result"], "properties": { "type": { "const": "ExternalTool" }, "result": { "$ref": "#/definitions/PublicExternalToolResult" } }, "additionalProperties": false },
         { "type": "object", "required": ["type"], "properties": { "type": { "const": "ManualUpdate" } }, "additionalProperties": false },
         { "type": "object", "required": ["type"], "properties": { "type": { "const": "LoadSnapshot" }, "error": { "type": ["string", "null"] } }, "additionalProperties": false },
         { "type": "object", "required": ["type", "snapshot"], "properties": { "type": { "const": "SaveSnapshot" }, "snapshot": { "$ref": "#/definitions/PublicSnapshotData" } }, "additionalProperties": false },
         { "type": "object", "required": ["type"], "properties": { "type": { "const": "ProcessOplogEntries" }, "error": { "type": ["string", "null"] } }, "additionalProperties": false }
+      ]
+    },
+    "PublicExternalToolResult": {
+      "oneOf": [
+        { "type": "object", "required": ["type", "result"], "properties": { "type": { "const": "Success" }, "result": { "anyOf": [{ "$ref": "#/definitions/TypedSchemaValue" }, { "type": "null" }] } }, "additionalProperties": false },
+        { "type": "object", "required": ["type"], "properties": { "type": { "const": "Failure" }, "value": {} }, "additionalProperties": false }
       ]
     },
     "PublicInvocationContext": { "type": "array", "items": { "type": "array", "items": { "$ref": "#/definitions/PublicSpanData" } } },
@@ -5283,6 +5704,50 @@
       "oneOf": [
         { "type": "object", "required": ["type", "value"], "properties": { "type": { "const": "String" }, "value": { "type": "string" } }, "additionalProperties": false }
       ]
+    },
+    "PublicSpanLink": {
+      "type": "object",
+      "required": ["traceId", "spanId", "traceStates"],
+      "properties": {
+        "traceId": { "type": "string" },
+        "spanId": { "type": "string" },
+        "traceStates": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    },
+    "PublicSpanStarted": {
+      "type": "object",
+      "required": ["spanId", "traceId", "traceStates", "parentSpanId", "links", "startedAt", "attributes", "kind"],
+      "properties": {
+        "spanId": { "type": "string" },
+        "traceId": { "type": "string" },
+        "traceStates": { "type": "array", "items": { "type": "string" } },
+        "parentSpanId": { "type": ["string", "null"] },
+        "links": { "type": "array", "items": { "$ref": "#/definitions/PublicSpanLink" } },
+        "startedAt": { "type": "string" },
+        "attributes": { "type": "array", "items": { "$ref": "#/definitions/PublicAttribute" } },
+        "kind": { "type": "string", "enum": ["internal", "client", "server"] }
+      },
+      "additionalProperties": false
+    },
+    "PublicSpanFinished": {
+      "type": "object",
+      "required": ["spanId", "finishedAt", "outcome"],
+      "properties": {
+        "spanId": { "type": "string" },
+        "finishedAt": { "type": "string" },
+        "outcome": { "type": "string", "enum": ["completed", "failed", "cancelled", "abandoned", "denied"] }
+      },
+      "additionalProperties": false
+    },
+    "PublicSpanAttributes": {
+      "type": "object",
+      "required": ["spanId", "attributes"],
+      "properties": {
+        "spanId": { "type": "string" },
+        "attributes": { "type": "array", "items": { "$ref": "#/definitions/PublicAttribute" } }
+      },
+      "additionalProperties": false
     },
     "PublicUpdateDescription": {
       "oneOf": [
@@ -5403,6 +5868,7 @@
         "components": { "$ref": "#/definitions/DeploymentDiffSection" },
         "httpApiDeployments": { "$ref": "#/definitions/DeploymentDiffSection" },
         "mcpDeployments": { "$ref": "#/definitions/DeploymentDiffSection" },
+        "mcpImports": { "$ref": "#/definitions/DeploymentDiffSection" },
         "remoteTools": { "$ref": "#/definitions/DeploymentDiffSection" },
         "publishedTools": { "$ref": "#/definitions/DeploymentSetDiffSection" },
         "remoteToolMiddlewareDeployments": { "$ref": "#/definitions/DeploymentDiffSection" },
@@ -5461,6 +5927,7 @@
         "metadataVersion",
         "metadataDigest",
         "provision",
+        "componentBindings",
         "bindings"
       ],
       "properties": {
@@ -5472,9 +5939,53 @@
         "metadataVersion": { "type": "string" },
         "metadataDigest": { "type": "string" },
         "provision": { "$ref": "#/definitions/ToolProvisionConfig" },
+        "componentBindings": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/definitions/EffectiveToolBindingDiffPayload" }
+        },
         "bindings": {
           "type": "object",
           "additionalProperties": { "$ref": "#/definitions/EffectiveToolBindingDiffPayload" }
+        },
+        "environmentMiddlewareBinding": { "$ref": "#/definitions/ToolMiddlewareBindingInput" },
+        "componentMiddlewareBindings": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/definitions/ToolMiddlewareBindingInput" }
+        },
+        "agentMiddlewareBindings": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/definitions/ToolMiddlewareBindingInput" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "ToolMiddlewareBindingInput": {
+      "type": "object",
+      "required": [
+        "configKeysReadable",
+        "secretKeysReadable",
+        "secretKeysRevealable",
+        "middleware",
+        "middlewareMergeMode"
+      ],
+      "properties": {
+        "configKeysReadable": { "$ref": "#/definitions/ConfigKeyScope" },
+        "secretKeysReadable": { "$ref": "#/definitions/SecretKeyScope" },
+        "secretKeysRevealable": { "$ref": "#/definitions/SecretKeyScope" },
+        "middleware": {
+          "oneOf": [
+            {
+              "type": "array",
+              "items": { "$ref": "#/definitions/ToolMiddlewareInstallation" }
+            },
+            { "type": "null" }
+          ]
+        },
+        "middlewareMergeMode": {
+          "oneOf": [
+            { "$ref": "#/definitions/ToolMiddlewareMergeMode" },
+            { "type": "null" }
+          ]
         }
       },
       "additionalProperties": false
@@ -5508,15 +6019,27 @@
     },
     "ComponentDiffPayload": {
       "type": "object",
-      "required": ["wasmChanged"],
+      "required": ["wasmChanged", "componentConfigChanged"],
       "properties": {
         "wasmChanged": { "type": "boolean" },
+        "componentConfigChanged": { "type": "boolean" },
         "agentTypeProvisionConfigChanges": {
           "type": "object",
-          "additionalProperties": { "$ref": "#/definitions/AgentTypeProvisionConfigDiffPayload" }
+          "additionalProperties": { "$ref": "#/definitions/AgentTypeProvisionConfigDiffMapValue" }
+        },
+        "toolDeploymentConfigChanges": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/definitions/ToolDeploymentConfigDiffMapValue" }
         }
       },
       "additionalProperties": false
+    },
+    "AgentTypeProvisionConfigDiffMapValue": {
+      "oneOf": [
+        { "type": "string", "enum": ["create", "delete"] },
+        { "$ref": "#/definitions/HashDiffPayload" },
+        { "$ref": "#/definitions/AgentTypeProvisionConfigDiffPayload" }
+      ]
     },
     "AgentTypeProvisionConfigDiffPayload": {
       "type": "object",
@@ -5531,14 +6054,56 @@
         },
         "fileChanges": {
           "type": "object",
-          "additionalProperties": { "$ref": "#/definitions/AgentFileDiffPayload" }
+          "additionalProperties": { "$ref": "#/definitions/AgentFileDiffMapValue" }
         },
         "pluginChanges": {
           "type": "object",
-          "additionalProperties": { "$ref": "#/definitions/PluginInstallationDiffPayload" }
-        }
+          "additionalProperties": { "$ref": "#/definitions/PluginInstallationDiffMapValue" }
+        },
+        "initialPermissionChanged": { "type": "boolean" }
       },
       "additionalProperties": false
+    },
+    "ToolDeploymentConfigDiffMapValue": {
+      "oneOf": [
+        { "type": "string", "enum": ["create", "delete"] },
+        { "$ref": "#/definitions/HashDiffPayload" },
+        { "$ref": "#/definitions/ToolDeploymentConfigDiffPayload" }
+      ]
+    },
+    "ToolDeploymentConfigDiffPayload": {
+      "type": "object",
+      "required": ["definitionChanged", "configChanged", "environmentBindingChanged"],
+      "properties": {
+        "definitionChanged": { "type": "boolean" },
+        "configChanged": { "type": "boolean" },
+        "envChanges": { "type": "object", "additionalProperties": { "type": "string" } },
+        "fileChanges": { "type": "object", "additionalProperties": { "$ref": "#/definitions/AgentFileDiffMapValue" } },
+        "pluginChanges": { "type": "object", "additionalProperties": { "$ref": "#/definitions/PluginInstallationDiffMapValue" } },
+        "environmentBindingChanged": { "type": "boolean" },
+        "componentBindingChanges": { "type": "object", "additionalProperties": { "$ref": "#/definitions/ToolBindingDiffMapValue" } },
+        "agentBindingChanges": { "type": "object", "additionalProperties": { "$ref": "#/definitions/ToolBindingDiffMapValue" } }
+      },
+      "additionalProperties": false
+    },
+    "AgentFileDiffMapValue": {
+      "oneOf": [
+        { "type": "string", "enum": ["create", "delete"] },
+        { "$ref": "#/definitions/HashDiffPayload" },
+        { "$ref": "#/definitions/AgentFileDiffPayload" }
+      ]
+    },
+    "PluginInstallationDiffMapValue": {
+      "oneOf": [
+        { "type": "string", "enum": ["create", "delete"] },
+        { "$ref": "#/definitions/PluginInstallationDiffPayload" }
+      ]
+    },
+    "ToolBindingDiffMapValue": {
+      "oneOf": [
+        { "type": "string", "enum": ["create", "delete"] },
+        { "$ref": "#/definitions/ToolBindingInput" }
+      ]
     },
     "AgentFileDiffPayload": {
       "type": "object",
@@ -5551,19 +6116,18 @@
     },
     "PluginInstallationDiffPayload": {
       "type": "object",
+      "required": ["priorityChanged", "parametersChanged"],
       "properties": {
         "priorityChanged": { "type": "boolean" },
-        "parametersChanged": { "type": "boolean" },
-        "pluginRegistrationIdChanged": { "type": "boolean" },
-        "pluginNameChanged": { "type": "boolean" },
-        "pluginVersionChanged": { "type": "boolean" }
+        "parametersChanged": { "type": "boolean" }
       },
       "additionalProperties": false
     },
     "HttpApiDeploymentDiffPayload": {
       "type": "object",
-      "required": ["webhooksUrlChanged", "openapiEndpointChanged"],
+      "required": ["schemeChanged", "webhooksUrlChanged", "openapiEndpointChanged"],
       "properties": {
+        "schemeChanged": { "type": "boolean" },
         "webhooksUrlChanged": { "type": "boolean" },
         "openapiEndpointChanged": { "type": "boolean" },
         "agentsChanges": {
@@ -5588,7 +6152,27 @@
         "agentsChanges": {
           "type": "object",
           "additionalProperties": { "$ref": "#/definitions/McpDeploymentAgentOptionsDiffPayload" }
+        },
+        "toolsChanges": {
+          "type": "object",
+          "additionalProperties": {
+            "oneOf": [
+              { "enum": ["create", "delete"] },
+              { "$ref": "#/definitions/McpDeploymentToolOptionsDiffPayload" }
+            ]
+          }
         }
+      },
+      "additionalProperties": false
+    },
+    "McpDeploymentToolOptionsDiffPayload": {
+      "type": "object",
+      "required": ["ownerComponentChanged", "securitySchemeChanged", "includeChanged", "excludeChanged"],
+      "properties": {
+        "ownerComponentChanged": { "type": "boolean" },
+        "securitySchemeChanged": { "type": "boolean" },
+        "includeChanged": { "type": "boolean" },
+        "excludeChanged": { "type": "boolean" }
       },
       "additionalProperties": false
     },
@@ -5605,7 +6189,7 @@
       "required": [
         "display",
         "agentSecretDefaults",
-        "skippedExistingAgentSecretDefaults",
+        "replaceableAgentSecretDefaults",
         "retryPolicyDefaults",
         "resourceDefaults"
       ],
@@ -5615,7 +6199,7 @@
           "type": "array",
           "items": { "$ref": "#/definitions/DeploymentAgentSecretDefault" }
         },
-        "skippedExistingAgentSecretDefaults": {
+        "replaceableAgentSecretDefaults": {
           "type": "array",
           "items": { "$ref": "#/definitions/DeploymentAgentSecretDefault" }
         },
@@ -5776,9 +6360,10 @@
     },
     "AgentType": {
       "type": "object",
-      "required": ["type_name", "description", "source_language", "schema", "constructor", "methods", "dependencies", "mode", "snapshotting", "config"],
+      "required": ["type_name", "kind", "description", "source_language", "schema", "constructor", "methods", "dependencies", "mode", "snapshotting", "config"],
       "properties": {
         "type_name": { "type": "string" },
+        "kind": { "type": "string", "enum": ["regular", "http-router"] },
         "description": { "type": "string" },
         "source_language": { "type": "string" },
         "schema": { "$ref": "#/definitions/SchemaGraph" },
@@ -5926,26 +6511,91 @@
     },
     "HttpMountDetails": {
       "type": "object",
-      "required": ["pathPrefix", "authDetails", "phantomAgent", "corsOptions", "webhookSuffix"],
+      "required": ["pathPrefix", "authDetails", "phantomAgent", "corsOptions", "webhookSuffix", "staticBindings", "filesystemBindings", "openapiProviderMethod"],
       "properties": {
         "pathPrefix": { "type": "array", "items": { "$ref": "#/definitions/PathSegment" } },
         "authDetails": { "oneOf": [{ "$ref": "#/definitions/AgentHttpAuthDetails" }, { "type": "null" }] },
         "phantomAgent": { "type": "boolean" },
         "corsOptions": { "$ref": "#/definitions/CorsOptions" },
-        "webhookSuffix": { "type": "array", "items": { "$ref": "#/definitions/PathSegment" } }
+        "webhookSuffix": { "type": "array", "items": { "$ref": "#/definitions/PathSegment" } },
+        "staticBindings": { "type": "array", "items": { "$ref": "#/definitions/FileMapping" } },
+        "filesystemBindings": { "type": "array", "items": { "$ref": "#/definitions/FileMapping" } },
+        "openapiProviderMethod": { "type": ["string", "null"] }
       },
       "additionalProperties": false
     },
+    "FileMapping": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["type", "publicPath", "filePath"],
+          "properties": {
+            "type": { "const": "Exact" },
+            "publicPath": { "type": "array", "items": { "type": "string" } },
+            "filePath": { "type": "string" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type", "publicPrefix", "filesystemRoot"],
+          "properties": {
+            "type": { "const": "Subtree" },
+            "publicPrefix": { "type": "array", "items": { "type": "string" } },
+            "filesystemRoot": { "type": "string" }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
     "HttpEndpointDetails": {
       "type": "object",
-      "required": ["httpMethod", "pathSuffix", "headerVars", "queryVars", "authDetails", "corsOptions"],
+      "required": ["httpMethod", "pathSuffix", "headerVars", "queryVars", "authDetails", "corsOptions", "durableStreams"],
       "properties": {
         "httpMethod": { "$ref": "#/definitions/HttpMethod" },
         "pathSuffix": { "type": "array", "items": { "$ref": "#/definitions/PathSegment" } },
         "headerVars": { "type": "array", "items": { "$ref": "#/definitions/HeaderVariable" } },
         "queryVars": { "type": "array", "items": { "$ref": "#/definitions/QueryVariable" } },
         "authDetails": { "oneOf": [{ "$ref": "#/definitions/AgentHttpAuthDetails" }, { "type": "null" }] },
-        "corsOptions": { "$ref": "#/definitions/CorsOptions" }
+        "corsOptions": { "$ref": "#/definitions/CorsOptions" },
+        "durableStreams": { "oneOf": [{ "$ref": "#/definitions/DurableStreamRouteOptions" }, { "type": "null" }] }
+      },
+      "additionalProperties": false
+    },
+    "DurableStreamRouteOptions": {
+      "type": "object",
+      "required": ["slots", "allowExternalWrites", "allowStreamDelete", "allowInvocationDelete", "load"],
+      "properties": {
+        "slots": { "type": "array", "items": { "$ref": "#/definitions/DurableStreamSlotOptions" } },
+        "allowExternalWrites": { "type": ["boolean", "null"] },
+        "allowStreamDelete": { "type": ["boolean", "null"] },
+        "allowInvocationDelete": { "type": ["boolean", "null"] },
+        "load": { "oneOf": [{ "$ref": "#/definitions/DurableStreamRouteLoadOptions" }, { "type": "null" }] }
+      },
+      "additionalProperties": false
+    },
+    "DurableStreamSlotOptions": {
+      "type": "object",
+      "required": ["source", "name", "contentType"],
+      "properties": {
+        "source": { "$ref": "#/definitions/DurableStreamSlotSource" },
+        "name": { "type": ["string", "null"] },
+        "contentType": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "DurableStreamSlotSource": {
+      "oneOf": [
+        { "type": "object", "required": ["type", "name"], "properties": { "type": { "const": "input" }, "name": { "type": "string" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "name"], "properties": { "type": { "const": "output" }, "name": { "type": "string" } }, "additionalProperties": false }
+      ]
+    },
+    "DurableStreamRouteLoadOptions": {
+      "type": "object",
+      "required": ["maxConcurrentReadersPerStream", "maxAppendRequestsPerSecondPerStream"],
+      "properties": {
+        "maxConcurrentReadersPerStream": { "type": ["integer", "null"], "minimum": 0 },
+        "maxAppendRequestsPerSecondPerStream": { "type": ["integer", "null"], "minimum": 0 }
       },
       "additionalProperties": false
     },
@@ -5985,7 +6635,8 @@
     "HttpMethod": {
       "oneOf": [
         { "type": "object", "required": ["type"], "properties": { "type": { "enum": ["Get", "Head", "Post", "Put", "Delete", "Connect", "Options", "Trace", "Patch"] } }, "additionalProperties": false },
-        { "type": "object", "required": ["type", "value"], "properties": { "type": { "const": "Custom" }, "value": { "type": "string" } }, "additionalProperties": false }
+        { "type": "object", "required": ["type", "value"], "properties": { "type": { "const": "Custom" }, "value": { "type": "string" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type"], "properties": { "type": { "const": "Any" } }, "additionalProperties": false }
       ]
     },
     "ApiPredicateValue": {
@@ -6079,6 +6730,9 @@
           "$ref": "#/definitions/DeploymentDiffSection"
         },
         "mcpDeployments": {
+          "$ref": "#/definitions/DeploymentDiffSection"
+        },
+        "mcpImports": {
           "$ref": "#/definitions/DeploymentDiffSection"
         },
         "remoteTools": {
@@ -6367,6 +7021,101 @@
         }
       },
       "additionalProperties": false
+    },
+    "tool.invoke": {
+      "type": "object",
+      "description": "Native external-tool invocation result, including its idempotency key and schema-typed success or custom error.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "tool invoke",
+      "required": ["$type", "response"],
+      "properties": {
+        "$type": { "const": "tool.invoke" },
+        "response": {
+          "type": "object",
+          "required": ["agentId", "idempotencyKey", "result", "status", "componentRevision", "agentFingerprint", "oplogIndex"],
+          "properties": {
+            "agentId": { "type": "object" },
+            "idempotencyKey": { "type": "string" },
+            "result": { "type": ["object", "null"] },
+            "status": {},
+            "componentRevision": {},
+            "agentFingerprint": {},
+            "oplogIndex": {}
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "tool.invoke-session": {
+      "type": "object",
+      "description": "Result of a live native external-tool invocation session, with its resolved target and idempotency key.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "tool invoke",
+      "required": ["$type", "target", "idempotencyKey", "result"],
+      "properties": {
+        "$type": { "const": "tool.invoke-session" },
+        "target": { "$ref": "#/definitions/PublicNativeToolTarget" },
+        "idempotencyKey": { "type": "string" },
+        "result": { "$ref": "#/definitions/PublicToolInvocationResult" }
+      },
+      "additionalProperties": false
+    },
+    "PublicNativeToolTarget": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind", "componentId", "agentId"],
+          "properties": {
+            "kind": { "const": "agent" },
+            "componentId": { "type": "string", "format": "uuid" },
+            "agentId": { "type": "string" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "componentId"],
+          "properties": {
+            "kind": { "const": "component" },
+            "componentId": { "type": "string", "format": "uuid" }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "PublicTypedValue": {
+      "type": "object",
+      "required": ["graph", "value"],
+      "properties": {
+        "graph": { "$ref": "#/definitions/SchemaGraph" },
+        "value": {}
+      },
+      "additionalProperties": false
+    },
+    "PublicToolInvocationResult": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind", "result"],
+          "properties": {
+            "kind": { "const": "toolsuccess" },
+            "result": { "oneOf": [{ "$ref": "#/definitions/PublicTypedValue" }, { "type": "null" }] }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "code", "message", "custom_error"],
+          "properties": {
+            "kind": { "const": "toolfailure" },
+            "code": { "type": "string" },
+            "message": { "type": ["string", "null"] },
+            "custom_error": { "oneOf": [{ "$ref": "#/definitions/PublicTypedValue" }, { "type": "null" }] }
+          },
+          "additionalProperties": false
+        }
+      ]
     },
     "EnvironmentToolMiddlewareGrantView": {
       "type": "object",
@@ -6952,6 +7701,7 @@
       "x-golem-command": "resource create",
       "required": [
         "$type",
+        "action",
         "id",
         "revision",
         "environmentId",
@@ -6964,6 +7714,11 @@
       "properties": {
         "$type": {
           "const": "resource.create"
+        },
+        "action": {
+          "description": "Whether the resource definition was created, or an existing one was updated (`--update-existing`).",
+          "type": "string",
+          "enum": ["created", "updated"]
         },
         "id": { "type": "string" },
         "revision": { "type": "integer", "minimum": 0 },
@@ -7146,6 +7901,7 @@
       "x-golem-command": "retry-policy create",
       "required": [
         "$type",
+        "action",
         "id",
         "environmentId",
         "name",
@@ -7157,6 +7913,11 @@
       "properties": {
         "$type": {
           "const": "retry-policy.create"
+        },
+        "action": {
+          "description": "Whether the retry policy was created, or an existing one was updated (`--update-existing`).",
+          "type": "string",
+          "enum": ["created", "updated"]
         },
         "id": { "type": "string" },
         "environmentId": { "type": "string" },
@@ -8107,6 +8868,7 @@
       "x-golem-command": "secret create",
       "required": [
         "$type",
+        "action",
         "id",
         "environmentId",
         "path",
@@ -8116,6 +8878,11 @@
       "properties": {
         "$type": {
           "const": "secret.create"
+        },
+        "action": {
+          "description": "Whether the secret was created, an existing secret was updated (`--update-existing`), or an existing secret with a different type was deleted and created again (`--replace-on-type-change`).",
+          "type": "string",
+          "enum": ["created", "updated", "replaced"]
         },
         "id": { "type": "string" },
         "environmentId": { "type": "string" },
@@ -8209,11 +8976,11 @@
       },
       "additionalProperties": false
     },
-    "secret.update-value": {
+    "secret.update": {
       "type": "object",
-      "description": "Single structured output document emitted by `golem secret update-value`.",
+      "description": "Single structured output document emitted by `golem secret update`.",
       "x-golem-output-mode": "single",
-      "x-golem-command": "secret update-value",
+      "x-golem-command": "secret update",
       "required": [
         "$type",
         "id",
@@ -8224,7 +8991,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "secret.update-value"
+          "const": "secret.update"
         },
         "id": { "type": "string" },
         "environmentId": { "type": "string" },
@@ -8455,6 +9222,26 @@
       "rustType": "DomainRegistrationNewView"
     },
     {
+      "type": "api.mcp-import.authorize",
+      "rustType": "McpImportAuthorizeView"
+    },
+    {
+      "type": "api.mcp-import.complete",
+      "rustType": "McpImportCompleteView"
+    },
+    {
+      "type": "api.mcp-import.disconnect",
+      "rustType": "McpImportDisconnectView"
+    },
+    {
+      "type": "api.mcp-import.status",
+      "rustType": "McpImportStatusView"
+    },
+    {
+      "type": "api.mcp-import.tools",
+      "rustType": "McpImportToolsView"
+    },
+    {
       "type": "api.security-scheme.create",
       "rustType": "HttpSecuritySchemeCreateView"
     },
@@ -8580,6 +9367,14 @@
     { "type": "tool.middleware.grant.delete", "rustType": "EnvironmentToolMiddlewareGrantDeleteView" },
     { "type": "tool.middleware.grant.restore", "rustType": "EnvironmentToolMiddlewareGrantRestoreView" },
     {
+      "type": "tool.invoke",
+      "rustType": "ToolInvokeView"
+    },
+    {
+      "type": "tool.invoke-session",
+      "rustType": "ToolInvocationSessionView"
+    },
+    {
       "type": "deploy.environment-setup-plan",
       "rustType": "EnvironmentSetupPlanView"
     },
@@ -8684,7 +9479,7 @@
       "rustType": "SecretListView"
     },
     {
-      "type": "secret.update-value",
+      "type": "secret.update",
       "rustType": "SecretUpdateView"
     }
   ]

@@ -465,10 +465,9 @@ async fn missing_agent_config_key(
         )
         .await?;
 
-    // TODO: this should be 400 / 409
     assert_matches!(
         result,
-        Err(golem_client::Error::Item(WorkerError::Error500(_)))
+        Err(golem_client::Error::Item(WorkerError::Error400(_)))
     );
 
     Ok(())
@@ -525,10 +524,9 @@ async fn mistyped_agent_config_key(
         )
         .await?;
 
-    // TODO: this should be 400 / 409
     assert_matches!(
         result,
-        Err(golem_client::Error::Item(WorkerError::Error500(_)))
+        Err(golem_client::Error::Item(WorkerError::Error400(_)))
     );
 
     Ok(())

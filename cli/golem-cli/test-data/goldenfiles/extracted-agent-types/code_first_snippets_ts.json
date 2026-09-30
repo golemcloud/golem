@@ -96,6 +96,7 @@
     },
     "dependencies": [],
     "description": "TS Code First BarAgent",
+    "kind": "regular",
     "methods": [
       {
         "description": "",
@@ -3688,9 +3689,31 @@
             {
               "name": "tree",
               "schema": {
-                "kind": "ref",
+                "kind": "record",
                 "value": {
-                  "id": "rec:122"
+                  "fields": [
+                    {
+                      "body": {
+                        "kind": "string",
+                        "value": {}
+                      },
+                      "name": "label"
+                    },
+                    {
+                      "body": {
+                        "kind": "list",
+                        "value": {
+                          "element": {
+                            "kind": "ref",
+                            "value": {
+                              "id": "rec:235"
+                            }
+                          }
+                        }
+                      },
+                      "name": "children"
+                    }
+                  ]
                 }
               },
               "source": {
@@ -3703,9 +3726,31 @@
         "output_schema": {
           "tag": "single",
           "value": {
-            "kind": "ref",
+            "kind": "record",
             "value": {
-              "id": "rec:122"
+              "fields": [
+                {
+                  "body": {
+                    "kind": "string",
+                    "value": {}
+                  },
+                  "name": "label"
+                },
+                {
+                  "body": {
+                    "kind": "list",
+                    "value": {
+                      "element": {
+                        "kind": "ref",
+                        "value": {
+                          "id": "rec:235"
+                        }
+                      }
+                    }
+                  },
+                  "name": "children"
+                }
+              ]
             }
           }
         }
@@ -6603,7 +6648,7 @@
                       "element": {
                         "kind": "ref",
                         "value": {
-                          "id": "rec:122"
+                          "id": "rec:235"
                         }
                       }
                     }
@@ -6613,7 +6658,7 @@
               ]
             }
           },
-          "id": "rec:122"
+          "id": "rec:235"
         }
       ],
       "root": {
@@ -6651,6 +6696,7 @@
     },
     "dependencies": [],
     "description": "TS Code First FooAgent",
+    "kind": "regular",
     "methods": [
       {
         "description": "",
@@ -10367,9 +10413,31 @@
             {
               "name": "tree",
               "schema": {
-                "kind": "ref",
+                "kind": "record",
                 "value": {
-                  "id": "rec:122"
+                  "fields": [
+                    {
+                      "body": {
+                        "kind": "string",
+                        "value": {}
+                      },
+                      "name": "label"
+                    },
+                    {
+                      "body": {
+                        "kind": "list",
+                        "value": {
+                          "element": {
+                            "kind": "ref",
+                            "value": {
+                              "id": "rec:235"
+                            }
+                          }
+                        }
+                      },
+                      "name": "children"
+                    }
+                  ]
                 }
               },
               "source": {
@@ -10382,9 +10450,31 @@
         "output_schema": {
           "tag": "single",
           "value": {
-            "kind": "ref",
+            "kind": "record",
             "value": {
-              "id": "rec:122"
+              "fields": [
+                {
+                  "body": {
+                    "kind": "string",
+                    "value": {}
+                  },
+                  "name": "label"
+                },
+                {
+                  "body": {
+                    "kind": "list",
+                    "value": {
+                      "element": {
+                        "kind": "ref",
+                        "value": {
+                          "id": "rec:235"
+                        }
+                      }
+                    }
+                  },
+                  "name": "children"
+                }
+              ]
             }
           }
         }
@@ -13158,7 +13248,7 @@
                       "element": {
                         "kind": "ref",
                         "value": {
-                          "id": "rec:122"
+                          "id": "rec:235"
                         }
                       }
                     }
@@ -13168,7 +13258,7 @@
               ]
             }
           },
-          "id": "rec:122"
+          "id": "rec:235"
         }
       ],
       "root": {

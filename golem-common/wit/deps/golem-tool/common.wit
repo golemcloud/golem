@@ -76,19 +76,17 @@ package golem:tool@0.1.0;
 ///     `guest.invoke(tool-name, …)` match against it. `commands.nodes`
 ///     is always non-empty.
 ///
-/// Capability scoping (WASI preopens, env masking, outbound-socket
-/// filters, subprocess-exec capability, and `golem:agent/host`'s
-/// `get-config-value` resolution) is performed by the host by inspecting
-/// the component's WIT imports — what a component *can* do is already
-/// declared structurally by which interfaces it imports — not by reading
-/// a declarative metadata record.
+/// Capability scoping is performed by the host. `requires-filesystem` declares
+/// that the tool cannot operate without a filesystem binding; it does not grant
+/// filesystem access.
 interface common {
   use golem:core/types@2.0.0.{schema-graph, type-node-index, schema-value-tree,
-    typed-schema-value};
+    typed-schema-value, tool-error};
 
   // Top level
   record tool {
     version:  string,
+    requires-filesystem: bool,
     commands: command-tree,
     /// Self-contained type-node pool holding every type referenced from
     /// this tool's commands. Command bodies reference entries by
@@ -104,6 +102,8 @@ interface common {
     aliases: list<string>,
     doc:     doc,
     scope:   tool-middleware-scope,
+    /// Schema of the static configuration supplied for each installation.
+    parameter-schema: schema-graph,
   }
 
   variant tool-middleware-scope {
@@ -149,6 +149,7 @@ interface common {
     constraints: list<constraint>,
     stdin:       option<stream-spec>,
     stdout:      option<stream-spec>,
+    stderr:      option<stream-spec>,
     %result:     option<result-spec>,
     errors:      list<error-case>,
     annotations: option<command-annotations>,
@@ -376,41 +377,11 @@ interface common {
     body:  string,
   }
 
-  // Invocation contract — shared between guest and host.
-  record custom-tool-error {
-    /// The selected declared error-case name, independent of payload shape.
-    name: string,
-    /// Unit for a payloadless error; otherwise the declared payload type.
-    payload: typed-schema-value,
-  }
-
-  variant tool-error {
-    invalid-tool-name(string),
-    invalid-command-path(list<string>),
-    invalid-input(string),
-    constraint-violation(string),
-    /// Returned `invocation-result` does not match the body's
-    /// declared `result-spec` (e.g., the returned value's root type
-    /// does not match the body's declared result schema; see §6.1
-    /// transparency invariant).
-    invalid-result(string),
-    /// Tool-defined failure identified by its declared case name. Consumers
-    /// preserve unfamiliar names and their typed payload when forwarding.
-    custom-error(custom-tool-error),
-  }
-
+  // Invocation contract — shared between guest and host. Both attachment
+  // fields must be absent: output bytes use the writers supplied to the guest.
   record invocation-result {
     %result: option<typed-schema-value>,
     stdout:  option<stream<u8>>,
-  }
-
-  /// Invocation-scoped access to exactly the next inner layer in a tool
-  /// middleware chain. The runtime creates this resource; guests cannot.
-  resource underlying-tool {
-    invoke: async func(
-      command-path: list<string>,
-      input:        typed-schema-value,
-      stdin:        option<stream<u8>>,
-    ) -> result<invocation-result, tool-error>;
+    stderr:  option<stream<u8>>,
   }
 }

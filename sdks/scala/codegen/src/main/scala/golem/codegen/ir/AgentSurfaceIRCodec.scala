@@ -41,6 +41,7 @@ object AgentSurfaceIRCodec {
       ),
       "metadata" -> ujson.Obj(
         "description"  -> a.metadata.description.fold[ujson.Value](ujson.Null)(ujson.Str(_)),
+        "kind"         -> a.metadata.kind,
         "mode"         -> a.metadata.mode,
         "snapshotting" -> a.metadata.snapshotting
       ),
@@ -85,7 +86,8 @@ object AgentSurfaceIRCodec {
             case s          => Some(s.str)
           },
           mode = mo("mode").str,
-          snapshotting = mo("snapshotting").str
+          snapshotting = mo("snapshotting").str,
+          kind = mo("kind").str
         )
       },
       methods = obj.get("methods").map(_.arr.toList.map(methodFromJson)).getOrElse(Nil),

@@ -16,7 +16,7 @@ import * as middleware from '@golemcloud/golem-ts-sdk/middleware';
 import { describe, expect, it } from 'vitest';
 
 describe('middleware package entry', () => {
-  it('exports host-neutral authoring without the ambient tool client', () => {
+  it('exports focused middleware authoring without the ambient tool client', () => {
     expect(middleware.toolDefinition).toBeTypeOf('function');
     expect(middleware.universalToolMiddleware).toBeTypeOf('function');
     expect(middleware.ToolInvokeError).toBeTypeOf('function');

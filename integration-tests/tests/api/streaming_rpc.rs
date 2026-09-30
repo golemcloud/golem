@@ -153,13 +153,28 @@ fn public_start(
         selector: Box::new(InvocationSelector {
             agent_type: "StreamingRpcTarget".to_string(),
             application: application_name.to_string(),
-            constructor_parameters: serde_json::json!({ "name": agent_name }),
+            constructor_parameters: native_record([serde_json::json!({
+                "kind": "string",
+                "value": agent_name
+            })]),
             environment: environment_name.to_string(),
             method: method_name.to_string(),
             phantom_id: None,
         }),
         version: INVOCATION_SESSION_VERSION,
     }
+}
+
+fn native_record(fields: impl IntoIterator<Item = serde_json::Value>) -> serde_json::Value {
+    serde_json::json!({"kind": "record", "value": {"fields": fields.into_iter().collect::<Vec<_>>()}})
+}
+
+fn native_u32(value: u32) -> serde_json::Value {
+    serde_json::json!({"kind": "u32", "value": value})
+}
+
+fn native_stream(reference: serde_json::Value) -> serde_json::Value {
+    serde_json::json!({"kind": "stream", "value": reference})
 }
 
 async fn run_public_session(
@@ -350,6 +365,8 @@ async fn invoke_agent_session(
             expected_callee_fingerprint: None,
             durable_input_mappings: Vec::new(),
             scope_card: None,
+            origin_invocation: None,
+            external_tool: None,
         })),
     };
     let mut state = InvocationSessionState::default();
@@ -388,7 +405,9 @@ async fn invoke_agent_session(
                     Some(invocation_session_result::Result::MethodResult(value)) => {
                         Some(value.try_into().map_err(anyhow::Error::msg)?)
                     }
-                    Some(invocation_session_result::Result::NoResult(_)) | None => {
+                    Some(invocation_session_result::Result::NoResult(_))
+                    | Some(invocation_session_result::Result::ToolResult(_))
+                    | None => {
                         anyhow::bail!("invocation session returned no method result")
                     }
                 };
@@ -479,6 +498,8 @@ impl TrustedInvocationSession {
                 expected_callee_fingerprint: None,
                 durable_input_mappings: Vec::new(),
                 scope_card: None,
+                origin_invocation: None,
+                external_tool: None,
             })),
         };
         let mut state = InvocationSessionState::default();
@@ -720,6 +741,33 @@ struct TrustedInvocationReport {
     unsent_requests: Vec<InvocationRequest>,
 }
 
+#[test]
+fn trusted_invocation_report_rejects_tool_results() {
+    let response = |result| InvocationResponse {
+        response: Some(invocation_response::Response::Result(
+            golem_api_grpc::proto::golem::worker::InvocationSessionResult {
+                result: Some(result),
+                ..Default::default()
+            },
+        )),
+    };
+    let mut report = TrustedInvocationReport::default();
+    assert!(
+        report
+            .record(response(invocation_session_result::Result::ToolResult(
+                Default::default(),
+            )))
+            .is_err()
+    );
+    let value = ProtoSchemaValue::try_from(SchemaValue::U32(17)).unwrap();
+    report
+        .record(response(invocation_session_result::Result::MethodResult(
+            value.clone(),
+        )))
+        .unwrap();
+    assert_eq!(report.result, Some(value));
+}
+
 impl TrustedInvocationReport {
     fn record(&mut self, response: InvocationResponse) -> anyhow::Result<()> {
         match response.response {
@@ -729,7 +777,9 @@ impl TrustedInvocationReport {
                 }
                 self.result = match result.result {
                     Some(invocation_session_result::Result::MethodResult(value)) => Some(value),
-                    Some(invocation_session_result::Result::NoResult(_)) | None => {
+                    Some(invocation_session_result::Result::NoResult(_))
+                    | Some(invocation_session_result::Result::ToolResult(_))
+                    | None => {
                         anyhow::bail!("trusted invocation returned no method result")
                     }
                 };
@@ -1888,6 +1938,117 @@ async fn assert_moonbit_target_ping(
 
 #[test]
 #[timeout("4 minutes")]
+async fn streaming_rpc_disconnect_resume(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
+    use golem_common::model::durable_stream::StreamSessionRecord;
+    use golem_common::model::oplog::{OplogIndex, PublicAgentInvocation, PublicOplogEntry};
+    use golem_common::schema::FromSchema;
+    use integration_tests::invocation_session::InvocationSession;
+    use std::time::Duration;
+
+    let user = deps.user().await?;
+    let (_, environment) = user.app_and_env().await?;
+    let component = user
+        .component(&environment.id, "golem_it_agent_rpc_rust_release")
+        .name("golem-it:agent-rpc-rust")
+        .unique()
+        .store()
+        .await?;
+    let agent = agent_id!("StreamingRpcTarget", uuid::Uuid::new_v4().to_string());
+    let worker = AgentId::from_agent_id(component.id, &agent).map_err(anyhow::Error::msg)?;
+    let checkpoint = InvocationSession::start(
+        deps,
+        &component,
+        &agent,
+        "benchmark_output",
+        data_value!(16u32, 701u32),
+        Duration::from_secs(60),
+    )
+    .await?
+    .disconnect_after(4)
+    .await?;
+    assert_eq!(checkpoint.item_count(), 4);
+    let accepted = checkpoint.acceptance.as_ref().unwrap();
+    let key = accepted.idempotency_key.as_ref().unwrap().value.clone();
+    let epoch = accepted.epoch;
+    // A finished producer is also a deterministic detach barrier; do not race Resume against
+    // the server observing a socket close, and do not use Takeover to hide that distinction.
+    tokio::time::timeout(Duration::from_secs(60), async {
+        loop {
+            if user
+                .get_oplog(&worker, OplogIndex::INITIAL)
+                .await?
+                .iter()
+                .any(|entry| {
+                    matches!(&entry.entry, PublicOplogEntry::StreamSession(session)
+                        if matches!(StreamSessionRecord::from_value(session.record.value()),
+                            Ok(StreamSessionRecord::Finished(finished))
+                                if finished.session_key.idempotency_key().value == key
+                                    && finished.result.is_ok()))
+                })
+            {
+                return Ok::<_, anyhow::Error>(());
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await??;
+    let report = InvocationSession::resume(
+        deps,
+        checkpoint,
+        PrivateResumeOperation::Resume,
+        Duration::from_secs(60),
+    )
+    .await?
+    .finish()
+    .await?;
+    assert_eq!(report.acceptance.as_ref().unwrap().epoch, epoch + 1);
+    assert_eq!(report.outputs.len(), 1);
+    let output = report.outputs.values().next().unwrap();
+    let values = output
+        .values()?
+        .into_iter()
+        .map(|value| SchemaValue::try_from(value).map_err(anyhow::Error::msg))
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    assert_eq!(
+        values,
+        (0..16)
+            .map(|index| SchemaValue::U32(701 + 3 * index))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        output
+            .items
+            .iter()
+            .filter(|item| item.epoch == epoch + 1)
+            .count(),
+        12
+    );
+    let events = &report.attempts[1];
+    assert!(events.sent <= events.accepted.unwrap());
+    assert!(events.accepted.unwrap() <= events.result.unwrap());
+    assert!(events.result.unwrap() <= events.first_item.unwrap());
+    assert!(events.first_item.unwrap() <= events.completed.unwrap());
+    let oplog = user.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    assert_eq!(oplog.iter().filter(|entry| matches!(&entry.entry,
+        PublicOplogEntry::AgentInvocationStarted(start)
+            if matches!(&start.invocation, PublicAgentInvocation::AgentMethodInvocation(method)
+                if method.idempotency_key.value == key)
+    )).count(), 1);
+    assert_eq!(
+        oplog
+            .iter()
+            .filter(|entry| matches!(&entry.entry,
+                PublicOplogEntry::AgentInvocationFinished(finish)
+                    if finish.method_name.as_deref() == Some("benchmark_output")
+            ))
+            .count(),
+        1
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("4 minutes")]
 #[tracing::instrument]
 async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
     deps: &EnvBasedTestDependencies,
@@ -1911,7 +2072,7 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
             environment_name,
             &agent_name,
             "ping",
-            serde_json::json!({}),
+            native_record([]),
         ),
     )
     .await?;
@@ -1921,15 +2082,16 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
         PublicServerMessage::InvocationAccepted { .. }
     ));
     let PublicServerMessage::InvocationResult {
-        mappings,
-        result: PublicInvocationResult::Value { value },
-        ..
+        mappings, result, ..
     } = &scalar[1]
     else {
         anyhow::bail!("scalar public invocation did not return a result")
     };
+    let PublicInvocationResult::Value { value, .. } = result.as_ref() else {
+        anyhow::bail!("scalar public invocation did not return a value")
+    };
     assert!(mappings.is_empty());
-    assert_eq!(value, &serde_json::json!("42"));
+    assert_eq!(value, &serde_json::json!({"kind": "u64", "value": "42"}));
     assert!(matches!(
         scalar[2],
         PublicServerMessage::InvocationFinished {
@@ -1946,18 +2108,22 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
             environment_name,
             &agent_name,
             "produce",
-            serde_json::json!({ "values": [3, 5, 8] }),
+            native_record([serde_json::json!({
+                "kind": "list",
+                "value": {"elements": [native_u32(3), native_u32(5), native_u32(8)]}
+            })]),
         ),
     )
     .await?;
     assert_eq!(produced.len(), 7);
     let PublicServerMessage::InvocationResult {
-        mappings,
-        result: PublicInvocationResult::Value { value },
-        ..
+        mappings, result, ..
     } = &produced[1]
     else {
         anyhow::bail!("streaming public invocation did not return an initial result")
+    };
+    let PublicInvocationResult::Value { value, .. } = result.as_ref() else {
+        anyhow::bail!("streaming public invocation did not return a value")
     };
     let [output_mapping] = mappings.as_slice() else {
         anyhow::bail!("streaming result did not expose exactly one output stream")
@@ -1965,9 +2131,9 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
     assert_eq!(output_mapping.direction, PublicStreamDirection::Output);
     assert_eq!(
         value,
-        &serde_json::json!({
-            "$stream": { "streamToken": output_mapping.stream_token.clone() }
-        })
+        &native_stream(serde_json::json!({
+            "streamToken": output_mapping.stream_token.clone()
+        }))
     );
     let items = produced[2..5]
         .iter()
@@ -1986,14 +2152,7 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
             other => panic!("expected output item, got {other:?}"),
         })
         .collect::<Vec<_>>();
-    assert_eq!(
-        items,
-        vec![
-            serde_json::json!(3),
-            serde_json::json!(5),
-            serde_json::json!(8)
-        ]
-    );
+    assert_eq!(items, vec![native_u32(3), native_u32(5), native_u32(8)]);
     assert!(matches!(
         produced[5],
         PublicServerMessage::OutputStreamEnd {
@@ -2016,9 +2175,9 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
         environment_name,
         &agent_name,
         "consume",
-        serde_json::json!({
-            "input": { "$stream": { "provisionalRef": input_reference } }
-        }),
+        native_record([native_stream(serde_json::json!({
+            "provisionalRef": input_reference
+        }))]),
     );
     let mut socket = connect_public_invocation_socket(deps, Some(&user.token)).await?;
     send_public_request(&mut socket, &start).await?;
@@ -2036,7 +2195,7 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
         let request = PublicClientMessage::InputStreamItem {
             channel: input_channel,
             sequence: DecimalU64(sequence as u64),
-            value: serde_json::json!(value),
+            value: native_u32(value),
             version: INVOCATION_SESSION_VERSION,
         };
         send_public_request(&mut socket, &request).await?;
@@ -2068,10 +2227,11 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
                 terminal: true,
                 ..
             } => assert_eq!(channel, input_channel),
-            PublicServerMessage::InvocationResult {
-                result: PublicInvocationResult::Value { value },
-                ..
-            } => consumed = Some(value),
+            PublicServerMessage::InvocationResult { result, .. } => {
+                if let PublicInvocationResult::Value { value, .. } = *result {
+                    consumed = Some(value);
+                }
+            }
             PublicServerMessage::InvocationFinished {
                 outcome: PublicInvocationOutcome::Success,
                 ..
@@ -2082,7 +2242,13 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
             _ => {}
         }
     }
-    assert_eq!(consumed, Some(serde_json::json!([13, 21])));
+    assert_eq!(
+        consumed,
+        Some(serde_json::json!({
+            "kind": "list",
+            "value": {"elements": [native_u32(13), native_u32(21)]}
+        }))
+    );
 
     let blocked_reference = uuid::Uuid::new_v4();
     let blocked = public_start(
@@ -2090,9 +2256,9 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
         environment_name,
         &agent_name,
         "consume",
-        serde_json::json!({
-            "input": { "$stream": { "provisionalRef": blocked_reference } }
-        }),
+        native_record([native_stream(serde_json::json!({
+            "provisionalRef": blocked_reference
+        }))]),
     );
     let mut blocked_socket = connect_public_invocation_socket(deps, Some(&user.token)).await?;
     send_public_request(&mut blocked_socket, &blocked).await?;
@@ -2136,7 +2302,7 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
             environment_name,
             &agent_name,
             "ping",
-            serde_json::json!({}),
+            native_record([]),
         ),
     )
     .await?;
@@ -2157,9 +2323,9 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
             environment_name,
             &agent_name,
             "consume",
-            serde_json::json!({
-                "input": { "$stream": { "provisionalRef": capability_reference } }
-            }),
+            native_record([native_stream(serde_json::json!({
+                "provisionalRef": capability_reference
+            }))]),
         ),
     )
     .await?;
@@ -2184,7 +2350,7 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
         &PublicClientMessage::InputStreamItem {
             channel: capability_channel,
             sequence: DecimalU64(0),
-            value: serde_json::json!({ "$secret": { "token": "forged" } }),
+            value: serde_json::json!({"kind": "secret", "value": {"token": "forged"}}),
             version: INVOCATION_SESSION_VERSION,
         },
     )
@@ -2224,7 +2390,7 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
                 environment_name,
                 &agent_name,
                 "ping",
-                serde_json::json!({}),
+                native_record([]),
             ),
         ),
     )
@@ -2292,7 +2458,7 @@ async fn public_websocket_invocation_enforces_auth_frames_and_rejections(
             "environment-that-does-not-exist",
             "missing-agent",
             "ping",
-            serde_json::json!({}),
+            native_record([]),
         ),
     )
     .await?;

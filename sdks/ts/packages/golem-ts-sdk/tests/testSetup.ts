@@ -30,6 +30,11 @@ const MockWasmRpc = Object.assign(vi.fn(makeWasmRpc), {
   create: vi.fn(makeWasmRpc),
 });
 
+vi.mock('golem:agent/durable-streams@2.0.0', () => ({
+  DurableStreamReader: vi.fn(),
+  DurableStreamWriter: vi.fn(),
+}));
+
 vi.mock('golem:agent/host@2.0.0', () => ({
   getAllAgentTypes: vi.fn(() => []),
   getAgentType: vi.fn((agentTypeName: string) => {
@@ -65,22 +70,25 @@ vi.mock('golem:agent/host@2.0.0', () => ({
     }
     return [typeName, typed, phantomId];
   }),
-  getConfigValue: () => {
+  getConfigValue: vi.fn(() => {
     throw new Error('getConfigValue is not mocked in this test setup');
-  },
+  }),
   createWebhook: () => 'https://example.com/webhook',
   WasmRpc: MockWasmRpc,
 }));
 
-vi.mock('golem:tool/host@0.1.0', () => ({
-  createStdin: vi.fn(),
-  createStdout: vi.fn(),
-  ToolRpc: vi.fn().mockImplementation(() => ({
+vi.mock('golem:tool/host@0.1.0', () => {
+  const rpc = vi.fn().mockImplementation(() => ({
     invokeAndAwait: vi.fn(),
     invoke: vi.fn(),
     asyncInvokeAndAwait: vi.fn(),
-  })),
-}));
+  }));
+  return {
+    createStdin: vi.fn(),
+    createOutput: vi.fn(),
+    ToolRpc: Object.assign(rpc, { create: rpc }),
+  };
+});
 
 vi.mock('golem:core/types@2.0.0', () => ({
   SchemaValueStream: {
@@ -132,9 +140,9 @@ vi.mock('golem:api/oplog@1.5.0', () => ({
 vi.mock('golem:quota/types@1.5.0', () => ({}));
 
 vi.mock('golem:secrets/reveal@0.1.0', () => ({
-  reveal: () => {
+  reveal: vi.fn(() => {
     throw new Error('reveal is not mocked in this test setup');
-  },
+  }),
 }));
 
 (globalThis as any).currentAgentId = 'foo-agent(123)';

@@ -1,12 +1,16 @@
 import type * as ToolCommon from "golem:tool/common@0.1.0"
 import type * as Core from "golem:core/types@2.0.0"
 import { Effect, Layer, Schema, Stream } from "effect"
-import { GraphEncoder } from "../schema-model/wit.js"
+import { GraphEncoder, schemaGraphFromWit } from "../schema-model/wit.js"
+import { schemaShapesMatch } from "../schema-model/model.js"
+import { validateSchemaGraph } from "../schema-model/validation.js"
 import { composeSchemaGraphs } from "../schema-model/builder.js"
 import { compile, type CompiledWitCodec } from "../../WitCodec.js"
 import { Uint32 } from "../../WitTypes.js"
 import type { HostServices } from "../../host/HostLive.js"
 import type { Scope } from "effect"
+import { registerTool } from "./registry.js"
+export { registeredTools, resetTools } from "./registry.js"
 
 export type DocInput = string | Partial<ToolCommon.Doc>
 export type RepeatableMode =
@@ -111,6 +115,7 @@ export interface BodyModel<
   readonly constraints: readonly ToolCommon.Constraint[]
   readonly stdin?: StreamOptions
   readonly stdout?: StreamOptions
+  readonly stderr?: StreamOptions
   readonly annotations?: CommandAnnotations
 }
 
@@ -206,6 +211,9 @@ export class BodyBuilder<
   output(options: StreamOptions = {}): BodyBuilder<F, O, Errors> {
     return new BodyBuilder({ ...this.model, stdout: options })
   }
+  stderr(options: StreamOptions = {}): BodyBuilder<F, O, Errors> {
+    return new BodyBuilder({ ...this.model, stderr: options })
+  }
   returns<S extends Schema.Top>(schema: S, options?: ResultOptions): BodyBuilder<F, S, Errors> {
     const formatters = options?.formatters ?? ["default"]
     const first = formatters[0]
@@ -244,6 +252,9 @@ export type HandlerContext = {
   readonly principal: unknown
   readonly stdin?: Stream.Stream<Uint8Array, ToolInvokeError>
   readonly stdout?: <R2>(
+    source: Stream.Stream<Uint8Array, ToolInvokeError, R2>,
+  ) => Effect.Effect<void, ToolInvokeError, R2>
+  readonly stderr?: <R2>(
     source: Stream.Stream<Uint8Array, ToolInvokeError, R2>,
   ) => Effect.Effect<void, ToolInvokeError, R2>
 }
@@ -295,8 +306,20 @@ export interface CommandModel {
   readonly children: Readonly<Record<string, CommandModel>>
 }
 export class CommandBuilder<M extends CommandModel = CommandModel> {
+  readonly requiresFilesystem = false
   constructor(readonly model: M) {}
   declare readonly name: M["name"]
+  /** Bind this complete definition to its registered tool name. @since 1.6.0 @category constructors */
+  client(
+    options?: import("../../Tool.js").ClientOptions,
+  ): import("../../Tool.js").Client<
+    ToolDefinition<M["name"], M>,
+    import("../../host/ToolClient.js").ToolClient
+  > {
+    if (!toolClientFactory)
+      throw new Error("tool client runtime is unavailable in this guest world")
+    return toolClientFactory(this as ToolDefinition<M["name"], M>, options) as never
+  }
   implement(
     implementation: [ImplementationRequirements<M, never>] extends [never]
       ? ToolImplementation<M>
@@ -319,7 +342,10 @@ export class CommandBuilder<M extends CommandModel = CommandModel> {
   body<B extends BodyBuilder<any, any, any>>(
     build: (body: BodyBuilder) => B,
   ): CommandBuilder<Omit<M, "body"> & { readonly body: B["model"] }> {
-    return new CommandBuilder({ ...this.model, body: build(new BodyBuilder()).model } as never)
+    return new CommandBuilder({
+      ...this.model,
+      body: build(new BodyBuilder()).model,
+    } as never) as unknown as CommandBuilder<Omit<M, "body"> & { readonly body: B["model"] }>
   }
   command<N extends string, C extends CommandBuilder<any>>(
     name: N,
@@ -342,6 +368,15 @@ export interface ToolDefinition<
 > {
   readonly name: Name
   readonly model: M
+  readonly requiresFilesystem: boolean
+}
+
+let toolClientFactory:
+  | ((definition: ToolDefinition, options?: import("../../Tool.js").ClientOptions) => unknown)
+  | undefined
+/** @internal Install client construction outside the metadata-only tool model. */
+export const registerToolClientFactory = (factory: typeof toolClientFactory): void => {
+  toolClientFactory = factory
 }
 export interface ErasedToolImplementation {
   readonly [name: string]: Handler<any, any> | ErasedToolImplementation
@@ -362,7 +397,7 @@ export interface ImplementedTool<Name extends string = string> {
 }
 export const toolDefinition = <N extends string>(
   name: N,
-  options: { aliases?: readonly string[]; doc?: DocInput } = {},
+  options: { aliases?: readonly string[]; doc?: DocInput; requiresFilesystem?: boolean } = {},
 ): CommandBuilder<{ name: N; aliases: readonly string[]; children: Record<never, never> }> => {
   let model: CommandModel = {
     name,
@@ -372,6 +407,7 @@ export const toolDefinition = <N extends string>(
   }
   const definition = Object.assign(Object.create(CommandBuilder.prototype), {
     name,
+    requiresFilesystem: options.requiresFilesystem ?? false,
     body: (build: (body: BodyBuilder) => BodyBuilder<any, any, any>) => {
       model = { ...model, body: build(new BodyBuilder()).model }
       return definition
@@ -402,6 +438,9 @@ export interface CompiledBody {
   readonly model: BodyModel
   readonly args: readonly ArgumentSpec[]
   readonly input: CompiledWitCodec<any>
+  readonly decodeInput: (
+    input: ToolCommon.TypedSchemaValue,
+  ) => Effect.Effect<any, Schema.SchemaError | ToolInvokeError, any>
   readonly output?: CompiledWitCodec<any>
   readonly errors: readonly { spec: ToolErrorCase; codec: CompiledWitCodec<any> }[]
 }
@@ -412,7 +451,6 @@ export interface Registered {
   readonly implementation: ToolImplementation
   readonly layer?: Layer.Layer<any>
 }
-const registry = new Map<string, Registered>()
 
 const doc = (input?: DocInput): ToolCommon.Doc =>
   typeof input === "string"
@@ -457,6 +495,25 @@ export function compileDefinition(
     ...args.filter((a) => a.kind === "option" && !a.global),
     ...args.filter((a) => a.kind === "flag" && !a.global),
   ]
+  const inputSchema = (argument: ArgumentSpec): Schema.Top => {
+    const optional =
+      (argument.kind === "option" || argument.kind === "positional") &&
+      !(argument.options.required ?? argument.kind === "positional") &&
+      argument.options.default === undefined &&
+      !argument.repeatable
+    if (!optional) return argument.schema
+    const graph = compileOnce(argument.schema).graph
+    let root = graph.root
+    const seen = new Set<string>()
+    while (root.body.tag === "ref") {
+      if (seen.has(root.body.id)) throw new TypeError(`Cyclic tool schema ref '${root.body.id}'`)
+      seen.add(root.body.id)
+      const definition = graph.defs.get(root.body.id)
+      if (!definition) throw new TypeError(`Unresolved tool schema ref '${root.body.id}'`)
+      root = definition.body
+    }
+    return root.body.tag === "option" ? argument.schema : Schema.NullOr(argument.schema)
+  }
   const collect = (
     m: CommandModel,
     path: readonly string[],
@@ -467,7 +524,7 @@ export function compileDefinition(
       const args = ordered([...inherited, ...m.body.args])
       inputCodecs.set(
         path.join("/"),
-        compileOnce(Schema.Struct(Object.fromEntries(args.map((a) => [a.name, a.schema])))),
+        compileOnce(Schema.Struct(Object.fromEntries(args.map((a) => [a.name, inputSchema(a)])))),
       )
       for (const argument of args) compileOnce(argument.wireSchema)
       if (m.body.output) compileOnce(m.body.output)
@@ -505,7 +562,29 @@ export function compileDefinition(
         const codec = compileOnce(spec.schema)
         return { spec, codec }
       })
-      cb = { model: m.body, args, input, output, errors }
+      cb = {
+        model: m.body,
+        args,
+        input,
+        output,
+        errors,
+        decodeInput: (value) =>
+          Effect.gen(function* () {
+            yield* Effect.try({
+              try: () => {
+                const graph = schemaGraphFromWit(value.graph)
+                const invalid = validateSchemaGraph(graph)[0]
+                if (invalid) throw new Error(invalid.message)
+                if (!schemaShapesMatch(graph, input.graph))
+                  throw new Error(
+                    "tool input schema does not match the command canonical input schema",
+                  )
+              },
+              catch: (error) => new ToolInvokeError({ tag: "invalid-input", val: String(error) }),
+            })
+            return yield* input.decode(value.value)
+          }),
+      }
       bodies.set(path.join("/"), cb)
     }
     const children = Object.values(m.children).map((c) =>
@@ -521,7 +600,7 @@ export function compileDefinition(
     }
     return index
   }
-  const bodyWire = (b: CompiledBody): ToolCommon.CommandBody => {
+  const bodyWire = (b: Omit<CompiledBody, "decodeInput">): ToolCommon.CommandBody => {
     const positionals: ToolCommon.Positional[] = []
     const options: ToolCommon.OptionSpec[] = []
     const flags: ToolCommon.FlagSpec[] = []
@@ -632,6 +711,13 @@ export function compileDefinition(
             required: b.model.stdout.required ?? false,
           }
         : undefined,
+      stderr: b.model.stderr
+        ? {
+            doc: doc(b.model.stderr.doc),
+            mime: [...(b.model.stderr.mime ?? [])],
+            required: b.model.stderr.required ?? false,
+          }
+        : undefined,
       result: b.output
         ? {
             type: indexFor(b.output),
@@ -672,7 +758,12 @@ export function compileDefinition(
   return {
     definition,
     bodies,
-    wire: { version: "0.1.0", commands: { nodes }, schema: enc.finish() },
+    wire: {
+      version: "0.1.0",
+      requiresFilesystem: definition.requiresFilesystem,
+      commands: { nodes },
+      schema: enc.finish(),
+    },
   }
 }
 
@@ -778,29 +869,11 @@ function validateDefinition(root: CommandModel): void {
   visit(root, new Set(), new Set())
 }
 
-function registerTool<N extends string>(
-  definition: ToolDefinition<N>,
-  implementation: ToolImplementation,
-  layer?: Layer.Layer<any>,
-): ImplementedTool<N> {
-  if (registry.has(definition.name))
-    throw new Error(`Tool '${definition.name}' is already registered`)
-  const compiled = compileDefinition(definition)
-  for (const path of compiled.bodies.keys()) {
-    if (!implementationAt(implementation, definition.name, path ? path.split("/") : []))
-      throw new Error(`missing implementation for tool command '${path || definition.name}'`)
-  }
-  registry.set(definition.name, { ...compiled, implementation, layer })
-  return { name: definition.name, definition }
-}
-export const registeredTools = () => [...registry.values()]
-export const resetTools = () => registry.clear()
 export const findCommand = (r: Registered, path: readonly string[]) => r.bodies.get(path.join("/"))
-/** Canonical host input order: inherited globals, positionals, tail, options, then flags. */
-export const canonicalInputFields = (
+const canonicalInputArguments = (
   definition: ToolDefinition,
   path: readonly string[],
-): Fields | undefined => {
+): ReadonlyArray<ArgumentSpec> | undefined => {
   let command = definition.model
   const inherited: ArgumentSpec[] = []
   for (const segment of path) {
@@ -819,7 +892,61 @@ export const canonicalInputFields = (
     ...args.filter((a) => a.kind === "option" && !a.global),
     ...args.filter((a) => a.kind === "flag" && !a.global),
   ]
-  return Object.fromEntries(ordered.map((argument) => [argument.name, argument.schema]))
+  return ordered
+}
+
+const canonicalArgumentSchema = (argument: ArgumentSpec): Schema.Top => {
+  const optional =
+    (argument.kind === "option" || argument.kind === "positional") &&
+    !(argument.options.required ?? argument.kind === "positional") &&
+    argument.options.default === undefined &&
+    !argument.repeatable
+  return optional ? Schema.NullOr(argument.schema) : argument.schema
+}
+
+/** Canonical host input order and effective wire schemas. */
+export const canonicalInputFields = (
+  definition: ToolDefinition,
+  path: readonly string[],
+): Fields | undefined => {
+  const arguments_ = canonicalInputArguments(definition, path)
+  return arguments_
+    ? Object.fromEntries(
+        arguments_.map((argument) => [argument.name, canonicalArgumentSchema(argument)]),
+      )
+    : undefined
+}
+
+/** Values supplied by command-line parsing when optional arguments are omitted. */
+export const canonicalInputDefaults = (
+  definition: ToolDefinition,
+  path: readonly string[],
+): Readonly<Record<string, unknown>> | undefined => {
+  const arguments_ = canonicalInputArguments(definition, path)
+  if (!arguments_) return undefined
+  return Object.fromEntries(
+    arguments_.flatMap((argument): Array<readonly [string, unknown]> => {
+      if (argument.kind === "flag")
+        return [
+          [argument.name, argument.flag === "count" ? 0 : (argument.options.default ?? false)],
+        ]
+      if (argument.kind === "tail")
+        return ((argument.options as { readonly min?: number }).min ?? 0) > 0
+          ? []
+          : [[argument.name, []]]
+      const required = argument.options.required ?? argument.kind === "positional"
+      if (required) return []
+      if (argument.options.default !== undefined) return [[argument.name, argument.options.default]]
+      if (argument.repeatable)
+        return [
+          [
+            argument.name,
+            resolveRoot(Effect.runSync(compile(argument.schema))).tag === "map" ? new Map() : [],
+          ],
+        ]
+      return [[argument.name, null]]
+    }),
+  )
 }
 export const implementationAt = (
   impl: ToolImplementation,

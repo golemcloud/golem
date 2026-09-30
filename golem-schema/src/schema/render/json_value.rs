@@ -171,11 +171,11 @@ fn encode(
         (SchemaType::S8 { .. }, SchemaValue::S8(i)) => Ok(json_number_i64(*i as i64)),
         (SchemaType::S16 { .. }, SchemaValue::S16(i)) => Ok(json_number_i64(*i as i64)),
         (SchemaType::S32 { .. }, SchemaValue::S32(i)) => Ok(json_number_i64(*i as i64)),
-        (SchemaType::S64 { .. }, SchemaValue::S64(i)) => Ok(json_number_i64(*i)),
+        (SchemaType::S64 { .. }, SchemaValue::S64(i)) => Ok(Value::String(i.to_string())),
         (SchemaType::U8 { .. }, SchemaValue::U8(u)) => Ok(json_number_u64(*u as u64)),
         (SchemaType::U16 { .. }, SchemaValue::U16(u)) => Ok(json_number_u64(*u as u64)),
         (SchemaType::U32 { .. }, SchemaValue::U32(u)) => Ok(json_number_u64(*u as u64)),
-        (SchemaType::U64 { .. }, SchemaValue::U64(u)) => Ok(json_number_u64(*u)),
+        (SchemaType::U64 { .. }, SchemaValue::U64(u)) => Ok(Value::String(u.to_string())),
         (SchemaType::F32 { .. }, SchemaValue::F32(f)) => json_number_f64(*f as f64, &r.path),
         (SchemaType::F64 { .. }, SchemaValue::F64(f)) => json_number_f64(*f, &r.path),
         (SchemaType::Char { .. }, SchemaValue::Char(c)) => Ok(Value::String(c.to_string())),
@@ -453,7 +453,7 @@ fn encode_union(
     // Sanity check: the produced JSON should match the branch's
     // discriminator rule. Validation should have caught a tag/body
     // disagreement at construction time; this is the runtime safety net.
-    if !rule_matches(&branch.discriminator, &rendered) {
+    if !rule_matches(&branch.discriminator, &rendered)? {
         return Err(RenderError::UnionTagMismatch {
             tag: payload.tag.clone(),
             reason: format!(
@@ -560,7 +560,7 @@ fn from_json_body(
             check_int_range::<i32>(json, path)?;
             Ok(SchemaValue::S32(json_i64(json, path)? as i32))
         }
-        SchemaType::S64 { .. } => Ok(SchemaValue::S64(json_i64(json, path)?)),
+        SchemaType::S64 { .. } => Ok(SchemaValue::S64(json_i64_string(json, path)?)),
         SchemaType::U8 { .. } => {
             check_int_range::<u8>(json, path)?;
             Ok(SchemaValue::U8(json_u64(json, path)? as u8))
@@ -573,7 +573,7 @@ fn from_json_body(
             check_int_range::<u32>(json, path)?;
             Ok(SchemaValue::U32(json_u64(json, path)? as u32))
         }
-        SchemaType::U64 { .. } => Ok(SchemaValue::U64(json_u64(json, path)?)),
+        SchemaType::U64 { .. } => Ok(SchemaValue::U64(json_u64_string(json, path)?)),
         SchemaType::F32 { .. } => {
             let value = json_f64(json, path)?;
             check_f32_in_range(value, path)?;
@@ -674,13 +674,24 @@ fn from_json_body(
             }
             let mut out = Vec::with_capacity(fields.len());
             for field in fields.iter() {
-                let value = obj.get(&field.name).ok_or_else(|| {
-                    mismatch(path, format!("missing record field `{}`", field.name))
-                })?;
-                path.push(PathSegment::Field(field.name.clone()));
-                let v = from_json_inner(graph, &field.body, value, path, &mut visited, policy)?;
-                path.pop();
-                out.push(v);
+                match obj.get(&field.name) {
+                    Some(value) => {
+                        path.push(PathSegment::Field(field.name.clone()));
+                        let v =
+                            from_json_inner(graph, &field.body, value, path, &mut visited, policy)?;
+                        path.pop();
+                        out.push(v);
+                    }
+                    None if resolves_to_option(graph, &field.body) => {
+                        out.push(SchemaValue::Option { inner: None });
+                    }
+                    None => {
+                        return Err(mismatch(
+                            path,
+                            format!("missing record field `{}`", field.name),
+                        ));
+                    }
+                }
             }
             Ok(SchemaValue::Record { fields: out })
         }
@@ -878,6 +889,21 @@ fn from_json_body(
     }
 }
 
+fn resolves_to_option(graph: &SchemaGraph, ty: &SchemaType) -> bool {
+    let mut current = ty;
+    let mut visited = HashSet::new();
+    loop {
+        match current {
+            SchemaType::Option { .. } => return true,
+            SchemaType::Ref { id, .. } if visited.insert(id.clone()) => match graph.lookup(id) {
+                Some(definition) => current = &definition.body,
+                None => return false,
+            },
+            _ => return false,
+        }
+    }
+}
+
 fn decode_result(
     graph: &SchemaGraph,
     spec: &ResultSpec,
@@ -949,7 +975,7 @@ fn decode_union(
     // time; a runtime safety net catches the case where the value is bad.
     let mut matched: Vec<&UnionBranch> = Vec::new();
     for branch in spec.branches.iter() {
-        if rule_matches(&branch.discriminator, json) {
+        if rule_matches(&branch.discriminator, json)? {
             matched.push(branch);
         }
     }
@@ -975,8 +1001,8 @@ fn decode_union(
 // ----------------------------------------------------------- discriminators
 
 /// Whether a [`DiscriminatorRule`] matches a raw JSON value.
-fn rule_matches(rule: &DiscriminatorRule, json: &Value) -> bool {
-    match rule {
+fn rule_matches(rule: &DiscriminatorRule, json: &Value) -> Result<bool, RenderError> {
+    Ok(match rule {
         DiscriminatorRule::Prefix { prefix } => json
             .as_str()
             .map(|s| s.starts_with(prefix.as_str()))
@@ -989,6 +1015,9 @@ fn rule_matches(rule: &DiscriminatorRule, json: &Value) -> bool {
             .as_str()
             .map(|s| s.contains(substring.as_str()))
             .unwrap_or(false),
+        #[cfg(not(feature = "regex"))]
+        DiscriminatorRule::Regex { .. } => return Err(RenderError::Unsupported("feature `regex`")),
+        #[cfg(feature = "regex")]
         DiscriminatorRule::Regex { regex } => match (json.as_str(), regex::Regex::new(regex)) {
             (Some(s), Ok(re)) => re.is_match(s),
             _ => false,
@@ -1005,7 +1034,7 @@ fn rule_matches(rule: &DiscriminatorRule, json: &Value) -> bool {
             .as_object()
             .map(|obj| !obj.contains_key(field_name.as_str()))
             .unwrap_or(false),
-    }
+    })
 }
 
 fn rule_label(rule: &DiscriminatorRule) -> String {
@@ -1039,6 +1068,55 @@ fn json_i64(json: &Value, path: &mut PathStack) -> Result<i64, RenderError> {
 fn json_u64(json: &Value, path: &mut PathStack) -> Result<u64, RenderError> {
     json.as_u64()
         .ok_or_else(|| mismatch(path, "expected JSON non-negative integer".to_string()))
+}
+
+fn json_i64_string(json: &Value, path: &mut PathStack) -> Result<i64, RenderError> {
+    let value = json
+        .as_str()
+        .ok_or_else(|| mismatch(path, "expected canonical signed integer string".to_string()))?;
+    if !is_canonical_signed_integer(value) {
+        return Err(mismatch(
+            path,
+            "expected canonical signed integer string".to_string(),
+        ));
+    }
+    value
+        .parse()
+        .map_err(|_| mismatch(path, "signed 64-bit integer out of range".to_string()))
+}
+
+fn json_u64_string(json: &Value, path: &mut PathStack) -> Result<u64, RenderError> {
+    let value = json.as_str().ok_or_else(|| {
+        mismatch(
+            path,
+            "expected canonical unsigned integer string".to_string(),
+        )
+    })?;
+    if value != "0" && !canonical_nonzero_digits(value) {
+        return Err(mismatch(
+            path,
+            "expected canonical unsigned integer string".to_string(),
+        ));
+    }
+    value
+        .parse()
+        .map_err(|_| mismatch(path, "unsigned 64-bit integer out of range".to_string()))
+}
+
+fn is_canonical_signed_integer(value: &str) -> bool {
+    value == "0"
+        || value
+            .strip_prefix('-')
+            .is_some_and(canonical_nonzero_digits)
+        || canonical_nonzero_digits(value)
+}
+
+fn canonical_nonzero_digits(value: &str) -> bool {
+    value
+        .as_bytes()
+        .first()
+        .is_some_and(|digit| matches!(digit, b'1'..=b'9'))
+        && value.bytes().all(|digit| digit.is_ascii_digit())
 }
 
 fn json_f64(json: &Value, path: &mut PathStack) -> Result<f64, RenderError> {

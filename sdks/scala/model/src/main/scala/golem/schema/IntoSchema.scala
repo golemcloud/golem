@@ -43,6 +43,12 @@ object IntoSchema {
 
   def apply[A](implicit ev: IntoSchema[A]): IntoSchema[A] = ev
 
+  implicit val byteArray: IntoSchema[Array[Byte]] = new IntoSchema[Array[Byte]] {
+    override val graph: SchemaGraph                       = SchemaBuilder.graphOf(_ => t.list(t.u8))
+    override def toValue(value: Array[Byte]): SchemaValue =
+      SchemaValue.ListValue(value.iterator.map(byte => SchemaValue.U8Value(byte & 0xff)).toList)
+  }
+
   implicit def derived[A](implicit schema: Schema[A]): IntoSchema[A] =
     new IntoSchema[A] {
       override lazy val graph: SchemaGraph        = Derivation.graphOf(schema)

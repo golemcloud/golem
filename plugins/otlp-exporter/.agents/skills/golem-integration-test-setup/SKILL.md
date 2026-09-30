@@ -187,7 +187,7 @@ localServer:
   dataDir: .golem/data
 ```
 
-`localServer` is a singleton across all manifest sources, so define it either in the main manifest or in the included file, not both. Include paths are relative to the manifest that declares `includes`; `localServer` path fields are relative to the manifest that declares `localServer`. If you load manifests explicitly with `--app`, pass every relevant manifest file because `includes` are only followed during normal auto-discovered manifest loading.
+`localServer` is a singleton across all manifest sources, so define it either in the main manifest or in the included file, not both. Include paths are relative to the manifest that declares `includes`; `localServer` path fields are relative to the manifest that declares `localServer`. If you select the manifest explicitly with `-A` / `--app-manifest-path`, pass the root `golem.yaml`; its `includes` are followed the same way as during auto-discovery.
 
 ## 5. Deploy Against the Test Environment
 

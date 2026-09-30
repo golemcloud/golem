@@ -34,7 +34,8 @@
 use super::*;
 use crate::schema::graph::SchemaGraph;
 use crate::schema::wit::{
-    DecodeError, EncodeError, GraphDecoder, GraphEncoder, decode_value_by_ref, encode_value,
+    DecodeError, EncodeError, GraphDecoder, GraphEncoder, decode_graph, decode_value_by_ref,
+    encode_graph, encode_value,
 };
 
 /// Generated `golem:tool/common@0.1.0` types used as the wire shape.
@@ -108,6 +109,7 @@ pub fn tool_middleware_to_wit(
         aliases: middleware.aliases.clone(),
         doc: wire::Doc::from(&middleware.doc),
         scope,
+        parameter_schema: encode_graph(&middleware.parameter_schema)?,
     })
 }
 
@@ -130,6 +132,7 @@ pub fn tool_middleware_from_wit(
         aliases: middleware.aliases,
         doc: Doc::from(&middleware.doc),
         scope,
+        parameter_schema: decode_graph(&middleware.parameter_schema)?,
     })
 }
 
@@ -454,6 +457,7 @@ impl TryFrom<&Tool> for wire::Tool {
         let schema = enc.finish();
         Ok(Self {
             version: tool.version.clone(),
+            requires_filesystem: tool.requires_filesystem,
             commands,
             schema,
         })
@@ -521,6 +525,7 @@ fn encode_command_body(
             .collect::<Result<Vec<_>, _>>()?,
         stdin: b.stdin.as_ref().map(wire::StreamSpec::from),
         stdout: b.stdout.as_ref().map(wire::StreamSpec::from),
+        stderr: b.stderr.as_ref().map(wire::StreamSpec::from),
         result: b
             .result
             .as_ref()
@@ -666,6 +671,7 @@ impl TryFrom<&wire::Tool> for Tool {
         let commands = decode_command_tree(&dec, &w.commands)?;
         Ok(Self {
             version: w.version.clone(),
+            requires_filesystem: w.requires_filesystem,
             commands,
             schema,
         })
@@ -733,6 +739,7 @@ fn decode_command_body(
             .collect::<Result<Vec<_>, _>>()?,
         stdin: b.stdin.as_ref().map(StreamSpec::from),
         stdout: b.stdout.as_ref().map(StreamSpec::from),
+        stderr: b.stderr.as_ref().map(StreamSpec::from),
         result: b
             .result
             .as_ref()

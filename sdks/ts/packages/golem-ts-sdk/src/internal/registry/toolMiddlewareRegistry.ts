@@ -19,12 +19,15 @@ import type {
   ToolError,
   ToolMiddleware,
   TypedSchemaValue,
-  UnderlyingTool,
 } from 'golem:tool/common@0.1.0';
+import type { UnderlyingTool } from 'golem:tool/underlying@0.1.0';
+import type { ToolOutputWriter } from 'golem:tool/streams@0.1.0';
 import type { Principal } from '../../principal';
 import type { UniversalToolMiddlewareInvoke } from '../../tool';
 import type { ExtendedToolRuntime, ExtendedToolType } from '../tool';
 import { encodeTool } from '../tool';
+import { schemaGraphToWit, t, v } from '../schema-model';
+import type { SchemaCodec } from '../../schema/codec';
 import {
   encodeToolInvokeError,
   invokeMonomorphicToolMiddleware,
@@ -36,6 +39,7 @@ interface ToolMiddlewareSourceBase {
   readonly version: string;
   readonly aliases: readonly string[];
   readonly doc: Doc;
+  readonly parameterCodec: SchemaCodec;
 }
 
 export interface MonomorphicToolMiddlewareSource extends ToolMiddlewareSourceBase {
@@ -55,9 +59,12 @@ export type ToolMiddlewareSource = MonomorphicToolMiddlewareSource | UniversalTo
 export interface RawToolMiddlewareInvocation {
   readonly toolName: string;
   readonly toolMetadata: Tool;
+  readonly parameters: TypedSchemaValue;
   readonly commandPath: readonly string[];
   readonly input: TypedSchemaValue;
   readonly stdin: AsyncIterable<number> | undefined;
+  readonly stdout: ToolOutputWriter | undefined;
+  readonly stderr: ToolOutputWriter | undefined;
   readonly principal: Principal;
   readonly wrapped: Pick<UnderlyingTool, 'invoke'>;
 }
@@ -142,7 +149,7 @@ class ToolMiddlewareRegistryImpl {
   }
 }
 
-export const ToolMiddlewareRegistry = new ToolMiddlewareRegistryImpl();
+export const ToolMiddlewareRegistry = /* @__PURE__ */ new ToolMiddlewareRegistryImpl();
 
 function encodeMiddleware(source: ToolMiddlewareSource): ToolMiddleware {
   return {
@@ -153,6 +160,7 @@ function encodeMiddleware(source: ToolMiddlewareSource): ToolMiddleware {
       ...source.doc,
       examples: source.doc.examples.map((example) => ({ ...example })),
     },
+    parameterSchema: schemaGraphToWit(source.parameterCodec.graph),
     scope:
       source.kind === 'monomorphic'
         ? {
@@ -165,6 +173,12 @@ function encodeMiddleware(source: ToolMiddlewareSource): ToolMiddleware {
         : { tag: 'universal' },
   };
 }
+
+export const emptyMiddlewareParameterCodec: SchemaCodec = {
+  graph: { defs: new Map(), root: t.record([]) },
+  toValue: () => v.record([]),
+  fromValue: () => ({}),
+};
 
 function compileInvoker(
   source: ToolMiddlewareSource,

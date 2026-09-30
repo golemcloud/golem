@@ -37,7 +37,8 @@ use golem_common::schema::multimodal::is_multimodal_schema_type;
 use golem_common::schema::schema_type::SchemaType;
 use golem_common::schema::unstructured::{binary_body_restrictions, text_body_restrictions};
 use golem_service_base::custom_api::{
-    CallAgentBehaviour, CompiledOutputSchema, PathSegment, QueryOrHeaderType, RequestBodySchema,
+    AgentRouteMode, CallAgentBehaviour, CompiledOutputSchema, DurableStreamRepresentation,
+    PathSegment, QueryOrHeaderType, RequestBodySchema,
 };
 
 /// Schema-model view of an entire set of compiled routes, ready for the
@@ -66,6 +67,19 @@ pub struct CallAgentRouteSchema {
     pub query_params: Vec<NamedParamSchema>,
     pub header_params: Vec<NamedParamSchema>,
     pub response: ResponseModel,
+    pub stream_slots: Option<Vec<StreamSlotSchema>>,
+}
+
+/// A public slot's message schema, independent of ordinary REST response policy.
+pub struct StreamSlotSchema {
+    pub canonical_name: String,
+    pub public_name: String,
+    pub content_type: String,
+    pub representation: DurableStreamRepresentation,
+    pub writable: bool,
+    pub allow_external_writes: bool,
+    pub allow_stream_delete: bool,
+    pub element: SchemaType,
 }
 
 /// A path parameter, with its inline scalar/enum schema.
@@ -122,12 +136,20 @@ pub fn build_document_schema(
     let mut graphs: Vec<SchemaGraph> = Vec::new();
 
     for route in routes {
-        let request_body = lower_request_body(&route.body, &mut graphs)?;
         let call_agent = match &route.behavior {
             super::super::RichRouteBehaviour::CallAgent(inner) => {
                 Some(lower_call_agent(&route.path, inner, &mut graphs)?)
             }
             _ => None,
+        };
+        let request_body = match &route.behavior {
+            super::super::RichRouteBehaviour::CallAgent(inner) => {
+                lower_request_body(&inner.body, &mut graphs)?
+            }
+            super::super::RichRouteBehaviour::WebhookCallback(_) => {
+                RequestBodyModel::UnrestrictedBinary
+            }
+            _ => RequestBodyModel::Unused,
         };
         per_route.push(RouteSchema {
             request_body,
@@ -224,14 +246,105 @@ fn lower_call_agent(
         .map(|(name, qoht)| lower_named_param(name, qoht))
         .collect::<Result<Vec<_>, String>>()?;
 
-    let response = lower_response(&inner.expected_agent_response, graphs)?;
+    let (response, stream_slots) = if inner.route_mode == AgentRouteMode::DurableStreams {
+        graphs.push(inner.method_input.graph.clone());
+        graphs.push(inner.expected_agent_response.graph.clone());
+        (ResponseModel::Unit, Some(lower_stream_slots(inner)?))
+    } else {
+        (
+            lower_response(&inner.expected_agent_response, graphs)?,
+            None,
+        )
+    };
 
     Ok(CallAgentRouteSchema {
         path_params,
         query_params,
         header_params,
         response,
+        stream_slots,
     })
+}
+
+fn lower_stream_slots(inner: &CallAgentBehaviour) -> Result<Vec<StreamSlotSchema>, String> {
+    use golem_common::schema::FieldSource;
+
+    let policy = inner
+        .durable_streams
+        .as_ref()
+        .ok_or("Durable Streams route has no compiled policy")?;
+
+    fn stream_element(graph: &SchemaGraph, ty: &SchemaType) -> Result<Option<SchemaType>, String> {
+        match graph.resolve_ref(ty).map_err(|e| e.to_string())? {
+            SchemaType::Stream {
+                inner: Some(element),
+                ..
+            } => Ok(Some((**element).clone())),
+            SchemaType::Stream { inner: None, .. } => {
+                Err("public stream has no element schema".into())
+            }
+            _ => Ok(None),
+        }
+    }
+
+    fn slot(name: &str, writable: bool, element: SchemaType) -> StreamSlotSchema {
+        StreamSlotSchema {
+            canonical_name: name.into(),
+            public_name: name.into(),
+            content_type: String::new(),
+            representation: DurableStreamRepresentation::Json,
+            writable,
+            allow_external_writes: false,
+            allow_stream_delete: false,
+            element,
+        }
+    }
+
+    let mut slots = Vec::new();
+    let graph = &inner.method_input.graph;
+    for field in inner.method_input.input_schema.fields() {
+        if matches!(field.source, FieldSource::UserSupplied)
+            && let Some(element) = stream_element(graph, &field.schema)?
+        {
+            slots.push(slot(&field.name, true, element));
+        }
+    }
+    let graph = &inner.expected_agent_response.graph;
+    if let OutputSchema::Single(output) = &inner.expected_agent_response.output_schema {
+        if let Some(element) = stream_element(graph, output)? {
+            slots.push(slot("$result", false, element));
+        } else if golem_common::schema::agent::contains_stream_in_graph(graph, output) {
+            let SchemaType::Record { fields, .. } =
+                graph.resolve_ref(output).map_err(|e| e.to_string())?
+            else {
+                return Err("public output streams must be direct record fields".into());
+            };
+            for field in fields {
+                let element = stream_element(graph, &field.body)?
+                    .ok_or("public output record field is not a stream")?;
+                slots.push(slot(&field.name, false, element));
+            }
+        } else {
+            slots.push(slot("$result", false, (**output).clone()));
+        }
+    }
+    for slot in &mut slots {
+        let compiled = policy
+            .slot_by_canonical_name(&slot.canonical_name)
+            .ok_or_else(|| {
+                format!(
+                    "compiled Durable Streams slot '{}' is missing",
+                    slot.canonical_name
+                )
+            })?;
+        slot.public_name.clone_from(&compiled.public_name);
+        slot.content_type.clone_from(&compiled.content_type);
+        slot.representation = compiled.representation;
+        slot.writable = compiled.writable();
+        slot.allow_external_writes = policy.allow_external_writes;
+        slot.allow_stream_delete = policy.allow_stream_delete;
+    }
+    Ok(slots)
 }
 
 fn lower_named_param(

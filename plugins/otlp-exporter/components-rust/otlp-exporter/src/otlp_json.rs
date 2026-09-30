@@ -49,10 +49,21 @@ pub(crate) struct OtlpSpan {
     pub(crate) start_time_unix_nano: String,
     pub(crate) end_time_unix_nano: String,
     pub(crate) attributes: Vec<KeyValue>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) links: Vec<OtlpSpanLink>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) trace_state: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) status: Option<SpanStatus>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct OtlpSpanLink {
+    pub(crate) trace_id: String,
+    pub(crate) span_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) trace_state: Option<String>,
 }
 
 #[derive(Clone, Serialize)]

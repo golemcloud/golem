@@ -952,10 +952,10 @@ mod tests {
     };
     use crate::services::shard::ShardServiceDefault;
     use crate::storage::indexed::memory::InMemoryIndexedStorage;
-    use crate::storage::indexed::{IndexedStorageError, IndexedStorageNamespace, ScanCursor};
+    use crate::storage::indexed::{IndexedStorageError, IndexedStorageNamespace};
     use async_trait::async_trait;
     use golem_common::model::account::{AccountEmail, AccountId};
-    use golem_common::model::agent::Principal;
+    use golem_common::model::agent::{OwnerKind, Principal};
     use golem_common::model::application::{ApplicationId, ApplicationName};
     use golem_common::model::component::{ComponentId, ComponentName, ComponentRevision};
     use golem_common::model::component_metadata::ComponentMetadata;
@@ -963,8 +963,8 @@ mod tests {
     use golem_common::model::oplog::OplogEntry;
     use golem_common::model::worker::AgentConfigEntryDto;
     use golem_common::model::{
-        AgentFingerprint, AgentInvocation, AgentMetadata, AgentStatusRecord, RetryConfig,
-        ShardEpoch, ShardLeaseRevision, Timestamp,
+        AgentFingerprint, AgentInvocation, AgentMetadata, AgentStatusRecord, IdempotencyKey,
+        RetryConfig, ShardEpoch, ShardLeaseRevision, Timestamp,
     };
     use golem_common::read_only_lock;
     use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -979,6 +979,16 @@ mod tests {
 
     const EPHEMERAL_L1: RouteId = RouteId { source_level: 1 };
 
+    /// The manager process behind every shard delivery in these tests.
+    const MANAGER: Uuid = Uuid::from_u128(0x5eed);
+
+    fn revision_of(incarnation: Uuid, number: u64) -> ShardLeaseRevision {
+        ShardLeaseRevision {
+            incarnation,
+            number,
+        }
+    }
+
     fn agent(name: &str, component_id: ComponentId) -> AgentId {
         AgentId {
             component_id,
@@ -987,21 +997,22 @@ mod tests {
     }
 
     fn create_entry(agent_id: &AgentId, environment_id: EnvironmentId) -> OplogEntry {
-        OplogEntry::create(
-            agent_id.clone(),
-            AgentMode::Ephemeral,
-            ComponentRevision::new(1).unwrap(),
-            Vec::new(),
+        OplogEntry::create(Box::new(golem_common::model::oplog::CreateParameters {
+            agent_id: agent_id.clone(),
+            owner_kind: OwnerKind::ComponentAgent,
+            agent_mode: AgentMode::Ephemeral,
+            component_revision: ComponentRevision::new(1).unwrap(),
+            env: Vec::new(),
             environment_id,
-            AccountId::new(),
-            None,
-            100,
-            100,
-            HashSet::new(),
-            Vec::new(),
-            None,
-            Uuid::new_v4(),
-        )
+            created_by: AccountId::new(),
+            parent: None,
+            component_size: 100,
+            initial_total_linear_memory_size: 100,
+            initial_active_plugins: HashSet::new(),
+            local_agent_config: Vec::new(),
+            original_phantom_id: None,
+            instance_id: Uuid::new_v4(),
+        }))
     }
 
     // --- pure functions -----------------------------------------------------------------------
@@ -1442,20 +1453,6 @@ mod tests {
             self.inner.exists(svc_name, api_name, namespace, key).await
         }
 
-        async fn scan(
-            &self,
-            svc_name: &'static str,
-            api_name: &'static str,
-            namespace: IndexedStorageMetaNamespace,
-            prefix: Option<&str>,
-            cursor: ScanCursor,
-            count: u64,
-        ) -> Result<(ScanCursor, Vec<String>), IndexedStorageError> {
-            self.inner
-                .scan(svc_name, api_name, namespace, prefix, cursor, count)
-                .await
-        }
-
         async fn scan_stable(
             &self,
             svc_name: &'static str,
@@ -1506,9 +1503,68 @@ mod tests {
             key: &str,
             id: u64,
             value: Vec<u8>,
+            expected_epoch: Option<golem_common::model::ShardEpoch>,
         ) -> Result<(), IndexedStorageError> {
             self.inner
-                .append(svc_name, api_name, entity_name, namespace, key, id, value)
+                .append(
+                    svc_name,
+                    api_name,
+                    entity_name,
+                    namespace,
+                    key,
+                    id,
+                    value,
+                    expected_epoch,
+                )
+                .await
+        }
+
+        async fn append_many(
+            &self,
+            svc_name: &'static str,
+            api_name: &'static str,
+            entity_name: &'static str,
+            namespace: &IndexedStorageNamespace,
+            key: &str,
+            pairs: Arc<[(u64, bytes::Bytes)]>,
+            expected_epoch: Option<golem_common::model::ShardEpoch>,
+        ) -> Result<(), IndexedStorageError> {
+            self.inner
+                .append_many(
+                    svc_name,
+                    api_name,
+                    entity_name,
+                    namespace,
+                    key,
+                    pairs,
+                    expected_epoch,
+                )
+                .await
+        }
+
+        async fn set_key_epoch(
+            &self,
+            svc_name: &'static str,
+            api_name: &'static str,
+            namespace: IndexedStorageNamespace,
+            key: &str,
+            epoch: golem_common::model::ShardEpoch,
+        ) -> Result<(), IndexedStorageError> {
+            self.inner
+                .set_key_epoch(svc_name, api_name, namespace, key, epoch)
+                .await
+        }
+
+        async fn delete_with_epoch(
+            &self,
+            svc_name: &'static str,
+            api_name: &'static str,
+            namespace: IndexedStorageNamespace,
+            key: &str,
+            expected_epoch: Option<ShardEpoch>,
+        ) -> Result<(), IndexedStorageError> {
+            self.inner
+                .delete_with_epoch(svc_name, api_name, namespace, key, expected_epoch)
                 .await
         }
 
@@ -1670,6 +1726,7 @@ mod tests {
     fn metadata(agent_id: &AgentId, environment_id: EnvironmentId) -> AgentMetadata {
         AgentMetadata {
             agent_id: agent_id.clone(),
+            owner_kind: OwnerKind::ComponentAgent,
             env: vec![],
             environment_id,
             created_by: AccountId::new(),
@@ -1811,6 +1868,17 @@ mod tests {
 
     #[async_trait]
     impl SchedulerWorkerAccess for DirectAccess {
+        async fn expire_durable_stream_session(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _target_agent_fingerprint: AgentFingerprint,
+            _public_session_id: String,
+            _session_key: IdempotencyKey,
+            _expected_deadline_millis: u64,
+        ) -> Result<(), WorkerExecutorError> {
+            unreachable!("the sweep never expires durable stream sessions")
+        }
+
         async fn active_worker_fingerprint(
             &self,
             _owned_agent_id: &OwnedAgentId,
@@ -1863,6 +1931,7 @@ mod tests {
                     metadata(&owned_agent_id.agent_id, owned_agent_id.environment_id),
                     status_lock(),
                     execution_lock(),
+                    None,
                 )
                 .await;
             Ok(match MultiLayerOplog::try_archive_blocking(&oplog).await {
@@ -1883,6 +1952,24 @@ mod tests {
         ) -> Result<(), WorkerExecutorError> {
             unreachable!("the sweep never enqueues invocations")
         }
+
+        async fn enqueue_exact_existing(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _target_worker_fingerprint: AgentFingerprint,
+            _invocation: AgentInvocation,
+        ) -> Result<bool, WorkerExecutorError> {
+            unreachable!("the sweep never enqueues invocations")
+        }
+
+        async fn enqueue_ephemeral_external_tool(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _invocation: AgentInvocation,
+            _component_revision: ComponentRevision,
+        ) -> Result<(), WorkerExecutorError> {
+            unreachable!("the sweep never enqueues invocations")
+        }
     }
 
     fn all_shards() -> Arc<ShardServiceDefault> {
@@ -1891,7 +1978,7 @@ mod tests {
             1,
             &HashMap::from([(ShardId::new(0), ShardEpoch(0))]),
             None,
-            ShardLeaseRevision(0),
+            revision_of(MANAGER, 0),
         );
         shard_service
     }
@@ -1970,11 +2057,12 @@ mod tests {
                 metadata(agent_id, environment_id),
                 status_lock(),
                 execution_lock(),
+                None,
             )
             .await;
-        oplog.add(OplogEntry::suspend()).await;
-        oplog.add(OplogEntry::exited()).await;
-        oplog.commit(CommitLevel::Always).await;
+        oplog.add(OplogEntry::suspend()).await.unwrap();
+        oplog.add(OplogEntry::exited()).await.unwrap();
+        oplog.commit(CommitLevel::Always).await.unwrap();
         drop(oplog);
     }
 
@@ -2817,11 +2905,12 @@ mod tests {
                 metadata(&agent_id, environment_id),
                 status_lock(),
                 execution_lock(),
+                None,
             )
             .await;
-        oplog.add(OplogEntry::suspend()).await;
-        oplog.add(OplogEntry::exited()).await;
-        oplog.commit(CommitLevel::Always).await;
+        oplog.add(OplogEntry::suspend()).await.unwrap();
+        oplog.add(OplogEntry::exited()).await.unwrap();
+        oplog.commit(CommitLevel::Always).await.unwrap();
         drop(oplog);
 
         let stranded = layers.archives[0]
@@ -3100,10 +3189,11 @@ mod tests {
                 metadata(agent_id, environment_id),
                 status_lock(),
                 execution_lock(),
+                None,
             )
             .await;
-        oplog.add(OplogEntry::suspend()).await;
-        oplog.commit(CommitLevel::Always).await;
+        oplog.add(OplogEntry::suspend()).await.unwrap();
+        oplog.commit(CommitLevel::Always).await.unwrap();
         drop(oplog);
     }
 
@@ -3170,7 +3260,7 @@ mod tests {
         stranded_ephemeral_oplog(&layers, &agent_id, environment_id).await;
 
         let shards = Arc::new(ShardServiceDefault::new());
-        shards.register(4, &HashMap::new(), None, ShardLeaseRevision(0));
+        shards.register(4, &HashMap::new(), None, revision_of(MANAGER, 0));
         let sweeper = build(&layers, manual(), shards, environment_id, HashSet::new());
 
         sweeper.sweep_once(&CancellationToken::new()).await;
@@ -3201,7 +3291,7 @@ mod tests {
 
         // The shard moves to another executor before the agent ever went quiet for us.
         shards
-            .assign_shards(4, &HashMap::new(), ShardLeaseRevision(1))
+            .assign_shards(4, &HashMap::new(), revision_of(MANAGER, 1))
             .expect("assignment");
         sweeper.sweep_once(&CancellationToken::new()).await;
 
@@ -3836,7 +3926,7 @@ mod tests {
             0,
             &HashMap::from([(ShardId::new(0), ShardEpoch(0))]),
             None,
-            ShardLeaseRevision(0),
+            revision_of(MANAGER, 0),
         );
         let sweeper = build(&layers, manual(), shards, environment_id, HashSet::new());
 
@@ -3861,7 +3951,7 @@ mod tests {
             1,
             &HashMap::from([(ShardId::new(0), ShardEpoch(0))]),
             Some(Instant::now()),
-            ShardLeaseRevision(0),
+            revision_of(MANAGER, 0),
         );
         let sweeper = build(&layers, manual(), shards, environment_id, HashSet::new());
 

@@ -30,6 +30,7 @@ use golem_common::model::quota::{EnforcementAction, ResourceLimit, ResourceName}
 use golem_common::model::security_scheme::SecuritySchemeName;
 use golem_common::model::tool::{ToolFilesystemAccess, ToolName};
 use golem_common::model::tool_middleware::{ToolMiddlewareMergeMode, ToolMiddlewareName};
+use golem_common::schema::ComponentConfigSchema;
 use indexmap::IndexMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -634,6 +635,10 @@ pub struct ToolMiddlewareInstallationStruct {
     pub parameters: NormalizedJsonValue,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub account: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secret_keys_readable: Option<ManifestSecretKeyScope>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secret_keys_revealable: Option<ManifestSecretKeyScope>,
     #[serde(default)]
     pub filesystem_access: ToolFilesystemAccess,
 }
@@ -660,16 +665,50 @@ impl ToolMiddlewareInstallation {
                     version,
                     parameters: empty_normalized_json(),
                     account: None,
+                    secret_keys_readable: None,
+                    secret_keys_revealable: None,
                     filesystem_access: ToolFilesystemAccess::Unset,
                 }
             }
         };
+
+        let into_secret_key_scope = |scope: ManifestSecretKeyScope| {
+            use golem_common::model::agent_secret::CanonicalAgentSecretPath;
+            use golem_common::model::tool::SecretKeyScope;
+
+            match scope {
+                ManifestSecretKeyScope::All(value) if value == "*" => Ok(SecretKeyScope::All),
+                ManifestSecretKeyScope::All(value) => Err(format!(
+                    "expected '*' or a list of secret paths, found '{value}'"
+                )),
+                ManifestSecretKeyScope::Keys(paths) => paths
+                    .into_iter()
+                    .map(|path| {
+                        crate::args::parse_agent_config_path(&path)
+                            .map(|segments| {
+                                CanonicalAgentSecretPath::from_path_in_unknown_casing(&segments)
+                            })
+                            .map_err(|error| format!("invalid secret path '{path}': {error}"))
+                    })
+                    .collect::<Result<BTreeSet<_>, _>>()
+                    .map(SecretKeyScope::Keys),
+            }
+        };
+
         Ok(
             golem_common::model::tool_middleware::ToolMiddlewareInstallation {
                 name: value.name,
                 version: value.version,
                 parameters: value.parameters,
                 account: value.account.map(AccountEmail::new),
+                secret_keys_readable: value
+                    .secret_keys_readable
+                    .map(&into_secret_key_scope)
+                    .transpose()?,
+                secret_keys_revealable: value
+                    .secret_keys_revealable
+                    .map(into_secret_key_scope)
+                    .transpose()?,
                 filesystem_access: value.filesystem_access,
             },
         )
@@ -826,6 +865,12 @@ impl ComponentDependencies {
 pub struct ComponentTemplate {
     #[serde(default, skip_serializing_if = "LenientTokenList::is_empty")]
     pub templates: LenientTokenList,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::model::language::manifest_guest_language"
+    )]
+    pub guest_language: Option<GuestLanguage>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub component_wasm: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -840,6 +885,8 @@ pub struct ComponentTemplate {
     pub custom_commands: IndexMap<String, Vec<ExternalCommand>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub clean: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_schema: Option<ComponentConfigSchema>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -856,6 +903,10 @@ pub struct ComponentTemplate {
     pub files_merge_mode: Option<VecMergeMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub files: Option<Vec<InitialComponentFile>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools_merge_mode: Option<MapMergeMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools: Option<IndexMap<String, ToolBinding>>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub presets: IndexMap<String, ComponentPreset>,
 }
@@ -863,6 +914,7 @@ pub struct ComponentTemplate {
 impl ComponentTemplate {
     pub fn component_layer_properties(&self) -> ComponentLayerProperties {
         ComponentLayerProperties {
+            guest_language: self.guest_language,
             component_wasm: self.component_wasm.clone(),
             output_wasm: self.output_wasm.clone(),
             dependencies: self.dependencies.clone(),
@@ -870,6 +922,7 @@ impl ComponentTemplate {
             build: self.build.clone(),
             custom_commands: self.custom_commands.clone(),
             clean: self.clean.clone(),
+            config_schema: self.config_schema.clone(),
             agent_properties: AgentLayerProperties {
                 config: self.config.clone(),
                 initial_card: self.initial_card.clone(),
@@ -879,8 +932,8 @@ impl ComponentTemplate {
                 plugins: self.plugins.clone(),
                 files_merge_mode: self.files_merge_mode,
                 files: self.files.clone(),
-                tools_merge_mode: None,
-                tools: None,
+                tools_merge_mode: self.tools_merge_mode,
+                tools: self.tools.clone(),
             },
         }
     }
@@ -908,6 +961,8 @@ pub struct Component {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub clean: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_schema: Option<ComponentConfigSchema>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initial_card: Option<ManifestInitialCard>,
@@ -923,6 +978,10 @@ pub struct Component {
     pub files_merge_mode: Option<VecMergeMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub files: Option<Vec<InitialComponentFile>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools_merge_mode: Option<MapMergeMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools: Option<IndexMap<String, ToolBinding>>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub presets: IndexMap<String, ComponentPreset>,
 }
@@ -930,6 +989,7 @@ pub struct Component {
 impl Component {
     pub fn component_layer_properties(&self) -> ComponentLayerProperties {
         ComponentLayerProperties {
+            guest_language: None,
             component_wasm: self.component_wasm.clone(),
             output_wasm: self.output_wasm.clone(),
             dependencies: self.dependencies.clone(),
@@ -937,6 +997,7 @@ impl Component {
             build: self.build.clone(),
             custom_commands: self.custom_commands.clone(),
             clean: self.clean.clone(),
+            config_schema: self.config_schema.clone(),
             agent_properties: AgentLayerProperties {
                 config: self.config.clone(),
                 initial_card: self.initial_card.clone(),
@@ -946,8 +1007,8 @@ impl Component {
                 plugins: self.plugins.clone(),
                 files_merge_mode: self.files_merge_mode,
                 files: self.files.clone(),
-                tools_merge_mode: None,
-                tools: None,
+                tools_merge_mode: self.tools_merge_mode,
+                tools: self.tools.clone(),
             },
         }
     }
@@ -973,6 +1034,8 @@ pub struct ComponentPreset {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub clean: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_schema: Option<ComponentConfigSchema>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initial_card: Option<ManifestInitialCard>,
@@ -988,11 +1051,16 @@ pub struct ComponentPreset {
     pub files_merge_mode: Option<VecMergeMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub files: Option<Vec<InitialComponentFile>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools_merge_mode: Option<MapMergeMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools: Option<IndexMap<String, ToolBinding>>,
 }
 
 impl ComponentPreset {
     pub fn into_component_layer_properties(self) -> ComponentLayerProperties {
         ComponentLayerProperties {
+            guest_language: None,
             component_wasm: self.component_wasm,
             output_wasm: self.output_wasm,
             dependencies: self.dependencies,
@@ -1000,6 +1068,7 @@ impl ComponentPreset {
             build: self.build,
             custom_commands: self.custom_commands,
             clean: self.clean,
+            config_schema: self.config_schema,
             agent_properties: AgentLayerProperties {
                 config: self.config,
                 initial_card: self.initial_card,
@@ -1009,8 +1078,8 @@ impl ComponentPreset {
                 plugins: self.plugins,
                 files_merge_mode: self.files_merge_mode,
                 files: self.files,
-                tools_merge_mode: None,
-                tools: None,
+                tools_merge_mode: self.tools_merge_mode,
+                tools: self.tools,
             },
         }
     }
@@ -1140,6 +1209,8 @@ pub struct HttpApiDeployment {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subdomain: Option<DeploymentSubdomain>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scheme: Option<golem_common::model::http_api_deployment::HttpApiDeploymentScheme>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub webhook_url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub openapi_endpoint: Option<String>,
@@ -1152,6 +1223,9 @@ pub struct HttpApiDeployment {
 pub struct Mcp {
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub deployments: IndexMap<EnvironmentName, Vec<McpDeployment>>,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub imports:
+        IndexMap<EnvironmentName, Vec<golem_common::model::mcp_import::McpImportDeployment>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1163,6 +1237,8 @@ pub struct McpDeployment {
     pub subdomain: Option<DeploymentSubdomain>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub agents: IndexMap<AgentTypeName, McpDeploymentAgentOptions>,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub tools: IndexMap<golem_common::model::tool::ToolName, McpDeploymentToolOptions>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -1170,6 +1246,18 @@ pub struct McpDeployment {
 pub struct McpDeploymentAgentOptions {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub security_scheme: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct McpDeploymentToolOptions {
+    pub owner_component: ComponentName,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub security_scheme: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub include: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exclude: Option<Vec<String>>,
 }
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -1204,7 +1292,7 @@ pub struct LocalServer {
     #[serde(
         skip_serializing_if = "Option::is_none",
         default,
-        with = "crate::model::byte_size::optional"
+        with = "golem_common::config::byte_size::optional"
     )]
     pub system_memory_override: Option<std::num::NonZeroU64>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -1590,6 +1678,8 @@ pub struct ManifestInitialCardBound {
 // strict unknown-field checks on manifest-facing structs that use deny_unknown_fields.
 #[derive(Clone, Debug)]
 pub struct ComponentLayerProperties {
+    // Only component templates declare a guest language.
+    pub guest_language: Option<GuestLanguage>,
     pub component_wasm: Option<String>,
     pub output_wasm: Option<String>,
     pub dependencies: ComponentDependencies,
@@ -1597,6 +1687,7 @@ pub struct ComponentLayerProperties {
     pub build: Vec<BuildCommand>,
     pub custom_commands: IndexMap<String, Vec<ExternalCommand>>,
     pub clean: Vec<String>,
+    pub config_schema: Option<ComponentConfigSchema>,
     pub agent_properties: AgentLayerProperties,
 }
 

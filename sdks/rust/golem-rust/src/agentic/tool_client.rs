@@ -12,24 +12,32 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#[cfg(test)]
 use std::cell::RefCell;
 use std::convert::Infallible;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
-use std::future::{Future, poll_fn};
+use std::future::Future;
+#[cfg(test)]
+use std::future::poll_fn;
 use std::pin::Pin;
 use std::rc::Rc;
-use std::sync::{Arc, Mutex};
-use std::task::{Context, Poll, Wake, Waker};
+#[cfg(test)]
+use std::sync::Arc;
+use std::task::{Context, Poll};
+#[cfg(test)]
+use std::task::{Wake, Waker};
 
 use crate::TypedSchemaValue;
 use crate::agentic::AmbientToolRpc;
+use crate::agentic::DirectToolError;
 use crate::agentic::InputStream;
-use crate::bindings::golem::tool::host::RpcError as WitRpcError;
 use crate::bindings::golem::tool::host::{
-    self, ToolRpc as HostToolRpc, ToolStdin as HostToolStdin, ToolStdout as HostToolStdout,
+    self, ToolOutput as HostToolOutput, ToolRpc as HostToolRpc, ToolStdin as HostToolStdin,
 };
 use crate::golem_agentic::golem::tool::host as agentic_host_api;
+use crate::schema::validation::subtyping::is_equivalent_cross_graph;
+use crate::schema::wit::wire::{ToolError as WitToolError, ToolRpcError as WitRpcError};
 use crate::schema::{FromSchema, FromSchemaError, IntoSchema};
 use crate::tool::RawCustomToolError;
 
@@ -66,8 +74,20 @@ impl Error for RpcError {}
 #[allow(clippy::large_enum_variant)]
 pub enum ToolError<E> {
     Rpc(RpcError),
+    RemoteTool(RemoteToolError),
     Tool(E),
     UnknownCustomError(RawCustomToolError),
+    MalformedRemoteOutput(String),
+}
+
+/// A structural failure returned by the remote tool implementation.
+#[derive(Clone, Debug, PartialEq)]
+pub enum RemoteToolError {
+    InvalidToolName(String),
+    InvalidCommandPath(Vec<String>),
+    InvalidInput(String),
+    ConstraintViolation(String),
+    InvalidResult(String),
 }
 
 /// Generated marker for a tool trait method that is invokable as a command body.
@@ -87,17 +107,188 @@ pub trait ToolClientWithParts: Sized {
         root_tool_name: String,
         command_path: Vec<String>,
         schema_path: Vec<String>,
-        inherited_prefix: Vec<crate::agentic::CanonicalInputValue>,
+        inherited_prefix: Vec<DirectInputValue>,
     ) -> Self;
+}
+
+trait DirectInputEncoder {
+    fn preflight(
+        &self,
+        preflight: &mut crate::schema::wit::direct::WirePreflight,
+    ) -> Result<(), crate::schema::wit::direct::WireError>;
+    fn prepare(
+        &self,
+    ) -> Pin<Box<dyn Future<Output = Result<(), crate::schema::wit::direct::WireError>> + '_>>;
+    fn write(
+        &self,
+        writer: &mut crate::schema::wit::direct::WireWriter,
+    ) -> Result<crate::schema::wit::wire::ValueNodeIndex, crate::schema::wit::direct::WireError>;
+    fn schema(
+        &self,
+        builder: &mut crate::schema::wit::direct::WireSchemaBuilder,
+    ) -> crate::schema::wit::wire::TypeNodeIndex;
+}
+
+impl<T: crate::schema::wit::direct::IntoWire + crate::schema::wit::direct::WireSchema>
+    DirectInputEncoder for T
+{
+    fn preflight(
+        &self,
+        preflight: &mut crate::schema::wit::direct::WirePreflight,
+    ) -> Result<(), crate::schema::wit::direct::WireError> {
+        crate::schema::wit::direct::IntoWire::preflight(self, preflight)
+    }
+    fn prepare(
+        &self,
+    ) -> Pin<Box<dyn Future<Output = Result<(), crate::schema::wit::direct::WireError>> + '_>> {
+        Box::pin(crate::schema::wit::direct::IntoWire::prepare_wire(self))
+    }
+    fn write(
+        &self,
+        writer: &mut crate::schema::wit::direct::WireWriter,
+    ) -> Result<crate::schema::wit::wire::ValueNodeIndex, crate::schema::wit::direct::WireError>
+    {
+        crate::schema::wit::direct::IntoWire::write_wire(self, writer)
+    }
+    fn schema(
+        &self,
+        builder: &mut crate::schema::wit::direct::WireSchemaBuilder,
+    ) -> crate::schema::wit::wire::TypeNodeIndex {
+        T::append_schema(builder)
+    }
+}
+
+#[derive(Clone)]
+#[doc(hidden)]
+pub struct DirectInputValue {
+    pub name: String,
+    pub aliases: Vec<String>,
+    pub short: Option<char>,
+    option_carrier: bool,
+    encoder: Rc<dyn DirectInputEncoder>,
+}
+
+impl DirectInputValue {
+    pub fn new<
+        T: crate::schema::wit::direct::IntoWire + crate::schema::wit::direct::WireSchema + 'static,
+    >(
+        name: impl Into<String>,
+        aliases: Vec<String>,
+        short: Option<char>,
+        value: T,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            aliases,
+            short,
+            option_carrier: false,
+            encoder: Rc::new(value),
+        }
+    }
+
+    pub fn with_option_carrier(mut self, option_carrier: bool) -> Self {
+        self.option_carrier = option_carrier;
+        self
+    }
+}
+
+#[doc(hidden)]
+pub async fn encode_direct_tool_input(
+    values: &[DirectInputValue],
+    field_order: &[&str],
+) -> Result<crate::schema::wit::wire::TypedSchemaValue, String> {
+    use crate::schema::wit::direct::{
+        WirePreflight, WireSchemaBuilder, WireWriter, empty_metadata,
+    };
+    let mut selected: Vec<&DirectInputValue> = Vec::new();
+    for value in values {
+        if let Some(previous) = selected
+            .iter_mut()
+            .find(|previous| previous.name == value.name)
+        {
+            *previous = value;
+        } else {
+            selected.push(value);
+        }
+    }
+    selected.sort_by_key(|value| {
+        field_order
+            .iter()
+            .position(|name| *name == value.name)
+            .map(|index| index + 1)
+            .unwrap_or(0)
+    });
+    let values = selected.as_slice();
+    let mut preflight = WirePreflight::asynchronous();
+    for value in values {
+        value
+            .encoder
+            .preflight(&mut preflight)
+            .map_err(|e| e.to_string())?;
+    }
+    for value in values {
+        value.encoder.prepare().await.map_err(|e| e.to_string())?;
+    }
+    let mut schemas = WireSchemaBuilder::default();
+    let mut fields = Vec::with_capacity(values.len());
+    let mut encoded_are_options = Vec::with_capacity(values.len());
+    for value in values {
+        let mut metadata = empty_metadata();
+        metadata.aliases = value.aliases.clone();
+        let body = value.encoder.schema(&mut schemas);
+        let body_is_option = matches!(
+            schemas.resolve(body).map(|node| &node.body),
+            Some(crate::schema::wit::wire::SchemaTypeBody::OptionType(_))
+        );
+        encoded_are_options.push(body_is_option);
+        let body = if value.option_carrier && !body_is_option {
+            schemas.push(crate::schema::wit::wire::SchemaTypeBody::OptionType(body))
+        } else {
+            body
+        };
+        fields.push(crate::schema::wit::wire::NamedFieldType {
+            name: value.name.clone(),
+            body,
+            metadata,
+        });
+    }
+    let schema_root = schemas.push(crate::schema::wit::wire::SchemaTypeBody::RecordType(fields));
+    let graph = schemas.finish(schema_root);
+    let mut writer = WireWriter::default();
+    let mut indices = Vec::with_capacity(values.len());
+    for (value, encoded_is_option) in values.iter().zip(encoded_are_options) {
+        let index = value
+            .encoder
+            .write(&mut writer)
+            .map_err(|e| e.to_string())?;
+        indices.push(if value.option_carrier && !encoded_is_option {
+            writer.push(crate::schema::wit::wire::SchemaValueNode::OptionValue(
+                Some(index),
+            ))
+        } else {
+            index
+        });
+    }
+    let root = writer.push(crate::schema::wit::wire::SchemaValueNode::RecordValue(
+        indices,
+    ));
+    Ok(crate::schema::wit::wire::TypedSchemaValue {
+        graph,
+        value: writer.finish(root),
+    })
 }
 
 impl<E: Display> Display for ToolError<E> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             ToolError::Rpc(error) => error.fmt(f),
+            ToolError::RemoteTool(error) => write!(f, "remote tool error: {error}"),
             ToolError::Tool(error) => error.fmt(f),
             ToolError::UnknownCustomError(error) => {
                 write!(f, "unknown custom tool error `{}`", error.name)
+            }
+            ToolError::MalformedRemoteOutput(message) => {
+                write!(f, "malformed remote tool output: {message}")
             }
         }
     }
@@ -107,16 +298,148 @@ impl<E: Error + 'static> Error for ToolError<E> {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             ToolError::Rpc(error) => Some(error),
+            ToolError::RemoteTool(error) => Some(error),
             ToolError::Tool(error) => Some(error),
             ToolError::UnknownCustomError(_) => None,
+            ToolError::MalformedRemoteOutput(_) => None,
         }
     }
 }
+
+impl Display for RemoteToolError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RemoteToolError::InvalidToolName(name) => write!(f, "invalid tool name `{name}`"),
+            RemoteToolError::InvalidCommandPath(path) => {
+                write!(f, "invalid command path `{}`", path.join(" "))
+            }
+            RemoteToolError::InvalidInput(message) => write!(f, "invalid input: {message}"),
+            RemoteToolError::ConstraintViolation(message) => {
+                write!(f, "constraint violation: {message}")
+            }
+            RemoteToolError::InvalidResult(message) => write!(f, "invalid result: {message}"),
+        }
+    }
+}
+
+impl Error for RemoteToolError {}
 
 /// Decoded successful result of `tool-rpc.invoke-and-await`.
 #[derive(Clone)]
 pub struct InvocationResult {
     pub result: Option<TypedSchemaValue>,
+}
+
+/// Direct wire completion used by generated typed clients.
+#[derive(Clone)]
+pub struct DirectInvocationResult {
+    pub snapshot: Rc<crate::schema::wit::direct::WireSnapshot>,
+    pub root: Option<crate::schema::wit::wire::ValueNodeIndex>,
+}
+
+pub fn decode_direct_result_value<T: crate::schema::wit::direct::FromWire, E>(
+    result: DirectInvocationResult,
+) -> Result<T, ToolError<E>> {
+    let root = result
+        .root
+        .ok_or_else(|| tool_protocol_error("tool result did not contain a value"))?;
+    let mut reader = result.snapshot.reader();
+    let value = T::read_wire(&mut reader, root).map_err(|e| tool_protocol_error(e.to_string()))?;
+    reader
+        .finish()
+        .map_err(|e| tool_protocol_error(e.to_string()))?;
+    Ok(value)
+}
+
+pub fn decode_direct_result_empty<E>(result: DirectInvocationResult) -> Result<(), ToolError<E>> {
+    if result.root.is_some() {
+        Err(tool_protocol_error(
+            "tool result unexpectedly contained a value",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+pub async fn invoke_and_await_direct<E: DirectToolError, R: ToolRpcClient>(
+    rpc: &R,
+    command_path: &[String],
+    input: crate::schema::wit::wire::TypedSchemaValue,
+    stdin: Option<R::Stdin>,
+    stdout: Option<R::Stdout>,
+    stderr: Option<R::Stderr>,
+) -> Result<DirectInvocationResult, ToolError<E>> {
+    invoke_and_await_direct_with_error_decoder(
+        rpc,
+        command_path,
+        input,
+        stdin,
+        stdout,
+        stderr,
+        E::recognizes_error_name,
+        E::from_direct_error_reader,
+    )
+    .await
+}
+
+pub async fn invoke_and_await_direct_with_error_decoder<E, R: ToolRpcClient>(
+    rpc: &R,
+    command_path: &[String],
+    input: crate::schema::wit::wire::TypedSchemaValue,
+    stdin: Option<R::Stdin>,
+    stdout: Option<R::Stdout>,
+    stderr: Option<R::Stderr>,
+    recognizes_error: fn(&str) -> bool,
+    decode_error: impl Fn(
+        &str,
+        &mut crate::schema::wit::direct::WireReader,
+        i32,
+    ) -> Result<Option<E>, String>,
+) -> Result<DirectInvocationResult, ToolError<E>> {
+    let result = rpc
+        .invoke_and_await_tool(command_path, input, stdin, stdout, stderr)
+        .await
+        .map_err(|error| {
+            decode_cached_direct_error(cache_direct_error(error, recognizes_error), &decode_error)
+        })?;
+    decode_direct_wire_invocation_result(result)
+}
+
+pub async fn invoke_and_await_direct_infallible<R: ToolRpcClient>(
+    rpc: &R,
+    command_path: &[String],
+    input: crate::schema::wit::wire::TypedSchemaValue,
+    stdin: Option<R::Stdin>,
+    stdout: Option<R::Stdout>,
+    stderr: Option<R::Stderr>,
+) -> Result<DirectInvocationResult, ToolError<Infallible>> {
+    let result = rpc
+        .invoke_and_await_tool(command_path, input, stdin, stdout, stderr)
+        .await
+        .map_err(map_infallible_rpc_error)?;
+    decode_direct_wire_invocation_result(result)
+}
+
+fn decode_direct_wire_invocation_result<E>(
+    result: host::InvocationResult,
+) -> Result<DirectInvocationResult, ToolError<E>> {
+    if result.stdout.is_some() || result.stderr.is_some() {
+        return Err(tool_protocol_error(
+            "tool result unexpectedly contained an embedded output stream",
+        ));
+    }
+    match result.result {
+        Some(value) => Ok(DirectInvocationResult {
+            root: Some(value.value.root),
+            snapshot: Rc::new(crate::schema::wit::direct::WireSnapshot::new(
+                value.value.value_nodes,
+            )),
+        }),
+        None => Ok(DirectInvocationResult {
+            root: None,
+            snapshot: Rc::new(crate::schema::wit::direct::WireSnapshot::new(Vec::new())),
+        }),
+    }
 }
 
 /// Decodes a structured invocation result and pairs it with its independently
@@ -157,12 +480,54 @@ fn decode_expected_value<T: FromSchema + IntoSchema, E>(
     let value = expect_value(value)?;
     let expected = crate::schema::try_into_schema_graph::<T>()
         .map_err(|error| protocol_error(error.to_string()))?;
-    if value.graph() != &expected {
+    if !is_equivalent_cross_graph(
+        value.graph(),
+        &value.graph().root,
+        &expected,
+        &expected.root,
+    ) {
         return Err(protocol_error(
             "tool result schema does not match the expected result schema".to_string(),
         ));
     }
     T::from_value(value.value()).map_err(|error| protocol_error(error.to_string()))
+}
+
+/// Validates a custom error payload against the caller-owned error declaration before decoding it.
+pub fn decode_declared_tool_error<E: super::ToolErrorSchema>(
+    name: String,
+    value: TypedSchemaValue,
+) -> Result<Option<E>, String> {
+    let cases = E::error_cases().map_err(|error| error.to_string())?;
+    let Some(case) = cases.iter().find(|case| case.name == name) else {
+        return Ok(None);
+    };
+    match &case.payload {
+        Some(expected) => {
+            if !is_equivalent_cross_graph(
+                value.graph(),
+                &value.graph().root,
+                expected,
+                &expected.root,
+            ) {
+                return Err(format!("custom error `{name}` has the wrong schema"));
+            }
+            crate::schema::validation::validate_value(expected, &expected.root, value.value())
+                .map_err(|errors| {
+                    errors
+                        .into_iter()
+                        .map(|error| error.to_string())
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                })?;
+        }
+        None if !matches!(value.value(), crate::SchemaValue::Tuple { elements } if elements.is_empty()) =>
+        {
+            return Err(format!("custom error `{name}` has an unexpected payload"));
+        }
+        None => {}
+    }
+    E::from_error_payload_value(name, value)
 }
 
 /// Requires the declared result value to be present in an invocation result.
@@ -191,6 +556,7 @@ pub fn expect_no_value<E>(value: Option<TypedSchemaValue>) -> Result<(), ToolErr
 pub trait ToolRpcClient {
     type Stdin;
     type Stdout;
+    type Stderr;
 
     async fn invoke_and_await_tool(
         &self,
@@ -198,6 +564,7 @@ pub trait ToolRpcClient {
         input: crate::schema::wit::wire::TypedSchemaValue,
         stdin: Option<Self::Stdin>,
         stdout: Option<Self::Stdout>,
+        stderr: Option<Self::Stderr>,
     ) -> Result<host::InvocationResult, WitRpcError>;
 }
 
@@ -208,13 +575,15 @@ pub trait StartedToolRpcClient {
         command_path: &[String],
         input: crate::schema::wit::wire::TypedSchemaValue,
         stdin: Option<agentic_host_api::ToolStdin>,
-        stdout: Option<agentic_host_api::ToolStdout>,
+        stdout: Option<agentic_host_api::ToolOutput>,
+        stderr: Option<agentic_host_api::ToolOutput>,
     ) -> agentic_host_api::FutureInvokeResult;
 }
 
 impl ToolRpcClient for HostToolRpc {
     type Stdin = HostToolStdin;
-    type Stdout = HostToolStdout;
+    type Stdout = HostToolOutput;
+    type Stderr = HostToolOutput;
 
     async fn invoke_and_await_tool(
         &self,
@@ -222,15 +591,17 @@ impl ToolRpcClient for HostToolRpc {
         input: crate::schema::wit::wire::TypedSchemaValue,
         stdin: Option<Self::Stdin>,
         stdout: Option<Self::Stdout>,
+        stderr: Option<Self::Stderr>,
     ) -> Result<host::InvocationResult, WitRpcError> {
-        self.invoke_and_await(command_path.to_vec(), input, stdin, stdout)
+        self.invoke_and_await(command_path.to_vec(), input, stdin, stdout, stderr)
             .await
     }
 }
 
 impl ToolRpcClient for AmbientToolRpc {
     type Stdin = agentic_host_api::ToolStdin;
-    type Stdout = agentic_host_api::ToolStdout;
+    type Stdout = agentic_host_api::ToolOutput;
+    type Stderr = agentic_host_api::ToolOutput;
 
     async fn invoke_and_await_tool(
         &self,
@@ -238,11 +609,11 @@ impl ToolRpcClient for AmbientToolRpc {
         input: crate::schema::wit::wire::TypedSchemaValue,
         stdin: Option<Self::Stdin>,
         stdout: Option<Self::Stdout>,
+        stderr: Option<Self::Stderr>,
     ) -> Result<host::InvocationResult, WitRpcError> {
         self.inner
-            .invoke_and_await(command_path.to_vec(), input, stdin, stdout)
+            .invoke_and_await(command_path.to_vec(), input, stdin, stdout, stderr)
             .await
-            .map_err(Into::into)
     }
 }
 
@@ -252,16 +623,18 @@ impl StartedToolRpcClient for AmbientToolRpc {
         command_path: &[String],
         input: crate::schema::wit::wire::TypedSchemaValue,
         stdin: Option<agentic_host_api::ToolStdin>,
-        stdout: Option<agentic_host_api::ToolStdout>,
+        stdout: Option<agentic_host_api::ToolOutput>,
+        stderr: Option<agentic_host_api::ToolOutput>,
     ) -> agentic_host_api::FutureInvokeResult {
         self.inner
-            .async_invoke_and_await(command_path, input, stdin, stdout)
+            .async_invoke_and_await(command_path, input, stdin, stdout, stderr)
     }
 }
 
 impl ToolRpcClient for crate::golem_agentic::golem::tool::host::ToolRpc {
     type Stdin = crate::golem_agentic::golem::tool::host::ToolStdin;
-    type Stdout = crate::golem_agentic::golem::tool::host::ToolStdout;
+    type Stdout = crate::golem_agentic::golem::tool::host::ToolOutput;
+    type Stderr = crate::golem_agentic::golem::tool::host::ToolOutput;
 
     async fn invoke_and_await_tool(
         &self,
@@ -269,10 +642,10 @@ impl ToolRpcClient for crate::golem_agentic::golem::tool::host::ToolRpc {
         input: crate::schema::wit::wire::TypedSchemaValue,
         stdin: Option<Self::Stdin>,
         stdout: Option<Self::Stdout>,
+        stderr: Option<Self::Stderr>,
     ) -> Result<host::InvocationResult, WitRpcError> {
-        self.invoke_and_await(command_path.to_vec(), input, stdin, stdout)
+        self.invoke_and_await(command_path.to_vec(), input, stdin, stdout, stderr)
             .await
-            .map_err(Into::into)
     }
 }
 
@@ -282,9 +655,10 @@ impl StartedToolRpcClient for crate::golem_agentic::golem::tool::host::ToolRpc {
         command_path: &[String],
         input: crate::schema::wit::wire::TypedSchemaValue,
         stdin: Option<agentic_host_api::ToolStdin>,
-        stdout: Option<agentic_host_api::ToolStdout>,
+        stdout: Option<agentic_host_api::ToolOutput>,
+        stderr: Option<agentic_host_api::ToolOutput>,
     ) -> agentic_host_api::FutureInvokeResult {
-        self.async_invoke_and_await(command_path, input, stdin, stdout)
+        self.async_invoke_and_await(command_path, input, stdin, stdout, stderr)
     }
 }
 
@@ -295,9 +669,19 @@ pub async fn invoke_and_await<E, R: ToolRpcClient>(
     input: &TypedSchemaValue,
     stdin: Option<R::Stdin>,
     stdout: Option<R::Stdout>,
+    stderr: Option<R::Stderr>,
     decode_error: impl Fn(String, TypedSchemaValue) -> Result<Option<E>, String>,
 ) -> Result<InvocationResult, ToolError<E>> {
-    invoke_and_await_with_error_decoder(rpc, command_path, input, stdin, stdout, decode_error).await
+    invoke_and_await_with_error_decoder(
+        rpc,
+        command_path,
+        input,
+        stdin,
+        stdout,
+        stderr,
+        decode_error,
+    )
+    .await
 }
 
 /// Invokes a tool whose remote custom-error payload is directly encoded as `E`.
@@ -307,6 +691,7 @@ pub async fn invoke_and_await_payload_error<E: FromSchema, R: ToolRpcClient>(
     input: &TypedSchemaValue,
     stdin: Option<R::Stdin>,
     stdout: Option<R::Stdout>,
+    stderr: Option<R::Stderr>,
 ) -> Result<InvocationResult, ToolError<E>> {
     invoke_and_await_with_error_decoder(
         rpc,
@@ -314,6 +699,7 @@ pub async fn invoke_and_await_payload_error<E: FromSchema, R: ToolRpcClient>(
         input,
         stdin,
         stdout,
+        stderr,
         decode_custom_tool_error::<E>,
     )
     .await
@@ -325,12 +711,14 @@ async fn invoke_and_await_with_error_decoder<E, R: ToolRpcClient>(
     input: &TypedSchemaValue,
     stdin: Option<R::Stdin>,
     stdout: Option<R::Stdout>,
+    stderr: Option<R::Stderr>,
     decode_error: impl Fn(String, TypedSchemaValue) -> Result<Option<E>, String>,
 ) -> Result<InvocationResult, ToolError<E>> {
-    let input = crate::encode_typed_schema_value(input)
+    let input = crate::encode_typed_schema_value_async(input)
+        .await
         .map_err(|error| protocol_error(format!("failed to encode tool input: {error}")))?;
     let result = rpc
-        .invoke_and_await_tool(command_path, input, stdin, stdout)
+        .invoke_and_await_tool(command_path, input, stdin, stdout, stderr)
         .await
         .map_err(|error| map_rpc_error(error, &decode_error))?;
 
@@ -344,36 +732,20 @@ pub async fn invoke_and_await_infallible<R: ToolRpcClient>(
     input: &TypedSchemaValue,
     stdin: Option<R::Stdin>,
     stdout: Option<R::Stdout>,
+    stderr: Option<R::Stderr>,
 ) -> Result<InvocationResult, ToolError<Infallible>> {
-    let input = crate::encode_typed_schema_value(input)
+    let input = crate::encode_typed_schema_value_async(input)
+        .await
         .map_err(|error| protocol_error(format!("failed to encode tool input: {error}")))?;
     let result = rpc
-        .invoke_and_await_tool(command_path, input, stdin, stdout)
+        .invoke_and_await_tool(command_path, input, stdin, stdout, stderr)
         .await
         .map_err(map_infallible_rpc_error)?;
 
     decode_wire_invocation_result(result)
 }
 
-impl From<crate::golem_agentic::golem::tool::host::RpcError> for WitRpcError {
-    fn from(error: crate::golem_agentic::golem::tool::host::RpcError) -> Self {
-        use crate::golem_agentic::golem::tool::host as agentic_host;
-
-        match error {
-            agentic_host::RpcError::ProtocolError(message) => Self::ProtocolError(message),
-            agentic_host::RpcError::Denied(message) => Self::Denied(message),
-            agentic_host::RpcError::NotFound(message) => Self::NotFound(message),
-            agentic_host::RpcError::RemoteInternalError(message) => {
-                Self::RemoteInternalError(message)
-            }
-            agentic_host::RpcError::RemoteToolError(error) => Self::RemoteToolError(error),
-            agentic_host::RpcError::Cancelled => Self::Cancelled,
-            agentic_host::RpcError::ResourceExhausted(message) => Self::ResourceExhausted(message),
-        }
-    }
-}
-
-fn map_rpc_error<E>(
+pub(crate) fn map_rpc_error<E>(
     error: WitRpcError,
     decode_error: &(impl Fn(String, TypedSchemaValue) -> Result<Option<E>, String> + ?Sized),
 ) -> ToolError<E> {
@@ -392,7 +764,7 @@ fn map_rpc_error<E>(
     }
 }
 
-fn map_infallible_rpc_error(error: WitRpcError) -> ToolError<Infallible> {
+fn map_infallible_rpc_error<E>(error: WitRpcError) -> ToolError<E> {
     match error {
         WitRpcError::ProtocolError(message) => ToolError::Rpc(RpcError::Protocol(message)),
         WitRpcError::Denied(message) => ToolError::Rpc(RpcError::Denied(message)),
@@ -400,10 +772,7 @@ fn map_infallible_rpc_error(error: WitRpcError) -> ToolError<Infallible> {
         WitRpcError::RemoteInternalError(message) => {
             ToolError::Rpc(RpcError::RemoteInternal(message))
         }
-        WitRpcError::RemoteToolError(error) => ToolError::Rpc(RpcError::Protocol(format!(
-            "remote tool error: {}",
-            remote_tool_error_label(&error)
-        ))),
+        WitRpcError::RemoteToolError(error) => map_remote_tool_error(error, &|_, _| Ok(None)),
         WitRpcError::Cancelled => ToolError::Rpc(RpcError::Cancelled),
         WitRpcError::ResourceExhausted(message) => {
             ToolError::Rpc(RpcError::ResourceExhausted(message))
@@ -494,113 +863,23 @@ pub fn pump_tool_stdin(source: InputStream) -> agentic_host_api::ToolStdin {
 }
 
 type CachedInvocationResult = Result<InvocationResult, ToolError<TypedSchemaValue>>;
-type InvocationResultFuture = Pin<Box<dyn Future<Output = CachedInvocationResult>>>;
-type InvocationResultFutureFactory = Box<dyn FnOnce() -> InvocationResultFuture>;
+type InvocationResultDriver =
+    crate::tool::invocation_result::InvocationResultDriver<CachedInvocationResult>;
+type Completion<T> = Rc<dyn Fn() -> Pin<Box<dyn Future<Output = T>>>>;
 
-enum InvocationResultDriverState {
-    Initial(Option<InvocationResultFutureFactory>),
-    Polling(InvocationResultFuture),
-    Ready(Box<CachedInvocationResult>),
-}
-
-#[derive(Default)]
-struct InvocationResultWake {
-    waiters: Mutex<Vec<Waker>>,
-}
-
-impl InvocationResultWake {
-    fn register(&self, waker: &Waker) {
-        let mut waiters = self.waiters.lock().expect("result waiters mutex poisoned");
-        if !waiters.iter().any(|waiter| waiter.will_wake(waker)) {
-            waiters.push(waker.clone());
-        }
-    }
-
-    fn wake_waiters(&self) {
-        let waiters =
-            std::mem::take(&mut *self.waiters.lock().expect("result waiters mutex poisoned"));
-        for waiter in waiters {
-            waiter.wake();
-        }
-    }
-}
-
-impl Wake for InvocationResultWake {
-    fn wake(self: Arc<Self>) {
-        self.wake_waiters();
-    }
-
-    fn wake_by_ref(self: &Arc<Self>) {
-        self.wake_waiters();
-    }
-}
-
-struct InvocationResultDriver {
-    state: RefCell<InvocationResultDriverState>,
-    wake: Arc<InvocationResultWake>,
-    source_waker: Waker,
-}
-
-impl InvocationResultDriver {
-    fn new(factory: impl FnOnce() -> InvocationResultFuture + 'static) -> Self {
-        let wake = Arc::new(InvocationResultWake::default());
-        Self {
-            state: RefCell::new(InvocationResultDriverState::Initial(Some(Box::new(
-                factory,
-            )))),
-            source_waker: Waker::from(Arc::clone(&wake)),
-            wake,
-        }
-    }
-
-    fn poll(&self, cx: &mut Context<'_>) -> Poll<CachedInvocationResult> {
-        loop {
-            let mut state = self.state.borrow_mut();
-            match &mut *state {
-                InvocationResultDriverState::Initial(factory) => {
-                    let future = factory
-                        .take()
-                        .expect("tool invocation result driver starts only once")(
-                    );
-                    *state = InvocationResultDriverState::Polling(future);
-                }
-                InvocationResultDriverState::Polling(future) => {
-                    self.wake.register(cx.waker());
-                    let mut source_context = Context::from_waker(&self.source_waker);
-                    let Poll::Ready(result) = future.as_mut().poll(&mut source_context) else {
-                        return Poll::Pending;
-                    };
-                    let result_for_caller = result.clone();
-                    *state = InvocationResultDriverState::Ready(Box::new(result));
-                    drop(state);
-                    self.wake.wake_waiters();
-                    return Poll::Ready(result_for_caller);
-                }
-                InvocationResultDriverState::Ready(result) => {
-                    return Poll::Ready((**result).clone());
-                }
-            }
-        }
-    }
-
-    async fn wait(self: Rc<Self>) -> CachedInvocationResult {
-        poll_fn(|cx| self.poll(cx)).await
-    }
-}
-
-/// The readable stdout of a started tool invocation.
+/// One readable output of a started tool invocation.
 ///
 /// Reading this stream also drives the invocation's shared result observer so
-/// stdout-only consumers can make progress for filesystem-capable tools.
-pub struct ToolInvocationStdout {
+/// output-only consumers can make progress for filesystem-capable tools.
+pub struct ToolInvocationOutput {
     stream: Option<InputStream>,
-    result: Rc<InvocationResultDriver>,
+    result: Completion<()>,
 }
 
-impl ToolInvocationStdout {
+impl ToolInvocationOutput {
     pub async fn next(&mut self) -> Option<Result<Vec<u8>, agentic_host_api::ByteStreamFailure>> {
         let stream = self.stream.as_mut()?;
-        drive_left_until_right(Rc::clone(&self.result).wait(), stream.next()).await
+        drive_left_until_right((self.result)(), stream.next()).await
     }
 
     pub async fn collect(mut self) -> Vec<Result<Vec<u8>, agentic_host_api::ByteStreamFailure>> {
@@ -616,149 +895,374 @@ impl ToolInvocationStdout {
     }
 }
 
-/// A started stdout-bearing tool call. Output, structured completion, and
+/// A started output-bearing tool call. Outputs, structured completion, and
 /// cancellation are independent capabilities.
 pub struct ToolInvocation<T, E> {
-    pub stdout: ToolInvocationStdout,
+    pub stdout: Option<ToolInvocationOutput>,
+    pub stderr: Option<ToolInvocationOutput>,
     future: Rc<agentic_host_api::FutureInvokeResult>,
-    result: Rc<InvocationResultDriver>,
-    decode: Rc<dyn Fn(InvocationResult) -> Result<T, ToolError<E>>>,
-    decode_error: Rc<dyn Fn(String, TypedSchemaValue) -> Result<Option<E>, String>>,
+    result: Completion<Result<T, ToolError<E>>>,
 }
 
 impl<T, E> ToolInvocation<T, E> {
     /// Returns an independently owned structured-completion future. The
-    /// stdout field may be moved into a concurrent consumer after this call.
+    /// output fields may be moved into concurrent consumers after this call.
     pub fn result(&self) -> impl Future<Output = Result<T, ToolError<E>>> + use<T, E> {
-        let result = Rc::clone(&self.result);
-        let decode = Rc::clone(&self.decode);
-        let decode_error = Rc::clone(&self.decode_error);
-        async move {
-            match result.wait().await {
-                Ok(result) => decode(result),
-                Err(ToolError::Rpc(error)) => Err(ToolError::Rpc(error)),
-                Err(ToolError::Tool(error)) => match decode_error(String::new(), error) {
-                    Ok(Some(error)) => Err(ToolError::Tool(error)),
-                    Ok(None) => Err(protocol_error(
-                        "custom tool error is missing its name".to_string(),
-                    )),
-                    Err(message) => Err(protocol_error(message)),
-                },
-                Err(ToolError::UnknownCustomError(error)) => {
-                    match decode_error(error.name.clone(), error.payload.clone()) {
-                        Ok(Some(error)) => Err(ToolError::Tool(error)),
-                        Ok(None) => Err(ToolError::UnknownCustomError(error)),
-                        Err(message) => Err(protocol_error(message)),
-                    }
-                }
-            }
-        }
+        (self.result)()
     }
 
     pub fn cancel(&self) {
         self.future.cancel();
     }
 
-    /// Drives stdout and structured completion concurrently.
-    pub async fn collect(self) -> Result<(T, Vec<u8>), ToolError<E>> {
+    /// Drives both outputs and structured completion concurrently.
+    pub async fn collect(self) -> Result<CollectedToolInvocation<T>, ToolError<E>> {
         let result = self.result();
-        let mut stdout = self.stdout;
-        let output = async {
+        let collect_output = |mut output: Option<ToolInvocationOutput>, channel: &'static str| async move {
+            let Some(ref mut output) = output else {
+                return Ok(None);
+            };
             let mut bytes = Vec::new();
             loop {
-                match stdout.next().await {
-                    None => return Ok(bytes),
+                match output.next().await {
+                    None => return Ok(Some(bytes)),
                     Some(Ok(chunk)) => bytes.extend(chunk),
                     Some(Err(reason)) => {
                         return Err(tool_protocol_error(format!(
-                            "tool stdout failed: {reason:?}"
+                            "tool {channel} failed: {reason:?}"
                         )));
                     }
                 }
             }
         };
-        let (result, output) = join(result, output).await;
-        Ok((result?, output?))
+        let outputs = async {
+            let stdout = collect_output(self.stdout, "stdout");
+            let stderr = collect_output(self.stderr, "stderr");
+            join(stdout, stderr).await
+        };
+        let (result, outputs) = join(result, outputs).await;
+        finish_collection(result, outputs)
     }
+}
+
+fn finish_collection<T, E>(
+    result: Result<T, ToolError<E>>,
+    outputs: (
+        Result<Option<Vec<u8>>, ToolError<E>>,
+        Result<Option<Vec<u8>>, ToolError<E>>,
+    ),
+) -> Result<CollectedToolInvocation<T>, ToolError<E>> {
+    let result = result?;
+    let (stdout, stderr) = outputs;
+    let stdout = stdout?;
+    let stderr = stderr?;
+    Ok(CollectedToolInvocation {
+        result,
+        stdout,
+        stderr,
+    })
+}
+
+pub struct CollectedToolInvocation<T> {
+    pub result: T,
+    pub stdout: Option<Vec<u8>>,
+    pub stderr: Option<Vec<u8>>,
 }
 
 fn decode_wire_invocation_result<E>(
     result: host::InvocationResult,
 ) -> Result<InvocationResult, ToolError<E>> {
-    let host::InvocationResult { result, stdout } = result;
-    if stdout.is_some() {
+    let host::InvocationResult {
+        result,
+        stdout,
+        stderr,
+    } = result;
+    if stdout.is_some() || stderr.is_some() {
         return Err(protocol_error(
-            "tool result unexpectedly contained an embedded stdout stream".to_string(),
+            "tool result unexpectedly contained an embedded output stream".to_string(),
         ));
     }
     let result = result
-        .map(|value| crate::decode_typed_schema_value(&value))
+        .map(crate::decode_typed_schema_value_owned)
         .transpose()
         .map_err(|error| protocol_error(format!("failed to decode tool result: {error}")))?;
     Ok(InvocationResult { result })
 }
 
-/// Starts a stdout-bearing invocation with a generated structured-result decoder.
-pub fn start_tool_invocation<T: 'static, E: 'static>(
+/// Starts an output-bearing invocation with a generated structured-result decoder.
+pub async fn start_tool_invocation<T: 'static, E: 'static>(
     rpc: &impl StartedToolRpcClient,
     command_path: &[String],
     input: &TypedSchemaValue,
     stdin: Option<InputStream>,
+    attach_stdout: bool,
+    attach_stderr: bool,
     decode: impl Fn(InvocationResult) -> Result<T, ToolError<E>> + 'static,
     decode_error: impl Fn(String, TypedSchemaValue) -> Result<Option<E>, String> + 'static,
 ) -> Result<ToolInvocation<T, E>, ToolError<E>> {
-    let input = crate::encode_typed_schema_value(input)
+    let input = crate::encode_typed_schema_value_async(input)
+        .await
         .map_err(|error| protocol_error(format!("failed to encode tool input: {error}")))?;
     let stdin = stdin.map(pump_tool_stdin);
-    let (stdout_target, stdout) = agentic_host_api::create_stdout();
-    let future = rpc.async_invoke_and_await_tool(command_path, input, stdin, Some(stdout_target));
+    let (stdout_target, stdout) = if attach_stdout {
+        let (target, stream) = agentic_host_api::create_output();
+        (Some(target), Some(stream))
+    } else {
+        (None, None)
+    };
+    let (stderr_target, stderr) = if attach_stderr {
+        let (target, stream) = agentic_host_api::create_output();
+        (Some(target), Some(stream))
+    } else {
+        (None, None)
+    };
+    let future =
+        rpc.async_invoke_and_await_tool(command_path, input, stdin, stdout_target, stderr_target);
     let future = Rc::new(future);
     let result = Rc::new(InvocationResultDriver::new({
         let future = Rc::clone(&future);
         move || {
             Box::pin(async move {
                 let result = future.get().await.map_err(|error| {
-                    map_rpc_error(error.into(), &|_, _| {
-                        Ok::<Option<TypedSchemaValue>, String>(None)
-                    })
+                    map_rpc_error(error, &|_, _| Ok::<Option<TypedSchemaValue>, String>(None))
                 })?;
                 decode_wire_invocation_result(result)
             })
         }
     }));
+    let stdout_drive = Rc::clone(&result);
+    let stderr_drive = Rc::clone(&result);
+    let decode = Rc::new(decode);
+    let decode_error = Rc::new(decode_error);
     Ok(ToolInvocation {
-        stdout: ToolInvocationStdout {
-            stream: Some(stdout),
-            result: Rc::clone(&result),
-        },
+        stdout: stdout.map(|stream| ToolInvocationOutput {
+            stream: Some(stream),
+            result: Rc::new(move || {
+                let drive = Rc::clone(&stdout_drive);
+                Box::pin(async move {
+                    let _ = drive.wait().await;
+                })
+            }),
+        }),
+        stderr: stderr.map(|stream| ToolInvocationOutput {
+            stream: Some(stream),
+            result: Rc::new(move || {
+                let drive = Rc::clone(&stderr_drive);
+                Box::pin(async move {
+                    let _ = drive.wait().await;
+                })
+            }),
+        }),
         future,
-        result,
-        decode: Rc::new(decode),
-        decode_error: Rc::new(decode_error),
+        result: Rc::new(move || {
+            let result = Rc::clone(&result);
+            let decode = Rc::clone(&decode);
+            let decode_error = Rc::clone(&decode_error);
+            Box::pin(async move {
+                match result.wait().await {
+                    Ok(value) => decode(value),
+                    Err(ToolError::Rpc(error)) => Err(ToolError::Rpc(error)),
+                    Err(ToolError::RemoteTool(error)) => Err(ToolError::RemoteTool(error)),
+                    Err(ToolError::MalformedRemoteOutput(error)) => {
+                        Err(ToolError::MalformedRemoteOutput(error))
+                    }
+                    Err(ToolError::Tool(value)) => match decode_error(String::new(), value) {
+                        Ok(Some(error)) => Err(ToolError::Tool(error)),
+                        Ok(None) => {
+                            Err(tool_protocol_error("custom tool error is missing its name"))
+                        }
+                        Err(message) => Err(tool_protocol_error(message)),
+                    },
+                    Err(ToolError::UnknownCustomError(error)) => {
+                        match error
+                            .payload()
+                            .and_then(|payload| decode_error(error.name.clone(), payload.clone()))
+                        {
+                            Ok(Some(error)) => Err(ToolError::Tool(error)),
+                            Ok(None) => Err(ToolError::UnknownCustomError(error)),
+                            Err(message) => Err(tool_protocol_error(message)),
+                        }
+                    }
+                }
+            })
+        }),
     })
 }
 
+/// Starts an invocation from an already encoded direct wire input.
+#[doc(hidden)]
+pub async fn start_tool_invocation_direct_input<T: 'static, E: 'static>(
+    rpc: &impl StartedToolRpcClient,
+    command_path: &[String],
+    input: crate::schema::wit::wire::TypedSchemaValue,
+    stdin: Option<InputStream>,
+    attach_stdout: bool,
+    attach_stderr: bool,
+    decode: impl Fn(DirectInvocationResult) -> Result<T, ToolError<E>> + 'static,
+    recognizes_error: fn(&str) -> bool,
+    decode_error: impl Fn(
+        &str,
+        &mut crate::schema::wit::direct::WireReader,
+        i32,
+    ) -> Result<Option<E>, String>
+    + 'static,
+) -> Result<ToolInvocation<T, E>, ToolError<E>> {
+    let stdin = stdin.map(pump_tool_stdin);
+    let (stdout_target, stdout) = if attach_stdout {
+        let (target, stream) = agentic_host_api::create_output();
+        (Some(target), Some(stream))
+    } else {
+        (None, None)
+    };
+    let (stderr_target, stderr) = if attach_stderr {
+        let (target, stream) = agentic_host_api::create_output();
+        (Some(target), Some(stream))
+    } else {
+        (None, None)
+    };
+    let future =
+        rpc.async_invoke_and_await_tool(command_path, input, stdin, stdout_target, stderr_target);
+    let future = Rc::new(future);
+    let result = Rc::new(crate::tool::invocation_result::InvocationResultDriver::new(
+        {
+            let future = Rc::clone(&future);
+            move || {
+                Box::pin(async move {
+                    let result = future
+                        .get()
+                        .await
+                        .map_err(|error| cache_direct_error(error, recognizes_error))?;
+                    decode_direct_wire_invocation_result(result)
+                })
+            }
+        },
+    ));
+    let stdout_drive = Rc::clone(&result);
+    let stderr_drive = Rc::clone(&result);
+    let decode = Rc::new(decode);
+    let decode_error = Rc::new(decode_error);
+    Ok(ToolInvocation {
+        stdout: stdout.map(|stream| ToolInvocationOutput {
+            stream: Some(stream),
+            result: Rc::new(move || {
+                let drive = Rc::clone(&stdout_drive);
+                Box::pin(async move {
+                    let _ = drive.wait().await;
+                })
+            }),
+        }),
+        stderr: stderr.map(|stream| ToolInvocationOutput {
+            stream: Some(stream),
+            result: Rc::new(move || {
+                let drive = Rc::clone(&stderr_drive);
+                Box::pin(async move {
+                    let _ = drive.wait().await;
+                })
+            }),
+        }),
+        future,
+        result: Rc::new(move || {
+            let result = Rc::clone(&result);
+            let decode = Rc::clone(&decode);
+            let decode_error = Rc::clone(&decode_error);
+            Box::pin(async move {
+                match result.wait().await {
+                    Ok(value) => decode(value),
+                    Err(error) => Err(decode_cached_direct_error(error, &*decode_error)),
+                }
+            })
+        }),
+    })
+}
+
+#[derive(Clone)]
+struct DirectErrorPayload {
+    name: String,
+    value: DirectInvocationResult,
+}
+
+fn cache_direct_error(
+    error: WitRpcError,
+    recognizes: fn(&str) -> bool,
+) -> ToolError<DirectErrorPayload> {
+    match error {
+        WitRpcError::RemoteToolError(WitToolError::CustomError(error))
+            if recognizes(&error.name) =>
+        {
+            ToolError::Tool(DirectErrorPayload {
+                name: error.name,
+                value: DirectInvocationResult {
+                    root: Some(error.payload.value.root),
+                    snapshot: Rc::new(crate::schema::wit::direct::WireSnapshot::new(
+                        error.payload.value.value_nodes,
+                    )),
+                },
+            })
+        }
+        WitRpcError::RemoteToolError(WitToolError::CustomError(error)) => {
+            ToolError::UnknownCustomError(RawCustomToolError::from_wire(error.name, error.payload))
+        }
+        other => map_infallible_rpc_error(other),
+    }
+}
+
+fn decode_cached_direct_error<E>(
+    error: ToolError<DirectErrorPayload>,
+    decode: &impl Fn(
+        &str,
+        &mut crate::schema::wit::direct::WireReader,
+        i32,
+    ) -> Result<Option<E>, String>,
+) -> ToolError<E> {
+    match error {
+        ToolError::Rpc(error) => ToolError::Rpc(error),
+        ToolError::RemoteTool(error) => ToolError::RemoteTool(error),
+        ToolError::MalformedRemoteOutput(error) => ToolError::MalformedRemoteOutput(error),
+        ToolError::UnknownCustomError(error) => ToolError::UnknownCustomError(error),
+        ToolError::Tool(error) => {
+            let mut reader = error.value.snapshot.reader();
+            match decode(&error.name, &mut reader, error.value.root.unwrap()) {
+                Ok(Some(value)) => match reader.finish() {
+                    Ok(()) => ToolError::Tool(value),
+                    Err(error) => tool_protocol_error(error.to_string()),
+                },
+                Ok(None) => tool_protocol_error("declared custom tool error was not decoded"),
+                Err(message) => tool_protocol_error(message),
+            }
+        }
+    }
+}
+
 fn map_remote_tool_error<E>(
-    error: host::ToolError,
+    error: WitToolError,
     decode_error: &(impl Fn(String, TypedSchemaValue) -> Result<Option<E>, String> + ?Sized),
 ) -> ToolError<E> {
     match error {
-        host::ToolError::CustomError(error) => match decode_custom_tool_error_value(&error.payload)
-        {
+        WitToolError::CustomError(error) => match decode_custom_tool_error_value(error.payload) {
             Ok(value) => match decode_error(error.name.clone(), value.clone()) {
                 Ok(Some(error)) => ToolError::Tool(error),
-                Ok(None) => ToolError::UnknownCustomError(RawCustomToolError {
-                    name: error.name,
-                    payload: value,
-                }),
+                Ok(None) => ToolError::UnknownCustomError(RawCustomToolError::from_payload(
+                    error.name, value,
+                )),
                 Err(message) => ToolError::Rpc(RpcError::Protocol(message)),
             },
             Err(message) => ToolError::Rpc(RpcError::Protocol(message)),
         },
-        error => ToolError::Rpc(RpcError::Protocol(format!(
-            "remote tool error: {}",
-            remote_tool_error_label(&error)
-        ))),
+        WitToolError::InvalidToolName(name) => {
+            ToolError::RemoteTool(RemoteToolError::InvalidToolName(name))
+        }
+        WitToolError::InvalidCommandPath(path) => {
+            ToolError::RemoteTool(RemoteToolError::InvalidCommandPath(path))
+        }
+        WitToolError::InvalidInput(message) => {
+            ToolError::RemoteTool(RemoteToolError::InvalidInput(message))
+        }
+        WitToolError::ConstraintViolation(message) => {
+            ToolError::RemoteTool(RemoteToolError::ConstraintViolation(message))
+        }
+        WitToolError::InvalidResult(message) => {
+            ToolError::RemoteTool(RemoteToolError::InvalidResult(message))
+        }
     }
 }
 
@@ -772,9 +1276,9 @@ fn decode_custom_tool_error<E: FromSchema>(
 }
 
 fn decode_custom_tool_error_value(
-    value: &crate::schema::wit::wire::TypedSchemaValue,
+    value: crate::schema::wit::wire::TypedSchemaValue,
 ) -> Result<TypedSchemaValue, String> {
-    crate::decode_typed_schema_value(value)
+    crate::decode_typed_schema_value_owned(value)
         .map_err(|error| format!("failed to decode remote tool error: {error}"))
 }
 
@@ -786,24 +1290,10 @@ fn protocol_error<E>(message: String) -> ToolError<E> {
     ToolError::Rpc(RpcError::Protocol(message))
 }
 
-fn remote_tool_error_label(error: &host::ToolError) -> String {
-    match error {
-        host::ToolError::InvalidToolName(name) => format!("invalid tool name `{name}`"),
-        host::ToolError::InvalidCommandPath(path) => {
-            format!("invalid command path `{}`", path.join(" "))
-        }
-        host::ToolError::InvalidInput(message) => format!("invalid input: {message}"),
-        host::ToolError::ConstraintViolation(message) => {
-            format!("constraint violation: {message}")
-        }
-        host::ToolError::InvalidResult(message) => format!("invalid result: {message}"),
-        host::ToolError::CustomError(_) => "custom error".to_string(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::schema::wit::wire::CustomToolError;
     use crate::{FromSchema, IntoSchema, IntoTypedSchemaValue};
     use std::cell::Cell;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -814,14 +1304,227 @@ mod tests {
         Usage(String),
     }
 
+    #[derive(
+        Clone,
+        Debug,
+        Eq,
+        PartialEq,
+        IntoSchema,
+        FromSchema,
+        crate::IntoWire,
+        crate::FromWire,
+        crate::WireSchema,
+    )]
+    struct CallerPayload {
+        message: String,
+    }
+
+    #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+    struct RemotePayload {
+        message: String,
+    }
+
+    #[derive(Clone, Debug, Eq, PartialEq, crate::ToolError)]
+    enum DeclaredError {
+        #[tool_error(kind = "usage-error", exit_code = 2)]
+        Usage(CallerPayload),
+    }
+
+    fn declared_error() -> ToolError<DeclaredError> {
+        ToolError::Tool(DeclaredError::Usage(CallerPayload {
+            message: "selected".to_string(),
+        }))
+    }
+
+    #[test]
+    fn collection_preserves_structured_error_precedence_over_each_output_failure() {
+        for outputs in [
+            (
+                Err(ToolError::MalformedRemoteOutput(
+                    "stdout failed".to_string(),
+                )),
+                Ok(None),
+            ),
+            (
+                Ok(None),
+                Err(ToolError::MalformedRemoteOutput(
+                    "stderr failed".to_string(),
+                )),
+            ),
+        ] {
+            match finish_collection::<(), _>(Err(declared_error()), outputs) {
+                Err(ToolError::Tool(DeclaredError::Usage(payload))) => {
+                    assert_eq!(payload.message, "selected")
+                }
+                _ => panic!("structured error must take precedence over output failure"),
+            }
+        }
+    }
+
+    #[test]
+    fn generated_result_decoder_accepts_resolved_graph_equivalence() {
+        let value = RemotePayload {
+            message: "ok".to_string(),
+        }
+        .into_typed_schema_value()
+        .unwrap();
+        assert_eq!(
+            decode_result_value::<CallerPayload, Infallible>(InvocationResult {
+                result: Some(value),
+            })
+            .unwrap(),
+            CallerPayload {
+                message: "ok".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn generated_error_decoder_accepts_resolved_graph_equivalence() {
+        let value = RemotePayload {
+            message: "bad".to_string(),
+        }
+        .into_typed_schema_value()
+        .unwrap();
+        assert_eq!(
+            decode_declared_tool_error::<DeclaredError>("usage".to_string(), value).unwrap(),
+            Some(DeclaredError::Usage(CallerPayload {
+                message: "bad".to_string(),
+            }))
+        );
+    }
+
+    #[test]
+    async fn direct_completion_observers_decode_non_clone_values_without_models() {
+        use crate::schema::wit::{direct, wire};
+        struct ResultOnly(u32);
+        impl direct::FromWire for ResultOnly {
+            fn read_wire(
+                reader: &mut direct::WireReader,
+                index: i32,
+            ) -> Result<Self, direct::WireError> {
+                u32::read_wire(reader, index).map(Self)
+            }
+        }
+        let count = Rc::new(Cell::new(0));
+        let source = Rc::clone(&count);
+        let driver = Rc::new(crate::tool::invocation_result::InvocationResultDriver::new(
+            move || {
+                source.set(source.get() + 1);
+                Box::pin(async {
+                    decode_direct_wire_invocation_result::<Infallible>(host::InvocationResult {
+                        result: Some(wire::TypedSchemaValue {
+                            graph: direct::schema::<u32>(),
+                            value: direct::encode(&83u32).unwrap(),
+                        }),
+                        stdout: None,
+                        stderr: None,
+                    })
+                })
+            },
+        ));
+        let (first, second) = join(Rc::clone(&driver).wait(), Rc::clone(&driver).wait()).await;
+        for result in [first, second, Rc::clone(&driver).wait().await] {
+            assert_eq!(
+                decode_direct_result_value::<ResultOnly, Infallible>(result.unwrap())
+                    .unwrap()
+                    .0,
+                83
+            );
+        }
+        assert_eq!(count.get(), 1);
+    }
+
+    #[test]
+    async fn captured_input_preserves_names_aliases_and_affine_preflight() {
+        let first = DirectInputValue::new("verbose", vec!["v".into()], None, true);
+        let second =
+            DirectInputValue::new("pattern", vec!["query".into()], None, "needle".to_string());
+        let mut input = crate::agentic::DirectToolInput::new(
+            encode_direct_tool_input(&[first, second], &["pattern", "verbose"])
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(input.take::<String>("query").unwrap(), "needle");
+        assert!(input.take::<bool>("v").unwrap());
+        input.finish().unwrap();
+
+        type MaybeString = Option<String>;
+        let aliased_option = DirectInputValue::new(
+            "maybe",
+            vec![],
+            None,
+            Some("present".to_string()) as MaybeString,
+        )
+        .with_option_carrier(true);
+        let mut input = crate::agentic::DirectToolInput::new(
+            encode_direct_tool_input(&[aliased_option], &["maybe"])
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            input.take::<MaybeString>("maybe").unwrap(),
+            Some("present".to_string())
+        );
+        input.finish().unwrap();
+
+        use crate::schema::wit::{GuestSecretHandle, wire};
+        let handle = GuestSecretHandle::new(unsafe { wire::Secret::from_handle(71) });
+        let captured = DirectInputValue::new("secret", vec![], None, handle.clone());
+        let alias = DirectInputValue::new("other", vec![], None, handle.clone());
+        assert!(
+            encode_direct_tool_input(&[captured, alias], &["secret", "other"])
+                .await
+                .is_err()
+        );
+        assert!(handle.is_present());
+        assert_eq!(handle.take().unwrap().take_handle(), 71);
+    }
+
+    #[test]
+    fn tool_rpc_errors_are_shared_with_oplog_bindings() {
+        use crate::bindings::golem::api::oplog;
+
+        let payload = "bad flag".to_string().into_typed_schema_value().unwrap();
+        let error = WitRpcError::RemoteToolError(WitToolError::CustomError(CustomToolError {
+            name: "usage".to_string(),
+            payload: crate::encode_typed_schema_value(&payload).unwrap(),
+        }));
+        let error: host::ToolRpcError = error;
+        let error: agentic_host_api::ToolRpcError = error;
+        let recorded = oplog::ExternalToolResultParameters { result: Err(error) };
+        let error = recorded.result.unwrap_err();
+        let decoded = map_rpc_error(error, &|name, value| {
+            assert_eq!(name, "usage");
+            String::from_value(value.value())
+                .map(CliError::Usage)
+                .map(Some)
+                .map_err(format_from_schema_error)
+        });
+        assert_eq!(
+            decoded,
+            ToolError::Tool(CliError::Usage("bad flag".to_string()))
+        );
+
+        let recorded = oplog::ToolInvocationResult {
+            result: Some(crate::encode_typed_schema_value(&payload).unwrap()),
+        };
+        let value = crate::decode_typed_schema_value_owned(recorded.result.unwrap()).unwrap();
+        assert_eq!(String::from_value(value.value()).unwrap(), "bad flag");
+    }
+
     #[test]
     fn rpc_cancellation_and_resource_exhaustion_remain_distinct() {
         assert_eq!(
-            map_infallible_rpc_error(WitRpcError::Cancelled),
+            map_infallible_rpc_error::<Infallible>(WitRpcError::Cancelled),
             ToolError::Rpc(RpcError::Cancelled)
         );
         assert_eq!(
-            map_infallible_rpc_error(WitRpcError::ResourceExhausted("stdout limit".to_string())),
+            map_infallible_rpc_error::<Infallible>(WitRpcError::ResourceExhausted(
+                "stdout limit".to_string()
+            )),
             ToolError::Rpc(RpcError::ResourceExhausted("stdout limit".to_string()))
         );
     }
@@ -832,7 +1535,7 @@ mod tests {
         let wire_payload = crate::encode_typed_schema_value(&payload).unwrap();
 
         let decoded = map_remote_tool_error(
-            host::ToolError::CustomError(crate::schema::tool::wit::wire::CustomToolError {
+            WitToolError::CustomError(CustomToolError {
                 name: "usage".to_string(),
                 payload: wire_payload,
             }),
@@ -852,11 +1555,44 @@ mod tests {
     }
 
     #[test]
+    fn direct_unknown_custom_error_defers_dynamic_payload_decoding() {
+        use crate::schema::wit::{direct, wire};
+        let cached = cache_direct_error(
+            WitRpcError::RemoteToolError(WitToolError::CustomError(CustomToolError {
+                name: "undeclared".to_string(),
+                payload: wire::TypedSchemaValue {
+                    graph: wire::SchemaGraph {
+                        type_nodes: vec![],
+                        defs: vec![],
+                        root: -1,
+                    },
+                    value: direct::encode(&37u32).unwrap(),
+                },
+            })),
+            |_| false,
+        );
+        let decoded: ToolError<Infallible> = decode_cached_direct_error(cached, &|_, _, _| {
+            panic!("undeclared error must not enter the concrete decoder")
+        });
+        let ToolError::UnknownCustomError(error) = decoded else {
+            panic!("unknown wire error was decoded eagerly")
+        };
+        assert_eq!(error.name, "undeclared");
+        assert!(format!("{error:?}").contains("undeclared"));
+        let other_observer = error.clone();
+        assert!(error.payload().is_err());
+        assert_eq!(
+            error.payload().unwrap_err(),
+            other_observer.payload().unwrap_err()
+        );
+    }
+
+    #[test]
     fn unknown_custom_tool_error_preserves_name_and_owned_payload() {
         let payload = "raw".to_string().into_typed_schema_value().unwrap();
         let wire_payload = crate::encode_typed_schema_value(&payload).unwrap();
         let decoded: ToolError<CliError> = map_remote_tool_error(
-            host::ToolError::CustomError(crate::schema::tool::wit::wire::CustomToolError {
+            WitToolError::CustomError(CustomToolError {
                 name: "new-error".to_string(),
                 payload: wire_payload,
             }),
@@ -868,7 +1604,7 @@ mod tests {
         };
         assert_eq!(error.name, "new-error");
         assert_eq!(
-            String::from_value(error.payload.value()).unwrap(),
+            String::from_value(error.payload().unwrap().value()).unwrap(),
             "raw".to_string()
         );
     }
@@ -878,7 +1614,7 @@ mod tests {
         let payload = 42u32.into_typed_schema_value().unwrap();
         let wire_payload = crate::encode_typed_schema_value(&payload).unwrap();
         let decoded: ToolError<CliError> = map_remote_tool_error(
-            host::ToolError::CustomError(crate::schema::tool::wit::wire::CustomToolError {
+            WitToolError::CustomError(CustomToolError {
                 name: "usage".to_string(),
                 payload: wire_payload,
             }),
@@ -1008,6 +1744,7 @@ mod tests {
     impl ToolRpcClient for FakeToolRpc {
         type Stdin = ();
         type Stdout = ();
+        type Stderr = ();
 
         async fn invoke_and_await_tool(
             &self,
@@ -1015,12 +1752,13 @@ mod tests {
             _input: crate::schema::wit::wire::TypedSchemaValue,
             _stdin: Option<Self::Stdin>,
             _stdout: Option<Self::Stdout>,
+            _stderr: Option<Self::Stderr>,
         ) -> Result<host::InvocationResult, WitRpcError> {
             let payload = "bad flag".to_string().into_typed_schema_value().unwrap();
             let wire_payload = crate::encode_typed_schema_value(&payload).unwrap();
 
-            Err(WitRpcError::RemoteToolError(host::ToolError::CustomError(
-                crate::schema::tool::wit::wire::CustomToolError {
+            Err(WitRpcError::RemoteToolError(WitToolError::CustomError(
+                CustomToolError {
                     name: "usage".to_string(),
                     payload: wire_payload,
                 },
@@ -1038,6 +1776,7 @@ mod tests {
     impl ToolRpcClient for FailingToolRpc {
         type Stdin = ();
         type Stdout = ();
+        type Stderr = ();
 
         async fn invoke_and_await_tool(
             &self,
@@ -1045,11 +1784,12 @@ mod tests {
             _input: crate::schema::wit::wire::TypedSchemaValue,
             _stdin: Option<Self::Stdin>,
             _stdout: Option<Self::Stdout>,
+            _stderr: Option<Self::Stderr>,
         ) -> Result<host::InvocationResult, WitRpcError> {
             Err(match self.0 {
                 FakeFailure::Denied => WitRpcError::Denied("no access".to_string()),
                 FakeFailure::RemoteInvalidInput => WitRpcError::RemoteToolError(
-                    host::ToolError::InvalidInput("bad wire input".to_string()),
+                    WitToolError::InvalidInput("bad wire input".to_string()),
                 ),
             })
         }
@@ -1067,26 +1807,33 @@ mod tests {
                 .map_err(format_from_schema_error)
         };
 
-        match invoke_and_await(&FakeToolRpc, &[], &input, None, None, decode_error).await {
+        match invoke_and_await(&FakeToolRpc, &[], &input, None, None, None, decode_error).await {
             Err(ToolError::Tool(CliError::Usage(message))) => assert_eq!(message, "bad flag"),
             Err(ToolError::Rpc(error)) => {
                 panic!("expected declared tool error, got RPC error: {error:?}")
             }
+            Err(ToolError::RemoteTool(error)) => {
+                panic!("expected declared tool error, got remote tool error: {error:?}")
+            }
             Err(ToolError::UnknownCustomError(error)) => {
                 panic!("expected declared tool error, got unknown error: {error:?}")
+            }
+            Err(ToolError::MalformedRemoteOutput(message)) => {
+                panic!("expected declared tool error, got malformed output: {message}")
             }
             Ok(_) => panic!("expected declared tool error, got success"),
         }
     }
 
     #[test]
-    async fn invoke_and_await_maps_framing_errors_to_rpc_errors() {
+    async fn invoke_and_await_distinguishes_rpc_and_remote_tool_errors() {
         let input = ().into_typed_schema_value().unwrap();
 
         match invoke_and_await_payload_error::<CliError, _>(
             &FailingToolRpc(FakeFailure::Denied),
             &[],
             &input,
+            None,
             None,
             None,
         )
@@ -1103,21 +1850,70 @@ mod tests {
             &input,
             None,
             None,
+            None,
         )
         .await
         {
-            Err(ToolError::Rpc(RpcError::Protocol(message))) => {
-                assert!(
-                    message.contains("remote tool error: invalid input: bad wire input"),
-                    "unexpected protocol error message: {message}"
-                );
+            Err(ToolError::RemoteTool(RemoteToolError::InvalidInput(message))) => {
+                assert_eq!(message, "bad wire input");
             }
             Err(other) => {
-                panic!("expected remote framing error to map to protocol RPC error, got {other:?}")
+                panic!("expected structural remote tool error, got {other:?}")
             }
-            Ok(_) => {
-                panic!("expected remote framing error to map to protocol RPC error, got success")
-            }
+            Ok(_) => panic!("expected remote tool error, got success"),
+        }
+    }
+
+    #[test]
+    fn all_structural_remote_tool_errors_keep_their_variant() {
+        let cases = [
+            (
+                WitToolError::InvalidToolName("bad name".to_string()),
+                RemoteToolError::InvalidToolName("bad name".to_string()),
+            ),
+            (
+                WitToolError::InvalidCommandPath(vec!["bad".to_string()]),
+                RemoteToolError::InvalidCommandPath(vec!["bad".to_string()]),
+            ),
+            (
+                WitToolError::InvalidInput("input".to_string()),
+                RemoteToolError::InvalidInput("input".to_string()),
+            ),
+            (
+                WitToolError::ConstraintViolation("constraint".to_string()),
+                RemoteToolError::ConstraintViolation("constraint".to_string()),
+            ),
+            (
+                WitToolError::InvalidResult("result".to_string()),
+                RemoteToolError::InvalidResult("result".to_string()),
+            ),
+        ];
+        for (wire, expected) in cases {
+            let actual: ToolError<Infallible> =
+                map_infallible_rpc_error(WitRpcError::RemoteToolError(wire));
+            assert_eq!(actual, ToolError::RemoteTool(expected));
+        }
+    }
+
+    #[test]
+    async fn pending_result_observers_preserve_remote_tool_error() {
+        let driver = Rc::new(InvocationResultDriver::new(|| {
+            Box::pin(async {
+                Err(map_rpc_error(
+                    WitRpcError::RemoteToolError(WitToolError::ConstraintViolation(
+                        "missing flag".to_string(),
+                    )),
+                    &|_, value| Ok(Some(value)),
+                ))
+            })
+        }));
+        let (first, second) = join(Rc::clone(&driver).wait(), Rc::clone(&driver).wait()).await;
+        for outcome in [first, second] {
+            assert!(matches!(
+                outcome,
+                Err(ToolError::RemoteTool(RemoteToolError::ConstraintViolation(message)))
+                    if message == "missing flag"
+            ));
         }
     }
 }

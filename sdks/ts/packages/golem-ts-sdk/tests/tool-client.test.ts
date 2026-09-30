@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { createStdin, createStdout, ToolRpc, type RpcError } from 'golem:tool/host@0.1.0';
+import type { ToolRpcError as RpcError } from 'golem:core/types@2.0.0';
+import { createStdin, createOutput, ToolRpc } from 'golem:tool/host@0.1.0';
 import { type as arkType } from 'arktype';
 import { describe, expect, it, vi } from 'vitest';
 import * as z3 from 'zod3';
@@ -23,7 +24,7 @@ import {
   type ToolClientInvocationResult,
   type ToolClientTransport,
 } from '../src/tool';
-import { client, ToolCallError } from '../src/toolClient';
+import { client, compiledToolClient, toolClientDefinition, ToolCallError } from '../src/toolClient';
 import type { ByteStreamItem } from 'golem:tool/host@0.1.0';
 import { compileSchema } from '../src/schema/adapter';
 import {
@@ -44,6 +45,7 @@ interface RecordedInvocation {
 interface FakeResponse {
   readonly result?: ReturnType<typeof wireValue>;
   readonly stdout?: AsyncIterable<ByteStreamItem>;
+  readonly stderr?: AsyncIterable<ByteStreamItem>;
 }
 
 class FakeTransport implements ToolClientTransport {
@@ -56,6 +58,7 @@ class FakeTransport implements ToolClientTransport {
     input: Parameters<ToolClientTransport['start']>[1],
     stdin: ReadableStream<Uint8Array> | undefined,
     withStdout: boolean,
+    withStderr: boolean,
   ): ToolClientInvocationResult {
     const invocation = { commandPath: [...commandPath], input, stdin };
     this.invocations.push(invocation);
@@ -74,6 +77,7 @@ class FakeTransport implements ToolClientTransport {
         value: { result: response.result },
       }),
       stdout: withStdout ? (response.stdout ?? streamItems(bytes())) : undefined,
+      stderr: withStderr ? (response.stderr ?? streamItems(bytes())) : undefined,
       cancel: vi.fn(),
     };
   }
@@ -109,6 +113,15 @@ function byteStream(...values: number[]): ReadableStream<Uint8Array> {
 }
 
 describe('tool runtime client', () => {
+  it('constructs definition-owned and caller-defined clients', async () => {
+    const definition = toolDefinition('owned').body((body) => body.returns(z.string()));
+    const transport = new FakeTransport(() => ({ result: wireValue(z.string(), 'ok') }));
+    await expect(definition.client({ transport }).owned({})).resolves.toBe('ok');
+    const partial = toolClientDefinition(definition);
+    await expect(partial.client('renamed', { transport }).owned({})).resolves.toBe('ok');
+    expect(() => partial.client()).toThrow('requires a target name');
+  });
+
   it('assembles root bodies, dispatchers, callable intersections, nested paths, and grafted subtrees', async () => {
     const subtree = toolDefinition('remote')
       .global('remote-global', z.string(), { required: true })
@@ -406,6 +419,63 @@ describe('tool runtime client', () => {
         ['optional-stdout']({})
         .collect(),
     ).resolves.toEqual({ result: 'value', stdout: new Uint8Array() });
+  });
+
+  it('returns a started invocation synchronously for a stderr-only command', async () => {
+    const definition = toolDefinition('stderr-only').body((body) =>
+      body.stderr({ required: true }).returns(z.string()),
+    );
+    const invocation = client(definition, {
+      transport: new FakeTransport(() => ({
+        result: wireValue(z.string(), 'value'),
+        stderr: streamItems(bytes(7, 8, 9)),
+      })),
+    })['stderr-only']({});
+
+    expect(invocation).toMatchObject({
+      stderr: expect.any(ReadableStream),
+      result: expect.any(Promise),
+      collect: expect.any(Function),
+    });
+    await expect(invocation.collect()).resolves.toEqual({
+      result: 'value',
+      stderr: new Uint8Array([7, 8, 9]),
+    });
+  });
+
+  it('cancels a compiled stderr invocation when the declared stream is missing', () => {
+    const cancel = vi.fn();
+    const codec = {
+      write: (_value: unknown, writer: { add(node: unknown): number }) =>
+        writer.add({ tag: 'record-value', val: [] }),
+      read: () => undefined,
+    };
+    const runtime = compiledToolClient(
+      'missing-compiled-stderr',
+      [
+        {
+          path: [],
+          aliases: [],
+          nested: false,
+          input: { codec, graph: { nodes: [], root: 0 } },
+          errors: {},
+          stderr: { required: true },
+        },
+      ],
+      {
+        transport: {
+          start: () => ({
+            settledResult: new Promise(() => undefined),
+            cancel,
+          }),
+        },
+      },
+    ) as { 'missing-compiled-stderr'(args: {}): unknown };
+
+    expect(() => runtime['missing-compiled-stderr']({})).toThrow(
+      'required stderr stream is missing',
+    );
+    expect(cancel).toHaveBeenCalledOnce();
   });
 
   it('combines stdin with structured results and stdout through the transport seam', async () => {
@@ -826,7 +896,7 @@ describe('tool runtime client', () => {
     expect(invalidResult).toMatchObject({
       cause: {
         tag: 'rpc',
-        error: { tag: 'protocol-error', val: expect.stringContaining('schema') },
+        error: { tag: 'protocol-error', val: expect.stringContaining('local definition') },
       },
     });
   });
@@ -855,7 +925,7 @@ describe('tool runtime client', () => {
     });
   });
 
-  it('rejects output-only record reorder and width before positional decoding', async () => {
+  it('rejects output-only record reorder and width through concrete decoding', async () => {
     const definition = toolDefinition('adapted-result').body((body) =>
       body.returns(z.object({ first: z.string(), second: z.number() })),
     );
@@ -874,7 +944,7 @@ describe('tool runtime client', () => {
       expect(failure).toMatchObject({
         cause: {
           tag: 'rpc',
-          error: { tag: 'protocol-error', val: expect.stringContaining('schema') },
+          error: { tag: 'protocol-error', val: expect.stringContaining('local definition') },
         },
       });
     }
@@ -975,7 +1045,7 @@ describe('tool runtime client', () => {
 
   it('keeps a rejected host result handled until a started invocation result is accessed', async () => {
     const rpcError = { tag: 'denied', val: 'not allowed' } satisfies RpcError;
-    vi.mocked(createStdout).mockReturnValueOnce([{}, streamItems(bytes())] as never);
+    vi.mocked(createOutput).mockReturnValueOnce([{}, streamItems(bytes())] as never);
     vi.mocked(ToolRpc).mockImplementationOnce(
       () =>
         ({
@@ -1009,7 +1079,7 @@ describe('tool runtime client', () => {
   it('handles a rejected host result when stdout validation throws synchronously', async () => {
     const rpcError = { tag: 'denied', val: 'not allowed' } satisfies RpcError;
     const cancel = vi.fn();
-    vi.mocked(createStdout).mockReturnValueOnce([{}, undefined] as never);
+    vi.mocked(createOutput).mockReturnValueOnce([{}, undefined] as never);
     vi.mocked(ToolRpc).mockImplementationOnce(
       () =>
         ({
@@ -1066,7 +1136,7 @@ describe('tool runtime client', () => {
     const stdinClosed = { wait: vi.fn(() => new Promise(() => undefined)) };
     const stdoutCapability = {};
     vi.mocked(createStdin).mockReturnValue([stdinWriter, stdinCapability, stdinClosed] as never);
-    vi.mocked(createStdout).mockReturnValue([stdoutCapability, stdout] as never);
+    vi.mocked(createOutput).mockReturnValue([stdoutCapability, stdout] as never);
     const asyncInvokeAndAwait = vi.fn(() => ({
       get: () => Promise.resolve({}),
       cancel: vi.fn(),
@@ -1090,6 +1160,7 @@ describe('tool runtime client', () => {
       expect.anything(),
       stdinCapability,
       stdoutCapability,
+      undefined,
     );
     await vi.waitFor(() =>
       expect(stdinWriter.write).toHaveBeenCalledWith(new Uint8Array([1, 2, 3])),

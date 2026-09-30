@@ -1,10 +1,11 @@
-import { describe, expect, it } from "@effect/vitest"
+import { describe, expect } from "@effect/vitest"
 import { Effect, Exit, Layer, Schema } from "effect"
-import * as fc from "effect/testing/FastCheck"
+import * as fc from "fast-check"
 import type { QuotaToken as RawQuotaToken } from "golem:core/types@2.0.0"
 import { acquireQuotaToken, QuotaTokenSchema } from "../src/Quota.js"
 import { QuotaClient } from "../src/host/QuotaClient.js"
 import { compile } from "../src/WitCodec.js"
+import { effectProp } from "./property.js"
 
 const expectedUseArb = fc.bigInt({ min: 0n, max: 2n ** 64n - 1n })
 const resourceNameArb = fc.string({ minLength: 1 })
@@ -22,7 +23,7 @@ const layer: Layer.Layer<QuotaClient> = Layer.succeed(
 )
 
 describe("QuotaToken affine codec properties", () => {
-  it.effect.prop(
+  effectProp(
     "a capability transfers to the receiver and each owner can send it only once",
     { resourceName: resourceNameArb, expectedUse: expectedUseArb },
     ({ resourceName, expectedUse }) =>
@@ -39,7 +40,7 @@ describe("QuotaToken affine codec properties", () => {
       }).pipe(Effect.provide(layer)),
   )
 
-  it.effect.prop(
+  effectProp(
     "a failed enclosing encode rolls capability ownership back",
     { resourceName: resourceNameArb, expectedUse: expectedUseArb },
     ({ resourceName, expectedUse }) =>

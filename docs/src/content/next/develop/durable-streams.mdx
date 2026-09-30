@@ -1,0 +1,183 @@
+import { Callout, Tabs } from "nextra/components"
+
+# External Durable Streams
+
+The guest SDKs can read and write services implementing the [Durable Streams protocol](https://github.com/durable-streams/durable-streams). Golem owns HTTP transport, authentication, and durable host-call recording; your agent owns checkpoints, producer identity, sequence progress, buffering, and retry policy.
+
+This page covers streams hosted outside the agent invocation protocol. For operating method input/output stream sessions exposed by Golem, see [Operating Durable Stream Sessions](/next/operate/durable_streams).
+
+## Read and write
+
+All five SDKs support JSON-message streams and byte streams. JSON appends are batches of complete logical values. Byte streams expose a sequence of bytes; HTTP batch and append boundaries are not preserved. In the examples, `url` identifies an already-created, open `application/json` stream; constructing an SDK reader or writer does not create the provider stream.
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+  <Tabs.Tab>
+```typescript
+import { z } from 'zod';
+import {
+  createDurableJsonWriter,
+  readDurableJsonStream,
+} from '@golemcloud/golem-ts-sdk';
+
+const writer = createDurableJsonWriter(z.string(), { url });
+await writer.append(['first', 'second']);
+await writer.close();
+
+for await (const value of readDurableJsonStream(z.string(), {
+  url,
+  offset: '-1',
+  live: 'long-poll',
+})) {
+  console.log(value);
+}
+```
+
+Use `createDurableByteWriter` and `readDurableByteStream` for bytes. TypeScript serializes operations and resolves a retained request before another append or disposal. `dispose()` does not create a separate close request, but it can complete a retained append-and-close and can fail if that retry fails.
+  </Tabs.Tab>
+  <Tabs.Tab>
+```typescript
+import { Effect, Schema, Stream } from 'effect';
+import { DurableStreams } from '@golemcloud/effect-golem';
+
+const program = Effect.gen(function* () {
+  const writer = yield* DurableStreams.makeJsonWriter(Schema.String, { url });
+  yield* writer.append(['first', 'second'], { close: true });
+  return yield* Stream.runCollect(
+    DurableStreams.readJson(Schema.String, { url, offset: '-1' }),
+  );
+}).pipe(Effect.scoped);
+```
+
+This effect runs inside a Golem agent handler, where the dispatcher supplies the host service; `Effect.scoped` supplies resource scope, not that service. Writers are scoped resources. Use `makeByteWriter` and `readBytes` for bytes. Host and protocol failures use `DurableStreams.DurableStreamError`; schema compilation and conversion can fail with separate typed errors.
+  </Tabs.Tab>
+  <Tabs.Tab>
+```rust
+use golem_rust::durable_streams::{
+    DurableStreamWriter, ExternalDurableStream, ReadOptions, WriteOptions,
+};
+
+let mut writer = DurableStreamWriter::new(
+    url.clone(),
+    "application/json",
+    WriteOptions::default(),
+)?;
+writer.append_json(&["first", "second"], true).await?;
+
+let mut reader = ExternalDurableStream::<String>::json(url, ReadOptions::default());
+while let Some(value) = reader.next().await? {
+    println!("{value}");
+}
+```
+
+Use `ExternalDurableStream::<u8>::bytes` and `append_bytes` for bytes. `reader.checkpoint()` returns the last fully drained checkpoint. `writer.retry_pending()` resolves an uncertain append.
+  </Tabs.Tab>
+  <Tabs.Tab>
+```scala
+import golem.streams.{DurableStreams, DurableStreamReadOptions}
+import scala.concurrent.ExecutionContext
+
+given ExecutionContext = ExecutionContext.parasitic
+
+val producer = DurableStreams.newProducer()
+val writer = DurableStreams.jsonWriter[String](url, producer)
+
+for {
+  _ <- writer.append(Vector("first", "second"), close = true)
+  values = DurableStreams.json[String](url, DurableStreamReadOptions())
+} yield values
+```
+
+The result contains a lazy `AgentStream[String]`; it does not collect the messages. `DurableStreams.bytes` and `byteWriter` handle bytes. A writer retains an uncertain append; call `retryPending()` before new data and `dispose()` to release without remotely closing.
+  </Tabs.Tab>
+  <Tabs.Tab>
+```moonbit
+// In an async function, with golemcloud/golem_sdk/durable_streams imported.
+let writer : @durable_streams.Writer[String] =
+  @durable_streams.json_writer(url)
+ignore(writer.append(["first", "second"], close=true))
+
+let reader : @durable_streams.Reader[String] =
+  @durable_streams.json_reader(url, offset="-1")
+for ;; {
+  match reader.read() {
+    Some(value) => println(value)
+    None => break
+  }
+}
+```
+
+Use `byte_reader` and `byte_writer` for bytes. `retry_pending()` retries the retained request exactly; `close()` consumes a sequence for a close-only append.
+  </Tabs.Tab>
+</Tabs>
+
+## Checkpoints and offsets
+
+A checkpoint contains a server-generated `offset` and optional transport `cursor`. Treat both as opaque strings:
+
+- `-1` starts from the service's beginning/default position.
+- `now` asks the service to resolve the current tail once during catch-up.
+- The SDK starts in catch-up mode, advances to the returned checkpoint only after the entire batch is consumed, then switches to long polling or SSE at the tail.
+- A pending or partially consumed batch does not promote its checkpoint. A still-live reader may retain the batch, but cancellation or close can discard it, and cancellation need not immediately abort the underlying HTTP request.
+
+Rust and MoonBit expose the last fully drained checkpoint. TypeScript, Effect, and Scala high-level readers do not expose it; restart those readers from an application-supplied offset. An Effect stream is a reusable description, and each execution creates a new reader from its options. During ordinary durable-agent recovery, Golem reconstructs progress by replay; do not snapshot native resource handles.
+
+## Producer identity and idempotency
+
+A writer is identified by `(producer ID, epoch)` and sends a monotonically increasing sequence per append request. Sequence counts requests, not JSON messages or bytes. SDKs generate one durable producer ID when omitted.
+
+For exactly-once retry deduplication, the remote service must atomically retain producer state with appended data and retain that state throughout the retry window. If a response is lost, retry the **same producer ID, epoch, sequence, payload, and close flag**. SDKs retain that uncertain request; TypeScript resolves it before another append, while the other SDKs require explicit pending-request recovery before different data.
+
+Golem records each completed host attempt and replays its result, but exactly-once external publication still depends on provider persistence and deduplication retention. With Golem idempotence disabled, recovery of an interrupted append can fail closed rather than risk changing the request.
+
+## Append and close
+
+- A JSON append contains zero or more separately encoded complete values; an array-valued application message remains one value inside the protocol's outer batch.
+- A byte append contains exact bytes, but readers do not recover append boundaries.
+- Empty data is valid only when `close` is true.
+- Append-and-close commits data and closure atomically. Close-only also consumes one producer sequence.
+- A successful receipt reports the acknowledged epoch, sequence, closed state, and possibly the next offset. Duplicate acknowledgements may omit the offset.
+- Dropping a host resource never rolls back an append. Release APIs differ: TypeScript `dispose()` first resolves any retained request, which can complete a pending append-and-close; other SDKs expose different explicit release behavior.
+
+## Fencing and concurrent use
+
+A provider-accepted higher epoch at sequence zero fences older epochs for the same stream and producer ID while that producer state remains retained. Use a new epoch only when deliberately taking ownership of a producer ID. `fenced` and `sequence-conflict` are safety failures. `producer-diverged` means the provider acknowledged a sequence ahead of this writer; it does not prove that equal-sequence retries carried equal payloads.
+
+Each SDK writer serializes appends and permits only one uncertain request. Do not pipeline one writer or operate it concurrently. Independent readers can use independent checkpoints, but each reader object is affine/single-reader.
+
+Forking a Golem agent copies producer identity and pending state; it does not fork the external stream or allocate another producer. Assign a distinct producer ID in each intended branch. A producer ID generated before the fork is inherited by both branches. Reconcile any inherited uncertain request before moving either branch to a different identity, because the original request may already have been published.
+
+## Errors and retries
+
+The common error kinds are:
+
+| Category | Kinds | Guidance |
+| --- | --- | --- |
+| Request or protocol | `invalid-request`, `protocol-error`, `payload-too-large` | Fix the request or peer implementation |
+| Access or lifecycle | `permission-denied`, `not-found`, `gone`, `closed` | Refresh authorization or stop using that URL |
+| Producer safety | `sequence-conflict`, `fenced`, `producer-diverged` | Reconcile producer ownership and retained state |
+| Transient | `timeout`, `transport`, `rate-limited`, `unavailable` | Retry with bounded exponential delay and honor `retry-after` |
+
+SDK defaults retry only transient failures. One HTTP attempt's timeout is separate from each SDK's retry limit; retry-count and wall-clock-budget policies differ by SDK. An error is never EOF; only a batch marked closed ends a reader normally.
+
+Stream retention and expiry are controlled by the external service, not Golem. An expired or deleted URL typically reports `gone` or `not-found`; `gone` can also mean a checkpoint precedes retained data. There is no separate guest-side keepalive guarantee, although provider-defined reads or writes may refresh a sliding TTL. Persist only provider-supported checkpoints and follow that provider's expiry policy.
+
+## Authentication
+
+Every SDK accepts an optional string-valued Golem secret handle for bearer authentication. The host borrows the capability and sends the credential without revealing plaintext to guest code. The descriptor records pinned secret identity, not the borrowed handle or plaintext. The agent still needs network permission, secret `Reveal` authority, and the applicable binding scope.
+
+## External streams or method streams?
+
+| Use | External Durable Streams | Agent method streams |
+| --- | --- | --- |
+| Stream owner | External protocol service | A Golem agent invocation |
+| Address | Provider URL | Typed SDK stream values; session and slot URLs for external HTTP clients |
+| Progress | Provider offsets/cursors managed by the guest client | Golem session checkpoints and attachment journals |
+| Producer identity | Explicit ID, epoch, and sequence | Managed for agent-to-agent SDK streams; external session writers supply producer tuples |
+| Best for | Shared logs and ingress/egress services whose lifecycle belongs to another service | Typed agent input/output and streams owned by one invocation, including output after method return |
+| Operations | Guest SDK plus provider lifecycle | [Operator session API](/next/operate/durable_streams) and method stream SDK types |
+
+Use an external stream when the URL and retention lifecycle belong to another service. Use a method stream when the producer or consumer is part of a typed Golem invocation. Bridging between them is valid, but preserve backpressure and cancellation and do not assume their offsets are interchangeable.
+
+<Callout type="warning">
+  A stream resource is not a snapshot-safe data structure. Construct it through deterministic agent execution and let replay rebuild it. A checkpoint does not capture a partially consumed batch, and producer ID and epoch alone do not restore a writer: recovery must also account for buffered progress, sequence progress, and any uncertain request. The SDKs do not expose a universal snapshot/restore API for these objects.
+</Callout>

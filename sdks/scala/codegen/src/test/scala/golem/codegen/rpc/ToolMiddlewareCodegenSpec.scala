@@ -90,7 +90,7 @@ class ToolMiddlewareCodegenSpec extends munit.FunSuite {
         "def inspect(@_root_.golem.runtime.annotations.internalToolMiddlewareField(\"config\", false) config: _root_.java.lang.String, " +
           "@_root_.golem.runtime.annotations.internalToolMiddlewareField(\"prefix\", false) prefix: _root_.java.lang.String, " +
           "@_root_.golem.runtime.annotations.internalToolMiddlewareField(\"name\", false) name: _root_.java.lang.String): " +
-          "_root_.scala.concurrent.Future[_root_.scala.Either[_root_.golem.tool.ToolInvokeError[_root_.scala.Nothing], _root_.java.lang.String]]"
+          "_root_.golem.tool.ToolUnderlyingInvocation[_root_.scala.Nothing, _root_.java.lang.String]"
       ),
       content
     )
@@ -98,16 +98,13 @@ class ToolMiddlewareCodegenSpec extends munit.FunSuite {
       content.contains(
         "stdin: _root_.golem.tool.ToolMiddlewareInputHandle): " +
           "_root_.scala.concurrent.Future[_root_.scala.Either[_root_.golem.tool.ToolInvokeError[_root_.scala.Nothing], " +
-          "(_root_.scala.Long, _root_.golem.tool.ToolMiddlewareOutputHandle)]]"
+          "_root_.golem.tool.ToolMiddlewareOutputs[_root_.scala.Long]]]"
       ),
       content
     )
     assert(!content.contains("stdin: _root_.golem.tool.ToolInputStream"), content)
-    assert(
-      content.contains(
-        "ToolUnderlyingRuntime.staticInputModel(__descriptor, _root_.scala.List(\"nested\", \"inspect\"))"
-      )
-    )
+    assert(content.contains("PublicEchoCallProjection.__start_inspect"))
+    assert(content.contains("PublicEchoCallProjection.__underlyingBackend"))
     assert(content.contains("def __golemFromRaw(underlying: _root_.golem.tool.RawToolUnderlying)"))
   }
 

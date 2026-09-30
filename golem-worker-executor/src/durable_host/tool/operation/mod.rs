@@ -17,6 +17,8 @@ use crate::model::TrapType;
 use crate::worker::owner_lane::{
     OwnerInvocationId, OwnerInvocationPermit, OwnerInvocationTicket, OwnerLane, OwnerLaneWait,
 };
+use futures::FutureExt;
+use futures::future::{BoxFuture, Shared};
 use golem_common::model::agent::Principal;
 use golem_common::model::entity::{
     EntityActivation, EntityCallMode, EntityInvocationDescriptor, EntityInvocationId,
@@ -119,6 +121,7 @@ pub struct ToolOperationMetadata {
     pub attachment_count: usize,
     pub stdin: Option<ToolAttachmentMetadata>,
     pub stdout: Option<ToolAttachmentMetadata>,
+    pub stderr: Option<ToolAttachmentMetadata>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -198,6 +201,7 @@ impl ToolOperationWinner {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct OwnerToolOperationContext {
     pub parent: OwnerInvocationId,
     pub call_mode: EntityCallMode,
@@ -219,6 +223,7 @@ struct RegisteredOperation {
     acquisition_error: Option<String>,
     stdin: Option<AttachmentController>,
     stdout: Option<AttachmentController>,
+    stderr: Option<AttachmentController>,
 }
 
 struct OperationLease {
@@ -276,6 +281,8 @@ struct OwnerToolOperationsState {
     owner_winner: Option<OwnerFailureWinner>,
     owner_failure_cleanup: Option<OwnerFailureCleanupState>,
     owner_failure_cleanup_complete: bool,
+    owner_failure_cleanup_settled: bool,
+    cleanup_task: Option<Shared<BoxFuture<'static, Result<(), WorkerExecutorError>>>>,
     operations: HashMap<u64, RegisteredOperation>,
 }
 
@@ -315,6 +322,8 @@ impl OwnerToolOperations {
                 owner_winner: None,
                 owner_failure_cleanup: None,
                 owner_failure_cleanup_complete: false,
+                owner_failure_cleanup_settled: false,
+                cleanup_task: None,
                 operations: HashMap::new(),
             }),
             changed: Notify::new(),
@@ -361,6 +370,7 @@ impl OwnerToolOperations {
                     acquisition_error: None,
                     stdin: None,
                     stdout: None,
+                    stderr: None,
                 },
             );
             winner_tx
@@ -388,6 +398,11 @@ impl OwnerToolOperations {
 
     pub(crate) fn begin_generation(&self) -> Result<(), WorkerExecutorError> {
         let mut state = self.state.lock().unwrap();
+        if let Some(task) = &state.cleanup_task {
+            task.clone().now_or_never().ok_or_else(|| {
+                WorkerExecutorError::runtime("tool failure cleanup is still running")
+            })??;
+        }
         if !state.operations.is_empty() {
             return Err(WorkerExecutorError::runtime(
                 "cannot begin an owner generation while tool operations are still active",
@@ -396,6 +411,8 @@ impl OwnerToolOperations {
         state.owner_winner = None;
         state.owner_failure_cleanup = None;
         state.owner_failure_cleanup_complete = false;
+        state.owner_failure_cleanup_settled = false;
+        state.cleanup_task = None;
         Ok(())
     }
 
@@ -440,6 +457,7 @@ impl OwnerToolOperations {
                                     .stdin
                                     .iter()
                                     .chain(operation.stdout.iter())
+                                    .chain(operation.stderr.iter())
                                     .cloned(),
                             );
                         }
@@ -502,6 +520,67 @@ impl OwnerToolOperations {
         }
     }
 
+    /// The observer may belong to an ancestor Store that cleanup itself destroys.
+    /// Retain the task and its result in the owner, rather than in that Store.
+    pub(crate) fn start_owner_failure_cleanup(
+        self: &Arc<Self>,
+        token: OwnerFailureCleanupToken,
+        cleanup: impl Future<Output = Result<(), WorkerExecutorError>> + Send + 'static,
+        wake: impl FnOnce() + Send + 'static,
+    ) -> Shared<BoxFuture<'static, Result<(), WorkerExecutorError>>> {
+        let mut state = self.state.lock().unwrap();
+        assert!(
+            state.cleanup_task.is_none(),
+            "owner cleanup is already running"
+        );
+        let owner = self.clone();
+        let task = tokio::spawn(async move {
+            let completed = std::panic::AssertUnwindSafe(cleanup).catch_unwind().await;
+            let settled = completed.is_ok();
+            let result = if let Ok(result) = completed {
+                // An ordinary settlement error must not bypass still-running ancestors.
+                owner.wait_owner_settled().await;
+                result
+            } else {
+                // A panic may have interrupted fencing itself. Retain the failed join without
+                // authorizing primary completion or reuse of this generation.
+                Err(WorkerExecutorError::runtime(
+                    "tool failure cleanup panicked",
+                ))
+            };
+            match &result {
+                Ok(()) => owner.complete_owner_failure_cleanup(token),
+                Err(_) => {
+                    let mut state = owner.state.lock().unwrap();
+                    state.owner_failure_cleanup_settled = settled;
+                    drop(state);
+                    owner.changed.notify_waiters();
+                }
+            }
+            if settled {
+                wake();
+            }
+            result
+        });
+        let task = async move {
+            task.await.map_err(|error| {
+                WorkerExecutorError::runtime(format!("tool failure cleanup task failed: {error}"))
+            })?
+        }
+        .boxed()
+        .shared();
+        state.cleanup_task = Some(task.clone());
+        task
+    }
+
+    pub(crate) async fn join_owner_failure_cleanup(&self) -> Result<(), WorkerExecutorError> {
+        let task = self.state.lock().unwrap().cleanup_task.clone();
+        if let Some(task) = task {
+            task.await?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn complete_owner_failure_cleanup(&self, token: OwnerFailureCleanupToken) {
         let mut state = self.state.lock().unwrap();
         assert!(
@@ -523,6 +602,7 @@ impl OwnerToolOperations {
             "owner failure cleanup requires every tool operation to settle"
         );
         state.owner_failure_cleanup_complete = true;
+        state.owner_failure_cleanup_settled = true;
         drop(state);
         self.changed.notify_waiters();
     }
@@ -545,6 +625,7 @@ impl OwnerToolOperations {
                     .stdin
                     .iter()
                     .chain(operation.stdout.iter())
+                    .chain(operation.stderr.iter())
                     .cloned()
             })
             .collect::<Vec<_>>();
@@ -565,7 +646,7 @@ impl OwnerToolOperations {
     pub(crate) fn interruptible_owner_failure(&self) -> Option<OwnerFailureWinner> {
         let state = self.state.lock().unwrap();
         state
-            .owner_failure_cleanup_complete
+            .owner_failure_cleanup_settled
             .then(|| state.owner_winner.clone())
             .flatten()
     }
@@ -637,10 +718,15 @@ impl OwnerToolOperations {
                     }
                 },
                 attachment_count: usize::from(operation.stdin.is_some())
-                    + usize::from(operation.stdout.is_some()),
+                    + usize::from(operation.stdout.is_some())
+                    + usize::from(operation.stderr.is_some()),
                 stdin: operation.stdin.as_ref().map(AttachmentController::metadata),
                 stdout: operation
                     .stdout
+                    .as_ref()
+                    .map(AttachmentController::metadata),
+                stderr: operation
+                    .stderr
                     .as_ref()
                     .map(AttachmentController::metadata),
             })
@@ -869,6 +955,7 @@ impl OwnerToolOperation {
         &self,
         stdin: Option<AttachmentController>,
         stdout: Option<AttachmentController>,
+        stderr: Option<AttachmentController>,
     ) -> bool {
         let mut state = self.owner.state.lock().unwrap();
         let operation = state
@@ -877,17 +964,19 @@ impl OwnerToolOperation {
             .expect("owner tool operation must remain registered");
         if operation.winner.is_terminal() {
             drop(state);
-            for attachment in stdin.iter().chain(stdout.iter()) {
+            for attachment in stdin.iter().chain(stdout.iter()).chain(stderr.iter()) {
                 attachment.fence_owner();
             }
             return false;
         }
         operation.stdin = stdin;
         operation.stdout = stdout;
+        operation.stderr = stderr;
         tracing::debug!(
             operation_id = self.id,
             has_stdin = operation.stdin.is_some(),
             has_stdout = operation.stdout.is_some(),
+            has_stderr = operation.stderr.is_some(),
             "Attached tool operation streams"
         );
         true
@@ -927,6 +1016,7 @@ impl OwnerToolOperation {
                 .stdin
                 .iter()
                 .chain(operation.stdout.iter())
+                .chain(operation.stderr.iter())
                 .cloned()
                 .collect::<Vec<_>>()
         };
@@ -1021,6 +1111,7 @@ impl OwnerToolOperation {
                         .stdin
                         .iter()
                         .chain(operation.stdout.iter())
+                        .chain(operation.stderr.iter())
                         .cloned()
                         .collect::<Vec<_>>()
                 })
@@ -1309,6 +1400,7 @@ impl OwnerToolOperation {
                 .stdin
                 .iter()
                 .chain(operation.stdout.iter())
+                .chain(operation.stderr.iter())
                 .cloned()
                 .collect::<Vec<_>>()
         };
@@ -1379,6 +1471,7 @@ impl OwnerToolOperation {
                                     .stdin
                                     .iter()
                                     .chain(operation.stdout.iter())
+                                    .chain(operation.stderr.iter())
                                     .cloned(),
                             );
                         }
@@ -1405,6 +1498,7 @@ impl OwnerToolOperation {
     pub(crate) async fn select_infrastructure(&self, error: WorkerExecutorError) -> bool {
         tracing::debug!(
             operation_id = self.id,
+            error = %error,
             "Tool operation observed an infrastructure failure"
         );
         let selected = self

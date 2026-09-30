@@ -41,6 +41,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod canonical;
 pub mod compatibility;
+pub mod constraints;
 #[cfg(feature = "full")]
 mod protobuf;
 pub mod validation;
@@ -49,13 +50,6 @@ pub mod validation;
     not(all(feature = "guest", feature = "host"))
 ))]
 pub mod wit;
-
-#[cfg(feature = "host")]
-#[derive(Clone, Debug)]
-pub struct UnderlyingToolHandleRep {
-    pub tool_name: String,
-    pub has_stdout: bool,
-}
 
 /// Index into [`CommandTree::nodes`].
 #[derive(
@@ -104,6 +98,7 @@ impl CommandIndex {
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub struct Tool {
     pub version: String,
+    pub requires_filesystem: bool,
     pub commands: CommandTree,
     /// Named-type registry shared by this tool's commands. Typed positions in
     /// the command tree may reference these definitions via
@@ -145,6 +140,7 @@ pub struct ToolMiddleware {
     pub aliases: Vec<String>,
     pub doc: Doc,
     pub scope: ToolMiddlewareScope,
+    pub parameter_schema: SchemaGraph,
 }
 
 #[derive(
@@ -272,6 +268,7 @@ pub struct CommandBody {
     pub constraints: Vec<Constraint>,
     pub stdin: Option<StreamSpec>,
     pub stdout: Option<StreamSpec>,
+    pub stderr: Option<StreamSpec>,
     pub result: Option<ResultSpec>,
     pub errors: Vec<ErrorCase>,
     pub annotations: Option<CommandAnnotations>,

@@ -1,0 +1,118 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "golemcloud/golem_sdk/interface/golem/agent/durable-streams"
+
+import {
+  "golemcloud/golem_sdk/interface/golem/core/types",
+  "moonbitlang/core/debug",
+}
+
+// Values
+
+// Errors
+pub(all) suberror DurableStreamErrorKind {
+  INVALID_REQUEST
+  PERMISSION_DENIED
+  NOT_FOUND
+  GONE
+  CLOSED
+  SEQUENCE_CONFLICT
+  FENCED
+  PRODUCER_DIVERGED
+  PROTOCOL_ERROR
+  PAYLOAD_TOO_LARGE
+  TIMEOUT
+  TRANSPORT
+  RATE_LIMITED
+  UNAVAILABLE
+} derive(Eq, @debug.Debug)
+pub fn DurableStreamErrorKind::from(Int) -> Self
+pub fn DurableStreamErrorKind::ordinal(Self) -> Int
+
+// Types and methods
+pub(all) enum DurableStreamAppendPayload {
+  Json(Array[String])
+  Bytes(FixedArray[Byte])
+} derive(Eq, @debug.Debug)
+
+pub(all) struct DurableStreamAppendReceipt {
+  next_offset : String?
+  epoch : UInt64
+  sequence : UInt64
+  closed : Bool
+} derive(Eq, @debug.Debug)
+
+pub(all) struct DurableStreamAppendRequest {
+  payload : DurableStreamAppendPayload
+  sequence : UInt64
+  close : Bool
+} derive(Eq, @debug.Debug)
+
+pub(all) struct DurableStreamBatch {
+  payload : FixedArray[Byte]
+  content_type : String
+  next : DurableStreamCheckpoint
+  up_to_date : Bool
+  closed : Bool
+} derive(Eq, @debug.Debug)
+
+pub(all) struct DurableStreamCheckpoint {
+  offset : String
+  cursor : String?
+} derive(Eq, @debug.Debug)
+
+pub(all) struct DurableStreamError {
+  kind : DurableStreamErrorKind
+  message : String
+  retry_after_ms : UInt64?
+  producer_epoch : UInt64?
+  expected_sequence : UInt64?
+} derive(Eq, @debug.Debug)
+
+pub(all) enum DurableStreamMode {
+  JSON
+  BYTES
+} derive(Eq, @debug.Debug)
+pub fn DurableStreamMode::from(Int) -> Self
+pub fn DurableStreamMode::ordinal(Self) -> Int
+
+pub(all) struct DurableStreamReadRequest {
+  checkpoint : DurableStreamCheckpoint
+  transport : DurableStreamTransport
+  content_type : String?
+} derive(Eq, @debug.Debug)
+
+pub(all) struct DurableStreamReader(Int) derive(Eq, @debug.Debug)
+pub fn DurableStreamReader::drop(Self) -> Unit
+pub fn DurableStreamReader::durable_stream_reader(DurableStreamReaderOptions, @types.Secret?) -> Self
+pub async fn DurableStreamReader::read(Self, DurableStreamReadRequest) -> Result[DurableStreamBatch, DurableStreamError]
+
+pub(all) struct DurableStreamReaderOptions {
+  url : String
+  mode : DurableStreamMode
+  timeout_ms : UInt64
+} derive(Eq, @debug.Debug)
+
+pub(all) enum DurableStreamTransport {
+  CATCH_UP
+  LONG_POLL
+  SSE
+} derive(Eq, @debug.Debug)
+pub fn DurableStreamTransport::from(Int) -> Self
+pub fn DurableStreamTransport::ordinal(Self) -> Int
+
+pub(all) struct DurableStreamWriter(Int) derive(Eq, @debug.Debug)
+pub async fn DurableStreamWriter::append(Self, DurableStreamAppendRequest) -> Result[DurableStreamAppendReceipt, DurableStreamError]
+pub fn DurableStreamWriter::drop(Self) -> Unit
+pub fn DurableStreamWriter::durable_stream_writer(DurableStreamWriterOptions, @types.Secret?) -> Self
+
+pub(all) struct DurableStreamWriterOptions {
+  url : String
+  content_type : String
+  producer_id : String
+  producer_epoch : UInt64
+  timeout_ms : UInt64
+} derive(Eq, @debug.Debug)
+
+// Type aliases
+
+// Traits

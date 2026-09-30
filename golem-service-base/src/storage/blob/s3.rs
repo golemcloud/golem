@@ -15,10 +15,11 @@
 use crate::config::S3BlobStorageConfig;
 use crate::replayable_stream::ErasedReplayableStream;
 use crate::storage::blob::{
-    BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult, blob_path_is_root,
-    blob_path_to_string, validate_relative_blob_path,
+    BLOB_STREAM_CHUNK_SIZE, BlobMetadata, BlobRangeStream, BlobStorage, BlobStorageNamespace,
+    ExistsResult, blob_path_is_root, blob_path_to_string, validate_range,
+    validate_relative_blob_path,
 };
-use anyhow::Error;
+use anyhow::{Error, anyhow, ensure};
 use async_trait::async_trait;
 use aws_sdk_s3::Client;
 use aws_sdk_s3::config::{BehaviorVersion, Credentials, Region, RequestChecksumCalculation};
@@ -30,8 +31,8 @@ use aws_sdk_s3::operation::put_object::PutObjectError;
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::types::{Delete, Object, ObjectIdentifier};
 use bytes::{Buf, Bytes};
-use futures::TryFutureExt;
 use futures::stream::BoxStream;
+use futures::{TryFutureExt, TryStreamExt};
 use golem_common::model::Timestamp;
 use golem_common::retries::with_retries_customized;
 use http_body::SizeHint;
@@ -41,6 +42,22 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use tracing::info;
+
+fn ranged_object_size(content_range: Option<&str>, start: u64, end: u64) -> Result<u64, Error> {
+    let (range, total) = content_range
+        .and_then(|value| value.strip_prefix("bytes "))
+        .and_then(|value| value.split_once('/'))
+        .ok_or_else(|| anyhow!("Missing or invalid S3 Content-Range"))?;
+    let (actual_start, actual_end) = range
+        .split_once('-')
+        .ok_or_else(|| anyhow!("Invalid S3 range"))?;
+    let total: u64 = total.parse()?;
+    ensure!(
+        actual_start.parse::<u64>()? == start && actual_end.parse::<u64>()? == end && end < total,
+        "Unexpected S3 range"
+    );
+    Ok(total)
+}
 
 #[derive(Debug)]
 pub struct S3BlobStorage {
@@ -479,6 +496,86 @@ impl BlobStorage for S3BlobStorage {
                 err => Err(err.into()),
             },
             Err(err) => Err(err.into()),
+        }
+    }
+
+    async fn get_range_stream(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+        offset: u64,
+        length: u64,
+    ) -> Result<Option<BlobRangeStream>, Error> {
+        validate_relative_blob_path(path)?;
+        if length == 0 {
+            return self
+                .get_metadata(target_label, op_label, namespace, path)
+                .await?
+                .map(|metadata| {
+                    validate_range(offset, length, metadata.size)?;
+                    Ok(BlobRangeStream {
+                        total_size: metadata.size,
+                        stream: Box::pin(futures::stream::empty()),
+                    })
+                })
+                .transpose();
+        }
+        let end = offset
+            .checked_add(length - 1)
+            .ok_or_else(|| anyhow!("Blob range overflow"))?;
+        let bucket = self.bucket_of(&namespace);
+        let key = blob_path_to_string(&self.prefix_of(&namespace).join(path))?;
+        let result = with_retries_customized(
+            target_label,
+            op_label,
+            Some(format!("{bucket} - {key}")),
+            &self.config.retries,
+            &(self.client.clone(), bucket, key),
+            |(client, bucket, key)| {
+                Box::pin(async move {
+                    client
+                        .get_object()
+                        .bucket(*bucket)
+                        .key(key.clone())
+                        .range(format!("bytes={offset}-{end}"))
+                        .send()
+                        .await
+                })
+            },
+            |error| {
+                use aws_sdk_s3::error::ProvideErrorMetadata;
+                !matches!(error, SdkError::ServiceError(service) if service.err().code() == Some("InvalidRange"))
+                    && Self::is_get_object_error_retriable(error)
+            },
+            Self::get_object_error_as_loggable,
+            false,
+        )
+        .await;
+        match result {
+            Ok(response) => {
+                let total_size = ranged_object_size(response.content_range(), offset, end)?;
+                if let Some(content_length) = response.content_length() {
+                    ensure!(
+                        u64::try_from(content_length)? == length,
+                        "Invalid S3 range length"
+                    );
+                }
+                let stream = tokio_util::io::ReaderStream::with_capacity(
+                    response.body.into_async_read(),
+                    BLOB_STREAM_CHUNK_SIZE,
+                );
+                Ok(Some(BlobRangeStream {
+                    total_size,
+                    stream: Box::pin(stream.map_err(Error::from)),
+                }))
+            }
+            Err(SdkError::ServiceError(error)) => match error.into_err() {
+                NoSuchKey(_) => Ok(None),
+                error => Err(error.into()),
+            },
+            Err(error) => Err(error.into()),
         }
     }
 
@@ -1216,6 +1313,25 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
     use test_r::{test, timeout};
+
+    #[test]
+    fn range_response_requires_exact_selection_and_total_size() {
+        assert_eq!(
+            ranged_object_size(Some("bytes 7-10/123"), 7, 10).unwrap(),
+            123
+        );
+        for invalid in [
+            None,
+            Some("bytes 0-122/123"),
+            Some("bytes 7-9/123"),
+            Some("bytes 7-10/*"),
+            Some("bytes 7-10/10"),
+            Some("items 7-10/123"),
+            Some("bytes 7-10/18446744073709551616"),
+        ] {
+            assert!(ranged_object_size(invalid, 7, 10).is_err(), "{invalid:?}");
+        }
+    }
 
     #[derive(Clone)]
     struct PutServerState {

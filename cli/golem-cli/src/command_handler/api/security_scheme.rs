@@ -16,8 +16,9 @@ use crate::command::api::security_scheme::ApiSecuritySchemeSubcommand;
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::NonSuccessfulExit;
-use crate::error::service::MapServiceError;
+use crate::error::service::{MapServiceError, ServiceError};
 use crate::log::log_error;
+use crate::model::create_action::CreateAction;
 use crate::model::environment::EnvironmentResolveMode;
 use crate::model::http_api::security::{
     HttpSecuritySchemeCreateView, HttpSecuritySchemeDeleteView, HttpSecuritySchemeGetView,
@@ -26,7 +27,9 @@ use crate::model::http_api::security::{
 use anyhow::bail;
 use golem_client::api::ApiSecurityClient;
 use golem_client::model::{SecuritySchemeCreation, SecuritySchemeDto, SecuritySchemeUpdate};
+use golem_common::base_model::api;
 use golem_common::model::Empty;
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::security_scheme::{Provider, ProviderKind, SecuritySchemeName};
 use std::sync::Arc;
 
@@ -50,6 +53,7 @@ impl ApiSecuritySchemeCommandHandler {
                 client_secret,
                 scope,
                 redirect_url,
+                update_existing,
             } => {
                 self.cmd_create(
                     security_scheme_name,
@@ -60,6 +64,7 @@ impl ApiSecuritySchemeCommandHandler {
                     client_secret,
                     scope,
                     redirect_url,
+                    update_existing,
                 )
                 .await
             }
@@ -125,6 +130,7 @@ impl ApiSecuritySchemeCommandHandler {
         client_secret: String,
         scopes: Vec<String>,
         redirect_url: String,
+        update_existing: bool,
     ) -> anyhow::Result<()> {
         let provider_type = match provider_kind {
             ProviderKind::Google => Provider::Google(Empty {}),
@@ -150,29 +156,91 @@ impl ApiSecuritySchemeCommandHandler {
             .resolve_environment(EnvironmentResolveMode::Any)
             .await?;
 
+        let existing = if update_existing {
+            self.find_scheme_by_name(&environment.environment_id, &security_scheme_name)
+                .await?
+        } else {
+            None
+        };
+
         let clients = self.ctx.golem_clients().await?;
 
-        let result = clients
-            .api_security
-            .create_security_scheme(
-                &environment.environment_id.0,
-                &SecuritySchemeCreation {
-                    name: security_scheme_name,
-                    provider_type,
-                    client_id,
-                    client_secret,
-                    redirect_url,
-                    scopes,
-                },
-            )
-            .await
-            .map_service_error()?;
+        let (action, result) = match existing {
+            Some(existing) => (
+                CreateAction::Updated,
+                clients
+                    .api_security
+                    .update_security_scheme(
+                        &existing.id.0,
+                        &SecuritySchemeUpdate {
+                            current_revision: existing.revision,
+                            provider_type: Some(provider_type),
+                            client_id: Some(client_id),
+                            client_secret: Some(client_secret),
+                            redirect_url: Some(redirect_url),
+                            scopes: Some(scopes),
+                        },
+                    )
+                    .await
+                    .map_service_error()?,
+            ),
+            None => {
+                let result = clients
+                    .api_security
+                    .create_security_scheme(
+                        &environment.environment_id.0,
+                        &SecuritySchemeCreation {
+                            name: security_scheme_name.clone(),
+                            provider_type,
+                            client_id,
+                            client_secret,
+                            redirect_url,
+                            scopes,
+                        },
+                    )
+                    .await;
+                match result {
+                    Ok(result) => (CreateAction::Created, result),
+                    Err(err) => {
+                        let err: ServiceError = err.into();
+                        if !update_existing
+                            && err
+                                .is_already_exists(api::error_code::SECURITY_SCHEME_ALREADY_EXISTS)
+                        {
+                            log_error(format!(
+                                "HTTP API Security Scheme {} already exists. Use --update-existing to update it",
+                                security_scheme_name.0
+                            ));
+                            bail!(NonSuccessfulExit);
+                        }
+                        return Err(err.into());
+                    }
+                }
+            }
+        };
 
         self.ctx
             .log_handler()
-            .log_output(HttpSecuritySchemeCreateView(result))?;
+            .log_output(HttpSecuritySchemeCreateView {
+                action,
+                security_scheme: result,
+            })?;
 
         Ok(())
+    }
+
+    async fn find_scheme_by_name(
+        &self,
+        environment_id: &EnvironmentId,
+        security_scheme_name: &SecuritySchemeName,
+    ) -> anyhow::Result<Option<SecuritySchemeDto>> {
+        let clients = self.ctx.golem_clients().await?;
+
+        Ok(clients
+            .api_security
+            .get_environment_security_scheme(&environment_id.0, &security_scheme_name.0)
+            .await
+            .map_service_error_not_found_as_opt()?)
     }
 
     async fn resolve_scheme_by_name(
@@ -185,13 +253,9 @@ impl ApiSecuritySchemeCommandHandler {
             .resolve_environment(EnvironmentResolveMode::Any)
             .await?;
 
-        let clients = self.ctx.golem_clients().await?;
-
-        let result = clients
-            .api_security
-            .get_environment_security_scheme(&environment.environment_id.0, &security_scheme_name.0)
-            .await
-            .map_service_error_not_found_as_opt()?;
+        let result = self
+            .find_scheme_by_name(&environment.environment_id, security_scheme_name)
+            .await?;
 
         let Some(result) = result else {
             log_error(format!(

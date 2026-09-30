@@ -21,11 +21,12 @@ use crate::fs;
 use crate::log::LogColorize;
 use crate::model::app::app_builder::{build_application, build_application_preload};
 use crate::model::app_raw;
+use crate::model::cascade::error::StoreGetValueError;
 use crate::model::cascade::layer::Layer;
 use crate::model::cascade::property::Property;
 use crate::model::cascade::property::json::JsonProperty;
 use crate::model::cascade::property::map::{MapMergeMode, MapProperty};
-use crate::model::cascade::property::optional::OptionalProperty;
+use crate::model::cascade::property::optional::{OptionalProperty, OptionalPropertyTraceElem};
 use crate::model::cascade::property::tool_bindings::{ToolBindingState, ToolBindingsProperty};
 use crate::model::cascade::property::vec::{VecMergeMode, VecProperty};
 use crate::model::cascade::store::Store;
@@ -50,6 +51,7 @@ use golem_common::model::tool::ToolName;
 use golem_common::model::tool_middleware::{ToolMiddlewareInstallation, ToolMiddlewareName};
 use golem_common::model::validate_lower_kebab_case_identifier;
 use golem_common::schema::AgentTypeSchema;
+use golem_common::schema::ComponentConfigSchema;
 use golem_common::schema::tool::Tool;
 use heck::{
     ToKebabCase, ToLowerCamelCase, ToPascalCase, ToShoutyKebabCase, ToShoutySnakeCase, ToSnakeCase,
@@ -290,6 +292,13 @@ pub enum AppBuildStep {
 pub enum SubjectSource {
     Local { component_name: ComponentName },
     RemoteRelease,
+    EnvironmentTool,
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct EnvironmentToolBridgeRequests {
+    pub wildcard: bool,
+    pub names: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
@@ -310,7 +319,7 @@ impl ComponentDependency {
             ComponentDependency::Agent { component_name, .. } => Some(component_name),
             ComponentDependency::Tool { source, .. } => match source {
                 SubjectSource::Local { component_name } => Some(component_name),
-                SubjectSource::RemoteRelease => None,
+                SubjectSource::RemoteRelease | SubjectSource::EnvironmentTool => None,
             },
         }
     }
@@ -321,6 +330,22 @@ impl ComponentDependency {
 pub enum BridgeSdkTargetSource {
     Local {
         component_name: ComponentName,
+    },
+    McpImport {
+        import_index: u32,
+        projection_digest: String,
+        #[serde(skip)]
+        manifest_source: PathBuf,
+    },
+    AmbientNative {
+        environment_id: golem_common::model::environment::EnvironmentId,
+        release_id: golem_common::model::tool_release::ToolReleaseId,
+        version: String,
+        metadata_version: String,
+        metadata_digest: golem_common::model::diff::Hash,
+        source_digest: golem_common::model::diff::Hash,
+        #[serde(skip)]
+        manifest_source: PathBuf,
     },
     RemoteRelease {
         release_id: golem_common::model::tool_release::ToolReleaseId,
@@ -341,7 +366,9 @@ impl BridgeSdkTargetSource {
     pub fn component_name(&self) -> Option<&ComponentName> {
         match self {
             Self::Local { component_name } => Some(component_name),
-            Self::RemoteRelease { .. } => None,
+            Self::RemoteRelease { .. } | Self::McpImport { .. } | Self::AmbientNative { .. } => {
+                None
+            }
         }
     }
 }
@@ -598,6 +625,10 @@ pub struct Application {
         BTreeMap<EnvironmentName, BTreeMap<Domain, WithSource<HttpApiDeploymentDeployProperties>>>,
     mcp_deployments:
         BTreeMap<EnvironmentName, BTreeMap<Domain, WithSource<McpDeploymentDeployProperties>>>,
+    mcp_imports: BTreeMap<
+        EnvironmentName,
+        WithSource<Vec<golem_common::model::mcp_import::McpImportDeployment>>,
+    >,
     agent_secrets_defaults: BTreeMap<EnvironmentName, WithSource<app_raw::JsonObject>>,
     retry_policy_defaults:
         BTreeMap<EnvironmentName, BTreeMap<String, WithSource<DeploymentRetryPolicyDefault>>>,
@@ -689,25 +720,47 @@ impl Application {
         build_application_preload(apps)
     }
 
-    pub fn language_templates_from_raw_apps(
+    /// Names of all component templates referenced by the raw applications, used for selecting
+    /// the built-in templates that have to be loaded. Tool and tool middleware declarations are
+    /// parsed leniently, as their errors are reported when the application is built.
+    pub fn referenced_template_names_from_raw_apps(
         apps: &[app_raw::ApplicationWithSource],
-    ) -> HashSet<GuestLanguage> {
-        apps.iter()
-            .flat_map(|app| {
-                app.application
-                    .component_templates
-                    .values()
-                    .map(|template| &template.templates)
-                    .chain(
-                        app.application
-                            .components
-                            .values()
-                            .map(|component| &component.templates),
-                    )
-                    .flat_map(|templates| templates.clone().into_vec())
-                    .filter_map(GuestLanguage::from_component_template_name)
-            })
-            .collect()
+    ) -> BTreeSet<String> {
+        let mut names = BTreeSet::new();
+        for app in apps {
+            let application = &app.application;
+            for templates in application
+                .component_templates
+                .values()
+                .map(|template| &template.templates)
+                .chain(
+                    application
+                        .components
+                        .values()
+                        .map(|component| &component.templates),
+                )
+                .chain(application.agents.values().map(|agent| &agent.templates))
+            {
+                names.extend(templates.clone().into_vec());
+            }
+
+            let (tools, middlewares) = application.tools.clone().into_tools_and_middleware();
+            for tool in tools.into_values() {
+                if let Ok(declaration) = serde_json::from_value::<app_raw::ToolDeclaration>(tool) {
+                    names.extend(declaration.templates.into_vec());
+                }
+            }
+            if let Some(middlewares) = middlewares
+                && let Ok(declarations) = serde_json::from_value::<
+                    IndexMap<String, app_raw::ToolMiddlewareDeclaration>,
+                >(middlewares)
+            {
+                for declaration in declarations.into_values() {
+                    names.extend(declaration.templates.into_vec());
+                }
+            }
+        }
+        names
     }
 
     pub fn application_name(&self) -> &ApplicationName {
@@ -898,6 +951,83 @@ impl Application {
             })
     }
 
+    pub fn requires_environment_tool_bridge_metadata(
+        &self,
+        selected: &BTreeSet<ComponentName>,
+        include_manifest_bridge_requests: bool,
+    ) -> bool {
+        let requests =
+            self.environment_tool_bridge_requests(selected, include_manifest_bridge_requests);
+        requests.wildcard || !requests.names.is_empty()
+    }
+
+    pub fn environment_tool_bridge_requests(
+        &self,
+        selected: &BTreeSet<ComponentName>,
+        include_manifest_bridge_requests: bool,
+    ) -> EnvironmentToolBridgeRequests {
+        let mut requests = EnvironmentToolBridgeRequests::default();
+        let application_tool_names = self.known_application_tool_names();
+        if include_manifest_bridge_requests {
+            for (_, _, targets) in self.bridge_sdks().for_all_used_modes() {
+                for matcher in targets
+                    .tools
+                    .map(|tools| tools.clone().into_set())
+                    .unwrap_or_default()
+                {
+                    if matcher == "*" {
+                        requests.wildcard = true;
+                    } else if !application_tool_names.contains(&matcher)
+                        && !self.components.keys().any(|name| name.as_str() == matcher)
+                    {
+                        requests.names.insert(matcher);
+                    }
+                }
+            }
+        }
+        let mut visited = BTreeSet::new();
+        let mut pending = selected.iter().cloned().collect::<Vec<_>>();
+        while let Some(name) = pending.pop() {
+            if !visited.insert(name.clone()) {
+                continue;
+            }
+            for dependency in &self.component(&name).properties().dependencies {
+                if let ComponentDependency::Tool {
+                    source: SubjectSource::EnvironmentTool,
+                    tool_name,
+                } = dependency
+                {
+                    requests.names.insert(tool_name.to_string());
+                }
+                if let Some(provider) = dependency.component_name() {
+                    pending.push(provider.clone());
+                }
+            }
+        }
+        requests
+    }
+
+    pub fn known_application_tool_names(&self) -> BTreeSet<String> {
+        self.tool_declarations
+            .keys()
+            .map(ToString::to_string)
+            .chain(self.components.values().flat_map(|component| {
+                component
+                    .value
+                    .0
+                    .dependencies
+                    .iter()
+                    .filter_map(|dependency| match dependency {
+                        ComponentDependency::Tool {
+                            source: SubjectSource::Local { .. },
+                            tool_name,
+                        } => Some(tool_name.to_string()),
+                        _ => None,
+                    })
+            }))
+            .collect()
+    }
+
     pub fn selected_environment_source(&self) -> Option<&Path> {
         self.environment_sources
             .get(self.environment_name())
@@ -913,8 +1043,14 @@ impl Application {
         for (agent_type_name, component_name) in mapping {
             let component = self.component(component_name);
             let component_base = component.agent_base_properties();
+            let component_tool_bindings = component.layer_properties().tool_bindings.clone_value();
             let (properties, layer_properties) = self
-                .resolve_agent(component_name, agent_type_name, component_base)
+                .resolve_agent(
+                    component_name,
+                    agent_type_name,
+                    component_base,
+                    component_tool_bindings,
+                )
                 .with_context(|| {
                     format!(
                         "Failed to resolve agent '{}' for component '{}'",
@@ -948,6 +1084,7 @@ impl Application {
         component_name: &ComponentName,
         agent_type_name: &AgentTypeName,
         mut component_base: app_raw::AgentLayerProperties,
+        component_tool_bindings: ToolBindingsProperty<AgentLayer>,
     ) -> anyhow::Result<(AgentProperties, AgentLayerProperties)> {
         if let Some(environment_tools) = self.selected_environment().tools.as_ref() {
             component_base.tools = Some(environment_tools.bindings.clone());
@@ -960,7 +1097,10 @@ impl Application {
             .add_layer(AgentLayer {
                 id: base_component_id.clone(),
                 parents: vec![],
-                properties: AgentLayerPropertiesKind::Common(Box::new(component_base)),
+                properties: AgentLayerPropertiesKind::ComponentBase {
+                    properties: Box::new(component_base),
+                    tool_bindings: component_tool_bindings,
+                },
             })
             .map_err(|err| anyhow!(err.to_string()))
             .with_context(|| {
@@ -985,8 +1125,15 @@ impl Application {
                         .map(|component_dir| self.cargo_manifest_dir_for(component_dir)),
                 );
 
+                let template_names = agent.templates.clone().into_vec();
+                check_template_list_ancestry(
+                    &self.component_layer_store,
+                    &format!("agent {}", agent_type_name.0),
+                    &template_names,
+                )?;
+
                 let mut latest_parent_id = base_component_id.clone();
-                for template_name in agent.templates.clone().into_vec() {
+                for template_name in template_names {
                     let template_layer_id =
                         ComponentLayerId::TemplateCustomPresets(template_name.clone());
                     let template_layer_props = self
@@ -1023,9 +1170,10 @@ impl Application {
                         .add_layer(AgentLayer {
                             id: template_id.clone(),
                             parents: vec![latest_parent_id],
-                            properties: AgentLayerPropertiesKind::Common(Box::new(
-                                template_agent_props,
-                            )),
+                            properties: AgentLayerPropertiesKind::ComponentTemplate {
+                                properties: Box::new(template_agent_props),
+                                tool_bindings: template_layer_props.tool_bindings.clone(),
+                            },
                         })
                         .map_err(|err| anyhow!(err.to_string()))
                         .with_context(|| {
@@ -1202,7 +1350,14 @@ impl Application {
             ),
         };
 
-        for template_name in declaration.value.templates.clone().into_vec() {
+        let template_names = declaration.value.templates.clone().into_vec();
+        check_template_list_ancestry(
+            &self.component_layer_store,
+            &format!("tool {tool_name}"),
+            &template_names,
+        )?;
+
+        for template_name in template_names {
             let component_template_id =
                 ComponentLayerId::TemplateCustomPresets(template_name.clone());
             let template = self
@@ -1516,6 +1671,21 @@ impl Application {
         environment: &EnvironmentName,
     ) -> Option<&BTreeMap<Domain, WithSource<McpDeploymentDeployProperties>>> {
         self.mcp_deployments.get(environment)
+    }
+
+    pub fn mcp_imports(
+        &self,
+        environment: &EnvironmentName,
+    ) -> Option<&Vec<golem_common::model::mcp_import::McpImportDeployment>> {
+        self.mcp_imports
+            .get(environment)
+            .map(|imports| &imports.value)
+    }
+
+    pub fn mcp_imports_source(&self, environment: &EnvironmentName) -> Option<&Path> {
+        self.mcp_imports
+            .get(environment)
+            .map(|imports| imports.source.as_path())
     }
 }
 
@@ -2034,6 +2204,33 @@ impl Layer for ComponentLayer {
             let template_ctx = self.id.is_template().then(|| ctx.template_context());
             let template_ctx = template_ctx.as_ref();
 
+            if let (Some(current), Some(declared)) = (
+                value.guest_language.value(),
+                properties.guest_language.value(),
+            ) && current != declared
+            {
+                let current_declared_by = value
+                    .guest_language
+                    .trace()
+                    .iter()
+                    .rev()
+                    .find_map(|elem| match elem {
+                        OptionalPropertyTraceElem::Override { id, .. } => Some(id.to_string()),
+                        OptionalPropertyTraceElem::Skip { .. } => None,
+                    })
+                    .unwrap_or_default();
+                return Err(format!(
+                    "Conflicting guest languages: {} declares {}, but {} already declares {}",
+                    id.to_string().log_color_highlight(),
+                    declared.id().log_color_highlight(),
+                    current_declared_by.log_color_highlight(),
+                    current.id().log_color_highlight(),
+                ));
+            }
+            value
+                .guest_language
+                .apply_layer(id, selection, *properties.guest_language.value());
+
             value.component_wasm.apply_layer(
                 id,
                 selection,
@@ -2119,6 +2316,12 @@ impl Layer for ComponentLayer {
                 ),
             );
 
+            value.config_schema.apply_layer(
+                id,
+                selection,
+                properties.config_schema.value().clone(),
+            );
+
             value
                 .config
                 .apply_layer(id, selection, properties.config.value().clone());
@@ -2149,6 +2352,11 @@ impl Layer for ComponentLayer {
                     properties.files.value().clone(),
                 ),
             );
+            if let Some(layer) = &properties.tool_bindings_layer {
+                value
+                    .tool_bindings
+                    .apply_layer(id, selection, layer.clone());
+            }
             value.file_sources.apply_layer(
                 id,
                 selection,
@@ -2255,16 +2463,17 @@ impl<'a> Component<'a> {
         self.component_name
     }
 
-    // Guesses the language from the language-prefixed applied templates.
-    pub fn guess_language(&self) -> Option<GuestLanguage> {
-        self.applied_layers().iter().find_map(|(id, _)| {
-            id.template_name()
-                .and_then(GuestLanguage::from_component_template_name)
-        })
+    // The guest language declared by the applied component templates.
+    pub fn guest_language(&self) -> Option<GuestLanguage> {
+        *self.layer_properties().guest_language.value()
     }
 
     pub fn source(&self) -> &Path {
         &self.properties.source
+    }
+
+    pub fn initial_card(&self) -> Option<&app_raw::ManifestInitialCard> {
+        self.layer_properties().initial_card.value().as_ref()
     }
 
     pub fn applied_layers(&self) -> &[(ComponentLayerId, Option<String>)] {
@@ -2347,6 +2556,10 @@ impl<'a> Component<'a> {
         &self.properties().config
     }
 
+    pub fn config_schema(&self) -> &ComponentConfigSchema {
+        &self.properties().config_schema
+    }
+
     pub fn files(&self) -> &Vec<InitialComponentFile> {
         &self.properties().files
     }
@@ -2408,6 +2621,7 @@ pub struct ComponentLayerProperties {
     )]
     pub applied_layers: Vec<(ComponentLayerId, Option<String>)>,
 
+    pub guest_language: OptionalProperty<ComponentLayer, GuestLanguage>,
     pub component_wasm: OptionalProperty<ComponentLayer, String>,
     pub output_wasm: OptionalProperty<ComponentLayer, String>,
     pub dependency_agents: VecProperty<ComponentLayer, app_raw::ComponentDependencyReference>,
@@ -2417,6 +2631,7 @@ pub struct ComponentLayerProperties {
     pub build: VecProperty<ComponentLayer, app_raw::BuildCommand>,
     pub custom_commands: MapProperty<ComponentLayer, String, Vec<app_raw::ExternalCommand>>,
     pub clean: VecProperty<ComponentLayer, String>,
+    pub config_schema: OptionalProperty<ComponentLayer, ComponentConfigSchema>,
     pub config: JsonProperty<ComponentLayer>,
     pub initial_card: OptionalProperty<ComponentLayer, app_raw::ManifestInitialCard>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2428,14 +2643,26 @@ pub struct ComponentLayerProperties {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub files_merge_mode: Option<VecMergeMode>,
     pub files: VecProperty<ComponentLayer, app_raw::InitialComponentFile>,
+    pub tool_bindings: ToolBindingsProperty<ComponentLayer>,
+    #[serde(skip)]
+    tool_bindings_layer: Option<(MapMergeMode, IndexMap<String, app_raw::ToolBinding>)>,
     #[serde(skip)]
     file_sources: VecProperty<ComponentLayer, PathBuf>,
 }
 
 impl From<app_raw::ComponentLayerProperties> for ComponentLayerProperties {
     fn from(value: app_raw::ComponentLayerProperties) -> Self {
+        let tool_bindings_layer = (value.agent_properties.tools.is_some()
+            || value.agent_properties.tools_merge_mode.is_some())
+        .then(|| {
+            (
+                value.agent_properties.tools_merge_mode.unwrap_or_default(),
+                value.agent_properties.tools.unwrap_or_default(),
+            )
+        });
         Self {
             applied_layers: vec![],
+            guest_language: value.guest_language.into(),
             component_wasm: value.component_wasm.into(),
             output_wasm: value.output_wasm.into(),
             dependency_agents: value.dependencies.agents.into(),
@@ -2444,6 +2671,7 @@ impl From<app_raw::ComponentLayerProperties> for ComponentLayerProperties {
             build: value.build.into(),
             custom_commands: value.custom_commands.into(),
             clean: value.clean.into(),
+            config_schema: value.config_schema.into(),
             config: value.agent_properties.config.into(),
             initial_card: value.agent_properties.initial_card.into(),
             env_merge_mode: value.agent_properties.env_merge_mode,
@@ -2452,6 +2680,8 @@ impl From<app_raw::ComponentLayerProperties> for ComponentLayerProperties {
             plugins: value.agent_properties.plugins.unwrap_or_default().into(),
             files_merge_mode: value.agent_properties.files_merge_mode,
             files: value.agent_properties.files.unwrap_or_default().into(),
+            tool_bindings: ToolBindingsProperty::default(),
+            tool_bindings_layer,
             file_sources: Vec::new().into(),
         }
     }
@@ -2459,6 +2689,7 @@ impl From<app_raw::ComponentLayerProperties> for ComponentLayerProperties {
 
 impl ComponentLayerProperties {
     pub fn compact_traces(&mut self) {
+        self.guest_language.compact_trace();
         self.component_wasm.compact_trace();
         self.output_wasm.compact_trace();
         self.dependency_agents.compact_trace();
@@ -2466,11 +2697,13 @@ impl ComponentLayerProperties {
         self.build.compact_trace();
         self.custom_commands.compact_trace();
         self.clean.compact_trace();
+        self.config_schema.compact_trace();
         self.config.compact_trace();
         self.initial_card.compact_trace();
         self.env.compact_trace();
         self.plugins.compact_trace();
         self.files.compact_trace();
+        self.tool_bindings.compact_trace();
         self.file_sources.compact_trace();
     }
 
@@ -2847,6 +3080,14 @@ struct AgentLayer {
 #[derive(Debug, Clone, Serialize)]
 enum AgentLayerPropertiesKind {
     Empty,
+    ComponentBase {
+        properties: Box<app_raw::AgentLayerProperties>,
+        tool_bindings: ToolBindingsProperty<AgentLayer>,
+    },
+    ComponentTemplate {
+        properties: Box<app_raw::AgentLayerProperties>,
+        tool_bindings: ToolBindingsProperty<ComponentLayer>,
+    },
     Common(Box<app_raw::AgentLayerProperties>),
     Presets {
         presets: IndexMap<String, app_raw::AgentLayerProperties>,
@@ -2877,6 +3118,20 @@ impl Layer for AgentLayer {
         value: &mut Self::Value,
     ) -> Result<(), Self::ApplyError> {
         let (property_layers_to_apply, selection) = match &self.properties {
+            AgentLayerPropertiesKind::ComponentBase {
+                properties,
+                tool_bindings,
+            } => {
+                value.tool_bindings = tool_bindings.clone();
+                (vec![properties.as_ref()], None)
+            }
+            AgentLayerPropertiesKind::ComponentTemplate {
+                properties,
+                tool_bindings,
+            } => {
+                value.tool_bindings.apply_template(&self.id, tool_bindings);
+                (vec![properties.as_ref()], None)
+            }
             AgentLayerPropertiesKind::Empty => (vec![], None),
             AgentLayerPropertiesKind::Common(properties) => (vec![properties.as_ref()], None),
             AgentLayerPropertiesKind::Presets {
@@ -3075,6 +3330,7 @@ pub struct ComponentProperties {
     pub build: Vec<app_raw::BuildCommand>,
     pub custom_commands: BTreeMap<String, Vec<app_raw::ExternalCommand>>,
     pub clean: Vec<String>,
+    pub config_schema: ComponentConfigSchema,
     pub files: Vec<InitialComponentFile>,
     pub plugins: Vec<PluginInstallation>,
     pub env: BTreeMap<String, String>,
@@ -3113,6 +3369,7 @@ impl ComponentProperties {
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect(),
             clean: merged.clean.value().clone(),
+            config_schema: merged.config_schema.value().clone().unwrap_or_default(),
             files,
             plugins,
             env: Self::validate_and_normalize_env(validation, merged.env.value().iter()),
@@ -3405,12 +3662,61 @@ impl PluginInstallation {
     }
 }
 
+/// Error message for a template inherited through multiple template paths by `consumer`.
+fn multiple_template_paths_error(
+    consumer: &str,
+    layer: &ComponentLayerId,
+    first_path: &[ComponentLayerId],
+    second_path: &[ComponentLayerId],
+) -> String {
+    let render_path = |path: &[ComponentLayerId]| {
+        path.iter()
+            .filter_map(|id| id.template_name())
+            .dedup()
+            .join(" -> ")
+    };
+    format!(
+        "Template {} is inherited by {} through multiple paths: {} and {}. Remove one of the references.",
+        layer.name().log_color_highlight(),
+        consumer.log_color_highlight(),
+        render_path(first_path).log_color_highlight(),
+        render_path(second_path).log_color_highlight(),
+    )
+}
+
+/// Checks that the templates listed by an agent or a tool do not inherit a template through
+/// multiple paths, as it is required for components.
+fn check_template_list_ancestry(
+    component_layer_store: &Store<ComponentLayer>,
+    consumer: &str,
+    template_names: &[String],
+) -> anyhow::Result<()> {
+    let roots = template_names
+        .iter()
+        .map(|name| ComponentLayerId::TemplateCustomPresets(name.clone()))
+        .collect::<Vec<_>>();
+    match component_layer_store.check_single_path_ancestry(&roots) {
+        Ok(()) => Ok(()),
+        Err(StoreGetValueError::MultipleParentPaths {
+            layer,
+            first_path,
+            second_path,
+        }) => Err(anyhow!(multiple_template_paths_error(
+            consumer,
+            &layer,
+            &first_path,
+            &second_path
+        ))),
+        Err(err) => Err(anyhow!(err.to_string())),
+    }
+}
+
 mod app_builder {
     use super::ResourceDefinitionCreation;
     use super::ResourceName;
     use super::{
         ToolEntityPath, ToolName, ToolValidationCode, ToolValidationIssue, ToolValidationPhase,
-        add_tool_issues,
+        add_tool_issues, multiple_template_paths_error,
     };
     use crate::app::edit;
     use crate::fuzzy::FuzzySearch;
@@ -3422,6 +3728,7 @@ mod app_builder {
         ComponentProperties, PartitionedComponentPresets, SubjectSource, TEMP_DIR, WithSource,
     };
     use crate::model::app_raw;
+    use crate::model::cascade::error::StoreGetValueError;
     use crate::model::cascade::store::Store;
     use crate::model::http_api::HttpApiDeploymentDeployProperties;
     use crate::model::mcp::{McpDeploymentAgentOptions, McpDeploymentDeployProperties};
@@ -3436,7 +3743,7 @@ mod app_builder {
     use golem_common::model::environment::EnvironmentName;
     use golem_common::model::http_api_deployment::{
         HttpApiDeploymentAgentOptions, HttpApiDeploymentAgentSecurity, HttpApiDeploymentCreation,
-        SecuritySchemeAgentSecurity, TestSessionHeaderAgentSecurity,
+        HttpApiDeploymentScheme, SecuritySchemeAgentSecurity, TestSessionHeaderAgentSecurity,
     };
     use golem_common::model::tool_middleware::ToolMiddlewareName;
     use indexmap::IndexMap;
@@ -3487,6 +3794,7 @@ mod app_builder {
         SecretDefaults(EnvironmentName),
         RetryPolicyDefaults(EnvironmentName),
         ResourceDefaults(EnvironmentName),
+        McpImports(EnvironmentName),
         Bridge,
         LocalServer,
         Version,
@@ -3510,6 +3818,7 @@ mod app_builder {
                 UniqueSourceCheckedEntityKey::SecretDefaults(_) => property,
                 UniqueSourceCheckedEntityKey::RetryPolicyDefaults(_) => property,
                 UniqueSourceCheckedEntityKey::ResourceDefaults(_) => property,
+                UniqueSourceCheckedEntityKey::McpImports(_) => property,
                 UniqueSourceCheckedEntityKey::Bridge => "Bridge",
                 UniqueSourceCheckedEntityKey::LocalServer => property,
                 UniqueSourceCheckedEntityKey::Version => property,
@@ -3576,6 +3885,11 @@ mod app_builder {
                         environment_name.0.log_color_highlight()
                     )
                 }
+                UniqueSourceCheckedEntityKey::McpImports(environment_name) => {
+                    format!("mcp.imports.{}", environment_name.0)
+                        .log_color_highlight()
+                        .to_string()
+                }
                 UniqueSourceCheckedEntityKey::Bridge => "bridge".log_color_highlight().to_string(),
                 UniqueSourceCheckedEntityKey::LocalServer => {
                     "localServer".log_color_highlight().to_string()
@@ -3608,6 +3922,36 @@ mod app_builder {
             "HTTP API",
             source,
         )
+    }
+
+    fn resolve_http_api_scheme(
+        validation: &mut ValidationBuilder,
+        scheme: Option<HttpApiDeploymentScheme>,
+        environment_name: &EnvironmentName,
+        environment: Option<&app_raw::Environment>,
+        source: &Path,
+    ) -> Option<HttpApiDeploymentScheme> {
+        if let Some(scheme) = scheme {
+            return Some(scheme);
+        }
+
+        match environment.and_then(|environment| environment.server.as_ref()) {
+            Some(app_raw::Server::Builtin(app_raw::BuiltinServer::Cloud)) => {
+                Some(HttpApiDeploymentScheme::Https)
+            }
+            Some(app_raw::Server::Custom(_)) => {
+                validation.add_error(format!(
+                    "HTTP API deployment in {} for custom server environment {} must define an explicit {}. The scheme is not inferred from the custom server management URL.",
+                    source.display().to_string().log_color_highlight(),
+                    environment_name.0.log_color_highlight(),
+                    "scheme".log_color_highlight(),
+                ));
+                None
+            }
+            Some(app_raw::Server::Builtin(app_raw::BuiltinServer::Local)) | None => {
+                Some(HttpApiDeploymentScheme::Http)
+            }
+        }
     }
 
     fn resolve_mcp_domain(
@@ -3792,6 +4136,10 @@ mod app_builder {
 
         mcp_deployments:
             BTreeMap<EnvironmentName, BTreeMap<Domain, WithSource<McpDeploymentDeployProperties>>>,
+        mcp_imports: BTreeMap<
+            EnvironmentName,
+            WithSource<Vec<golem_common::model::mcp_import::McpImportDeployment>>,
+        >,
 
         bridge_sdks: WithSource<app_raw::BridgeSdks>,
 
@@ -3862,6 +4210,7 @@ mod app_builder {
             builder.validate_unique_sources(&mut validation);
             builder.validate_tool_release_configuration(&mut validation);
             builder.validate_http_api_deployments(&mut validation, &environments);
+            builder.validate_mcp_imports(&mut validation, &environments);
 
             validation.build(Application {
                 app_root_dir,
@@ -3884,6 +4233,7 @@ mod app_builder {
                 clean: builder.clean,
                 http_api_deployments: builder.http_api_deployments,
                 mcp_deployments: builder.mcp_deployments,
+                mcp_imports: builder.mcp_imports,
                 agent_secrets_defaults: builder.agent_secret_defaults,
                 retry_policy_defaults: builder.retry_policy_defaults,
                 resource_definition_defaults: builder.resource_definition_defaults,
@@ -4025,8 +4375,6 @@ mod app_builder {
                     }
 
                     for (agent_type_name, agent_properties) in app.application.agents {
-                        // TODO: atl: resolve and store effective agent properties here using
-                        // agent templates/presets and flattened component fallback layers.
                         let unique_key = UniqueSourceCheckedEntityKey::Agent(agent_type_name.clone());
                         if self.add_entity_source(unique_key, &app.source) {
                             self.record_selectable_presets(agent_properties.presets.keys());
@@ -4143,6 +4491,15 @@ mod app_builder {
                                 ) else {
                                     continue;
                                 };
+                                let Some(scheme) = resolve_http_api_scheme(
+                                    validation,
+                                    api_deployment.scheme,
+                                    &environment,
+                                    self.environments.get(&environment),
+                                    &app.source,
+                                ) else {
+                                    continue;
+                                };
 
                                 let deployments =
                                     self.http_api_deployments.entry(environment.clone()).or_default();
@@ -4162,6 +4519,7 @@ mod app_builder {
                                 deployments.entry(domain).or_insert(WithSource::new(
                                     app.source.to_path_buf(),
                                     HttpApiDeploymentDeployProperties {
+                                        scheme,
                                         webhooks_prefix: HttpApiDeploymentCreation::normalize_webhooks_prefix(
                                             api_deployment
                                                 .webhook_url
@@ -4176,6 +4534,14 @@ mod app_builder {
                     }
 
                     if let Some(mcp) = app.application.mcp {
+                        for (environment, imports) in mcp.imports {
+                            if self.add_entity_source(
+                                UniqueSourceCheckedEntityKey::McpImports(environment.clone()),
+                                &app.source,
+                            ) {
+                                self.mcp_imports.insert(environment, WithSource::new(app.source.clone(), imports));
+                            }
+                        }
                         for (environment, deployments) in mcp.deployments {
                             for mcp_deployment in deployments {
                                 let Some(domain) = resolve_mcp_domain(
@@ -4191,6 +4557,14 @@ mod app_builder {
                                     continue;
                                 };
 
+                                if mcp_deployment.agents.is_empty() && mcp_deployment.tools.is_empty() {
+                                    validation.add_error(format!("MCP deployment in {} must contain at least one agent or tool", app.source.display()));
+                                    continue;
+                                }
+                                if mcp_deployment.tools.values().any(|options| options.include.is_some() && options.exclude.is_some()) {
+                                    validation.add_error(format!("MCP tool include and exclude are mutually exclusive in {}", app.source.display()));
+                                    continue;
+                                }
                                 let mcp_deployments =
                                     self.mcp_deployments.entry(environment.clone()).or_default();
 
@@ -4200,10 +4574,16 @@ mod app_builder {
                                         security_scheme: v.security_scheme,
                                     }))
                                     .collect();
+                                let tools = mcp_deployment.tools.into_iter().map(|(k, v)| (k, crate::model::mcp::McpDeploymentToolOptions {
+                                    owner_component: v.owner_component,
+                                    security_scheme: v.security_scheme,
+                                    include: v.include,
+                                    exclude: v.exclude,
+                                })).collect();
 
                                 mcp_deployments.entry(domain).or_insert(WithSource::new(
                                     app.source.to_path_buf(),
-                                    McpDeploymentDeployProperties { agents },
+                                    McpDeploymentDeployProperties { agents, tools },
                                 ));
                             }
                         }
@@ -4820,13 +5200,7 @@ mod app_builder {
                     }
 
                     match self.tool_declarations.get(tool_name) {
-                        None => issues.push(ToolValidationIssue::error(
-                            ToolValidationPhase::BindingReferences,
-                            ToolValidationCode::MissingDeclaration,
-                            ToolEntityPath::tool(tool_name, "components.dependencies.tools"),
-                            Some(component.source.clone()),
-                            format!("Component {component_name} depends on undeclared tool"),
-                        )),
+                        None => *source = SubjectSource::EnvironmentTool,
                         Some(declaration) if declaration.value.release.is_none() => {
                             if let Some(dependency_component) = &declaration.value.component {
                                 if dependency_component == component_name {
@@ -5079,6 +5453,16 @@ mod app_builder {
                         WithSource::new(source, (component_properties, component_layer_properties)),
                     );
                 }
+                Err(StoreGetValueError::MultipleParentPaths {
+                    layer,
+                    first_path,
+                    second_path,
+                }) => validation.add_error(multiple_template_paths_error(
+                    component_name.as_str(),
+                    &layer,
+                    &first_path,
+                    &second_path,
+                )),
                 Err(err) => validation.add_error(format!("Failed to resolve component: {err}")),
             }
         }
@@ -5167,6 +5551,25 @@ mod app_builder {
                             ));
                         }
                     }
+                }
+            }
+        }
+
+        fn validate_mcp_imports(
+            &self,
+            validation: &mut ValidationBuilder,
+            environments: &BTreeMap<EnvironmentName, app_raw::Environment>,
+        ) {
+            for environment in self.mcp_imports.keys() {
+                if !environments.contains_key(environment) {
+                    validation.add_warn(format!(
+                        "Unknown environment in manifest: {}\n\n{}",
+                        environment.0.log_color_highlight(),
+                        self.available_profiles(
+                            environments.keys().map(|p| p.0.as_str()),
+                            &environment.0
+                        )
+                    ));
                 }
             }
         }
@@ -5317,17 +5720,21 @@ mod test {
     use crate::fs;
     use crate::model::app::{
         Application, ApplicationPreload, ComponentDependency, ComponentLayerApplyContext,
-        ComponentPresetSelector, SubjectSource, ToolName, includes_from_yaml_file,
+        ComponentPresetSelector, EnvironmentToolBridgeRequests, SubjectSource, ToolName,
+        includes_from_yaml_file,
     };
     use crate::model::app_raw;
+    use crate::model::cascade::property::Property;
+    use crate::model::language::GuestLanguage;
     use golem_common::model::agent::AgentTypeName;
     use golem_common::model::component::ComponentName;
     use golem_common::model::domain_registration::Domain;
     use golem_common::model::environment::EnvironmentName;
+    use golem_common::model::http_api_deployment::HttpApiDeploymentScheme;
     use indoc::indoc;
     use pretty_assertions::assert_eq;
     use serde_json::json;
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
     use std::path::PathBuf;
     use tempfile::TempDir;
     use test_r::test;
@@ -5435,6 +5842,54 @@ mod test {
                 "app:main[app-env:local]".to_string(),
                 "app:main[debug]".to_string(),
             ]
+        );
+    }
+
+    #[test]
+    fn component_config_schema_follows_template_environment_and_custom_preset_order() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+                componentPresets: debug
+
+            componentTemplates:
+              base:
+                configSchema:
+                  declarations:
+                    - source: Local
+                      path: [template]
+                      value_type: { kind: bool, value: {} }
+                presets:
+                  app-env:local:
+                    configSchema:
+                      declarations:
+                        - source: Local
+                          path: [environment]
+                          value_type: { kind: bool, value: {} }
+                  debug:
+                    configSchema:
+                      declarations:
+                        - source: Local
+                          path: [custom]
+                          value_type: { kind: bool, value: {} }
+
+            components:
+              app:main:
+                templates: base
+                componentWasm: main.wasm
+        "# };
+
+        let (app, _) = load_app_for_env(source, "local", &["debug"]);
+        let component_name = parse_component_name("app:main");
+        let component = app.component(&component_name);
+
+        assert_eq!(component.config_schema().declarations.len(), 1);
+        assert_eq!(
+            component.config_schema().declarations[0].path,
+            vec!["custom".to_string()]
         );
     }
 
@@ -5817,6 +6272,61 @@ mod test {
     }
 
     #[test]
+    fn mcp_imports_keep_order_and_reject_duplicate_environment_sources() {
+        let source = indoc! {r#"
+            app: hello-app
+            environments:
+              local:
+                server: local
+            components:
+              app:main:
+                componentWasm: main.wasm
+            mcp:
+              imports:
+                local:
+                  - url: https://z.example/mcp
+                  - url: https://a.example/mcp
+        "#};
+        let (app, _dir) = load_app(source, &selector("local", &[]));
+        assert_eq!(
+            app.mcp_imports(&EnvironmentName("local".into()))
+                .unwrap()
+                .iter()
+                .map(|import| import.url.as_str())
+                .collect::<Vec<_>>(),
+            ["https://z.example/mcp", "https://a.example/mcp"]
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        let apps = vec![
+            app_raw::ApplicationWithSource::from_yaml_string(dir.path().join("golem.yaml"), source)
+                .unwrap(),
+            app_raw::ApplicationWithSource::from_yaml_string(
+                dir.path().join("included.yaml"),
+                "mcp:\n  imports:\n    local: []\n",
+            )
+            .unwrap(),
+        ];
+        let preload = Application::preload_from_raw_apps(&apps)
+            .into_product()
+            .0
+            .unwrap();
+        let (_, _, errors) = Application::from_raw_apps(
+            dir.path().to_path_buf(),
+            preload.application_name,
+            preload.environments,
+            preload.local_server,
+            selector("local", &[]),
+            apps,
+        )
+        .into_product();
+        assert!(
+            errors.iter().any(|error| error.contains("mcp.imports")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
     fn test_component_custom_template_single_is_applied() {
         let source = indoc! { r#"
             app: hello-app
@@ -5968,6 +6478,197 @@ mod test {
                 "template-b[debug]".to_string(),
                 "app:main".to_string(),
             ]
+        );
+    }
+
+    #[test]
+    fn test_component_guest_language_comes_from_templates() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            componentTemplates:
+              base:
+                guestLanguage: ts
+                componentWasm: base.wasm
+              derived:
+                templates: base
+              same-language:
+                guestLanguage: ts
+              rust-helpers:
+                componentWasm: helpers.wasm
+
+            components:
+              app:direct:
+                templates: base
+              app:inherited:
+                templates: derived
+              app:same-language-twice:
+                templates: [base, same-language]
+              app:no-language:
+                templates: rust-helpers
+        "# };
+
+        let (app, _app_tmp_dir) = load_app_for_env(source, "local", &[]);
+
+        for (component_name, expected) in [
+            ("app:direct", Some(GuestLanguage::TypeScript)),
+            ("app:inherited", Some(GuestLanguage::TypeScript)),
+            ("app:same-language-twice", Some(GuestLanguage::TypeScript)),
+            ("app:no-language", None),
+        ] {
+            let component_name = parse_component_name(component_name);
+            assert_eq!(
+                app.component(&component_name).guest_language(),
+                expected,
+                "{component_name}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_component_templates_with_conflicting_guest_languages_are_rejected() {
+        let errors = load_app_errors(indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            componentTemplates:
+              ts-template:
+                guestLanguage: ts
+                componentWasm: main.wasm
+              rust-template:
+                guestLanguage: rust
+
+            components:
+              app:main:
+                templates: [ts-template, rust-template]
+        "# });
+
+        assert_eq!(errors.len(), 1, "unexpected errors: {errors:#?}");
+        assert!(
+            errors[0].contains("Conflicting guest languages"),
+            "unexpected error: {}",
+            errors[0]
+        );
+        assert!(errors[0].contains("template:rust-template:common"));
+        assert!(errors[0].contains("template:ts-template:common"));
+    }
+
+    #[test]
+    fn test_component_templates_with_shared_parent_are_rejected() {
+        let errors = load_app_errors(indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            componentTemplates:
+              base:
+                componentWasm: base.wasm
+              template-a:
+                templates: base
+              template-b:
+                templates: base
+
+            components:
+              app:main:
+                templates: [template-a, template-b]
+        "# });
+
+        assert_eq!(errors.len(), 1, "unexpected errors: {errors:#?}");
+        assert!(
+            errors[0].contains(
+                "Template base is inherited by app:main through multiple paths: \
+                 template-a -> base and template-b -> base"
+            ),
+            "unexpected error: {}",
+            errors[0]
+        );
+    }
+
+    #[test]
+    fn test_agent_templates_with_shared_parent_are_rejected() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            componentTemplates:
+              base:
+                env:
+                  BASE: base
+              derived:
+                templates: base
+
+            components:
+              app:main:
+                componentWasm: main.wasm
+
+            agents:
+              FooAgent:
+                templates: [base, derived]
+        "# };
+
+        let (app, _tmp_dir) = load_app_for_env(source, "local", &[]);
+        let err = resolve_agents_for(&app, "app:main", "FooAgent").unwrap_err();
+
+        assert!(
+            format!("{err:#}").contains(
+                "Template base is inherited by agent FooAgent through multiple paths: \
+                 base and derived -> base"
+            ),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[test]
+    fn test_tool_templates_with_shared_parent_are_rejected() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            componentTemplates:
+              base:
+                env:
+                  BASE: base
+              derived:
+                templates: base
+
+            components:
+              app:main:
+                componentWasm: main.wasm
+
+            tools:
+              grep:
+                templates: [base, derived]
+        "# };
+
+        let (app, _tmp_dir) = load_app_for_env(source, "local", &[]);
+        let err = app
+            .resolve_tool_provision(
+                &ToolName::try_from("grep").unwrap(),
+                &parse_component_name("app:main"),
+            )
+            .unwrap_err();
+
+        assert!(
+            format!("{err:#}").contains(
+                "Template base is inherited by tool grep through multiple paths: \
+                 base and derived -> base"
+            ),
+            "unexpected error: {err:#}"
         );
     }
 
@@ -6334,6 +7035,146 @@ mod test {
     }
 
     #[test]
+    fn environment_tool_dependencies_keep_declared_sources_and_resolve_only_for_selected_builds() {
+        let source = indoc! {r#"
+            app: imported-tools
+            environments:
+              local:
+                server: local
+            components:
+              app:provider:
+                componentWasm: provider.wasm
+              app:consumer:
+                componentWasm: consumer.wasm
+                dependencies:
+                  tools: [native-tool, released-tool, imported-tool]
+            tools:
+              native-tool:
+                component: app:provider
+              released-tool:
+                release:
+                  account: publisher@example.com
+                  name: released-tool
+                  version: 1.0.0
+        "#};
+        let (app, _dir) = load_app_for_env(source, "local", &[]);
+        let consumer = parse_component_name("app:consumer");
+        let provider = parse_component_name("app:provider");
+        let component = app.component(&consumer);
+        let dependencies = &component.properties().dependencies;
+        assert!(matches!(
+            &dependencies[0],
+            ComponentDependency::Tool {
+                source: SubjectSource::Local { .. },
+                ..
+            }
+        ));
+        assert!(matches!(
+            &dependencies[1],
+            ComponentDependency::Tool {
+                source: SubjectSource::RemoteRelease,
+                ..
+            }
+        ));
+        assert!(
+            matches!(&dependencies[2], ComponentDependency::Tool { source: SubjectSource::EnvironmentTool, tool_name } if tool_name.as_str() == "imported-tool")
+        );
+        assert!(app.requires_environment_tool_bridge_metadata(&BTreeSet::from([consumer]), true));
+        assert!(
+            !app.requires_environment_tool_bridge_metadata(
+                &BTreeSet::from([provider.clone()]),
+                true
+            )
+        );
+        let (wildcard, _dir) = load_app_for_env(
+            &format!("{source}\nbridge:\n  rust:\n    internal:\n      tools: ['*']\n"),
+            "local",
+            &[],
+        );
+        assert!(
+            wildcard.requires_environment_tool_bridge_metadata(
+                &BTreeSet::from([provider.clone()]),
+                true
+            )
+        );
+        assert!(
+            !wildcard.requires_environment_tool_bridge_metadata(&BTreeSet::from([provider]), false)
+        );
+    }
+
+    #[test]
+    fn environment_tool_metadata_demand_follows_transitive_local_dependencies() {
+        let (app, _dir) = load_app_for_env(
+            indoc! {r#"
+                app: transitive-environment-tool
+                environments:
+                  local:
+                    server: local
+                components:
+                  app:provider:
+                    componentWasm: provider.wasm
+                    dependencies:
+                      tools:
+                        - ambient-tool
+                  app:consumer:
+                    componentWasm: consumer.wasm
+                    dependencies:
+                      tools:
+                        - local-tool
+                tools:
+                  local-tool:
+                    component: app:provider
+            "#},
+            "local",
+            &[],
+        );
+
+        assert!(app.requires_environment_tool_bridge_metadata(
+            &BTreeSet::from([ComponentName("app:consumer".to_string())]),
+            false
+        ));
+    }
+
+    #[test]
+    fn explicit_local_tool_names_are_not_environment_requests() {
+        let (app, _dir) = load_app_for_env(
+            indoc! {r#"
+                app: local-tool-request
+                environments:
+                  local:
+                    server: local
+                components:
+                  app:provider:
+                    componentWasm: provider.wasm
+                  app:consumer:
+                    componentWasm: consumer.wasm
+                    dependencies:
+                      tools:
+                        - component: app:provider
+                          name: grep
+                bridge:
+                  rust:
+                    internal:
+                      tools: [grep]
+            "#},
+            "local",
+            &[],
+        );
+
+        assert_eq!(
+            app.known_application_tool_names(),
+            BTreeSet::from(["grep".to_string()])
+        );
+        assert_eq!(
+            app.environment_tool_bridge_requests(
+                &BTreeSet::from([ComponentName("app:consumer".to_string())]),
+                true,
+            ),
+            EnvironmentToolBridgeRequests::default()
+        );
+    }
+
+    #[test]
     fn remote_release_manifest_validation_reports_invalid_references() {
         let errors = load_app_errors(indoc! { r#"
             app: hello-app
@@ -6365,7 +7206,6 @@ mod test {
             "declaration key must match",
             "cannot publish remote tool",
             "publishes undeclared tool",
-            "depends on undeclared tool",
             "name-only dependency",
         ] {
             assert!(
@@ -7218,6 +8058,120 @@ mod test {
     }
 
     #[test]
+    fn component_tool_defaults_are_preserved_and_overridden_per_agent() {
+        let source = indoc! { r#"
+            app: hello-app
+            environments:
+              local:
+                server: local
+                componentPresets: narrowed
+            componentTemplates:
+              defaults:
+                tools:
+                  search:
+                    parameters: { root: /template, depth: 2 }
+                    secretKeysReadable: [shared, template]
+                presets:
+                  narrowed:
+                    tools:
+                      search:
+                        parameters: { root: /component }
+                        secretKeysReadable: [shared, preset]
+            components:
+              app:main:
+                templates: defaults
+                componentWasm: dummy-component.wasm
+                tools:
+                  extra: {}
+            agents:
+              first:
+                tools:
+                  search:
+                    parameters: { depth: 1 }
+                    secretKeysReadable: [shared, agent]
+              second:
+                toolsMergeMode: replace
+                tools:
+                  extra:
+                    parameters: { own: true }
+        "# };
+
+        let (app, _app_tmp_dir) = load_app_for_env(source, "local", &["narrowed"]);
+        let component_name = ComponentName("app:main".to_string());
+        let component = app.component(&component_name);
+        let baseline = component.layer_properties().tool_bindings.value();
+        assert_eq!(baseline["search"].parameters["root"], json!("/component"));
+        assert_eq!(baseline["search"].parameters["depth"], json!(2));
+        assert_eq!(baseline["search"].secret_keys_readable.len(), 2);
+        assert!(baseline.contains_key("extra"));
+
+        with_resolved_agent(&app, "app:main", "first", |agent| {
+            let bindings = agent.tool_bindings();
+            assert_eq!(bindings["search"].parameters["root"], json!("/component"));
+            assert_eq!(bindings["search"].parameters["depth"], json!(1));
+            assert_eq!(bindings["search"].secret_keys_readable.len(), 3);
+            assert!(bindings.contains_key("extra"));
+        });
+        with_resolved_agent(&app, "app:main", "second", |agent| {
+            let bindings = agent.tool_bindings();
+            assert_eq!(bindings.len(), 1);
+            assert_eq!(bindings["extra"].parameters["own"], json!(true));
+        });
+    }
+
+    #[test]
+    fn agent_templates_apply_tool_operations_to_component_defaults() {
+        let source = indoc! { r#"
+            app: hello-app
+            environments:
+              local:
+                server: local
+            componentTemplates:
+              remove-default:
+                toolsMergeMode: remove
+                tools:
+                  search: {}
+              clear-defaults:
+                toolsMergeMode: replace
+              narrow:
+                tools:
+                  search:
+                    parameters: { depth: 7 }
+                    secretKeysReadable: [shared, template]
+            components:
+              app:main:
+                componentWasm: dummy-component.wasm
+                tools:
+                  search:
+                    parameters: { root: /component, depth: 2 }
+                    secretKeysReadable: [shared, component]
+                  other: {}
+            agents:
+              removing:
+                templates: remove-default
+              clearing:
+                templates: clear-defaults
+              narrowing:
+                templates: narrow
+        "# };
+        let (app, _app_tmp_dir) = load_app_for_env(source, "local", &[]);
+        with_resolved_agent(&app, "app:main", "removing", |agent| {
+            assert!(!agent.tool_bindings().contains_key("search"));
+            assert!(agent.tool_bindings().contains_key("other"));
+        });
+        with_resolved_agent(&app, "app:main", "clearing", |agent| {
+            assert!(agent.tool_bindings().is_empty());
+        });
+        with_resolved_agent(&app, "app:main", "narrowing", |agent| {
+            let binding = &agent.tool_bindings()["search"];
+            assert_eq!(binding.parameters["root"], json!("/component"));
+            assert_eq!(binding.parameters["depth"], json!(7));
+            assert_eq!(binding.secret_keys_readable.len(), 2);
+            assert!(agent.tool_bindings().contains_key("other"));
+        });
+    }
+
+    #[test]
     fn test_agent_resolution_fails_on_unknown_template() {
         let source = indoc! { r#"
             app: hello-app
@@ -7277,12 +8231,10 @@ mod test {
         let err = resolve_agents_for(&app, "app:main", "test-agent").unwrap_err();
         let message = format!("{err:#}");
         assert!(
-            message.contains("Layer already exists") || message.contains("already exists"),
-            "error should mention duplicate layer: {message}"
-        );
-        assert!(
-            message.contains("shared-template"),
-            "error should mention duplicate template name: {message}"
+            message.contains(
+                "Template shared-template is inherited by agent test-agent through multiple paths"
+            ),
+            "error should mention the duplicate template: {message}"
         );
     }
 
@@ -7316,10 +8268,16 @@ mod test {
               deployments:
                 local:
                   - subdomain: hello-mcp
+                    agents:
+                      Echo: {}
                 implicit:
                   - subdomain: implicit-mcp
+                    agents:
+                      Echo: {}
                 cloud:
                   - subdomain: hello-mcp
+                    agents:
+                      Echo: {}
         "# };
 
         let (app, _app_tmp_dir) = load_app_for_env(source, "local", &[]);
@@ -7357,6 +8315,77 @@ mod test {
     }
 
     #[test]
+    fn http_api_schemes_resolve_from_environment_and_allow_overrides() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+              implicit: {}
+              cloud:
+                server: cloud
+              custom:
+                server:
+                  url: https://management.example.com
+                  workerUrl: https://workers.example.com
+                  auth:
+                    staticToken: token
+
+            httpApi:
+              deployments:
+                local:
+                  - domain: local.example.com
+                  - domain: secure-local.example.com
+                    scheme: https
+                implicit:
+                  - domain: implicit.example.com
+                cloud:
+                  - domain: cloud.example.com
+                  - domain: insecure-cloud.example.com
+                    scheme: http
+                custom:
+                  - domain: custom.example.com
+                    scheme: http
+        "# };
+
+        let (app, _app_tmp_dir) = load_app_for_env(source, "local", &[]);
+        let scheme = |environment: &str, domain: &str| {
+            app.http_api_deployments(&EnvironmentName(environment.to_string()))
+                .unwrap()
+                .get(&Domain(domain.to_string()))
+                .unwrap()
+                .value
+                .scheme
+        };
+
+        assert_eq!(
+            scheme("local", "local.example.com"),
+            HttpApiDeploymentScheme::Http
+        );
+        assert_eq!(
+            scheme("implicit", "implicit.example.com"),
+            HttpApiDeploymentScheme::Http
+        );
+        assert_eq!(
+            scheme("cloud", "cloud.example.com"),
+            HttpApiDeploymentScheme::Https
+        );
+        assert_eq!(
+            scheme("local", "secure-local.example.com"),
+            HttpApiDeploymentScheme::Https
+        );
+        assert_eq!(
+            scheme("cloud", "insecure-cloud.example.com"),
+            HttpApiDeploymentScheme::Http
+        );
+        assert_eq!(
+            scheme("custom", "custom.example.com"),
+            HttpApiDeploymentScheme::Http
+        );
+    }
+
+    #[test]
     fn deployment_domains_keep_full_domains_unchanged() {
         let source = indoc! { r#"
             app: hello-app
@@ -7374,6 +8403,8 @@ mod test {
               deployments:
                 local:
                   - domain: mcp.example.com
+                    agents:
+                      Echo: {}
         "# };
 
         let (app, _app_tmp_dir) = load_app_for_env(source, "local", &[]);
@@ -7408,6 +8439,8 @@ mod test {
               deployments:
                 local:
                   - subdomain: hello-mcp
+                    agents:
+                      Echo: {}
         "# };
 
         let (app, _app_tmp_dir) = load_app_for_env(source, "local", &[]);
@@ -7658,6 +8691,53 @@ mod test {
             "\n{}",
             errors.join("\n\n")
         );
+    }
+
+    #[test]
+    fn http_api_deployment_requires_explicit_scheme_for_custom_server() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              custom:
+                server:
+                  url: https://management.example.com
+                  workerUrl: https://workers.example.com
+                  auth:
+                    staticToken: token
+
+            httpApi:
+              deployments:
+                custom:
+                  - domain: api.example.com
+        "# };
+
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let golem_yaml_path = tmp_dir.path().join("golem.yaml");
+        fs::write(&golem_yaml_path, source).unwrap();
+        let raw_apps = vec![
+            app_raw::ApplicationWithSource::from_yaml_file(&golem_yaml_path)
+                .expect("raw manifest should parse"),
+        ];
+        let (preload, warns, errors) = Application::preload_from_raw_apps(&raw_apps).into_product();
+        assert!(warns.is_empty(), "\n{}", warns.join("\n\n"));
+        assert!(errors.is_empty(), "\n{}", errors.join("\n\n"));
+        let preload = preload.expect("manifest should preload");
+
+        let (_app, warns, errors) = Application::from_raw_apps(
+            std::env::current_dir().unwrap(),
+            preload.application_name,
+            preload.environments,
+            preload.local_server,
+            selector("custom", &[]),
+            raw_apps,
+        )
+        .into_product();
+
+        assert!(warns.is_empty(), "\n{}", warns.join("\n\n"));
+        assert_eq!(errors.len(), 1, "\n{}", errors.join("\n\n"));
+        assert!(errors[0].contains("must define an explicit"));
+        assert!(errors[0].contains("not inferred from the custom server management URL"));
     }
 
     #[test]

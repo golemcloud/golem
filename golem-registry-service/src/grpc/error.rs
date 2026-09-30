@@ -21,11 +21,13 @@ use crate::services::component_resolver::ComponentResolverError;
 use crate::services::deployment::{DeployedMcpError, DeployedRoutesError, DeploymentError};
 use crate::services::environment::EnvironmentError;
 use crate::services::environment_state::EnvironmentStateError;
+use crate::services::mcp_import::McpImportResolverError;
+use crate::services::mcp_oauth::McpOAuthError;
 use crate::services::resource_definition::ResourceDefinitionError;
-use golem_common::IntoAnyhow;
 use golem_common::base_model::api;
 use golem_common::metrics::api::ApiErrorDetails;
 use golem_common::model::error::{ErrorBody, ErrorsBody};
+use golem_common::{IntoAnyhow, SafeDisplay};
 use golem_service_base::model::auth::AuthorizationError;
 
 #[derive(Debug)]
@@ -205,6 +207,104 @@ impl From<AccountUsageError> for GrpcApiError {
                 error,
                 code: api::error_code::INTERNAL_UNKNOWN.to_string(),
                 cause: Some(value.into_anyhow()),
+            }),
+        }
+    }
+}
+
+impl From<McpOAuthError> for GrpcApiError {
+    fn from(value: McpOAuthError) -> Self {
+        std::sync::Arc::new(value).into()
+    }
+}
+
+impl From<std::sync::Arc<McpOAuthError>> for GrpcApiError {
+    fn from(value: std::sync::Arc<McpOAuthError>) -> Self {
+        let error = value.to_safe_string();
+        match value.as_ref() {
+            McpOAuthError::ImportNotFound | McpOAuthError::SchemeNotFound => {
+                Self::NotFound(ErrorBody {
+                    error,
+                    code: api::error_code::DEPLOYMENT_NOT_FOUND.to_string(),
+                    cause: None,
+                })
+            }
+            McpOAuthError::Unauthorized(_)
+            | McpOAuthError::AccountUsage(AccountUsageError::Unauthorized(_)) => {
+                Self::Unauthorized(ErrorBody {
+                    error,
+                    code: api::error_code::AUTH_UNAUTHORIZED.to_string(),
+                    cause: None,
+                })
+            }
+            McpOAuthError::OwnerMismatch
+            | McpOAuthError::Transport(golem_mcp_import::transport::TransportError::Denied) => {
+                Self::Unauthorized(ErrorBody {
+                    error,
+                    code: api::error_code::AUTH_FORBIDDEN.to_string(),
+                    cause: None,
+                })
+            }
+            McpOAuthError::AccountUsage(AccountUsageError::AccountNotfound(_)) => {
+                Self::NotFound(ErrorBody {
+                    error,
+                    code: api::error_code::ACCOUNT_NOT_FOUND.to_string(),
+                    cause: None,
+                })
+            }
+            McpOAuthError::AccountUsage(AccountUsageError::LimitExceeded(_)) => {
+                Self::LimitExceeded(ErrorBody {
+                    error,
+                    code: api::error_code::LIMIT_EXCEEDED.to_string(),
+                    cause: None,
+                })
+            }
+            McpOAuthError::NotOAuth
+            | McpOAuthError::ContextChanged
+            | McpOAuthError::AuthorizationRequired(_)
+            | McpOAuthError::RefreshUnresolved(_)
+            | McpOAuthError::InvalidCallback
+            | McpOAuthError::ConsentDenied => Self::BadRequest(ErrorsBody {
+                errors: vec![error],
+                code: api::error_code::VALIDATION_ERROR.to_string(),
+                cause: None,
+            }),
+            McpOAuthError::Transport(transport)
+                if !matches!(
+                    transport,
+                    golem_mcp_import::transport::TransportError::Network
+                        | golem_mcp_import::transport::TransportError::Timeout
+                ) && !matches!(transport, golem_mcp_import::transport::TransportError::HttpStatus(status) if *status == 429 || *status >= 500) =>
+            {
+                Self::BadRequest(ErrorsBody {
+                    errors: vec![error],
+                    code: api::error_code::VALIDATION_ERROR.to_string(),
+                    cause: None,
+                })
+            }
+            _ => Self::InternalError(ErrorBody {
+                error,
+                code: api::error_code::INTERNAL_UNKNOWN.to_string(),
+                cause: Some(anyhow::Error::new(value)),
+            }),
+        }
+    }
+}
+
+impl From<McpImportResolverError> for GrpcApiError {
+    fn from(value: McpImportResolverError) -> Self {
+        match value {
+            McpImportResolverError::OAuth(error) => error.into(),
+            McpImportResolverError::SourceUnavailable { error, .. } => (*error).into(),
+            McpImportResolverError::Projection(error) => Self::BadRequest(ErrorsBody {
+                errors: vec![error],
+                code: api::error_code::VALIDATION_ERROR.to_string(),
+                cause: None,
+            }),
+            other => Self::InternalError(ErrorBody {
+                error: other.to_string(),
+                code: api::error_code::INTERNAL_UNKNOWN.to_string(),
+                cause: None,
             }),
         }
     }
@@ -491,5 +591,63 @@ impl From<GrpcApiError> for golem_api_grpc::proto::golem::registry::v1::Registry
         Self {
             error: Some(value.into()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use golem_common::model::security_scheme::SecuritySchemeName;
+    use golem_mcp_import::transport::TransportError;
+    use golem_service_base::clients::registry::RegistryServiceError;
+    use test_r::test;
+
+    fn through_wire(error: McpOAuthError) -> RegistryServiceError {
+        let wire: golem_api_grpc::proto::golem::registry::v1::RegistryServiceError =
+            GrpcApiError::from(error).into();
+        wire.into()
+    }
+
+    #[test]
+    fn mcp_errors_preserve_quota_terminal_and_transient_categories_without_secrets() {
+        assert!(matches!(
+            through_wire(McpOAuthError::AccountUsage(
+                AccountUsageError::LimitExceeded(LimitExceededError {
+                    limit_name: "monthly-http".into(),
+                    limit_value: 0,
+                    current_value: 1,
+                })
+            )),
+            RegistryServiceError::LimitExceeded(_)
+        ));
+        for error in [
+            McpOAuthError::AuthorizationRequired(SecuritySchemeName("provider".into())),
+            McpOAuthError::RefreshUnresolved(SecuritySchemeName("provider".into())),
+            McpOAuthError::ContextChanged,
+            TransportError::OAuthGrantRejected.into(),
+            TransportError::Configuration("unsupported protocol".into()).into(),
+            TransportError::HttpStatus(404).into(),
+            TransportError::Protocol("invalid token response".into()).into(),
+        ] {
+            assert!(matches!(
+                through_wire(error),
+                RegistryServiceError::BadRequest(_)
+            ));
+        }
+        for error in [
+            TransportError::Network,
+            TransportError::Timeout,
+            TransportError::HttpStatus(503),
+            TransportError::HttpStatus(429),
+        ] {
+            assert!(matches!(
+                through_wire(error.into()),
+                RegistryServiceError::InternalServerError(_)
+            ));
+        }
+        let internal = through_wire(McpOAuthError::InternalError(anyhow::anyhow!(
+            "private-secret"
+        )));
+        assert!(!internal.to_string().contains("private-secret"));
     }
 }

@@ -21,15 +21,25 @@ mod app;
 mod build_and_deploy_all;
 mod cards;
 mod directory_source_ifs;
+mod effect_http_router;
+mod external_durable_streams;
+mod mcp_import;
+mod mcp_oauth;
 mod moonbit_guest_streams;
+mod moonbit_http_router;
+mod moonbit_reflection;
 mod moonbit_tool_middleware;
 mod plugins;
 mod remote_releases;
+mod rust_minimal_exports;
 mod rust_streams;
 mod scala_guest_streams;
+mod scala_http_router;
 mod scala_tool_middleware;
+mod secrets;
 mod tool_middleware;
 mod typescript_guest_streams;
+mod typescript_http_router;
 
 inherit_test_dep!(Tracing);
 
@@ -46,14 +56,24 @@ tag_suite!(account, deploy);
 tag_suite!(build_and_deploy_all, deploy);
 tag_suite!(cards, deploy);
 tag_suite!(directory_source_ifs, deploy);
+tag_suite!(effect_http_router, deploy);
+tag_suite!(external_durable_streams, agents_streaming);
+tag_suite!(mcp_import, agents_guest_bridge);
+tag_suite!(mcp_oauth, agents_guest_bridge);
 tag_suite!(moonbit_guest_streams, agents_guest_bridge);
+tag_suite!(moonbit_http_router, deploy);
+tag_suite!(moonbit_reflection, deploy);
 tag_suite!(moonbit_tool_middleware, deploy);
 tag_suite!(plugins, deploy);
+tag_suite!(rust_minimal_exports, deploy);
 tag_suite!(rust_streams, agents_guest_bridge);
 tag_suite!(scala_guest_streams, agents_guest_bridge);
+tag_suite!(scala_http_router, agents_guest_bridge);
 tag_suite!(scala_tool_middleware, deploy);
+tag_suite!(secrets, deploy);
 tag_suite!(tool_middleware, deploy);
 tag_suite!(typescript_guest_streams, agents_guest_bridge);
+tag_suite!(typescript_http_router, deploy);
 
 use crate::{Tracing, crate_path, workspace_path};
 use anyhow::Context;
@@ -115,7 +135,11 @@ mod cmd {
     pub static PROFILE: &str = "profile";
     pub static REGISTER: &str = "register";
     pub static REPL: &str = "repl";
+    pub static RESOURCE: &str = "resource";
+    pub static RETRY_POLICY: &str = "retry-policy";
+    pub static SECRET: &str = "secret";
     pub static TEMPLATES: &str = "templates";
+    pub static TOOL: &str = "tool";
 }
 
 mod flag {

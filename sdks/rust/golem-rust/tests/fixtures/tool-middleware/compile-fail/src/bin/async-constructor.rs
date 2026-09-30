@@ -1,5 +1,5 @@
 use middleware_definition::{PublicEchoMiddleware, PublicEchoUnderlying, PublicError};
-use sdk::{tool_middleware, tool::ToolInvokeError};
+use sdk::{tool::ToolInvokeError, tool_middleware};
 
 struct Policy;
 
@@ -13,7 +13,7 @@ impl Policy {
 impl PublicEchoMiddleware for Policy {
     async fn echo(
         &self,
-        underlying: &mut PublicEchoUnderlying,
+        underlying: &PublicEchoUnderlying,
         value: String,
     ) -> Result<String, ToolInvokeError<PublicError>> {
         underlying.echo(value).await

@@ -4,13 +4,13 @@
 import {
   ToolRpc,
   createStdin,
-  createStdout,
+  createOutput,
   type ByteStreamFailure,
   type ByteStreamItem,
   type FutureInvokeResult,
-  type RpcError,
-  type ToolError,
 } from 'golem:tool/host@0.1.0';
+export type ToolError = import('golem:core/types@2.0.0').ToolError;
+export type ToolRpcError = import('golem:core/types@2.0.0').ToolRpcError;
 import {
   preflightWitTypedSchemaValue,
   typedSchemaValueFromWit,
@@ -42,6 +42,7 @@ export interface ToolInvocationResult {
 
 export interface RawToolInvocation {
   readonly stdout?: AsyncIterable<ByteStreamItem>;
+  readonly stderr?: AsyncIterable<ByteStreamItem>;
   readonly settledResult: Promise<
     SettledToolResult<Awaited<ReturnType<FutureInvokeResult['get']>>>
   >;
@@ -54,26 +55,33 @@ export interface ToolClientTransport {
     input: Parameters<ToolRpc['asyncInvokeAndAwait']>[1],
     stdin: ToolInputStream | undefined,
     stdout: boolean,
+    stderr: boolean,
   ): RawToolInvocation;
 }
 
-export function createToolClientTransport(toolName: string): ToolClientTransport {
+export function createToolClientTransport(
+  toolName: string,
+  reflected = false,
+): ToolClientTransport {
   let rpc: ToolRpc | undefined;
   return {
-    start(commandPath, input, stdin, withStdout) {
-      rpc ??= new ToolRpc(toolName);
+    start(commandPath, input, stdin, withStdout, withStderr) {
+      rpc ??= reflected ? ToolRpc.create(toolName) : new ToolRpc(toolName);
       const inputEndpoints = stdin === undefined ? undefined : createStdin();
-      const outputEndpoints = withStdout ? createStdout() : undefined;
+      const stdoutEndpoints = withStdout ? createOutput() : undefined;
+      const stderrEndpoints = withStderr ? createOutput() : undefined;
       const future = rpc.asyncInvokeAndAwait(
         [...commandPath],
         input,
         inputEndpoints?.[1],
-        outputEndpoints?.[0],
+        stdoutEndpoints?.[0],
+        stderrEndpoints?.[0],
       );
       if (inputEndpoints) void pumpToolStdin(stdin!, inputEndpoints[0], inputEndpoints[2]);
       const settledResult = settleToolResult(future.get());
       return {
-        stdout: outputEndpoints?.[1],
+        stdout: stdoutEndpoints?.[1],
+        stderr: stderrEndpoints?.[1],
         settledResult,
         cancel: () => future.cancel(),
       };
@@ -134,8 +142,10 @@ export interface ToolClientRuntime {
     input: TypedSchemaValue,
     stdin: ToolInputStream | undefined,
     stdout: boolean,
+    stderr: boolean,
   ): {
     stdout?: AsyncIterable<ByteStreamItem>;
+    stderr?: AsyncIterable<ByteStreamItem>;
     settledResult: Promise<SettledToolResult<ToolInvocationResult>>;
     cancel(): void;
   };
@@ -146,10 +156,25 @@ export function createToolClientRuntime(
   transport: ToolClientTransport = createToolClientTransport(toolName),
 ): ToolClientRuntime {
   return {
-    start(commandPath, input, stdin, stdout) {
-      const invocation = transport.start(commandPath, typedSchemaValueToWit(input), stdin, stdout);
+    start(commandPath, input, stdin, stdout, stderr) {
+      let invocation: RawToolInvocation;
+      try {
+        invocation = transport.start(
+          commandPath,
+          typedSchemaValueToWit(input),
+          stdin,
+          stdout,
+          stderr,
+        );
+      } catch (reason) {
+        return {
+          settledResult: Promise.resolve({ status: 'rejected', reason }),
+          cancel() {},
+        };
+      }
       return {
         stdout: invocation.stdout,
+        stderr: invocation.stderr,
         settledResult: mapSettledToolResult(invocation.settledResult, (value) => ({
           result: value.result === undefined ? undefined : typedSchemaValueFromWit(value.result),
         })),
@@ -160,7 +185,7 @@ export function createToolClientRuntime(
 }
 
 export type ToolRuntimeError<Declared> =
-  | { readonly tag: 'rpc'; readonly error: RpcError }
+  | { readonly tag: 'rpc'; readonly error: ToolRpcError }
   | { readonly tag: 'tool'; readonly error: Declared };
 
 function implementationObject(value: unknown): value is Record<string, unknown> {
@@ -204,7 +229,7 @@ function isToolError(value: unknown): value is ToolError {
       return false;
   }
 }
-export function isRpcError(value: unknown): value is RpcError {
+export function isRpcError(value: unknown): value is ToolRpcError {
   if (!implementationObject(value) || typeof value.tag !== 'string') return false;
   switch (value.tag) {
     case 'cancelled':
@@ -222,7 +247,7 @@ export function isRpcError(value: unknown): value is RpcError {
   }
 }
 export function splitToolRpcError<Declared>(
-  error: RpcError,
+  error: ToolRpcError,
   decodeCustomError: (name: string, payload: TypedSchemaValue) => Declared,
 ): ToolRuntimeError<Declared> {
   if (error.tag !== 'remote-tool-error' || error.val.tag !== 'custom-error')
@@ -232,4 +257,3 @@ export function splitToolRpcError<Declared>(
     error: decodeCustomError(error.val.val.name, typedSchemaValueFromWit(error.val.val.payload)),
   };
 }
-export type { RpcError, ToolError };

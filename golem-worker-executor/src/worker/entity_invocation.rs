@@ -311,7 +311,7 @@ impl<Ctx: WorkerCtx> RetainedEntityStore for RetainedHostedInstance<Ctx> {
     }
 
     fn settle(
-        mut self: Box<Self>,
+        self: Box<Self>,
     ) -> Pin<Box<dyn Future<Output = Result<(), WorkerExecutorError>> + Send>> {
         Box::pin(async move {
             self.hosted.settle_tool_children(self.invocation).await?;
@@ -507,6 +507,38 @@ where
     start_entity_invocation_inner(slot, lane, scope, mode, Some(ticket), run, finalize)
 }
 
+pub(crate) fn start_registered_entity_invocation<Ctx, R, F, Finalize, Finalized>(
+    host: InstanceHost<Ctx>,
+    slot: Arc<EntitySlot>,
+    lane: OwnerLane,
+    scope: EntityInvocationScope,
+    mode: EntityCallMode,
+    ticket: OwnerInvocationTicket,
+    invoke: F,
+    finalize: Finalize,
+) -> Result<EntityInvocationHandle<R>, WorkerExecutorError>
+where
+    Ctx: WorkerCtx,
+    R: Send + 'static,
+    F: Send + 'static,
+    F: for<'a> FnOnce(
+        &'a Instance,
+        &'a mut Store<Ctx>,
+    )
+        -> Pin<Box<dyn Future<Output = Result<R, WorkerExecutorError>> + Send + 'a>>,
+    Finalize: FnOnce(Result<R, WorkerExecutorError>) -> Finalized + Send + 'static,
+    Finalized: Future<Output = Result<R, WorkerExecutorError>> + Send + 'static,
+{
+    let run = ComponentEntityRunner {
+        host,
+        body: ClosureEntityInvocationBody(invoke),
+    };
+    let mut handle =
+        start_entity_invocation_inner(slot, lane, scope, mode, Some(ticket), run, finalize)?;
+    handle.lane_await_required = false;
+    Ok(handle)
+}
+
 /// Starts a body whose caller already owns the registered and granted lane node. This is used by
 /// staged tool operations, which keep the permit under operation/owner terminal arbitration until
 /// durable completion rather than transferring it into the sidecar task.
@@ -580,6 +612,49 @@ where
         ClosureEntityRunner(run),
         finalize,
     )
+}
+
+pub(crate) fn start_registered_native_entity_invocation<R, Run, Finalize, Finalized>(
+    slot: Arc<EntitySlot>,
+    lane: OwnerLane,
+    scope: EntityInvocationScope,
+    mode: EntityCallMode,
+    ticket: OwnerInvocationTicket,
+    run: Run,
+    finalize: Finalize,
+) -> Result<EntityInvocationHandle<R>, WorkerExecutorError>
+where
+    R: Send + 'static,
+    Run: Send + 'static,
+    Run: for<'a> FnOnce(
+        EntityInvocationScope,
+        &'a EntitySlotRegistration,
+        tokio_util::sync::CancellationToken,
+    ) -> Pin<
+        Box<
+            dyn Future<
+                    Output = (
+                        Result<R, WorkerExecutorError>,
+                        Option<Box<dyn RetainedEntityStore>>,
+                    ),
+                > + Send
+                + 'a,
+        >,
+    >,
+    Finalize: FnOnce(Result<R, WorkerExecutorError>) -> Finalized + Send + 'static,
+    Finalized: Future<Output = Result<R, WorkerExecutorError>> + Send + 'static,
+{
+    let mut handle = start_entity_invocation_inner(
+        slot,
+        lane,
+        scope,
+        mode,
+        Some(ticket),
+        ClosureEntityRunner(run),
+        finalize,
+    )?;
+    handle.lane_await_required = false;
+    Ok(handle)
 }
 
 fn start_entity_invocation_inner<R, Run, Finalize, Finalized>(

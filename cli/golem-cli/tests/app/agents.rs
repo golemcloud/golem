@@ -24,10 +24,15 @@ inherit_test_dep!(Tracing);
 async fn streaming_invocation_context() -> TestContext {
     let mut ctx = TestContext::new();
     let component_dir = ctx.cwd_path_join("component");
-    fs::create_dir_all(component_dir.join("src")).unwrap();
+    fs::create_dir_all(&component_dir).unwrap();
 
     let fixture = workspace_path().join("test-components/agent-rpc/golem-it-agent-rpc-rust");
-    fs::copy(fixture.join("src/lib.rs"), component_dir.join("src/lib.rs")).unwrap();
+    fs_extra::dir::copy(
+        fixture.join("src"),
+        &component_dir,
+        &fs_extra::dir::CopyOptions::new(),
+    )
+    .unwrap();
 
     let sdk_path = workspace_path().join("sdks/rust/golem-rust");
     fs::write_str(
@@ -66,6 +71,7 @@ async fn streaming_invocation_context() -> TestContext {
 
             componentTemplates:
               rust-streaming-test:
+                guestLanguage: rust
                 build:
                 - command: cargo build --target wasm32-wasip2 --release
                   sources:
@@ -1068,22 +1074,27 @@ async fn test_generated_streaming_bridges_end_to_end() {
 
     for language in ["rust", "typescript", "scala", "moonbit"] {
         let bridge_root = ctx.cwd_path_join(format!("{language}-streaming-bridge"));
-        let output = ctx
-            .cli([
-                cmd::GENERATE_BRIDGE,
-                flag::LANGUAGE,
-                language,
-                flag::AGENT_TYPE_NAME,
-                "StreamingRpcTarget",
-                flag::OUTPUT_DIR,
-                bridge_root.to_str().unwrap(),
-            ])
-            .await;
-        assert!(output.success_or_dump());
-        assert!(
-            bridge_root.join("streaming-rpc-target-client").exists(),
-            "generated {language} streaming bridge is missing"
-        );
+        for (agent_type, package) in [
+            ("StreamingRpcTarget", "streaming-rpc-target-client"),
+            ("ConfiguredRpcTarget", "configured-rpc-target-client"),
+        ] {
+            let output = ctx
+                .cli([
+                    cmd::GENERATE_BRIDGE,
+                    flag::LANGUAGE,
+                    language,
+                    flag::AGENT_TYPE_NAME,
+                    agent_type,
+                    flag::OUTPUT_DIR,
+                    bridge_root.to_str().unwrap(),
+                ])
+                .await;
+            assert!(output.success_or_dump());
+            assert!(
+                bridge_root.join(package).exists(),
+                "generated {language} {agent_type} bridge is missing"
+            );
+        }
     }
 
     let worker_service_url = ctx.worker_service_url();
@@ -1192,6 +1203,59 @@ async fn test_generated_streaming_bridges_end_to_end() {
         "Rust driver did not reach post-acceptance reconnect coverage"
     );
 
+    let rust_config_client =
+        ctx.cwd_path_join("rust-streaming-bridge/configured-rpc-target-client");
+    let mut rust_config_manifest = std::fs::OpenOptions::new()
+        .append(true)
+        .open(rust_config_client.join("Cargo.toml"))
+        .unwrap();
+    writeln!(
+        rust_config_manifest,
+        "\n[dev-dependencies]\ntokio = {{ version = \"1\", features = [\"macros\", \"rt-multi-thread\"] }}"
+    )
+    .unwrap();
+    let rust_config_driver = formatdoc! {r#"
+        use configured_rpc_target_client::{{configure, ConfiguredRpcTarget, GolemServer}};
+
+        #[tokio::main]
+        async fn main() -> Result<(), Box<dyn std::error::Error>> {{
+            configure(
+                GolemServer::Custom {{
+                    url: "{worker_service_url}".parse()?,
+                    token: "{token}".to_string(),
+                }},
+                "streaming-invocation",
+                "local",
+            );
+            let agent = ConfiguredRpcTarget::get_with_config(
+                "rust-configured".to_string(),
+                Some(7),
+                Some("rust-label".to_string()),
+            ).await?;
+            assert_eq!(
+                agent.describe().await?,
+                ("rust-configured".to_string(), "rust-label".to_string(), 7),
+            );
+            println!("RUST_CONFIG_BRIDGE_E2E_OK");
+            Ok(())
+        }}
+        "#};
+    std::fs::create_dir_all(rust_config_client.join("examples")).unwrap();
+    std::fs::write(
+        rust_config_client.join("examples/e2e.rs"),
+        rust_config_driver,
+    )
+    .unwrap();
+    let mut rust_config_command = std::process::Command::new("cargo");
+    rust_config_command
+        .args(["run", "--quiet", "--example", "e2e"])
+        .current_dir(&rust_config_client);
+    assert_generated_driver(
+        run_generated_driver(rust_config_command).await,
+        "Rust config",
+        "RUST_CONFIG_BRIDGE_E2E_OK",
+    );
+
     let typescript_client =
         ctx.cwd_path_join("typescript-streaming-bridge/streaming-rpc-target-client");
     let (typescript_proxy, typescript_interrupted, typescript_proxy_task) =
@@ -1240,6 +1304,9 @@ async fn test_generated_streaming_bridges_end_to_end() {
         assert.deepEqual(Array.from(binaryResult[0].bytes), Array.from(binary.bytes))
         assert.equal(binaryResult[0].mimeType, undefined)
 
+        const transformedBytes = await collect(await agent.transformBytes(input([0, 1, 127, 128, 255])))
+        assert.deepEqual(transformedBytes, [0, 1, 127, 128, 255])
+
         const affine = await agent.produce([8, 9])
         const firstConsumer = affine[Symbol.asyncIterator]()
         assert.throws(() => affine[Symbol.asyncIterator](), /only be iterated once/)
@@ -1255,7 +1322,7 @@ async fn test_generated_streaming_bridges_end_to_end() {
     std::fs::write(typescript_client.join("e2e.ts"), typescript_driver).unwrap();
     let mut typescript_install = std::process::Command::new("pnpm");
     typescript_install
-        .args(["install", "--ignore-workspace"])
+        .args(["install", "--ignore-workspace", "--ignore-scripts"])
         .current_dir(&typescript_client);
     assert_generated_driver(
         run_generated_driver(typescript_install).await,
@@ -1278,12 +1345,55 @@ async fn test_generated_streaming_bridges_end_to_end() {
         "TypeScript driver did not reach post-acceptance reconnect coverage"
     );
 
+    let typescript_config_client =
+        ctx.cwd_path_join("typescript-streaming-bridge/configured-rpc-target-client");
+    let typescript_config_driver = formatdoc! {r#"
+        import assert from 'node:assert/strict'
+        import {{ configure, ConfiguredRpcTarget }} from './configured-rpc-target-client.js'
+
+        configure({{
+          server: {{ type: 'custom', url: '{worker_service_url}', token: '{token}' }},
+          application: 'streaming-invocation',
+          environment: 'local',
+        }})
+        const agent = await ConfiguredRpcTarget.getWithConfig(
+          'typescript-configured',
+          7,
+          'typescript-label',
+        )
+        assert.deepEqual(await agent.describe(), ['typescript-configured', 'typescript-label', 7])
+        console.log('TYPESCRIPT_CONFIG_BRIDGE_E2E_OK')
+        "#};
+    std::fs::write(
+        typescript_config_client.join("e2e.ts"),
+        typescript_config_driver,
+    )
+    .unwrap();
+    let mut typescript_config_install = std::process::Command::new("pnpm");
+    typescript_config_install
+        .args(["install", "--ignore-workspace", "--ignore-scripts"])
+        .current_dir(&typescript_config_client);
+    assert_generated_driver(
+        run_generated_driver(typescript_config_install).await,
+        "TypeScript config install",
+        "",
+    );
+    let mut typescript_config_command = std::process::Command::new("pnpm");
+    typescript_config_command
+        .args(["exec", "tsx", "e2e.ts"])
+        .current_dir(&typescript_config_client);
+    assert_generated_driver(
+        run_generated_driver(typescript_config_command).await,
+        "TypeScript config",
+        "TYPESCRIPT_CONFIG_BRIDGE_E2E_OK",
+    );
+
     let scala_client = ctx.cwd_path_join("scala-streaming-bridge/streaming-rpc-target-client");
     let (scala_proxy, scala_interrupted, scala_proxy_task) =
         start_interrupting_websocket_proxy(&worker_service_url, false).await;
     let scala_driver = formatdoc! {r#"
         import golem.bridge.client.streaming_rpc_target.{{NestedStreamInput, StreamingRpcTargetClient}}
-        import golem.bridge.runtime.{{AgentBinary, AgentStream, AgentStreamStep, GolemServer, UInt}}
+        import golem.bridge.runtime.{{AgentBinary, AgentStream, AgentStreamStep, GolemServer, UByte, UInt}}
         import scala.collection.mutable.ListBuffer
         import scala.concurrent.{{Await, ExecutionContext, Future}}
         import scala.concurrent.duration.*
@@ -1337,6 +1447,10 @@ async fn test_generated_streaming_bridges_end_to_end() {
 
             val binary = AgentBinary(Vector[Byte](0, 1, 2, -3, -2, -1), None)
             assert(collect(Await.result(agent.transformBinary(input(List(binary))), timeout)) == List(binary))
+            assert(
+              collect(Await.result(agent.transformBytes(input(List(UByte(0), UByte(1), UByte(127), UByte(128), UByte(255)))), timeout))
+                .map(_.value) == List(0, 1, 127, 128, 255)
+            )
 
             val affine = Await.result(agent.produce(List(UInt(8), UInt(9))), timeout)
             val firstConsumer = Await.result(affine.consume(), timeout)
@@ -1364,6 +1478,53 @@ async fn test_generated_streaming_bridges_end_to_end() {
     assert!(
         scala_interrupted.load(std::sync::atomic::Ordering::SeqCst),
         "Scala driver did not reach post-acceptance reconnect coverage"
+    );
+
+    let scala_config_client =
+        ctx.cwd_path_join("scala-streaming-bridge/configured-rpc-target-client");
+    let scala_config_driver = formatdoc! {r#"
+        import golem.bridge.client.configured_rpc_target.ConfiguredRpcTargetClient
+        import golem.bridge.runtime.{{GolemServer, UInt}}
+        import scala.concurrent.{{Await, ExecutionContext}}
+        import scala.concurrent.duration.*
+
+        object Main {{
+          given ExecutionContext = ExecutionContext.global
+
+          def main(args: Array[String]): Unit = {{
+            ConfiguredRpcTargetClient.configure(
+              GolemServer.Custom("{worker_service_url}", "{token}"),
+              "streaming-invocation",
+              "local",
+            )
+            val timeout = 90.seconds
+            val agent = Await.result(
+              ConfiguredRpcTargetClient.getWithConfig(
+                "scala-configured",
+                Some(UInt(7)),
+                Some("scala-label"),
+              ),
+              timeout,
+            )
+            assert(Await.result(agent.describe(), timeout) == ("scala-configured", "scala-label", UInt(7)))
+            println("SCALA_CONFIG_BRIDGE_E2E_OK")
+          }}
+        }}
+        "#};
+    let scala_config_main_dir = scala_config_client.join("src/main/scala");
+    std::fs::write(
+        scala_config_main_dir.join("Main.scala"),
+        scala_config_driver,
+    )
+    .unwrap();
+    let mut scala_config_command = std::process::Command::new("sbt");
+    scala_config_command
+        .args(["--batch", "runMain Main"])
+        .current_dir(&scala_config_client);
+    assert_generated_driver(
+        run_generated_driver(scala_config_command).await,
+        "Scala config",
+        "SCALA_CONFIG_BRIDGE_E2E_OK",
     );
 
     let moonbit_client = ctx.cwd_path_join("moonbit-streaming-bridge/streaming-rpc-target-client");
@@ -1422,7 +1583,24 @@ async fn test_generated_streaming_bridges_end_to_end() {
           }})
         }}
 
+        fn byte_input(values : Array[Byte]) -> @runtime.AgentStream[Byte] {{
+          @runtime.AgentStream::from_next(fn() {{
+            if values.is_empty() {{ None }} else {{ Some(values.remove(0)) }}
+          }})
+        }}
+
         async fn collect_uint(stream : @runtime.AgentStream[UInt]) -> Array[UInt] raise {{
+          let result = []
+          while true {{
+            match stream.next() {{
+              Some(value) => result.push(value)
+              None => break
+            }}
+          }}
+          result
+        }}
+
+        async fn collect_byte(stream : @runtime.AgentStream[Byte]) -> Array[Byte] raise {{
           let result = []
           while true {{
             match stream.next() {{
@@ -1464,6 +1642,10 @@ async fn test_generated_streaming_bridges_end_to_end() {
           let transformed_binary = agent.transform_binary(binary_input([binary]))
           assert_true(transformed_binary.next() == Some(binary))
           assert_true(transformed_binary.next() is None)
+          assert_eq(
+            collect_byte(agent.transform_bytes(byte_input([0, 1, 127, 128, 255]))),
+            [0, 1, 127, 128, 255],
+          )
 
           let affine = agent.produce([8, 9])
           assert_eq(affine.next(), Some(8))
@@ -1494,6 +1676,62 @@ async fn test_generated_streaming_bridges_end_to_end() {
     assert!(
         moonbit_interrupted.load(std::sync::atomic::Ordering::SeqCst),
         "MoonBit driver did not reach post-acceptance reconnect coverage"
+    );
+
+    let moonbit_config_client =
+        ctx.cwd_path_join("moonbit-streaming-bridge/configured-rpc-target-client");
+    let moonbit_config_manifest: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(moonbit_config_client.join("moon.mod.json")).unwrap(),
+    )
+    .unwrap();
+    let moonbit_config_module = moonbit_config_manifest["name"].as_str().unwrap();
+    let moonbit_config_main_pkg = formatdoc! {r#"
+        import {{
+          "moonbitlang/async",
+          "{moonbit_config_module}/client" @client,
+          "{moonbit_config_module}/runtime" @runtime,
+        }}
+
+        options(
+          "is-main": true,
+        )
+        "#};
+    let moonbit_config_driver = formatdoc! {r#"
+        async fn main {{
+          @client.ConfiguredRpcTarget::configure(
+            @runtime.Custom("{worker_service_url}", "{token}"),
+            "streaming-invocation",
+            "local",
+          )
+          let agent = @client.ConfiguredRpcTarget::get_with_config(
+            "moonbit-configured",
+            Some(7),
+            Some("moonbit-label"),
+          )
+          assert_eq(agent.describe(), ("moonbit-configured", "moonbit-label", 7))
+          println("MOONBIT_CONFIG_BRIDGE_E2E_OK")
+        }}
+        "#};
+    let moonbit_config_main_dir = moonbit_config_client.join("main");
+    std::fs::create_dir_all(&moonbit_config_main_dir).unwrap();
+    std::fs::write(
+        moonbit_config_main_dir.join("moon.pkg"),
+        moonbit_config_main_pkg,
+    )
+    .unwrap();
+    std::fs::write(
+        moonbit_config_main_dir.join("main.mbt"),
+        moonbit_config_driver,
+    )
+    .unwrap();
+    let mut moonbit_config_command = std::process::Command::new("moon");
+    moonbit_config_command
+        .args(["run", "--target", "native", "--deny-warn", "main"])
+        .current_dir(&moonbit_config_client);
+    assert_generated_driver(
+        run_generated_driver(moonbit_config_command).await,
+        "MoonBit config",
+        "MOONBIT_CONFIG_BRIDGE_E2E_OK",
     );
 }
 
@@ -2329,7 +2567,7 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
 /// calling the deployed provider and asserting its echo result.
 #[test]
 #[tag(agents_guest_bridge)]
-#[timeout("15 minutes")]
+#[timeout("20 minutes")]
 async fn test_rust_tool_guest_bridge_e2e() {
     let mut ctx = TestContext::new();
     let app_name = "tool-bridge";
@@ -2623,6 +2861,234 @@ async fn test_mixed_agent_and_tool_component_deployment_e2e() {
 
     let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
     assert!(outputs.success_or_dump());
+}
+
+#[test]
+#[timeout("15 minutes")]
+async fn tool_invoke_stdout_contains_only_raw_bytes() {
+    let mut ctx = TestContext::new();
+    let app_name = "tool-raw-stdout";
+
+    let failed = ctx
+        .cli_with_input(
+            [
+                cmd::TOOL,
+                cmd::INVOKE,
+                "--component",
+                "tool-raw-stdout:provider",
+                "raw-output",
+                "--stdout",
+                "--",
+                "emit",
+            ],
+            &[],
+        )
+        .await;
+    assert!(!failed.success());
+    assert!(failed.stdout().is_empty());
+    assert!(
+        !failed.stderr.is_empty(),
+        "failure diagnostics must reach stderr"
+    );
+
+    ctx.start_server().await;
+    fs::create_dir_all(ctx.cwd_path_join(app_name)).unwrap();
+    ctx.cd(app_name);
+
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::NEW,
+            ".",
+            flag::TEMPLATE,
+            "rust",
+            flag::COMPONENT_NAME,
+            "tool-raw-stdout:provider",
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    fs::write_str(
+        ctx.cwd_path_join("golem.yaml"),
+        formatdoc! { r#"
+            manifestVersion: {MANIFEST_VERSION}
+
+            app: tool-raw-stdout
+
+            environments:
+              local:
+                server: local
+                componentPresets: debug
+
+            components:
+              tool-raw-stdout:provider:
+                dir: .
+                templates: rust
+                tools:
+                  raw-output: {{}}
+
+            tools:
+              raw-output: {{}}
+        "#, MANIFEST_VERSION = versions::sdk::MANIFEST },
+    )
+    .unwrap();
+
+    fs::write_str(
+        ctx.cwd_path_join("src/counter_agent.rs"),
+        indoc! { r#"
+            use golem_rust::agentic::OutputStream;
+            use golem_rust::{tool_definition, tool_implementation};
+
+            #[tool_definition(version = "1.0.0")]
+            pub trait RawOutput {
+                async fn emit(&self, stdout: OutputStream);
+                fn repeat(&self, text: String, count: u32) -> String;
+            }
+
+            struct RawOutputImpl;
+
+            #[tool_implementation]
+            impl RawOutput for RawOutputImpl {
+                async fn emit(&self, mut stdout: OutputStream) {
+                    stdout.write(vec![0, 0xff, b'R', b'A', b'W']).await.unwrap();
+                }
+
+                fn repeat(&self, text: String, count: u32) -> String {
+                    text.repeat(count as usize)
+                }
+            }
+        "# },
+    )
+    .unwrap();
+
+    let outputs = ctx.cli([cmd::BUILD]).await;
+    assert!(outputs.success_or_dump());
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(outputs.success_or_dump());
+
+    let help = ctx
+        .cli_with_input(
+            [
+                cmd::TOOL,
+                cmd::INVOKE,
+                "--component",
+                "tool-raw-stdout:provider",
+                "raw-output",
+                "--",
+                "repeat",
+                "--help",
+            ],
+            &[],
+        )
+        .await;
+    assert!(help.success(), "{}", String::from_utf8_lossy(&help.stderr));
+    assert!(String::from_utf8_lossy(help.stdout()).contains("repeat"));
+    let repeated = ctx
+        .cli_with_input(
+            [
+                "--format",
+                "json",
+                cmd::TOOL,
+                cmd::INVOKE,
+                "--component",
+                "tool-raw-stdout:provider",
+                "--idempotency-key",
+                "structured-cli-repeat",
+                "raw-output",
+                "--",
+                "repeat",
+                "a b",
+                "3",
+            ],
+            &[],
+        )
+        .await;
+    assert!(
+        repeated.success(),
+        "{}",
+        String::from_utf8_lossy(&repeated.stderr)
+    );
+    assert!(String::from_utf8_lossy(repeated.stdout()).contains("a ba ba b"));
+
+    let lookup = ctx
+        .cli_with_input(
+            [
+                "--format",
+                "json",
+                cmd::TOOL,
+                cmd::INVOKE,
+                "--component",
+                "tool-raw-stdout:provider",
+                "--lookup",
+                "--idempotency-key",
+                "structured-cli-repeat",
+                "raw-output",
+                "--",
+                "repeat",
+            ],
+            &[],
+        )
+        .await;
+    assert!(
+        lookup.success(),
+        "{}",
+        String::from_utf8_lossy(&lookup.stderr)
+    );
+    assert!(String::from_utf8_lossy(lookup.stdout()).contains("a ba ba b"));
+
+    let output = ctx
+        .cli_with_input(
+            [
+                cmd::TOOL,
+                cmd::INVOKE,
+                "--component",
+                "tool-raw-stdout:provider",
+                "raw-output",
+                "--stdout",
+                "--",
+                "emit",
+            ],
+            &[],
+        )
+        .await;
+    assert!(
+        output.success(),
+        "tool invocation failed with code {:?}: {}",
+        output.exit_code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.stdout(), &[0, 0xff, b'R', b'A', b'W']);
+
+    let output = ctx
+        .cli_with_input(
+            [
+                cmd::TOOL,
+                cmd::INVOKE,
+                "--component",
+                "tool-raw-stdout:provider",
+                "raw-output",
+                "--stdout",
+                "--output",
+                "raw.bin",
+                "--",
+                "emit",
+            ],
+            &[],
+        )
+        .await;
+    assert!(
+        output.success(),
+        "file-output invocation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        std::fs::read(ctx.cwd_path_join("raw.bin")).unwrap(),
+        [0, 0xff, b'R', b'A', b'W']
+    );
+    assert!(
+        !output.stdout().is_empty(),
+        "file mode retains its report on stdout"
+    );
 }
 
 /// End-to-end test for the Rust guest agent bridge: a provider component

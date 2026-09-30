@@ -62,10 +62,12 @@ object ToolClientSpec extends ZIOSpecDefault {
       commandPath: List[String],
       input: TypedSchemaValue,
       stdin: Option[ToolInputStream],
-      stdout: Boolean
+      stdout: Boolean,
+      stderr: Boolean
     ): Either[ToolRpcFailure, ToolRpcStarted] =
       Right(
         ToolRpcStarted(
+          None,
           None,
           Future.successful(
             Left(ToolRpcFailure.RemoteToolError(ToolInvokeError.UnknownToolError("usage", stringPayload("bad flag"))))
@@ -86,10 +88,12 @@ object ToolClientSpec extends ZIOSpecDefault {
       commandPath: List[String],
       input: TypedSchemaValue,
       stdin: Option[ToolInputStream],
-      stdout: Boolean
+      stdout: Boolean,
+      stderr: Boolean
     ): Either[ToolRpcFailure, ToolRpcStarted] =
       Right(
         ToolRpcStarted(
+          None,
           None,
           Future.successful(Left(failure match {
             case FakeFailure.Denied             => ToolRpcFailure.Denied("no access")
@@ -139,9 +143,15 @@ object ToolClientSpec extends ZIOSpecDefault {
           Right(None)
         )
       )
-      val invocation = ToolInvocation[Nothing, String](stream, Future.successful(Right("done")), () => ())
+      val invocation = ToolInvocation[Nothing, String](Some(stream), None, Future.successful(Right("done")), () => ())
       ZIO.fromFuture(ec => invocation.collect()(ec)).map { result =>
-        assertTrue(result.exists { case (value, bytes) => value == "done" && bytes.sameElements(Array[Byte](1, 2, 3)) })
+        assertTrue(
+          result.exists(value =>
+            value.result == "done" &&
+              value.stdout.exists(_.sameElements(Array[Byte](1, 2, 3))) &&
+              value.stderr.isEmpty
+          )
+        )
       }
     },
     test("started invocation collect waits for stdout after an observer failure") {
@@ -151,7 +161,7 @@ object ToolClientSpec extends ZIOSpecDefault {
         override def cancel(): Future[Unit]                                         = Future.successful(())
       }
       val failure    = new RuntimeException("observer failed")
-      val invocation = ToolInvocation[Nothing, Unit](stream, Future.failed(failure), () => ())
+      val invocation = ToolInvocation[Nothing, Unit](Some(stream), None, Future.failed(failure), () => ())
       val collected  = invocation.collect()(ExecutionContext.global)
       for {
         _     <- ZIO.yieldNow
@@ -164,7 +174,8 @@ object ToolClientSpec extends ZIOSpecDefault {
       val declared   = Usage("bad flag")
       val stream     = new ChunkStream(List(Left(ByteStreamFailure.ResourceExhausted)))
       val invocation = ToolInvocation[CliError, Unit](
-        stream,
+        Some(stream),
+        None,
         Future.successful(Left(ToolError.Tool(declared))),
         () => ()
       )
@@ -175,7 +186,8 @@ object ToolClientSpec extends ZIOSpecDefault {
     test("started invocation cancellation is explicit and observer drop does not invoke it") {
       var cancelled  = false
       val invocation = ToolInvocation[Nothing, Unit](
-        new ChunkStream(List(Right(None))),
+        Some(new ChunkStream(List(Right(None)))),
+        None,
         Future.successful(Right(())),
         () => cancelled = true
       )
@@ -184,7 +196,7 @@ object ToolClientSpec extends ZIOSpecDefault {
       invocation.cancel()
       assertTrue(before, cancelled)
     },
-    test("invoke_and_await_maps_framing_errors_to_rpc_errors") {
+    test("invoke_and_await_distinguishes_rpc_and_remote_tool_errors") {
       for {
         denied <- ZIO.fromFuture(_ =>
                     ToolClientRuntime.invokeAndAwaitPayloadError[String](
@@ -208,12 +220,34 @@ object ToolClientSpec extends ZIOSpecDefault {
           case _                                             => false
         }
         val remoteOk = remote match {
-          case Left(ToolError.Rpc(RpcError.Protocol(message))) =>
-            message.contains("remote tool error: invalid input: bad wire input")
+          case Left(ToolError.RemoteTool(ToolInvokeError.InvalidInput(message))) =>
+            message == "bad wire input"
           case _ => false
         }
         assertTrue(deniedOk, remoteOk)
       }
+    },
+    test("all structural remote tool errors retain their variants") {
+      val errors: List[ToolInvokeError[TypedSchemaValue]] = List(
+        ToolInvokeError.InvalidToolName("bad name"),
+        ToolInvokeError.InvalidCommandPath(List("bad")),
+        ToolInvokeError.InvalidInput("input"),
+        ToolInvokeError.ConstraintViolation("constraint"),
+        ToolInvokeError.InvalidResult("result")
+      )
+      assertTrue(
+        errors.forall(error =>
+          ToolClientRuntime.mapRemoteToolError(error, decodeCliError) == ToolError.RemoteTool(error)
+        )
+      )
+    },
+    test("infallible pending results retain structural remote tool errors") {
+      ZIO
+        .fromFuture(_ =>
+          ToolClientRuntime
+            .invokeAndAwaitInfallible(new FailingToolRpc(FakeFailure.RemoteInvalidInput), Nil, unitInput, None)
+        )
+        .map(result => assertTrue(result == Left(ToolError.RemoteTool(ToolInvokeError.InvalidInput("bad wire input")))))
     }
   )
 }

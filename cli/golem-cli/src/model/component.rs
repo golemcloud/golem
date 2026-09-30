@@ -16,7 +16,7 @@ use crate::agent_id_display::SourceLanguage;
 use crate::agent_id_display::render_type_for_language;
 use crate::log::LogColorize;
 use crate::model::agent::RawAgentId;
-use crate::model::app::{ComponentLayerId, ComponentLayerProperties};
+use crate::model::app::{ComponentLayerId, ComponentLayerProperties, InitialComponentFile};
 use crate::model::app_raw;
 use crate::model::cli_output::StructuredOutput;
 use crate::model::environment::ResolvedEnvironmentIdentity;
@@ -30,7 +30,9 @@ use colored::Colorize;
 use colored::control::SHOULD_COLORIZE;
 use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_common::model::agent::{AgentConfigSource, AgentFileContentHash, AgentTypeName};
-use golem_common::model::card::recipient::{RecipientMonomorphizationContext, RecipientPattern};
+use golem_common::model::card::recipient::{
+    RecipientMonomorphizationContext, RecipientOwnerContext, RecipientPattern,
+};
 use golem_common::model::card::{
     PolymorphicCard, PolymorphicManifestPermissionPattern,
     parse_polymorphic_manifest_permission_grant, parse_polymorphic_permission,
@@ -48,7 +50,9 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::tool::{ToolDeploymentMetadata, ToolName};
 use golem_common::model::worker::TypedAgentConfigEntry;
 use golem_common::model::{diff, tool};
-use golem_common::schema::agent::{AgentTypeSchema, FieldSource, InputSchema, OutputSchema};
+use golem_common::schema::agent::{
+    AgentTypeKind, AgentTypeSchema, ComponentConfigSchema, FieldSource, InputSchema, OutputSchema,
+};
 use golem_common::schema::graph::SchemaGraph;
 use golem_common::schema::tool::Tool;
 use heck::{ToLowerCamelCase, ToSnakeCase};
@@ -292,39 +296,96 @@ impl AgentTypeManifestProvisionConfig {
         &self,
         context: &RecipientMonomorphizationContext,
     ) -> AgentTypeInitialPermissions {
-        let mut permissions = self
-            .initial_card
-            .clone()
-            .map(|card| card.resolve_recipients(context))
-            .unwrap_or_else(|| {
-                AgentTypeInitialPermissions::default_for_recipient(initial_permission_recipient(
-                    context,
-                ))
-            });
-        let recipient = initial_permission_recipient(context).render();
-        for file in &self.files {
-            let path = file.target_path.as_abs_str();
-            let descendants = if path == "/" {
-                "/**".to_string()
-            } else {
-                format!("{path}/**")
-            };
-            let verbs: &[&str] = match file.permissions.unwrap_or_default() {
-                AgentFilePermissions::ReadOnly => &["read", "stat", "list"],
-                AgentFilePermissions::ReadWrite => &["read", "stat", "list", "write", "delete"],
-            };
-            for verb in verbs {
-                for resource in [path, descendants.as_str()] {
-                    permissions.lower_bound.positive.push(
-                        parse_polymorphic_permission(&format!(
-                            "filesystem(?agent) @ {recipient} : {verb} : {resource}"
-                        ))
-                        .expect("canonical initial file path must form a valid permission"),
-                    );
-                }
+        resolve_initial_permission(self.initial_card.clone(), &self.files, context)
+    }
+}
+
+pub fn resolve_initial_permission(
+    initial_card: Option<ParsedInitialPermissionCard>,
+    files: &[app_raw::InitialComponentFile],
+    context: &RecipientMonomorphizationContext,
+) -> AgentTypeInitialPermissions {
+    let mut permissions = initial_card
+        .map(|card| card.resolve_recipients(context))
+        .unwrap_or_else(|| {
+            AgentTypeInitialPermissions::default_for_recipient(initial_permission_recipient(
+                context,
+            ))
+        });
+    let recipient = initial_permission_recipient(context).render();
+    for file in files {
+        let path = file.target_path.as_abs_str();
+        let descendants = if path == "/" {
+            "/**".to_string()
+        } else {
+            format!("{path}/**")
+        };
+        let verbs: &[&str] = match file.permissions.unwrap_or_default() {
+            AgentFilePermissions::ReadOnly => &["read", "stat", "list"],
+            AgentFilePermissions::ReadWrite => &["read", "stat", "list", "write", "delete"],
+        };
+        for verb in verbs {
+            for resource in [path, descendants.as_str()] {
+                permissions.lower_bound.positive.push(
+                    parse_polymorphic_permission(&format!(
+                        "filesystem(?agent) @ {recipient} : {verb} : {resource}"
+                    ))
+                    .expect("canonical initial file path must form a valid permission"),
+                );
             }
         }
-        permissions
+    }
+    permissions
+}
+
+pub fn resolve_component_initial_permission(
+    initial_card: Option<ParsedInitialPermissionCard>,
+    files: &[crate::model::app::InitialComponentFile],
+    context: &RecipientMonomorphizationContext,
+) -> AgentTypeInitialPermissions {
+    let mut permissions = initial_card
+        .map(|card| card.resolve_recipients(context))
+        .unwrap_or_else(|| {
+            AgentTypeInitialPermissions::default_for_recipient(initial_permission_recipient(
+                context,
+            ))
+        });
+    let recipient = initial_permission_recipient(context).render();
+    for file in files {
+        append_initial_file_permissions(
+            &mut permissions,
+            file.target.path.as_abs_str(),
+            file.target.permissions,
+            &recipient,
+        );
+    }
+    permissions
+}
+
+fn append_initial_file_permissions(
+    permissions: &mut AgentTypeInitialPermissions,
+    path: &str,
+    file_permissions: AgentFilePermissions,
+    recipient: &str,
+) {
+    let descendants = if path == "/" {
+        "/**".to_string()
+    } else {
+        format!("{path}/**")
+    };
+    let verbs: &[&str] = match file_permissions {
+        AgentFilePermissions::ReadOnly => &["read", "stat", "list"],
+        AgentFilePermissions::ReadWrite => &["read", "stat", "list", "write", "delete"],
+    };
+    for verb in verbs {
+        for resource in [path, descendants.as_str()] {
+            permissions.lower_bound.positive.push(
+                parse_polymorphic_permission(&format!(
+                    "filesystem(?agent) @ {recipient} : {verb} : {resource}"
+                ))
+                .expect("canonical initial file path must form a valid permission"),
+            );
+        }
     }
 }
 
@@ -343,6 +404,12 @@ pub fn initial_permission_from_manifest_card(
 #[derive(Debug)]
 pub struct ComponentDeployProperties {
     pub wasm_path: PathBuf,
+    pub config_schema: ComponentConfigSchema,
+    pub component_config: Vec<AgentConfigEntryDto>,
+    pub component_initial_card: Option<ParsedInitialPermissionCard>,
+    pub component_env: BTreeMap<String, String>,
+    pub component_files: Vec<InitialComponentFile>,
+    pub component_plugins: Vec<app_raw::PluginInstallation>,
     pub agent_types: Vec<AgentTypeSchema>,
     pub tools: Vec<Tool>,
     pub tool_middlewares: Vec<golem_common::schema::tool::ToolMiddleware>,
@@ -359,6 +426,10 @@ pub struct ResolvedManifestComponentsAndTools {
     pub components: BTreeMap<ComponentName, ComponentDeployProperties>,
     pub remote_tools: RemoteToolDeploymentPlan,
     pub tools_to_publish: BTreeSet<ToolName>,
+    pub environment_tool_middleware_bindings:
+        BTreeMap<ToolName, golem_common::model::tool::ToolBindingInput>,
+    pub agent_tool_middleware_bindings:
+        BTreeMap<AgentTypeName, BTreeMap<ToolName, golem_common::model::tool::ToolBindingInput>>,
 }
 
 #[derive(Debug, Default)]
@@ -397,6 +468,7 @@ pub struct ToolManifestProvisionConfig {
 pub struct ToolManifestDeploymentConfig {
     pub provision: ToolManifestProvisionConfig,
     pub environment_binding: Option<golem_common::model::tool::ToolBindingInput>,
+    pub component_bindings: BTreeMap<ComponentName, golem_common::model::tool::ToolBindingInput>,
     pub agent_bindings: BTreeMap<AgentTypeName, golem_common::model::tool::ToolBindingInput>,
 }
 
@@ -410,19 +482,40 @@ pub fn initial_permission_recipient_context(
         application: environment.application_name.clone(),
         environment: environment.environment_name.clone(),
         component: component_name.clone(),
-        agent_type: agent_type_name.clone(),
+        owner: RecipientOwnerContext::AgentType(agent_type_name.clone()),
+    }
+}
+
+pub fn component_initial_permission_recipient_context(
+    environment: &ResolvedEnvironmentIdentity,
+    component_name: &ComponentName,
+) -> RecipientMonomorphizationContext {
+    RecipientMonomorphizationContext {
+        account: environment.server_environment.owner_account_email.clone(),
+        application: environment.application_name.clone(),
+        environment: environment.environment_name.clone(),
+        component: component_name.clone(),
+        owner: RecipientOwnerContext::ComponentExternalToolOwner,
     }
 }
 
 pub fn initial_permission_recipient(
     context: &RecipientMonomorphizationContext,
 ) -> RecipientPattern {
+    let RecipientOwnerContext::AgentType(agent_type) = &context.owner else {
+        return RecipientPattern::ComponentExternalToolOwner {
+            account: context.account.clone(),
+            application: context.application.clone(),
+            environment: context.environment.clone(),
+            component: context.component.clone(),
+        };
+    };
     RecipientPattern::Agent {
         account: context.account.clone(),
         application: context.application.clone(),
         environment: context.environment.clone(),
         component: context.component.clone(),
-        agent_type: context.agent_type.clone(),
+        agent_type: agent_type.clone(),
     }
 }
 
@@ -443,6 +536,7 @@ pub fn show_exported_agent_constructors(
 ) -> Vec<String> {
     agents
         .iter()
+        .filter(|agent| agent.kind != AgentTypeKind::HttpRouter)
         .map(|c| render_agent_constructor(c, wrapper_naming, true))
         .collect()
 }
@@ -573,20 +667,27 @@ pub fn agent_interface_name(component: &ComponentDto, agent_type_name: &str) -> 
 
 #[cfg(test)]
 mod tests {
-    use super::{AgentTypeManifestProvisionConfig, ParsedInitialPermissionCard, app_raw};
+    use super::{
+        AgentTypeManifestProvisionConfig, ParsedInitialPermissionCard, app_raw,
+        resolve_initial_permission, show_exported_agent_constructors,
+    };
+    use golem_common::model::Empty;
     use golem_common::model::account::AccountEmail;
-    use golem_common::model::agent::AgentTypeName;
+    use golem_common::model::agent::{AgentMode, AgentTypeName, Snapshotting};
     use golem_common::model::application::ApplicationName;
     use golem_common::model::card::owner::{AgentOwnerLeafPattern, PolymorphicAgentOwnerPattern};
     use golem_common::model::card::recipient::{
         PolymorphicAgentRecipientPattern, PolymorphicRecipientPattern,
-        RecipientMonomorphizationContext, RecipientPattern,
+        RecipientMonomorphizationContext, RecipientOwnerContext, RecipientPattern,
     };
     use golem_common::model::card::{
         AgentMethodName, AgentResourcePattern, AgentVerb, PolymorphicManifestPermissionPattern,
     };
     use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath, ComponentName};
     use golem_common::model::environment::EnvironmentName;
+    use golem_common::schema::{
+        AgentConstructorSchema, AgentTypeKind, AgentTypeSchema, InputSchema, SchemaGraph,
+    };
     use test_r::test;
 
     fn manifest_card() -> ParsedInitialPermissionCard {
@@ -600,6 +701,58 @@ mod tests {
             Vec::new(),
         )
         .unwrap()
+    }
+
+    fn agent_type(kind: AgentTypeKind, name: &str) -> AgentTypeSchema {
+        AgentTypeSchema {
+            kind,
+            type_name: AgentTypeName(name.to_string()),
+            description: String::new(),
+            source_language: String::new(),
+            schema: SchemaGraph::empty(),
+            constructor: AgentConstructorSchema {
+                name: None,
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: InputSchema::Parameters(vec![]),
+            },
+            methods: vec![],
+            dependencies: vec![],
+            mode: AgentMode::Durable,
+            http_mount: None,
+            snapshotting: Snapshotting::Disabled(Empty {}),
+            config: vec![],
+        }
+    }
+
+    #[test]
+    fn tooling_corpus_controls_constructor_discovery_by_kind() {
+        let corpus: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../golem-service-base/tests/fixtures/http-handlers/corpus.json"
+        ))
+        .unwrap();
+
+        for id in ["tooling-router-discovery", "tooling-name-not-kind"] {
+            let case = corpus["cases"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|case| case["id"] == id)
+                .unwrap();
+            let kind = match case["input"]["kind"].as_str().unwrap() {
+                "regular" => AgentTypeKind::Regular,
+                "http-router" => AgentTypeKind::HttpRouter,
+                other => panic!("{id}: unsupported agent kind {other}"),
+            };
+            let name = case["input"]["name"].as_str().unwrap_or("Router");
+            let constructors = show_exported_agent_constructors(&[agent_type(kind, name)], true);
+
+            assert_eq!(
+                !constructors.is_empty(),
+                case["expect"]["included"].as_bool().unwrap(),
+                "{id}"
+            );
+        }
     }
 
     #[test]
@@ -706,16 +859,40 @@ mod tests {
         let context = test_context();
         let initial_permission =
             AgentTypeManifestProvisionConfig::default().to_initial_permission(&context);
+        let RecipientOwnerContext::AgentType(agent_type) = context.owner else {
+            panic!("expected agent context")
+        };
         let expected = RecipientPattern::Agent {
             account: context.account,
             application: context.application,
             environment: context.environment,
             component: context.component,
-            agent_type: context.agent_type,
+            agent_type,
         };
 
         assert!(
             initial_permission
+                .lower_bound
+                .positive
+                .iter()
+                .all(|permission| permission.recipient() == &expected)
+        );
+    }
+
+    #[test]
+    fn component_initial_permission_recipient_is_isolated_from_real_agent_owner() {
+        let mut context = test_context();
+        context.owner = RecipientOwnerContext::ComponentExternalToolOwner;
+        let permissions = resolve_initial_permission(None, &[], &context);
+        let expected = RecipientPattern::ComponentExternalToolOwner {
+            account: context.account,
+            application: context.application,
+            environment: context.environment,
+            component: context.component,
+        };
+
+        assert!(
+            permissions
                 .lower_bound
                 .positive
                 .iter()
@@ -769,7 +946,7 @@ mod tests {
             application: ApplicationName("shop".to_string()),
             environment: EnvironmentName("prod".to_string()),
             component: ComponentName("cart-svc".to_string()),
-            agent_type: AgentTypeName("Cart".to_string()),
+            owner: RecipientOwnerContext::AgentType(AgentTypeName("Cart".to_string())),
         }
     }
 }

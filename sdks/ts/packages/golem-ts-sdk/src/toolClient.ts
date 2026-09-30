@@ -12,12 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { RpcError } from 'golem:tool/host@0.1.0';
+import type { ToolRpcError } from 'golem:core/types@2.0.0';
+import type { TypedSchemaValue } from 'golem:tool/common@0.1.0';
 import { createToolClientTransport, isRpcError } from './bridge/tool';
+import {
+  mapSettledToolResult,
+  resultFromSettledToolResult,
+  startedToolInvocation,
+} from './internal/tool/startedToolInvocation';
+import { readConcrete, writeConcrete, type CompiledCommand } from './internal/tool/compiled';
 import {
   createToolClient,
   decodeDeclaredToolError,
   getExtendedToolDefinition,
+  registerToolClientFactory,
   type AnyToolDefinition,
   type ToolClient,
   type ToolClientFailureContext,
@@ -30,8 +38,35 @@ export interface ToolClientOptions {
   readonly lookupName?: string;
 }
 
+/** A caller-owned typed command definition; its commands may be a subset of the deployed tool. */
+export interface ToolClientDefinition<Definition extends AnyToolDefinition> {
+  readonly name?: string;
+  readonly definition: Definition;
+  client(
+    targetName?: string,
+    options?: Omit<ToolClientOptions, 'lookupName'>,
+  ): ToolClient<Definition>;
+}
+
+/** Bind a partial typed tool definition without discovery or compatibility preflight. */
+export function toolClientDefinition<Definition extends AnyToolDefinition>(
+  definition: Definition,
+  name?: string,
+): ToolClientDefinition<Definition> {
+  return Object.freeze({
+    name,
+    definition,
+    client(targetName?: string, options: Omit<ToolClientOptions, 'lookupName'> = {}) {
+      const lookupName = name ?? targetName;
+      if (!lookupName)
+        throw new TypeError('A nameless tool client definition requires a target name');
+      return client(definition, { ...options, lookupName });
+    },
+  });
+}
+
 export type ToolCallErrorCause<Errors> =
-  | { readonly tag: 'rpc'; readonly error: RpcError }
+  | { readonly tag: 'rpc'; readonly error: ToolRpcError }
   | { readonly tag: 'tool'; readonly error: Errors }
   | {
       readonly tag: 'unknown-error';
@@ -61,6 +96,126 @@ export function client<Definition extends AnyToolDefinition>(
   return createToolClient(definition, transport, mapToolClientFailure);
 }
 
+registerToolClientFactory(client);
+
+/** @internal Compiler-emitted model-free typed tool client. */
+export function compiledToolClient(
+  toolName: string,
+  commands: CompiledCommand[],
+  options: ToolClientOptions = {},
+): object {
+  const transport = options.transport ?? createToolClientTransport(options.lookupName ?? toolName);
+  const root: Record<string, unknown> = {};
+  for (const command of commands) {
+    let target = root;
+    const members = command.path.length ? command.path : [toolName];
+    for (const member of members.slice(0, -1))
+      target = (target[member] ??= {}) as Record<string, unknown>;
+    const name = members.at(-1)!;
+    const callName = [toolName, ...command.path].join(' ');
+    const method = (args: Record<string, unknown>): unknown => {
+      const start = () => {
+        try {
+          if (args === null || typeof args !== 'object' || Array.isArray(args))
+            throw new TypeError('tool client arguments must be an object');
+          const input = {
+            graph: command.input.graph,
+            value: writeConcrete(command.input.codec, args),
+          };
+          const stdin = command.stdin ? args.stdin : undefined;
+          if (stdin !== undefined && !(stdin instanceof ReadableStream))
+            throw new TypeError('stdin must be a readable stream');
+          if (command.stdin?.required && stdin === undefined)
+            throw new TypeError('required stdin stream is missing');
+          const invocation = transport.start(
+            command.path,
+            input,
+            stdin as ReadableStream<Uint8Array> | undefined,
+            command.stdout !== undefined,
+            command.stderr !== undefined,
+          );
+          const settled = mapSettledToolResult(
+            invocation.settledResult,
+            (terminal) => {
+              try {
+                if (!command.result && terminal.result !== undefined)
+                  throw new TypeError('unit command returned an unexpected result');
+                if (command.result && terminal.result === undefined)
+                  throw new TypeError('structured command result is missing');
+                return command.result
+                  ? readConcrete(command.result.codec, terminal.result!.value)
+                  : undefined;
+              } catch (error) {
+                throw mapCompiledFailure(error, command, callName);
+              }
+            },
+            (error) => {
+              throw mapCompiledFailure(error, command, callName);
+            },
+          );
+          if (!command.stdout && !command.stderr) return resultFromSettledToolResult(settled);
+          if (command.stdout && !invocation.stdout) {
+            invocation.cancel();
+            throw new TypeError('required stdout stream is missing');
+          }
+          if (command.stderr && !invocation.stderr) {
+            invocation.cancel();
+            throw new TypeError('required stderr stream is missing');
+          }
+          return startedToolInvocation(invocation.stdout, invocation.stderr, settled, () =>
+            invocation.cancel(),
+          );
+        } catch (error) {
+          throw mapCompiledFailure(error, command, callName);
+        }
+      };
+      return command.stdout || command.stderr ? start() : Promise.resolve().then(start);
+    };
+    Object.defineProperty(target, name, { value: method, enumerable: true });
+  }
+  return root;
+}
+
+function mapCompiledFailure(error: unknown, command: CompiledCommand, callName: string): unknown {
+  if (error instanceof ToolCallError) return error;
+  if (
+    error !== null &&
+    typeof error === 'object' &&
+    (error as { tag?: unknown }).tag === 'remote-tool-error' &&
+    (error as { val?: { tag?: unknown } }).val?.tag === 'custom-error'
+  ) {
+    const custom = (
+      error as {
+        val: { val: { name: string; payload: TypedSchemaValue } };
+      }
+    ).val.val;
+    const codec = command.errors[custom.name];
+    if (codec) {
+      try {
+        return new ToolCallError({
+          tag: 'tool',
+          error: {
+            tag: 'err',
+            name: custom.name,
+            hasPayload: true,
+            payload: readConcrete(codec.codec, custom.payload.value),
+          },
+        });
+      } catch (decodeError) {
+        return protocolToolCallError(`${callName}: ${errorMessage(decodeError)}`);
+      }
+    }
+    if (Object.prototype.hasOwnProperty.call(command.errors, custom.name))
+      return new ToolCallError({
+        tag: 'tool',
+        error: { tag: 'err', name: custom.name, hasPayload: false },
+      });
+    return new ToolCallError({ tag: 'unknown-error', name: custom.name, payload: custom.payload });
+  }
+  if (isRpcError(error)) return new ToolCallError({ tag: 'rpc', error });
+  return protocolToolCallError(`${callName}: ${errorMessage(error)}`);
+}
+
 function mapToolClientFailure(
   error: unknown,
   { body, callName }: ToolClientFailureContext,
@@ -72,7 +227,7 @@ function mapToolClientFailure(
 
 function mapToolRpcError(
   body: ToolClientFailureContext['body'],
-  error: RpcError,
+  error: ToolRpcError,
   callName: string,
 ): ToolCallError<unknown> {
   if (error.tag !== 'remote-tool-error' || error.val.tag !== 'custom-error') {

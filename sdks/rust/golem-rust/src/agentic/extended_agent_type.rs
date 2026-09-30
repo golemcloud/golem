@@ -16,8 +16,8 @@ use crate::agentic::{AutoInjectedParamType, schema_graph_root};
 use crate::golem_agentic::golem::agent::common::AgentConfigDeclaration;
 use crate::golem_agentic::golem::agent::common::{
     AgentConfigSource, AgentConstructor, AgentDependency, AgentMethod, AgentMode, AgentType,
-    AutoInjectedKind, FieldSource, HttpEndpointDetails, HttpMountDetails, InputSchema, NamedField,
-    OutputSchema, ReadOnlyConfig, Snapshotting,
+    AgentTypeKind, AutoInjectedKind, FieldSource, HttpEndpointDetails, HttpMountDetails,
+    InputSchema, NamedField, OutputSchema, ReadOnlyConfig, Snapshotting,
 };
 use crate::schema::wit::GraphEncoder;
 use crate::schema::{MetadataEnvelope, SchemaGraph, merge_agent_graphs};
@@ -30,6 +30,7 @@ use std::collections::HashSet;
 #[derive(Clone)]
 pub struct ExtendedAgentType {
     pub type_name: String,
+    pub kind: AgentTypeKind,
     pub description: String,
     pub source_language: String,
     pub constructor: ExtendedAgentConstructor,
@@ -53,6 +54,92 @@ pub struct ExtendedAgentConfigDeclaration {
 }
 
 impl ExtendedAgentType {
+    pub fn from_agent_type(agent: AgentType) -> Result<Self, crate::schema::wit::DecodeError> {
+        let decoder = crate::schema::wit::GraphDecoder::new(&agent.schema)?;
+        let defs = decoder.decode_defs()?;
+        let graph = |index| -> Result<SchemaGraph, crate::schema::wit::DecodeError> {
+            Ok(SchemaGraph {
+                root: decoder.decode_type_at(index)?,
+                defs: defs.clone(),
+            })
+        };
+        let input = |schema| -> Result<
+            Vec<(String, EnrichedParameterSchema)>,
+            crate::schema::wit::DecodeError,
+        > {
+            let InputSchema::Parameters(fields) = schema;
+            fields
+                .into_iter()
+                .map(|field| {
+                    Ok((
+                        field.name,
+                        match field.source {
+                            FieldSource::UserSupplied => {
+                                EnrichedParameterSchema::Value(graph(field.schema)?)
+                            }
+                            FieldSource::AutoInjected(AutoInjectedKind::Principal) => {
+                                EnrichedParameterSchema::AutoInject(
+                                    AutoInjectedParamType::Principal,
+                                )
+                            }
+                        },
+                    ))
+                })
+                .collect()
+        };
+        let methods = agent
+            .methods
+            .into_iter()
+            .map(|method| {
+                Ok(EnrichedAgentMethod {
+                    name: method.name,
+                    description: method.description,
+                    prompt_hint: method.prompt_hint,
+                    http_endpoint: method.http_endpoint,
+                    read_only: method.read_only,
+                    input_schema: input(method.input_schema)?,
+                    output_schema: match method.output_schema {
+                        OutputSchema::Unit => vec![],
+                        OutputSchema::Single(index) => {
+                            vec![("return_value".to_string(), graph(index)?)]
+                        }
+                    },
+                })
+            })
+            .collect::<Result<Vec<_>, crate::schema::wit::DecodeError>>()?;
+        let mut sorted_method_indices: Vec<usize> = (0..methods.len()).collect();
+        sorted_method_indices.sort_by(|a, b| methods[*a].name.cmp(&methods[*b].name));
+        Ok(Self {
+            type_name: agent.type_name,
+            kind: agent.kind,
+            description: agent.description,
+            source_language: agent.source_language,
+            constructor: ExtendedAgentConstructor {
+                name: agent.constructor.name,
+                description: agent.constructor.description,
+                prompt_hint: agent.constructor.prompt_hint,
+                input_schema: input(agent.constructor.input_schema)?,
+            },
+            methods,
+            dependencies: agent.dependencies,
+            mode: agent.mode,
+            http_mount: agent.http_mount,
+            snapshotting: agent.snapshotting,
+            config: agent
+                .config
+                .into_iter()
+                .map(|config| {
+                    Ok(ExtendedAgentConfigDeclaration {
+                        source: config.source,
+                        path: config.path,
+                        value_type: graph(config.value_type)?,
+                    })
+                })
+                .collect::<Result<_, crate::schema::wit::DecodeError>>()?,
+            sorted_method_indices,
+        })
+    }
+
     pub fn principal_params_in_constructor(&self) -> HashSet<String> {
         let mut principal_params = HashSet::new();
 
@@ -69,6 +156,7 @@ impl ExtendedAgentType {
         let agent_schema = build_agent_schema(self).expect("failed to build agent schema");
         AgentType {
             type_name: self.type_name.clone(),
+            kind: self.kind,
             description: self.description.clone(),
             source_language: self.source_language.clone(),
             schema: agent_schema.schema,
@@ -282,5 +370,114 @@ fn encode_output_schema(
                     .collect(),
             ))?,
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::golem_agentic::golem::agent::common::{
+        AuthDetails, CorsOptions, ExactFileMapping, FileMapping, HttpMethod, SubtreeFileMapping,
+    };
+    use test_r::test;
+
+    #[test]
+    fn low_level_http_router_metadata_survives_conversion() {
+        let static_bindings = vec![
+            FileMapping::Exact(ExactFileMapping {
+                public_path: vec!["index.html".to_string()],
+                file_path: "assets/index.html".to_string(),
+            }),
+            FileMapping::Subtree(SubtreeFileMapping {
+                public_prefix: vec!["static".to_string()],
+                filesystem_root: "assets/static".to_string(),
+            }),
+        ];
+        let filesystem_bindings = vec![
+            FileMapping::Subtree(SubtreeFileMapping {
+                public_prefix: vec!["data".to_string()],
+                filesystem_root: "/data".to_string(),
+            }),
+            FileMapping::Exact(ExactFileMapping {
+                public_path: vec!["config.json".to_string()],
+                file_path: "/config/config.json".to_string(),
+            }),
+        ];
+        let extended = ExtendedAgentType {
+            type_name: "Router".to_string(),
+            kind: AgentTypeKind::HttpRouter,
+            description: String::new(),
+            source_language: "rust".to_string(),
+            constructor: ExtendedAgentConstructor {
+                name: None,
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: vec![],
+            },
+            methods: vec![EnrichedAgentMethod {
+                name: "route".to_string(),
+                description: String::new(),
+                http_endpoint: vec![HttpEndpointDetails {
+                    http_method: HttpMethod::Any,
+                    path_suffix: vec![],
+                    header_vars: vec![],
+                    query_vars: vec![],
+                    auth_details: None,
+                    cors_options: CorsOptions {
+                        allowed_patterns: vec![],
+                    },
+                    durable_streams: None,
+                }],
+                prompt_hint: None,
+                input_schema: vec![],
+                output_schema: vec![],
+                read_only: None,
+            }],
+            dependencies: vec![],
+            mode: AgentMode::Ephemeral,
+            http_mount: Some(HttpMountDetails {
+                path_prefix: vec![],
+                auth_details: Some(AuthDetails { required: false }),
+                phantom_agent: false,
+                cors_options: CorsOptions {
+                    allowed_patterns: vec![],
+                },
+                webhook_suffix: vec![],
+                static_bindings,
+                filesystem_bindings,
+                openapi_provider_method: Some("openapi".to_string()),
+            }),
+            snapshotting: Snapshotting::Disabled,
+            config: vec![],
+            sorted_method_indices: vec![],
+        };
+
+        let converted = extended.to_agent_type();
+
+        assert!(matches!(converted.kind, AgentTypeKind::HttpRouter));
+        assert!(matches!(
+            converted.methods[0].http_endpoint[0].http_method,
+            HttpMethod::Any
+        ));
+        let mount = converted
+            .http_mount
+            .expect("HTTP mount should be preserved");
+        assert!(matches!(
+            mount.static_bindings.as_slice(),
+            [FileMapping::Exact(exact), FileMapping::Subtree(subtree)]
+                if exact.public_path == ["index.html"]
+                    && exact.file_path == "assets/index.html"
+                    && subtree.public_prefix == ["static"]
+                    && subtree.filesystem_root == "assets/static"
+        ));
+        assert!(matches!(
+            mount.filesystem_bindings.as_slice(),
+            [FileMapping::Subtree(subtree), FileMapping::Exact(exact)]
+                if subtree.public_prefix == ["data"]
+                    && subtree.filesystem_root == "/data"
+                    && exact.public_path == ["config.json"]
+                    && exact.file_path == "/config/config.json"
+        ));
+        assert_eq!(mount.openapi_provider_method.as_deref(), Some("openapi"));
     }
 }

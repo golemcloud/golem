@@ -12,6 +12,34 @@ const Evidence = z.object({
   bytesRead: s.u64(),
 });
 
+const CompletionEvidence = z.object({
+  output: s.bytes(),
+  stdoutTerminal: z.string(),
+  resultTerminal: z.string(),
+});
+
+const DualOutputEvidence = z.object({
+  stdout: s.bytes(),
+  stderr: s.bytes(),
+  resultTerminal: z.string(),
+});
+
+async function collect(reader: ReadableStreamDefaultReader<Uint8Array>): Promise<Uint8Array> {
+  const chunks: Uint8Array[] = [];
+  while (true) {
+    const item = await reader.read();
+    if (item.done) break;
+    chunks.push(item.value);
+  }
+  const result = new Uint8Array(chunks.reduce((size, chunk) => size + chunk.byteLength, 0));
+  let offset = 0;
+  for (const chunk of chunks) {
+    result.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return result;
+}
+
 const Caller = defineAgent({
   name: "TsToolStreamingCaller",
   id: { name: z.string() },
@@ -24,12 +52,35 @@ const Caller = defineAgent({
       input: {},
       returns: z.string(),
     }),
+    declaredErrorCompletion: method({
+      input: {},
+      returns: CompletionEvidence,
+    }),
+    dualOutputDeclaredError: method({
+      input: {},
+      returns: DualOutputEvidence,
+    }),
   },
 });
 
 Caller.implement({
   init: () => ({}),
   methods: {
+    async dualOutputDeclaredError() {
+      const invocation = TsStreamingClient.newClient().dual();
+      if (!invocation.stdout || !invocation.stderr) {
+        throw new Error("TypeScript dual-output invocation omitted a declared channel");
+      }
+      const [result, stdout, stderr] = await Promise.all([
+        invocation.result.then(
+          () => "ok",
+          () => "declared-error",
+        ),
+        collect(invocation.stdout.getReader()),
+        collect(invocation.stderr.getReader()),
+      ]);
+      return { stdout, stderr, resultTerminal: result };
+    },
     async markerBeforeEof({ payload }) {
       let releaseInput!: () => void;
       const inputGate = new Promise<void>((resolve) => {
@@ -47,6 +98,9 @@ Caller.implement({
         "marker-echo",
         stdin,
       );
+      if (!invocation.stdout) {
+        throw new Error("TypeScript tool invocation omitted declared stdout");
+      }
       const reader = invocation.stdout.getReader();
       const marker = await reader.read();
       if (
@@ -90,6 +144,9 @@ Caller.implement({
         "resource-exhausted",
         stdin,
       );
+      if (!invocation.stdout) {
+        throw new Error("TypeScript tool invocation omitted declared stdout");
+      }
       const [result, stdout] = await Promise.allSettled([
         invocation.result,
         invocation.stdout.getReader().read(),
@@ -103,6 +160,45 @@ Caller.implement({
       }
       if (!(stdout.reason instanceof ToolStreamError)) throw stdout.reason;
       return stdout.reason.failure.tag;
+    },
+    async declaredErrorCompletion() {
+      const stdin = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.close();
+        },
+      });
+      const invocation = TsStreamingClient.newClient().ts_streaming(
+        "declared-error",
+        stdin,
+      );
+      if (!invocation.stdout) {
+        throw new Error("TypeScript tool invocation omitted declared stdout");
+      }
+      const chunks: Uint8Array[] = [];
+      const reader = invocation.stdout.getReader();
+      const [result, stdout] = await Promise.allSettled([
+        invocation.result,
+        (async () => {
+          while (true) {
+            const item = await reader.read();
+            if (item.done) return "finished";
+            chunks.push(item.value);
+          }
+        })(),
+      ]);
+      const output = new Uint8Array(
+        chunks.reduce((size, chunk) => size + chunk.byteLength, 0),
+      );
+      let offset = 0;
+      for (const chunk of chunks) {
+        output.set(chunk, offset);
+        offset += chunk.byteLength;
+      }
+      return {
+        output,
+        stdoutTerminal: stdout.status === "fulfilled" ? stdout.value : "failed",
+        resultTerminal: result.status === "rejected" ? "declared-error" : "ok",
+      };
     },
   },
 });

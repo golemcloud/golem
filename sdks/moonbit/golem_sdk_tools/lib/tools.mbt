@@ -8,6 +8,7 @@ pub(all) enum ToolHiddenType {
   Principal
   InputStream
   OutputStream
+  ErrorStream
 } derive(Debug, Eq)
 
 ///|
@@ -47,6 +48,7 @@ pub(all) struct ToolArgInfo {
   min_length : String?
   max_length : String?
   direction : String?
+  channel : String?
   mimes : Array[String]
   schemes : Array[String]
   min : String?
@@ -117,6 +119,7 @@ pub(all) struct ToolInfo {
   source_name : String
   name : String
   version : String?
+  requires_filesystem : Bool
   description : String
   examples : Array[ToolExample]
   commands : Array[ToolCommandInfo]
@@ -630,6 +633,7 @@ fn parse_arg(
   let min_length : Ref[String?] = Ref(None)
   let max_length : Ref[String?] = Ref(None)
   let direction : Ref[String?] = Ref(None)
+  let channel : Ref[String?] = Ref(None)
   let min : Ref[String?] = Ref(None)
   let max : Ref[String?] = Ref(None)
   let bounds : Ref[String?] = Ref(None)
@@ -659,6 +663,7 @@ fn parse_arg(
           "min_length" => set_once(min_length, v, k)
           "max_length" => set_once(max_length, v, k)
           "direction" => set_once(direction, v, k)
+          "channel" => set_once(channel, v, k)
           "mime" => mimes.push(v)
           "scheme" => schemes.push(v)
           "min" => set_once(min, v, k)
@@ -706,6 +711,9 @@ fn parse_arg(
   if direction.val is Some(d) && !["input", "output", "inout"].contains(d) {
     tool_fail("Invalid direction '" + d + "'")
   }
+  if channel.val is Some(c) && !["stdout", "stderr"].contains(c) {
+    tool_fail("Invalid output channel '" + c + "'")
+  }
   if optional_scalar.val == Some(true) && repeatable.val is Some(_) {
     tool_fail("optional_scalar cannot be combined with repeatable")
   }
@@ -738,6 +746,7 @@ fn parse_arg(
     min_length: min_length.val,
     max_length: max_length.val,
     direction: direction.val,
+    channel: channel.val,
     mimes,
     schemes,
     min: min.val,
@@ -868,13 +877,13 @@ fn hidden_or_public(ty : @syntax.Type) -> ToolParamType raise ToolParseError {
   match pt {
     Simple("@common.Principal" | "@agentCommon.Principal" | "@tool.Principal") =>
       Hidden(Principal)
-    Simple("@tool.ProviderStdout") => Hidden(OutputStream)
+    Simple("@tool.ProviderOutput") => Hidden(OutputStream)
     Parameterized("@asyncCore.Stream" | "Stream", [_]) => Hidden(InputStream)
     Parameterized("@asyncCore.Sink" | "Sink", [_]) => Hidden(OutputStream)
     Simple(name) if name == "Principal" ||
       name == "InputStream" ||
       name == "OutputStream" ||
-      name == "ProviderStdout" =>
+      name == "ProviderOutput" =>
       raise ToolParseError(
         "Hidden SDK type '" + name + "' must use its exact qualified name",
       )
@@ -1221,16 +1230,44 @@ fn parse_command(
       )
     }
   }
+  for arg in args {
+    if arg.channel is Some(channel) {
+      let mut found = false
+      for i, param in params {
+        if param.0 == arg.source_param {
+          found = true
+          params[i] = match (param.1, channel) {
+            (Hidden(OutputStream), "stdout") => param
+            (LabelledHidden(OutputStream), "stdout") => param
+            (Hidden(OutputStream), "stderr") => (param.0, Hidden(ErrorStream))
+            (LabelledHidden(OutputStream), "stderr") =>
+              (param.0, LabelledHidden(ErrorStream))
+            _ => {
+              tool_fail(
+                "channel is only valid on @tool.ProviderOutput parameters",
+              )
+              param
+            }
+          }
+        }
+      }
+      if !found {
+        tool_fail("channel references a missing output parameter")
+      }
+    }
+  }
   let mut input_streams = 0
   let mut output_streams = 0
+  let mut error_streams = 0
   for p in params {
     match p.1 {
       Hidden(InputStream) | LabelledHidden(InputStream) => input_streams += 1
       Hidden(OutputStream) | LabelledHidden(OutputStream) => output_streams += 1
+      Hidden(ErrorStream) | LabelledHidden(ErrorStream) => error_streams += 1
       _ => ()
     }
   }
-  if input_streams > 1 || output_streams > 1 {
+  if input_streams > 1 || output_streams > 1 || error_streams > 1 {
     tool_fail("Tool command '" + owner + "' has duplicate stream parameters")
   }
   let mapped = moonbit_name_to_kebab_case(decl.name.name)
@@ -1381,20 +1418,23 @@ pub fn parse_tools(
               }
               let mut name : String? = None
               let mut version : String? = None
+              let mut requires_filesystem = false
               for p in props {
-                match prop_string(p) {
-                  Some((None, v)) =>
+                match (prop_string(p), prop_bool(p)) {
+                  (Some((None, v)), _) =>
                     if name is None {
                       name = Some(v)
                     } else {
                       tool_fail("Duplicate tool name")
                     }
-                  Some((Some("version"), v)) =>
+                  (Some((Some("version"), v)), _) =>
                     if version is None {
                       version = Some(v)
                     } else {
                       tool_fail("Duplicate tool version")
                     }
+                  (_, Some(("requires_filesystem", value))) =>
+                    requires_filesystem = value
                   _ =>
                     tool_fail(
                       "Malformed or unknown #derive.tool property on '" +
@@ -1422,6 +1462,7 @@ pub fn parse_tools(
                 source_name: decl.tycon,
                 name: wire,
                 version,
+                requires_filesystem,
                 description: tool_doc(decl.doc),
                 examples: parse_examples(decl.attrs, "tool " + decl.tycon),
                 commands: [],
@@ -1472,7 +1513,9 @@ pub fn parse_tools(
           Some({ name: Ident(name=owner), .. }) =>
             match by_source.get(owner) {
               Some(idx) if fun_decl.vis is Pub(..) => {
-                if fun_decl.name.name == "new" || fun_decl.name.name == "drop" {
+                if fun_decl.name.name == "new" ||
+                  fun_decl.name.name == "new_for" ||
+                  fun_decl.name.name == "drop" {
                   tool_fail(
                     "Tool command '" +
                     owner +

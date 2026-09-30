@@ -4,10 +4,15 @@ import golem.BaseAgent
 import golem.runtime.annotations.*
 import golem.runtime.tool.client.ToolRpcClient
 import golem.schema.IntoSchema
-import golem.tool.{ByteStreamFailure, ToolInputStream, ToolInvokeError, ToolOutputStream, ToolRpcFailure}
+import golem.tool.{ByteStreamFailure, ToolError, ToolInputStream, ToolInvokeError, ToolOutputStream, ToolRpcFailure}
 import zio.blocks.schema.Schema
 
 import scala.concurrent.{ExecutionContext, Future, Promise}
+
+enum ScalaStreamingError {
+  @error(kind = "runtime", exitCode = 1)
+  case Expected(message: String)
+}
 
 @toolDefinition(name = "scala-streaming", version = "1.0.0")
 trait ScalaStreamingTool {
@@ -19,6 +24,12 @@ trait ScalaStreamingTool {
 
   def output(mode: String, stdout: ToolOutputStream): Future[String]
   def outputUnit(stdout: ToolOutputStream): Future[Unit]
+  def declaredOutput(stdout: ToolOutputStream): Future[Either[ScalaStreamingError, String]]
+  @arg("stderr", channel = "stderr")
+  def dualOutput(
+      stdout: ToolOutputStream,
+      stderr: ToolOutputStream
+  ): Future[Either[ScalaStreamingError, String]]
   def plain(): String
 }
 
@@ -33,6 +44,22 @@ final class ScalaStreamingToolImpl extends ScalaStreamingTool {
 
   override def outputUnit(stdout: ToolOutputStream): Future[Unit] =
     stdout.write(Array[Byte](0, 127, -128, -1)).flatMap(requireWrite)
+
+  override def declaredOutput(stdout: ToolOutputStream): Future[Either[ScalaStreamingError, String]] =
+    stdout
+      .write("scala-declared:".getBytes("UTF-8"))
+      .flatMap(requireWrite)
+      .map(_ => Left(ScalaStreamingError.Expected("expected")))
+
+  override def dualOutput(
+      stdout: ToolOutputStream,
+      stderr: ToolOutputStream
+  ): Future[Either[ScalaStreamingError, String]] =
+    stdout
+      .write(Array[Byte](0, 127, -1))
+      .flatMap(requireWrite)
+      .zip(stderr.write(Array[Byte](-128, 1, 2)).flatMap(requireWrite))
+      .map(_ => Left(ScalaStreamingError.Expected("dual-expected")))
 
   override def output(mode: String, stdout: ToolOutputStream): Future[String] =
     outputUnit(stdout).flatMap { _ =>
@@ -81,17 +108,70 @@ object ScalaOutputEvidence {
   implicit val schema: Schema[ScalaOutputEvidence] = Schema.derived
 }
 
+final case class ScalaDualOutputEvidence(stdout: List[Int], stderr: List[Int], result: String)
+object ScalaDualOutputEvidence {
+  implicit val schema: Schema[ScalaDualOutputEvidence] = Schema.derived
+}
+
 @agentDefinition()
 trait ScalaToolStreamingCaller extends BaseAgent {
   class Id(val name: String)
   def markerBeforeEof(payload: String): Future[ScalaStreamEvidence]
   def invalidCommandPathCleanup(): Future[ScalaCleanupEvidence]
   def outputEvidence(mode: String): Future[ScalaOutputEvidence]
+  def declaredErrorCompletion(): Future[ScalaOutputEvidence]
+  def dualOutputDeclaredError(): Future[ScalaDualOutputEvidence]
 }
 
 @agentImplementation()
 final class ScalaToolStreamingCallerImpl(name: String) extends ScalaToolStreamingCaller {
   private implicit val ec: ExecutionContext = ExecutionContext.global
+
+  override def dualOutputDeclaredError(): Future[ScalaDualOutputEvidence] =
+    ScalaStreamingToolClient().dualOutput() match {
+      case Left(error) => Future.failed(new IllegalStateException(s"failed to start dual-output tool: $error"))
+      case Right(invocation) =>
+        def drain(stream: ToolInputStream, bytes: List[Int]): Future[List[Int]] =
+          stream.read().flatMap {
+            case Right(Some(chunk)) => drain(stream, bytes ++ chunk.map(_ & 0xff).toList)
+            case Right(None)        => Future.successful(bytes)
+            case Left(error)        => Future.failed(new IllegalStateException(s"dual output failed: $error"))
+          }
+
+        (invocation.stdout, invocation.stderr) match {
+          case (Some(stdout), Some(stderr)) =>
+            invocation.result.zip(drain(stdout, Nil).zip(drain(stderr, Nil))).map {
+              case (Left(ToolError.Tool(ScalaStreamingError.Expected(message))), (out, err)) =>
+                ScalaDualOutputEvidence(out, err, s"declared:$message")
+              case (other, (out, err)) =>
+                ScalaDualOutputEvidence(out, err, s"unexpected:$other")
+            }
+          case _ => Future.failed(new IllegalStateException("dual-output invocation omitted a declared channel"))
+        }
+    }
+
+  override def declaredErrorCompletion(): Future[ScalaOutputEvidence] =
+    ScalaStreamingToolClient().declaredOutput() match {
+      case Left(error) => Future.failed(new IllegalStateException(s"failed to start declared-output tool: $error"))
+      case Right(invocation) =>
+        def drain(stream: ToolInputStream, bytes: List[Int]): Future[(List[Int], String)] =
+          stream.read().flatMap {
+            case Right(Some(chunk)) => drain(stream, bytes ++ chunk.map(_ & 0xff).toList)
+            case Right(None)        => Future.successful((bytes, "finished"))
+            case Left(error)        => Future.successful((bytes, s"failed:$error"))
+          }
+
+        invocation.stdout match {
+          case Some(stdout) =>
+            invocation.result.zip(drain(stdout, Nil)).map {
+              case (Left(ToolError.Tool(ScalaStreamingError.Expected(message))), (bytes, terminal)) =>
+                ScalaOutputEvidence(bytes, terminal, s"declared:$message")
+              case (other, (bytes, terminal)) =>
+                ScalaOutputEvidence(bytes, terminal, s"unexpected:$other")
+            }
+          case None => Future.failed(new IllegalStateException("declared-output invocation omitted stdout"))
+        }
+    }
 
   override def outputEvidence(mode: String): Future[ScalaOutputEvidence] = {
     val client = ScalaStreamingToolClient()
@@ -116,11 +196,12 @@ final class ScalaToolStreamingCallerImpl(name: String) extends ScalaToolStreamin
 
       started match {
         case Left(error) => Future.failed(new IllegalStateException(s"failed to start output tool: $error"))
-        case Right((stdout, result)) =>
+        case Right((Some(stdout), result)) =>
           result.zip(drain(stdout, Nil)).map {
             case (Right(value), (bytes, terminal)) => ScalaOutputEvidence(bytes, terminal, value)
             case (Left(error), _) => throw new IllegalStateException(s"output tool failed: $error")
           }
+        case Right((None, _)) => Future.failed(new IllegalStateException("output invocation omitted stdout"))
       }
     }
   }
@@ -146,17 +227,21 @@ final class ScalaToolStreamingCallerImpl(name: String) extends ScalaToolStreamin
     ScalaStreamingToolClient().stream("marker-echo", stdin) match {
       case Left(error) => Future.failed(new IllegalStateException(s"failed to start Scala streaming tool: $error"))
       case Right(invocation) =>
-        invocation.stdout.read().flatMap {
-          case Right(Some(marker)) if marker.sameElements("scala-marker:".getBytes("UTF-8")) =>
-            release.success(())
-            val output = readAll(invocation.stdout, Vector(marker))
-            invocation.result.zip(output).flatMap {
-              case (Right(bytesRead), bytes) =>
-                Future.successful(ScalaStreamEvidence(new String(bytes, "UTF-8"), bytesRead))
-              case (Left(error), _) => Future.failed(new IllegalStateException(s"Scala tool failed: $error"))
+        invocation.stdout match {
+          case Some(stdout) =>
+            stdout.read().flatMap {
+              case Right(Some(marker)) if marker.sameElements("scala-marker:".getBytes("UTF-8")) =>
+                release.success(())
+                val output = readAll(stdout, Vector(marker))
+                invocation.result.zip(output).flatMap {
+                  case (Right(bytesRead), bytes) =>
+                    Future.successful(ScalaStreamEvidence(new String(bytes, "UTF-8"), bytesRead))
+                  case (Left(error), _) => Future.failed(new IllegalStateException(s"Scala tool failed: $error"))
+                }
+              case other =>
+                Future.failed(new IllegalStateException(s"expected live Scala marker before stdin EOF, got $other"))
             }
-          case other =>
-            Future.failed(new IllegalStateException(s"expected live Scala marker before stdin EOF, got $other"))
+          case None => Future.failed(new IllegalStateException("streaming invocation omitted stdout"))
         }
     }
   }
@@ -181,7 +266,8 @@ final class ScalaToolStreamingCallerImpl(name: String) extends ScalaToolStreamin
         List("missing"),
         IntoSchema[String].toTyped("ignored"),
         Some(stdin),
-        stdout = true
+        stdout = true,
+        stderr = false
       ) match {
       case Left(error) => Future.failed(new IllegalStateException(s"failed to start invalid-path invocation: $error"))
       case Right(invocation) =>

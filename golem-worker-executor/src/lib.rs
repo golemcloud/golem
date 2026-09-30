@@ -34,6 +34,17 @@ pub mod workerctx;
 pub mod span_test_support;
 
 #[cfg(test)]
+use span_test_support::Tracing;
+#[cfg(test)]
+use test_r::test_dep;
+
+#[cfg(test)]
+#[test_dep(scope = PerWorker)]
+fn tracing() -> Tracing {
+    Tracing::init()
+}
+
+#[cfg(test)]
 test_r::enable!();
 
 use self::durable_host::{DurableWorkerCtx, DurableWorkerCtxView};
@@ -176,6 +187,10 @@ impl Drop for RunDetails {
 #[async_trait]
 #[allow(clippy::too_many_arguments)]
 pub trait Bootstrap<Ctx: WorkerCtx> {
+    /// Called after the complete service graph has been assembled and before it is moved into the
+    /// servers. In-process harnesses can retain a clone to exercise internal admission paths.
+    fn capture_services(&self, _services: &All<Ctx>) {}
+
     fn create_native_tool_catalog(
         &self,
     ) -> anyhow::Result<Arc<crate::native_tool::NativeToolCatalog<Ctx>>> {
@@ -348,6 +363,13 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         rpc
     }
 
+    fn wrap_worker_enumeration_service(
+        &self,
+        service: Arc<dyn WorkerEnumerationService>,
+    ) -> Arc<dyn WorkerEnumerationService> {
+        service
+    }
+
     async fn create_services(
         &self,
         direct_invocation_auth_service: Arc<dyn DirectInvocationAuthService>,
@@ -383,9 +405,13 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         shutdown_token: tokio_util::sync::CancellationToken,
         http_connection_pool: Option<wasmtime_wasi_http::HttpConnectionPool>,
         websocket_connection_pool: crate::durable_host::websocket::WebSocketConnectionPool,
+        mcp_transport: Arc<services::mcp::McpTransport>,
         leak_sentinel: Arc<()>,
     ) -> anyhow::Result<All<Ctx>> {
         let native_tool_catalog = self.create_native_tool_catalog()?;
+        let external_durable_streams = Arc::new(
+            services::external_durable_stream::DefaultExternalDurableStreamService::new()?,
+        );
         let worker_fork = Arc::new(DefaultWorkerFork::new(
             Arc::new(RemoteInvocationRpc::new(
                 worker_proxy.clone(),
@@ -420,9 +446,11 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             native_tool_catalog.clone(),
             agent_types_service.clone(),
             agent_webhooks_service.clone(),
+            external_durable_streams.clone(),
             shutdown_token.clone(),
             http_connection_pool.clone(),
             websocket_connection_pool.clone(),
+            mcp_transport.clone(),
             additional_deps.clone(),
             leak_sentinel.clone(),
         ));
@@ -463,8 +491,10 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             native_tool_catalog.clone(),
             agent_types_service.clone(),
             agent_webhooks_service.clone(),
+            external_durable_streams.clone(),
             http_connection_pool.clone(),
             websocket_connection_pool.clone(),
+            mcp_transport.clone(),
             additional_deps.clone(),
             leak_sentinel.clone(),
         ));
@@ -474,6 +504,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             active_agents,
             agent_types_service,
             agent_webhooks_service,
+            external_durable_streams,
             card_service,
             engine,
             linker,
@@ -503,6 +534,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             shutdown_token,
             http_connection_pool,
             websocket_connection_pool.clone(),
+            mcp_transport,
             environment_state_service.clone(),
             native_tool_catalog,
             additional_deps,
@@ -538,6 +570,10 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             &mut linker,
             DurableWorkerCtxView::durable_ctx_mut,
         )?;
+        crate::preview2::golem::agent::durable_streams::add_to_linker::<
+            _,
+            HasSelf<DurableWorkerCtx<Ctx>>,
+        >(&mut linker, DurableWorkerCtxView::durable_ctx_mut)?;
         crate::preview2::golem::tool::host::add_to_linker::<_, HasSelf<DurableWorkerCtx<Ctx>>>(
             &mut linker,
             DurableWorkerCtxView::durable_ctx_mut,
@@ -819,6 +855,9 @@ pub async fn create_worker_executor_impl<
     let websocket_connection_pool = crate::durable_host::websocket::WebSocketConnectionPool::new(
         golem_config.max_websocket_connections,
     );
+    let mcp_transport = Arc::new(services::mcp::McpTransport::new(
+        golem_config.mcp_transport,
+    )?);
     let golem_config = Arc::new(golem_config);
 
     let shard_service = bootstrap.create_shard_service();
@@ -841,30 +880,23 @@ pub async fn create_worker_executor_impl<
     let sweep_archives = oplog_archives.clone();
     let oplog_archives = NEVec::try_from_vec(oplog_archives);
 
+    // Built once for both shapes, so neither can be left without the observer: without it a
+    // refused write never reaches the shard manager, and a manager whose state lost history goes
+    // on minting below the oplog rows that refuse it.
+    let primary_oplog_service = PrimaryOplogService::new(
+        indexed_storage.clone(),
+        blob_storage.clone(),
+        golem_config.oplog.max_operations_before_commit,
+        golem_config.oplog.max_operations_before_commit_ephemeral,
+        golem_config.oplog.max_payload_size,
+        golem_config.indexed_storage_retry.clone(),
+    )
+    .await;
+
     let base_oplog_service: Arc<dyn OplogService> = match oplog_archives {
-        None => Arc::new(
-            PrimaryOplogService::new(
-                indexed_storage.clone(),
-                blob_storage.clone(),
-                golem_config.oplog.max_operations_before_commit,
-                golem_config.oplog.max_operations_before_commit_ephemeral,
-                golem_config.oplog.max_payload_size,
-                golem_config.indexed_storage_retry.clone(),
-            )
-            .await,
-        ),
+        None => Arc::new(primary_oplog_service),
         Some(oplog_archives) => {
-            let primary = Arc::new(
-                PrimaryOplogService::new(
-                    indexed_storage.clone(),
-                    blob_storage.clone(),
-                    golem_config.oplog.max_operations_before_commit,
-                    golem_config.oplog.max_operations_before_commit_ephemeral,
-                    golem_config.oplog.max_payload_size,
-                    golem_config.indexed_storage_retry.clone(),
-                )
-                .await,
-            );
+            let primary = Arc::new(primary_oplog_service);
 
             Arc::new(MultiLayerOplogService::new(
                 primary,
@@ -975,12 +1007,13 @@ pub async fn create_worker_executor_impl<
         component_service.clone(),
         golem_config.clone(),
     ));
-    let worker_enumeration_service = Arc::new(DefaultWorkerEnumerationService::new(
-        worker_service.clone(),
-        oplog_service.clone(),
-        component_service.clone(),
-        golem_config.clone(),
-    ));
+    let worker_enumeration_service =
+        bootstrap.wrap_worker_enumeration_service(Arc::new(DefaultWorkerEnumerationService::new(
+            worker_service.clone(),
+            oplog_service.clone(),
+            component_service.clone(),
+            golem_config.clone(),
+        )));
 
     let promise_service = Arc::new(LazyPromiseService::new());
 
@@ -1061,6 +1094,7 @@ pub async fn create_worker_executor_impl<
             shutdown_token,
             http_connection_pool,
             websocket_connection_pool,
+            mcp_transport,
             leak_sentinel,
         )
         .await?;
@@ -1087,7 +1121,11 @@ pub async fn create_worker_executor_impl<
 /// Derives a `DbSqliteConfig` for a module that should live in a separate
 /// SQLite DB file next to a base one (used by `KVStoreSqlite` to give the
 /// indexed storage its own DB and migration table).
-fn derive_disjoint_sqlite_config(base: &DbSqliteConfig, suffix: &str) -> DbSqliteConfig {
+///
+/// Public so test utilities can open the same file an executor uses without copying the naming
+/// rule.
+#[doc(hidden)]
+pub fn derive_disjoint_sqlite_config(base: &DbSqliteConfig, suffix: &str) -> DbSqliteConfig {
     let database = match base.database.strip_suffix(".db") {
         Some(stem) => format!("{stem}-{suffix}.db"),
         None => format!("{}-{suffix}", base.database),
@@ -1130,6 +1168,7 @@ pub async fn bootstrap_and_run_worker_executor<
     start_registry_invalidation_handler: bool,
 ) -> anyhow::Result<RunDetails> {
     debug!("Initializing worker executor");
+    golem_config.validate()?;
 
     let memory_snapshot = crate::services::active_agents::memory_probe::default_probe(
         golem_config.memory.system_memory_override,
@@ -1185,6 +1224,7 @@ pub async fn bootstrap_and_run_worker_executor<
 
     let leak_detector = worker_executor_impl.leak_detector();
     let invocation_loops = worker_executor_impl.active_agents().invocation_loops();
+    bootstrap.capture_services(&worker_executor_impl);
 
     crate::metrics::runtime::install_runtime_metrics(
         runtime.clone(),

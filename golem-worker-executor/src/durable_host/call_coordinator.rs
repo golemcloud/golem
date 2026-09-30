@@ -85,6 +85,21 @@ impl<'a, Ctx: WorkerCtx> DurableCallCoordinator<'a, Ctx> {
         Ok(DurableCallBoundary::from_begin_index(begin_index))
     }
 
+    pub(crate) async fn admit_with_span(
+        self,
+        admission: DurableCallAdmission<'_>,
+        span_started: golem_common::model::oplog::SpanStarted,
+    ) -> Result<(DurableCallBoundary, golem_common::model::oplog::SpanStarted), WorkerExecutorError>
+    {
+        self.check_allowed(admission)?;
+        self.ctx.synchronize_agent_wallet_at_boundary().await?;
+        let (begin_index, recorded) = self
+            .ctx
+            .begin_function_with_span(admission.function_type, span_started)
+            .await?;
+        Ok((DurableCallBoundary::from_begin_index(begin_index), recorded))
+    }
+
     pub(crate) async fn admit_with_agent_authority(
         self,
         admission: DurableCallAdmission<'_>,
@@ -125,9 +140,10 @@ impl<'a, Ctx: WorkerCtx> DurableCallCoordinator<'a, Ctx> {
         function_type: &DurableFunctionType,
         boundary: DurableCallBoundary,
         forced_commit: bool,
+        span_finished: Option<golem_common::model::oplog::SpanFinished>,
     ) -> Result<(), WorkerExecutorError> {
         self.ctx
-            .end_function(function_type, boundary.begin_index())
+            .end_function_impl(function_type, boundary.begin_index(), span_finished)
             .await?;
         if !self.ctx.state.snapshotting_mode
             && (function_type == &DurableFunctionType::WriteRemote
@@ -142,7 +158,7 @@ impl<'a, Ctx: WorkerCtx> DurableCallCoordinator<'a, Ctx> {
                 .public_state
                 .worker()
                 .commit_oplog_and_update_state(CommitLevel::DurableOnly)
-                .await;
+                .await?;
             // The status checkpoint is only safe after the durable boundary has committed.
             self.ctx.maybe_mid_invocation_checkpoint().await;
         }
@@ -298,6 +314,44 @@ where
             .await?
             .expect("waiting authority boundary always returns a guard");
     Ok(store.with(|mut access| get_ctx(access.data_mut()).agent_auth_ctx()))
+}
+
+pub(crate) async fn synchronize_live_agent_authority_access<T, D, Ctx>(
+    store: &Accessor<T, D>,
+    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+) -> Result<(), WorkerExecutorError>
+where
+    T: 'static,
+    D: HasData + ?Sized,
+    Ctx: WorkerCtx,
+{
+    if !store.with(|mut access| get_ctx(access.data_mut()).state.is_live()) {
+        return Ok(());
+    }
+    loop {
+        let boundary_guard =
+            lock_synchronized_card_event_boundary_access_inner(store, get_ctx, true, true)
+                .await?
+                .expect("waiting authority boundary always returns a guard");
+        let stable = store.with(|mut access| {
+            let ctx = get_ctx(access.data_mut());
+            let generation = ctx
+                .state
+                .published_authority_generation
+                .load(Ordering::Acquire);
+            ctx.refresh_authority_expiration_deadline();
+            if ctx.authority_snapshot_is_stable(generation) {
+                ctx.adopt_authority_generation(generation);
+                true
+            } else {
+                false
+            }
+        });
+        drop(boundary_guard);
+        if stable {
+            return Ok(());
+        }
+    }
 }
 
 pub(super) async fn lock_synchronized_card_event_boundary_access<T, D, Ctx>(
@@ -646,8 +700,8 @@ where
         Ok(wallet_generation) => OplogEntry::card_installed(
             entity_parent_start_index,
             Some(queued_event_index),
-            card,
-            Some(wallet_generation),
+            Box::new(card),
+            wallet_generation,
         ),
         Err(reason) => OplogEntry::card_install_failed(
             entity_parent_start_index,
@@ -656,7 +710,7 @@ where
             reason,
         ),
     };
-    worker.add_and_commit_oplog(entry).await;
+    worker.add_and_commit_oplog(entry).await?;
     Ok(())
 }
 
@@ -666,7 +720,7 @@ async fn apply_received_card_transfer_access<T, D, Ctx>(
     entity_parent_start_index: Option<OplogIndex>,
     queued_event_index: OplogIndex,
     transfer_id: uuid::Uuid,
-    source_card_id: Option<golem_common::model::card::CardId>,
+    source_card_id: golem_common::model::card::CardId,
     card: golem_common::model::card::StoredCard,
 ) -> Result<(), WorkerExecutorError>
 where
@@ -692,8 +746,8 @@ where
             golem_common::model::card::CardHolder::Agent(
                 golem_common::model::card::AgentCardHolder { agent_id },
             ),
-            card,
-            Some(wallet_generation),
+            Box::new(card),
+            wallet_generation,
         ),
         Err(reason) => OplogEntry::card_install_failed(
             entity_parent_start_index,
@@ -702,7 +756,7 @@ where
             reason,
         ),
     };
-    worker.add_and_commit_oplog(entry).await;
+    worker.add_and_commit_oplog(entry).await?;
     Ok(())
 }
 
@@ -762,9 +816,9 @@ where
             .add_and_commit_oplog(OplogEntry::card_expired(
                 entity_parent_start_index,
                 card_id,
-                Some(wallet_generation),
+                wallet_generation,
             ))
-            .await;
+            .await?;
     }
     Ok(())
 }
@@ -852,12 +906,10 @@ where
             } => {
                 store.with(|mut access| -> Result<(), WorkerExecutorError> {
                     let ctx = get_ctx(access.data_mut());
-                    if source_holder.as_ref().is_none_or(|source_holder| {
-                        crate::durable_host::card_holder_is_agent(
-                            source_holder,
-                            &ctx.owned_agent_id.agent_id,
-                        )
-                    }) && crate::durable_host::transfer_started_removes_source_membership(
+                    if crate::durable_host::card_holder_is_agent(
+                        &source_holder,
+                        &ctx.owned_agent_id.agent_id,
+                    ) && crate::durable_host::transfer_started_removes_source_membership(
                         ctx.state.agent_wallet_cards.get(&card_id),
                         &source_holder,
                         &ctx.owned_agent_id.agent_id,
@@ -1009,7 +1061,7 @@ where
     }
     worker
         .queue_card_revocations_locked(&revoked_card_ids)
-        .await;
+        .await?;
     Ok(())
 }
 
@@ -1132,15 +1184,15 @@ where
             retry.entity_parent_start_index(),
             retry.transfer_id,
             retry.source_card_id,
-            Some(golem_common::model::card::CardHolder::Agent(
+            golem_common::model::card::CardHolder::Agent(
                 golem_common::model::card::AgentCardHolder {
                     agent_id: source_agent_id,
                 },
-            )),
+            ),
             target_holder,
-            store.with(|mut access| Some(get_ctx(access.data_mut()).state.wallet_generation)),
+            store.with(|mut access| get_ctx(access.data_mut()).state.wallet_generation),
         ))
-        .await;
+        .await?;
 
     Ok(())
 }
@@ -1222,7 +1274,7 @@ where
             retry.installed_card.card_id(),
             target_holder,
         ))
-        .await;
+        .await?;
     Ok(())
 }
 
@@ -1289,9 +1341,9 @@ where
             entity_parent_start_index,
             revoked_card_ids: card_ids,
             affected_wallets,
-            local_wallet_generation: Some(wallet_generation),
+            local_wallet_generation: wallet_generation,
         })
-        .await;
+        .await?;
     Ok(())
 }
 
@@ -1409,7 +1461,7 @@ where
             file_loader: ctx.state.file_loader.clone(),
             filesystem_generation_handle: ctx.filesystem_generation_handle(),
             owned_agent_id: ctx.owned_agent_id.clone(),
-            agent_id: ctx.state.agent_id.clone(),
+            agent_id: ctx.state.owner_context.agent().cloned(),
             initial_agent_config: ctx.state.initial_agent_config.clone(),
             current_revision: ctx.component_metadata().revision,
         }
@@ -1528,7 +1580,7 @@ where
             target_revision,
             Some(details.clone()),
         ))
-        .await;
+        .await?;
     tracing::warn!(
         "Worker failed to update to {}: {}, update attempt aborted",
         target_revision,
@@ -1564,6 +1616,6 @@ where
             component_size,
             active_plugins,
         )
-        .await;
+        .await?;
     Ok(())
 }

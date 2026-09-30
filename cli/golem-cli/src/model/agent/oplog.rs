@@ -20,9 +20,9 @@ use base64::prelude::BASE64_STANDARD;
 use golem_common::model::Timestamp;
 use golem_common::model::oplog::{
     MultipartPartData, PluginInstallationDescription, PublicAgentInvocation,
-    PublicAgentInvocationResult, PublicAttributeValue, PublicEntityCallMode,
-    PublicEntityInvocation, PublicEntityInvocationOperation, PublicOplogEntry,
-    PublicOplogEntryAttribution, PublicSnapshotData, PublicUpdateDescription, StringAttributeValue,
+    PublicAgentInvocationResult, PublicEntityCallMode, PublicEntityInvocation,
+    PublicEntityInvocationOperation, PublicExternalToolResult, PublicOplogEntry,
+    PublicOplogEntryAttribution, PublicSnapshotData, PublicUpdateDescription,
 };
 use golem_common::schema::TypedSchemaValue;
 use serde::{Deserialize, Serialize};
@@ -91,6 +91,11 @@ fn render_oplog_attribution_lines(attribution: &PublicOplogEntryAttribution) -> 
                 lines.push(format!("{pad}stdout declared:   {}", tool.declares_stdout));
                 lines.push(format!(
                     "{pad}stdout recording:  none (live attachment only)"
+                ));
+                lines.push(format!("{pad}stderr requested:  {}", tool.has_stderr));
+                lines.push(format!("{pad}stderr declared:   {}", tool.declares_stderr));
+                lines.push(format!(
+                    "{pad}stderr recording:  none (live attachment only)"
                 ));
             }
             lines
@@ -172,6 +177,9 @@ impl TextOutput for PublicOplogEntry {
                         typed_schema_value_to_string(request)
                     ));
                 }
+                if let Some(span) = &params.span_started {
+                    logln(format!("{pad}span started:      {span:?}"));
+                }
             }
             PublicOplogEntry::End(params) => {
                 logln(format_message_highlight("END"));
@@ -189,6 +197,12 @@ impl TextOutput for PublicOplogEntry {
                 if params.forced_commit {
                     logln(format!("{pad}forced commit:     true"));
                 }
+                if let Some(span) = &params.span_finished {
+                    logln(format!("{pad}span finished:     {span:?}"));
+                }
+                if let Some(attributes) = &params.span_attributes {
+                    logln(format!("{pad}span attributes:   {attributes:?}"));
+                }
             }
             PublicOplogEntry::Cancelled(params) => {
                 logln(format_message_highlight("CANCELLED"));
@@ -202,6 +216,9 @@ impl TextOutput for PublicOplogEntry {
                         "{pad}partial result:    {}",
                         typed_schema_value_to_string(partial)
                     ));
+                }
+                if let Some(span) = &params.span_finished {
+                    logln(format!("{pad}span finished:     {span:?}"));
                 }
             }
             PublicOplogEntry::CompletionDiscarded(params) => {
@@ -227,27 +244,27 @@ impl TextOutput for PublicOplogEntry {
                     &params.timestamp,
                     &params.invocation,
                 );
-                if let Some(wallet_pin) = &params.wallet_pin {
-                    let wallet_id_hash = wallet_pin
-                        .wallet_token
-                        .wallet_id_hash
-                        .iter()
-                        .map(|byte| format!("{byte:02x}"))
-                        .collect::<String>();
-                    logln(format!("{pad}wallet id hash:    {wallet_id_hash}"));
-                    logln(format!(
-                        "{pad}wallet generation: {}",
-                        wallet_pin.wallet_token.generation
-                    ));
-                    if let Some(scope_card_id) = wallet_pin.scope_card_id {
-                        logln(format!("{pad}scope card:        {scope_card_id}"));
-                    }
+                let wallet_id_hash = params
+                    .wallet_pin
+                    .wallet_token
+                    .wallet_id_hash
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect::<String>();
+                logln(format!("{pad}wallet id hash:    {wallet_id_hash}"));
+                logln(format!(
+                    "{pad}wallet generation: {}",
+                    params.wallet_pin.wallet_token.generation
+                ));
+                if let Some(scope_card_id) = params.wallet_pin.scope_card_id {
+                    logln(format!("{pad}scope card:        {scope_card_id}"));
                 }
             }
             PublicOplogEntry::AgentInvocationFinished(params) => {
                 let variant_label = match &params.result {
                     PublicAgentInvocationResult::AgentInitialization(_) => "initialization",
                     PublicAgentInvocationResult::AgentMethod(_) => "method",
+                    PublicAgentInvocationResult::ExternalTool(_) => "external tool",
                     PublicAgentInvocationResult::ManualUpdate(_) => "manual update",
                     PublicAgentInvocationResult::LoadSnapshot(_) => "load snapshot",
                     PublicAgentInvocationResult::SaveSnapshot(_) => "save snapshot",
@@ -272,6 +289,17 @@ impl TextOutput for PublicOplogEntry {
                         logln(format!("{pad}output:"));
                         log_typed_schema_value(pad, &output.output);
                     }
+                    PublicAgentInvocationResult::ExternalTool(result) => match &result.result {
+                        PublicExternalToolResult::Success(output) => {
+                            if let Some(output) = &output.result {
+                                logln(format!("{pad}output:"));
+                                log_typed_schema_value(pad, output);
+                            }
+                        }
+                        PublicExternalToolResult::Failure(_) => {
+                            logln(format!("{pad}result:            failed"));
+                        }
+                    },
                     PublicAgentInvocationResult::ManualUpdate(_) => {}
                     PublicAgentInvocationResult::LoadSnapshot(fallible) => {
                         log_optional_error(pad, &fallible.error);
@@ -536,67 +564,6 @@ impl TextOutput for PublicOplogEntry {
                     format_id(&params.idempotency_key),
                 ));
             }
-            PublicOplogEntry::StartSpan(params) => {
-                logln(format_message_highlight("START SPAN"));
-                logln(format!(
-                    "{pad}at:                {}",
-                    format_id(&params.timestamp)
-                ));
-                logln(format!(
-                    "{pad}span id:           {}",
-                    format_id(&params.span_id)
-                ));
-                if let Some(parent_id) = &params.parent_id {
-                    logln(format!("{pad}parent span:       {}", format_id(&parent_id),));
-                }
-                if let Some(linked_id) = &params.linked_context {
-                    logln(format!("{pad}linked span:       {}", format_id(&linked_id),));
-                }
-                logln(format!("{pad}attributes:"));
-                for kv in &params.attributes {
-                    logln(format!(
-                        "{pad}  - {}: {}",
-                        kv.key,
-                        match &kv.value {
-                            PublicAttributeValue::String(StringAttributeValue { value }) =>
-                                format_id(value),
-                        }
-                    ));
-                }
-            }
-            PublicOplogEntry::FinishSpan(params) => {
-                logln(format_message_highlight("FINISH SPAN"));
-                logln(format!(
-                    "{pad}at:                {}",
-                    format_id(&params.timestamp)
-                ));
-                logln(format!(
-                    "{pad}span id:           {}",
-                    format_id(&params.span_id)
-                ));
-            }
-            PublicOplogEntry::SetSpanAttribute(params) => {
-                logln(format_message_highlight("SET SPAN ATTRIBUTE"));
-                logln(format!(
-                    "{pad}at:                {}",
-                    format_id(&params.timestamp)
-                ));
-                logln(format!(
-                    "{pad}span id:           {}",
-                    format_id(&params.span_id)
-                ));
-                logln(format!(
-                    "{pad}key:               {}",
-                    format_id(&params.key)
-                ));
-                logln(format!(
-                    "{pad}value:             {}",
-                    match &params.value {
-                        PublicAttributeValue::String(StringAttributeValue { value }) =>
-                            format_id(value),
-                    }
-                ));
-            }
             PublicOplogEntry::BeginRemoteTransaction(params) => {
                 logln(format_message_highlight("BEGIN REMOTE TRANSACTION"));
                 logln(format!(
@@ -724,9 +691,10 @@ impl TextOutput for PublicOplogEntry {
                     "{pad}card id:           {}",
                     format_id(&params.card_id)
                 ));
-                if let Some(generation) = params.wallet_generation {
-                    logln(format!("{pad}wallet generation: {generation}"));
-                }
+                logln(format!(
+                    "{pad}wallet generation: {}",
+                    params.wallet_generation
+                ));
             }
             PublicOplogEntry::HostStreamFrame(params) => {
                 logln(format_message_highlight("HOST STREAM FRAME"));
@@ -812,9 +780,10 @@ impl TextOutput for PublicOplogEntry {
                     "{pad}card id:           {}",
                     format_id(&params.card_id)
                 ));
-                if let Some(generation) = params.wallet_generation {
-                    logln(format!("{pad}wallet generation: {generation}"));
-                }
+                logln(format!(
+                    "{pad}wallet generation: {}",
+                    params.wallet_generation
+                ));
             }
             PublicOplogEntry::CardEventQueued(params) => {
                 logln(format_message_highlight("CARD EVENT QUEUED"));
@@ -841,9 +810,10 @@ impl TextOutput for PublicOplogEntry {
                     "{pad}card id:           {}",
                     format_id(&params.card_id)
                 ));
-                if let Some(generation) = params.wallet_generation {
-                    logln(format!("{pad}wallet generation: {generation}"));
-                }
+                logln(format!(
+                    "{pad}wallet generation: {}",
+                    params.wallet_generation
+                ));
             }
             PublicOplogEntry::CardInstallFailed(params) => {
                 logln(format_message_highlight("CARD INSTALL FAILED"));
@@ -878,9 +848,10 @@ impl TextOutput for PublicOplogEntry {
                     "{pad}parent ids:        {}",
                     format_id(&format!("{:?}", params.parent_ids))
                 ));
-                if let Some(generation) = params.wallet_generation {
-                    logln(format!("{pad}wallet generation: {generation}"));
-                }
+                logln(format!(
+                    "{pad}wallet generation: {}",
+                    params.wallet_generation
+                ));
             }
             PublicOplogEntry::CardTransferStarted(params) => {
                 logln(format_message_highlight("CARD TRANSFER STARTED"));
@@ -900,9 +871,10 @@ impl TextOutput for PublicOplogEntry {
                     "{pad}target holder:     {}",
                     format_id(&format!("{:?}", params.target_holder))
                 ));
-                if let Some(generation) = params.source_wallet_generation {
-                    logln(format!("{pad}source generation: {generation}"));
-                }
+                logln(format!(
+                    "{pad}source generation: {}",
+                    params.source_wallet_generation
+                ));
             }
             PublicOplogEntry::CardTransferred(params) => {
                 logln(format_message_highlight("CARD TRANSFER ADMITTED"));
@@ -914,12 +886,10 @@ impl TextOutput for PublicOplogEntry {
                     "{pad}transfer id:       {}",
                     format_id(&params.transfer_id)
                 ));
-                if let Some(source_card_id) = params.source_card_id {
-                    logln(format!(
-                        "{pad}source card id:    {}",
-                        format_id(&source_card_id)
-                    ));
-                }
+                logln(format!(
+                    "{pad}source card id:    {}",
+                    format_id(&params.source_card_id)
+                ));
                 logln(format!(
                     "{pad}installed card id: {}",
                     format_id(&params.installed_card_id)
@@ -928,9 +898,10 @@ impl TextOutput for PublicOplogEntry {
                     "{pad}target holder:     {}",
                     format_id(&format!("{:?}", params.target_holder))
                 ));
-                if let Some(generation) = params.target_wallet_generation {
-                    logln(format!("{pad}target generation: {generation}"));
-                }
+                logln(format!(
+                    "{pad}target generation: {}",
+                    params.target_wallet_generation
+                ));
             }
             PublicOplogEntry::CardRevokedCascade(params) => {
                 logln(format_message_highlight("CARD REVOKED CASCADE"));
@@ -942,9 +913,10 @@ impl TextOutput for PublicOplogEntry {
                     "{pad}revoked card ids:  {}",
                     format_id(&format!("{:?}", params.revoked_card_ids))
                 ));
-                if let Some(generation) = params.local_wallet_generation {
-                    logln(format!("{pad}local generation:  {generation}"));
-                }
+                logln(format!(
+                    "{pad}local generation:  {}",
+                    params.local_wallet_generation
+                ));
             }
             PublicOplogEntry::CardTransferConfirmed(params) => {
                 logln(format_message_highlight("CARD TRANSFER CONFIRMED"));
@@ -1039,6 +1011,19 @@ fn render_agent_invocation(
             lines.push(format!("{pad}input:"));
             lines.push(render_typed_schema_value_line(pad, &params.function_input));
         }
+        PublicAgentInvocation::ExternalTool(params) => {
+            lines.push(format!("{pad}tool:              {}", params.tool_name));
+            lines.push(format!(
+                "{pad}command:           {}",
+                params.command_path.join("/")
+            ));
+            lines.push(format!(
+                "{pad}idempotency key:   {}",
+                format_id(&params.idempotency_key)
+            ));
+            lines.push(format!("{pad}input:"));
+            lines.push(render_typed_schema_value_line(pad, &params.input));
+        }
         PublicAgentInvocation::SaveSnapshot(_) => {}
         PublicAgentInvocation::LoadSnapshot(params) => {
             lines.extend(render_snapshot_data_lines(pad, &params.snapshot));
@@ -1082,6 +1067,13 @@ fn render_agent_invocation_header(
                 format_id(&params.method_name)
             )
         }
+        (AgentInvocationRenderKind::Started, PublicAgentInvocation::ExternalTool(params)) => {
+            format!(
+                "{} {}",
+                format_message_highlight("INVOKE EXTERNAL TOOL"),
+                format_id(&params.tool_name)
+            )
+        }
         (AgentInvocationRenderKind::Started, PublicAgentInvocation::SaveSnapshot(_)) => {
             format!(
                 "{} {}",
@@ -1121,6 +1113,13 @@ fn render_agent_invocation_header(
                 "{} {}",
                 format_message_highlight("ENQUEUED INVOCATION"),
                 format_id(&params.method_name)
+            )
+        }
+        (AgentInvocationRenderKind::Pending, PublicAgentInvocation::ExternalTool(params)) => {
+            format!(
+                "{} {}",
+                format_message_highlight("ENQUEUED EXTERNAL TOOL"),
+                format_id(&params.tool_name)
             )
         }
         (AgentInvocationRenderKind::Pending, PublicAgentInvocation::SaveSnapshot(_)) => {
@@ -1445,7 +1444,9 @@ mod tests {
                     command_path: vec!["files".to_string(), "lookup".to_string()],
                     has_stdin: true,
                     has_stdout: false,
+                    has_stderr: true,
                     declares_stdout: true,
+                    declares_stderr: true,
                 },
             )),
         };
@@ -1470,6 +1471,9 @@ mod tests {
                 "stdout requested:  false",
                 "stdout declared:   true",
                 "stdout recording:  none (live attachment only)",
+                "stderr requested:  true",
+                "stderr declared:   true",
+                "stderr recording:  none (live attachment only)",
             ],
         );
         assert!(

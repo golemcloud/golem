@@ -1,9 +1,4 @@
-import {
-  ok,
-  s,
-  toolDefinition,
-  ToolStreamError,
-} from "@golemcloud/golem-ts-sdk";
+import { err, ok, s, toolDefinition, ToolStreamError } from "@golemcloud/golem-ts-sdk";
 import { z } from "zod/v4";
 
 toolDefinition("ts-streaming")
@@ -12,7 +7,25 @@ toolDefinition("ts-streaming")
       .positional("mode", z.string())
       .stdin({ required: true })
       .stdout({ required: true })
-      .returns(s.u64()),
+      .returns(s.u64())
+      .error("declared", {
+        kind: "runtime",
+        exitCode: 1,
+        payload: z.string(),
+      }),
+  )
+  .command("dual", (dual) =>
+    dual.body((body) =>
+      body
+        .stdout({ required: true })
+        .stderr({ required: true })
+        .returns(z.string())
+        .error("declared", {
+          kind: "runtime",
+          exitCode: 1,
+          payload: z.string(),
+        }),
+    ),
   )
   .implement({
     "ts-streaming": async ({ mode }, context) => {
@@ -30,6 +43,10 @@ toolDefinition("ts-streaming")
         await writer.write(new TextEncoder().encode("ts-marker:"));
       }
 
+      if (mode === "declared-error") {
+        await writer.write(new TextEncoder().encode("ts-declared:"));
+      }
+
       while (true) {
         const item = await reader.read();
         if (item.done) break;
@@ -37,6 +54,17 @@ toolDefinition("ts-streaming")
         await writer.write(item.value);
       }
 
-      return ok(bytesRead);
+      return mode === "declared-error"
+        ? err("declared", "expected")
+        : ok(bytesRead);
+    },
+    dual: async (_input, context) => {
+      const stdout = context.stdout.getWriter();
+      const stderr = context.stderr.getWriter();
+      await Promise.all([
+        stdout.write(new Uint8Array([0, 127, 128, 255])),
+        stderr.write(new Uint8Array([255, 128, 1, 2])),
+      ]);
+      return err("declared", "dual-expected");
     },
   });

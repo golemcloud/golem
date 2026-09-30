@@ -15,6 +15,7 @@
 use crate::SchemaValue;
 use crate::agentic::{Schema, StructuredSchema};
 use crate::schema::VariantValuePayload;
+use crate::schema::wit::{direct, wire};
 use std::fmt::Debug;
 
 /// Represents a binary value that can either be inline or a URL reference.
@@ -147,5 +148,81 @@ impl<T: AllowedMimeTypes> UnstructuredBinary<T> {
         })?;
 
         Ok(UnstructuredBinary::Inline { data, mime_type })
+    }
+}
+
+impl<T: AllowedMimeTypes> direct::WireSchema for UnstructuredBinary<T> {
+    fn append_schema(builder: &mut direct::WireSchemaBuilder) -> i32 {
+        let inline = builder.push(wire::SchemaTypeBody::BinaryType(wire::BinaryRestrictions {
+            mime_types: (!T::all().is_empty())
+                .then(|| T::all().iter().map(|s| (*s).to_string()).collect()),
+            min_bytes: None,
+            max_bytes: None,
+        }));
+        let url = builder.push(wire::SchemaTypeBody::UrlType(wire::UrlRestrictions {
+            allowed_schemes: None,
+            allowed_hosts: None,
+        }));
+        let mut metadata = direct::empty_metadata();
+        metadata.role = Some(wire::Role::UnstructuredBinary);
+        builder.push_with_metadata(
+            wire::SchemaTypeBody::VariantType(vec![
+                wire::VariantCaseType {
+                    name: "inline".to_string(),
+                    payload: Some(inline),
+                    metadata: direct::empty_metadata(),
+                },
+                wire::VariantCaseType {
+                    name: "url".to_string(),
+                    payload: Some(url),
+                    metadata: direct::empty_metadata(),
+                },
+            ]),
+            metadata,
+        )
+    }
+}
+
+impl<T: AllowedMimeTypes> direct::IntoWire for UnstructuredBinary<T> {
+    fn write_wire(&self, writer: &mut direct::WireWriter) -> Result<i32, direct::WireError> {
+        let (case, payload) = match self {
+            Self::Url(url) => (1, wire::SchemaValueNode::UrlValue(url.clone())),
+            Self::Inline { data, mime_type } => (
+                0,
+                wire::SchemaValueNode::BinaryValue(wire::BinaryValuePayload {
+                    bytes: data.clone(),
+                    mime_type: Some(mime_type.to_string()),
+                }),
+            ),
+        };
+        let payload = writer.push(payload);
+        Ok(writer.push(wire::SchemaValueNode::VariantValue(
+            wire::VariantValuePayload {
+                case,
+                payload: Some(payload),
+            },
+        )))
+    }
+}
+
+impl<T: AllowedMimeTypes> direct::FromWire for UnstructuredBinary<T> {
+    fn read_wire(reader: &mut direct::WireReader, index: i32) -> Result<Self, direct::WireError> {
+        let wire::SchemaValueNode::VariantValue(wire::VariantValuePayload {
+            case,
+            payload: Some(payload),
+        }) = reader.take(index)?
+        else {
+            return Err(direct::WireError::Shape(
+                "unstructured binary variant with payload",
+            ));
+        };
+        match (case, reader.take(payload)?) {
+            (0, wire::SchemaValueNode::BinaryValue(payload)) => {
+                Self::from_binary_payload(payload.bytes, payload.mime_type)
+                    .map_err(|_| direct::WireError::Shape("allowed binary MIME type"))
+            }
+            (1, wire::SchemaValueNode::UrlValue(url)) => Ok(Self::Url(url)),
+            _ => Err(direct::WireError::Shape("unstructured binary payload")),
+        }
     }
 }

@@ -17,15 +17,8 @@ import { AgentType, Principal } from 'golem:agent/common@2.0.0';
 import { SchemaValueTree, uuidToString, parseUuid } from 'golem:core/types@2.0.0';
 import type { Snapshot } from 'golem:api/host@1.5.0';
 import type { InvocationResult, Tool, ToolError, TypedSchemaValue } from 'golem:tool/common@0.1.0';
-import type { ByteStreamItem, ToolStdoutWriter } from 'golem:tool/host@0.1.0';
-import { schemaValueConforms, type ExtendedCommandBody } from './internal/tool';
-import {
-  schemaValueFromWit,
-  t,
-  typedSchemaValueFromWit,
-  typedSchemaValueToWit,
-  v,
-} from './internal/schema-model';
+import type { ByteStreamItem, ToolOutputWriter } from 'golem:tool/streams@0.1.0';
+import type { ExtendedCommandBody } from './internal/tool';
 import { createCustomError, isAgentError } from './internal/agentError';
 import { AgentInitiatorRegistry } from './internal/registry/agentInitiatorRegistry';
 import { getRawSelfAgentId } from './host/hostapi';
@@ -61,6 +54,7 @@ export { Principal } from './principal';
 export { AgentClassName } from './agentClassName';
 export { CancellationToken } from 'golem:agent/host@2.0.0';
 export { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
+export * from './durableStreams';
 export * from './webhook';
 export * from './host/hostapi';
 export * as oplog from './host/oplog';
@@ -74,10 +68,21 @@ export * from './host/checkpoint';
 export * from './host/durable';
 
 export { defineAgent } from './defineAgent';
+export { defineHttpRouter } from './defineHttpRouter';
+export type {
+  HttpRouterBuilder,
+  HttpRouterOptions,
+  HttpRouterContext,
+  WebHttpRouterContext,
+  HttpRouterHandler,
+  RawHttpRouterHandler,
+} from './defineHttpRouter';
+export { withRawHeaders } from './httpRouterWeb';
+export type { HttpRequest, HttpResponse, HttpHeader, FileExposure } from './httpRouterContract';
 export type {
   AgentDefinition,
-  AgentClientBindingDefinition,
-  AgentClientDefinition,
+  MethodOnlyAgentClientDefinition,
+  FullAgentClientDefinition,
   AgentImpl,
   AgentImplementation,
   AgentSpec,
@@ -118,7 +123,8 @@ export {
   toolDefinition,
   universalToolMiddleware,
 } from './tool';
-export { client, ToolCallError } from './toolClient';
+export { client, toolClientDefinition, ToolCallError } from './toolClient';
+export type { ToolClientDefinition } from './toolClient';
 export type {
   CamelCase,
   ConstraintRef,
@@ -175,8 +181,11 @@ export type {
 export { defineAgentClient, isRemoteCallError, RemoteCallError, RemoteOutputError } from './client';
 export type { ToolCallErrorCause, ToolClientOptions } from './toolClient';
 export type {
-  AgentClientFactory,
-  AgentClientSpec,
+  FullAgentClientFactory,
+  MethodOnlyAgentClientSpec,
+  AgentConfigEntry,
+  FullAgentClientSpec,
+  ConfigOverrides,
   EphemeralInvocationResult,
   EphemeralRemoteClientFactory,
   PhantomClientDetails,
@@ -208,6 +217,7 @@ export {
   getAgentTypeByAgentId,
   getAllAgentTypes,
   getAgentType as getReflectedAgentType,
+  getToolType as getReflectedToolType,
 } from './reflection';
 export type { ReflectedInvocation, ReflectedPhantomClient } from './reflection';
 export type { StartedToolInvocation } from './bridge/tool';
@@ -234,7 +244,8 @@ interface GolemToolGuest {
     commandPath: string[],
     input: TypedSchemaValue,
     stdin: AsyncIterable<ByteStreamItem> | undefined,
-    stdout: ToolStdoutWriter | undefined,
+    stdout: ToolOutputWriter | undefined,
+    stderr: ToolOutputWriter | undefined,
     principal: Principal,
   ): Promise<InvocationResult>;
 }
@@ -274,9 +285,7 @@ async function initialize(
 
   setAgentId(getRawSelfAgentId());
 
-  const initiateResult = await (initiator.initiateFromWit
-    ? initiator.initiateFromWit(input, principal)
-    : initiator.initiate(schemaValueFromWit(input), principal));
+  const initiateResult = await initiator.initiate(input, principal);
 
   if (initiateResult.tag === 'ok') {
     initializedAgent = { agent: initiateResult.val, principal };
@@ -325,11 +334,13 @@ async function invokeTool(
   commandPath: string[],
   input: TypedSchemaValue,
   stdin: AsyncIterable<ByteStreamItem> | undefined,
-  stdout: ToolStdoutWriter | undefined,
+  stdout: ToolOutputWriter | undefined,
+  stderr: ToolOutputWriter | undefined,
   principal: Principal,
 ): Promise<InvocationResult> {
   let inputAdapter: ToolInputStreamAdapter | undefined;
-  let outputAdapter: ToolOutputStreamAdapter | undefined;
+  let stdoutAdapter: ToolOutputStreamAdapter | undefined;
+  let stderrAdapter: ToolOutputStreamAdapter | undefined;
   let inputCleanup: Promise<void> | undefined;
   const disposeInput = async (reason?: unknown): Promise<void> => {
     if (!inputCleanup) {
@@ -341,14 +352,12 @@ async function invokeTool(
   try {
     const resolved = ToolRegistry.resolveInvocation(toolName, commandPath);
 
-    let decodedInput;
+    let prepared;
     try {
-      decodedInput = typedSchemaValueFromWit(input);
+      prepared = resolved.prepareWire(input);
     } catch (error) {
       throw invalidToolInput(`malformed invocation input: ${errorMessage(error)}`);
     }
-
-    const prepared = resolved.prepare(decodedInput);
     const body = resolved.command.body;
     if (!body) throw { tag: 'invalid-command-path', val: [...commandPath] } satisfies ToolError;
 
@@ -370,18 +379,32 @@ async function invokeTool(
         throw invalidToolInput('tool invocation did not contain declared stdout stream');
       }
       if (stdout) {
-        outputAdapter = createToolOutputStream(stdout);
-        context.stdout = outputAdapter.stream;
+        stdoutAdapter = createToolOutputStream(stdout);
+        context.stdout = stdoutAdapter.stream;
+      }
+    }
+
+    if (body.stderr) {
+      if (!stderr && body.stderr.required) {
+        throw invalidToolInput('tool invocation did not contain declared stderr stream');
+      }
+      if (stderr) {
+        stderrAdapter = createToolOutputStream(stderr);
+        context.stderr = stderrAdapter.stream;
       }
     }
 
     const outcome = await prepared.invoke(context);
-    await outputAdapter?.finish();
+    await Promise.all([stdoutAdapter?.finish(), stderrAdapter?.finish()]);
     const result = projectToolOutcome(body, outcome);
     await disposeInput();
     return result;
   } catch (error) {
-    await Promise.allSettled([outputAdapter?.abort(error), disposeInput(error)]);
+    await Promise.allSettled([
+      stdoutAdapter?.abort(error),
+      stderrAdapter?.abort(error),
+      disposeInput(error),
+    ]);
     throw error;
   }
 }
@@ -522,7 +545,7 @@ async function pullInput(
   }
 }
 
-function createToolOutputStream(writer: ToolStdoutWriter): ToolOutputStreamAdapter {
+function createToolOutputStream(writer: ToolOutputWriter): ToolOutputStreamAdapter {
   const invocationCompleted = new Error('tool invocation completed');
   let activeOperation: Promise<void> | undefined;
   let controller: WritableStreamDefaultController | undefined;
@@ -620,7 +643,11 @@ function createToolOutputStream(writer: ToolStdoutWriter): ToolOutputStreamAdapt
       controller?.error(invocationCompleted);
       if (!terminated) {
         terminated = true;
-        await writer.finish();
+        try {
+          await writer.finish();
+        } catch {
+          // The writer's selected or drop terminal reports completion failure independently.
+        }
       }
     },
     abort,
@@ -842,7 +869,7 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
     throw `Agent is already initialized in this container`;
   }
 
-  const [agentTypeName, agentParameters] = getRawSelfAgentId().parsed();
+  const [agentTypeName, agentParameters] = getRawSelfAgentId().parsedWire();
   const registrationError = AgentTypeRegistry.getRegistrationError(agentTypeName);
   if (registrationError) {
     // The snapshot WIT interface returns `result<_, string>`, not AgentError.

@@ -63,6 +63,7 @@ pub(all) struct AgentInitializationParameters {
 pub(all) enum AgentInvocation {
   AgentInitialization(AgentInitializationParameters)
   AgentMethodInvocation(AgentMethodInvocationParameters)
+  ExternalTool(ExternalToolInvocationParameters)
   SaveSnapshot
   LoadSnapshot(LoadSnapshotParameters)
   ProcessOplogEntries(ProcessOplogEntriesParameters)
@@ -84,6 +85,7 @@ pub(all) struct AgentInvocationOutputParameters {
 pub(all) enum AgentInvocationResult {
   AgentInitialization(AgentInvocationOutputParameters)
   AgentMethod(AgentInvocationOutputParameters)
+  ExternalTool(ExternalToolResultParameters)
   ManualUpdate
   LoadSnapshot(FallibleResultParameters)
   SaveSnapshot(SaveSnapshotResultParameters)
@@ -93,6 +95,7 @@ pub(all) enum AgentInvocationResult {
 pub(all) struct AgentInvocationStartedParameters {
   timestamp : @system-clock.Instant
   invocation : AgentInvocation
+  wallet_pin : PublicInvocationWalletPin
 } derive(Eq, @debug.Debug)
 
 pub(all) struct AgentMethodInvocationParameters {
@@ -136,6 +139,7 @@ pub(all) struct CancelledParameters {
   timestamp : @system-clock.Instant
   start_index : UInt64
   partial : @types.TypedSchemaValue?
+  span_finished : SpanFinished?
 } derive(Eq, @debug.Debug)
 
 pub(all) struct CardEventQueuedParameters {
@@ -146,6 +150,7 @@ pub(all) struct CardEventQueuedParameters {
 pub(all) struct CardExpiredParameters {
   timestamp : @system-clock.Instant
   card_id : @types.CardId
+  wallet_generation : UInt64
 } derive(Eq, @debug.Debug)
 
 pub(all) struct CardInstallFailedParameters {
@@ -168,12 +173,14 @@ pub(all) struct CardInstalledParameters {
   timestamp : @system-clock.Instant
   queued_event_index : UInt64?
   card_id : @types.CardId
+  wallet_generation : UInt64
 } derive(Eq, @debug.Debug)
 
 pub(all) struct CardRevokedParameters {
   timestamp : @system-clock.Instant
   queued_event_index : UInt64
   card_id : @types.CardId
+  wallet_generation : UInt64
 } derive(Eq, @debug.Debug)
 
 pub(all) struct CompletionDeliveredParameters {
@@ -194,6 +201,7 @@ pub(all) struct CountBoxState {
 pub(all) struct CreateParameters {
   timestamp : @system-clock.Instant
   agent_id : @types.AgentId
+  owner_kind : OwnerKind
   agent_mode : AgentMode
   component_revision : UInt64
   env : Array[(String, String)]
@@ -227,6 +235,24 @@ pub(all) struct DropResourceParameters {
   owner : String
 } derive(Eq, @debug.Debug)
 
+pub(all) enum DurableStreamEventSummary {
+  Registered
+  Items(UInt64)
+  End(DurableStreamOutcome)
+  Cancelled
+  SessionResult
+  SessionFinished(DurableStreamOutcome)
+  SessionCancellation
+  SessionExpired
+} derive(Eq, @debug.Debug)
+
+pub(all) enum DurableStreamOutcome {
+  SUCCESS
+  ERROR
+} derive(Eq, @debug.Debug)
+pub fn DurableStreamOutcome::from(Int) -> Self
+pub fn DurableStreamOutcome::ordinal(Self) -> Int
+
 pub(all) struct DurableStreamRecordParameters {
   timestamp : @system-clock.Instant
   record : @types.TypedSchemaValue
@@ -242,6 +268,8 @@ pub(all) struct EndParameters {
   start_index : UInt64
   response : @types.TypedSchemaValue?
   forced_commit : Bool
+  span_finished : SpanFinished?
+  span_attributes : SpanAttributes?
 } derive(Eq, @debug.Debug)
 
 pub(all) struct EnvironmentPluginGrantId {
@@ -274,6 +302,20 @@ pub(all) struct ExternalSpanData {
   span_id : String
 } derive(Eq, @debug.Debug)
 
+pub(all) struct ExternalToolInvocationParameters {
+  idempotency_key : String
+  tool_name : String
+  command_path : Array[String]
+  input : @types.TypedSchemaValue
+  trace_id : String
+  trace_states : Array[String]
+  invocation_context : Array[Array[SpanData]]
+} derive(Eq, @debug.Debug)
+
+pub(all) struct ExternalToolResultParameters {
+  result : Result[ToolInvocationResult, @types.ToolRpcError]
+} derive(Eq, @debug.Debug)
+
 pub(all) struct FailedUpdateParameters {
   timestamp : @system-clock.Instant
   target_revision : UInt64
@@ -282,11 +324,6 @@ pub(all) struct FailedUpdateParameters {
 
 pub(all) struct FallibleResultParameters {
   error : String?
-} derive(Eq, @debug.Debug)
-
-pub(all) struct FinishSpanParameters {
-  timestamp : @system-clock.Instant
-  span_id : String
 } derive(Eq, @debug.Debug)
 
 pub(all) struct GetOplog(Int) derive(Eq, @debug.Debug)
@@ -353,6 +390,12 @@ pub(all) struct LogParameters {
   level : LogLevel
   context : String
   message : String
+  trace_context : LogTraceContext?
+} derive(Eq, @debug.Debug)
+
+pub(all) struct LogTraceContext {
+  trace_id : String
+  span_id : String
 } derive(Eq, @debug.Debug)
 
 pub(all) struct ManualUpdateParameters {
@@ -389,9 +432,6 @@ pub(all) enum OplogEntry {
   DeactivatePlugin(RawDeactivatePluginParameters)
   Revert(RevertParameters)
   CancelPendingInvocation(CancelPendingInvocationParameters)
-  StartSpan(StartSpanParameters)
-  FinishSpan(FinishSpanParameters)
-  SetSpanAttribute(SetSpanAttributeParameters)
   BeginRemoteTransaction(RawBeginRemoteTransactionParameters)
   PreCommitRemoteTransaction(RemoteTransactionParameters)
   PreRollbackRemoteTransaction(RemoteTransactionParameters)
@@ -440,6 +480,13 @@ pub(all) struct OplogRegion {
   end : UInt64
 } derive(Eq, @debug.Debug)
 
+pub(all) enum OwnerKind {
+  COMPONENT_AGENT
+  EPHEMERAL_EXTERNAL_TOOL
+} derive(Eq, @debug.Debug)
+pub fn OwnerKind::from(Int) -> Self
+pub fn OwnerKind::ordinal(Self) -> Int
+
 pub(all) struct PairState {
   left : Int
   right : Int
@@ -466,6 +513,11 @@ pub(all) struct PluginInstallationDescription {
 
 pub(all) struct ProcessOplogEntriesParameters {
   idempotency_key : String
+} derive(Eq, @debug.Debug)
+
+pub(all) struct PublicInvocationWalletPin {
+  wallet_token : WalletVersionToken
+  scope_card_id : @types.CardId?
 } derive(Eq, @debug.Debug)
 
 pub(all) enum PublicOplogEntry {
@@ -498,9 +550,6 @@ pub(all) enum PublicOplogEntry {
   DeactivatePlugin(DeactivatePluginParameters)
   Revert(RevertParameters)
   CancelPendingInvocation(CancelPendingInvocationParameters)
-  StartSpan(StartSpanParameters)
-  FinishSpan(FinishSpanParameters)
-  SetSpanAttribute(SetSpanAttributeParameters)
   BeginRemoteTransaction(BeginRemoteTransactionParameters)
   PreCommitRemoteTransaction(RemoteTransactionParameters)
   PreRollbackRemoteTransaction(RemoteTransactionParameters)
@@ -558,6 +607,7 @@ pub(all) struct RawAgentInvocationStartedParameters {
   trace_id : String
   trace_states : Array[String]
   invocation_context : Array[SpanData]
+  wallet_pin : RawInvocationWalletPin
 } derive(Eq, @debug.Debug)
 
 pub(all) struct RawBeginRemoteTransactionParameters {
@@ -570,12 +620,14 @@ pub(all) struct RawCancelledParameters {
   timestamp : @system-clock.Instant
   start_index : UInt64
   partial : OplogPayload?
+  span_finished : SpanFinished?
 } derive(Eq, @debug.Debug)
 
 pub(all) struct RawCardInstalledParameters {
   timestamp : @system-clock.Instant
   queued_event_index : UInt64?
   card : FixedArray[Byte]
+  wallet_generation : UInt64
 } derive(Eq, @debug.Debug)
 
 pub(all) struct RawCompletionDeliveredParameters {
@@ -591,6 +643,7 @@ pub(all) struct RawCompletionDiscardedParameters {
 pub(all) struct RawCreateParameters {
   timestamp : @system-clock.Instant
   agent_id : @types.AgentId
+  owner_kind : OwnerKind
   agent_mode : AgentMode
   component_revision : UInt64
   env : Array[(String, String)]
@@ -625,6 +678,7 @@ pub(all) struct RawDropResourceParameters {
 pub(all) struct RawDurableStreamRecordParameters {
   timestamp : @system-clock.Instant
   record : OplogPayload
+  summary : DurableStreamEventSummary?
 } derive(Eq, @debug.Debug)
 
 pub(all) struct RawEndParameters {
@@ -632,6 +686,8 @@ pub(all) struct RawEndParameters {
   start_index : UInt64
   response : OplogPayload?
   forced_commit : Bool
+  span_finished : SpanFinished?
+  span_attributes : SpanAttributes?
 } derive(Eq, @debug.Debug)
 
 pub(all) struct RawErrorParameters {
@@ -648,6 +704,12 @@ pub(all) struct RawHostStreamFrameParameters {
   parent_start_index : UInt64
   kind : HostStreamKind
   payload : OplogPayload
+} derive(Eq, @debug.Debug)
+
+pub(all) struct RawInvocationWalletPin {
+  wallet_token : WalletVersionToken
+  pinned_card_ids : Array[@types.CardId]
+  scope_card_id : @types.CardId?
 } derive(Eq, @debug.Debug)
 
 pub(all) struct RawLocalAgentConfigEntry {
@@ -688,6 +750,8 @@ pub(all) struct RawSnapshotParameters {
   timestamp : @system-clock.Instant
   data : OplogPayload
   mime_type : String
+  active_cards : Array[FixedArray[Byte]]
+  wallet_generation : UInt64
 } derive(Eq, @debug.Debug)
 
 pub(all) struct RawStartParameters {
@@ -698,6 +762,7 @@ pub(all) struct RawStartParameters {
   observational_owner : UInt64?
   request : OplogPayload?
   durable_function_type : WrappedFunctionType
+  span_started : SpanStarted?
 } derive(Eq, @debug.Debug)
 
 pub(all) struct RawSuccessfulUpdateParameters {
@@ -755,13 +820,6 @@ pub(all) struct SetRetryPolicyParameters {
   policy : @retry.NamedRetryPolicy
 } derive(Eq, @debug.Debug)
 
-pub(all) struct SetSpanAttributeParameters {
-  timestamp : @system-clock.Instant
-  span_id : String
-  key : String
-  value : @context.AttributeValue
-} derive(Eq, @debug.Debug)
-
 pub(all) struct SnapshotData {
   data : FixedArray[Byte]
   mime_type : String
@@ -772,9 +830,55 @@ pub(all) struct SnapshotParameters {
   data : SnapshotData
 } derive(Eq, @debug.Debug)
 
+pub(all) struct SpanAttributes {
+  span_id : String
+  attributes : Array[@context.Attribute]
+} derive(Eq, @debug.Debug)
+
 pub(all) enum SpanData {
   LocalSpan(LocalSpanData)
   ExternalSpan(ExternalSpanData)
+} derive(Eq, @debug.Debug)
+
+pub(all) struct SpanFinished {
+  span_id : String
+  finished_at : @system-clock.Instant
+  outcome : SpanOutcome
+} derive(Eq, @debug.Debug)
+
+pub(all) enum SpanKind {
+  INTERNAL
+  CLIENT
+  SERVER
+} derive(Eq, @debug.Debug)
+pub fn SpanKind::from(Int) -> Self
+pub fn SpanKind::ordinal(Self) -> Int
+
+pub(all) struct SpanLink {
+  trace_id : String
+  span_id : String
+  trace_states : Array[String]
+} derive(Eq, @debug.Debug)
+
+pub(all) enum SpanOutcome {
+  COMPLETED
+  FAILED
+  CANCELLED
+  ABANDONED
+  DENIED
+} derive(Eq, @debug.Debug)
+pub fn SpanOutcome::from(Int) -> Self
+pub fn SpanOutcome::ordinal(Self) -> Int
+
+pub(all) struct SpanStarted {
+  span_id : String
+  trace_id : String
+  trace_states : Array[String]
+  parent_span_id : String?
+  links : Array[SpanLink]
+  started_at : @system-clock.Instant
+  attributes : Array[@context.Attribute]
+  kind : SpanKind
 } derive(Eq, @debug.Debug)
 
 pub(all) struct StartParameters {
@@ -785,14 +889,7 @@ pub(all) struct StartParameters {
   observational_owner : UInt64?
   request : @types.TypedSchemaValue?
   durable_function_type : WrappedFunctionType
-} derive(Eq, @debug.Debug)
-
-pub(all) struct StartSpanParameters {
-  timestamp : @system-clock.Instant
-  span_id : String
-  parent : String?
-  linked_context_id : String?
-  attributes : Array[@context.Attribute]
+  span_started : SpanStarted?
 } derive(Eq, @debug.Debug)
 
 pub(all) enum StateNode {
@@ -815,9 +912,18 @@ pub(all) struct Timestamp {
   timestamp : @system-clock.Instant
 } derive(Eq, @debug.Debug)
 
+pub(all) struct ToolInvocationResult {
+  result : @types.TypedSchemaValue?
+} derive(Eq, @debug.Debug)
+
 pub(all) enum UpdateDescription {
   AutoUpdate
   SnapshotBased(@host.Snapshot)
+} derive(Eq, @debug.Debug)
+
+pub(all) struct WalletVersionToken {
+  wallet_id_hash : FixedArray[Byte]
+  generation : UInt64
 } derive(Eq, @debug.Debug)
 
 pub(all) enum WrappedFunctionType {

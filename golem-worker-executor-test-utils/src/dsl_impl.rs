@@ -47,6 +47,7 @@ use golem_common::model::component::{
 };
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::environment::EnvironmentId;
+use golem_common::model::filesystem::{FileByteSelection, FileReadExtent, FileReadHead};
 use golem_common::model::oplog::PublicOplogEntryWithIndex;
 use golem_common::model::tool::{ToolBindingInput, ToolName};
 use golem_common::model::worker::{
@@ -126,8 +127,16 @@ impl TestWorkerExecutor {
             match response.response {
                 Some(invocation_response::Response::Accepted(_)) => {}
                 Some(invocation_response::Response::Rejected(rejected)) => {
+                    // Kept alongside the message: a rejection is refused before acceptance, and
+                    // the reason says as what.
+                    let reason =
+                        golem_api_grpc::proto::golem::worker::InvocationRejectionReason::try_from(
+                            rejected.reason,
+                        )
+                        .map(|reason| reason.as_str_name())
+                        .unwrap_or("UNKNOWN");
                     terminal = Some(Err(anyhow!(
-                        "Agent invocation rejected: {}",
+                        "Agent invocation rejected ({reason}): {}",
                         rejected.error
                     )));
                 }
@@ -560,6 +569,8 @@ impl TestDsl for TestWorkerExecutor {
             expected_callee_fingerprint: None,
             durable_input_mappings: Vec::new(),
             scope_card: None,
+            origin_invocation: None,
+            external_tool: None,
         })
         .await?;
         Ok(())
@@ -606,6 +617,8 @@ impl TestDsl for TestWorkerExecutor {
                 expected_callee_fingerprint: None,
                 durable_input_mappings: Vec::new(),
                 scope_card: None,
+                origin_invocation: None,
+                external_tool: None,
             })
             .await?;
 
@@ -618,8 +631,11 @@ impl TestDsl for TestWorkerExecutor {
             ),
             Some(golem_api_grpc::proto::golem::worker::invocation_session_result::Result::NoResult(_))
             | None => None,
+            Some(golem_api_grpc::proto::golem::worker::invocation_session_result::Result::ToolResult(_)) => {
+                return Err(anyhow!("agent invocation returned an external-tool result"));
+            }
         };
-        Ok(AgentResult::new(value))
+        Ok(AgentResult::new(value, worker_agent_id))
     }
 
     #[tracing::instrument(level = "info", skip_all, fields(%agent_id))]
@@ -1193,35 +1209,61 @@ impl TestDsl for TestWorkerExecutor {
                 component_owner_account_id: Some(latest_version.account_id.into()),
                 auth_ctx: Some(self.auth_ctx().into()),
                 principal: None,
+                selection: Some(FileByteSelection::Full.into()),
             })
             .await?
             .into_inner();
 
         let mut bytes = Vec::new();
+        let mut expected = None;
         while let Some(chunk) = stream.message().await? {
             match chunk.result {
                 Some(workerexecutor::v1::get_file_contents_response::Result::Success(data)) => {
+                    if expected.is_none() || data.len() > 64 * 1024 {
+                        return Err(anyhow!("Invalid body before header or oversized chunk"));
+                    }
                     bytes.extend_from_slice(&data);
                 }
                 Some(workerexecutor::v1::get_file_contents_response::Result::Header(header)) => {
-                    match header.result {
-                        Some(
-                            workerexecutor::v1::get_file_contents_response_header::Result::Success(
-                                _,
-                            ),
-                        ) => {}
-                        _ => {
-                            return Err(anyhow!("Unexpected header from get_file_contents"));
+                    if expected.is_some() {
+                        return Err(anyhow!("Duplicate header from get_file_contents"));
+                    }
+                    let head = FileReadHead::try_from(header)
+                        .map_err(|error| anyhow!("Invalid file metadata: {error}"))?;
+                    match head {
+                        FileReadHead::File(metadata) => {
+                            metadata
+                                .validate_for(FileByteSelection::Full)
+                                .map_err(|error| anyhow!("Invalid file metadata: {error}"))?;
+                            expected = Some(match metadata.selection {
+                                FileReadExtent::Selected { length, .. } => length,
+                                FileReadExtent::Unsatisfiable => 0,
+                            });
                         }
+                        other => return Err(anyhow!("Unexpected file head: {other:?}")),
                     }
                 }
                 Some(workerexecutor::v1::get_file_contents_response::Result::Failure(err)) => {
                     return Err(anyhow!("Error from get_file_contents: {err:?}"));
                 }
+                Some(workerexecutor::v1::get_file_contents_response::Result::ReadFailure(err)) => {
+                    let err = golem_api_grpc::proto::golem::worker::FileReadError::try_from(err)?;
+                    return Err(anyhow!(
+                        "File read error from get_file_contents: {}",
+                        err.as_str_name()
+                    ));
+                }
                 None => {
                     return Err(anyhow!("Unexpected response from get_file_contents"));
                 }
             }
+        }
+        let expected = expected.ok_or_else(|| anyhow!("Missing header from get_file_contents"))?;
+        if bytes.len() as u64 != expected {
+            return Err(anyhow!(
+                "Wrong file body length: expected {expected}, got {}",
+                bytes.len()
+            ));
         }
         Ok(Bytes::from(bytes))
     }

@@ -21,7 +21,8 @@ use axum::routing::{get, post};
 use bytes::Bytes;
 use futures_concurrency::future::Join;
 use golem_api_grpc::proto::golem::worker::{LogEvent, log_event};
-use golem_client::api::RegistryServiceClient;
+use golem_client::api::{RegistryServiceClient, WorkerClient, WorkerError};
+use golem_client::model::WorkersMetadataRequest;
 use golem_common::model::account::{AccountRevision, AccountSetPlan};
 use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath, ComponentId};
 use golem_common::model::oplog::public_oplog_entry::AgentInvocationStartedParams;
@@ -496,6 +497,100 @@ async fn get_workers(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> any
             .get_workers_metadata(&component.id, filter, cursor, workers_count as u64, true)
             .await?;
         assert_eq!(values.len(), 0);
+    }
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn invalid_worker_enumeration_requests_return_http_400(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    fn assert_validation_error(error: golem_client::Error<WorkerError>) {
+        match error {
+            golem_client::Error::Item(WorkerError::Error400(body)) => {
+                assert_eq!(
+                    body.code,
+                    golem_common::base_model::api::error_code::VALIDATION_ERROR
+                );
+                assert_eq!(body.errors.len(), 1);
+            }
+            other => panic!("expected HTTP 400 validation error, got {other:?}"),
+        }
+    }
+
+    let user = deps.user().await?;
+    let (_, env) = user.app_and_env().await?;
+    let component = user
+        .component(&env.id, "it_agent_counters_release")
+        .name("it:agent-counters-invalid-listing")
+        .store()
+        .await?;
+    let client = user
+        .deps
+        .worker_service()
+        .worker_http_client(&user.token)
+        .await;
+    let running_filter = AgentFilter::new_status(FilterComparator::Equal, AgentStatus::Running);
+    let get_filter = ["status = Running".to_string()];
+    let invalid_counts = [0, i64::MAX as u64 + 1];
+
+    assert_validation_error(
+        client
+            .get_workers_metadata(
+                &component.id.0,
+                Some(&get_filter),
+                Some("not-a-valid-cursor"),
+                Some(1),
+                Some(false),
+            )
+            .await
+            .unwrap_err(),
+    );
+    assert_validation_error(
+        client
+            .find_workers_metadata(
+                &component.id.0,
+                &WorkersMetadataRequest {
+                    filter: Some(running_filter.clone()),
+                    cursor: Some(ScanCursor::new("not-a-valid-cursor".to_string())),
+                    count: Some(1),
+                    precise: Some(false),
+                },
+            )
+            .await
+            .unwrap_err(),
+    );
+
+    for count in invalid_counts {
+        assert_validation_error(
+            client
+                .get_workers_metadata(
+                    &component.id.0,
+                    Some(&get_filter),
+                    None,
+                    Some(count),
+                    Some(false),
+                )
+                .await
+                .unwrap_err(),
+        );
+        assert_validation_error(
+            client
+                .find_workers_metadata(
+                    &component.id.0,
+                    &WorkersMetadataRequest {
+                        filter: Some(running_filter.clone()),
+                        cursor: None,
+                        count: Some(count),
+                        precise: Some(false),
+                    },
+                )
+                .await
+                .unwrap_err(),
+        );
     }
 
     Ok(())

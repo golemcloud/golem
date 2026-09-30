@@ -31,8 +31,37 @@ pub use raw_types::*;
 
 use crate::model::component::ComponentRevision;
 
+/// The Store an oplog entry was recorded from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EntityAttribution {
+    /// The entry kind does not record which Store appended it.
+    Unattributed,
+    /// Appended by the primary agent Store.
+    Agent,
+    /// Appended by the entity body whose entity invocation `Start` is at this index.
+    EntityBody(OplogIndex),
+}
+
+impl EntityAttribution {
+    /// The attribution of an entry recorded with the given `entity_parent_start_index` field.
+    pub fn of_store(entity_parent_start_index: Option<OplogIndex>) -> Self {
+        match entity_parent_start_index {
+            Some(start) => Self::EntityBody(start),
+            None => Self::Agent,
+        }
+    }
+}
+
 impl OplogEntry {
     pub fn entity_parent_start_index(&self) -> Option<OplogIndex> {
+        match self.entity_attribution() {
+            EntityAttribution::EntityBody(start) => Some(start),
+            EntityAttribution::Agent | EntityAttribution::Unattributed => None,
+        }
+    }
+
+    /// The Store an entry was recorded from.
+    pub fn entity_attribution(&self) -> EntityAttribution {
         match self {
             OplogEntry::Error {
                 entity_parent_start_index,
@@ -129,7 +158,7 @@ impl OplogEntry {
             | OplogEntry::StreamSession {
                 entity_parent_start_index,
                 ..
-            } => *entity_parent_start_index,
+            } => EntityAttribution::of_store(*entity_parent_start_index),
             OplogEntry::Create { .. }
             | OplogEntry::Start { .. }
             | OplogEntry::End { .. }
@@ -154,9 +183,6 @@ impl OplogEntry {
             | OplogEntry::DeactivatePlugin { .. }
             | OplogEntry::Revert { .. }
             | OplogEntry::CancelPendingInvocation { .. }
-            | OplogEntry::StartSpan { .. }
-            | OplogEntry::FinishSpan { .. }
-            | OplogEntry::SetSpanAttribute { .. }
             | OplogEntry::BeginRemoteTransaction { .. }
             | OplogEntry::PreCommitRemoteTransaction { .. }
             | OplogEntry::PreRollbackRemoteTransaction { .. }
@@ -164,7 +190,7 @@ impl OplogEntry {
             | OplogEntry::RolledBackRemoteTransaction { .. }
             | OplogEntry::Snapshot { .. }
             | OplogEntry::OplogProcessorCheckpoint { .. }
-            | OplogEntry::HostStreamFrame { .. } => None,
+            | OplogEntry::HostStreamFrame { .. } => EntityAttribution::Unattributed,
         }
     }
 
@@ -297,9 +323,6 @@ impl OplogEntry {
             | OplogEntry::DeactivatePlugin { .. }
             | OplogEntry::Revert { .. }
             | OplogEntry::CancelPendingInvocation { .. }
-            | OplogEntry::StartSpan { .. }
-            | OplogEntry::FinishSpan { .. }
-            | OplogEntry::SetSpanAttribute { .. }
             | OplogEntry::BeginRemoteTransaction { .. }
             | OplogEntry::PreCommitRemoteTransaction { .. }
             | OplogEntry::PreRollbackRemoteTransaction { .. }
@@ -349,9 +372,7 @@ impl OplogEntry {
 
     pub fn specifies_component_revision(&self) -> Option<ComponentRevision> {
         match self {
-            OplogEntry::Create {
-                component_revision, ..
-            } => Some(*component_revision),
+            OplogEntry::Create { parameters, .. } => Some(parameters.component_revision),
             OplogEntry::SuccessfulUpdate {
                 target_revision, ..
             } => Some(*target_revision),
@@ -386,9 +407,6 @@ impl OplogEntry {
             | OplogEntry::DeactivatePlugin { .. }
             | OplogEntry::Revert { .. }
             | OplogEntry::CancelPendingInvocation { .. }
-            | OplogEntry::StartSpan { .. }
-            | OplogEntry::FinishSpan { .. }
-            | OplogEntry::SetSpanAttribute { .. }
             | OplogEntry::BeginRemoteTransaction { .. }
             | OplogEntry::PreCommitRemoteTransaction { .. }
             | OplogEntry::PreRollbackRemoteTransaction { .. }
@@ -483,18 +501,6 @@ impl OplogScopeProjection {
             | OplogEntry::Log {
                 parent_start_index: Some(parent_start_index),
                 ..
-            }
-            | OplogEntry::StartSpan {
-                parent_start_index: Some(parent_start_index),
-                ..
-            }
-            | OplogEntry::FinishSpan {
-                parent_start_index: Some(parent_start_index),
-                ..
-            }
-            | OplogEntry::SetSpanAttribute {
-                parent_start_index: Some(parent_start_index),
-                ..
             } => self.starts.contains(parent_start_index),
             OplogEntry::Error { .. }
             | OplogEntry::NoOp { .. }
@@ -563,18 +569,6 @@ impl OplogScopeProjection {
             | OplogEntry::DeactivatePlugin { .. }
             | OplogEntry::Revert { .. }
             | OplogEntry::CancelPendingInvocation { .. }
-            | OplogEntry::StartSpan {
-                parent_start_index: None,
-                ..
-            }
-            | OplogEntry::FinishSpan {
-                parent_start_index: None,
-                ..
-            }
-            | OplogEntry::SetSpanAttribute {
-                parent_start_index: None,
-                ..
-            }
             | OplogEntry::Snapshot { .. }
             | OplogEntry::OplogProcessorCheckpoint { .. } => false,
         };

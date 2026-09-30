@@ -1,0 +1,35 @@
+---
+name: golem-call-tool-ts
+description: "Calls a typed Golem tool from TypeScript. Use when invoking a tool provider and handling tool or RPC failures."
+---
+
+# Call a Golem tool from TypeScript
+
+Bind a client from the same definition, or use `toolClientDefinition` for a caller-owned subset:
+
+```typescript
+import { ToolCallError, toolClientDefinition, toolDefinition } from '@golemcloud/golem-ts-sdk';
+import { z } from 'zod/v4';
+
+const echo = toolDefinition('echo').body((body) =>
+  body.positional('value', z.string()).returns(z.string()),
+);
+const client = toolClientDefinition(echo).client('echo');
+
+try {
+  const value = await client.echo({ value: 'hello' });
+  console.log(value);
+} catch (error) {
+  if (error instanceof ToolCallError && error.cause.tag === 'tool') {
+    console.error(error.cause.error);
+  } else {
+    throw error;
+  }
+}
+```
+
+Commands without declared stdout or stderr return a Promise of their result. Commands with either
+output return a `StartedToolInvocation`; consume its independent `stdout` and `stderr` streams and
+await its `result`, or use `.collect()` to drain every declared output concurrently. Stderr bytes do
+not imply failure. `ToolCallError.cause.tag` is `tool`, `rpc`, or `unknown-error`.
+Protocol errors use `rpc` with `cause.error.tag === 'protocol-error'`.

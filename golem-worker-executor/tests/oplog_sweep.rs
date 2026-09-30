@@ -107,7 +107,6 @@ async fn a_lookup_created_worker_expires_and_its_stranded_oplog_is_swept(
             configure: Some(Arc::new(|config| {
                 config.active_agents.ttl = TEST_TTL;
                 config.oplog.sweep.interval = SWEEP_INTERVAL;
-                config.durable_stream.renewal_interval = Duration::from_millis(5);
                 config.durable_stream.reconciliation_interval = Duration::from_millis(5);
             })),
             ..Default::default()
@@ -169,6 +168,8 @@ async fn a_lookup_created_worker_expires_and_its_stranded_oplog_is_swept(
             expected_callee_fingerprint: None,
             durable_input_mappings: Vec::new(),
             scope_card: None,
+            origin_invocation: None,
+            external_tool: None,
         })
         .await?;
     assert!(

@@ -34,7 +34,6 @@ golem new --template <LANGUAGE> --yes <APPLICATION_PATH>
 |------|-------------|
 | `--application-name <NAME>` | Override the application name (defaults to the folder name). |
 | `--component-name <NAMESPACE:NAME>` | Set a specific component name. Must follow `namespace:name` format. Defaults to a name derived from the application name and language. |
-| `--preset <PRESET>` | Select a component preset. Generated projects come with `debug` and `release` presets by default (configured in `golem.yaml`). |
 
 ## Agent skills installed by `golem new`
 
@@ -46,6 +45,7 @@ Running `golem new` deploys a large number of agent skills into the new project'
 |----------|---------------|
 | Rust | `rust` |
 | TypeScript | `ts` |
+| Effect | `effect` |
 | Scala | `scala` |
 
 ## Examples
@@ -58,6 +58,11 @@ golem new --template rust --yes my-rust-app
 Create a new TypeScript project:
 ```shell
 golem new --template ts --yes my-ts-app
+```
+
+Create a new Effect project:
+```shell
+golem new --template effect --yes my-effect-app
 ```
 
 Create a new Scala project:
@@ -75,7 +80,8 @@ Create a project with a specific component name:
 golem new --template ts --component-name myns:my-component --yes my-app
 ```
 
-Create a project with the release preset:
+Component presets (e.g. the `release` preset in generated Rust projects' `golem.yaml`) are not chosen by `golem new`; select one with `-P` / `--preset` when building or deploying:
 ```shell
-golem new --template rust --preset release --yes my-app
+golem build --yes -P release
+golem deploy --yes -P release
 ```

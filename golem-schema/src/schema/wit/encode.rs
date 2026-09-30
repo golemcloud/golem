@@ -492,10 +492,8 @@ fn collect_streams<'a>(
                 collect_streams(value, streams);
             }
         }
-        SchemaValue::Option { inner } => {
-            if let Some(value) = inner {
-                collect_streams(value, streams);
-            }
+        SchemaValue::Option { inner: Some(value) } => {
+            collect_streams(value, streams);
         }
         SchemaValue::Result(payload) => {
             let value = match payload {
@@ -740,6 +738,16 @@ pub fn encode_typed(typed: &TypedSchemaValue) -> Result<wire::TypedSchemaValue, 
     Ok(wire::TypedSchemaValue {
         graph: encode_graph(typed.graph())?,
         value: encode_value(typed.value())?,
+    })
+}
+
+#[cfg(all(feature = "guest", not(feature = "host")))]
+pub async fn encode_typed_async(
+    typed: &TypedSchemaValue,
+) -> Result<wire::TypedSchemaValue, EncodeError> {
+    Ok(wire::TypedSchemaValue {
+        graph: encode_graph(typed.graph())?,
+        value: encode_value_async(typed.value()).await?,
     })
 }
 

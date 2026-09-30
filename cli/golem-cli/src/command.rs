@@ -798,8 +798,8 @@ pub enum GolemCliSubcommand {
         /// version label. Versions are user-defined strings attached to
         /// deployments; if more than one deployment shares the same version,
         /// this command will refuse and ask you to use `--revision` instead.
-        /// List existing deployments with `golem-cli api deployment list`.
-        /// Mutually exclusive with `--revision`.
+        /// If no deployment has the given version, the available deployments
+        /// are listed. Mutually exclusive with `--revision`.
         #[arg(long, conflicts_with_all = ["force_build", "revision", "stage", "approve_staging_steps"])]
         version: Option<String>,
         /// Roll the environment back to the deployment with this revision id.
@@ -1196,6 +1196,8 @@ pub mod environment {
 }
 
 pub mod tool {
+    use crate::model::agent::RawAgentId;
+    use chrono::{DateTime, Utc};
     use clap::{ArgGroup, Args, Subcommand};
     use golem_common::base_model::account::{AccountEmail, AccountId};
     use golem_common::base_model::environment_tool_grant::EnvironmentToolGrantId;
@@ -1204,6 +1206,8 @@ pub mod tool {
     use golem_common::base_model::tool_middleware::ToolMiddlewareName;
     use golem_common::base_model::tool_middleware_release::ToolMiddlewareReleaseId;
     use golem_common::base_model::tool_release::ToolReleaseId;
+    use golem_common::model::IdempotencyKey;
+    use golem_common::model::component::ComponentName;
 
     #[derive(Debug, Subcommand)]
     pub enum ToolSubcommand {
@@ -1216,6 +1220,8 @@ pub mod tool {
             /// Deployed tool name
             tool_name: ToolName,
         },
+        /// Invoke a deployed native external tool
+        Invoke(ToolInvokeArgs),
         /// Manage published tool releases
         Release {
             #[command(subcommand)]
@@ -1321,6 +1327,49 @@ pub mod tool {
             /// Published tool middleware release ID
             release_id: ToolMiddlewareReleaseId,
         },
+    }
+
+    #[derive(Debug, Args)]
+    #[command(group(ArgGroup::new("target").required(true).multiple(false).args(["agent", "component"])))]
+    pub struct ToolInvokeArgs {
+        /// Existing agent that owns the invocation
+        #[arg(long)]
+        pub agent: Option<RawAgentId>,
+        /// Component used to create a fresh ephemeral invocation owner without constructing an agent
+        #[arg(long)]
+        pub component: Option<ComponentName>,
+        /// Deployed tool name
+        pub tool_name: ToolName,
+        /// Tool subcommands, arguments and options after `--`; use `-- --help` for tool help
+        #[arg(last = true, value_name = "TOOL_ARGUMENT")]
+        pub tool_args: Vec<String>,
+        /// Read raw tool stdin from this file; use `-` for process stdin
+        #[arg(long, value_name = "PATH")]
+        pub stdin: Option<std::path::PathBuf>,
+        /// Request raw tool stdout
+        #[arg(long)]
+        pub stdout: bool,
+        /// Write raw stdout to a file instead of process stdout
+        #[arg(long, requires = "stdout")]
+        pub output: Option<std::path::PathBuf>,
+        /// Request raw tool stderr
+        #[arg(long)]
+        pub stderr: bool,
+        /// Write raw stderr to a file instead of process stderr
+        #[arg(long, requires = "stderr")]
+        pub stderr_output: Option<std::path::PathBuf>,
+        /// Enqueue without waiting
+        #[arg(long, conflicts_with_all = ["lookup", "stdin", "stdout", "output", "stderr", "stderr_output"])]
+        pub trigger: bool,
+        /// Look up an existing invocation without starting execution or input
+        #[arg(long, conflicts_with_all = ["trigger", "schedule_at", "stdin", "stdout", "output", "stderr", "stderr_output"])]
+        pub lookup: bool,
+        /// Schedule execution at an RFC 3339 timestamp
+        #[arg(long, requires = "trigger", conflicts_with_all = ["stdin", "stdout", "output", "stderr", "stderr_output"])]
+        pub schedule_at: Option<DateTime<Utc>>,
+        /// Idempotency key; `-` generates a fresh key
+        #[arg(long, short)]
+        pub idempotency_key: Option<IdempotencyKey>,
     }
 
     #[derive(Debug, Subcommand)]
@@ -1521,7 +1570,7 @@ pub mod worker {
             /// The effective key (whether explicit or auto-generated) is always echoed
             /// back: in `--format text` mode as a `Using ... idempotency key:` log
             /// line on stderr, and in `--format json/yaml/toon` mode as the
-            /// `idempotency_key` field of the result document on stdout.
+            /// `idempotencyKey` field of the result document on stdout.
             #[clap(long, short)]
             idempotency_key: Option<IdempotencyKey>,
             #[clap(long, short)]
@@ -1578,12 +1627,14 @@ pub mod worker {
 
             /// Filter for agent metadata in form of `property op value`.
             ///
-            /// Supported properties: `name`, `version`, `status`, `mode`, `env.<KEY>`.
+            /// Supported properties: `name`, `revision`, `status`, `mode`, `created_at`,
+            /// `env.<KEY>`, `config.<PATH>`.
             /// Supported operators: `==`/`=`, `!=`, `>=`, `>`, `<=`, `<`
             /// (string properties additionally support `like`, `notlike`, `startswith`).
-            /// Operator and value are case-insensitive; spaces around the operator are required.
+            /// Operator and value are case-insensitive; spaces around the operator are required
+            /// and the value itself must not contain spaces.
             ///
-            /// Filter examples: `name == my-agent(1, 2, 3)`, `version >= 0`,
+            /// Filter examples: `name == CounterAgent("c1")`, `revision >= 0`,
             /// `status == Running`, `env.var1 == value`, `name like %worker%`.
             /// Can be used multiple times (AND condition is applied between them).
             #[arg(long)]
@@ -1596,10 +1647,10 @@ pub mod worker {
             ///
             /// Cursor can be used to get the next page of results, use the cursor returned
             /// in the previous response.
-            /// The cursor has the format 'layer/position' where both layer and position are numbers.
+            /// The cursor is an opaque string and must be passed back unchanged.
             ///
             /// Returned cursors: in `--format json/yaml/toon` the response includes a
-            /// `cursors` map of the form `{ "<component-name>": "<layer>/<position>", ... }`
+            /// `cursors` map of the form `{ "<component-name>": "<opaque-cursor>", ... }`
             /// (one entry per component that still has more results). Pass any of
             /// those values back as `--scan-cursor` to fetch the next page.
             /// An entry being absent means that component has been fully scanned.
@@ -1828,6 +1879,31 @@ pub mod api {
     use crate::command::api::domain::ApiDomainSubcommand;
     use crate::command::api::security_scheme::ApiSecuritySchemeSubcommand;
     use clap::Subcommand;
+    use std::fmt::{Debug, Formatter};
+    use std::str::FromStr;
+
+    #[derive(Clone)]
+    pub struct OAuthCallbackUrl(url::Url);
+
+    impl OAuthCallbackUrl {
+        pub fn into_inner(self) -> url::Url {
+            self.0
+        }
+    }
+
+    impl Debug for OAuthCallbackUrl {
+        fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("OAuthCallbackUrl([REDACTED])")
+        }
+    }
+
+    impl FromStr for OAuthCallbackUrl {
+        type Err = url::ParseError;
+
+        fn from_str(value: &str) -> Result<Self, Self::Err> {
+            value.parse().map(Self)
+        }
+    }
 
     #[derive(Debug, Subcommand)]
     pub enum ApiSubcommand {
@@ -1841,10 +1917,81 @@ pub mod api {
             #[clap(subcommand)]
             subcommand: ApiSecuritySchemeSubcommand,
         },
+        /// Inspect, refresh and authorize MCP imports
+        McpImport {
+            #[clap(subcommand)]
+            subcommand: McpImportSubcommand,
+        },
         /// Manage API Domains
         Domain {
             #[clap(subcommand)]
             subcommand: ApiDomainSubcommand,
+        },
+    }
+
+    #[derive(Debug, Subcommand)]
+    pub enum McpImportSubcommand {
+        /// Inspect an import's projected tool definitions
+        Tools {
+            /// Zero-based index in the target deployment's MCP imports
+            import_index: u32,
+            /// Deployment revision to target; defaults to the current deployment
+            #[arg(long)]
+            revision: Option<golem_common::model::deployment::DeploymentRevision>,
+        },
+        /// Fetch fresh upstream definitions for an import
+        Refresh {
+            /// Zero-based index in the target deployment's MCP imports
+            import_index: u32,
+            /// Deployment revision to target; defaults to the current deployment
+            #[arg(long)]
+            revision: Option<golem_common::model::deployment::DeploymentRevision>,
+        },
+        /// Start authorization and print the provider consent URL
+        Authorize {
+            /// Zero-based import index in the target deployment or selected manifest
+            import_index: u32,
+            /// Deployment revision; defaults to current. Mutually exclusive with --manifest
+            #[arg(long)]
+            revision: Option<golem_common::model::deployment::DeploymentRevision>,
+            /// Use the selected environment's manifest import before deployment
+            #[arg(long, conflicts_with = "revision")]
+            manifest: bool,
+        },
+        /// Complete authorization from the exact provider callback URL
+        Complete {
+            /// Zero-based import index in the target deployment or selected manifest
+            import_index: u32,
+            /// Exact provider callback URL received after consent, including query parameters
+            callback_url: OAuthCallbackUrl,
+            /// Deployment revision; defaults to current. Mutually exclusive with --manifest
+            #[arg(long)]
+            revision: Option<golem_common::model::deployment::DeploymentRevision>,
+            /// Use the selected environment's manifest import before deployment
+            #[arg(long, conflicts_with = "revision")]
+            manifest: bool,
+        },
+        /// Show non-secret authorization state
+        Status {
+            /// Zero-based import index in the target deployment or selected manifest
+            import_index: u32,
+            /// Deployment revision; defaults to current. Mutually exclusive with --manifest
+            #[arg(long)]
+            revision: Option<golem_common::model::deployment::DeploymentRevision>,
+            /// Use the selected environment's manifest import before deployment
+            #[arg(long, conflicts_with = "revision")]
+            manifest: bool,
+        },
+        /// Revoke the stored grant
+        Disconnect {
+            /// Zero-based import index in the target deployment or selected manifest
+            import_index: u32,
+            /// Deployment revision; defaults to current. Mutually exclusive with --manifest
+            #[arg(long)]
+            revision: Option<golem_common::model::deployment::DeploymentRevision>,
+            /// Use the selected environment's manifest import before deployment
+            #[arg(long, conflicts_with = "revision")]
+            manifest: bool,
         },
     }
 
@@ -1894,15 +2041,30 @@ pub mod api {
                 /// languages are tried as a fallback. There is no separate JSON
                 /// schema for this field; it is always a type expression in one of
                 /// the supported source languages.
-                #[arg(long)]
+                #[arg(long = "type")]
                 secret_type: String,
-                /// Value of the secret. Must match `--secret-type` and is parsed
-                /// using the project's source language syntax (e.g. `"my-key"` for
-                /// strings, `42` for integers, `true` for booleans). If omitted,
-                /// the secret is created without a value and must later be set with
-                /// `golem-cli secret update-value`.
+                /// Value of the secret. Must match `--type` and is parsed using the
+                /// project's source language syntax (e.g. `"my-key"` for strings,
+                /// `42` for integers, `true` for booleans). When no value option is
+                /// given, the value is prompted for with hidden input.
+                #[arg(long, conflicts_with_all = ["value_stdin", "no_value"])]
+                value: Option<String>,
+                /// Read the value of the secret from STDIN (one trailing newline is removed)
+                #[arg(long, conflicts_with_all = ["value", "no_value"])]
+                value_stdin: bool,
+                /// Create the secret without a value
+                #[arg(long, conflicts_with_all = ["value", "value_stdin"])]
+                no_value: bool,
+                /// If a secret already exists at the path, update its value instead of failing.
+                /// Fails if the existing secret has a different type, unless
+                /// `--replace-on-type-change` is also given.
                 #[arg(long)]
-                secret_value: Option<String>,
+                update_existing: bool,
+                /// With `--update-existing`: if the existing secret has a different type, delete it
+                /// and create it again with the new type and value (asks for confirmation, use
+                /// `-Y/--yes` to skip). The replacement is not atomic and changes the secret ID.
+                #[arg(long, requires = "update_existing")]
+                replace_on_type_change: bool,
             },
 
             /// Get Secret by path or ID
@@ -1917,17 +2079,25 @@ pub mod api {
             },
 
             /// Update Secret value
-            #[command(after_help = crate::command_examples::SECRET_UPDATE_VALUE)]
-            UpdateValue {
+            #[command(after_help = crate::command_examples::SECRET_UPDATE)]
+            Update {
                 /// Path of the secret (dot-separated). Mutually exclusive with `--id`.
                 #[arg(value_parser = parse_secret_path, required_unless_present = "id", conflicts_with = "id")]
                 path: Option<AgentSecretPath>,
                 /// ID of the secret (alternative to path). Mutually exclusive with the positional `<PATH>`.
                 #[arg(long, required_unless_present = "path", conflicts_with = "path")]
                 id: Option<AgentSecretId>,
-                /// Value of the secret (e.g. "my-key" for strings, 42 for numbers). Uses the project's language syntax or JSON
-                #[arg(long)]
-                secret_value: Option<String>,
+                /// New value of the secret (e.g. "my-key" for strings, 42 for numbers). Uses the
+                /// project's language syntax or JSON. When no value option is given, the value is
+                /// prompted for with hidden input.
+                #[arg(long, conflicts_with_all = ["value_stdin", "unset"])]
+                value: Option<String>,
+                /// Read the new value of the secret from STDIN (one trailing newline is removed)
+                #[arg(long, conflicts_with_all = ["value", "unset"])]
+                value_stdin: bool,
+                /// Remove the value of the secret
+                #[arg(long, conflicts_with_all = ["value", "value_stdin"])]
+                unset: bool,
             },
 
             /// DESTRUCTIVE: Permanently deletes the secret. Any agent or API binding referencing it will start failing. This action is irreversible. Use `-Y/--yes` to skip the interactive confirmation.
@@ -2009,6 +2179,10 @@ pub mod api {
                 #[arg(long)]
                 /// Security Scheme redirect URL
                 redirect_url: String,
+                /// If a security scheme with the same name already exists, update it with the
+                /// given values instead of failing
+                #[arg(long)]
+                update_existing: bool,
             },
 
             /// Get HTTP API Security Scheme
@@ -2181,6 +2355,10 @@ pub mod resource_definition {
             /// Plural unit label (e.g. "tokens")
             #[arg(long, default_value = "units")]
             units: String,
+            /// If a resource definition with the same name already exists, update it with the
+            /// given values instead of failing
+            #[arg(long)]
+            update_existing: bool,
         },
 
         /// Update an existing quota resource definition
@@ -2266,6 +2444,10 @@ pub mod retry_policy {
                 verbatim_doc_comment,
             )]
             policy: String,
+            /// If a retry policy with the same name already exists, update it with the given
+            /// values instead of failing
+            #[arg(long)]
+            update_existing: bool,
         },
 
         /// List retry policies in the environment
@@ -2806,7 +2988,7 @@ pub mod server {
         /// Override detected system memory for agent admission and eviction (e.g. 2GiB or 500MB).
         /// Overrides GOLEM_LOCAL_SERVER_SYSTEM_MEMORY_OVERRIDE and localServer.systemMemoryOverride.
         /// The executor reserves 20% for host overhead. This is not a hard RSS limit.
-        #[clap(long, value_parser = crate::model::byte_size::parse_positive)]
+        #[clap(long, value_parser = golem_common::config::byte_size::parse_positive)]
         pub system_memory_override: Option<std::num::NonZeroU64>,
 
         /// Address to serve the main API on, defaults to 0.0.0.0
@@ -2870,7 +3052,7 @@ pub mod server {
                 match get_env(NAME) {
                     Ok(value) => {
                         self.system_memory_override = Some(
-                            crate::model::byte_size::parse_positive(&value)
+                            golem_common::config::byte_size::parse_positive(&value)
                                 .map_err(anyhow::Error::msg)
                                 .with_context(|| format!("Failed to parse {NAME}: {value}"))?,
                         );
@@ -2926,6 +3108,8 @@ fn help_target_to_subcommand_names(target: ShowClapHelpTarget) -> Vec<&'static s
     match target {
         ShowClapHelpTarget::AppNew => vec!["new"],
         ShowClapHelpTarget::ProfileNew => vec!["profile", "new"],
+        ShowClapHelpTarget::SecretCreate => vec!["secret", "create"],
+        ShowClapHelpTarget::SecretUpdate => vec!["secret", "update"],
     }
 }
 
@@ -3021,6 +3205,139 @@ mod test {
         }
 
         assert!(GolemCliCommand::try_parse_from(["golem", "environment", "tool", "list"]).is_err());
+    }
+
+    #[test]
+    fn tool_invoke_enforces_live_io_argument_ownership() {
+        let base = [
+            "golem",
+            "tool",
+            "invoke",
+            "--component",
+            "example:component",
+            "native",
+        ];
+        for suffix in [
+            &["--trigger", "--stdin", "-"][..],
+            &["--trigger", "--stdout"][..],
+            &["--trigger", "--stderr"][..],
+            &["--lookup", "--input", "{}"][..],
+            &["--lookup", "--stdin", "-"][..],
+            &["--lookup", "--stderr-output", "errors.bin"][..],
+            &["--output", "result.bin"][..],
+            &["--stderr-output", "errors.bin"][..],
+        ] {
+            assert!(
+                GolemCliCommand::try_parse_from(base.into_iter().chain(suffix.iter().copied()))
+                    .is_err(),
+                "unexpectedly accepted {suffix:?}"
+            );
+        }
+        assert!(
+            GolemCliCommand::try_parse_from(base.into_iter().chain([
+                "--stdin",
+                "-",
+                "--stdout",
+                "--output",
+                "result.bin",
+                "--stderr",
+                "--stderr-output",
+                "errors.bin"
+            ]))
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn secret_value_options_are_mutually_exclusive() {
+        let create = ["golem", "secret", "create", "apiKey", "--type", "String"];
+        let update = ["golem", "secret", "update", "apiKey"];
+        for (base, options) in [
+            (&create[..], ["--value=x", "--value-stdin", "--no-value"]),
+            (&update[..], ["--value=x", "--value-stdin", "--unset"]),
+        ] {
+            assert!(
+                GolemCliCommand::try_parse_from(base.iter().copied()).is_ok(),
+                "unexpectedly rejected {base:?} without a value option"
+            );
+            for option in options {
+                assert!(
+                    GolemCliCommand::try_parse_from(base.iter().copied().chain([option])).is_ok(),
+                    "unexpectedly rejected {base:?} with {option}"
+                );
+            }
+            for (i, first) in options.iter().enumerate() {
+                for second in &options[i + 1..] {
+                    assert!(
+                        GolemCliCommand::try_parse_from(
+                            base.iter().copied().chain([*first, *second])
+                        )
+                        .is_err(),
+                        "unexpectedly accepted {base:?} with {first} and {second}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn secret_create_replace_on_type_change_requires_update_existing() {
+        let base = ["golem", "secret", "create", "apiKey", "--type", "String"];
+        assert!(
+            GolemCliCommand::try_parse_from(base.into_iter().chain(["--replace-on-type-change"]))
+                .is_err()
+        );
+        assert!(
+            GolemCliCommand::try_parse_from(
+                base.into_iter()
+                    .chain(["--update-existing", "--replace-on-type-change"])
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn tool_invoke_passes_tool_options_after_separator_unchanged() {
+        let parsed = GolemCliCommand::try_parse_from([
+            "golem",
+            "tool",
+            "invoke",
+            "--component",
+            "example:component",
+            "--stdout",
+            "native",
+            "--",
+            "query",
+            "--stdout",
+            "--help",
+            "-vv",
+            "--",
+            "-file",
+        ])
+        .unwrap();
+        let GolemCliSubcommand::Tool {
+            subcommand: crate::command::tool::ToolSubcommand::Invoke(args),
+        } = parsed.subcommand
+        else {
+            panic!()
+        };
+        assert!(args.stdout);
+        assert_eq!(
+            args.tool_args,
+            ["query", "--stdout", "--help", "-vv", "--", "-file"]
+        );
+        assert!(
+            GolemCliCommand::try_parse_from([
+                "golem",
+                "tool",
+                "invoke",
+                "--component",
+                "example:component",
+                "native",
+                "query",
+            ])
+            .is_err()
+        );
     }
 
     #[test]

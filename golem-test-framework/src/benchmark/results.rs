@@ -22,8 +22,9 @@ use itertools::Itertools;
 use serde::de::{Error, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_with::{DurationMilliSecondsWithFrac, serde_as};
+use sha2::{Digest, Sha256};
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::fmt::Write;
 use std::fmt::{Debug, Display, Formatter};
@@ -291,26 +292,25 @@ impl Default for CountResult {
     }
 }
 
-/// How many distinct failure messages a `FailureResult` keeps. The count is
-/// exact; the samples exist so the report can say *what* failed without the
-/// results JSON growing by one string per failed attempt.
+/// Limit distinct messages in the console summary. JSON retains all messages.
 pub const MAX_FAILURE_SAMPLES: usize = 5;
 
-/// Failed attempts recorded against one measurement key. A failure is an
-/// attempt that did not produce a result and was retried (a non-success HTTP
-/// status, a transport error, a timeout), so the durations recorded under the
-/// same key are only the attempts that succeeded outright.
+/// Failed attempts or benchmark phases recorded against one measurement key.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FailureResult {
     pub count: u64,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub samples: Vec<String>,
+    /// Every failure, in attempt order within each recorded iteration.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub per_iteration: Vec<Vec<String>>,
 }
 
 impl FailureResult {
     pub fn add_iteration(&mut self, messages: &[String]) {
         self.count += messages.len() as u64;
+        self.per_iteration.push(messages.to_vec());
         for message in messages {
             if self.samples.len() >= MAX_FAILURE_SAMPLES {
                 break;
@@ -600,6 +600,61 @@ pub struct BenchmarkSource {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BenchmarkArtifact {
+    pub path: String,
+    pub sha256: String,
+}
+
+impl BenchmarkArtifact {
+    pub fn from_path(path: &Path) -> anyhow::Result<Self> {
+        use std::io::Read;
+        let mut file = std::fs::File::open(path)?;
+        let mut hash = Sha256::new();
+        let mut buffer = [0u8; 65536];
+        loop {
+            let count = file.read(&mut buffer)?;
+            if count == 0 {
+                break;
+            }
+            hash.update(&buffer[..count]);
+        }
+        Ok(Self {
+            path: path.to_string_lossy().into_owned(),
+            sha256: format!("{:x}", hash.finalize()),
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BenchmarkArtifacts {
+    pub runner: BenchmarkArtifact,
+    pub services: BTreeMap<String, BenchmarkArtifact>,
+    pub fixtures: BTreeMap<String, BenchmarkArtifact>,
+}
+
+impl BenchmarkArtifacts {
+    /// Hash exact input files before running a suite. Missing inputs fail the
+    /// suite rather than silently producing incomplete provenance.
+    pub fn collect(
+        runner: &Path,
+        services: &BTreeMap<String, std::path::PathBuf>,
+        fixtures: &BTreeMap<String, std::path::PathBuf>,
+    ) -> anyhow::Result<Self> {
+        let hash_all = |paths: &BTreeMap<String, std::path::PathBuf>| {
+            paths
+                .iter()
+                .map(|(name, path)| Ok((name.clone(), BenchmarkArtifact::from_path(path)?)))
+                .collect::<anyhow::Result<BTreeMap<_, _>>>()
+        };
+        Ok(Self {
+            runner: BenchmarkArtifact::from_path(runner)?,
+            services: hash_all(services)?,
+            fixtures: hash_all(fixtures)?,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BenchmarkSuiteResult {
     pub suite: String,
     pub environment: String,
@@ -609,6 +664,8 @@ pub struct BenchmarkSuiteResult {
     pub runner: Option<BenchmarkRunner>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub source: Option<BenchmarkSource>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub artifacts: Option<BenchmarkArtifacts>,
     /// Suite-level run-id. Set in cloud mode to `bench-{run_id}` to allow
     /// cross-run correlation and garbage collection of orphaned state.
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -650,6 +707,7 @@ impl BenchmarkSuiteResult {
             timestamp: Utc::now(),
             runner: None,
             source: None,
+            artifacts: None,
             run_id: None,
             results: vec![],
         }
@@ -796,9 +854,9 @@ impl BenchmarkResult {
         }
     }
 
-    pub fn drop_zero_counts(&mut self) {
+    pub fn drop_zero_counts(&mut self, retain_selected: bool) {
         for run_result in &mut self.results {
-            run_result.drop_zero_counts();
+            run_result.drop_zero_counts(retain_selected);
         }
     }
 
@@ -917,15 +975,15 @@ impl BenchmarkRunResult {
     pub fn keep_primary_only(&mut self) {
         self.duration_results.retain(|key, _| key.primary);
         self.count_results.retain(|key, _| key.primary);
-        self.failures.retain(|key, _| key.primary);
     }
 
     pub fn failure_count(&self) -> u64 {
         self.failures.values().map(|f| f.count).sum()
     }
 
-    pub fn drop_zero_counts(&mut self) {
-        self.count_results.retain(|_, result| result.max > 0);
+    pub fn drop_zero_counts(&mut self, retain_selected: bool) {
+        self.count_results
+            .retain(|key, result| result.max > 0 || (retain_selected && key.primary));
     }
 
     pub fn drop_details(&mut self) {
@@ -980,6 +1038,7 @@ mod tests {
             timestamp: Utc::now(),
             runner: None,
             source: None,
+            artifacts: None,
             run_id: None,
             results: vec![],
         }
@@ -1039,6 +1098,73 @@ mod tests {
         }
     }
 
+    #[test]
+    fn benchmark_artifact_provenance_round_trips() {
+        let directory = tempfile::tempdir().unwrap();
+        let runner = directory.path().join("runner");
+        let fixture = directory.path().join("fixture.wasm");
+        std::fs::write(&runner, b"abc").unwrap();
+        std::fs::write(&fixture, b"").unwrap();
+        let artifacts = BenchmarkArtifacts::collect(
+            &runner,
+            &BTreeMap::from([("worker-executor".into(), runner.clone())]),
+            &BTreeMap::from([("fixture".into(), fixture.clone())]),
+        )
+        .unwrap();
+        assert_eq!(
+            artifacts.runner.sha256,
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        assert_eq!(
+            artifacts.fixtures["fixture"].sha256,
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+        let mut suite = suite_result();
+        suite.artifacts = Some(artifacts);
+        let json = serde_json::to_string(&suite).unwrap();
+        assert_eq!(
+            serde_json::from_str::<BenchmarkSuiteResult>(&json).unwrap(),
+            suite
+        );
+        assert!(BenchmarkArtifact::from_path(&directory.path().join("absent")).is_err());
+    }
+
+    #[test]
+    fn benchmark_retains_primary_counts_raw_samples_and_selected_zeros() {
+        let mut result = BenchmarkRunResult::new(run_config());
+        let recorder = BenchmarkRecorder::new();
+        recorder.count(&ResultKey::primary("seeded-sessions"), 0);
+        recorder.count(&ResultKey::primary("items"), 7);
+        recorder.count(&ResultKey::secondary("diagnostic-zero"), 0);
+        recorder.duration(&ResultKey::primary("first-item"), Duration::from_millis(3));
+        recorder.duration(&ResultKey::primary("first-item"), Duration::from_millis(17));
+        result.add(recorder);
+        let mut compact = result.clone();
+        compact.drop_zero_counts(false);
+        assert!(
+            !compact
+                .count_results
+                .contains_key(&ResultKey::primary("seeded-sessions"))
+        );
+        result.drop_zero_counts(true);
+        result.keep_primary_only();
+        let json = serde_json::to_string(&result).unwrap();
+        let parsed: BenchmarkRunResult = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.count_results.len(), 2);
+        assert_eq!(
+            parsed.count_results[&ResultKey::primary("seeded-sessions")].all,
+            vec![0]
+        );
+        assert_eq!(
+            parsed.count_results[&ResultKey::primary("items")].all,
+            vec![7]
+        );
+        assert_eq!(
+            parsed.duration_results[&ResultKey::primary("first-item")].all,
+            vec![Duration::from_millis(3), Duration::from_millis(17)]
+        );
+    }
+
     fn recorder_with_failures(messages: &[&str]) -> BenchmarkRecorder {
         let recorder = BenchmarkRecorder::new();
         recorder.duration(&"invocation".into(), Duration::from_millis(5));
@@ -1066,6 +1192,8 @@ mod tests {
 
         let failure = &result.failures[&ResultKey::primary("invocation")];
         assert_eq!(failure.count, 8);
+        assert_eq!(failure.per_iteration.iter().map(Vec::len).sum::<usize>(), 8);
+        assert_eq!(failure.per_iteration[1][4], "status 408");
         assert_eq!(failure.samples.len(), MAX_FAILURE_SAMPLES);
         assert_eq!(
             failure.samples,
@@ -1107,7 +1235,7 @@ mod tests {
     }
 
     #[test]
-    fn failures_round_trip_through_json_and_survive_primary_only() {
+    fn benchmark_failures_survive_primary_only_filter() {
         let mut result = BenchmarkRunResult::new(run_config());
         let recorder = recorder_with_failures(&["status 503 for http://x: overloaded"]);
         recorder.failure(&ResultKey::secondary("worker-1"), "status 503");
@@ -1115,7 +1243,7 @@ mod tests {
         result.keep_primary_only();
         result.drop_details();
 
-        assert_eq!(result.failures.len(), 1);
+        assert_eq!(result.failures.len(), 2);
         let json = serde_json::to_string(&result).unwrap();
         let parsed: BenchmarkRunResult = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.failures, result.failures);

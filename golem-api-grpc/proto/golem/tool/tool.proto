@@ -9,6 +9,7 @@ message Tool {
   string version = 1;
   CommandTree commands = 2;
   golem.schema.SchemaGraph schema = 3;
+  bool requires_filesystem = 4;
 }
 
 message ToolMiddleware {
@@ -17,6 +18,7 @@ message ToolMiddleware {
   repeated string aliases = 3;
   Doc doc = 4;
   ToolMiddlewareScope scope = 5;
+  golem.schema.SchemaGraph parameter_schema = 6;
 }
 
 message ToolMiddlewareScope {
@@ -59,6 +61,7 @@ message CommandBody {
   optional ResultSpec result = 7;
   repeated ErrorCase errors = 8;
   optional CommandAnnotations annotations = 9;
+  optional StreamSpec stderr = 10;
 }
 
 message CommandAnnotations {

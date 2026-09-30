@@ -1398,7 +1398,8 @@ where
                 // scope by awaiting it (repairing a crash-split half-pair by appending the missing
                 // `End` live) instead of a positional read. Otherwise the begin index would dangle in
                 // `active_durable_scopes` and mis-parent later `Start` entries.
-                ctx.close_durable_scope_replay(entry.begin_index).await?;
+                ctx.close_durable_scope_replay(entry.begin_index, None)
+                    .await?;
             } else {
                 // Crashed after `PreRollbackRemoteTransaction` but before the rollback was recorded.
                 // `begin_transaction_function` already confirmed the external rollback (otherwise it

@@ -1,5 +1,6 @@
 use crate::raw_http;
 use crate::raw_http::Method;
+use futures_concurrency::future::Join;
 use golem_rust::bindings::golem::agent::host::{Datetime, WasmRpc};
 use golem_rust::bindings::golem::api::oplog::{GetOplog, OplogReadError, SearchOplog};
 use golem_rust::bindings::golem::tool::host as tool_host;
@@ -43,7 +44,16 @@ mod gated_host_bindings {
 use gated_host_bindings::golem::agent::host as agent_host;
 use gated_host_bindings::golem::api::host as host_api;
 
-#[derive(Clone, IntoSchema, FromSchema, Serialize, Deserialize)]
+#[derive(
+    Clone,
+    IntoSchema,
+    FromSchema,
+    golem_rust::IntoWire,
+    golem_rust::FromWire,
+    golem_rust::WireSchema,
+    Serialize,
+    Deserialize,
+)]
 pub struct ResolveComponentResult {
     pub component_found: bool,
     pub worker_found: bool,
@@ -111,6 +121,11 @@ pub trait GolemHostApi {
         precise: bool,
     ) -> Vec<AgentMetadata>;
     fn get_agents_next_result(&self, component_id: ComponentId) -> Result<u64, String>;
+    fn get_agents_across_promise(
+        &self,
+        component_id: ComponentId,
+        promise_id: PromiseId,
+    ) -> Result<Vec<Vec<String>>, String>;
     fn get_self_metadata_result(&self) -> Result<String, String>;
     fn resolve_agent_id_strict_result(
         &self,
@@ -118,6 +133,7 @@ pub trait GolemHostApi {
         agent_name: String,
     ) -> Result<bool, String>;
     fn self_fork_result(&self) -> Result<String, String>;
+    fn self_fork_atomic_result(&self) -> Result<String, String>;
     fn get_self_uri(&self) -> AgentMetadata;
     fn get_worker_metadata(&self, agent_id: AgentId) -> Option<AgentMetadata>;
     fn update_worker(&self, agent_id: AgentId, component_revision: u64, update_mode: UpdateMode);
@@ -195,6 +211,21 @@ pub trait GolemHostApi {
         command_path: Vec<String>,
         input: String,
     ) -> Result<(), String>;
+    async fn tool_rpc_invoke_with_policy(
+        &self,
+        tool_name: String,
+        idempotent: bool,
+        atomic: bool,
+    ) -> Result<(), String>;
+    async fn tool_rpc_collect_stdout(
+        &self,
+        tool_name: String,
+        checkpoint: Option<String>,
+    ) -> (Result<(), String>, Result<Vec<u8>, String>);
+    async fn tool_rpc_cancel_and_collect_stdout(
+        &self,
+        tool_name: String,
+    ) -> (Result<(), String>, Result<Vec<u8>, String>);
 }
 
 pub struct GolemHostApiImpl {
@@ -660,6 +691,43 @@ impl GolemHostApi for GolemHostApiImpl {
             .map_err(|error| format!("{error:?}"))
     }
 
+    fn get_agents_across_promise(
+        &self,
+        component_id: ComponentId,
+        promise_id: PromiseId,
+    ) -> Result<Vec<Vec<String>>, String> {
+        let getter = GetAgents::new(component_id, None, false);
+        let first = getter
+            .get_next()
+            .map_err(|error| format!("{error:?}"))?
+            .ok_or_else(|| "expected first agent page".to_string())?;
+
+        golem_rust::blocking_await_promise(&promise_id);
+
+        let second = getter
+            .get_next()
+            .map_err(|error| format!("{error:?}"))?
+            .ok_or_else(|| "expected second agent page".to_string())?;
+        if getter
+            .get_next()
+            .map_err(|error| format!("{error:?}"))?
+            .is_some()
+        {
+            return Err("expected agent enumeration to be exhausted".to_string());
+        }
+
+        Ok(vec![
+            first
+                .into_iter()
+                .map(|metadata| metadata.agent_id.agent_id)
+                .collect(),
+            second
+                .into_iter()
+                .map(|metadata| metadata.agent_id.agent_id)
+                .collect(),
+        ])
+    }
+
     fn get_self_metadata_result(&self) -> Result<String, String> {
         host_api::get_self_metadata()
             .map(|metadata| metadata.agent_id.agent_id)
@@ -675,12 +743,17 @@ impl GolemHostApi for GolemHostApiImpl {
     }
 
     fn self_fork_result(&self) -> Result<String, String> {
+        println!("fork checkpoint");
         host_api::fork()
             .map(|result| match result {
                 host_api::ForkResult::Original(_) => "original".to_string(),
                 host_api::ForkResult::Forked(_) => "forked".to_string(),
             })
             .map_err(|error| format!("{error:?}"))
+    }
+
+    fn self_fork_atomic_result(&self) -> Result<String, String> {
+        atomically(|| self.self_fork_result())
     }
 
     fn get_self_uri(&self) -> AgentMetadata {
@@ -962,7 +1035,8 @@ impl GolemHostApi for GolemHostApiImpl {
         command_path: Vec<String>,
         input: String,
     ) -> Result<(), String> {
-        tool_host::ToolRpc::new(&tool_name)
+        tool_host::ToolRpc::create(&tool_name)
+            .map_err(|error| format!("{error:?}"))?
             .invoke(&command_path, encode_tool_input(input)?, None)
             .map(|_| ())
             .map_err(|error| format!("{error:?}"))
@@ -974,8 +1048,9 @@ impl GolemHostApi for GolemHostApiImpl {
         command_path: Vec<String>,
         input: String,
     ) -> Result<(), String> {
-        tool_host::ToolRpc::new(&tool_name)
-            .async_invoke_and_await(&command_path, encode_tool_input(input)?, None, None)
+        tool_host::ToolRpc::create(&tool_name)
+            .map_err(|error| format!("{error:?}"))?
+            .async_invoke_and_await(&command_path, encode_tool_input(input)?, None, None, None)
             .get()
             .await
             .map(|_| ())
@@ -988,11 +1063,122 @@ impl GolemHostApi for GolemHostApiImpl {
         command_path: Vec<String>,
         input: String,
     ) -> Result<(), String> {
-        tool_host::ToolRpc::new(&tool_name)
-            .invoke_and_await(command_path, encode_tool_input(input)?, None, None)
+        tool_host::ToolRpc::create(&tool_name)
+            .map_err(|error| format!("{error:?}"))?
+            .invoke_and_await(command_path, encode_tool_input(input)?, None, None, None)
             .await
             .map(|_| ())
             .map_err(|error| format!("{error:?}"))
+    }
+
+    async fn tool_rpc_invoke_with_policy(
+        &self,
+        tool_name: String,
+        idempotent: bool,
+        atomic: bool,
+    ) -> Result<(), String> {
+        let _idempotence = use_idempotence_mode(idempotent);
+        let _atomic = atomic.then(golem_rust::mark_atomic_operation);
+        self.tool_rpc_invoke_and_await_result(tool_name, Vec::new(), String::new())
+            .await
+    }
+
+    async fn tool_rpc_collect_stdout(
+        &self,
+        tool_name: String,
+        checkpoint: Option<String>,
+    ) -> (Result<(), String>, Result<Vec<u8>, String>) {
+        let (stdout_target, mut stdout) = tool_host::create_output();
+        let result = tool_host::ToolRpc::create(&tool_name)
+            .expect("tool RPC creation failed")
+            .async_invoke_and_await(
+                &[],
+                encode_tool_input(String::new()).expect("encode empty tool input"),
+                None,
+                Some(stdout_target),
+                None,
+            );
+        if let Some(checkpoint) = checkpoint {
+            let port = std::env::var("MCP_STDOUT_CHECKPOINT_PORT")
+                .expect("MCP_STDOUT_CHECKPOINT_PORT is configured");
+            raw_http::request_async(
+                Method::Get,
+                &format!("localhost:{port}"),
+                &format!("/checkpoint/{checkpoint}"),
+                None,
+                None,
+            )
+            .await;
+        }
+        let read = async move {
+            let mut bytes = Vec::new();
+            while let Some(item) = stdout.next().await {
+                match item {
+                    Ok(chunk) => bytes.extend(chunk),
+                    Err(error) => return Err(format!("{error:?}")),
+                }
+            }
+            Ok(bytes)
+        };
+        let (result, stdout) = (result.get(), read).join().await;
+        (
+            result.map(|_| ()).map_err(|error| format!("{error:?}")),
+            stdout,
+        )
+    }
+
+    async fn tool_rpc_cancel_and_collect_stdout(
+        &self,
+        tool_name: String,
+    ) -> (Result<(), String>, Result<Vec<u8>, String>) {
+        let (stdout_target, mut stdout) = tool_host::create_output();
+        let result = tool_host::ToolRpc::create(&tool_name)
+            .expect("tool RPC creation failed")
+            .async_invoke_and_await(
+                &[],
+                encode_tool_input(String::new()).expect("encode empty tool input"),
+                None,
+                Some(stdout_target),
+                None,
+            );
+        let port = std::env::var("MCP_STDOUT_CHECKPOINT_PORT")
+            .expect("MCP_STDOUT_CHECKPOINT_PORT is configured");
+        raw_http::request_async(
+            Method::Get,
+            &format!("localhost:{port}"),
+            "/checkpoint/cancel",
+            None,
+            None,
+        )
+        .await;
+        result.cancel();
+        let read = async move {
+            let mut bytes = Vec::new();
+            while let Some(item) = stdout.next().await {
+                match item {
+                    Ok(chunk) => bytes.extend(chunk),
+                    Err(error) => return Err(format!("{error:?}")),
+                }
+            }
+            Ok(bytes)
+        };
+        let (result, stdout) = (result.get(), read).join().await;
+        // Make the observed stream terminal part of a subsequent durable claim.
+        // Returning it alone does not validate what reconstruction recomputes.
+        let _ = tool_host::ToolRpc::create(&tool_name)
+            .expect("tool RPC creation failed")
+            .invoke_and_await(
+                vec![format!("observed-{stdout:?}")],
+                encode_tool_input(String::new()).expect("encode empty tool input"),
+                None,
+                None,
+                None,
+            )
+            .await;
+        (
+            result.map(|_| ()).map_err(|error| format!("{error:?}")),
+            stdout,
+        )
     }
 }
 

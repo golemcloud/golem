@@ -33,7 +33,26 @@ pub trait WorkerExecutor: Send + Sync {
 
     fn grpc_port(&self) -> u16;
 
-    async fn kill(&self);
+    /// Hard kill and reap the owned child before the deadline. Unsupported
+    /// executors fail closed; absence of a child handle is not proof of exit.
+    async fn kill_and_wait(&self, _deadline: tokio::time::Instant) -> anyhow::Result<()> {
+        anyhow::bail!("kill-and-wait requires a spawned worker executor")
+    }
+
+    fn is_reaped(&self) -> bool {
+        false
+    }
+
+    /// Holds the lifecycle lock only if this process has been reaped, preventing
+    /// concurrent restart while test code alters derived storage.
+    async fn lock_reaped(&self) -> anyhow::Result<Box<dyn Send + Sync>> {
+        anyhow::bail!("storage mutation requires a reaped spawned executor")
+    }
+
+    /// URL and generation of the spawned process, for reset-aware metrics.
+    fn metrics_endpoint(&self) -> Option<(String, u64)> {
+        None
+    }
 
     async fn restart(&self);
 
@@ -51,6 +70,24 @@ pub trait WorkerExecutor: Send + Sync {
              SpawnedWorkerExecutor; the default implementation refuses to silently \
              discard the requested env overrides."
         );
+    }
+
+    /// Freezes this worker executor's process in place (SIGSTOP) without killing it: it keeps its
+    /// sockets, its memory and every lease it believes it holds, but answers nothing until
+    /// [`WorkerExecutor::resume`]. This is how an executor is made to look dead to the rest of
+    /// the cluster while it still thinks it owns its shards, which a kill cannot do.
+    ///
+    /// Default implementation panics: only `SpawnedWorkerExecutor` owns a process to freeze.
+    async fn pause(&self) {
+        panic!("WorkerExecutor::pause is only supported by SpawnedWorkerExecutor");
+    }
+
+    /// Thaws a process frozen by [`WorkerExecutor::pause`] (SIGCONT). It carries on from exactly
+    /// where it stopped.
+    ///
+    /// Default implementation panics: only `SpawnedWorkerExecutor` owns a process to thaw.
+    async fn resume(&self) {
+        panic!("WorkerExecutor::resume is only supported by SpawnedWorkerExecutor");
     }
 
     async fn is_running(&self) -> bool;

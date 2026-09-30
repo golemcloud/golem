@@ -39,6 +39,11 @@ const rawIn = (value: Common.SchemaValueTree): RawPermissionCard => {
 }
 
 describe("permission-card ownership across tool boundaries", () => {
+  const emptyParameters = () => {
+    const codec = Effect.runSync(compile(Schema.Struct({})))
+    return { graph: codec.schemaGraph, value: Effect.runSync(codec.encode({})) }
+  }
+
   beforeEach(() => {
     resetTools()
     resetMiddlewares()
@@ -111,6 +116,7 @@ describe("permission-card ownership across tool boundaries", () => {
         { graph: codec.schemaGraph, value: wire },
         undefined,
         undefined,
+        undefined,
         {},
       ),
     ).rejects.toBeDefined()
@@ -130,6 +136,7 @@ describe("permission-card ownership across tool boundaries", () => {
       { graph: codec.schemaGraph, value: successfulInput },
       undefined,
       undefined,
+      undefined,
       {},
     )
     expect(rawIn(result.result!.value)).toBe(successfulRaw)
@@ -144,6 +151,7 @@ describe("permission-card ownership across tool boundaries", () => {
     )
     typed({
       name: "card-pass",
+      parameters: Schema.Struct({}),
       presented: definition,
       handler: {
         cardMiddleware: ({ payload }, { underlying }) => underlying({ payload }),
@@ -160,7 +168,14 @@ describe("permission-card ownership across tool boundaries", () => {
         const decoded = await Effect.runPromise(codec.decode(input.value))
         const outputCodec = Effect.runSync(compile(Payload))
         const value = await Effect.runPromise(outputCodec.encode(decoded.payload))
-        return { result: { graph: outputCodec.schemaGraph, value } }
+        return [
+          {
+            get: async () => ({ graph: outputCodec.schemaGraph, value }),
+            cancel: vi.fn(),
+          },
+          undefined,
+          undefined,
+        ] as const
       }),
     }
 
@@ -169,8 +184,11 @@ describe("permission-card ownership across tool boundaries", () => {
         "card-pass",
         "card-middleware",
         toolMiddlewareGuest.getToolMiddleware("card-pass") as never,
+        emptyParameters(),
         [],
         { graph: codec.schemaGraph, value: malformed },
+        undefined,
+        undefined,
         undefined,
         { tag: "anonymous" },
         wrapped as never,
@@ -181,8 +199,11 @@ describe("permission-card ownership across tool boundaries", () => {
       "card-pass",
       "card-middleware",
       toolMiddlewareGuest.getToolMiddleware("card-pass") as never,
+      emptyParameters(),
       [],
       { graph: codec.schemaGraph, value: malformed },
+      undefined,
+      undefined,
       undefined,
       { tag: "anonymous" },
       wrapped as never,

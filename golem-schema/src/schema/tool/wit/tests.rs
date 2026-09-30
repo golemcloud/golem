@@ -5,6 +5,7 @@ use test_r::test;
 fn tool(name: &str, version: &str) -> Tool {
     Tool {
         version: version.to_string(),
+        requires_filesystem: false,
         commands: CommandTree {
             nodes: vec![CommandNode {
                 name: name.to_string(),
@@ -20,6 +21,16 @@ fn tool(name: &str, version: &str) -> Tool {
 }
 
 #[test]
+fn tool_wit_roundtrip_preserves_filesystem_requirement() {
+    for requires_filesystem in [false, true] {
+        let mut tool = tool("filesystem-test", "1");
+        tool.requires_filesystem = requires_filesystem;
+        let wire = wire::Tool::try_from(&tool).unwrap();
+        assert_eq!(Tool::try_from(&wire).unwrap(), tool);
+    }
+}
+
+#[test]
 fn tool_middleware_roundtrip_preserves_independent_versions() {
     let middleware = ToolMiddleware {
         name: "redactor".to_string(),
@@ -30,6 +41,9 @@ fn tool_middleware_roundtrip_preserves_independent_versions() {
             presented: tool("public-tool", "presented-2"),
             expected: Some(tool("private-tool", "expected-9")),
         })),
+        parameter_schema: SchemaGraph::anonymous(SchemaType::String {
+            metadata: Default::default(),
+        }),
     };
 
     let decoded = tool_middleware_from_wit(tool_middleware_to_wit(&middleware).unwrap()).unwrap();
@@ -44,6 +58,7 @@ fn universal_middleware_roundtrip_preserves_its_version() {
         aliases: vec![],
         doc: Doc::default(),
         scope: ToolMiddlewareScope::Universal,
+        parameter_schema: SchemaGraph::empty(),
     };
 
     let decoded = tool_middleware_from_wit(tool_middleware_to_wit(&middleware).unwrap()).unwrap();
@@ -61,6 +76,7 @@ fn malformed_embedded_tool_is_rejected() {
             presented: tool("public-tool", "1"),
             expected: None,
         })),
+        parameter_schema: SchemaGraph::empty(),
     };
     let mut wire = tool_middleware_to_wit(&middleware).unwrap();
     let wire::ToolMiddlewareScope::Monomorphic(scope) = &mut wire.scope else {

@@ -68,7 +68,14 @@ trait ToolMiddlewareInputHandle {
  */
 trait ToolMiddlewareOutputHandle {
   private[golem] def close(): Future[Unit] = Future.successful(())
+  private[golem] def drained: Future[Unit] = Future.successful(())
 }
+
+final case class ToolMiddlewareOutputs[+A](
+  result: A,
+  stdout: Option[ToolMiddlewareOutputHandle],
+  stderr: Option[ToolMiddlewareOutputHandle]
+)
 
 sealed trait ByteStreamFailure extends Product with Serializable
 object ByteStreamFailure {
@@ -92,33 +99,47 @@ object StreamWriteError {
 }
 
 /**
- * A started stdout-bearing invocation. Stream and result have independent
+ * A started output-bearing invocation. Streams and result have independent
  * lifetimes.
  */
 final case class ToolInvocation[+E, +A](
-  stdout: ToolInputStream,
+  stdout: Option[ToolInputStream],
+  stderr: Option[ToolInputStream],
   result: Future[Either[ToolError[E], A]],
   cancel: () => Unit
 ) {
 
-  /** Drains stdout concurrently with the structured result. */
-  def collect()(implicit ec: ExecutionContext): Future[Either[ToolError[E], (A, Array[Byte])]] = {
-    def drain(chunks: Vector[Array[Byte]]): Future[Array[Byte]] =
-      stdout.read().flatMap {
-        case Right(Some(chunk)) => drain(chunks :+ chunk)
+  /** Drains both outputs concurrently with the structured result. */
+  def collect()(implicit ec: ExecutionContext): Future[Either[ToolError[E], CollectedToolInvocation[A]]] = {
+    def drain(stream: ToolInputStream, chunks: Vector[Array[Byte]]): Future[Array[Byte]] =
+      stream.read().flatMap {
+        case Right(Some(chunk)) => drain(stream, chunks :+ chunk)
         case Right(None)        => Future.successful(chunks.flatten.toArray)
         case Left(failure)      => Future.failed(new ToolStreamException(failure))
       }
+    def collectOutput(stream: Option[ToolInputStream]): Future[Either[Throwable, Option[Array[Byte]]]] =
+      stream
+        .fold(Future.successful(Option.empty[Array[Byte]]))(value => drain(value, Vector.empty).map(Some(_)))
+        .map(Right(_): Either[Throwable, Option[Array[Byte]]])
+        .recover { case t => Left(t) }
+
     val terminal = result.map(Right(_): Either[Throwable, Either[ToolError[E], A]]).recover { case t => Left(t) }
-    val output   = drain(Vector.empty).map(Right(_): Either[Throwable, Array[Byte]]).recover { case t => Left(t) }
-    terminal.zip(output).flatMap {
-      case (Right(Left(error @ ToolError.Tool(_))), _) => Future.successful(Left(error))
-      case (Left(error), _)                            => Future.failed(error)
-      case (_, Left(error))                            => Future.failed(error)
-      case (Right(result), Right(bytes))               => Future.successful(result.map(_ -> bytes))
+    terminal.zip(collectOutput(stdout)).zip(collectOutput(stderr)).flatMap {
+      case ((Right(Left(error)), _), _)                          => Future.successful(Left(error))
+      case ((Left(error), _), _)                                 => Future.failed(error)
+      case ((_, Left(error)), _)                                 => Future.failed(error)
+      case ((_, _), Left(error))                                 => Future.failed(error)
+      case ((Right(Right(value)), Right(stdout)), Right(stderr)) =>
+        Future.successful(Right(CollectedToolInvocation(value, stdout, stderr)))
     }
   }
 }
+
+final case class CollectedToolInvocation[+A](
+  result: A,
+  stdout: Option[Array[Byte]],
+  stderr: Option[Array[Byte]]
+)
 
 final class ToolStreamException(val failure: ByteStreamFailure)
     extends RuntimeException(s"tool byte stream failed: $failure")

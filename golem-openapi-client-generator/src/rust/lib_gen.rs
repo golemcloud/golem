@@ -109,7 +109,13 @@ pub fn lib_gen(self_name: &str, modules: &[ModuleDef], disable_clippy: bool) -> 
         .iter()
         .map(|m| &m.name)
         .sorted()
-        .map(|i| i.code())
+        .map(|i| {
+            if disable_clippy {
+                line(unit() + "#[allow(clippy::all)]") + i.code()
+            } else {
+                i.code()
+            }
+        })
         .reduce(|acc, e| acc + e)
         .unwrap_or_else(unit);
 
@@ -120,12 +126,7 @@ pub fn lib_gen(self_name: &str, modules: &[ModuleDef], disable_clippy: bool) -> 
         .reduce(|acc, e| acc + e)
         .unwrap_or_else(unit);
 
-    let base = if disable_clippy {
-        line(unit() + "#[allow(clippy::all)]")
-    } else {
-        unit()
-    };
-    let code = base + NewLine + mods + NewLine + uses;
+    let code = unit() + NewLine + mods + NewLine + uses;
 
     RustContext::new().print_to_string(code)
 }
@@ -156,9 +157,10 @@ mod tests {
         );
 
         let expected = indoc! { r#"
-            #[allow(clippy::all)]
 
+            #[allow(clippy::all)]
             mod abc;
+            #[allow(clippy::all)]
             mod xyz;
 
             pub use lib::abc::B;

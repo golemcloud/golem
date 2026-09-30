@@ -33,6 +33,7 @@ declare module 'golem:api/oplog@1.5.0' {
   export type CardId = golemCore200Types.CardId;
   export type SchemaValueTree = golemCore200Types.SchemaValueTree;
   export type TypedSchemaValue = golemCore200Types.TypedSchemaValue;
+  export type ToolRpcError = golemCore200Types.ToolRpcError;
   export type ComponentRevision = golemApi150Host.ComponentRevision;
   export type OplogIndex = golemApi150Host.OplogIndex;
   export type EnvironmentId = golemApi150Host.EnvironmentId;
@@ -162,9 +163,11 @@ declare module 'golem:api/oplog@1.5.0' {
     path: string[];
     value: TypedSchemaValue;
   };
+  export type OwnerKind = "component-agent" | "ephemeral-external-tool";
   export type CreateParameters = {
     timestamp: Datetime;
     agentId: AgentId;
+    ownerKind: OwnerKind;
     agentMode: AgentMode;
     componentRevision: ComponentRevision;
     env: [string, string][];
@@ -177,6 +180,27 @@ declare module 'golem:api/oplog@1.5.0' {
     localAgentConfig: LocalAgentConfigEntry[];
     originalPhantomId?: Uuid;
     instanceId: Uuid;
+  };
+  export type SpanKind = "internal" | "client" | "server";
+  export type SpanOutcome = "completed" | "failed" | "cancelled" | "abandoned" | "denied";
+  export type SpanLink = {
+    traceId: TraceId;
+    spanId: SpanId;
+    traceStates: string[];
+  };
+  /**
+   * The span name remains in the `name` attribute. An embedded opening must
+   * be explicitly closed; invocation boundaries do not close it automatically.
+   */
+  export type SpanStarted = {
+    spanId: SpanId;
+    traceId: TraceId;
+    traceStates: string[];
+    parentSpanId?: SpanId;
+    links: SpanLink[];
+    startedAt: Datetime;
+    attributes: Attribute[];
+    kind: SpanKind;
   };
   /**
    * Parameters of an enriched durable host-call `start` entry.
@@ -194,6 +218,34 @@ declare module 'golem:api/oplog@1.5.0' {
     observationalOwner?: OplogIndex;
     request?: TypedSchemaValue;
     durableFunctionType: WrappedFunctionType;
+    spanStarted?: SpanStarted;
+  };
+  /**
+   * A compact close records the outcome but no error-message payload. Consumers
+   * must not decode the opaque host request to manufacture one.
+   */
+  export type SpanFinished = {
+    spanId: SpanId;
+    finishedAt: Datetime;
+    outcome: SpanOutcome;
+  };
+  /**
+   * Parameters of an enriched durable host-call `cancelled` entry. Like the
+   * `start` `request`, the optional recorded `partial` result surfaces as a
+   * generic `typed-schema-value` tree (no per-interface named WIT variants).
+   */
+  export type CancelledParameters = {
+    timestamp: Datetime;
+    startIndex: OplogIndex;
+    partial?: TypedSchemaValue;
+    spanFinished?: SpanFinished;
+  };
+  /**
+   * Attributes applied by `end` before the span is closed.
+   */
+  export type SpanAttributes = {
+    spanId: SpanId;
+    attributes: Attribute[];
   };
   /**
    * Parameters of an enriched durable host-call `end` entry. Like the
@@ -205,16 +257,8 @@ declare module 'golem:api/oplog@1.5.0' {
     startIndex: OplogIndex;
     response?: TypedSchemaValue;
     forcedCommit: boolean;
-  };
-  /**
-   * Parameters of an enriched durable host-call `cancelled` entry. Like the
-   * `start` `request`, the optional recorded `partial` result surfaces as a
-   * generic `typed-schema-value` tree (no per-interface named WIT variants).
-   */
-  export type CancelledParameters = {
-    timestamp: Datetime;
-    startIndex: OplogIndex;
-    partial?: TypedSchemaValue;
+    spanFinished?: SpanFinished;
+    spanAttributes?: SpanAttributes;
   };
   /**
    * Parameters of a `completion-discarded` entry: the durable host call started at
@@ -256,6 +300,19 @@ declare module 'golem:api/oplog@1.5.0' {
   {
     tag: 'external-span'
     val: ExternalSpanData
+  };
+  export type WalletVersionToken = {
+    walletIdHash: Uint8Array;
+    generation: bigint;
+  };
+  export type PublicInvocationWalletPin = {
+    walletToken: WalletVersionToken;
+    scopeCardId?: CardId;
+  };
+  export type RawInvocationWalletPin = {
+    walletToken: WalletVersionToken;
+    pinnedCardIds: CardId[];
+    scopeCardId?: CardId;
   };
   export type OplogErrorKind = "invocation" | "recovery";
   export type ErrorParameters = {
@@ -318,6 +375,7 @@ declare module 'golem:api/oplog@1.5.0' {
     timestamp: Datetime;
     queuedEventIndex?: OplogIndex;
     cardId: CardId;
+    walletGeneration: bigint;
   };
   /**
    * Raw parameters for a card-installed oplog entry.
@@ -326,6 +384,7 @@ declare module 'golem:api/oplog@1.5.0' {
     timestamp: Datetime;
     queuedEventIndex?: OplogIndex;
     card: Uint8Array;
+    walletGeneration: bigint;
   };
   export type CardInstallFailure = "card-revoked" | "not-found" | "recipient-mismatch" | "not-permitted";
   /**
@@ -344,6 +403,7 @@ declare module 'golem:api/oplog@1.5.0' {
     timestamp: Datetime;
     queuedEventIndex: OplogIndex;
     cardId: CardId;
+    walletGeneration: bigint;
   };
   /**
    * Parameters for a card-expired oplog entry.
@@ -351,6 +411,7 @@ declare module 'golem:api/oplog@1.5.0' {
   export type CardExpiredParameters = {
     timestamp: Datetime;
     cardId: CardId;
+    walletGeneration: bigint;
   };
   /**
    * Identifies which host-owned stream a host-stream-frame oplog entry belongs to.
@@ -399,6 +460,21 @@ declare module 'golem:api/oplog@1.5.0' {
   };
   export type ManualUpdateParameters = {
     targetRevision: ComponentRevision;
+  };
+  export type ExternalToolInvocationParameters = {
+    idempotencyKey: string;
+    toolName: string;
+    commandPath: string[];
+    input: TypedSchemaValue;
+    traceId: string;
+    traceStates: string[];
+    invocationContext: SpanData[][];
+  };
+  export type ToolInvocationResult = {
+    result?: TypedSchemaValue;
+  };
+  export type ExternalToolResultParameters = {
+    result: Result<ToolInvocationResult, ToolRpcError>;
   };
   export type AgentInvocationOutputParameters = {
     output: TypedSchemaValue;
@@ -450,11 +526,16 @@ declare module 'golem:api/oplog@1.5.0' {
     owner: string;
   };
   export type LogLevel = "stdout" | "stderr" | "trace" | "debug" | "info" | "warn" | "error" | "critical";
+  export type LogTraceContext = {
+    traceId: TraceId;
+    spanId: SpanId;
+  };
   export type LogParameters = {
     timestamp: Datetime;
     level: LogLevel;
     context: string;
     message: string;
+    traceContext?: LogTraceContext;
   };
   export type ActivatePluginParameters = {
     timestamp: Datetime;
@@ -471,23 +552,6 @@ declare module 'golem:api/oplog@1.5.0' {
   export type CancelPendingInvocationParameters = {
     timestamp: Datetime;
     idempotencyKey: string;
-  };
-  export type StartSpanParameters = {
-    timestamp: Datetime;
-    spanId: SpanId;
-    parent?: SpanId;
-    linkedContextId?: SpanId;
-    attributes: Attribute[];
-  };
-  export type FinishSpanParameters = {
-    timestamp: Datetime;
-    spanId: SpanId;
-  };
-  export type SetSpanAttributeParameters = {
-    timestamp: Datetime;
-    spanId: SpanId;
-    key: string;
-    value: AttributeValue;
   };
   export type BeginRemoteTransactionParameters = {
     timestamp: Datetime;
@@ -514,6 +578,10 @@ declare module 'golem:api/oplog@1.5.0' {
     val: AgentMethodInvocationParameters
   } |
   {
+    tag: 'external-tool'
+    val: ExternalToolInvocationParameters
+  } |
+  {
     tag: 'save-snapshot'
   } |
   {
@@ -531,6 +599,7 @@ declare module 'golem:api/oplog@1.5.0' {
   export type AgentInvocationStartedParameters = {
     timestamp: Datetime;
     invocation: AgentInvocation;
+    walletPin: PublicInvocationWalletPin;
   };
   export type SaveSnapshotResultParameters = {
     snapshot: SnapshotData;
@@ -543,6 +612,10 @@ declare module 'golem:api/oplog@1.5.0' {
   {
     tag: 'agent-method'
     val: AgentInvocationOutputParameters
+  } |
+  {
+    tag: 'external-tool'
+    val: ExternalToolResultParameters
   } |
   {
     tag: 'manual-update'
@@ -688,6 +761,7 @@ declare module 'golem:api/oplog@1.5.0' {
   export type RawCreateParameters = {
     timestamp: Datetime;
     agentId: AgentId;
+    ownerKind: OwnerKind;
     agentMode: AgentMode;
     componentRevision: ComponentRevision;
     env: [string, string][];
@@ -709,17 +783,21 @@ declare module 'golem:api/oplog@1.5.0' {
     observationalOwner?: OplogIndex;
     request?: OplogPayload;
     durableFunctionType: WrappedFunctionType;
+    spanStarted?: SpanStarted;
   };
   export type RawEndParameters = {
     timestamp: Datetime;
     startIndex: OplogIndex;
     response?: OplogPayload;
     forcedCommit: boolean;
+    spanFinished?: SpanFinished;
+    spanAttributes?: SpanAttributes;
   };
   export type RawCancelledParameters = {
     timestamp: Datetime;
     startIndex: OplogIndex;
     partial?: OplogPayload;
+    spanFinished?: SpanFinished;
   };
   export type RawCompletionDiscardedParameters = {
     timestamp: Datetime;
@@ -739,12 +817,42 @@ declare module 'golem:api/oplog@1.5.0' {
     kind: HostStreamKind;
     payload: OplogPayload;
   };
+  export type DurableStreamOutcome = "success" | "error";
+  export type DurableStreamEventSummary =
+  {
+    tag: 'registered'
+  } |
+  {
+    tag: 'items'
+    val: bigint
+  } |
+  {
+    tag: 'end'
+    val: DurableStreamOutcome
+  } |
+  {
+    tag: 'cancelled'
+  } |
+  {
+    tag: 'session-result'
+  } |
+  {
+    tag: 'session-finished'
+    val: DurableStreamOutcome
+  } |
+  {
+    tag: 'session-cancellation'
+  } |
+  {
+    tag: 'session-expired'
+  };
   /**
    * A raw durable-stream producer record, stored inline or in external payload storage.
    */
   export type RawDurableStreamRecordParameters = {
     timestamp: Datetime;
     record: OplogPayload;
+    summary?: DurableStreamEventSummary;
   };
   export type RawAgentInvocationStartedParameters = {
     timestamp: Datetime;
@@ -753,6 +861,7 @@ declare module 'golem:api/oplog@1.5.0' {
     traceId: string;
     traceStates: string[];
     invocationContext: SpanData[];
+    walletPin: RawInvocationWalletPin;
   };
   export type RawAgentInvocationFinishedParameters = {
     timestamp: Datetime;
@@ -838,6 +947,8 @@ declare module 'golem:api/oplog@1.5.0' {
     timestamp: Datetime;
     data: OplogPayload;
     mimeType: string;
+    activeCards: Uint8Array[];
+    walletGeneration: bigint;
   };
   export type RawOplogProcessorCheckpointParameters = {
     timestamp: Datetime;
@@ -1013,21 +1124,6 @@ declare module 'golem:api/oplog@1.5.0' {
   {
     tag: 'cancel-pending-invocation'
     val: CancelPendingInvocationParameters
-  } |
-  /** Start a new span in the invocation context */
-  {
-    tag: 'start-span'
-    val: StartSpanParameters
-  } |
-  /** Finish an open span in the invocation context */
-  {
-    tag: 'finish-span'
-    val: FinishSpanParameters
-  } |
-  /** Set an attribute on an open span in the invocation context */
-  {
-    tag: 'set-span-attribute'
-    val: SetSpanAttributeParameters
   } |
   /** Begins a transaction operation */
   {
@@ -1315,21 +1411,6 @@ declare module 'golem:api/oplog@1.5.0' {
   {
     tag: 'cancel-pending-invocation'
     val: CancelPendingInvocationParameters
-  } |
-  /** Start a new span in the invocation context */
-  {
-    tag: 'start-span'
-    val: StartSpanParameters
-  } |
-  /** Finish an open span in the invocation context */
-  {
-    tag: 'finish-span'
-    val: FinishSpanParameters
-  } |
-  /** Set an attribute on an open span in the invocation context */
-  {
-    tag: 'set-span-attribute'
-    val: SetSpanAttributeParameters
   } |
   /** Begins a transaction operation */
   {

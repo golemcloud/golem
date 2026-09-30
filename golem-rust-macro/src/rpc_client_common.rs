@@ -14,12 +14,6 @@
 
 //! Generator-neutral primitives shared by the agent remote-client generator
 //! and the tool client generator.
-//!
-//! Both generators turn a trait method into a call site that encodes its
-//! parameters into the schema wire model, performs an RPC, and decodes the
-//! result. Keeping the encode/decode primitives here is what keeps the two
-//! generators' wire conventions from drifting: neither side hand-rolls the
-//! positional record packing or the result graph handling.
 
 use proc_macro2::{Span, TokenStream};
 use quote::quote;
@@ -201,18 +195,6 @@ pub fn collect_kept_args(
         .collect()
 }
 
-// =====================================================================
-// Input encoding
-// =====================================================================
-
-/// Emits a `SchemaValue::Record` expression whose positional fields are the
-/// given parameter identifiers, in the order supplied by the caller.
-///
-/// Each field is produced by moving the parameter into
-/// `Schema::to_schema_value`, so there are no field-name strings on the wire
-/// and no clones of the parameter values. The caller is responsible for
-/// supplying the identifiers in the encoding order required by its carrier
-/// (declaration order for agents, canonical order for tools).
 pub fn positional_record_schema_value(idents: &[syn::Ident], field_expect: &str) -> TokenStream {
     quote! {
         golem_rust::SchemaValue::Record {
@@ -224,8 +206,6 @@ pub fn positional_record_schema_value(idents: &[syn::Ident], field_expect: &str)
     }
 }
 
-/// Wraps a positional input record in the value-only carrier used by the agent
-/// remote client: the record is encoded directly into a `schema-value-tree`.
 pub fn encode_value_only_carrier(record_expr: TokenStream) -> TokenStream {
     quote! {
         golem_rust::encode_schema_value(&#record_expr)
@@ -233,33 +213,6 @@ pub fn encode_value_only_carrier(record_expr: TokenStream) -> TokenStream {
     }
 }
 
-/// Wraps a positional input record together with its schema graph in the
-/// self-contained `typed-schema-value` carrier used by the tool client.
-#[allow(dead_code)]
-pub fn encode_typed_carrier(graph_expr: TokenStream, record_expr: TokenStream) -> TokenStream {
-    quote! {
-        golem_rust::encode_typed_schema_value(
-            &golem_rust::TypedSchemaValue::new(#graph_expr, #record_expr)
-        )
-        .expect("Failed to encode parameters")
-    }
-}
-
-// =====================================================================
-// Result decoding (memoized schema graph)
-// =====================================================================
-
-/// Emits an expression evaluating to a `&'static SchemaGraph` that lazily
-/// builds `build_expr` once and reuses it on every subsequent call.
-///
-/// The cache is a `OnceLock` declared inline at the call site, so each
-/// expansion gets its own static. This is only correct when the enclosing
-/// generated method is non-generic: a block `static` inside a generic function
-/// is shared across all of that function's instantiations rather than being
-/// per-monomorphization, so a type-dependent `build_expr` would be cached
-/// against the wrong type. Callers must therefore only use this in non-generic
-/// generated methods, and it must never be hoisted into a generic runtime
-/// helper where the single static would be shared across all callers.
 pub fn memoized_graph_access(build_expr: TokenStream) -> TokenStream {
     quote! {
         {
@@ -270,12 +223,6 @@ pub fn memoized_graph_access(build_expr: TokenStream) -> TokenStream {
     }
 }
 
-/// Emits the decoding of an RPC result `SchemaValue` (`value_expr`) into the
-/// method's return type `ty`, using a memoized schema graph for the type.
-///
-/// The return type's schema graph is built once and cached; the cached graph
-/// is reused for each decode instead of rebuilding and revalidating it on
-/// every call.
 pub fn decode_result_value(ty: &Type, value_expr: TokenStream) -> TokenStream {
     let graph = memoized_graph_access(quote! {
         <#ty as golem_rust::agentic::Schema>::get_type()

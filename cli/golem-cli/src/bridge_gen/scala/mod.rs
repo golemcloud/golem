@@ -1532,7 +1532,7 @@ impl ScalaBridgeGenerator {
         let uses_streams = method.uses_streams(&self.agent_type.schema);
 
         // apply (await) returns metadata for ephemeral agents.
-        let (ret_ty, decode_block) = self.output_return(&method.output_schema)?;
+        let (ret_ty, decode_block) = self.output_return(&method.output_schema, !uses_streams)?;
         let awaited_ty = if self.agent_type.mode == AgentMode::Ephemeral {
             format!("_root_.golem.bridge.runtime.InvocationResult[{ret_ty}]")
         } else {
@@ -1945,8 +1945,9 @@ impl ScalaBridgeGenerator {
             writer.line(format!("{name}.map {{ value =>"));
             writer.indent();
             writer.line(format!("val configValue = {enc}"));
+            let codec = self.public_codec(&config.value_type)?;
             writer.line(format!(
-                "{AGENT_CONFIG_ENTRY}({LIST}({path_lit}), configValue)"
+                "{AGENT_CONFIG_ENTRY}({LIST}({path_lit}), {codec}.encodeApplication(configValue))"
             ));
             writer.dedent();
             writer.line(format!("}}{comma}"));
@@ -2291,14 +2292,28 @@ impl ScalaBridgeGenerator {
     /// The `(returnType, decodeBlock)` for a method's output. The decode block
     /// is a Scala expression operating on `__result` (the
     /// `AgentInvocationResult`) producing a value of `returnType`.
-    fn output_return(&self, output: &OutputSchema) -> anyhow::Result<(String, String)> {
+    fn output_return(
+        &self,
+        output: &OutputSchema,
+        validate_expected: bool,
+    ) -> anyhow::Result<(String, String)> {
         // A multimodal output (`list<variant<… Role::Multimodal>>`) is surfaced
         // as `List[Multimodal<N>]`, decoded through the generated list codec.
         if let Some(cases) = output_multimodal_cases(self.type_naming.graph(), output)? {
             let name = self.multimodal_name(&cases)?;
             let ret_ty = self.multimodal_list_type(&name);
+            let validation = if validate_expected {
+                let codec = self.public_codec(
+                    output
+                        .schema()
+                        .expect("multimodal output always has a schema"),
+                )?;
+                format!("{codec}.encode(__value)\n")
+            } else {
+                String::new()
+            };
             let block = format!(
-                "val __value = __result.result.getOrElse(throw {BRIDGE_EXCEPTION}(\"Missing result value for an await invocation\"))\n{}.{CODECS_OBJECT}.decode{name}List(__value)",
+                "val __value = __result.result.getOrElse(throw {BRIDGE_EXCEPTION}(\"Missing result value for an await invocation\"))\n{validation}{}.{CODECS_OBJECT}.decode{name}List(__value)",
                 self.client_pkg()
             );
             return Ok((ret_ty, block));
@@ -2308,8 +2323,13 @@ impl ScalaBridgeGenerator {
             OutputSchema::Single(ty) => {
                 let ret_ty = self.type_reference(ty)?;
                 let decode = self.decode_expr("__value", ty, 0)?;
+                let validation = if validate_expected {
+                    format!("{}.encode(__value)\n", self.public_codec(ty)?)
+                } else {
+                    String::new()
+                };
                 let block = format!(
-                    "val __value = __result.result.getOrElse(throw {BRIDGE_EXCEPTION}(\"Missing result value for an await invocation\"))\n{decode}"
+                    "val __value = __result.result.getOrElse(throw {BRIDGE_EXCEPTION}(\"Missing result value for an await invocation\"))\n{validation}{decode}"
                 );
                 Ok((ret_ty, block))
             }
@@ -4308,6 +4328,7 @@ mod tests {
 
     fn minimal_agent_type(type_name: &str) -> AgentTypeSchema {
         AgentTypeSchema {
+            kind: golem_common::schema::agent::AgentTypeKind::Regular,
             type_name: AgentTypeName(type_name.to_string()),
             description: String::new(),
             source_language: String::new(),

@@ -15,7 +15,7 @@ components:
     templates: scala
   scala-tool-middleware-roles:middleware:
     dir: middleware
-    templates: scala-tool-middleware
+    templates: scala
   scala-tool-middleware-roles:combined:
     dir: combined
-    templates: scala-agent-tool-middleware
+    templates: scala

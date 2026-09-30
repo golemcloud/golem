@@ -20,6 +20,16 @@ the number of recorded `Error` entries with the same `retry_from`
 (`count_oplog_errors_for`, `current_retry_state_for`). After a trap and replay the in-memory
 count resets but the oplog count does not, so a policy exhausted inline stays exhausted.
 
+Elapsed-time budgets share the same durable sequence boundary. When the selected policy contains
+a `TimeBox` (including below another decorator or combinator), `RetryPolicyState::TimeBox` wraps
+the structural policy state with the first decision's wall-clock timestamp and the greatest
+elapsed duration observed so far. Each later decision evaluates with
+`max(previous_elapsed, now - started_at)`. The high-water mark makes elapsed monotonic if the wall
+clock moves backward, and persisting the wrapper in each `Error` entry means reconstruction does
+not restart the budget. The first decision observes zero elapsed; `RetryPolicy::step` keeps its
+canonical inclusive boundary, so `elapsed >= limit` gives up. Policies without a `TimeBox` keep
+their existing state shape.
+
 Startup and replay infrastructure failures are separate from both paths. They append
 `Error { kind: Recovery, retry_policy_state: None, .. }`, so metadata truthfully remains
 `Retrying` but the failure neither reads nor advances the agent's semantic invocation retry
@@ -48,6 +58,15 @@ terminal retry state and report `Failed`.
 
 Otherwise `FallBackToTrap` calls `try_trigger_host_trap_retry`; if that finds no applicable
 policy, the failure is persisted as the call's result (`InternalRetryResult::Persist`).
+
+HTTP response-body resumption has an additional ownership rule. A terminal P2 body read retires
+the failed stream and parent `IncomingBody` in place before sending the Range request. Dropping
+that old parent releases its connection-pool permits (or its unpooled request worker) while the
+guest resource IDs and table parent/child relationship remain unchanged. On success, the
+replacement `IncomingBody` retains the replacement response's worker, worker-error receiver, and
+pool permits; swapping the replacement stream and body into the existing table slots therefore
+preserves ordinary body lifetime and replay semantics. Sending the replacement before retiring
+the old permit owner can self-wait until timeout when the per-host pool capacity is one.
 
 Spawned store tasks use the same decision but `FallBackToTrap` there means "stop inline retries
 and let the invocation loop's trap path take over" (`durability.rs`, spawned-task section).

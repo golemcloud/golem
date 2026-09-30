@@ -230,10 +230,10 @@ export const multimodal = <S extends MultimodalShape>(shape: S): Multimodal<S> =
           const DomainCarrier = Schema.declare((_u): _u is MultimodalValue<S> => true)
           const codec = SchemaValueCarrier.pipe(
             Schema.decodeTo(DomainCarrier, {
-              decode: SchemaGetter.transformOrFail((sv: SchemaValue) =>
+              decode: SchemaGetter.transformEffect((sv: SchemaValue) =>
                 fromValue(sv).pipe(Effect.mapError((error) => error.issue)),
               ),
-              encode: SchemaGetter.transformOrFail((d: MultimodalValue<S>) =>
+              encode: SchemaGetter.transformEffect((d: MultimodalValue<S>) =>
                 toValue(d).pipe(Effect.mapError((error) => error.issue)),
               ),
             }),

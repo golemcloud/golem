@@ -17,7 +17,7 @@ use futures_util::{SinkExt, Stream, StreamExt};
 use golem_common::model::invocation_session_public::{
     BinaryMessage, BinaryMessageKind, BinaryMessageMetadata, DecimalU64,
     INVOCATION_SESSION_SUBPROTOCOL, INVOCATION_SESSION_VERSION, InvocationSelector,
-    MAX_LOGICAL_VALUE_SIZE, MAX_PACKED_U8_SIZE, MAX_WEBSOCKET_MESSAGE_SIZE,
+    MAX_LOGICAL_VALUE_SIZE, MAX_PACKED_U8_SIZE, MAX_WEBSOCKET_MESSAGE_SIZE, PublicByteStreamRole,
     PublicClientCancelReason, PublicClientMessage, PublicConfigEntry, PublicInvocationOutcome,
     PublicInvocationResult, PublicOutputStreamOutcome, PublicResumeOperation, PublicServerMessage,
     PublicStreamDirection, PublicStreamMapping, decode_binary_message, decode_server_text,
@@ -30,6 +30,7 @@ use golem_common::schema::public_json::{
 use golem_common::schema::stream::SchemaValueStream;
 use golem_common::schema::validation::value::validate_value;
 use golem_common::schema::{SchemaGraph, SchemaType, SchemaValue};
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fmt::{Debug, Formatter};
 use std::pin::Pin;
@@ -72,6 +73,8 @@ pub enum SessionTransportError {
     Protocol(String),
     #[error("failed to persist invocation session state: {0}")]
     StatePersistence(String),
+    #[error("invocation session input/output failed: {0}")]
+    Io(#[from] std::io::Error),
     #[error("delivery cursor sequence overflow")]
     SequenceOverflow,
     #[error("output channel {channel} delivered sequence {actual} after {previous}")]
@@ -761,8 +764,16 @@ pub enum ServerFrame {
 #[derive(Clone, Debug, PartialEq)]
 pub struct InvocationSessionStateSnapshot {
     pub delivered_output_cursors: BTreeMap<String, String>,
+    pub stable_stream_bindings: BTreeMap<String, StableStreamIdentity>,
     pub pending_operation: Option<PublicClientMessage>,
     pub session_token: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct StableStreamIdentity {
+    pub direction: PublicStreamDirection,
+    pub byte_role: Option<PublicByteStreamRole>,
 }
 
 pub trait InvocationSessionStateObserver: Send + Sync {
@@ -795,17 +806,22 @@ struct SessionState {
 #[derive(Clone)]
 struct ConnectionBinding {
     direction: PublicStreamDirection,
+    byte_role: Option<PublicByteStreamRole>,
     provisional_ref: Option<uuid::Uuid>,
     stream_token: String,
 }
 
+#[derive(Clone)]
 struct StableStreamBinding {
     direction: PublicStreamDirection,
+    byte_role: Option<PublicByteStreamRole>,
+    byte_role_known: bool,
     provisional_ref: Option<uuid::Uuid>,
     schema_evidence: Option<String>,
     delivered: Option<DeliveredCursor>,
 }
 
+#[derive(Clone)]
 struct DeliveredCursor {
     sequence: Option<u64>,
     token: String,
@@ -816,11 +832,13 @@ impl Default for DeliveryTracker {
         Self::new(
             InvocationSessionStateSnapshot {
                 delivered_output_cursors: BTreeMap::new(),
+                stable_stream_bindings: BTreeMap::new(),
                 pending_operation: None,
                 session_token: None,
             },
             Arc::new(()),
         )
+        .expect("the default invocation session state is valid")
     }
 }
 
@@ -828,26 +846,41 @@ impl DeliveryTracker {
     fn new(
         initial: InvocationSessionStateSnapshot,
         observer: Arc<dyn InvocationSessionStateObserver>,
-    ) -> Self {
+    ) -> Result<Self, SessionTransportError> {
         let stable_streams = initial
-            .delivered_output_cursors
+            .stable_stream_bindings
             .iter()
-            .map(|(stream_token, cursor)| {
+            .map(|(stream_token, identity)| {
+                let delivered = initial
+                    .delivered_output_cursors
+                    .get(stream_token)
+                    .map(|cursor| DeliveredCursor {
+                        sequence: None,
+                        token: cursor.clone(),
+                    });
                 (
                     stream_token.clone(),
                     StableStreamBinding {
-                        direction: PublicStreamDirection::Output,
+                        direction: identity.direction,
+                        byte_role: identity.byte_role,
+                        byte_role_known: true,
                         provisional_ref: None,
                         schema_evidence: None,
-                        delivered: Some(DeliveredCursor {
-                            sequence: None,
-                            token: cursor.clone(),
-                        }),
+                        delivered,
                     },
                 )
             })
-            .collect();
-        Self {
+            .collect::<BTreeMap<_, _>>();
+        if initial.delivered_output_cursors.keys().any(|stream_token| {
+            !stable_streams
+                .get(stream_token)
+                .is_some_and(|binding| binding.direction == PublicStreamDirection::Output)
+        }) {
+            return Err(SessionTransportError::Protocol(
+                "a delivered output cursor has no stable output identity".to_string(),
+            ));
+        }
+        Ok(Self {
             shared: Arc::new(SharedSessionState {
                 state: Mutex::new(SessionState {
                     connection_channels: BTreeMap::new(),
@@ -857,7 +890,7 @@ impl DeliveryTracker {
                 }),
                 observer,
             }),
-        }
+        })
     }
 
     pub fn snapshot(&self) -> InvocationSessionStateSnapshot {
@@ -899,6 +932,8 @@ impl DeliveryTracker {
             .state
             .lock()
             .expect("invocation session state mutex poisoned");
+        let mut connection_channels = state.connection_channels.clone();
+        let mut stable_streams = state.stable_streams.clone();
         for mapping in mappings {
             if mapping.channel == 0
                 || mapping.stream_token.is_empty()
@@ -907,14 +942,15 @@ impl DeliveryTracker {
             {
                 return Err(SessionTransportError::InvalidMapping);
             }
-            if let Some(existing) = state.connection_channels.get(&mapping.channel)
+            if let Some(existing) = connection_channels.get(&mapping.channel)
                 && (existing.stream_token != mapping.stream_token
                     || existing.direction != mapping.direction
+                    || existing.byte_role != mapping.byte_role
                     || existing.provisional_ref != mapping.provisional_ref)
             {
                 return Err(SessionTransportError::MappingRebound);
             }
-            if state.connection_channels.iter().any(|(channel, existing)| {
+            if connection_channels.iter().any(|(channel, existing)| {
                 *channel != mapping.channel
                     && (existing.stream_token == mapping.stream_token
                         || mapping.provisional_ref.is_some()
@@ -922,8 +958,9 @@ impl DeliveryTracker {
             }) {
                 return Err(SessionTransportError::MappingRebound);
             }
-            if let Some(existing) = state.stable_streams.get(&mapping.stream_token) {
+            if let Some(existing) = stable_streams.get(&mapping.stream_token) {
                 if existing.direction != mapping.direction
+                    || existing.byte_role_known && existing.byte_role != mapping.byte_role
                     || existing.provisional_ref.is_some()
                         && mapping.provisional_ref.is_some()
                         && existing.provisional_ref != mapping.provisional_ref
@@ -933,25 +970,45 @@ impl DeliveryTracker {
                     });
                 }
             } else {
-                state.stable_streams.insert(
+                stable_streams.insert(
                     mapping.stream_token.clone(),
                     StableStreamBinding {
                         direction: mapping.direction,
+                        byte_role: mapping.byte_role,
+                        byte_role_known: true,
                         provisional_ref: mapping.provisional_ref,
                         schema_evidence: None,
                         delivered: None,
                     },
                 );
             }
-            state.connection_channels.insert(
+            if let Some(existing) = stable_streams.get_mut(&mapping.stream_token)
+                && !existing.byte_role_known
+            {
+                existing.byte_role = mapping.byte_role;
+                existing.byte_role_known = true;
+            }
+            connection_channels.insert(
                 mapping.channel,
                 ConnectionBinding {
                     direction: mapping.direction,
+                    byte_role: mapping.byte_role,
                     provisional_ref: mapping.provisional_ref,
                     stream_token: mapping.stream_token.clone(),
                 },
             );
         }
+        let changed = snapshot_from_parts(
+            &stable_streams,
+            &state.pending_operation,
+            &state.session_token,
+        );
+        self.shared
+            .observer
+            .state_changed(&changed)
+            .map_err(SessionTransportError::StatePersistence)?;
+        state.connection_channels = connection_channels;
+        state.stable_streams = stable_streams;
         Ok(())
     }
 
@@ -1104,9 +1161,20 @@ impl DeliveryTracker {
 }
 
 fn snapshot(state: &SessionState) -> InvocationSessionStateSnapshot {
+    snapshot_from_parts(
+        &state.stable_streams,
+        &state.pending_operation,
+        &state.session_token,
+    )
+}
+
+fn snapshot_from_parts(
+    stable_streams: &BTreeMap<String, StableStreamBinding>,
+    pending_operation: &Option<PublicClientMessage>,
+    session_token: &Option<String>,
+) -> InvocationSessionStateSnapshot {
     InvocationSessionStateSnapshot {
-        delivered_output_cursors: state
-            .stable_streams
+        delivered_output_cursors: stable_streams
             .iter()
             .filter_map(|(stream, binding)| {
                 binding
@@ -1115,8 +1183,20 @@ fn snapshot(state: &SessionState) -> InvocationSessionStateSnapshot {
                     .map(|cursor| (stream.clone(), cursor.token.clone()))
             })
             .collect(),
-        pending_operation: state.pending_operation.clone(),
-        session_token: state.session_token.clone(),
+        stable_stream_bindings: stable_streams
+            .iter()
+            .map(|(stream_token, binding)| {
+                (
+                    stream_token.clone(),
+                    StableStreamIdentity {
+                        direction: binding.direction,
+                        byte_role: binding.byte_role,
+                    },
+                )
+            })
+            .collect(),
+        pending_operation: pending_operation.clone(),
+        session_token: session_token.clone(),
     }
 }
 
@@ -1430,7 +1510,7 @@ impl InvocationSession {
         observer
             .state_changed(&initial)
             .map_err(SessionTransportError::StatePersistence)?;
-        let deliveries = DeliveryTracker::new(initial, observer);
+        let deliveries = DeliveryTracker::new(initial, observer)?;
         let transport =
             connect_for_pending_operation(&request_provider, connector.clone(), &deliveries)
                 .await?;
@@ -1604,10 +1684,23 @@ impl InvocationSession {
     }
 
     pub async fn receive(&mut self) -> Result<ReceivedFrame, SessionTransportError> {
+        self.receive_with_transport_recovery(true).await
+    }
+
+    async fn receive_without_transport_recovery(
+        &mut self,
+    ) -> Result<ReceivedFrame, SessionTransportError> {
+        self.receive_with_transport_recovery(false).await
+    }
+
+    async fn receive_with_transport_recovery(
+        &mut self,
+        recover_transport: bool,
+    ) -> Result<ReceivedFrame, SessionTransportError> {
         loop {
             let mut frame = match self.transport.receive().await {
                 Ok(frame) => frame,
-                Err(error) if is_transport_detach(&error) => {
+                Err(error) if recover_transport && is_transport_detach(&error) => {
                     self.recover().await?;
                     continue;
                 }
@@ -1843,6 +1936,515 @@ impl InvocationSession {
     }
 }
 
+/// Drives native byte attachments concurrently with the structured tool result, using the
+/// same input acknowledgements and reconnect cursors as agent invocation sessions.
+pub async fn drive_native_tool_session<R, W, E>(
+    session: InvocationSession,
+    input: Option<R>,
+    stdout: &mut W,
+    stderr: &mut E,
+) -> Result<PublicInvocationResult, SessionTransportError>
+where
+    R: tokio::io::AsyncRead + Unpin,
+    W: tokio::io::AsyncWrite + Unpin,
+    E: tokio::io::AsyncWrite + Unpin,
+{
+    drive_native_tool_session_until(session, input, stdout, stderr, std::future::pending()).await
+}
+
+/// Drives a native tool session until completion or explicit client cancellation.
+pub async fn drive_native_tool_session_until<R, W, E, C>(
+    mut session: InvocationSession,
+    input: Option<R>,
+    stdout: &mut W,
+    stderr: &mut E,
+    cancelled: C,
+) -> Result<PublicInvocationResult, SessionTransportError>
+where
+    R: tokio::io::AsyncRead + Unpin,
+    W: tokio::io::AsyncWrite + Unpin,
+    E: tokio::io::AsyncWrite + Unpin,
+    C: std::future::Future<Output = ()>,
+{
+    use tokio::io::AsyncReadExt;
+
+    let Some(PublicClientMessage::ToolStart {
+        stdin,
+        stdout: has_stdout,
+        stderr: has_stderr,
+        ..
+    }) = session.state().pending_operation
+    else {
+        return Err(SessionTransportError::Protocol(
+            "native tool driver requires a tool start operation".to_string(),
+        ));
+    };
+    if stdin != input.is_some() {
+        return Err(SessionTransportError::Protocol(
+            "native tool stdin does not match its source".to_string(),
+        ));
+    }
+    let buffer = InputReplayBuffer::new(MAX_LOGICAL_VALUE_SIZE, PIPELINE_ITEMS);
+    if stdin {
+        // The sole byte input is bound by the accepted stdin mapping, not by a typed
+        // provisional reference. Once accepted, its stable token identifies it on resume.
+        session.register_input(uuid::Uuid::new_v4(), None, buffer.clone())?;
+    }
+    let (input_tx, mut input_rx) = mpsc::channel(PIPELINE_ITEMS);
+    let (cancel_input, mut input_cancelled) = tokio::sync::watch::channel(false);
+    let producer = async {
+        let Some(mut input) = input else {
+            return Ok::<_, SessionTransportError>(());
+        };
+        let mut sequence = 0_u64;
+        let mut bytes = vec![0; 64 * 1024];
+        loop {
+            let count = tokio::select! {
+                _ = input_cancelled.changed() => return Ok(()),
+                count = input.read(&mut bytes) => count?,
+            };
+            let request = if count == 0 {
+                ReplayableInput::End { sequence }
+            } else {
+                ReplayableInput::Binary(BinaryMessage {
+                    metadata: BinaryMessageMetadata {
+                        channel: 0,
+                        cursor_token: None,
+                        item_count: DecimalU64(count as u64),
+                        kind: BinaryMessageKind::InputU8,
+                        mime_type: None,
+                        sequence: DecimalU64(sequence),
+                        version: INVOCATION_SESSION_VERSION,
+                    },
+                    payload: bytes[..count].to_vec(),
+                })
+            };
+            tokio::select! {
+                _ = input_cancelled.changed() => return Ok(()),
+                result = async {
+                    let admitted = buffer.admit(request, count).await?;
+                    input_tx.send(admitted).await.map_err(|_| SessionTransportError::Closed)
+                } => result?,
+            }
+            if count == 0 {
+                return Ok(());
+            }
+            sequence = sequence
+                .checked_add(count as u64)
+                .ok_or(SessionTransportError::SequenceOverflow)?;
+        }
+    };
+    tokio::pin!(producer);
+    tokio::pin!(cancelled);
+    let mut producer_done = false;
+    let (cancel_output, output_cancelled) = tokio::sync::watch::channel(false);
+    let (stdout_tx, stdout_rx) = mpsc::channel(PIPELINE_ITEMS);
+    let (stderr_tx, stderr_rx) = mpsc::channel(PIPELINE_ITEMS);
+    let (delivered_tx, mut delivered_rx) = mpsc::unbounded_channel();
+    let stdout_pump = pump_native_output(
+        stdout_rx,
+        stdout,
+        output_cancelled.clone(),
+        delivered_tx.clone(),
+    );
+    let stderr_pump = pump_native_output(stderr_rx, stderr, output_cancelled, delivered_tx);
+    tokio::pin!(stdout_pump);
+    tokio::pin!(stderr_pump);
+    let result = async {
+        let mut input_open = stdin;
+        let mut stdout_channel = None;
+        let mut stderr_channel = None;
+        let mut stdout_terminal = !has_stdout;
+        let mut stderr_terminal = !has_stderr;
+        let mut stdout_failure = None;
+        let mut stderr_failure = None;
+        let mut stdout_admission = (None, false);
+        let mut stderr_admission = (None, false);
+        let mut stdout_cancellation = None;
+        let mut stderr_cancellation = None;
+        let mut admitted_frames = 0usize;
+        let mut pending_output = None;
+        let mut pending_recovery = None;
+        let mut result = None;
+        let mut finished = false;
+        let mut completion_failure = None;
+        loop {
+            if finished && stdout_terminal && stderr_terminal {
+                if let Some(message) = completion_failure {
+                    return Err(SessionTransportError::Protocol(message));
+                }
+                if !matches!(result, Some(PublicInvocationResult::ToolFailure { .. })) {
+                    if let Some(outcome) = stdout_failure {
+                        return Err(SessionTransportError::Protocol(format!("native stdout failed: {outcome:?}")));
+                    }
+                    if let Some(outcome) = stderr_failure {
+                        return Err(SessionTransportError::Protocol(format!("native stderr failed: {outcome:?}")));
+                    }
+                }
+                return result.ok_or_else(|| SessionTransportError::Protocol("native invocation finished without a tool result".to_string()));
+            }
+            if pending_recovery.is_some() && admitted_frames == 0 && pending_output.is_none() {
+                let error = pending_recovery.take().expect("checked above");
+                tokio::select! {
+                    _ = &mut cancelled => {
+                        let _ = cancel_input.send(true);
+                        let _ = cancel_output.send(true);
+                        return Err(SessionTransportError::Io(std::io::Error::new(
+                            std::io::ErrorKind::Interrupted,
+                            "native tool invocation cancelled",
+                        )));
+                    }
+                    recovered = session.recover_after_send_failure(error) => recovered?,
+                }
+                continue;
+            }
+            let unsent = buffer.next_unsent();
+            let sender = session.sender();
+            let binding = session.input_binding(&buffer);
+            tokio::select! {
+                result = &mut producer, if !producer_done => {
+                    producer_done = true;
+                    if let Err(error) = result {
+                        cancel_native_streams(
+                            &session,
+                            binding.as_ref().map(|binding| binding.0),
+                            [
+                                stdout_channel.filter(|_| !stdout_terminal),
+                                stderr_channel.filter(|_| !stderr_terminal),
+                            ],
+                            PublicClientCancelReason::SourceUnavailable,
+                        ).await;
+                        return Err(error);
+                    }
+                }
+                _ = &mut cancelled => {
+                    let _ = cancel_input.send(true);
+                    cancel_native_streams(
+                        &session,
+                        binding.as_ref().map(|binding| binding.0),
+                        [
+                            stdout_channel.filter(|_| !stdout_terminal),
+                            stderr_channel.filter(|_| !stderr_terminal),
+                        ],
+                        PublicClientCancelReason::Cancelled,
+                    ).await;
+                    return Err(SessionTransportError::Io(std::io::Error::new(
+                        std::io::ErrorKind::Interrupted,
+                        "native tool invocation cancelled",
+                    )));
+                }
+                admitted = input_rx.recv(), if input_open && session.is_accepted() => {
+                    match admitted {
+                        Some(admitted) => buffer.push(admitted),
+                        None => input_open = false,
+                    }
+                }
+                sent = async {
+                    let (index, request, offset) = unsent.as_ref().unwrap();
+                    send_replayable_input(&sender, request, binding.as_ref().unwrap().0, *offset).await?;
+                    Ok::<_, SessionTransportError>(*index)
+                }, if pending_recovery.is_none() && session.is_accepted() && binding.is_some() && unsent.is_some() && !*cancel_input.borrow() => {
+                    match sent {
+                        Ok(index) => buffer.mark_sent(index)?,
+                        Err(error) if is_transport_detach(&error) => {
+                            pending_recovery = Some(error);
+                        }
+                        Err(error) => return Err(error),
+                    }
+                }
+                pumped = &mut stdout_pump, if has_stdout && !stdout_terminal => {
+                    match pumped {
+                        Ok(outcome) => {
+                            if !matches!(outcome, PublicOutputStreamOutcome::Ok) {
+                                stdout_failure = Some(outcome);
+                            }
+                            stdout_terminal = true;
+                        }
+                        Err(error) => {
+                            let _ = cancel_output.send(true);
+                            cancel_native_streams(
+                                &session,
+                                binding.as_ref().map(|binding| binding.0),
+                                [stdout_channel, stderr_channel.filter(|_| !stderr_terminal)],
+                                PublicClientCancelReason::ConsumerDrop,
+                            ).await;
+                            return Err(error);
+                        }
+                    }
+                }
+                pumped = &mut stderr_pump, if has_stderr && !stderr_terminal => {
+                    match pumped {
+                        Ok(outcome) => {
+                            if !matches!(outcome, PublicOutputStreamOutcome::Ok) {
+                                stderr_failure = Some(outcome);
+                            }
+                            stderr_terminal = true;
+                        }
+                        Err(error) => {
+                            let _ = cancel_output.send(true);
+                            cancel_native_streams(
+                                &session,
+                                binding.as_ref().map(|binding| binding.0),
+                                [stdout_channel.filter(|_| !stdout_terminal), stderr_channel],
+                                PublicClientCancelReason::ConsumerDrop,
+                            ).await;
+                            return Err(error);
+                        }
+                    }
+                }
+                delivered = delivered_rx.recv(), if admitted_frames > 0 => {
+                    delivered.ok_or(SessionTransportError::Closed)?;
+                    admitted_frames -= 1;
+                }
+                permit = stdout_tx.reserve(), if pending_output.as_ref().is_some_and(|(_, stdout)| *stdout) => {
+                    let permit = permit.map_err(|_| SessionTransportError::Closed)?;
+                    let (received, _) = pending_output.take().expect("guarded by pending stdout");
+                    permit.send(received);
+                    admitted_frames += 1;
+                }
+                permit = stderr_tx.reserve(), if pending_output.as_ref().is_some_and(|(_, stdout)| !*stdout) => {
+                    let permit = permit.map_err(|_| SessionTransportError::Closed)?;
+                    let (received, _) = pending_output.take().expect("guarded by pending stderr");
+                    permit.send(received);
+                    admitted_frames += 1;
+                }
+                received = session.receive_without_transport_recovery(), if !finished && pending_recovery.is_none() && pending_output.is_none() => {
+                    let mut received = match received {
+                        Ok(received) => received,
+                        Err(error) if is_transport_detach(&error) => {
+                            pending_recovery = Some(error);
+                            continue;
+                        }
+                        Err(error) => return Err(error),
+                    };
+                    match received.frame() {
+                        ServerFrame::Message(PublicServerMessage::InvocationAccepted { mappings, .. }) => {
+                            stdout_channel = None;
+                            stderr_channel = None;
+                            for mapping in mappings {
+                                match (mapping.byte_role, mapping.direction) {
+                                    (Some(PublicByteStreamRole::Stdin), PublicStreamDirection::Input) if stdin => {},
+                                    (Some(PublicByteStreamRole::Stdout), PublicStreamDirection::Output) if has_stdout && stdout_channel.is_none() => {
+                                        stdout_channel = Some(mapping.channel);
+                                    }
+                                    (Some(PublicByteStreamRole::Stderr), PublicStreamDirection::Output) if has_stderr && stderr_channel.is_none() => {
+                                        stderr_channel = Some(mapping.channel);
+                                    }
+                                    _ => return Err(SessionTransportError::InvalidMapping),
+                                }
+                            }
+                            if has_stdout != stdout_channel.is_some()
+                                || has_stderr != stderr_channel.is_some()
+                                || stdin != session.input_binding(&buffer).is_some()
+                            {
+                                return Err(SessionTransportError::InvalidMapping);
+                            }
+                        }
+                        ServerFrame::Binary(message) if message.metadata.kind == BinaryMessageKind::OutputU8 && (Some(message.metadata.channel) == stdout_channel || Some(message.metadata.channel) == stderr_channel) => {
+                            let (stdout, admission) = if Some(message.metadata.channel) == stdout_channel {
+                                (true, &mut stdout_admission)
+                            } else {
+                                (false, &mut stderr_admission)
+                            };
+                            if admit_native_output_frame(
+                                message.metadata.sequence.0,
+                                message.metadata.item_count.0,
+                                admission,
+                            )? {
+                                pending_output = Some((received, stdout));
+                            }
+                            continue;
+                        }
+                        ServerFrame::Message(PublicServerMessage::OutputStreamItem { channel, sequence, .. }) if Some(*channel) == stdout_channel || Some(*channel) == stderr_channel => {
+                            let (stdout, admission) = if Some(*channel) == stdout_channel {
+                                (true, &mut stdout_admission)
+                            } else {
+                                (false, &mut stderr_admission)
+                            };
+                            if admit_native_output_frame(sequence.0, 1, admission)? {
+                                pending_output = Some((received, stdout));
+                            }
+                            continue;
+                        }
+                        ServerFrame::Message(PublicServerMessage::OutputStreamEnd { channel, sequence, .. }) if Some(*channel) == stdout_channel || Some(*channel) == stderr_channel => {
+                            let (stdout, admission) = if Some(*channel) == stdout_channel {
+                                (true, &mut stdout_admission)
+                            } else {
+                                (false, &mut stderr_admission)
+                            };
+                            if admit_native_output_frame(sequence.0, 0, admission)? {
+                                pending_output = Some((received, stdout));
+                            }
+                            continue;
+                        }
+                        ServerFrame::Message(PublicServerMessage::InvocationResult { result: value, mappings, .. })
+                            if mappings.is_empty()
+                                && matches!(value.as_ref(), PublicInvocationResult::ToolSuccess { .. } | PublicInvocationResult::ToolFailure { .. }) => {
+                            result = Some((**value).clone());
+                        }
+                        ServerFrame::Message(PublicServerMessage::InputStreamAck { .. }) => {},
+                        ServerFrame::Message(PublicServerMessage::StreamCancel { channel, reason, .. }) if Some(*channel) == stdout_channel || Some(*channel) == stderr_channel => {
+                            let (stdout, admission, cancellation) = if Some(*channel) == stdout_channel {
+                                (true, &mut stdout_admission, &mut stdout_cancellation)
+                            } else {
+                                (false, &mut stderr_admission, &mut stderr_cancellation)
+                            };
+                            if admission.1 {
+                                if cancellation.as_ref() == Some(reason) {
+                                    continue;
+                                }
+                                return Err(SessionTransportError::Protocol(
+                                    "native output was cancelled after its terminal".to_string(),
+                                ));
+                            }
+                            admission.1 = true;
+                            *cancellation = Some(*reason);
+                            pending_output = Some((received, stdout));
+                            continue;
+                        }
+                        ServerFrame::Message(PublicServerMessage::StreamCancel { channel, .. }) if binding.as_ref().is_some_and(|binding| binding.0 == *channel) => {
+                            input_open = false;
+                            let _ = cancel_input.send(true);
+                        }
+                        ServerFrame::Message(PublicServerMessage::InvocationFinished { outcome, .. }) => {
+                            if let PublicInvocationOutcome::Failure { code, message } = outcome {
+                                completion_failure = Some(format!("{}: {message}", code.as_str()));
+                            }
+                            finished = true;
+                        }
+                        other => return Err(SessionTransportError::Protocol(format!("unexpected native tool response: {other:?}"))),
+                    }
+                    received.mark_delivered()?;
+                }
+            }
+        }
+    }.await;
+    let _ = cancel_input.send(true);
+    let _ = cancel_output.send(true);
+    result
+}
+
+fn admit_native_output_frame(
+    sequence: u64,
+    item_count: u64,
+    admission: &mut (Option<u64>, bool),
+) -> Result<bool, SessionTransportError> {
+    let next = admission.0.get_or_insert(sequence);
+    if sequence < *next {
+        return Ok(false);
+    }
+    if admission.1 && item_count == 0 && sequence == *next {
+        return Ok(false);
+    }
+    if sequence != *next || admission.1 {
+        return Err(SessionTransportError::Protocol(
+            "native output sequence is discontinuous".to_string(),
+        ));
+    }
+    if item_count == 0 {
+        admission.1 = true;
+    } else {
+        *next = next
+            .checked_add(item_count)
+            .ok_or(SessionTransportError::SequenceOverflow)?;
+    }
+    Ok(true)
+}
+
+async fn pump_native_output<W>(
+    mut frames: mpsc::Receiver<ReceivedFrame>,
+    output: &mut W,
+    mut cancelled: tokio::sync::watch::Receiver<bool>,
+    delivered: mpsc::UnboundedSender<()>,
+) -> Result<PublicOutputStreamOutcome, SessionTransportError>
+where
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    use tokio::io::AsyncWriteExt;
+
+    while let Some(mut received) = frames.recv().await {
+        let (payload, terminal) = match received.frame() {
+            ServerFrame::Binary(message) => (Some(message.payload.clone()), None),
+            ServerFrame::Message(PublicServerMessage::OutputStreamItem { value, .. }) => {
+                let byte = value
+                    .as_u64()
+                    .and_then(|value| u8::try_from(value).ok())
+                    .ok_or_else(|| {
+                        SessionTransportError::Protocol(
+                            "native output item is not a byte".to_string(),
+                        )
+                    })?;
+                (Some(vec![byte]), None)
+            }
+            ServerFrame::Message(PublicServerMessage::OutputStreamEnd { outcome, .. }) => {
+                (None, Some(outcome.clone()))
+            }
+            ServerFrame::Message(PublicServerMessage::StreamCancel { reason, .. }) => (
+                None,
+                Some(PublicOutputStreamOutcome::Cancelled { reason: *reason }),
+            ),
+            _ => {
+                return Err(SessionTransportError::Protocol(
+                    "native output pump received a non-output frame".to_string(),
+                ));
+            }
+        };
+        if let Some(payload) = payload {
+            tokio::select! {
+                _ = cancelled.changed() => {
+                    return Err(SessionTransportError::Io(std::io::Error::new(
+                        std::io::ErrorKind::Interrupted,
+                        "native output pump cancelled",
+                    )));
+                }
+                result = output.write_all(&payload) => result?,
+            }
+            tokio::select! {
+                _ = cancelled.changed() => {
+                    return Err(SessionTransportError::Io(std::io::Error::new(
+                        std::io::ErrorKind::Interrupted,
+                        "native output pump cancelled",
+                    )));
+                }
+                result = output.flush() => result?,
+            }
+        }
+        received.mark_delivered()?;
+        delivered
+            .send(())
+            .map_err(|_| SessionTransportError::Closed)?;
+        if let Some(outcome) = terminal {
+            return Ok(outcome);
+        }
+    }
+    Err(SessionTransportError::Closed)
+}
+
+async fn cancel_native_streams(
+    session: &InvocationSession,
+    input_channel: Option<u32>,
+    output_channels: [Option<u32>; 2],
+    reason: PublicClientCancelReason,
+) {
+    let sender = session.sender();
+    let _ = tokio::time::timeout(Duration::from_secs(3), async {
+        for channel in std::iter::once(input_channel)
+            .chain(output_channels)
+            .flatten()
+        {
+            sender
+                .send_message(&PublicClientMessage::StreamCancel {
+                    channel,
+                    reason,
+                    version: INVOCATION_SESSION_VERSION,
+                })
+                .await?;
+        }
+        sender.close().await
+    })
+    .await;
+}
+
 pub async fn send_replayable_input(
     sender: &InvocationSessionSender,
     request: &ReplayableInput,
@@ -1935,6 +2537,7 @@ async fn connect_for_pending_operation(
 fn operation_attempt_id(operation: &PublicClientMessage) -> Option<uuid::Uuid> {
     match operation {
         PublicClientMessage::InvocationStart { attempt_id, .. }
+        | PublicClientMessage::ToolStart { attempt_id, .. }
         | PublicClientMessage::ResumeAttach { attempt_id, .. } => Some(*attempt_id),
         _ => None,
     }
@@ -2130,6 +2733,7 @@ where
         });
     let initial = InvocationSessionStateSnapshot {
         delivered_output_cursors: BTreeMap::new(),
+        stable_stream_bindings: BTreeMap::new(),
         pending_operation: Some(start),
         session_token: None,
     };
@@ -2504,6 +3108,27 @@ fn send_generated_result<T>(
     }
 }
 
+fn decode_generated_result_value(
+    result_graph: &SchemaGraph,
+    value: &serde_json::Value,
+    expected_graph: &SchemaGraph,
+) -> Result<SchemaValue, SessionTransportError> {
+    let value = decode_public_schema_value(
+        result_graph,
+        &result_graph.root,
+        value,
+        PublicStreamReferencePolicy::Stable,
+        |reference, _| Ok(SchemaValueStream::from_host_endpoint(reference)),
+    )
+    .map_err(|error| SessionTransportError::Protocol(error.to_string()))?;
+    validate_value(expected_graph, &expected_graph.root, &value).map_err(|errors| {
+        SessionTransportError::Protocol(format!(
+            "invocation result failed expected schema validation: {errors:?}"
+        ))
+    })?;
+    Ok(value)
+}
+
 async fn handle_generated_frame<T>(
     frame: ReceivedFrame,
     session: &mut InvocationSession,
@@ -2533,20 +3158,21 @@ where
             Ok(true)
         }
         ServerFrame::Message(PublicServerMessage::InvocationResult { result, .. }) => {
-            let value = match result {
+            let value = match result.as_ref() {
                 PublicInvocationResult::None => None,
-                PublicInvocationResult::Value { value } => {
-                    let graph = output_graph.ok_or_else(|| {
+                PublicInvocationResult::Value { graph, value } => {
+                    let expected_graph = output_graph.ok_or_else(|| {
                         SessionTransportError::Protocol(
                             "server returned a value for a unit method".to_string(),
                         )
                     })?;
-                    let context = output_context.expect("output graph has a decode context");
-                    Some(
-                        context
-                            .decode_value(&graph.root, value)
-                            .map_err(|error| SessionTransportError::Protocol(error.to_string()))?,
-                    )
+                    Some(decode_generated_result_value(graph, value, expected_graph)?)
+                }
+                PublicInvocationResult::ToolSuccess { .. }
+                | PublicInvocationResult::ToolFailure { .. } => {
+                    return Err(SessionTransportError::Protocol(
+                        "native tool result received by an agent invocation session".to_string(),
+                    ));
                 }
             };
             let decoder = decode.take().ok_or_else(|| {
@@ -3230,6 +3856,7 @@ impl<T> Drop for AgentStream<T> {
 mod tests {
     use super::*;
     use base64::Engine;
+    use golem_common::model::invocation_session_public::PublicServerCancelReason;
     use serde::Deserialize;
 
     #[derive(Deserialize)]
@@ -3265,11 +3892,47 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn generated_result_uses_returned_graph_and_validates_expected_type() {
+        let type_id = golem_common::schema::metadata::TypeId::new("ReturnedText");
+        let result_graph = SchemaGraph {
+            defs: vec![golem_common::schema::SchemaTypeDef {
+                id: type_id.clone(),
+                name: Some("ReturnedText".to_string()),
+                body: SchemaType::string(),
+            }],
+            root: SchemaType::ref_to(type_id),
+        };
+        let value = serde_json::json!({"kind":"string","value":"done"});
+
+        assert_eq!(
+            decode_generated_result_value(
+                &result_graph,
+                &value,
+                &SchemaGraph::anonymous(SchemaType::string()),
+            )
+            .unwrap(),
+            SchemaValue::String("done".to_string())
+        );
+        assert!(
+            decode_generated_result_value(
+                &result_graph,
+                &value,
+                &SchemaGraph::anonymous(SchemaType::u64()),
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("expected schema validation")
+        );
+    }
+
     use golem_common::model::invocation_session_public::{
-        DecimalU64, InvocationSelector, PublicAttachmentRevokedReason, PublicErrorCode,
-        PublicInputHighWater, PublicInvocationOutcome, PublicInvocationResult,
-        PublicOutputStreamOutcome, decode_client_text,
+        DecimalU64, InvocationSelector, PublicAttachmentRevokedReason, PublicByteStreamRole,
+        PublicErrorCode, PublicInputHighWater, PublicInvocationOutcome, PublicInvocationResult,
+        PublicNativeToolTarget, PublicOutputStreamOutcome, PublicTypedValue, decode_client_text,
     };
+    use std::collections::BTreeSet;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use test_r::test;
     use tokio::net::TcpListener;
@@ -3306,6 +3969,28 @@ mod tests {
         }
     }
 
+    fn tool_start_request(attempt_id: uuid::Uuid) -> PublicClientMessage {
+        PublicClientMessage::ToolStart {
+            attempt_id,
+            application: "app".to_string(),
+            environment: "env".to_string(),
+            idempotency_key: "tool-invocation-key".to_string(),
+            tool_name: "tool".to_string(),
+            command_path: Vec::new(),
+            target: PublicNativeToolTarget::Component {
+                component_id: uuid::Uuid::new_v4(),
+            },
+            input: Box::new(PublicTypedValue {
+                graph: SchemaGraph::anonymous(SchemaType::u8()),
+                value: serde_json::json!({"kind": "u8", "value": 7}),
+            }),
+            stdin: true,
+            stdout: true,
+            stderr: false,
+            version: 1,
+        }
+    }
+
     async fn receive_client_message(
         socket: &mut tokio_tungstenite::WebSocketStream<TcpStream>,
     ) -> PublicClientMessage {
@@ -3313,6 +3998,90 @@ mod tests {
             panic!("expected client text message")
         };
         decode_client_text(text.as_bytes()).unwrap()
+    }
+
+    fn native_output_mapping(
+        channel: u32,
+        byte_role: PublicByteStreamRole,
+        stream_token: &str,
+    ) -> PublicStreamMapping {
+        PublicStreamMapping {
+            channel,
+            direction: PublicStreamDirection::Output,
+            byte_role: Some(byte_role),
+            input_high_water: None,
+            provisional_ref: None,
+            stream_token: stream_token.to_string(),
+        }
+    }
+
+    async fn send_native_binary(
+        socket: &mut tokio_tungstenite::WebSocketStream<TcpStream>,
+        channel: u32,
+        sequence: u64,
+        token: &str,
+        payload: &[u8],
+    ) {
+        socket
+            .send(Message::Binary(
+                encode_binary_message(&BinaryMessage {
+                    metadata: BinaryMessageMetadata {
+                        channel,
+                        cursor_token: Some(token.to_string()),
+                        item_count: DecimalU64(payload.len() as u64),
+                        kind: BinaryMessageKind::OutputU8,
+                        mime_type: None,
+                        sequence: DecimalU64(sequence),
+                        version: 1,
+                    },
+                    payload: payload.to_vec(),
+                })
+                .unwrap()
+                .into(),
+            ))
+            .await
+            .unwrap();
+    }
+
+    async fn send_native_end(
+        socket: &mut tokio_tungstenite::WebSocketStream<TcpStream>,
+        channel: u32,
+        sequence: u64,
+        token: &str,
+    ) {
+        socket
+            .send(Message::Text(
+                encode_text(&PublicServerMessage::OutputStreamEnd {
+                    channel,
+                    cursor_token: Some(token.to_string()),
+                    outcome: PublicOutputStreamOutcome::Ok,
+                    sequence: DecimalU64(sequence),
+                    version: 1,
+                })
+                .unwrap()
+                .into(),
+            ))
+            .await
+            .unwrap();
+    }
+
+    async fn send_native_cancel(
+        socket: &mut tokio_tungstenite::WebSocketStream<TcpStream>,
+        channel: u32,
+        reason: PublicServerCancelReason,
+    ) {
+        socket
+            .send(Message::Text(
+                encode_text(&PublicServerMessage::StreamCancel {
+                    channel,
+                    reason,
+                    version: 1,
+                })
+                .unwrap()
+                .into(),
+            ))
+            .await
+            .unwrap();
     }
 
     fn select_session_subprotocol(_request: &Request, mut response: Response) -> Response {
@@ -3327,11 +4096,942 @@ mod tests {
         Arc::new(Semaphore::new(1)).try_acquire_owned().unwrap()
     }
 
+    async fn verify_native_tool_session(result_before_stdout_end: bool) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        const MARKER: &[u8] = b"ready:";
+        const STDERR_MARKER: &[u8] = b"warning:";
+        const PAYLOAD: &[u8] = &[0, 255, 17, 128, 9];
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let attempt_id = uuid::Uuid::new_v4();
+        let mut initial = tool_start_request(attempt_id);
+        if let PublicClientMessage::ToolStart { stderr, .. } = &mut initial {
+            *stderr = true;
+        }
+        let server_initial = initial.clone();
+        let structured_result = if result_before_stdout_end {
+            PublicInvocationResult::ToolSuccess {
+                result: Some(PublicTypedValue {
+                    graph: SchemaGraph::anonymous(SchemaType::string()),
+                    value: serde_json::json!({
+                        "kind": "string",
+                        "value": "structured-result"
+                    }),
+                }),
+            }
+        } else {
+            PublicInvocationResult::ToolFailure {
+                code: "custom-code".to_string(),
+                message: Some("structured failure".to_string()),
+                custom_error: Some(PublicTypedValue {
+                    graph: SchemaGraph::anonymous(SchemaType::u8()),
+                    value: serde_json::json!({"kind": "u8", "value": 255}),
+                }),
+            }
+        };
+        let server_result = structured_result.clone();
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut socket = accept_hdr_async(socket, |request: &Request, response: Response| {
+                Ok(select_session_subprotocol(request, response))
+            })
+            .await
+            .unwrap();
+            assert_eq!(receive_client_message(&mut socket).await, server_initial);
+            socket
+                .send(Message::Text(
+                    encode_text(&PublicServerMessage::InvocationAccepted {
+                        attempt_id,
+                        idempotency_key: "tool-invocation-key".to_string(),
+                        mappings: vec![
+                            PublicStreamMapping {
+                                channel: 11,
+                                direction: PublicStreamDirection::Input,
+                                byte_role: Some(PublicByteStreamRole::Stdin),
+                                input_high_water: Some(PublicInputHighWater {
+                                    sequence: DecimalU64(0),
+                                    terminal: false,
+                                }),
+                                provisional_ref: None,
+                                stream_token: "native-stdin".to_string(),
+                            },
+                            PublicStreamMapping {
+                                channel: 12,
+                                direction: PublicStreamDirection::Output,
+                                byte_role: Some(PublicByteStreamRole::Stdout),
+                                input_high_water: None,
+                                provisional_ref: None,
+                                stream_token: "native-stdout".to_string(),
+                            },
+                            PublicStreamMapping {
+                                channel: 13,
+                                direction: PublicStreamDirection::Output,
+                                byte_role: Some(PublicByteStreamRole::Stderr),
+                                input_high_water: None,
+                                provisional_ref: None,
+                                stream_token: "native-stderr".to_string(),
+                            },
+                        ],
+                        session_token: "native-session".to_string(),
+                        version: 1,
+                    })
+                    .unwrap()
+                    .into(),
+                ))
+                .await
+                .unwrap();
+            let marker = BinaryMessage {
+                metadata: BinaryMessageMetadata {
+                    channel: 12,
+                    cursor_token: Some("stdout-marker".to_string()),
+                    item_count: DecimalU64(MARKER.len() as u64),
+                    kind: BinaryMessageKind::OutputU8,
+                    mime_type: None,
+                    sequence: DecimalU64(0),
+                    version: 1,
+                },
+                payload: MARKER.to_vec(),
+            };
+            socket
+                .send(Message::Binary(
+                    encode_binary_message(&marker).unwrap().into(),
+                ))
+                .await
+                .unwrap();
+            socket
+                .send(Message::Binary(
+                    encode_binary_message(&BinaryMessage {
+                        metadata: BinaryMessageMetadata {
+                            channel: 13,
+                            cursor_token: Some("stderr-marker".to_string()),
+                            item_count: DecimalU64(STDERR_MARKER.len() as u64),
+                            kind: BinaryMessageKind::OutputU8,
+                            mime_type: None,
+                            sequence: DecimalU64(0),
+                            version: 1,
+                        },
+                        payload: STDERR_MARKER.to_vec(),
+                    })
+                    .unwrap()
+                    .into(),
+                ))
+                .await
+                .unwrap();
+
+            let Message::Binary(frame) = socket.next().await.unwrap().unwrap() else {
+                panic!("expected packed native stdin")
+            };
+            let input = decode_binary_message(&frame).unwrap();
+            assert_eq!(input.metadata.channel, 11);
+            assert_eq!(input.metadata.kind, BinaryMessageKind::InputU8);
+            assert_eq!(input.metadata.sequence, DecimalU64(0));
+            assert_eq!(input.payload, PAYLOAD);
+            assert!(matches!(
+                receive_client_message(&mut socket).await,
+                PublicClientMessage::InputStreamEnd {
+                    channel: 11,
+                    sequence: DecimalU64(5),
+                    ..
+                }
+            ));
+
+            let result_message = PublicServerMessage::InvocationResult {
+                mappings: Vec::new(),
+                result: Box::new(server_result),
+                version: 1,
+            };
+            if result_before_stdout_end {
+                socket
+                    .send(Message::Text(encode_text(&result_message).unwrap().into()))
+                    .await
+                    .unwrap();
+            }
+            let echoed = BinaryMessage {
+                metadata: BinaryMessageMetadata {
+                    channel: 12,
+                    cursor_token: Some("stdout-payload".to_string()),
+                    item_count: DecimalU64(PAYLOAD.len() as u64),
+                    kind: BinaryMessageKind::OutputU8,
+                    mime_type: None,
+                    sequence: DecimalU64(MARKER.len() as u64),
+                    version: 1,
+                },
+                payload: PAYLOAD.to_vec(),
+            };
+            socket
+                .send(Message::Binary(
+                    encode_binary_message(&echoed).unwrap().into(),
+                ))
+                .await
+                .unwrap();
+            socket
+                .send(Message::Text(
+                    encode_text(&PublicServerMessage::OutputStreamEnd {
+                        channel: 12,
+                        cursor_token: Some("stdout-end".to_string()),
+                        outcome: if result_before_stdout_end {
+                            PublicOutputStreamOutcome::Ok
+                        } else {
+                            PublicOutputStreamOutcome::Error {
+                                code: golem_common::model::invocation_session_public::PublicErrorCode::ProtocolError,
+                                message: "tool invocation rejected".to_string(),
+                            }
+                        },
+                        sequence: DecimalU64((MARKER.len() + PAYLOAD.len()) as u64),
+                        version: 1,
+                    })
+                    .unwrap()
+                    .into(),
+                ))
+                .await
+                .unwrap();
+            socket
+                .send(Message::Text(
+                    encode_text(&PublicServerMessage::OutputStreamEnd {
+                        channel: 13,
+                        cursor_token: Some("stderr-end".to_string()),
+                        outcome: PublicOutputStreamOutcome::Ok,
+                        sequence: DecimalU64(STDERR_MARKER.len() as u64),
+                        version: 1,
+                    })
+                    .unwrap()
+                    .into(),
+                ))
+                .await
+                .unwrap();
+            if !result_before_stdout_end {
+                socket
+                    .send(Message::Text(encode_text(&result_message).unwrap().into()))
+                    .await
+                    .unwrap();
+            }
+            socket
+                .send(Message::Text(
+                    encode_text(&PublicServerMessage::InvocationFinished {
+                        outcome: PublicInvocationOutcome::Success,
+                        version: 1,
+                    })
+                    .unwrap()
+                    .into(),
+                ))
+                .await
+                .unwrap();
+        });
+
+        let session = InvocationSession::open(
+            Arc::new(StaticRequestProvider(format!("ws://{address}"))),
+            None,
+            InvocationSessionStateSnapshot {
+                delivered_output_cursors: BTreeMap::new(),
+                stable_stream_bindings: BTreeMap::new(),
+                pending_operation: Some(initial),
+                session_token: None,
+            },
+            false,
+            Arc::new(()),
+        )
+        .await
+        .unwrap();
+        let (input_reader, mut input_writer) = tokio::io::duplex(64);
+        let (mut output_reader, mut output_writer) = tokio::io::duplex(64);
+        let (mut stderr_reader, mut stderr_writer) = tokio::io::duplex(64);
+        let consumer = tokio::spawn(async move {
+            let mut output = vec![0; MARKER.len()];
+            output_reader.read_exact(&mut output).await.unwrap();
+            assert_eq!(output, MARKER);
+            input_writer.write_all(PAYLOAD).await.unwrap();
+            input_writer.shutdown().await.unwrap();
+            output_reader.read_to_end(&mut output).await.unwrap();
+            output
+        });
+        let stderr_consumer = tokio::spawn(async move {
+            let mut output = Vec::new();
+            stderr_reader.read_to_end(&mut output).await.unwrap();
+            output
+        });
+
+        let actual_result = tokio::time::timeout(
+            Duration::from_secs(5),
+            drive_native_tool_session(
+                session,
+                Some(input_reader),
+                &mut output_writer,
+                &mut stderr_writer,
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        drop(output_writer);
+        drop(stderr_writer);
+        let output = consumer.await.unwrap();
+        let stderr = stderr_consumer.await.unwrap();
+        assert_eq!(output, [MARKER, PAYLOAD].concat());
+        assert_eq!(stderr, STDERR_MARKER);
+        assert_eq!(actual_result, structured_result);
+        server.await.unwrap();
+    }
+
+    #[test]
+    async fn native_tool_session_drains_stdout_before_stdin_and_result_before_terminal() {
+        verify_native_tool_session(true).await;
+    }
+
+    #[test]
+    async fn native_tool_session_preserves_custom_failure_after_stdout_terminal() {
+        verify_native_tool_session(false).await;
+    }
+
+    async fn verify_native_tool_session_cancels_open_streams(output_failure: bool) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let attempt_id = uuid::Uuid::new_v4();
+        let initial = tool_start_request(attempt_id);
+        let server_initial = initial.clone();
+        let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut socket = accept_hdr_async(socket, |request: &Request, response: Response| {
+                Ok(select_session_subprotocol(request, response))
+            })
+            .await
+            .unwrap();
+            assert_eq!(receive_client_message(&mut socket).await, server_initial);
+            socket
+                .send(Message::Text(
+                    encode_text(&PublicServerMessage::InvocationAccepted {
+                        attempt_id,
+                        idempotency_key: "tool-invocation-key".to_string(),
+                        mappings: vec![
+                            PublicStreamMapping {
+                                channel: 11,
+                                direction: PublicStreamDirection::Input,
+                                byte_role: Some(PublicByteStreamRole::Stdin),
+                                input_high_water: Some(PublicInputHighWater {
+                                    sequence: DecimalU64(0),
+                                    terminal: false,
+                                }),
+                                provisional_ref: None,
+                                stream_token: "native-stdin".to_string(),
+                            },
+                            PublicStreamMapping {
+                                channel: 12,
+                                direction: PublicStreamDirection::Output,
+                                byte_role: Some(PublicByteStreamRole::Stdout),
+                                input_high_water: None,
+                                provisional_ref: None,
+                                stream_token: "native-stdout".to_string(),
+                            },
+                        ],
+                        session_token: "native-session".to_string(),
+                        version: 1,
+                    })
+                    .unwrap()
+                    .into(),
+                ))
+                .await
+                .unwrap();
+            if output_failure {
+                socket
+                    .send(Message::Binary(
+                        encode_binary_message(&BinaryMessage {
+                            metadata: BinaryMessageMetadata {
+                                channel: 12,
+                                cursor_token: Some("stdout".to_string()),
+                                item_count: DecimalU64(1),
+                                kind: BinaryMessageKind::OutputU8,
+                                mime_type: None,
+                                sequence: DecimalU64(0),
+                                version: 1,
+                            },
+                            payload: vec![1],
+                        })
+                        .unwrap()
+                        .into(),
+                    ))
+                    .await
+                    .unwrap();
+            } else {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                cancel_tx.send(()).unwrap();
+            }
+            let reason = if output_failure {
+                PublicClientCancelReason::ConsumerDrop
+            } else {
+                PublicClientCancelReason::Cancelled
+            };
+            for channel in [11, 12] {
+                assert!(matches!(
+                    receive_client_message(&mut socket).await,
+                    PublicClientMessage::StreamCancel {
+                        channel: actual,
+                        reason: actual_reason,
+                        ..
+                    } if actual == channel && actual_reason == reason
+                ));
+            }
+        });
+
+        let session = InvocationSession::open(
+            Arc::new(StaticRequestProvider(format!("ws://{address}"))),
+            None,
+            InvocationSessionStateSnapshot {
+                delivered_output_cursors: BTreeMap::new(),
+                stable_stream_bindings: BTreeMap::new(),
+                pending_operation: Some(initial),
+                session_token: None,
+            },
+            false,
+            Arc::new(()),
+        )
+        .await
+        .unwrap();
+        let (input, _input_writer) = tokio::io::duplex(1);
+        let mut output = if output_failure {
+            Box::pin(FailingWriter) as Pin<Box<dyn tokio::io::AsyncWrite>>
+        } else {
+            Box::pin(tokio::io::sink()) as Pin<Box<dyn tokio::io::AsyncWrite>>
+        };
+        let cancelled = async {
+            let _ = cancel_rx.await;
+        };
+        let mut stderr = tokio::io::sink();
+        assert!(
+            drive_native_tool_session_until(
+                session,
+                Some(input),
+                &mut output,
+                &mut stderr,
+                cancelled,
+            )
+            .await
+            .is_err()
+        );
+        server.await.unwrap();
+    }
+
+    struct FailingWriter;
+
+    impl tokio::io::AsyncWrite for FailingWriter {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            _buf: &[u8],
+        ) -> Poll<std::io::Result<usize>> {
+            Poll::Ready(Err(std::io::Error::other("mock output failure")))
+        }
+
+        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    struct BlockingWriter {
+        started: Option<tokio::sync::oneshot::Sender<()>>,
+    }
+
+    impl tokio::io::AsyncWrite for BlockingWriter {
+        fn poll_write(
+            mut self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            _buf: &[u8],
+        ) -> Poll<std::io::Result<usize>> {
+            if let Some(started) = self.started.take() {
+                let _ = started.send(());
+            }
+            Poll::Pending
+        }
+
+        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+            Poll::Pending
+        }
+
+        fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    #[test]
+    async fn native_tool_session_cancels_streams_on_client_cancel() {
+        verify_native_tool_session_cancels_open_streams(false).await;
+    }
+
+    #[test]
+    async fn native_tool_session_cancels_streams_on_output_io_failure() {
+        verify_native_tool_session_cancels_open_streams(true).await;
+    }
+
+    #[test]
+    async fn blocked_stdout_does_not_stall_stderr_and_cancellation_interrupts_the_write() {
+        use tokio::io::AsyncReadExt;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let attempt_id = uuid::Uuid::new_v4();
+        let mut initial = tool_start_request(attempt_id);
+        let PublicClientMessage::ToolStart { stdin, stderr, .. } = &mut initial else {
+            unreachable!()
+        };
+        *stdin = false;
+        *stderr = true;
+        let server_initial = initial.clone();
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut socket = accept_hdr_async(socket, |request: &Request, response: Response| {
+                Ok(select_session_subprotocol(request, response))
+            })
+            .await
+            .unwrap();
+            assert_eq!(receive_client_message(&mut socket).await, server_initial);
+            socket
+                .send(Message::Text(
+                    encode_text(&PublicServerMessage::InvocationAccepted {
+                        attempt_id,
+                        idempotency_key: "tool-invocation-key".to_string(),
+                        mappings: vec![
+                            PublicStreamMapping {
+                                channel: 12,
+                                direction: PublicStreamDirection::Output,
+                                byte_role: Some(PublicByteStreamRole::Stdout),
+                                input_high_water: None,
+                                provisional_ref: None,
+                                stream_token: "native-stdout".to_string(),
+                            },
+                            PublicStreamMapping {
+                                channel: 13,
+                                direction: PublicStreamDirection::Output,
+                                byte_role: Some(PublicByteStreamRole::Stderr),
+                                input_high_water: None,
+                                provisional_ref: None,
+                                stream_token: "native-stderr".to_string(),
+                            },
+                        ],
+                        session_token: "native-session".to_string(),
+                        version: 1,
+                    })
+                    .unwrap()
+                    .into(),
+                ))
+                .await
+                .unwrap();
+            for (channel, token, byte) in [(12, "stdout-blocked", 1), (13, "stderr-live", 2)] {
+                socket
+                    .send(Message::Binary(
+                        encode_binary_message(&BinaryMessage {
+                            metadata: BinaryMessageMetadata {
+                                channel,
+                                cursor_token: Some(token.to_string()),
+                                item_count: DecimalU64(1),
+                                kind: BinaryMessageKind::OutputU8,
+                                mime_type: None,
+                                sequence: DecimalU64(0),
+                                version: 1,
+                            },
+                            payload: vec![byte],
+                        })
+                        .unwrap()
+                        .into(),
+                    ))
+                    .await
+                    .unwrap();
+            }
+            for channel in [12, 13] {
+                assert!(matches!(
+                    receive_client_message(&mut socket).await,
+                    PublicClientMessage::StreamCancel {
+                        channel: actual,
+                        reason: PublicClientCancelReason::Cancelled,
+                        ..
+                    } if actual == channel
+                ));
+            }
+        });
+
+        let session = InvocationSession::open(
+            Arc::new(StaticRequestProvider(format!("ws://{address}"))),
+            None,
+            InvocationSessionStateSnapshot {
+                delivered_output_cursors: BTreeMap::new(),
+                stable_stream_bindings: BTreeMap::new(),
+                pending_operation: Some(initial),
+                session_token: None,
+            },
+            false,
+            Arc::new(()),
+        )
+        .await
+        .unwrap();
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let mut stdout = BlockingWriter {
+            started: Some(started_tx),
+        };
+        let (mut stderr_reader, mut stderr_writer) = tokio::io::duplex(1);
+        let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
+        let coordinate = tokio::spawn(async move {
+            started_rx.await.unwrap();
+            let mut byte = [0];
+            stderr_reader.read_exact(&mut byte).await.unwrap();
+            assert_eq!(byte, [2]);
+            cancel_tx.send(()).unwrap();
+        });
+        let error = tokio::time::timeout(
+            Duration::from_secs(5),
+            drive_native_tool_session_until(
+                session,
+                Option::<tokio::io::Empty>::None,
+                &mut stdout,
+                &mut stderr_writer,
+                async {
+                    let _ = cancel_rx.await;
+                },
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap_err();
+        assert!(
+            matches!(error, SessionTransportError::Io(ref error) if error.kind() == std::io::ErrorKind::Interrupted)
+        );
+        coordinate.await.unwrap();
+        server.await.unwrap();
+    }
+
+    #[test]
+    async fn full_stdout_queue_drains_both_outputs_before_completion_failure() {
+        use tokio::io::AsyncReadExt;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let attempt_id = uuid::Uuid::new_v4();
+        let mut initial = tool_start_request(attempt_id);
+        let PublicClientMessage::ToolStart { stdin, stderr, .. } = &mut initial else {
+            unreachable!()
+        };
+        *stdin = false;
+        *stderr = true;
+        let server_initial = initial.clone();
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut socket = accept_hdr_async(socket, |request: &Request, response: Response| {
+                Ok(select_session_subprotocol(request, response))
+            })
+            .await
+            .unwrap();
+            assert_eq!(receive_client_message(&mut socket).await, server_initial);
+            socket
+                .send(Message::Text(
+                    encode_text(&PublicServerMessage::InvocationAccepted {
+                        attempt_id,
+                        idempotency_key: "tool-invocation-key".to_string(),
+                        mappings: vec![
+                            native_output_mapping(
+                                12,
+                                PublicByteStreamRole::Stdout,
+                                "native-stdout",
+                            ),
+                            native_output_mapping(
+                                13,
+                                PublicByteStreamRole::Stderr,
+                                "native-stderr",
+                            ),
+                        ],
+                        session_token: "native-session".to_string(),
+                        version: 1,
+                    })
+                    .unwrap()
+                    .into(),
+                ))
+                .await
+                .unwrap();
+            for sequence in 0..(PIPELINE_ITEMS as u64 + 2) {
+                send_native_binary(
+                    &mut socket,
+                    12,
+                    sequence,
+                    &format!("stdout-{sequence}"),
+                    &[sequence as u8],
+                )
+                .await;
+            }
+            send_native_binary(&mut socket, 13, 0, "stderr-0", b"E").await;
+            for channel in [12, 13] {
+                socket
+                    .send(Message::Text(
+                        encode_text(&PublicServerMessage::StreamCancel {
+                            channel,
+                            reason: golem_common::model::invocation_session_public::PublicServerCancelReason::InvocationFailed,
+                            version: 1,
+                        })
+                        .unwrap()
+                        .into(),
+                    ))
+                    .await
+                    .unwrap();
+            }
+            socket
+                .send(Message::Text(
+                    encode_text(&PublicServerMessage::InvocationFinished {
+                        outcome: PublicInvocationOutcome::Failure {
+                            code: golem_common::model::invocation_session_public::PublicErrorCode::InternalError,
+                            message: "worker failed".to_string(),
+                        },
+                        version: 1,
+                    })
+                    .unwrap()
+                    .into(),
+                ))
+                .await
+                .unwrap();
+        });
+
+        let session = InvocationSession::open(
+            Arc::new(StaticRequestProvider(format!("ws://{address}"))),
+            None,
+            InvocationSessionStateSnapshot {
+                delivered_output_cursors: BTreeMap::new(),
+                stable_stream_bindings: BTreeMap::new(),
+                pending_operation: Some(initial),
+                session_token: None,
+            },
+            false,
+            Arc::new(()),
+        )
+        .await
+        .unwrap();
+        let (mut stdout_reader, mut stdout_writer) = tokio::io::duplex(1);
+        let (mut stderr_reader, mut stderr_writer) = tokio::io::duplex(1);
+        let drive = tokio::spawn(async move {
+            drive_native_tool_session(
+                session,
+                Option::<tokio::io::Empty>::None,
+                &mut stdout_writer,
+                &mut stderr_writer,
+            )
+            .await
+        });
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let stdout = tokio::spawn(async move {
+            let mut bytes = Vec::new();
+            stdout_reader.read_to_end(&mut bytes).await.unwrap();
+            bytes
+        });
+        let stderr = tokio::spawn(async move {
+            let mut bytes = Vec::new();
+            stderr_reader.read_to_end(&mut bytes).await.unwrap();
+            bytes
+        });
+        let error = tokio::time::timeout(Duration::from_secs(5), drive)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap_err();
+        assert!(
+            matches!(error, SessionTransportError::Protocol(ref message) if message == "internal-error: worker failed")
+        );
+        assert_eq!(
+            stdout.await.unwrap(),
+            (0..(PIPELINE_ITEMS as u8 + 2)).collect::<Vec<_>>()
+        );
+        assert_eq!(stderr.await.unwrap(), b"E");
+        server.await.unwrap();
+    }
+
+    #[test]
+    async fn native_outputs_resume_independently_without_swap_or_duplicate_delivery() {
+        use tokio::io::AsyncReadExt;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let attempt_id = uuid::Uuid::new_v4();
+        let mut initial = tool_start_request(attempt_id);
+        let PublicClientMessage::ToolStart { stdin, stderr, .. } = &mut initial else {
+            unreachable!()
+        };
+        *stdin = false;
+        *stderr = true;
+        let server_initial = initial.clone();
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut socket = accept_hdr_async(socket, |request: &Request, response: Response| {
+                Ok(select_session_subprotocol(request, response))
+            })
+            .await
+            .unwrap();
+            assert_eq!(receive_client_message(&mut socket).await, server_initial);
+            socket
+                .send(Message::Text(
+                    encode_text(&PublicServerMessage::InvocationAccepted {
+                        attempt_id,
+                        idempotency_key: "tool-invocation-key".to_string(),
+                        mappings: vec![
+                            native_output_mapping(
+                                12,
+                                PublicByteStreamRole::Stdout,
+                                "native-stdout",
+                            ),
+                            native_output_mapping(
+                                13,
+                                PublicByteStreamRole::Stderr,
+                                "native-stderr",
+                            ),
+                        ],
+                        session_token: "native-session".to_string(),
+                        version: 1,
+                    })
+                    .unwrap()
+                    .into(),
+                ))
+                .await
+                .unwrap();
+            send_native_binary(&mut socket, 12, 0, "stdout-a", b"A").await;
+            send_native_binary(&mut socket, 13, 0, "stderr-x", b"X").await;
+            send_native_cancel(&mut socket, 13, PublicServerCancelReason::InvocationFailed).await;
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            drop(socket);
+
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut socket = accept_hdr_async(socket, |request: &Request, response: Response| {
+                Ok(select_session_subprotocol(request, response))
+            })
+            .await
+            .unwrap();
+            let resume = receive_client_message(&mut socket).await;
+            let PublicClientMessage::ResumeAttach {
+                attempt_id: resumed_attempt,
+                operation: PublicResumeOperation::Resume,
+                output_cursors,
+                session_token,
+                ..
+            } = resume
+            else {
+                panic!("expected resume attachment")
+            };
+            assert_ne!(resumed_attempt, attempt_id);
+            assert_eq!(session_token, "native-session");
+            assert_eq!(
+                output_cursors.into_iter().collect::<BTreeSet<_>>(),
+                BTreeSet::from(["stdout-a".to_string(), "stderr-x".to_string()])
+            );
+            socket
+                .send(Message::Text(
+                    encode_text(&PublicServerMessage::InvocationAccepted {
+                        attempt_id: resumed_attempt,
+                        idempotency_key: "tool-invocation-key".to_string(),
+                        mappings: vec![
+                            native_output_mapping(
+                                22,
+                                PublicByteStreamRole::Stdout,
+                                "native-stdout",
+                            ),
+                            native_output_mapping(
+                                23,
+                                PublicByteStreamRole::Stderr,
+                                "native-stderr",
+                            ),
+                        ],
+                        session_token: "native-session".to_string(),
+                        version: 1,
+                    })
+                    .unwrap()
+                    .into(),
+                ))
+                .await
+                .unwrap();
+            // Replayed completed frames are ignored locally even if a server starts before
+            // the checkpoint, while fresh frames continue at each role's own offset.
+            send_native_binary(&mut socket, 22, 0, "stdout-a", b"A").await;
+            send_native_binary(&mut socket, 23, 0, "stderr-x", b"X").await;
+            send_native_cancel(&mut socket, 23, PublicServerCancelReason::InvocationFailed).await;
+            send_native_binary(&mut socket, 22, 1, "stdout-b", b"B").await;
+            send_native_end(&mut socket, 22, 2, "stdout-end").await;
+            socket
+                .send(Message::Text(
+                    encode_text(&PublicServerMessage::InvocationResult {
+                        mappings: Vec::new(),
+                        result: Box::new(PublicInvocationResult::ToolSuccess { result: None }),
+                        version: 1,
+                    })
+                    .unwrap()
+                    .into(),
+                ))
+                .await
+                .unwrap();
+            socket
+                .send(Message::Text(
+                    encode_text(&PublicServerMessage::InvocationFinished {
+                        outcome: PublicInvocationOutcome::Failure {
+                            code: golem_common::model::invocation_session_public::PublicErrorCode::InternalError,
+                            message: "worker failed".to_string(),
+                        },
+                        version: 1,
+                    })
+                    .unwrap()
+                    .into(),
+                ))
+                .await
+                .unwrap();
+        });
+
+        let session = InvocationSession::open(
+            Arc::new(StaticRequestProvider(format!("ws://{address}"))),
+            None,
+            InvocationSessionStateSnapshot {
+                delivered_output_cursors: BTreeMap::new(),
+                stable_stream_bindings: BTreeMap::new(),
+                pending_operation: Some(initial),
+                session_token: None,
+            },
+            false,
+            Arc::new(()),
+        )
+        .await
+        .unwrap();
+        let (mut stdout_reader, mut stdout_writer) = tokio::io::duplex(8);
+        let (mut stderr_reader, mut stderr_writer) = tokio::io::duplex(8);
+        let stdout_read = tokio::spawn(async move {
+            let mut bytes = Vec::new();
+            stdout_reader.read_to_end(&mut bytes).await.unwrap();
+            bytes
+        });
+        let stderr_read = tokio::spawn(async move {
+            let mut bytes = Vec::new();
+            stderr_reader.read_to_end(&mut bytes).await.unwrap();
+            bytes
+        });
+        let error = tokio::time::timeout(
+            Duration::from_secs(5),
+            drive_native_tool_session(
+                session,
+                Option::<tokio::io::Empty>::None,
+                &mut stdout_writer,
+                &mut stderr_writer,
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap_err();
+        assert!(
+            matches!(error, SessionTransportError::Protocol(ref message) if message == "internal-error: worker failed")
+        );
+        drop(stdout_writer);
+        drop(stderr_writer);
+        assert_eq!(stdout_read.await.unwrap(), b"AB");
+        assert_eq!(stderr_read.await.unwrap(), b"X");
+        server.await.unwrap();
+    }
+
     fn output_frame(tracker: &DeliveryTracker, sequence: u64, token: &str) -> ReceivedFrame {
         tracker
             .install_mappings(&[PublicStreamMapping {
                 channel: 7,
                 direction: PublicStreamDirection::Output,
+                byte_role: None,
                 input_high_water: None,
                 provisional_ref: None,
                 stream_token: "stream-seven".to_string(),
@@ -3353,11 +5053,12 @@ mod tests {
 
     struct FailOnceObserver {
         calls: AtomicUsize,
+        fail_at: usize,
     }
 
     impl InvocationSessionStateObserver for FailOnceObserver {
         fn state_changed(&self, _state: &InvocationSessionStateSnapshot) -> Result<(), String> {
-            if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+            if self.calls.fetch_add(1, Ordering::SeqCst) == self.fail_at {
                 Err("injected checkpoint failure".to_string())
             } else {
                 Ok(())
@@ -3381,13 +5082,16 @@ mod tests {
         let tracker = DeliveryTracker::new(
             InvocationSessionStateSnapshot {
                 delivered_output_cursors: BTreeMap::new(),
+                stable_stream_bindings: BTreeMap::new(),
                 pending_operation: None,
                 session_token: None,
             },
             Arc::new(FailOnceObserver {
                 calls: AtomicUsize::new(0),
+                fail_at: 1,
             }),
-        );
+        )
+        .unwrap();
         let mut frame = output_frame(&tracker, 3, "cursor-three");
 
         assert!(matches!(
@@ -3407,6 +5111,7 @@ mod tests {
             .begin_connection(&[PublicStreamMapping {
                 channel: 7,
                 direction: PublicStreamDirection::Output,
+                byte_role: None,
                 input_high_water: None,
                 provisional_ref: None,
                 stream_token: "replacement-stream".to_string(),
@@ -3425,13 +5130,16 @@ mod tests {
         let tracker = DeliveryTracker::new(
             InvocationSessionStateSnapshot {
                 delivered_output_cursors: BTreeMap::new(),
+                stable_stream_bindings: BTreeMap::new(),
                 pending_operation: None,
                 session_token: None,
             },
             Arc::new(FailOnceObserver {
                 calls: AtomicUsize::new(0),
+                fail_at: 0,
             }),
-        );
+        )
+        .unwrap();
         let pending = start_request(uuid::Uuid::new_v4());
 
         assert!(matches!(
@@ -3452,6 +5160,7 @@ mod tests {
             .begin_connection(&[PublicStreamMapping {
                 channel: 2,
                 direction: PublicStreamDirection::Output,
+                byte_role: None,
                 input_high_water: None,
                 provisional_ref: None,
                 stream_token: "stable-stream".to_string(),
@@ -3461,6 +5170,7 @@ mod tests {
             .begin_connection(&[PublicStreamMapping {
                 channel: 3,
                 direction: PublicStreamDirection::Input,
+                byte_role: None,
                 input_high_water: Some(
                     golem_common::model::invocation_session_public::PublicInputHighWater {
                         sequence: DecimalU64(0),
@@ -3474,6 +5184,27 @@ mod tests {
         assert!(matches!(
             error,
             SessionTransportError::StableMappingRebound { .. }
+        ));
+    }
+
+    #[test]
+    fn stable_mapping_rejects_tool_byte_role_changes_across_connections() {
+        let tracker = DeliveryTracker::default();
+        let mapping = |channel, byte_role| PublicStreamMapping {
+            channel,
+            direction: PublicStreamDirection::Output,
+            byte_role: Some(byte_role),
+            input_high_water: None,
+            provisional_ref: None,
+            stream_token: "native-output".to_string(),
+        };
+        tracker
+            .begin_connection(&[mapping(2, PublicByteStreamRole::Stdout)])
+            .unwrap();
+        let tracker = DeliveryTracker::new(tracker.snapshot(), Arc::new(())).unwrap();
+        assert!(matches!(
+            tracker.begin_connection(&[mapping(3, PublicByteStreamRole::Stderr)]),
+            Err(SessionTransportError::StableMappingRebound { .. })
         ));
     }
 
@@ -3568,6 +5299,7 @@ mod tests {
             .begin_connection(&[PublicStreamMapping {
                 channel: 3,
                 direction: PublicStreamDirection::Output,
+                byte_role: None,
                 input_high_water: None,
                 provisional_ref: None,
                 stream_token: "packed-stream".to_string(),
@@ -3611,6 +5343,7 @@ mod tests {
             .begin_connection(&[PublicStreamMapping {
                 channel: 3,
                 direction: PublicStreamDirection::Output,
+                byte_role: None,
                 input_high_water: None,
                 provisional_ref: None,
                 stream_token: "packed-stream".to_string(),
@@ -3784,6 +5517,7 @@ mod tests {
                         mappings: vec![PublicStreamMapping {
                             channel: 3,
                             direction: PublicStreamDirection::Output,
+                            byte_role: None,
                             input_high_water: None,
                             provisional_ref: None,
                             stream_token: "output-stream".to_string(),
@@ -3808,6 +5542,7 @@ mod tests {
             None,
             InvocationSessionStateSnapshot {
                 delivered_output_cursors: BTreeMap::new(),
+                stable_stream_bindings: BTreeMap::new(),
                 pending_operation: Some(initial),
                 session_token: None,
             },
@@ -3837,7 +5572,7 @@ mod tests {
             cursor_token: "cursor-one".to_string(),
             mappings: Vec::new(),
             sequence: DecimalU64(0),
-            value: serde_json::json!("seven"),
+            value: serde_json::json!({"kind": "string", "value": "seven"}),
             version: 1,
         });
         let frame = ReceivedFrame {
@@ -3978,6 +5713,7 @@ mod tests {
             None,
             InvocationSessionStateSnapshot {
                 delivered_output_cursors: BTreeMap::new(),
+                stable_stream_bindings: BTreeMap::new(),
                 pending_operation: Some(expected),
                 session_token: None,
             },
@@ -4076,6 +5812,7 @@ mod tests {
             None,
             InvocationSessionStateSnapshot {
                 delivered_output_cursors: BTreeMap::new(),
+                stable_stream_bindings: BTreeMap::new(),
                 pending_operation: Some(initial),
                 session_token: None,
             },
@@ -4145,6 +5882,7 @@ mod tests {
                         mappings: vec![PublicStreamMapping {
                             channel: 3,
                             direction: PublicStreamDirection::Output,
+                            byte_role: None,
                             input_high_water: None,
                             provisional_ref: None,
                             stream_token: "output-stream".to_string(),
@@ -4188,6 +5926,7 @@ mod tests {
                         mappings: vec![PublicStreamMapping {
                             channel: 9,
                             direction: PublicStreamDirection::Output,
+                            byte_role: None,
                             input_high_water: None,
                             provisional_ref: None,
                             stream_token: "output-stream".to_string(),
@@ -4215,6 +5954,7 @@ mod tests {
             None,
             InvocationSessionStateSnapshot {
                 delivered_output_cursors: BTreeMap::new(),
+                stable_stream_bindings: BTreeMap::new(),
                 pending_operation: Some(initial),
                 session_token: None,
             },
@@ -4272,6 +6012,7 @@ mod tests {
                         mappings: vec![PublicStreamMapping {
                             channel: 4,
                             direction: PublicStreamDirection::Input,
+                            byte_role: None,
                             input_high_water: Some(PublicInputHighWater {
                                 sequence: DecimalU64(0),
                                 terminal: false,
@@ -4318,6 +6059,7 @@ mod tests {
                         mappings: vec![PublicStreamMapping {
                             channel: 10,
                             direction: PublicStreamDirection::Input,
+                            byte_role: None,
                             input_high_water: Some(PublicInputHighWater {
                                 sequence: DecimalU64(0),
                                 terminal: false,
@@ -4348,6 +6090,7 @@ mod tests {
             None,
             InvocationSessionStateSnapshot {
                 delivered_output_cursors: BTreeMap::new(),
+                stable_stream_bindings: BTreeMap::new(),
                 pending_operation: Some(initial),
                 session_token: None,
             },
@@ -4419,6 +6162,7 @@ mod tests {
             None,
             InvocationSessionStateSnapshot {
                 delivered_output_cursors: BTreeMap::new(),
+                stable_stream_bindings: BTreeMap::new(),
                 pending_operation: Some(initial),
                 session_token: None,
             },
@@ -4489,6 +6233,7 @@ mod tests {
             None,
             InvocationSessionStateSnapshot {
                 delivered_output_cursors: BTreeMap::new(),
+                stable_stream_bindings: BTreeMap::new(),
                 pending_operation: Some(initial),
                 session_token: None,
             },
@@ -4591,6 +6336,7 @@ mod tests {
             None,
             InvocationSessionStateSnapshot {
                 delivered_output_cursors: BTreeMap::new(),
+                stable_stream_bindings: BTreeMap::new(),
                 pending_operation: Some(initial),
                 session_token: None,
             },
@@ -4650,7 +6396,7 @@ mod tests {
                 },
                 PublicServerMessage::InvocationResult {
                     mappings: Vec::new(),
-                    result: PublicInvocationResult::None,
+                    result: Box::new(PublicInvocationResult::None),
                     version: 1,
                 },
                 PublicServerMessage::AttachmentRevoked {
@@ -4670,6 +6416,7 @@ mod tests {
             None,
             InvocationSessionStateSnapshot {
                 delivered_output_cursors: BTreeMap::new(),
+                stable_stream_bindings: BTreeMap::new(),
                 pending_operation: Some(initial),
                 session_token: None,
             },
@@ -4721,6 +6468,7 @@ mod tests {
                         mappings: vec![PublicStreamMapping {
                             channel: 9,
                             direction: PublicStreamDirection::Input,
+                            byte_role: None,
                             input_high_water: Some(PublicInputHighWater {
                                 sequence: DecimalU64(3),
                                 terminal: false,
@@ -4743,6 +6491,7 @@ mod tests {
             None,
             InvocationSessionStateSnapshot {
                 delivered_output_cursors: BTreeMap::new(),
+                stable_stream_bindings: BTreeMap::new(),
                 pending_operation: Some(initial),
                 session_token: None,
             },
@@ -4788,6 +6537,7 @@ mod tests {
                         mappings: vec![PublicStreamMapping {
                             channel: 9,
                             direction: PublicStreamDirection::Input,
+                            byte_role: None,
                             input_high_water: Some(PublicInputHighWater {
                                 sequence: DecimalU64(3),
                                 terminal: false,
@@ -4811,6 +6561,7 @@ mod tests {
             None,
             InvocationSessionStateSnapshot {
                 delivered_output_cursors: BTreeMap::new(),
+                stable_stream_bindings: BTreeMap::new(),
                 pending_operation: Some(initial),
                 session_token: None,
             },
