@@ -163,6 +163,24 @@ runs:
         version: 0.10.11+6ff76a5f9
         core-version: 0.10.11+6ff76a5f9
 
+    - name: Update MoonBit workspace dependencies
+      if: inputs.language == 'moonbit'
+      shell: bash
+      working-directory: sdks/moonbit
+      run: moon update
+
+    - name: Install Golem MoonBit wit-bindgen
+      if: inputs.language == 'moonbit'
+      shell: bash
+      working-directory: sdks/moonbit/golem_sdk
+      run: ./scripts/install-wit-bindgen.sh
+
+    - name: Generate MoonBit WIT bindings
+      if: inputs.language == 'moonbit'
+      shell: bash
+      working-directory: sdks/moonbit/golem_sdk
+      run: ./scripts/regen-bindings.sh
+
     - name: Install wasm-tools
       if: inputs.language == 'moonbit'
       shell: bash

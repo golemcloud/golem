@@ -54,8 +54,11 @@ proptest-regressions/
 .ck
 .ckignore
 
-# Claude Code local settings
-.claude/
+# Generated Golem app skills and Claude Code links
+**/.agents/
+!/.agents/
+!/.agents/**
+.claude
 
 # docs/ (Next.js / Nextra site, imported from golemcloud/docs)
 docs/.next/

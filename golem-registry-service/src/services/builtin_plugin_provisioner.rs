@@ -66,7 +66,7 @@ static BUILTIN_PLUGINS: &[BuiltinPluginDescriptor] = &[BuiltinPluginDescriptor {
     component_name: "otlp:exporter",
     artifact_id: "otlp_exporter",
     plugin_name: "golem-otlp-exporter",
-    version: "1.5.3",
+    version: "1.5.4",
     description: "Built-in OTLP exporter oplog processor plugin",
 }];
 

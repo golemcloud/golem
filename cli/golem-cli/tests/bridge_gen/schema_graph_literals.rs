@@ -68,6 +68,24 @@ pub(super) fn canonical_carrier_shape() -> (usize, i32, Vec<(String, i32)>) {
 }
 
 #[test]
+fn uuid_schema_literals_are_first_class_nodes() {
+    let graph = golem_common::schema::graph::SchemaGraph::anonymous(
+        golem_common::schema::schema_type::SchemaType::uuid(),
+    );
+    let rust = rust_emitter::emit_schema_graph_literal(&graph).to_string();
+    let typescript = typescript_emitter::emit_schema_graph_literal(&graph);
+    let scala = scala_emitter::schema_graph::emit_schema_graph_literal(&graph);
+
+    assert!(rust.contains("SchemaTypeBody :: UuidType"));
+    assert!(typescript.contains("tag: 'uuid'"));
+    assert!(scala.contains("SchemaTypeBody.UuidType"));
+    for literal in [&rust, &typescript, &scala] {
+        assert!(!literal.contains("high-bits"));
+        assert!(!literal.contains("low-bits"));
+    }
+}
+
+#[test]
 fn exhaustive_rust_literal_compiles_executes_and_round_trips_through_wit() {
     let dir = TempDir::new().unwrap();
     let workspace = workspace_root().unwrap();

@@ -574,6 +574,11 @@ fn schema_json(graph : @model.SchemaGraph, schema : @model.SchemaType) -> Json {
       }
       Json::object(fields)
     }
+    Uuid =>
+      Json::object({
+        "type": Json::string("string"),
+        "format": Json::string("uuid"),
+      })
     Datetime =>
       Json::object({
         "type": Json::string("string"),

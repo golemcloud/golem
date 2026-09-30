@@ -14,6 +14,7 @@
 
 use super::attachment::attachment_lease_expiry;
 use super::*;
+use crate::services::rpc::RpcError;
 
 /// Attachment control that resolves the producer owner before each durable operation.
 pub struct RoutedStreamAttachmentControl {
@@ -50,28 +51,16 @@ impl RoutedAttachedStreamSegmentSource {
         &self,
         request: AttachedStreamSegmentRequest,
     ) -> Result<Vec<u8>, StreamStoreError> {
-        let mut delay = std::time::Duration::from_millis(100);
-        loop {
-            match self
-                .rpc
-                .read_durable_stream_segment(
-                    golem_common::model::durable_stream::DurableStreamReadRequest::AttachedConsumer(
-                        Box::new(request.clone()),
-                    ),
-                    &self.auth_ctx,
-                )
-                .await
-            {
-                Ok(payload) => return Ok(payload),
-                Err(DurableStreamReadError::Other(error)) => {
-                    return Err(StreamStoreError::Oplog(error.to_string()));
-                }
-                Err(DurableStreamReadError::Unavailable) => {
-                    tokio::time::sleep(delay).await;
-                    delay = (delay * 2).min(std::time::Duration::from_secs(1));
-                }
-            }
-        }
+        DurableStreamRemoteError::retry_while_unavailable(|| {
+            self.rpc.read_durable_stream_segment(
+                golem_common::model::durable_stream::DurableStreamReadRequest::AttachedConsumer(
+                    Box::new(request.clone()),
+                ),
+                &self.auth_ctx,
+            )
+        })
+        .await
+        .map_err(|error| StreamStoreError::Oplog(error.to_string()))
     }
 }
 
@@ -146,21 +135,52 @@ impl RoutedStreamAttachmentControl {
         }
     }
 
+    /// Sends one control to the producer, retrying while the producer is unavailable (recovering,
+    /// fenced or being deleted). Retrying is safe: every control is idempotent on the producer.
+    async fn execute_routed(
+        &self,
+        operation: StreamAttachmentControlOperation,
+    ) -> Result<bool, RpcError> {
+        DurableStreamRemoteError::retry_while_unavailable(|| {
+            self.rpc.control_durable_stream_attachment(
+                StreamAttachmentControlRequest {
+                    format_version: DURABLE_STREAM_FORMAT_VERSION,
+                    mapping: Some(self.mapping.clone()),
+                    operation: operation.clone(),
+                },
+                &self.auth_ctx,
+            )
+        })
+        .await
+    }
+
     async fn execute(
         &self,
         operation: StreamAttachmentControlOperation,
     ) -> Result<bool, StreamStoreError> {
-        self.rpc
-            .control_durable_stream_attachment(
-                StreamAttachmentControlRequest {
-                    format_version: DURABLE_STREAM_FORMAT_VERSION,
-                    mapping: Some(self.mapping.clone()),
-                    operation,
-                },
-                &self.auth_ctx,
-            )
+        self.execute_routed(operation)
             .await
             .map_err(|error| StreamStoreError::Oplog(error.to_string()))
+    }
+
+    /// Tells the producer that this consumer is being deleted. A producer that no longer exists
+    /// has nothing left to finalize, so its absence completes the consumer's side.
+    pub async fn finalize_deleted_consumer(
+        &self,
+        key: StreamAttachmentKey,
+        now_millis: u64,
+    ) -> Result<(), StreamStoreError> {
+        match self
+            .execute_routed(StreamAttachmentControlOperation::Finalize {
+                key,
+                reason: StreamAttachmentFinalizationReason::ConsumerDeleted,
+                now_millis,
+            })
+            .await
+        {
+            Ok(_) | Err(RpcError::NotFound { .. }) => Ok(()),
+            Err(error) => Err(StreamStoreError::Oplog(error.to_string())),
+        }
     }
 
     /// Forwards cancellation and waits for the producer's durable receipt, not callback delivery.

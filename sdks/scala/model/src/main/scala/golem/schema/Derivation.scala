@@ -44,9 +44,6 @@ import scala.util.control.NonFatal
  */
 private[golem] object Derivation {
 
-  // Canonical id of the cross-SDK UUID record, byte-identical to the Rust SDK.
-  private final val UuidTypeId  = "uuid.Uuid"
-  private final val UuidName    = "uuid"
   private final val SecretFqn   = "golem.config.Secret"
   private final val PathFqn     = "golem.schema.GolemPath"
   private final val UrlFqn      = "golem.schema.Url"
@@ -323,9 +320,6 @@ private[golem] object Derivation {
   private def casePayloadRef(caseReflect: Reflect.Bound[Any]): Option[Reflect.Bound[Any]] =
     extractValueRef(caseReflect)
 
-  private def uuidRecordBody: SchemaType =
-    t.record(List(t.field("high-bits", t.u64), t.field("low-bits", t.u64)))
-
   // ---------------------------------------------------------------------------
   // Reflect -> SchemaType (graph building)
   // ---------------------------------------------------------------------------
@@ -335,9 +329,8 @@ private[golem] object Derivation {
 
     richBody(reflect) match {
       case Some(body)              => SchemaType(body)
-      case None if isUuid(reflect) =>
-        ctx.register(UuidTypeId, reflect.typeId, Some(UuidName), () => uuidRecordBody)
-      case None =>
+      case None if isUuid(reflect) => SchemaType(SchemaTypeBody.UuidType)
+      case None                    =>
         unsignedBody(reflect) match {
           case Some(body) => SchemaType(body)
           case None       =>
@@ -591,12 +584,7 @@ private[golem] object Derivation {
           }
           checkUnsignedBig(raw, MaxU64, s"Uuid.$name", SchemaEncodeError(_))
         }
-        SchemaValue.RecordValue(
-          List(
-            SchemaValue.U64Value(U64.toRawBits(field("highBits"))),
-            SchemaValue.U64Value(U64.toRawBits(field("lowBits")))
-          )
-        )
+        SchemaValue.UuidValue(Uuid(field("highBits"), field("lowBits")))
       case other => throw SchemaEncodeError(s"Uuid expected record dynamic value, got $other")
     }
 
@@ -851,15 +839,17 @@ private[golem] object Derivation {
 
   private def uuidToDynamic[A](reflect: Reflect.Bound[A], value: SchemaValue): DV =
     value match {
-      case SchemaValue.RecordValue(SchemaValue.U64Value(hi) :: SchemaValue.U64Value(lo) :: Nil) =>
+      case SchemaValue.UuidValue(uuid) =>
         val names = reflect.asRecord.map(_.fields.toList.map(_.name)).getOrElse(List("highBits", "lowBits"))
+        val high  = checkUnsignedBig(uuid.highBits, MaxU64, "Uuid.highBits", FromSchemaError(_))
+        val low   = checkUnsignedBig(uuid.lowBits, MaxU64, "Uuid.lowBits", FromSchemaError(_))
         DV.Record(
           Chunk(
-            names.head -> DV.Primitive(PrimitiveValue.BigInt(U64.fromRawBits(hi))),
-            names(1)   -> DV.Primitive(PrimitiveValue.BigInt(U64.fromRawBits(lo)))
+            names.head -> DV.Primitive(PrimitiveValue.BigInt(high)),
+            names(1)   -> DV.Primitive(PrimitiveValue.BigInt(low))
           )
         )
-      case other => throw FromSchemaError(s"expected Uuid record value (two u64), got $other")
+      case other => throw FromSchemaError(s"expected uuid value, got $other")
     }
 
   private def optionToDynamic(innerRef: Reflect.Bound[Any], usesRecordWrapper: Boolean, value: SchemaValue): DV =

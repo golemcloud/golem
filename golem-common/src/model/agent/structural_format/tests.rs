@@ -306,6 +306,7 @@ mod schema_native_tests {
                     }),
                 ),
                 ("url", SchemaType::url(UrlRestrictions::default())),
+                ("uuid", SchemaType::uuid()),
                 ("dt", SchemaType::datetime()),
                 ("dur", SchemaType::duration()),
                 (
@@ -345,6 +346,9 @@ mod schema_native_tests {
                 SchemaValue::Url {
                     url: "https://example.com/a?b=c".into(),
                 },
+                SchemaValue::Uuid(
+                    uuid::Uuid::parse_str("dd00721b-3329-4621-a01d-c71f02cd78c6").unwrap(),
+                ),
                 SchemaValue::Datetime { value: dt },
                 SchemaValue::Duration(DurationValuePayload {
                     nanoseconds: 1_500_000_000,
@@ -363,7 +367,7 @@ mod schema_native_tests {
             ],
         );
         let formatted = roundtrip(&v);
-        assert!(formatted.starts_with("@t\"hello\",@t[hu]\"szia\",@b[]\"AQID\",@b[text/plain]\"YWJj\",@p\"/tmp/a b\",@u\"https://example.com/a?b=c\",@dt\"2025-04-12T13:14:15.000000000Z\",@dur\"PT1.5S\",@qty\"12.3kg\""));
+        assert!(formatted.starts_with("@t\"hello\",@t[hu]\"szia\",@b[]\"AQID\",@b[text/plain]\"YWJj\",@p\"/tmp/a b\",@u\"https://example.com/a?b=c\",@uuid\"dd00721b-3329-4621-a01d-c71f02cd78c6\",@dt\"2025-04-12T13:14:15.000000000Z\",@dur\"PT1.5S\",@qty\"12.3kg\""));
         assert!(formatted.ends_with(",m[(\"a\",1),(\"b\",2)]"));
     }
 

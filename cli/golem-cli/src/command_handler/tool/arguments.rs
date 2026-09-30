@@ -591,6 +591,7 @@ fn decode(graph: &SchemaGraph, ty: &SchemaType, raw: &str) -> Result<SchemaValue
         | SchemaType::Enum { .. }
         | SchemaType::Path { .. }
         | SchemaType::Url { .. }
+        | SchemaType::Uuid { .. }
         | SchemaType::Datetime { .. }
         | SchemaType::Duration { .. } => serde_json::Value::String(raw.into()),
         SchemaType::Bool { .. } if raw.eq_ignore_ascii_case("true") => {

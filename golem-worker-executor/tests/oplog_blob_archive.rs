@@ -148,7 +148,8 @@ async fn append_worker(
                 None,
             ),
         )])
-        .await;
+        .await
+        .unwrap();
 }
 
 async fn drain(

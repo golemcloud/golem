@@ -16839,6 +16839,18 @@ components:
           kind:
             type: string
             enum:
+            - uuid
+          value:
+            type: string
+            format: uuid
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
             - record
           value:
             type: object
@@ -20776,6 +20788,20 @@ components:
           kind:
             type: string
             enum:
+            - uuid
+          value:
+            type: object
+            properties:
+              metadata:
+                $ref: '#/components/schemas/MetadataEnvelope'
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
             - datetime
           value:
             type: object
@@ -21315,6 +21341,18 @@ components:
                 type: string
             required:
             - url
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - uuid
+          value:
+            type: string
+            format: uuid
         required:
         - kind
         - value

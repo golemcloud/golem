@@ -400,6 +400,10 @@ impl RustBridgeGenerator {
             SchemaType::Url { .. } => {
                 push(quote! { __wire::SchemaValueNode::UrlValue(#val.clone()) })
             }
+            SchemaType::Uuid { .. } => quote! {
+                golem_rust::schema::wit::direct::IntoWire::write_wire(#val, __writer)
+                    .map_err(|__error| __error.to_string())
+            },
             SchemaType::Duration { .. } => push(quote! {
                 __wire::SchemaValueNode::DurationValue(__wire::DurationValuePayload { nanoseconds: *#val })
             }),
@@ -584,6 +588,10 @@ impl RustBridgeGenerator {
             SchemaType::String { .. } => scalar!(StringValue, "string"),
             SchemaType::Path { .. } => scalar!(PathValue, "path"),
             SchemaType::Url { .. } => scalar!(UrlValue, "url"),
+            SchemaType::Uuid { .. } => quote! {
+                <golem_rust::Uuid as golem_rust::schema::wit::direct::FromWire>::read_wire(__reader, #index)
+                    .map_err(|__error| __error.to_string())
+            },
             SchemaType::Duration { .. } => {
                 quote! { match __reader.take(#index).map_err(|e| e.to_string())? {
                     __wire::SchemaValueNode::DurationValue(__value) => Ok(__value.nanoseconds),
