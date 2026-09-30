@@ -27,7 +27,7 @@ use crate::services::golem_config::FilesystemSnapshotUploadConfig;
 use async_trait::async_trait;
 use golem_common::model::OwnedAgentId;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 use tokio::sync::watch;
@@ -37,7 +37,6 @@ use tokio::sync::watch;
 struct Faults {
     failing_saves: AtomicUsize,
     save_delay: Mutex<Duration>,
-    restores_fail: AtomicBool,
     failing_restore_names: Mutex<std::collections::HashSet<String>>,
     /// The directory of the tree of each save, in the order of the saves.
     trees: Mutex<Vec<std::path::PathBuf>>,
@@ -51,7 +50,6 @@ struct Faults {
     restored: Mutex<Vec<String>>,
     /// The names of the restores that gave a tree, in the order of their ends.
     completed_restores: Mutex<Vec<String>>,
-    stats: AtomicUsize,
 }
 
 /// The store side of a held save: the save reports its name, then waits for the release.
@@ -144,11 +142,6 @@ impl TestFilesystemSnapshotStore {
         }
     }
 
-    /// Makes each restore fail with an error that allows no retry, or not.
-    pub fn fail_restores(&self, fail: bool) {
-        self.faults.restores_fail.store(fail, Ordering::SeqCst);
-    }
-
     /// The directory of the tree of each save that started, in the order of the saves.
     pub fn saved_trees(&self) -> Vec<std::path::PathBuf> {
         self.faults
@@ -195,11 +188,6 @@ impl TestFilesystemSnapshotStore {
         self.faults.saves.load(Ordering::SeqCst)
     }
 
-    /// The number of restores that started.
-    pub fn restore_count(&self) -> usize {
-        self.restored_names().len()
-    }
-
     /// The names that the restores asked for, in the order of the restores.
     pub fn restored_names(&self) -> Vec<String> {
         self.faults
@@ -216,11 +204,6 @@ impl TestFilesystemSnapshotStore {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
-    }
-
-    /// The number of stat calls.
-    pub fn stat_count(&self) -> usize {
-        self.faults.stats.load(Ordering::SeqCst)
     }
 
     /// The names of the snapshots of the agent, newest first.
@@ -330,13 +313,12 @@ impl FilesystemSnapshotStore for TestFilesystemSnapshotStore {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .push(name.as_str().to_string());
-        if self.faults.restores_fail.load(Ordering::SeqCst)
-            || self
-                .faults
-                .failing_restore_names
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .contains(name.as_str())
+        if self
+            .faults
+            .failing_restore_names
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .contains(name.as_str())
         {
             return Err(SnapshotStoreError::Corrupt(anyhow::anyhow!(
                 "an injected restore failure"
@@ -356,7 +338,6 @@ impl FilesystemSnapshotStore for TestFilesystemSnapshotStore {
         agent: &AgentSnapshots,
         name: &SnapshotName,
     ) -> Result<Option<SnapshotInfo>, SnapshotStoreError> {
-        self.faults.stats.fetch_add(1, Ordering::SeqCst);
         Ok(self
             .inner
             .stat(agent, name)

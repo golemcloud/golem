@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::*;
-use crate::filesystem_snapshot::InMemorySnapshotStore;
+use crate::filesystem_snapshot::{InMemorySnapshotStore, SpacedTimes};
 use crate::services::agent_filesystem::RestoreTree;
 use async_trait::async_trait;
 use futures::StreamExt as _;
@@ -21,32 +21,15 @@ use golem_common::model::RetryConfig;
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{AgentId, OwnedAgentId};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use test_r::test;
 
-/// The in-memory store, empty by default.
-struct Memory(InMemorySnapshotStore);
-
-impl Default for Memory {
-    fn default() -> Self {
-        Self(InMemorySnapshotStore::new())
-    }
-}
-
-impl std::ops::Deref for Memory {
-    type Target = InMemorySnapshotStore;
-
-    fn deref(&self) -> &InMemorySnapshotStore {
-        &self.0
-    }
-}
-
 /// A store over the in-memory store that a test can make fail, hold and count.
 #[derive(Default)]
 struct ScriptedStore {
-    memory: Memory,
+    memory: InMemorySnapshotStore,
     /// The number of saves that still fail with a retryable storage error.
     failing_saves: AtomicUsize,
     /// Whether a failing save publishes the tree before it fails, as a late PUT does.
@@ -81,15 +64,12 @@ struct ScriptedStore {
     most_restores_at_once: AtomicUsize,
     store_calls_now: AtomicUsize,
     most_store_calls_at_once: AtomicUsize,
-    /// The time of each saved name. Each save is ten minutes after the one before it, so
-    /// retention sees times that are far apart.
-    times: Mutex<HashMap<String, golem_common::model::Timestamp>>,
+    /// The time of each saved name.
+    times: SpacedTimes,
 }
 
 /// The time of the first save of a scripted store.
-const FIRST_SAVE_MILLIS: u64 = 1_800_000_000_000;
-/// The time between two saves of a scripted store.
-const SAVE_SPACING_MILLIS: u64 = 10 * 60 * 1000;
+const FIRST_SAVE_MILLIS: u64 = SpacedTimes::FIRST_MILLIS;
 
 /// A gate that holds each caller until the test opens it.
 struct Gate {
@@ -127,16 +107,6 @@ impl Gate {
 }
 
 impl ScriptedStore {
-    /// Gives `info` with the time of the save of `name`, which the store gives to a new name.
-    fn timed(&self, name: &SnapshotName, info: SnapshotInfo) -> SnapshotInfo {
-        let mut times = self.times.lock().unwrap();
-        let count = times.len() as u64;
-        let created_at = *times.entry(name.as_str().to_string()).or_insert_with(|| {
-            golem_common::model::Timestamp::from(FIRST_SAVE_MILLIS + count * SAVE_SPACING_MILLIS)
-        });
-        SnapshotInfo { created_at, ..info }
-    }
-
     /// Holds each save of `agent` at the gate that this gives, until the test opens it.
     fn hold_saves_of(&self, agent: &AgentSnapshots) -> Arc<Gate> {
         let gate = Arc::new(Gate::default());
@@ -241,7 +211,7 @@ impl FilesystemSnapshotStore for ScriptedStore {
             return Err(retryable("the publish failed"));
         }
         let info = self.memory.save(agent, name, tree, parent).await?;
-        Ok(self.timed(name, info))
+        Ok(self.times.timed(name, info))
     }
 
     async fn restore(
@@ -278,22 +248,12 @@ impl FilesystemSnapshotStore for ScriptedStore {
         agent: &AgentSnapshots,
     ) -> Result<Box<[(SnapshotName, SnapshotInfo)]>, SnapshotStoreError> {
         self.lists.fetch_add(1, Ordering::SeqCst);
-        let times = self.times.lock().unwrap().clone();
         Ok(self
             .memory
             .list(agent)
             .await?
             .iter()
-            .map(|(name, info)| {
-                let created_at = times.get(name.as_str()).copied().unwrap_or(info.created_at);
-                (
-                    name.clone(),
-                    SnapshotInfo {
-                        created_at,
-                        ..*info
-                    },
-                )
-            })
+            .map(|(name, info)| (name.clone(), self.times.known(name, *info)))
             .collect())
     }
 
@@ -422,26 +382,16 @@ fn paused<T>(test: impl std::future::Future<Output = T>) -> T {
         .block_on(test)
 }
 
-impl AgentFilesystemSnapshots {
-    /// Admits a job of `kind` without the wait of a manual update.
-    async fn admit(
-        &self,
-        agent: &AgentSnapshots,
-        kind: SnapshotKind,
-    ) -> Result<Admission, SnapshotSkip> {
-        match &self.core {
-            Some(core) => Core::admit(core, agent, kind)
-                .await
-                .map_err(|refusal| refusal.skip),
-            None => Err(SnapshotSkip::Disabled),
-        }
-    }
-
-    /// Whether no job runs for `agent`.
-    fn is_free(&self, agent: &AgentSnapshots) -> bool {
-        self.core
-            .as_ref()
-            .is_none_or(|core| core.registry.read(|state| rules::is_free(state, agent)))
+/// Admits a job of `kind` for `agent` through the interface of the service. The callers ask for
+/// a manual update only while no upload of the agent runs, so it does not wait.
+async fn admit(
+    snapshots: &AgentFilesystemSnapshots,
+    agent: &AgentSnapshots,
+    kind: SnapshotKind,
+) -> Admission {
+    match kind {
+        SnapshotKind::Periodic => snapshots.admit_periodic(agent).await.unwrap(),
+        SnapshotKind::Update => snapshots.admit_update(agent, no_interrupt()).await.unwrap(),
     }
 }
 
@@ -546,7 +496,7 @@ fn each_admission_makes_a_new_name_with_the_prefix_of_its_kind() {
         .then(|kind| {
             let snapshots = &snapshots;
             let agent = &agent;
-            async move { snapshots.admit(agent, kind).await.unwrap().name().clone() }
+            async move { admit(snapshots, agent, kind).await.name().clone() }
         })
         .collect::<Vec<_>>()
         .await;
@@ -573,24 +523,15 @@ fn a_second_admission_of_an_agent_gets_upload_in_flight_until_the_first_ends() {
         let discarded = Arc::new(AtomicUsize::new(0));
         let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
 
-        let admission = snapshots
-            .admit(&agent, SnapshotKind::Periodic)
-            .await
-            .unwrap();
-        let while_admitted = snapshots.admit(&agent, SnapshotKind::Update).await.err();
-        let other_agent = snapshots
-            .admit(&other, SnapshotKind::Periodic)
-            .await
-            .is_ok();
+        let admission = snapshots.admit_periodic(&agent).await.unwrap();
+        let while_admitted = snapshots.admit_periodic(&agent).await.err();
+        let other_agent = snapshots.admit_periodic(&other).await.is_ok();
         admission.submit(capture(b"one", &discarded), None, confirmer(&confirm));
         gate.wait_reached(1).await;
-        let while_uploading = snapshots.admit(&agent, SnapshotKind::Periodic).await.err();
+        let while_uploading = snapshots.admit_periodic(&agent).await.err();
         gate.open();
         ended(&snapshots, &agent).await;
-        let after = snapshots
-            .admit(&agent, SnapshotKind::Periodic)
-            .await
-            .is_ok();
+        let after = snapshots.admit_periodic(&agent).await.is_ok();
 
         assert_eq!(
             (while_admitted, other_agent, while_uploading, after),
@@ -611,16 +552,8 @@ fn a_dropped_admission_frees_its_agent_and_writes_nothing() {
         let snapshots = service(&store, settings(4, 4, 1));
         let agent = agent_snapshots("dropped");
 
-        drop(
-            snapshots
-                .admit(&agent, SnapshotKind::Periodic)
-                .await
-                .unwrap(),
-        );
-        let again = snapshots
-            .admit(&agent, SnapshotKind::Periodic)
-            .await
-            .is_ok();
+        drop(snapshots.admit_periodic(&agent).await.unwrap());
+        let again = snapshots.admit_periodic(&agent).await.is_ok();
 
         assert!(again);
         assert!(store.saved_names().is_empty());
@@ -633,7 +566,7 @@ fn a_disabled_service_admits_nothing_and_restores_nothing() {
         let snapshots = AgentFilesystemSnapshots::disabled();
         let agent = agent_snapshots("disabled");
 
-        let admitted = snapshots.admit(&agent, SnapshotKind::Periodic).await.err();
+        let admitted = snapshots.admit_periodic(&agent).await.err();
         let restored = snapshots
             .restore(&agent, &FilesystemSnapshotName::periodic())
             .err();
@@ -654,10 +587,7 @@ fn a_job_saves_discards_and_calls_the_confirmer_once_with_its_own_name() {
         let discarded = Arc::new(AtomicUsize::new(0));
         let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
 
-        let admission = snapshots
-            .admit(&agent, SnapshotKind::Periodic)
-            .await
-            .unwrap();
+        let admission = snapshots.admit_periodic(&agent).await.unwrap();
         let name = admission.name().clone();
         admission.submit(capture(b"tree", &discarded), None, confirmer(&confirm));
         ended(&snapshots, &agent).await;
@@ -686,10 +616,7 @@ fn after_the_retry_budget_the_job_discards_the_capture_and_calls_no_confirmer() 
         let discarded = Arc::new(AtomicUsize::new(0));
         let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
 
-        let admission = snapshots
-            .admit(&agent, SnapshotKind::Periodic)
-            .await
-            .unwrap();
+        let admission = snapshots.admit_periodic(&agent).await.unwrap();
         admission.submit(capture(b"tree", &discarded), None, confirmer(&confirm));
         let started = tokio::time::Instant::now();
         ended(&snapshots, &agent).await;
@@ -714,10 +641,7 @@ fn an_error_that_allows_no_retry_ends_the_job_after_one_attempt() {
         let discarded = Arc::new(AtomicUsize::new(0));
         let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
 
-        let admission = snapshots
-            .admit(&agent, SnapshotKind::Periodic)
-            .await
-            .unwrap();
+        let admission = snapshots.admit_periodic(&agent).await.unwrap();
         admission.submit(capture(b"tree", &discarded), None, confirmer(&confirm));
         ended(&snapshots, &agent).await;
 
@@ -754,10 +678,7 @@ async fn after_older_uploads(outcome: ConfirmOutcome) -> (Vec<String>, String, b
             let discarded = &discarded;
             let confirmed = &confirmed;
             async move {
-                let admission = snapshots
-                    .admit(agent, SnapshotKind::Periodic)
-                    .await
-                    .unwrap();
+                let admission = snapshots.admit_periodic(agent).await.unwrap();
                 let name = admission.name().clone();
                 admission.submit(
                     capture(format!("older-{index}").as_bytes(), discarded),
@@ -773,10 +694,7 @@ async fn after_older_uploads(outcome: ConfirmOutcome) -> (Vec<String>, String, b
     let deletes_before = store.deletes.lock().unwrap().len();
     let confirm = ScriptedConfirmer::answering(outcome);
 
-    let admission = snapshots
-        .admit(&agent, SnapshotKind::Periodic)
-        .await
-        .unwrap();
+    let admission = snapshots.admit_periodic(&agent).await.unwrap();
     let name = admission.name().clone();
     admission.submit(capture(b"newest", &discarded), None, confirmer(&confirm));
     ended(&snapshots, &agent).await;
@@ -854,7 +772,7 @@ fn a_confirmed_periodic_upload_keeps_the_newest_by_kind() {
             let discarded = &discarded;
             let confirm = &confirm;
             async move {
-                let admission = snapshots.admit(agent, kind).await.unwrap();
+                let admission = admit(snapshots, agent, kind).await;
                 let name = admission.name().clone();
                 match kind {
                     SnapshotKind::Periodic => admission.submit(
@@ -1035,10 +953,7 @@ fn an_admission_waits_for_the_open_file_calls_as_long_as_the_settings_say() {
         let snapshots = service(&store, settings.clone());
         let agent = agent_snapshots("capture-wait");
 
-        let admission = snapshots
-            .admit(&agent, SnapshotKind::Periodic)
-            .await
-            .unwrap();
+        let admission = snapshots.admit_periodic(&agent).await.unwrap();
 
         assert_eq!(admission.capture_wait(), settings.capture_wait());
         assert_ne!(admission.capture_wait(), Duration::ZERO);
@@ -1054,10 +969,7 @@ fn a_copy_of_all_snapshots_holds_each_snapshot_of_the_agent() {
         let to = agent_snapshots("copied-to");
         let discarded = Arc::new(AtomicUsize::new(0));
         let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
-        let admission = snapshots
-            .admit(&from, SnapshotKind::Periodic)
-            .await
-            .unwrap();
+        let admission = snapshots.admit_periodic(&from).await.unwrap();
         let name = admission.name().clone();
         admission.submit(capture(b"tree", &discarded), None, confirmer(&confirm));
         ended(&snapshots, &from).await;
@@ -1087,13 +999,13 @@ fn an_admission_during_a_delete_of_all_snapshots_gets_deleting_all_snapshots_unt
 
         snapshots.delete_all_snapshots(&agent);
         eventually(|| store.all_deletes.load(Ordering::SeqCst) == 1).await;
-        let while_deleting = snapshots.admit(&agent, SnapshotKind::Periodic).await.err();
+        let while_deleting = snapshots.admit_periodic(&agent).await.err();
         eventually(|| store.all_deletes.load(Ordering::SeqCst) == 2).await;
         let after = {
-            let admitted = snapshots.admit(&agent, SnapshotKind::Periodic).await;
+            let admitted = snapshots.admit_periodic(&agent).await;
             let retried = futures::stream::repeat(())
                 .then(|()| tokio::time::sleep(Duration::from_millis(5)))
-                .then(|()| snapshots.admit(&agent, SnapshotKind::Periodic))
+                .then(|()| snapshots.admit_periodic(&agent))
                 .filter(|admitted| std::future::ready(admitted.is_ok()));
             match admitted {
                 Ok(_) => true,
@@ -1121,10 +1033,7 @@ fn the_decision_of_a_job_carries_its_outcome_before_the_job_ends() {
         let agent = agent_snapshots("decided");
         let discarded = Arc::new(AtomicUsize::new(0));
         let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Deferred);
-        let admission = snapshots
-            .admit(&agent, SnapshotKind::Periodic)
-            .await
-            .unwrap();
+        let admission = snapshots.admit_periodic(&agent).await.unwrap();
         let name = admission.name().clone();
 
         admission.submit(capture(b"tree", &discarded), None, confirmer(&confirm));
@@ -1167,10 +1076,7 @@ async fn with_a_save_held(
     *store.save_gate.lock().unwrap() = Some(Arc::clone(&gate));
     let snapshots = service(&store, settings(4, 4, 1));
     let discarded = Arc::new(AtomicUsize::new(0));
-    let admission = snapshots
-        .admit(agent, SnapshotKind::Periodic)
-        .await
-        .unwrap();
+    let admission = snapshots.admit_periodic(agent).await.unwrap();
     let name = admission.name().clone();
     admission.submit(
         capture(b"tree", &discarded),
@@ -1255,10 +1161,7 @@ fn a_start_without_a_running_upload_asks_the_store_at_once() {
         let snapshots = service(&store, settings(4, 4, 1));
         let agent = agent_snapshots("start-without-upload");
         let discarded = Arc::new(AtomicUsize::new(0));
-        let admission = snapshots
-            .admit(&agent, SnapshotKind::Periodic)
-            .await
-            .unwrap();
+        let admission = snapshots.admit_periodic(&agent).await.unwrap();
         let name = admission.name().clone();
         admission.submit(
             capture(b"tree", &discarded),
@@ -1398,10 +1301,7 @@ fn delete_all_snapshots_cancels_the_job_and_deletes_them_after_the_job_ended() {
         let discarded = Arc::new(AtomicUsize::new(0));
         let discard_gate = Arc::new(Gate::default());
         let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
-        let admission = snapshots
-            .admit(&agent, SnapshotKind::Periodic)
-            .await
-            .unwrap();
+        let admission = snapshots.admit_periodic(&agent).await.unwrap();
         admission.submit(
             gated_capture(b"tree", &discarded, Some(Arc::clone(&discard_gate))),
             None,
@@ -1437,10 +1337,7 @@ fn a_cancelled_confirmation_deletes_nothing() {
         let snapshots = service(&store, settings(4, 4, 1));
         let agent = agent_snapshots("cancelled-confirmation");
         let discarded = Arc::new(AtomicUsize::new(0));
-        let admission = snapshots
-            .admit(&agent, SnapshotKind::Periodic)
-            .await
-            .unwrap();
+        let admission = snapshots.admit_periodic(&agent).await.unwrap();
         let name = admission.name().clone();
         admission.submit(capture(b"tree", &discarded), None, confirmer(&confirm));
         gate.wait_reached(1).await;
@@ -1472,7 +1369,7 @@ fn a_store_that_fails_every_delete_of_all_snapshots_leaves_the_service_running()
         eventually(|| store.all_deletes.load(Ordering::SeqCst) == 3).await;
         let discarded = Arc::new(AtomicUsize::new(0));
         let saved = snapshots
-            .admit(&agent, SnapshotKind::Update)
+            .admit_update(&agent, no_interrupt())
             .await
             .unwrap()
             .upload_now(capture(b"after", &discarded), no_interrupt())
@@ -1494,10 +1391,7 @@ fn each_delete_holds_a_slot_of_the_uploads() {
         let deleted_names = agent_snapshots("deleted-names");
         let discarded = Arc::new(AtomicUsize::new(0));
         let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
-        let admission = snapshots
-            .admit(&uploading, SnapshotKind::Periodic)
-            .await
-            .unwrap();
+        let admission = snapshots.admit_periodic(&uploading).await.unwrap();
         admission.submit(capture(b"tree", &discarded), None, confirmer(&confirm));
         gate.wait_reached(1).await;
 
@@ -1535,7 +1429,10 @@ fn at_most_the_configured_number_of_restores_run_at_the_same_time() {
         let agent = agent_snapshots("restores");
         let discarded = Arc::new(AtomicUsize::new(0));
         let name = {
-            let admission = snapshots.admit(&agent, SnapshotKind::Update).await.unwrap();
+            let admission = snapshots
+                .admit_update(&agent, no_interrupt())
+                .await
+                .unwrap();
             let name = admission.name().clone();
             drop(
                 admission
@@ -1583,7 +1480,10 @@ fn a_restore_gives_the_saved_tree() {
         let snapshots = service(&store, settings(4, 2, 1));
         let agent = agent_snapshots("restore");
         let discarded = Arc::new(AtomicUsize::new(0));
-        let admission = snapshots.admit(&agent, SnapshotKind::Update).await.unwrap();
+        let admission = snapshots
+            .admit_update(&agent, no_interrupt())
+            .await
+            .unwrap();
         let name = admission.name().clone();
         drop(
             admission
@@ -1619,10 +1519,7 @@ fn a_name_whose_save_failed_is_never_given_to_another_capture() {
         let discarded = Arc::new(AtomicUsize::new(0));
         let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
 
-        let first = snapshots
-            .admit(&agent, SnapshotKind::Periodic)
-            .await
-            .unwrap();
+        let first = snapshots.admit_periodic(&agent).await.unwrap();
         let first_name = first.name().clone();
         first.submit(
             capture(b"first tree", &discarded),
@@ -1632,7 +1529,10 @@ fn a_name_whose_save_failed_is_never_given_to_another_capture() {
         ended(&snapshots, &agent).await;
         store.failing_saves.store(1, Ordering::SeqCst);
         store.publish_before_failing.store(false, Ordering::SeqCst);
-        let second = snapshots.admit(&agent, SnapshotKind::Update).await.unwrap();
+        let second = snapshots
+            .admit_update(&agent, no_interrupt())
+            .await
+            .unwrap();
         let second_name = second.name().clone();
         let second_saved = second
             .upload_now(capture(b"second tree", &discarded), no_interrupt())
@@ -1680,10 +1580,7 @@ fn a_shutdown_before_the_confirmation_stops_the_job_without_a_confirmation_or_a_
         let agent = agent_snapshots("shutdown");
         let discarded = Arc::new(AtomicUsize::new(0));
         let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
-        let admission = snapshots
-            .admit(&agent, SnapshotKind::Periodic)
-            .await
-            .unwrap();
+        let admission = snapshots.admit_periodic(&agent).await.unwrap();
         admission.submit(capture(b"tree", &discarded), None, confirmer(&confirm));
         gate.wait_reached(1).await;
 
@@ -1698,7 +1595,7 @@ fn a_shutdown_before_the_confirmation_stops_the_job_without_a_confirmation_or_a_
         assert!(confirm.names().is_empty());
         assert!(store.deletes.lock().unwrap().is_empty());
         assert_eq!(discarded.load(Ordering::SeqCst), 1);
-        assert!(snapshots.is_free(&agent));
+        assert!(snapshots.admit_periodic(&agent).await.is_ok());
     })
 }
 
@@ -1712,10 +1609,7 @@ fn a_parent_reaches_the_store_with_its_detection() {
         let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
         let parent = FilesystemSnapshotName::periodic();
 
-        let admission = snapshots
-            .admit(&agent, SnapshotKind::Periodic)
-            .await
-            .unwrap();
+        let admission = snapshots.admit_periodic(&agent).await.unwrap();
         admission.submit(
             capture(b"tree", &discarded),
             Some((parent.clone(), ChangeDetection::SizeMtime)),
@@ -1742,10 +1636,7 @@ async fn update_uploads_with_retention(
 ) -> (String, Vec<String>) {
     let discarded = Arc::new(AtomicUsize::new(0));
     let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
-    let periodic = snapshots
-        .admit(agent, SnapshotKind::Periodic)
-        .await
-        .unwrap();
+    let periodic = snapshots.admit_periodic(agent).await.unwrap();
     let periodic_name = periodic.name().as_str().to_string();
     periodic.submit(capture(b"periodic", &discarded), None, confirmer(&confirm));
     ended(snapshots, agent).await;
@@ -1753,7 +1644,7 @@ async fn update_uploads_with_retention(
         .then(|index| {
             let discarded = &discarded;
             async move {
-                let admission = snapshots.admit(agent, SnapshotKind::Update).await.unwrap();
+                let admission = snapshots.admit_update(agent, no_interrupt()).await.unwrap();
                 let name = admission.name().as_str().to_string();
                 admission
                     .upload_now(
@@ -1811,7 +1702,7 @@ fn a_dropped_update_retention_deletes_nothing_and_frees_the_agent() {
                 let agent = &agent;
                 let discarded = &discarded;
                 async move {
-                    let admission = snapshots.admit(agent, SnapshotKind::Update).await.unwrap();
+                    let admission = snapshots.admit_update(agent, no_interrupt()).await.unwrap();
                     let name = admission.name().as_str().to_string();
                     let retention = admission
                         .upload_now(
@@ -1820,7 +1711,7 @@ fn a_dropped_update_retention_deletes_nothing_and_frees_the_agent() {
                         )
                         .await
                         .unwrap();
-                    let while_held = snapshots.admit(agent, SnapshotKind::Periodic).await.err();
+                    let while_held = snapshots.admit_periodic(agent).await.err();
                     drop(retention);
                     (name, while_held)
                 }
@@ -1834,12 +1725,7 @@ fn a_dropped_update_retention_deletes_nothing_and_frees_the_agent() {
                 .iter()
                 .all(|(_, while_held)| *while_held == Some(SnapshotSkip::UploadInFlight))
         );
-        assert!(
-            snapshots
-                .admit(&agent, SnapshotKind::Periodic)
-                .await
-                .is_ok()
-        );
+        assert!(snapshots.admit_periodic(&agent).await.is_ok());
     })
 }
 
@@ -1870,19 +1756,13 @@ async fn with_a_delete_held(
     let agent = agent_snapshots("held-delete");
     let discarded = Arc::new(AtomicUsize::new(0));
     let deferred = ScriptedConfirmer::answering(ConfirmOutcome::Deferred);
-    let older = snapshots
-        .admit(&agent, SnapshotKind::Periodic)
-        .await
-        .unwrap();
+    let older = snapshots.admit_periodic(&agent).await.unwrap();
     older.submit(capture(b"older", &discarded), None, confirmer(&deferred));
     ended(&snapshots, &agent).await;
     let gate = Arc::new(Gate::default());
     *store.delete_gate.lock().unwrap() = Some(Arc::clone(&gate));
     let answering = ScriptedConfirmer::answering(outcome);
-    let newest = snapshots
-        .admit(&agent, SnapshotKind::Periodic)
-        .await
-        .unwrap();
+    let newest = snapshots.admit_periodic(&agent).await.unwrap();
     newest.submit(capture(b"newest", &discarded), None, confirmer(&answering));
     gate.wait_reached(1).await;
     (store, snapshots, agent, gate)
@@ -1930,7 +1810,10 @@ fn a_stop_of_an_upload_now_ends_the_save_and_discards_the_capture() {
         let snapshots = service(&store, settings(4, 4, 1));
         let agent = agent_snapshots("stopped-upload-now");
         let discarded = Arc::new(AtomicUsize::new(0));
-        let admission = snapshots.admit(&agent, SnapshotKind::Update).await.unwrap();
+        let admission = snapshots
+            .admit_update(&agent, no_interrupt())
+            .await
+            .unwrap();
         let (stop, stopped) = watch::channel(false);
 
         let uploading = admission.upload_now(capture(b"tree", &discarded), stopped);
@@ -1943,12 +1826,7 @@ fn a_stop_of_an_upload_now_ends_the_save_and_discards_the_capture() {
 
         assert!(uploaded.is_err());
         assert_eq!(discarded.load(Ordering::SeqCst), 1);
-        assert!(
-            snapshots
-                .admit(&agent, SnapshotKind::Periodic)
-                .await
-                .is_ok()
-        );
+        assert!(snapshots.admit_periodic(&agent).await.is_ok());
     })
 }
 
@@ -1960,10 +1838,7 @@ async fn submit(
     content: &[u8],
     confirm: Confirm,
 ) -> FilesystemSnapshotName {
-    let admission = snapshots
-        .admit(agent, SnapshotKind::Periodic)
-        .await
-        .unwrap();
+    let admission = snapshots.admit_periodic(agent).await.unwrap();
     let name = admission.name().clone();
     admission.submit(
         capture(content, &Arc::new(AtomicUsize::new(0))),
@@ -2112,7 +1987,10 @@ fn a_stop_seen_after_the_grant_of_a_slot_gives_stopped_to_an_upload_now() {
         submit(&snapshots, &holder, b"held", stopping).await;
         gate.wait_reached(1).await;
         let agent = agent_snapshots("upload-now-stopped");
-        let admission = snapshots.admit(&agent, SnapshotKind::Update).await.unwrap();
+        let admission = snapshots
+            .admit_update(&agent, no_interrupt())
+            .await
+            .unwrap();
 
         let uploading =
             admission.upload_now(capture(b"now", &Arc::new(AtomicUsize::new(0))), stopped);
@@ -2231,7 +2109,10 @@ fn a_manual_update_ends_the_wait_of_the_retention_of_an_earlier_update_for_its_s
     paused(async {
         let (_store, snapshots, holder, holder_gate) = one_slot_with_a_held_agent();
         let agent = agent_snapshots("update-after-update");
-        let first = snapshots.admit(&agent, SnapshotKind::Update).await.unwrap();
+        let first = snapshots
+            .admit_update(&agent, no_interrupt())
+            .await
+            .unwrap();
         let saved = first
             .upload_now(
                 capture(b"first", &Arc::new(AtomicUsize::new(0))),

@@ -46,6 +46,12 @@ pub(crate) struct InMemorySnapshotStore {
     clock: Arc<dyn Clock>,
 }
 
+impl Default for InMemorySnapshotStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// One snapshot of a scope.
 #[derive(Clone)]
 struct Stored {
@@ -229,5 +235,38 @@ impl FilesystemSnapshotStore for InMemorySnapshotStore {
             scopes.insert(to.clone(), snapshots);
         }
         Ok(())
+    }
+}
+
+/// The times that a test store gives its saves: each new name gets a time ten minutes after the
+/// name before it, so that retention sees times far apart.
+#[cfg(test)]
+#[derive(Default)]
+pub(crate) struct SpacedTimes(Mutex<HashMap<String, Timestamp>>);
+
+#[cfg(test)]
+impl SpacedTimes {
+    /// The time of the first save.
+    pub(crate) const FIRST_MILLIS: u64 = 1_800_000_000_000;
+    /// The time between two saves.
+    const SPACING_MILLIS: u64 = 10 * 60 * 1000;
+
+    /// Gives `info` with the time of `name`, and gives a new name the next time.
+    pub(crate) fn timed(&self, name: &SnapshotName, info: SnapshotInfo) -> SnapshotInfo {
+        let mut times = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        let count = times.len() as u64;
+        let created_at = *times
+            .entry(name.as_str().to_string())
+            .or_insert_with(|| Timestamp::from(Self::FIRST_MILLIS + count * Self::SPACING_MILLIS));
+        SnapshotInfo { created_at, ..info }
+    }
+
+    /// Gives `info` with the time of `name` when it has one, and gives no time to a new name.
+    pub(crate) fn known(&self, name: &SnapshotName, info: SnapshotInfo) -> SnapshotInfo {
+        let times = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        SnapshotInfo {
+            created_at: times.get(name.as_str()).copied().unwrap_or(info.created_at),
+            ..info
+        }
     }
 }

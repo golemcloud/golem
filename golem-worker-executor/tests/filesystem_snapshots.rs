@@ -486,7 +486,7 @@ async fn a_periodic_snapshot_brings_the_files_back_after_a_restart(
     let live = agent.describe(&executor).await?;
     let applied = agent.applied(&executor).await?;
     executor.release().await?;
-    let restores = store.restore_count();
+    let restores = store.restored_names().len();
 
     let restarted =
         start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
@@ -494,7 +494,7 @@ async fn a_periodic_snapshot_brings_the_files_back_after_a_restart(
 
     assert_eq!(restored, live);
     assert_eq!(agent.applied(&restarted).await?, applied);
-    assert!(store.restore_count() > restores);
+    assert!(store.restored_names().len() > restores);
     Ok(())
 }
 
@@ -592,7 +592,7 @@ async fn a_restart_from_a_snapshot_gives_the_tree_of_a_full_replay(
     let replaying = start_replaying(deps, &context, replay_root.path()).await?;
     let replayed = agent.describe(&replaying).await?;
 
-    assert!(store.restore_count() > 0);
+    assert!(!store.restored_names().is_empty());
     assert_eq!(restored, live);
     assert_eq!(replayed, live);
     Ok(())
@@ -656,7 +656,7 @@ async fn an_injected_upload_failure_falls_back_and_a_later_upload_recovers(
     let recovered = agent.confirmed(&falling_back).await?;
     let recovered_live = agent.describe(&falling_back).await?;
     falling_back.release().await?;
-    let restores = store.restore_count();
+    let restores = store.restored_names().len();
     let recovering =
         start_snapshotting(deps, &context, &store, Duration::from_secs(1), None).await?;
     let after_recovery = agent.describe(&recovering).await?;
@@ -670,7 +670,7 @@ async fn an_injected_upload_failure_falls_back_and_a_later_upload_recovers(
     assert_eq!(after_failure, live);
     assert_ne!(recovered, first);
     assert_eq!(after_recovery, recovered_live);
-    assert!(store.restore_count() > restores);
+    assert!(store.restored_names().len() > restores);
     Ok(())
 }
 
@@ -737,7 +737,7 @@ async fn the_next_start_confirms_the_snapshot_of_an_agent_that_stopped_during_it
     let agent = Agent::start(&executor, &context, initial_file_system, "stopping", &[]).await?;
     let (live, named) = stop_during_an_upload(&executor, &context, &store, &agent).await?;
     let while_stopped = agent.records(&executor).await?;
-    let restores = store.restore_count();
+    let restores = store.restored_names().len();
 
     executor.resume(&agent.worker_id, false).await?;
     let after_start = agent.describe(&executor).await?;
@@ -749,7 +749,7 @@ async fn the_next_start_confirms_the_snapshot_of_an_agent_that_stopped_during_it
     );
     assert!(records.confirmations.contains(&named), "{records:?}");
     assert_eq!(after_start, live);
-    assert!(store.restore_count() > restores);
+    assert!(store.restored_names().len() > restores);
     Ok(())
 }
 
@@ -768,7 +768,7 @@ async fn a_start_on_another_executor_confirms_a_whole_snapshot_and_restores_it(
     let agent = Agent::start(&executor, &context, initial_file_system, "moved", &[]).await?;
     let (live, named) = stop_during_an_upload(&executor, &context, &store, &agent).await?;
     executor.release().await?;
-    let restores = store.restore_count();
+    let restores = store.restored_names().len();
 
     let restarted =
         start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
@@ -778,7 +778,7 @@ async fn a_start_on_another_executor_confirms_a_whole_snapshot_and_restores_it(
 
     assert!(records.confirmations.contains(&named), "{records:?}");
     assert_eq!(after_start, live);
-    assert!(store.restore_count() > restores);
+    assert!(store.restored_names().len() > restores);
     Ok(())
 }
 
@@ -903,7 +903,7 @@ async fn a_crash_during_an_upload_restarts_with_the_tree_of_a_run_without_a_cras
     // The crash: the executor goes away while the upload of the last snapshot is held.
     executor.release().await?;
     drop(held);
-    let restores = store.restore_count();
+    let restores = store.restored_names().len();
 
     let restarted =
         start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
@@ -1378,7 +1378,7 @@ async fn a_start_waits_for_a_running_upload_until_the_limit_and_then_falls_back(
     })
     .await?;
     agent.stop(&executor, &context).await?;
-    let restores = store.restore_count();
+    let restores = store.restored_names().len();
 
     let started = std::time::Instant::now();
     executor.resume(&agent.worker_id, false).await?;
@@ -1390,7 +1390,7 @@ async fn a_start_waits_for_a_running_upload_until_the_limit_and_then_falls_back(
     assert!(waited >= limit, "the start waited {waited:?}");
     assert!(waited < limit * 5, "the start waited {waited:?}");
     assert!(!records.confirmations.contains(&named), "{records:?}");
-    assert_eq!(store.restore_count(), restores);
+    assert_eq!(store.restored_names().len(), restores);
     Ok(())
 }
 
@@ -1486,7 +1486,7 @@ async fn a_newer_and_an_older_record_that_both_fail_to_load_end_in_a_full_replay
     executor
         .return_empty_snapshot_payload(&agent.worker_id, older)
         .await?;
-    let restores = store.restore_count();
+    let restores = store.restored_names().len();
 
     let (_, tree) = agent.restart_and_describe(&executor, &context).await?;
     let applied = agent.applied(&executor).await?;
@@ -1573,7 +1573,7 @@ async fn a_rejected_record_stays_rejected_after_a_restart_and_the_older_record_s
         .return_empty_snapshot_payload(&agent.worker_id, newer)
         .await?;
     agent.stop(&executor, &context).await?;
-    let restores = store.restore_count();
+    let restores = store.restored_names().len();
 
     // The start runs no invocation, so it writes no newer snapshot record.
     executor.resume(&agent.worker_id, false).await?;
@@ -1587,7 +1587,7 @@ async fn a_rejected_record_stays_rejected_after_a_restart_and_the_older_record_s
 
     let restarted =
         start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
-    let restores = store.restore_count();
+    let restores = store.restored_names().len();
     let tree = agent.describe(&restarted).await?;
     let applied = agent.applied(&restarted).await?;
     let second_start = store.restored_names()[restores..].to_vec();
@@ -2221,7 +2221,7 @@ async fn a_newest_record_whose_filesystem_does_not_restore_falls_back_to_the_old
     let (_, newer_name) = agent.apply_and_confirm(&executor, operations[1]).await?;
     store.fail_restores_of(&newer_name);
     agent.stop(&executor, &context).await?;
-    let restores = store.restore_count();
+    let restores = store.restored_names().len();
 
     let tree = agent.describe(&executor).await?;
     let applied = agent.applied(&executor).await?;
@@ -2265,7 +2265,7 @@ async fn a_start_during_an_upload_waits_for_it_and_then_confirms_its_snapshot(
         .snapshot_names(&agent.owned(&context))
         .await
         .contains(&named);
-    let restores = store.restore_count();
+    let restores = store.restored_names().len();
 
     let started = std::time::Instant::now();
     executor.resume(&agent.worker_id, false).await?;
@@ -2525,7 +2525,7 @@ async fn failed_manual_updates_never_delete_the_snapshot_of_the_last_successful_
         })
         .await;
     agent.stop(&executor, &context).await?;
-    let restores = store.restore_count();
+    let restores = store.restored_names().len();
     let current = Agent {
         component: successful,
         agent: agent.agent.clone(),

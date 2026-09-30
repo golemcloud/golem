@@ -2111,35 +2111,11 @@ mod tests {
     /// A store over an in-memory store that gives each save a time ten minutes after the time of
     /// the save before it, so that a retention sees snapshots older than its clock-skew margin,
     /// and that reports each deleted name.
+    #[derive(Default)]
     struct SpacedStore {
         memory: crate::filesystem_snapshot::InMemorySnapshotStore,
-        times: std::sync::Mutex<std::collections::HashMap<String, Timestamp>>,
+        times: crate::filesystem_snapshot::SpacedTimes,
         deleted: watch::Sender<Vec<String>>,
-    }
-
-    impl Default for SpacedStore {
-        fn default() -> Self {
-            Self {
-                memory: crate::filesystem_snapshot::InMemorySnapshotStore::new(),
-                times: std::sync::Mutex::default(),
-                deleted: watch::Sender::default(),
-            }
-        }
-    }
-
-    impl SpacedStore {
-        fn spaced(
-            &self,
-            name: &crate::filesystem_snapshot::SnapshotName,
-            info: crate::filesystem_snapshot::SnapshotInfo,
-        ) -> crate::filesystem_snapshot::SnapshotInfo {
-            let mut times = self.times.lock().unwrap();
-            let count = times.len() as u64;
-            let created_at = *times
-                .entry(name.as_str().to_string())
-                .or_insert_with(|| Timestamp::from(1_800_000_000_000 + count * 10 * 60 * 1000));
-            crate::filesystem_snapshot::SnapshotInfo { created_at, ..info }
-        }
     }
 
     #[async_trait::async_trait]
@@ -2158,7 +2134,7 @@ mod tests {
             crate::filesystem_snapshot::SnapshotStoreError,
         > {
             let info = self.memory.save(agent, name, tree, parent).await?;
-            Ok(self.spaced(name, info))
+            Ok(self.times.timed(name, info))
         }
 
         async fn restore(
@@ -2201,7 +2177,7 @@ mod tests {
                 .list(agent)
                 .await?
                 .iter()
-                .map(|(name, info)| (name.clone(), self.spaced(name, *info)))
+                .map(|(name, info)| (name.clone(), self.times.timed(name, *info)))
                 .collect())
         }
 

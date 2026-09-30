@@ -35,6 +35,8 @@ mod time_zone_tests;
 
 #[allow(unused_imports)]
 pub(crate) use memory::InMemorySnapshotStore;
+#[cfg(test)]
+pub(crate) use memory::SpacedTimes;
 use rustic::RusticSnapshotStore;
 
 /// The filesystem snapshots of one agent.
