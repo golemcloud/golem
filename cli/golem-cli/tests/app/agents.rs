@@ -3046,6 +3046,69 @@ async fn rust_ambient_native_client_executes_through_golem() {
             && !denied.stdout_contains("Evidence { value: \"denied\""),
         "the unauthorized agent must return a tool permission denial without native fixture evidence"
     );
+
+    let generated_path = ctx.cwd_path_join(
+        "golem-temp/bridge-sdk/rust/internal/native-conformance-tool-guest-client/src/lib.rs",
+    );
+    let initial_generated = fs::read_to_string(&generated_path).unwrap();
+    assert!(!initial_generated.contains("fn refreshed"));
+
+    ctx.server_process.take().unwrap().kill().await.unwrap();
+    ctx.startup_ports = None;
+    ctx.add_env_var(
+        golem_native_tool::conformance_fixture::TEST_FIXTURE_ENV,
+        "2",
+    );
+    ctx.start_server().await;
+    fs::write_str(
+        ctx.cwd_path_join("consumer/src/counter_agent.rs"),
+        indoc! {r#"
+            use golem_rust::{agent_definition, agent_implementation};
+            use native_conformance_tool_guest_client::NativeConformanceClient;
+
+            #[agent_definition]
+            pub trait NativeConsumer {
+                fn new(name: String) -> Self;
+                async fn refreshed(&self) -> u64;
+            }
+
+            struct NativeConsumerImpl;
+
+            #[agent_implementation]
+            impl NativeConsumer for NativeConsumerImpl {
+                fn new(_name: String) -> Self { Self }
+
+                async fn refreshed(&self) -> u64 {
+                    NativeConformanceClient::new()
+                        .refreshed()
+                        .await
+                        .expect("refreshed native contract")
+                }
+            }
+        "#},
+    )
+    .unwrap();
+    let refreshed_build = ctx
+        .cli([flag::YES, cmd::BUILD, "native-client:consumer"])
+        .await;
+    assert!(refreshed_build.success_or_dump());
+    let refreshed_generated = fs::read_to_string(&generated_path).unwrap();
+    assert!(refreshed_generated.contains("fn refreshed"));
+    assert_ne!(initial_generated, refreshed_generated);
+
+    let refreshed_deploy = ctx.cli([flag::YES, cmd::DEPLOY]).await;
+    assert!(refreshed_deploy.success_or_dump());
+    let refreshed_invoke = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            "NativeConsumer(\"refresh\")",
+            "refreshed",
+        ])
+        .await;
+    assert!(refreshed_invoke.success_or_dump());
+    assert!(refreshed_invoke.stdout_contains("2"));
 }
 
 /// Deploys a single component whose discovered metadata contains both an agent

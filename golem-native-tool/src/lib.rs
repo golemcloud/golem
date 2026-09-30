@@ -221,6 +221,7 @@ pub mod conformance_fixture {
     pub const TOOL_NAME: &str = "native-conformance";
     pub const HOST_TOOL_ID: &str = "native-conformance-fixture";
     pub const IMPLEMENTATION_VERSION: &str = "1.0.0";
+    pub const REFRESHED_IMPLEMENTATION_VERSION: &str = "2.0.0";
 
     #[derive(Debug, Clone, IntoSchema)]
     pub struct Evidence {
@@ -311,17 +312,44 @@ pub mod conformance_fixture {
         }
     }
 
+    #[tool_definition(version = "2.0.0")]
+    trait NativeConformanceRefreshed {
+        fn refreshed(&self, context: &mut ()) -> u64;
+    }
+
+    struct NativeConformanceRefreshedImpl;
+
+    #[tool_implementation]
+    impl NativeConformanceRefreshed for NativeConformanceRefreshedImpl {
+        fn refreshed(&self, _context: &mut ()) -> u64 {
+            2
+        }
+    }
+
     pub struct ConformanceNativeTool;
 
     pub fn enabled() -> bool {
         std::env::var_os(TEST_FIXTURE_ENV).is_some()
     }
 
+    fn refreshed() -> bool {
+        std::env::var(TEST_FIXTURE_ENV).is_ok_and(|value| value == "2")
+    }
+
     pub fn definition() -> NativeToolDefinition {
-        NativeConformanceImpl
-            .native_tool_invoker()
-            .definition(HOST_TOOL_ID, IMPLEMENTATION_VERSION)
-            .expect("native conformance fixture definition is valid")
+        if refreshed() {
+            let mut tool = NativeConformanceRefreshedImpl
+                .native_tool_invoker()
+                .metadata();
+            tool.commands.nodes[0].name = TOOL_NAME.to_string();
+            NativeToolDefinition::new(HOST_TOOL_ID, REFRESHED_IMPLEMENTATION_VERSION, tool)
+                .expect("refreshed native conformance fixture definition is valid")
+        } else {
+            NativeConformanceImpl
+                .native_tool_invoker()
+                .definition(HOST_TOOL_ID, IMPLEMENTATION_VERSION)
+                .expect("native conformance fixture definition is valid")
+        }
     }
 
     impl<Ctx> NativeToolInvoker<Ctx, anyhow::Error> for ConformanceNativeTool
@@ -329,7 +357,7 @@ pub mod conformance_fixture {
         Ctx: Send + 'static,
     {
         fn metadata(&self) -> Tool {
-            NativeConformanceImpl.native_tool_invoker().metadata()
+            definition().tool
         }
 
         fn invoke<'a>(
@@ -339,10 +367,17 @@ pub mod conformance_fixture {
         ) -> NativeToolFuture<'a, anyhow::Error> {
             Box::pin(async move {
                 let mut context = ();
-                NativeConformanceImpl
-                    .native_tool_invoker()
-                    .invoke(&mut context, invocation)
-                    .await
+                if refreshed() {
+                    NativeConformanceRefreshedImpl
+                        .native_tool_invoker()
+                        .invoke(&mut context, invocation)
+                        .await
+                } else {
+                    NativeConformanceImpl
+                        .native_tool_invoker()
+                        .invoke(&mut context, invocation)
+                        .await
+                }
             })
         }
     }
