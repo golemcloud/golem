@@ -902,10 +902,9 @@ impl OwnerCommitController {
 
 /// Whether the last automatic snapshot record of `status` has `name` and its confirmation.
 fn confirmed_with_name(status: &AgentStatusRecord, name: &FilesystemSnapshotName) -> bool {
-    status
-        .last_automatic_snapshot
-        .as_ref()
-        .is_some_and(|last| last.confirmed && last.filesystem_snapshot.as_ref() == Some(name))
+    status.last_automatic_snapshot.as_ref().is_some_and(|last| {
+        last.files == golem_common::model::SnapshotFiles::Confirmed(name.clone())
+    })
 }
 
 /// Decides a confirmation job before its append, after its first commit. Gives the reply of a job
@@ -924,7 +923,7 @@ fn confirmation_before_append(
     } else if status
         .last_automatic_snapshot
         .as_ref()
-        .and_then(|last| last.filesystem_snapshot.as_ref())
+        .and_then(|last| last.files.name())
         != Some(name)
     {
         Some(ConfirmOutcome::Superseded)
@@ -1547,8 +1546,12 @@ mod tests {
                 index: OplogIndex::from_u64(10),
                 timestamp: golem_common::model::Timestamp::from(1_000),
                 component_revision: golem_common::model::component::ComponentRevision::INITIAL,
-                filesystem_snapshot: name.cloned(),
-                confirmed,
+                files: match (name, confirmed) {
+                    (Some(name), true) => {
+                        golem_common::model::SnapshotFiles::Confirmed(name.clone())
+                    }
+                    (name, _) => golem_common::model::SnapshotFiles::named(name.cloned()),
+                },
             }),
             ..AgentStatusRecord::default()
         }

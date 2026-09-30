@@ -12690,8 +12690,7 @@ mod tests {
                 index: snapshot_index,
                 timestamp: Timestamp::from(1_000),
                 component_revision: active_revision,
-                filesystem_snapshot: None,
-                confirmed: false,
+                files: golem_common::model::SnapshotFiles::Unnamed,
             }),
             ..Default::default()
         };

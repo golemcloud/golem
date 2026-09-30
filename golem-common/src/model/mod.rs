@@ -1334,8 +1334,8 @@ impl Default for InvocationResultMembership {
     }
 }
 
-/// The newest automatic snapshot entry in the oplog, with whether a `SnapshotConfirmed` entry
-/// confirmed its filesystem snapshot.
+/// The newest automatic snapshot entry in the oplog, with the filesystem snapshot that it names
+/// and the confirmation of that snapshot.
 #[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
 #[desert(evolution())]
 pub struct AutomaticSnapshot {
@@ -1345,22 +1345,64 @@ pub struct AutomaticSnapshot {
     pub timestamp: Timestamp,
     /// The component revision that made the entry.
     pub component_revision: ComponentRevision,
-    /// The filesystem snapshot name of the entry. `None` when the entry has no filesystem
-    /// capture.
-    pub filesystem_snapshot: Option<FilesystemSnapshotName>,
-    /// True when a `SnapshotConfirmed` entry with the same name follows the entry. The filesystem
-    /// snapshot is a usable baseline only when this is true.
-    pub confirmed: bool,
+    /// The filesystem snapshot that the entry names, with its confirmation.
+    pub files: SnapshotFiles,
+}
+
+/// The filesystem snapshot that an automatic snapshot entry names, with its confirmation. Only a
+/// named snapshot can be confirmed.
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
+pub enum SnapshotFiles {
+    /// The entry names no filesystem snapshot: it has no filesystem capture.
+    Unnamed,
+    /// The entry names this filesystem snapshot, and no `SnapshotConfirmed` entry confirmed it.
+    Unconfirmed(FilesystemSnapshotName),
+    /// A `SnapshotConfirmed` entry with the same name follows the entry.
+    Confirmed(FilesystemSnapshotName),
+}
+
+impl SnapshotFiles {
+    /// The files of a new entry that names `name`, before any confirmation.
+    pub fn named(name: Option<FilesystemSnapshotName>) -> Self {
+        name.map_or(Self::Unnamed, Self::Unconfirmed)
+    }
+
+    /// The name of the filesystem snapshot, when the entry names one.
+    pub fn name(&self) -> Option<&FilesystemSnapshotName> {
+        match self {
+            Self::Unnamed => None,
+            Self::Unconfirmed(name) | Self::Confirmed(name) => Some(name),
+        }
+    }
+
+    /// Whether a `SnapshotConfirmed` entry confirmed the named filesystem snapshot.
+    pub fn is_confirmed(&self) -> bool {
+        matches!(self, Self::Confirmed(_))
+    }
+
+    /// Confirms the named filesystem snapshot when its name is `name`.
+    pub fn confirm(&mut self, name: &FilesystemSnapshotName) {
+        if let Self::Unconfirmed(own) = self
+            && own == name
+        {
+            *self = Self::Confirmed(own.clone());
+        }
+    }
 }
 
 impl AutomaticSnapshot {
     /// The entry as a baseline of a start, when it is usable: its filesystem snapshot is
-    /// confirmed, or it has no filesystem snapshot name.
+    /// confirmed, or it names none.
     pub fn usable(&self) -> Option<UsableAutomaticSnapshot> {
-        (self.confirmed || self.filesystem_snapshot.is_none()).then(|| UsableAutomaticSnapshot {
+        let filesystem_snapshot = match &self.files {
+            SnapshotFiles::Unnamed => None,
+            SnapshotFiles::Confirmed(name) => Some(name.clone()),
+            SnapshotFiles::Unconfirmed(_) => return None,
+        };
+        Some(UsableAutomaticSnapshot {
             index: self.index,
             component_revision: self.component_revision,
-            filesystem_snapshot: self.filesystem_snapshot.clone(),
+            filesystem_snapshot,
         })
     }
 }
@@ -1424,8 +1466,10 @@ pub struct AgentStatusRecord {
     /// on this payload before starting replay.
     pub last_manual_update_snapshot_index: Option<OplogIndex>,
     /// The last automatic snapshot entry. Its index is after `last_manual_update_snapshot_index`.
-    /// The agent calls load_snapshot on its payload before it starts the replay. If the
-    /// load_snapshot fails, the start ignores it and replays from the last manual update snapshot.
+    /// A start that selects it calls load_snapshot on its payload before it starts the replay. If
+    /// the load_snapshot fails, the start rejects this entry and tries
+    /// `previous_usable_automatic_snapshot`, then the last manual update snapshot, then a full
+    /// replay.
     pub last_automatic_snapshot: Option<AutomaticSnapshot>,
     /// The newest automatic snapshot entry before the last one that was usable when the last one
     /// came: an entry with a confirmed filesystem snapshot, or an entry without a filesystem

@@ -24,7 +24,7 @@
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::oplog::{FilesystemSnapshotName, OplogIndex};
 use golem_common::model::{
-    AgentStatusRecord, AutomaticSnapshot, PendingUpdateKind, UsableAutomaticSnapshot,
+    AgentStatusRecord, AutomaticSnapshot, PendingUpdateKind, SnapshotFiles, UsableAutomaticSnapshot,
 };
 use std::collections::HashSet;
 
@@ -138,8 +138,6 @@ struct AutomaticSnapshotFilter<'a> {
     filesystem_snapshots_enabled: bool,
 }
 
-/// Whether an automatic snapshot entry with the filesystem snapshot `filesystem_snapshot` can be
-/// a baseline: a `SnapshotConfirmed` entry confirms its filesystem snapshot, or it has none.
 /// Gives the automatic snapshot entry that a start uses as its baseline, or `None` when the start
 /// uses the manual-update baseline or a full replay.
 fn select_automatic_snapshot(
@@ -173,9 +171,11 @@ fn start_candidate(
     status
         .last_automatic_snapshot
         .as_ref()
-        .filter(|last| !last.confirmed)
+        .and_then(|last| match &last.files {
+            SnapshotFiles::Unconfirmed(name) => Some(name.clone()),
+            SnapshotFiles::Unnamed | SnapshotFiles::Confirmed(_) => None,
+        })
         .filter(|_| selects_the_last_record_once_confirmed(status, filter))
-        .and_then(|last| last.filesystem_snapshot.clone())
 }
 
 /// Whether a start would select the last automatic snapshot record if a confirmation record
@@ -190,7 +190,7 @@ fn selects_the_last_record_once_confirmed(
             filter,
             last.index,
             last.component_revision,
-            last.filesystem_snapshot.is_some(),
+            last.files.name().is_some(),
         )
     })
 }
@@ -260,8 +260,10 @@ mod tests {
                 index: OplogIndex::from_u64(10),
                 timestamp: Timestamp::from(1_000),
                 component_revision: revision(2),
-                filesystem_snapshot: last,
-                confirmed,
+                files: match (last, confirmed) {
+                    (Some(name), true) => SnapshotFiles::Confirmed(name),
+                    (last, _) => SnapshotFiles::named(last),
+                },
             }),
             previous_usable_automatic_snapshot: previous.map(|filesystem_snapshot| {
                 UsableAutomaticSnapshot {

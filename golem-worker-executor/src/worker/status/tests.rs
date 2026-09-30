@@ -52,7 +52,7 @@ use golem_common::model::{
     AgentMetadata, AgentStatus, AgentStatusRecord, AutomaticSnapshot, FailedUpdateRecord,
     IdempotencyKey, OplogProcessorCheckpointState, OwnedAgentId, PendingInvocationRef,
     PendingUpdateKind, PendingUpdateRef, ReceivedCardTransferState, RetryConfig, RetryPolicyState,
-    ScanCursor, SuccessfulUpdateRecord, Timestamp, UsableAutomaticSnapshot,
+    ScanCursor, SnapshotFiles, SuccessfulUpdateRecord, Timestamp, UsableAutomaticSnapshot,
 };
 use golem_common::read_only_lock;
 use golem_common::schema::IntoTypedSchemaValue;
@@ -2211,14 +2211,14 @@ async fn snapshot_confirmed_with_same_name_sets_flag() {
         final_status
             .last_automatic_snapshot
             .as_ref()
-            .and_then(|last| last.filesystem_snapshot.clone()),
+            .and_then(|last| last.files.name().cloned()),
         Some(name)
     );
     assert!(
         final_status
             .last_automatic_snapshot
             .as_ref()
-            .is_some_and(|last| last.confirmed)
+            .is_some_and(|last| last.files.is_confirmed())
     );
     run_test_case(test_case).await;
 }
@@ -2250,14 +2250,14 @@ async fn snapshot_confirmed_after_successful_update_is_ignored() {
         final_status
             .last_automatic_snapshot
             .as_ref()
-            .and_then(|last| last.filesystem_snapshot.clone()),
+            .and_then(|last| last.files.name().cloned()),
         None
     );
     assert!(
         !final_status
             .last_automatic_snapshot
             .as_ref()
-            .is_some_and(|last| last.confirmed)
+            .is_some_and(|last| last.files.is_confirmed())
     );
     run_test_case(test_case).await;
 }
@@ -2287,14 +2287,14 @@ async fn snapshot_confirmed_after_reverted_snapshot_is_ignored() {
         final_status
             .last_automatic_snapshot
             .as_ref()
-            .and_then(|last| last.filesystem_snapshot.clone()),
+            .and_then(|last| last.files.name().cloned()),
         None
     );
     assert!(
         !final_status
             .last_automatic_snapshot
             .as_ref()
-            .is_some_and(|last| last.confirmed)
+            .is_some_and(|last| last.files.is_confirmed())
     );
     run_test_case(test_case).await;
 }
@@ -2323,14 +2323,14 @@ async fn snapshot_confirmed_matches_only_the_newest_snapshot() {
         final_status
             .last_automatic_snapshot
             .as_ref()
-            .and_then(|last| last.filesystem_snapshot.clone()),
+            .and_then(|last| last.files.name().cloned()),
         Some(second)
     );
     assert!(
         final_status
             .last_automatic_snapshot
             .as_ref()
-            .is_some_and(|last| last.confirmed)
+            .is_some_and(|last| last.files.is_confirmed())
     );
     run_test_case(test_case).await;
 }
@@ -2358,14 +2358,14 @@ async fn snapshot_after_confirmed_snapshot_starts_an_unconfirmed_candidate() {
         final_status
             .last_automatic_snapshot
             .as_ref()
-            .and_then(|last| last.filesystem_snapshot.clone()),
+            .and_then(|last| last.files.name().cloned()),
         Some(second)
     );
     assert!(
         !final_status
             .last_automatic_snapshot
             .as_ref()
-            .is_some_and(|last| last.confirmed)
+            .is_some_and(|last| last.files.is_confirmed())
     );
     run_test_case(test_case).await;
 }
@@ -2393,14 +2393,14 @@ async fn snapshot_confirmed_for_unknown_name_is_ignored() {
         final_status
             .last_automatic_snapshot
             .as_ref()
-            .and_then(|last| last.filesystem_snapshot.clone()),
+            .and_then(|last| last.files.name().cloned()),
         None
     );
     assert!(
         !final_status
             .last_automatic_snapshot
             .as_ref()
-            .is_some_and(|last| last.confirmed)
+            .is_some_and(|last| last.files.is_confirmed())
     );
     run_test_case(test_case).await;
 }
@@ -2502,7 +2502,7 @@ async fn a_record_that_reuses_a_confirmed_name_is_confirmed_and_keeps_the_older_
         final_status
             .last_automatic_snapshot
             .as_ref()
-            .is_some_and(|last| last.confirmed)
+            .is_some_and(|last| last.files.is_confirmed())
     );
     assert_eq!(
         final_status
@@ -2583,7 +2583,7 @@ async fn a_revert_of_the_newer_records_restores_the_previous_usable_snapshot() {
         final_status
             .last_automatic_snapshot
             .as_ref()
-            .is_some_and(|last| last.confirmed)
+            .is_some_and(|last| last.files.is_confirmed())
     );
     assert_eq!(final_status.previous_usable_automatic_snapshot, None);
     run_test_case(test_case).await;
@@ -3037,21 +3037,20 @@ impl TestCaseBuilder {
             move |mut status| {
                 if let Some(last) = &status.last_automatic_snapshot
                     && (filesystem_snapshot.is_none()
-                        || filesystem_snapshot != last.filesystem_snapshot)
-                    && (last.confirmed || last.filesystem_snapshot.is_none())
+                        || filesystem_snapshot.as_ref() != last.files.name())
+                    && (last.files.is_confirmed() || last.files.name().is_none())
                 {
                     status.previous_usable_automatic_snapshot = Some(UsableAutomaticSnapshot {
                         index: last.index,
                         component_revision: last.component_revision,
-                        filesystem_snapshot: last.filesystem_snapshot.clone(),
+                        filesystem_snapshot: last.files.name().cloned(),
                     });
                 }
                 status.last_automatic_snapshot = Some(AutomaticSnapshot {
                     index: oplog_idx,
                     timestamp,
                     component_revision: status.component_revision,
-                    filesystem_snapshot: filesystem_snapshot.clone(),
-                    confirmed: false,
+                    files: SnapshotFiles::named(filesystem_snapshot.clone()),
                 });
                 status
             },
@@ -3064,10 +3063,10 @@ impl TestCaseBuilder {
         expect_confirmed: bool,
     ) -> Self {
         self.add(
-            OplogEntry::snapshot_confirmed(filesystem_snapshot).rounded(),
+            OplogEntry::snapshot_confirmed(filesystem_snapshot.clone()).rounded(),
             move |mut status| {
                 if expect_confirmed && let Some(last) = status.last_automatic_snapshot.as_mut() {
-                    last.confirmed = true;
+                    last.files.confirm(&filesystem_snapshot);
                 }
                 status
             },

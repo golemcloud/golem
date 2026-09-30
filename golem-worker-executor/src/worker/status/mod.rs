@@ -16,8 +16,8 @@ use golem_common::model::{
     DurableStreamSessionIndex, ExportForkAdmissions, FailedUpdateRecord, IdempotencyKey,
     InvocationResultMembership, OplogProcessorCheckpointState, OwnedAgentId, PendingCardEventRef,
     PendingInvocationRef, PendingUpdateKind, PendingUpdateRef, ReceivedCardTransferIndex,
-    ReceivedCardTransferState, RetryConfig, RetryPolicyState, SuccessfulUpdateRecord,
-    UsableAutomaticSnapshot,
+    ReceivedCardTransferState, RetryConfig, RetryPolicyState, SnapshotFiles,
+    SuccessfulUpdateRecord, UsableAutomaticSnapshot,
 };
 use golem_common::serialization::{deserialize, try_deserialize};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -1610,7 +1610,7 @@ fn calculate_update_fields(
                     .take()
                     .filter(|last| {
                         filesystem_snapshot.is_none()
-                            || last.filesystem_snapshot != *filesystem_snapshot
+                            || last.files.name() != filesystem_snapshot.as_ref()
                     })
                     .and_then(|last| last.usable())
                 {
@@ -1620,19 +1620,15 @@ fn calculate_update_fields(
                     index: *oplog_idx,
                     timestamp: *timestamp,
                     component_revision: revision,
-                    filesystem_snapshot: filesystem_snapshot.clone(),
-                    confirmed: false,
+                    files: SnapshotFiles::named(filesystem_snapshot.clone()),
                 });
             }
             OplogEntry::SnapshotConfirmed {
                 filesystem_snapshot,
                 ..
             } => {
-                if let Some(last) = last_automatic_snapshot
-                    .as_mut()
-                    .filter(|last| last.filesystem_snapshot.as_ref() == Some(filesystem_snapshot))
-                {
-                    last.confirmed = true;
+                if let Some(last) = last_automatic_snapshot.as_mut() {
+                    last.files.confirm(filesystem_snapshot);
                 }
             }
             _ => {}
