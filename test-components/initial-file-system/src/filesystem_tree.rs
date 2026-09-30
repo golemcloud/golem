@@ -128,21 +128,17 @@ pub trait SnapshotTree {
 }
 
 struct SnapshotTreeImpl {
-    _name: String,
     applied: u32,
 }
 
 #[agent_implementation]
 impl SnapshotTree for SnapshotTreeImpl {
-    fn new(name: String) -> Self {
+    fn new(_name: String) -> Self {
         // The guest reads its environment once, at its first access. The constructor makes that
         // access, so the first snapshot comes after it, and a start from that snapshot replays
         // the same host calls that the live run made.
         let _ = std::env::vars().count();
-        Self {
-            _name: name,
-            applied: 0,
-        }
+        Self { applied: 0 }
     }
 
     fn apply(&mut self, operation: String, path: String, argument: String) -> String {
@@ -172,12 +168,9 @@ impl SnapshotTree for SnapshotTreeImpl {
         let golem_rust::SchemaValue::Record { fields } = context.parameters else {
             return Err("Invalid snapshot restore parameters".to_string());
         };
-        let [golem_rust::SchemaValue::String(name)] = fields.as_slice() else {
+        let [golem_rust::SchemaValue::String(_)] = fields.as_slice() else {
             return Err("Invalid snapshot restore parameters".to_string());
         };
-        Ok(Self {
-            _name: name.clone(),
-            applied,
-        })
+        Ok(Self { applied })
     }
 }
