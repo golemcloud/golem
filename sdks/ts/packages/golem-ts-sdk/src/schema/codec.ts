@@ -149,6 +149,7 @@ export type ConcreteCodecMetadata =
       readonly tag: 'multimodal';
       readonly cases: ReadonlyArray<{ name: string; codec: SchemaCodec }>;
     }
+  | { readonly tag: 'plain-text' }
   | { readonly tag: 'unstructured-text' | 'unstructured-binary' }
   | { readonly tag: 'principal' };
 

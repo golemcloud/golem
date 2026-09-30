@@ -62,6 +62,7 @@ import {
 import { PERMISSION_CARD_INTERNAL } from '../internal/schema-model/permissionCardInternal';
 import type {
   BinaryRestrictions,
+  TextRestrictions,
   PathDirection,
   PathKind,
   QuantitySpec,
@@ -595,6 +596,37 @@ function binaryMarker(options: BinaryRestrictions = {}): MarkerSchema<Uint8Array
       graph: { defs: new Map(), root: schemaType({ tag: 'binary', restrictions }) },
       toValue: (value) => ({ tag: 'binary', bytes: value as Uint8Array }),
       fromValue: (value) => (value as Extract<SchemaValue, { tag: 'binary' }>).bytes,
+    }),
+  );
+}
+
+function textMarker(options: TextRestrictions = {}): MarkerSchema<string> {
+  const restrictions: TextRestrictions = {
+    languages: options.languages ? [...options.languages] : undefined,
+    minLength: options.minLength,
+    maxLength: options.maxLength,
+    regex: options.regex,
+  };
+  return marker(
+    (value) => {
+      if (typeof value !== 'string') return fail('Expected a string for WIT text');
+      const length = [...value].length;
+      if (restrictions.minLength !== undefined && length < restrictions.minLength) {
+        return fail(`Text value has fewer than ${restrictions.minLength} characters`);
+      }
+      if (restrictions.maxLength !== undefined && length > restrictions.maxLength) {
+        return fail(`Text value has more than ${restrictions.maxLength} characters`);
+      }
+      if (restrictions.regex !== undefined && !new RegExp(restrictions.regex, 'u').test(value)) {
+        return fail('Text value does not match the required pattern');
+      }
+      return ok(value);
+    },
+    () => ({
+      graph: { defs: new Map(), root: schemaType({ tag: 'text', restrictions }) },
+      concrete: { tag: 'plain-text' },
+      toValue: (value) => v.text(value as string),
+      fromValue: (value) => (value as Extract<SchemaValue, { tag: 'text' }>).text,
     }),
   );
 }
@@ -1242,6 +1274,7 @@ export const s = {
   datetime: () => datetimeMarker(),
   duration: () => durationMarker(),
   url: () => urlMarker(),
+  text: (opts?: TextRestrictions) => textMarker(opts),
   bytes: () => typedArrayMarker({ ctor: Uint8Array, elemType: t.u8, elemValue: v.u8 }),
   binary: (opts?: BinaryRestrictions) => binaryMarker(opts),
 

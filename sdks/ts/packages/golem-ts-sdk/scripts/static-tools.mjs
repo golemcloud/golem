@@ -412,8 +412,13 @@ export function staticTools(config, runtime) {
       write = `if(typeof v!=="string")throw new TypeError("invalid ${body.tag}");return w.add({tag:${literal(tag)},val:v});`;
       read = `if(typeof n.val!=="string")throw new TypeError("invalid ${body.tag}");return n.val;`;
     } else if (body.tag === 'text') {
-      write = `if(!v||typeof v.text!=="string")throw new TypeError("invalid text");return w.add({tag:"text-value",val:v});`;
-      read = `if(!n.val||typeof n.val.text!=="string")throw new TypeError("invalid text");return n.val;`;
+      const plain = codec.concrete?.tag === 'plain-text';
+      write = plain
+        ? 'if(typeof v!=="string")throw new TypeError("invalid text");return w.add({tag:"text-value",val:{text:v}});'
+        : 'if(!v||typeof v.text!=="string")throw new TypeError("invalid text");return w.add({tag:"text-value",val:v});';
+      read = plain
+        ? 'if(!n.val||typeof n.val.text!=="string")throw new TypeError("invalid text");return n.val.text;'
+        : 'if(!n.val||typeof n.val.text!=="string")throw new TypeError("invalid text");return n.val;';
     } else if (body.tag === 'binary') {
       write = `if(!v||!(v.bytes instanceof Uint8Array))throw new TypeError("invalid binary");return w.add({tag:"binary-value",val:v});`;
       read = `if(!n.val||!(n.val.bytes instanceof Uint8Array))throw new TypeError("invalid binary");return n.val;`;

@@ -434,7 +434,12 @@ describe('static component exports', () => {
     expect(schemaTag(render.body.result.type)).toBe('record-type');
     const resultFields = metadata.schema.typeNodes[render.body.result.type].body.val;
     const digest = resultFields.find(({ name }) => name === 'digest');
-    expect(metadata.schema.typeNodes[digest.body].body.tag).toBe('string-type');
+    expect(metadata.schema.typeNodes[digest.body].body).toEqual({
+      tag: 'text-type',
+      val: expectedMetadata.schemaDefinitions.ArtifactReport.fields.find(
+        ({ name }) => name === 'digest',
+      ).type.restrictions,
+    });
     expect(statusNode.body.positionals.fixed[0].name).toBe('artifact-id');
     expect(schemaTag(statusNode.body.positionals.fixed[0].type)).toBe('u64-type');
     expect(metadata.schema.typeNodes[statusNode.body.result.type].body).toEqual({

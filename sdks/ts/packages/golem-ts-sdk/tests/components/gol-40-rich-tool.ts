@@ -19,7 +19,7 @@ const ArtifactRequest = z.object({
 });
 const ArtifactReport = z.object({
   artifactId: s.u64(),
-  digest: z.string(),
+  digest: s.text({ minLength: 8, maxLength: 64, regex: '^[a-f0-9]+$' }),
   labels: KeyValue(z.string()),
   warnings: z.array(z.string()),
 });
