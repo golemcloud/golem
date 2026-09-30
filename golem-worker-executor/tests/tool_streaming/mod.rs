@@ -11693,6 +11693,7 @@ async fn builtin_web_fetch_has_expected_behavior_and_replays_after_restart(
     }
     assert_eq!(interrupted_requests.load(Ordering::SeqCst), 1);
 
+    executor.shutdown_and_wait_for_invocation_loops().await?;
     drop(executor);
     let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
     let replay_probe: String = executor
@@ -11737,6 +11738,7 @@ async fn builtin_web_fetch_has_expected_behavior_and_replays_after_restart(
     let target_requests_before_restart = target_requests.load(Ordering::SeqCst);
     assert_eq!(target_requests_before_restart, 2);
 
+    executor.shutdown_and_wait_for_invocation_loops().await?;
     drop(executor);
     let executor = start_with_overrides(deps, &context, overrides).await?;
     let replay_probe: String = executor
