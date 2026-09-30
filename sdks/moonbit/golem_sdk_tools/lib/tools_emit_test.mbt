@@ -1673,3 +1673,101 @@ test "wire client orders inherited globals before leaf globals and fields" {
   assert_false(run.contains("command_index_by_path"))
   assert_false(run.contains("build_canonical_input"))
 }
+
+///|
+test "GOL-40 artifact fixture preserves rich metadata and client call shape" {
+  let package_info = @lib.PackageInfo::{
+    rel_path: "gol40-conformance",
+    dir: "test-data/gol40-conformance",
+  }
+  let tools = @lib.parse_tools(@lib.scan_package(package_info).files) catch {
+    error => fail("GOL-40 fixture did not parse: " + repr(error))
+  }
+  assert_eq(tools.length(), 2)
+  let artifact = canonical_tool(tools, "artifact")
+  assert_eq(artifact.version, Some("1.0.0"))
+  assert_eq(
+    artifact.description,
+    "Build and inspect artifacts.\n A deliberately asymmetric conformance tool.",
+  )
+  assert_eq(artifact.examples, [
+    {
+      title: Some("Render"),
+      body: "artifact --region eu-west-1 render src/main.wasm --format json",
+    },
+  ])
+  let mount = canonical_command(artifact, "render")
+  assert_eq(mount.aliases, ["build"])
+  assert_eq(mount.subtree, Some("ArtifactRender"))
+  assert_eq(mount.params.map(param => param.0), ["region", "trace"])
+  let render_tool = canonical_tool(tools, "artifact-render")
+  let render = canonical_command(render_tool, "render")
+  assert_eq(render.aliases, ["build"])
+  assert_eq(render.idempotent, Some(true))
+  assert_eq(render.destructive, Some(false))
+  assert_eq(render.read_only, Some(false))
+  assert_eq(render.open_world, Some(false))
+  assert_eq(render.params.map(param => param.0), [
+    "profile", "request", "inputs", "format", "tag", "define", "color", "checksum",
+    "verbose", "stdin", "stdout", "stderr", "principal",
+  ])
+  assert_true(render.params.any(param => param.1 is @lib.Hidden(InputStream)))
+  assert_true(render.params.any(param => param.1 is @lib.Hidden(OutputStream)))
+  assert_true(render.params.any(param => param.1 is @lib.Hidden(ErrorStream)))
+  assert_true(render.params.any(param => param.1 is @lib.Hidden(Principal)))
+  assert_eq(render.constraints.map(constraint => constraint.kind), [
+    "requires_all", "implies", "forbids",
+  ])
+  assert_eq(render.result.unwrap().formatters, ["json", "table"])
+  assert_eq(render.result.unwrap().defaults, ["json"])
+  assert_eq(
+    render.errors.map(error => (error.name, error.kind, error.exit_code)),
+    [
+      ("InvalidRequest", "usage-error", Some("2")),
+      ("RenderFailed", "runtime-error", Some("70")),
+    ],
+  )
+  let status = canonical_command(render_tool, "status")
+  assert_eq(status.aliases, ["show"])
+  assert_eq(status.read_only, Some(true))
+  assert_eq(status.idempotent, Some(true))
+  assert_eq(status.args[0].source_param, "artifactId")
+  assert_eq(status.args[0].name, Some("artifact-id"))
+  let registration = @formatter.impls_to_string(
+    @lib.generate_tool_registration(tools) catch {
+      error => fail("GOL-40 provider generation failed: " + repr(error))
+    },
+  )
+  assert_true(registration.contains("name: \"artifact\""))
+  assert_true(registration.contains("name: \"render\""))
+  assert_true(registration.contains("name: \"status\""))
+  assert_true(registration.contains("@toolCommon.Constraint::RequiresAll"))
+  assert_true(registration.contains("@toolCommon.Constraint::Implies"))
+  assert_true(registration.contains("@toolCommon.Constraint::Forbids"))
+  assert_true(registration.contains("stdout: Some("))
+  assert_true(registration.contains("stderr: Some("))
+  assert_true(registration.contains("principal : @tool.Principal"))
+  let clients = @formatter.impls_to_string(
+    @lib.generate_tool_client_code(tools) catch {
+      error => fail("GOL-40 client generation failed: " + repr(error))
+    },
+  )
+  assert_true(clients.contains("pub(all) struct ArtifactRenderClient"))
+  assert_true(clients.contains("ArtifactClient::new()"))
+  assert_true(clients.contains("ArtifactClient::new_for"))
+  assert_true(clients.contains("ArtifactClient::render"))
+  assert_true(clients.contains("ArtifactRenderClient::render"))
+  assert_true(clients.contains("ArtifactRenderClient::status"))
+  let mount_client = clients.split("ArtifactClient::render").last().unwrap()
+  assert_true(mount_client.contains("region : String"))
+  assert_true(mount_client.contains("trace : Bool"))
+  let render_client = clients
+    .split("ArtifactRenderClient::render")
+    .last()
+    .unwrap()
+  let profile = render_client.find("__golem_values.push(profile)").unwrap()
+  let request = render_client.find("__golem_values.push(request)").unwrap()
+  assert_true(profile < request)
+  assert_true(render_client.contains("ArtifactReport"))
+  assert_true(render_client.contains("ArtifactError"))
+}
