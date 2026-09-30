@@ -911,6 +911,8 @@ async fn a_crash_during_an_upload_restarts_with_the_tree_of_a_run_without_a_cras
     let restored = store.restored_names()[restores..].to_vec();
     let records = agent.records(&restarted).await?;
 
+    let shape = invocation_shape(&restarted.stored_oplog(&agent.worker_id).await);
+
     assert_eq!(newest.as_ref(), Some(&blocked));
     assert!(
         !records.confirmations.contains(&blocked),
@@ -918,7 +920,82 @@ async fn a_crash_during_an_upload_restarts_with_the_tree_of_a_run_without_a_cras
     );
     assert_eq!(restored, [confirmed]);
     assert_eq!(tree, expected);
+    assert_eq!(
+        shape,
+        InvocationShape {
+            not_finished_once: Vec::new(),
+            starts_without_terminal: Vec::new(),
+            applied: operations.len(),
+        }
+    );
     Ok(())
+}
+
+/// The shape of the invocation entries of an oplog after a restart.
+#[derive(Debug, PartialEq, Eq)]
+struct InvocationShape {
+    /// Each idempotency key whose invocation has no `AgentInvocationFinished`, or more than one.
+    not_finished_once: Vec<String>,
+    /// The index of each durable-call `Start` without an `End` or a `Cancelled`.
+    starts_without_terminal: Vec<u64>,
+    /// The number of finished `apply` invocations.
+    applied: usize,
+}
+
+/// Reads the shape of the invocation entries of `oplog`, whose first entry is at index 1. An
+/// `AgentInvocationFinished` belongs to the `AgentInvocationStarted` before it.
+fn invocation_shape(oplog: &[OplogEntry]) -> InvocationShape {
+    let (finished, _) = oplog.iter().fold(
+        (std::collections::BTreeMap::<String, usize>::new(), None),
+        |(mut finished, current), entry| match entry {
+            OplogEntry::AgentInvocationStarted {
+                idempotency_key, ..
+            } => {
+                let key = idempotency_key.to_string();
+                finished.entry(key.clone()).or_insert(0);
+                (finished, Some(key))
+            }
+            OplogEntry::AgentInvocationFinished { .. } => {
+                *finished
+                    .entry(current.unwrap_or_else(|| "<no started invocation>".to_string()))
+                    .or_insert(0) += 1;
+                (finished, None)
+            }
+            _ => (finished, current),
+        },
+    );
+    let indexed = || (1u64..).zip(oplog.iter());
+    let terminated = indexed()
+        .filter_map(|(_, entry)| match entry {
+            OplogEntry::End { start_index, .. } | OplogEntry::Cancelled { start_index, .. } => {
+                Some(u64::from(*start_index))
+            }
+            _ => None,
+        })
+        .collect::<std::collections::HashSet<_>>();
+    InvocationShape {
+        not_finished_once: finished
+            .into_iter()
+            .filter(|(_, count)| *count != 1)
+            .map(|(key, count)| format!("{key}: {count}"))
+            .collect(),
+        starts_without_terminal: indexed()
+            .filter(|(index, entry)| {
+                matches!(entry, OplogEntry::Start { .. }) && !terminated.contains(index)
+            })
+            .map(|(index, _)| index)
+            .collect(),
+        applied: oplog
+            .iter()
+            .filter(|entry| {
+                matches!(
+                    entry,
+                    OplogEntry::AgentInvocationFinished { method_name: Some(name), .. }
+                        if name == "apply"
+                )
+            })
+            .count(),
+    }
 }
 
 #[test]
