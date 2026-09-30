@@ -863,6 +863,34 @@ impl TestWorkerExecutor {
         )
     }
 
+    /// Stores the automatic snapshot entries at `indexes` as rejected for the incarnation of the
+    /// agent, as a start that could not load them does. A later start of the agent selects none
+    /// of them.
+    pub async fn reject_automatic_snapshots(
+        &self,
+        agent_id: &AgentId,
+        indexes: impl IntoIterator<Item = OplogIndex>,
+    ) -> anyhow::Result<()> {
+        let owned_agent_id = OwnedAgentId::new(self.context.default_environment_id, agent_id);
+        let worker_service = self
+            .services
+            .as_ref()
+            .ok_or_else(|| anyhow!("the test service graph is not captured"))?
+            .worker_service();
+        let metadata = worker_service
+            .get(&owned_agent_id)
+            .await?
+            .ok_or_else(|| anyhow!("no metadata for {owned_agent_id}"))?;
+        worker_service
+            .reject_periodic_snapshots(
+                &owned_agent_id,
+                metadata.initial_worker_metadata.fingerprint,
+                &indexes.into_iter().collect(),
+            )
+            .await?;
+        Ok(())
+    }
+
     pub fn fail_next_oplog_download(&self, agent_id: &AgentId) {
         self.additional_test_deps
             .fail_next_oplog_download(agent_id.clone());
@@ -4821,6 +4849,10 @@ impl Oplog for TestOplog {
             return OplogEntry::no_op(None);
         }
         let mut entry = self.oplog.read(oplog_index).await;
+        if matches!(entry, OplogEntry::Snapshot { .. }) {
+            self.additional_test_deps
+                .record_oplog_call(&self.owned_agent_id, "read_automatic_snapshot");
+        }
         if let Some(payload_id) = self
             .additional_test_deps
             .snapshot_download_failures

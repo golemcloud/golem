@@ -884,8 +884,8 @@ async fn a_crash_during_an_upload_restarts_with_the_tree_of_a_run_without_a_cras
     let confirmed = agent.confirmed(&executor).await?;
     let held = store.hold_next_save();
     agent.apply_all(&executor, last).await?;
-    // The snapshot of the last operation is skipped while the upload before it still deletes
-    // older snapshots. A `describe` changes no file and takes the snapshot then.
+    // The snapshot of the last operation can be skipped, when the job before it still deletes
+    // older snapshots at that moment. A `describe` changes no file and takes the snapshot then.
     let blocked = eventually(Duration::from_secs(30), || async {
         match held.name() {
             Some(name) => Ok(Some(name)),
@@ -925,6 +925,7 @@ async fn a_crash_during_an_upload_restarts_with_the_tree_of_a_run_without_a_cras
         InvocationShape {
             not_finished_once: Vec::new(),
             starts_without_terminal: Vec::new(),
+            durable_calls_after_the_last_finished: Vec::new(),
             applied: operations.len(),
         }
     );
@@ -938,6 +939,9 @@ struct InvocationShape {
     not_finished_once: Vec<String>,
     /// The index of each durable-call `Start` without an `End` or a `Cancelled`.
     starts_without_terminal: Vec<u64>,
+    /// The index of each durable-call `Start`, `End` or `Cancelled` after the last
+    /// `AgentInvocationFinished`.
+    durable_calls_after_the_last_finished: Vec<u64>,
     /// The number of finished `apply` invocations.
     applied: usize,
 }
@@ -973,6 +977,11 @@ fn invocation_shape(oplog: &[OplogEntry]) -> InvocationShape {
             _ => None,
         })
         .collect::<std::collections::HashSet<_>>();
+    let last_finished = indexed()
+        .filter(|(_, entry)| matches!(entry, OplogEntry::AgentInvocationFinished { .. }))
+        .map(|(index, _)| index)
+        .last()
+        .unwrap_or(0);
     InvocationShape {
         not_finished_once: finished
             .into_iter()
@@ -982,6 +991,18 @@ fn invocation_shape(oplog: &[OplogEntry]) -> InvocationShape {
         starts_without_terminal: indexed()
             .filter(|(index, entry)| {
                 matches!(entry, OplogEntry::Start { .. }) && !terminated.contains(index)
+            })
+            .map(|(index, _)| index)
+            .collect(),
+        durable_calls_after_the_last_finished: indexed()
+            .filter(|(index, entry)| {
+                *index > last_finished
+                    && matches!(
+                        entry,
+                        OplogEntry::Start { .. }
+                            | OplogEntry::End { .. }
+                            | OplogEntry::Cancelled { .. }
+                    )
             })
             .map(|(index, _)| index)
             .collect(),
@@ -1707,9 +1728,22 @@ impl Agent {
 enum Restart {
     /// From its last usable periodic snapshot.
     FromSnapshot,
-    /// With a full replay: the agent loses its periodic snapshots before the restart, and the
-    /// executor restarts on an empty root without periodic snapshots.
+    /// With a full replay: before the restart, each periodic record of the agent is rejected,
+    /// as a start that could not load it does, and the agent loses its periodic snapshots. The
+    /// executor restarts on an empty root without periodic snapshots. A record without a
+    /// filesystem snapshot name is usable without the store, so only the rejection keeps the
+    /// start from selecting it.
     FullReplay,
+}
+
+/// What the restart of a run of a generated history used.
+#[derive(Debug)]
+struct RestartSelection {
+    /// The names of the restores of the restart that gave a tree.
+    restored: Vec<String>,
+    /// The number of reads of automatic snapshot entries up to the end of the first call after
+    /// the restart. A start reads the entry that it selected, to load its guest snapshot.
+    automatic_reads: usize,
 }
 
 /// What a run of a generated history on one agent gives.
@@ -1724,7 +1758,7 @@ struct HistoryRun {
 }
 
 /// Runs `before` on an agent with snapshots, restarts it as `restart` says, and runs `after`
-/// live. Gives the run and the names of the restores of the restart that gave a tree.
+/// live. Gives the run and what the restart used.
 async fn run_history(
     deps: &WorkerExecutorTestDependencies,
     last_unique_id: &LastUniqueId,
@@ -1732,7 +1766,7 @@ async fn run_history(
     initial: usize,
     (before, after): (&[Step], &[Step]),
     restart: Restart,
-) -> anyhow::Result<(HistoryRun, Vec<String>)> {
+) -> anyhow::Result<(HistoryRun, RestartSelection)> {
     let context = TestContext::new(last_unique_id);
     let store = TestFilesystemSnapshotStore::new();
     let executor =
@@ -1746,6 +1780,18 @@ async fn run_history(
     )
     .await?;
     let (agent, mut results) = agent.run_steps(&executor, before).await?;
+    if let Restart::FullReplay = restart {
+        let periodic_records = executor
+            .get_oplog(&agent.worker_id, OplogIndex::INITIAL)
+            .await?
+            .into_iter()
+            .filter(|entry| matches!(entry.entry, PublicOplogEntry::Snapshot(_)))
+            .map(|entry| entry.oplog_index)
+            .collect::<Vec<_>>();
+        executor
+            .reject_automatic_snapshots(&agent.worker_id, periodic_records)
+            .await?;
+    }
     executor.release().await?;
     let root = tempfile::tempdir()?;
     if let Restart::FullReplay = restart {
@@ -1768,7 +1814,11 @@ async fn run_history(
         }
     };
     let restarted_outcome = agent.outcome(&restarted).await?;
-    let restored = store.completed_restore_names()[restores..].to_vec();
+    let selection = RestartSelection {
+        restored: store.completed_restore_names()[restores..].to_vec(),
+        automatic_reads: restarted
+            .oplog_service_call_count(&agent.worker_id, "read_automatic_snapshot"),
+    };
     let (agent, after_results) = agent.run_steps(&restarted, after).await?;
     results.extend(after_results);
     let finished = agent.outcome(&restarted).await?;
@@ -1779,7 +1829,7 @@ async fn run_history(
             restarted: restarted_outcome,
             finished,
         },
-        restored,
+        selection,
     ))
 }
 
@@ -1820,8 +1870,8 @@ async fn generated_histories_restart_from_a_snapshot_with_the_tree_and_the_resul
                     restart,
                 )
             };
-            let (from_snapshot, snapshot_restores) = run(Restart::FromSnapshot).await?;
-            let (full_replay, replay_restores) = run(Restart::FullReplay).await?;
+            let (from_snapshot, snapshot_selection) = run(Restart::FromSnapshot).await?;
+            let (full_replay, replay_selection) = run(Restart::FullReplay).await?;
             Ok::<_, anyhow::Error>((
                 (from_snapshot != full_replay).then(|| {
                     format!(
@@ -1829,8 +1879,8 @@ async fn generated_histories_restart_from_a_snapshot_with_the_tree_and_the_resul
                          with a full replay {full_replay:#?}"
                     )
                 }),
-                snapshot_restores,
-                replay_restores,
+                snapshot_selection,
+                (format!("{initial} {before:?}"), replay_selection),
             ))
         })
         .collect::<Vec<_>>()
@@ -1843,19 +1893,22 @@ async fn generated_histories_restart_from_a_snapshot_with_the_tree_and_the_resul
         .collect::<Vec<_>>();
     let snapshot_restores = outcomes
         .iter()
-        .map(|(_, restores, _)| restores.len())
+        .map(|(_, selection, _)| selection.restored.len())
         .sum::<usize>();
-    let periodic_replay_restores = outcomes
+    let replays_from_a_periodic_record = outcomes
         .iter()
-        .flat_map(|(_, _, restores)| restores)
-        .filter(|name| name.starts_with("p-"))
+        .filter(|(_, _, (_, selection))| {
+            selection.automatic_reads > 0
+                || selection.restored.iter().any(|name| name.starts_with("p-"))
+        })
+        .map(|(_, _, (case, selection))| format!("{case}: {selection:?}"))
         .collect::<Vec<_>>();
 
     assert!(failures.is_empty(), "{failures:#?}");
     assert!(snapshot_restores > 0, "no restart restored a snapshot");
     assert!(
-        periodic_replay_restores.is_empty(),
-        "a full replay restored the periodic snapshots {periodic_replay_restores:?}"
+        replays_from_a_periodic_record.is_empty(),
+        "a full-replay restart used a periodic record: {replays_from_a_periodic_record:#?}"
     );
     Ok(())
 }
