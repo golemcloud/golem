@@ -52,17 +52,55 @@ pub(all) struct ValidationFailure {
 }
 
 ///|
+#derive.golem_schema(inline=true)
+pub(all) enum Region {
+  #derive.case(name="eu-west-1")
+  EuWest1
+  #derive.case(name="us-east-1")
+  UsEast1
+}
+
+///|
+#derive.golem_schema(inline=true)
+pub(all) enum Profile {
+  #derive.case(name="debug")
+  Debug
+  #derive.case(name="release")
+  Release
+}
+
+///|
+#derive.golem_schema(inline=true)
+pub(all) enum ReportFormat {
+  #derive.case(name="json")
+  Json
+  #derive.case(name="text")
+  Text
+}
+
+///|
+#derive.golem_schema(inline=true)
+pub(all) enum ColorMode {
+  #derive.case(name="auto")
+  Auto
+  #derive.case(name="always")
+  Always
+  #derive.case(name="never")
+  Never
+}
+
+///|
 enum ArtifactError {
-  /// Request validation failed.
+  /// Request validation failed
   #derive.error(kind="usage-error", exit_code="2")
   InvalidRequest(ValidationFailure)
-  /// Renderer failed.
+  /// Renderer failed
   #derive.error(kind="runtime-error", exit_code="70")
   RenderFailed(stage~ : String, code~ : UInt)
 }
 
 ///|
-#derive.golem_schema
+#derive.golem_schema(inline=true)
 pub(all) enum ArtifactStatus {
   #derive.case(name="queued")
   Queued
@@ -73,20 +111,20 @@ pub(all) enum ArtifactStatus {
 }
 
 ///|
-/// Build and inspect artifacts.
+/// Build and inspect artifacts
 /// A deliberately asymmetric conformance tool.
 #derive.example("artifact --region eu-west-1 render src/main.wasm --format json", title="Render")
 #derive.tool("artifact", version="1.0.0", alias="art")
 struct Artifact {}
 
 ///|
-/// Render one artifact.
+/// Render one artifact
 /// Build an artifact and return a structured report.
 #derive.example("artifact render src/main.wasm --format json --tag release --define opt=3 --checksum", title="Release build")
-#derive.command(alias="build", subtree="ArtifactRender")
-#derive.arg("region", scope="root-global", short="r", alias="location", value_name="REGION", default="eu-west-1", env="ARTIFACT_REGION", doc="Execution region")
+#derive.command(name="render", alias="build", subtree="ArtifactRender")
+#derive.arg("region", scope="root-global", short="r", alias="location", value_name="REGION", default="eu-west-1", env="ARTIFACT_REGION", doc="Execution region", description="Inherited by every executable descendant.")
 #derive.arg("trace", scope="root-global", short="t", alias="diagnostics", kind="flag", negatable=true, default="false", doc="Emit trace details")
-pub fn Artifact::render(region : String, trace : Bool) -> Unit {
+pub fn Artifact::render(region : Region, trace : Bool) -> Unit {
   ignore(region)
   ignore(trace)
 }
@@ -96,16 +134,16 @@ pub fn Artifact::render(region : String, trace : Bool) -> Unit {
 struct ArtifactRender {}
 
 ///|
-/// Render one artifact.
+/// Render one artifact
 /// Build an artifact and return a structured report.
-#derive.command(name="render", alias="build", idempotent=true, destructive=false, read_only=false, open_world=false)
-#derive.arg("profile", scope="global", short="p", value_name="PROFILE", default="release", doc="Build profile")
+#derive.command(idempotent=true, destructive=false, read_only=false, open_world=false)
+#derive.arg("profile", scope="global", short="p", value_name="PROFILE", default="release", doc="Build profile", description="Inherited by render descendants.")
 #derive.arg("request", scope="positional", value_name="REQUEST", doc="Artifact request")
-#derive.arg("inputs", scope="tail", kind="file", direction="input", min="1", max="3", separator="--", verbatim=true, doc="Input modules")
+#derive.arg("inputs", scope="tail", value_name="INPUT", kind="file", direction="input", extension="wasm", extension="wat", min="1", max="3", separator="--", verbatim=true, doc="Input modules", description="One to three source modules.")
 #derive.arg("format", scope="option", short="f", alias="output-format", value_name="FORMAT", default="json", doc="Report format")
-#derive.arg("tag", scope="option", alias="label", value_name="TAG", repeatable="either", delim=",", doc="Tags")
-#derive.arg("define", scope="option", short="D", value_name="KEY=VALUE", repeatable="repeated", doc="Numeric definitions")
-#derive.arg("color", scope="option", value_name="WHEN", optional_scalar=true, default="auto", doc="Color mode")
+#derive.arg("tag", scope="option", alias="label", value_name="TAG", repeatable="either", delim=",", doc="Tags", description="May be repeated or comma-delimited.")
+#derive.arg("define", scope="option", short="D", value_name="KEY=VALUE", repeatable="repeated", doc="Numeric definitions", description="Duplicate keys are rejected.")
+#derive.arg("color", scope="option", value_name="WHEN", optional_scalar=true, default="auto", doc="Color mode", description="Bare presence resolves to the default.")
 #derive.arg("checksum", kind="flag", short="c", alias="digest", negatable=true, default="false", doc="Include digest")
 #derive.arg("verbose", kind="count-flag", short="v", max="3", doc="Verbosity")
 #derive.arg("stdin", mime="application/wasm", doc="Optional module bytes")
@@ -114,15 +152,15 @@ struct ArtifactRender {}
 #derive.constraint("requires_all", "checksum", "format")
 #derive.constraint("implies", lhs_value_is="profile=release", rhs="tag", rhs_quant="any")
 #derive.constraint("forbids", lhs_value_is="format=text", lhs_quant="any", rhs="define")
-#derive.result("json", formatter="table", default="json")
-pub async fn ArtifactRender::render(
-  profile : String,
+#derive.result("json", formatter="table", default="json", doc="Artifact report", formatter_doc="json=JSON report", formatter_doc="table=Tabular report")
+pub async fn ArtifactRender::artifact_render(
+  profile : Profile,
   request : ArtifactRequest,
   inputs : Array[@schema.Path],
-  format : String,
+  format : ReportFormat,
   tag : Array[String],
   define : Map[String, Int64],
-  color : String?,
+  color : ColorMode?,
   checksum : Bool,
   verbose : UInt,
   stdin : @asyncCore.Stream[Byte]?,
@@ -147,10 +185,10 @@ pub async fn ArtifactRender::render(
 }
 
 ///|
-/// Inspect render status.
+/// Inspect render status
 #derive.command(alias="show", read_only=true, destructive=false, idempotent=true, open_world=false)
 #derive.arg("artifactId", scope="positional", name="artifact-id", value_name="ID", doc="Artifact identifier")
-#derive.result("json", default="json")
+#derive.result("json", default="json", doc="Current status", formatter_doc="json=JSON status")
 pub fn ArtifactRender::status(artifactId : UInt64) -> ArtifactStatus {
   ignore(artifactId)
   Ready

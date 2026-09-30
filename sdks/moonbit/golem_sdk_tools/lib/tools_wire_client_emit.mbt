@@ -64,6 +64,7 @@ fn emit_client_wire_input(
   has_prefix : Bool,
   asynchronous : Bool,
   stdin : String?,
+  optional_stdin : Bool,
 ) -> Unit {
   let schemas = fields.map(arg => {
     let schema = wire_client_field_type(arg, arg.type_.unwrap())
@@ -86,7 +87,17 @@ fn emit_client_wire_input(
   } else {
     "@schema.into_wire_record"
   }
-  let cleanup = stdin.map(source => source + ".drop_sync(); ").unwrap_or("")
+  let cleanup = stdin
+    .map(source => {
+      if optional_stdin {
+        "match " +
+        source +
+        " { Some(__golem_stdin) => __golem_stdin.drop_sync()\nNone => ()\n }\n"
+      } else {
+        source + ".drop_sync(); "
+      }
+    })
+    .unwrap_or("")
   buf.write_string(
     "  let __golem_schema = @schema.WireTypeEncoder::new()\n" +
     "  let __golem_root = __golem_schema.push(@types.RecordType([" +

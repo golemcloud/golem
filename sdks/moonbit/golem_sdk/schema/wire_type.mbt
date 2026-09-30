@@ -31,6 +31,7 @@ pub fn WireTypeEncoder::named(
   self : WireTypeEncoder,
   id : String,
   build : () -> Int,
+  name? : String? = None,
 ) -> Int {
   match self.ids.get(id) {
     Some(definition) => {
@@ -48,10 +49,11 @@ pub fn WireTypeEncoder::named(
       let definition = self.defs.length()
       self.ids[id] = definition
       self.active[id] = ()
-      self.defs.push({ id, name: Some(id), body: 0, })
+      let display_name = Some(name.unwrap_or(id))
+      self.defs.push({ id, name: display_name, body: 0, })
       let body = build()
       ignore(self.active.remove(id))
-      self.defs[definition] = { id, name: Some(id), body, }
+      self.defs[definition] = { id, name: display_name, body, }
       self.push(@types.SchemaTypeBody::RefType(definition))
     }
   }

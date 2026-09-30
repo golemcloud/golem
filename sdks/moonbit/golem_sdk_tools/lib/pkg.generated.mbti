@@ -352,12 +352,14 @@ pub(all) struct ToolArgInfo {
   direction : String?
   channel : String?
   mimes : Array[String]
+  extensions : Array[String]
   schemes : Array[String]
   min : String?
   max : String?
   bounds : String?
   unit : String?
   doc : String?
+  description : String?
   value_name : String?
 } derive(Eq, @debug.Debug)
 
@@ -477,8 +479,10 @@ pub(all) enum ToolParamType {
 
 pub(all) struct ToolResultInfo {
   formatters : Array[String]
-  options : Array[(String, String)]
+  formatter_docs : Array[(String, String)]
   defaults : Array[String]
+  doc : String?
+  description : String?
 } derive(Eq, @debug.Debug)
 
 pub(all) struct UniversalToolMiddlewareInfo {

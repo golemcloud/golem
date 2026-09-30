@@ -52,12 +52,14 @@ pub(all) struct ToolArgInfo {
   direction : String?
   channel : String?
   mimes : Array[String]
+  extensions : Array[String]
   schemes : Array[String]
   min : String?
   max : String?
   bounds : String?
   unit : String?
   doc : String?
+  description : String?
   value_name : String?
 } derive(Debug, Eq)
 
@@ -77,8 +79,10 @@ pub(all) struct ToolConstraintInfo {
 ///|
 pub(all) struct ToolResultInfo {
   formatters : Array[String]
-  options : Array[(String, String)]
+  formatter_docs : Array[(String, String)]
   defaults : Array[String]
+  doc : String?
+  description : String?
 } derive(Debug, Eq)
 
 ///|
@@ -657,10 +661,12 @@ fn parse_arg(
   let bounds : Ref[String?] = Ref(None)
   let unit : Ref[String?] = Ref(None)
   let doc : Ref[String?] = Ref(None)
+  let description : Ref[String?] = Ref(None)
   let value_name : Ref[String?] = Ref(None)
   let aliases : Array[String] = []
   let defaults : Array[String] = []
   let mimes : Array[String] = []
+  let extensions : Array[String] = []
   let schemes : Array[String] = []
   for p in props {
     match prop_string(p) {
@@ -683,12 +689,14 @@ fn parse_arg(
           "direction" => set_once(direction, v, k)
           "channel" => set_once(channel, v, k)
           "mime" => mimes.push(v)
+          "extension" => extensions.push(v)
           "scheme" => schemes.push(v)
           "min" => set_once(min, v, k)
           "max" => set_once(max, v, k)
           "bounds" => set_once(bounds, v, k)
           "unit" => set_once(unit, v, k)
           "doc" => set_once(doc, v, k)
+          "description" => set_once(description, v, k)
           "value_name" => set_once(value_name, v, k)
           _ => tool_fail("Unknown #derive.arg property '" + k + "' on " + owner)
         }
@@ -768,12 +776,14 @@ fn parse_arg(
     direction: direction.val,
     channel: channel.val,
     mimes,
+    extensions,
     schemes,
     min: min.val,
     max: max.val,
     bounds: bounds.val,
     unit: unit.val,
     doc: doc.val,
+    description: description.val,
     value_name: value_name.val,
   }
 }
@@ -1235,8 +1245,10 @@ fn parse_command(
           tool_fail("Duplicate #derive.result on " + owner)
         }
         let formatters : Array[String] = []
-        let options : Array[(String, String)] = []
+        let formatter_docs : Array[(String, String)] = []
         let defaults : Array[String] = []
+        let doc : Ref[String?] = Ref(None)
+        let description : Ref[String?] = Ref(None)
         let props = match derive_props(attr, "result") {
           Some(props) => props
           None => {
@@ -1248,7 +1260,22 @@ fn parse_command(
           match prop_string(p) {
             Some((None, v)) | Some((Some("formatter"), v)) => formatters.push(v)
             Some((Some("default"), v)) => defaults.push(v)
-            Some((Some(k), v)) => options.push((k, v))
+            Some((Some("formatter_doc"), v)) => {
+              guard v.find("=") is Some(separator) && separator > 0 else {
+                tool_fail(
+                  "#derive.result formatter_doc must be '<formatter>=<doc>'",
+                )
+                continue
+              }
+              formatter_docs.push(
+                (v[:separator].to_owned(), v[separator + 1:].to_owned()),
+              )
+            }
+            Some((Some("doc"), v)) => set_once(doc, v, "doc")
+            Some((Some("description"), v)) =>
+              set_once(description, v, "description")
+            Some((Some(k), _)) =>
+              tool_fail("Unknown #derive.result property '" + k + "'")
             _ => tool_fail("Malformed #derive.result property on " + owner)
           }
         }
@@ -1266,13 +1293,25 @@ fn parse_command(
             "' is not one of the declared formatters",
           )
         }
-        if options.length() > 0 {
-          tool_fail("Unknown #derive.result property '" + options[0].0 + "'")
-        }
         for formatter in formatters {
           require_tool_identifier(formatter, "result formatter", owner)
         }
-        result = Some({ formatters, options, defaults, })
+        for formatter_doc in formatter_docs {
+          if !formatters.contains(formatter_doc.0) {
+            tool_fail(
+              "Result formatter documentation references undeclared formatter '" +
+              formatter_doc.0 +
+              "'",
+            )
+          }
+        }
+        result = Some({
+          formatters,
+          formatter_docs,
+          defaults,
+          doc: doc.val,
+          description: description.val,
+        })
       }
       Some((Some("derive"), "example")) | None => ()
       Some((Some("derive"), n)) if n == "prompt_hint" ||

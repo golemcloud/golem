@@ -19,10 +19,11 @@ for the executor matrix rather than being represented by an SDK echo or a source
 claim.
 
 The fixture uses the public MoonBit authoring surface for the complete CONTRACT-1 metadata:
-namespace-root aliases and globals, constrained text, authored enum case names, inline error-record
-payloads, and independently optional stdin/stderr declarations. The metadata assertion compares the
-generated descriptor projection exactly; it does not normalize language-specific differences or use
-legacy metadata carriers.
+namespace-root aliases and globals, a directly grafted executable subtree root, constrained text,
+authored enum case names, path extensions, complete argument/result/formatter documentation,
+inline error-record payloads, stable schema display names, and independently optional stdin/stderr
+declarations. The metadata assertion compares the generated descriptor projection exactly; it does
+not normalize language-specific differences or use legacy metadata carriers.
 
 ## Existing terminal coverage mapped for SDK-TERMINALS
 

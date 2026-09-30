@@ -215,7 +215,7 @@ pub(all) struct WireTypeEncoder {
   ids : Map[String, Int]
   active : Map[String, Unit]
 }
-pub fn WireTypeEncoder::named(Self, String, () -> Int) -> Int
+pub fn WireTypeEncoder::named(Self, String, () -> Int, name? : String?) -> Int
 pub fn WireTypeEncoder::new() -> Self
 pub fn WireTypeEncoder::push(Self, @types.SchemaTypeBody) -> Int
 

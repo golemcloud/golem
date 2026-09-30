@@ -26,6 +26,7 @@ pub(all) enum ValueTypeKind {
 pub(all) struct ValueTypeInfo {
   name : String
   kind : ValueTypeKind
+  inline : Bool
 } derive(Debug, Eq)
 
 ///|
@@ -111,17 +112,41 @@ pub fn parse_value_types(
       match impl_ {
         TopTypeDef(type_decl) => {
           let mut is_schema = false
+          let inline = Ref(false)
           let attr_arr = type_decl.attrs.to_array()
           for attr in attr_arr {
-            if attr.raw == "#derive.golem_schema" {
-              is_schema = true
+            match derive_props(attr, "golem_schema") {
+              Some(props) => {
+                is_schema = true
+                for prop in props {
+                  match prop {
+                    @attribute.Prop::Labeled("inline", Bool(value)) =>
+                      inline.val = value
+                    _ =>
+                      raise AgentParseError(
+                        "Malformed or unknown #derive.golem_schema property on '\{type_decl.tycon}'",
+                      )
+                  }
+                }
+              }
+              None => ()
             }
           }
           if is_schema {
             let name = type_decl.tycon
             let kind = parse_type_desc(name, type_decl.components)
+            if inline.val && kind is Record(_) {
+              raise AgentParseError(
+                "#derive.golem_schema(inline=true) is only supported on enums",
+              )
+            }
+            if inline.val && kind is VariantEnum(_) {
+              raise AgentParseError(
+                "#derive.golem_schema(inline=true) is only supported on unit-case enums",
+              )
+            }
             validate_no_multimodal_in_value_kind(name, kind)
-            results.push({ name, kind, })
+            results.push({ name, kind, inline: inline.val, })
           }
         }
         _ => ()

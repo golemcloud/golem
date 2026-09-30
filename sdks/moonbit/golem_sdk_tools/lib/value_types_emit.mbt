@@ -29,7 +29,8 @@ pub fn generate_value_type_impls(
     }
     match t.kind {
       Record(fields) => emit_record_impls(buf, t.name, id_base, fields)
-      SimpleEnum(cases) => emit_simple_enum_impls(buf, t.name, id_base, cases)
+      SimpleEnum(cases) =>
+        emit_simple_enum_impls(buf, t.name, id_base, cases, t.inline)
       VariantEnum(cases) => emit_variant_impls(buf, t.name, id_base, cases)
     }
   }
@@ -92,7 +93,9 @@ fn emit_record_impls(
       "      @model.field(\"\{escape_string_lit(fname)}\", \{register_in_with_expr(ts)}),\n",
     )
   }
-  buf.write_string("    ])),\n    Some(\"\{id}\"),\n  )\n}\n\n")
+  buf.write_string(
+    "    ])),\n    Some(\"\{escape_string_lit(name)}\"),\n  )\n}\n\n",
+  )
   // to_value
   buf.write_string("///|\n")
   buf.write_string(
@@ -168,7 +171,7 @@ fn emit_record_impls(
       "    { name: \"\{escape_string_lit(fname)}\", body: @schema.append_wire_type_with(encoder, (@schema.TypeTag::{  } : @schema.TypeTag[\{ts}])), metadata: @schema.empty_wire_metadata() },\n",
     )
   }
-  buf.write_string("  ])))\n}\n\n")
+  buf.write_string("  ])), name=Some(\"\{escape_string_lit(name)}\"))\n}\n\n")
 }
 
 // ============================================================
@@ -181,6 +184,7 @@ fn emit_simple_enum_impls(
   name : String,
   id_base : String,
   cases : Array[ValueCase],
+  inline : Bool,
 ) -> Unit {
   let id = escape_string_lit(id_base)
   let count = cases.length()
@@ -196,9 +200,15 @@ fn emit_simple_enum_impls(
   buf.write_string(
     "pub impl @schema.IntoSchema for \{name} with register_in(b) {\n",
   )
-  buf.write_string(
-    "  b.register(\"\{id}\", () => @model.schema_type(Enum([\{case_lits}])), Some(\"\{id}\"))\n}\n\n",
-  )
+  if inline {
+    buf.write_string(
+      "  ignore(b)\n  @model.schema_type(Enum([\{case_lits}]))\n}\n\n",
+    )
+  } else {
+    buf.write_string(
+      "  b.register(\"\{id}\", () => @model.schema_type(Enum([\{case_lits}])), Some(\"\{escape_string_lit(name)}\"))\n}\n\n",
+    )
+  }
   // to_value
   buf.write_string("///|\n")
   buf.write_string(
@@ -232,17 +242,23 @@ fn emit_simple_enum_impls(
     "  }\n  encoder.push(@types.SchemaValueNode::EnumValue(case))\n}\n\n",
   )
   buf.write_string(
-    "///|\npub impl @schema.FromWire for \{name} with read_wire(tree, index) {\n  let case = match @schema.wire_node(tree, index) {\n    @types.SchemaValueNode::EnumValue(case) => case\n    _ => raise @schema.WireError::Invalid(\"\{id}: expected enum value\")\n  }\n  match case {\n",
+    "///|\npub impl @schema.FromWire for \{name} with read_wire(tree, index) {\n  let case = match @schema.wire_node(tree, index) {\n    @types.SchemaValueNode::EnumValue(case) => case\n    _ => { let error = @schema.WireError::Invalid(\"\{id}: expected enum value\"); raise error }\n  }\n  match case {\n",
   )
   for i, c in cases {
     buf.write_string("    \{i} => \{c.source_name}\n")
   }
   buf.write_string(
-    "    _ => raise @schema.WireError::Invalid(\"\{id}: enum case out of range\")\n  }\n}\n\n",
+    "    _ => { let error = @schema.WireError::Invalid(\"\{id}: enum case out of range\"); raise error }\n  }\n}\n\n",
   )
-  buf.write_string(
-    "///|\npub impl @schema.WireSchema for \{name} with append_wire_type(encoder) {\n  encoder.named(\"\{id}\", () => encoder.push(@types.SchemaTypeBody::EnumType([\{case_lits}])))\n}\n\n",
-  )
+  if inline {
+    buf.write_string(
+      "///|\npub impl @schema.WireSchema for \{name} with append_wire_type(encoder) {\n  encoder.push(@types.SchemaTypeBody::EnumType([\{case_lits}]))\n}\n\n",
+    )
+  } else {
+    buf.write_string(
+      "///|\npub impl @schema.WireSchema for \{name} with append_wire_type(encoder) {\n  encoder.named(\"\{id}\", () => encoder.push(@types.SchemaTypeBody::EnumType([\{case_lits}])), name=Some(\"\{escape_string_lit(name)}\"))\n}\n\n",
+    )
+  }
 }
 
 ///|
@@ -307,7 +323,9 @@ fn emit_variant_impls(
         )
     }
   }
-  buf.write_string("    ])),\n    Some(\"\{id}\"),\n  )\n}\n\n")
+  buf.write_string(
+    "    ])),\n    Some(\"\{escape_string_lit(name)}\"),\n  )\n}\n\n",
+  )
   // to_value
   buf.write_string("///|\n")
   buf.write_string(
@@ -463,7 +481,7 @@ fn emit_wire_variant_impls(
     }
   }
   buf.write_string(
-    "    _ => raise @schema.WireError::Invalid(\"\{id}: variant case out of range\")\n  }\n}\n\n",
+    "    _ => { let error = @schema.WireError::Invalid(\"\{id}: variant case out of range\"); raise error }\n  }\n}\n\n",
   )
   buf.write_string(
     "///|\npub impl @schema.WireSchema for \{name} with append_wire_type(encoder) {\n  encoder.named(\"\{id}\", () => encoder.push(@types.SchemaTypeBody::VariantType([\n",
@@ -481,7 +499,7 @@ fn emit_wire_variant_impls(
         )
     }
   }
-  buf.write_string("  ])))\n}\n\n")
+  buf.write_string("  ])), name=Some(\"\{escape_string_lit(name)}\"))\n}\n\n")
 }
 
 ///|

@@ -86,6 +86,58 @@ test "parse simple enum (all unit cases)" {
 }
 
 ///|
+test "parse inline simple enum with authored case names" {
+  let content =
+    #|///|
+    #|#derive.golem_schema(inline=true)
+    #|pub(all) enum Profile {
+    #|  #derive.case(name="debug")
+    #|  Debug
+    #|  #derive.case("release")
+    #|  Release
+    #|}
+  let types = parse_value_types([("profile.mbt", content)])
+  assert_eq(types, [
+    {
+      name: "Profile",
+      inline: true,
+      kind: SimpleEnum([
+        { source_name: "Debug", name: "debug", },
+        { source_name: "Release", name: "release", },
+      ]),
+    },
+  ])
+}
+
+///|
+test "inline schema rejects records and payload variants" {
+  let record =
+    #|#derive.golem_schema(inline=true)
+    #|pub(all) struct Request { source : String }
+  let record_result = capture_agent_parse_error(fn() raise AgentParseError {
+    parse_value_types([("request.mbt", record)])
+  })
+  debug_inspect(
+    record_result,
+    content=(
+      #|Err(AgentParseError("#derive.golem_schema(inline=true) is only supported on enums"))
+    ),
+  )
+  let variant =
+    #|#derive.golem_schema(inline=true)
+    #|pub(all) enum Result { Ok(String) }
+  let variant_result = capture_agent_parse_error(fn() raise AgentParseError {
+    parse_value_types([("result.mbt", variant)])
+  })
+  debug_inspect(
+    variant_result,
+    content=(
+      #|Err(AgentParseError("#derive.golem_schema(inline=true) is only supported on unit-case enums"))
+    ),
+  )
+}
+
+///|
 test "parse enum with mixed unit and payload cases" {
   let content =
     #|///|

@@ -687,12 +687,14 @@ test "generate_client_code - recursively stream-bearing methods are awaited only
   let value_types : Array[@lib.ValueTypeInfo] = [
     {
       name: "NestedRecord",
+      inline: false,
       kind: @lib.ValueTypeKind::Record([
         ("items", @lib.ParamType::Optional(@lib.ParamType::List(direct_stream))),
       ]),
     },
     {
       name: "NestedVariant",
+      inline: false,
       kind: @lib.ValueTypeKind::VariantEnum([
         (
           @lib.ValueCase::{ source_name: "Empty", name: "Empty", },
@@ -726,6 +728,7 @@ test "generate_client_code - recursively stream-bearing methods are awaited only
     },
     {
       name: "RecursiveStart",
+      inline: false,
       kind: @lib.ValueTypeKind::Record([
         ("cycle", @lib.ParamType::Simple("RecursiveCycle")),
         ("streaming_sibling", @lib.ParamType::Simple("NestedRecord")),
@@ -733,6 +736,7 @@ test "generate_client_code - recursively stream-bearing methods are awaited only
     },
     {
       name: "RecursiveCycle",
+      inline: false,
       kind: @lib.ValueTypeKind::VariantEnum([
         (
           @lib.ValueCase::{ source_name: "Again", name: "Again", },
@@ -744,6 +748,7 @@ test "generate_client_code - recursively stream-bearing methods are awaited only
     },
     {
       name: "SafeRecursiveA",
+      inline: false,
       kind: @lib.ValueTypeKind::Record([
         (
           "next",
@@ -753,6 +758,7 @@ test "generate_client_code - recursively stream-bearing methods are awaited only
     },
     {
       name: "SafeRecursiveB",
+      inline: false,
       kind: @lib.ValueTypeKind::Record([
         (
           "next",
@@ -846,6 +852,7 @@ test "generate_client_code - stream-bearing constructor is rejected" {
   let value_types : Array[@lib.ValueTypeInfo] = [
     {
       name: "ConstructorInput",
+      inline: false,
       kind: @lib.ValueTypeKind::Record([
         (
           "stream",

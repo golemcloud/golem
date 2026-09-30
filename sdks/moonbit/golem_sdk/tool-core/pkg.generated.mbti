@@ -86,7 +86,7 @@ pub fn[T : @schema.FromSchema] project_result_with_stdout(InvocationResult) -> R
 
 pub fn refine_numeric(@schema_model.SchemaGraph, String?, String?, String?) -> @schema_model.SchemaGraph raise ToolBuildError
 
-pub fn refine_path(@schema_model.SchemaGraph, @types.PathDirection?, @types.PathKind?, Array[String]?) -> @schema_model.SchemaGraph raise ToolBuildError
+pub fn refine_path(@schema_model.SchemaGraph, @types.PathDirection?, @types.PathKind?, Array[String]?, extensions? : Array[String]?) -> @schema_model.SchemaGraph raise ToolBuildError
 
 pub fn refine_text(@schema_model.SchemaGraph, String?, UInt?, UInt?) -> @schema_model.SchemaGraph raise ToolBuildError
 
@@ -124,7 +124,7 @@ pub fn value_is_literal_to_schema_value(@schema_model.SchemaGraph, ToolLiteral) 
 
 pub fn wire_refine_numeric(WireToolType, String?, String?, String?) -> WireToolType raise ToolBuildError
 
-pub fn wire_refine_path(WireToolType, @types.PathDirection?, @types.PathKind?, Array[String]?) -> WireToolType raise ToolBuildError
+pub fn wire_refine_path(WireToolType, @types.PathDirection?, @types.PathKind?, Array[String]?, extensions? : Array[String]?) -> WireToolType raise ToolBuildError
 
 pub fn wire_refine_text(WireToolType, String?, UInt?, UInt?) -> WireToolType raise ToolBuildError
 

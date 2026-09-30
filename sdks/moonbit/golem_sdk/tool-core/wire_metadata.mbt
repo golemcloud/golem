@@ -80,6 +80,7 @@ pub fn wire_refine_path(
   direction : @types.PathDirection?,
   kind : @types.PathKind?,
   mime_types : Array[String]?,
+  extensions? : Array[String]? = None,
 ) -> WireToolType raise ToolBuildError {
   guard type_.resolved().body is @types.PathType(spec) else {
     raise RefinementTypeMismatch("path", "non-path wire type")
@@ -89,7 +90,7 @@ pub fn wire_refine_path(
       direction: direction.unwrap_or(spec.direction),
       kind: kind.unwrap_or(spec.kind),
       allowed_mime_types: overlay(mime_types, spec.allowed_mime_types),
-      allowed_extensions: spec.allowed_extensions,
+      allowed_extensions: overlay(extensions, spec.allowed_extensions),
     }),
   )
 }

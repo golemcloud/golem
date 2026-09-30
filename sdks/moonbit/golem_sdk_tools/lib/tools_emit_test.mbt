@@ -928,6 +928,67 @@ test "delimiter metadata requires a delimiter-aware repetition mode" {
 }
 
 ///|
+test "repeatable options without authored defaults emit empty collection defaults" {
+  let source =
+    #|#derive.tool
+    #|struct Runner {}
+    #|#derive.arg("tags", scope="option", repeatable="either", delim=",")
+    #|#derive.arg("defines", scope="option", repeatable="repeated")
+    #|pub fn Runner::run(tags : Array[String], defines : Map[String, Int64]) -> Unit { () }
+  let generated = @formatter.impls_to_string(
+    @lib.generate_tool_registration(@lib.parse_tools([("runner.mbt", source)])),
+  )
+  let compact = generated.split(" ").join("").split("\n").join("")
+  assert_true(compact.contains("@tool.ToolLiteral::List([])"))
+  assert_true(compact.contains("@tool.ToolLiteral::Map([])"))
+}
+
+///|
+test "argument description metadata does not require a doc summary" {
+  let source =
+    #|#derive.tool
+    #|struct Runner {}
+    #|#derive.arg("input", description="Long argument description.")
+    #|pub fn Runner::run(input : String) -> String { input }
+  let generated = @formatter.impls_to_string(
+    @lib.generate_tool_registration(@lib.parse_tools([("runner.mbt", source)])),
+  )
+  assert_true(generated.contains("Long argument description."))
+}
+
+///|
+test "result description metadata does not require a doc summary" {
+  let source =
+    #|#derive.tool
+    #|struct Runner {}
+    #|#derive.result("json", description="Long result description.")
+    #|pub fn Runner::run(input : String) -> String { input }
+  let generated = @formatter.impls_to_string(
+    @lib.generate_tool_registration(@lib.parse_tools([("runner.mbt", source)])),
+  )
+  assert_true(generated.contains("Long result description."))
+}
+
+///|
+test "result documentation preserves command examples" {
+  let source =
+    #|#derive.tool
+    #|struct Runner {}
+    #|#derive.example("runner run input", title="Example run")
+    #|#derive.result("json", doc="Result summary")
+    #|pub fn Runner::run(input : String) -> String { input }
+  let generated = @formatter.impls_to_string(
+    @lib.generate_tool_registration(@lib.parse_tools([("runner.mbt", source)])),
+  )
+  let compact = generated.split(" ").join("").split("\n").join("")
+  assert_true(
+    compact.contains(
+      "summary:\"Resultsummary\",description:\"\",examples:[{title:\"Examplerun\",body:\"runnerruninput\"}]",
+    ),
+  )
+}
+
+///|
 test "repeatable option delimiters must be one character" {
   let source =
     #|#derive.tool
@@ -1772,12 +1833,38 @@ test "GOL-40 artifact fixture preserves rich metadata and client call shape" {
     error => fail("GOL-40 value metadata did not parse: " + repr(error))
   }
   assert_eq(tools.length(), 2)
+  assert_eq(value_types.map(type_ => (type_.name, type_.inline)), [
+    ("ArtifactRequest", false),
+    ("ArtifactReport", false),
+    ("ValidationFailure", false),
+    ("Region", true),
+    ("Profile", true),
+    ("ReportFormat", true),
+    ("ColorMode", true),
+    ("ArtifactStatus", true),
+  ])
+  assert_eq(
+    value_types.filter_map(type_ => {
+      match type_.kind {
+        @lib.ValueTypeKind::SimpleEnum(cases) =>
+          Some((type_.name, cases.map(case => case.name)))
+        _ => None
+      }
+    }),
+    [
+      ("Region", ["eu-west-1", "us-east-1"]),
+      ("Profile", ["debug", "release"]),
+      ("ReportFormat", ["json", "text"]),
+      ("ColorMode", ["auto", "always", "never"]),
+      ("ArtifactStatus", ["queued", "ready", "failed"]),
+    ],
+  )
   let artifact = canonical_tool(tools, "artifact")
   assert_eq(artifact.version, Some("1.0.0"))
   assert_eq(artifact.aliases, ["art"])
   assert_eq(
     artifact.description,
-    "Build and inspect artifacts.\n A deliberately asymmetric conformance tool.",
+    "Build and inspect artifacts\n A deliberately asymmetric conformance tool.",
   )
   assert_eq(artifact.examples, [
     {
@@ -1787,15 +1874,27 @@ test "GOL-40 artifact fixture preserves rich metadata and client call shape" {
   ])
   let mount = canonical_command(artifact, "render")
   assert_eq(mount.aliases, ["build"])
+  assert_true(mount.explicit_name)
   assert_eq(mount.subtree, Some("ArtifactRender"))
   assert_eq(mount.params.map(param => param.0), ["region", "trace"])
   assert_eq(mount.args.map(arg => arg.scope), [
     Some("root-global"),
     Some("root-global"),
   ])
+  assert_eq(mount.params[0].1, @lib.ToolParamType::Public(Simple("Region")))
+  assert_eq(
+    mount.args[0].description,
+    Some("Inherited by every executable descendant."),
+  )
   let render_tool = canonical_tool(tools, "artifact-render")
-  let render = canonical_command(render_tool, "render")
-  assert_eq(render.aliases, ["build"])
+  let render = canonical_command(render_tool, "artifact-render")
+  assert_eq(render_tool.root_command, Some(0))
+  assert_eq(render.source_name, "artifact_render")
+  assert_eq(render.aliases, [])
+  assert_eq(
+    render.description,
+    "Render one artifact\n Build an artifact and return a structured report.",
+  )
   assert_eq(render.idempotent, Some(true))
   assert_eq(render.destructive, Some(false))
   assert_eq(render.read_only, Some(false))
@@ -1804,6 +1903,15 @@ test "GOL-40 artifact fixture preserves rich metadata and client call shape" {
     "profile", "request", "inputs", "format", "tag", "define", "color", "checksum",
     "verbose", "stdin", "stdout", "stderr", "principal",
   ])
+  assert_eq(render.params[0].1, @lib.ToolParamType::Public(Simple("Profile")))
+  assert_eq(
+    render.params[3].1,
+    @lib.ToolParamType::Public(Simple("ReportFormat")),
+  )
+  assert_eq(
+    render.params[6].1,
+    @lib.ToolParamType::Public(Optional(Simple("ColorMode"))),
+  )
   assert_true(
     render.params.any(param => param.1 is @lib.OptionalHidden(InputStream)),
   )
@@ -1812,6 +1920,18 @@ test "GOL-40 artifact fixture preserves rich metadata and client call shape" {
     render.params.any(param => param.1 is @lib.OptionalHidden(ErrorStream)),
   )
   assert_true(render.params.any(param => param.1 is @lib.Hidden(Principal)))
+  let inputs = render.args
+    .iter()
+    .find_first(arg => arg.source_param == "inputs")
+    .unwrap()
+  assert_eq(inputs.extensions, ["wasm", "wat"])
+  assert_eq(inputs.value_name, Some("INPUT"))
+  assert_eq(inputs.min, Some("1"))
+  assert_eq(inputs.max, Some("3"))
+  assert_eq(inputs.separator, Some("--"))
+  assert_eq(inputs.verbatim, Some(true))
+  assert_eq(inputs.direction, Some("input"))
+  assert_eq(inputs.description, Some("One to three source modules."))
   let report = value_types
     .iter()
     .find_first(type_ => type_.name == "ArtifactReport")
@@ -1840,11 +1960,48 @@ test "GOL-40 artifact fixture preserves rich metadata and client call shape" {
       @lib.ValueCase::{ source_name: "Failed", name: "failed", },
     ]),
   )
-  assert_eq(render.constraints.map(constraint => constraint.kind), [
-    "requires_all", "implies", "forbids",
+  assert_eq(render.constraints, [
+    {
+      kind: "requires_all",
+      refs: ["checksum", "format"],
+      lhs: [],
+      rhs: [],
+      lhs_quant: None,
+      rhs_quant: None,
+      lhs_value_is: [],
+      rhs_value_is: [],
+      value_is: [],
+    },
+    {
+      kind: "implies",
+      refs: [],
+      lhs: [],
+      rhs: ["tag"],
+      lhs_quant: None,
+      rhs_quant: Some("any"),
+      lhs_value_is: ["profile=release"],
+      rhs_value_is: [],
+      value_is: [],
+    },
+    {
+      kind: "forbids",
+      refs: [],
+      lhs: [],
+      rhs: ["define"],
+      lhs_quant: Some("any"),
+      rhs_quant: None,
+      lhs_value_is: ["format=text"],
+      rhs_value_is: [],
+      value_is: [],
+    },
   ])
   assert_eq(render.result.unwrap().formatters, ["json", "table"])
   assert_eq(render.result.unwrap().defaults, ["json"])
+  assert_eq(render.result.unwrap().doc, Some("Artifact report"))
+  assert_eq(render.result.unwrap().formatter_docs, [
+    ("json", "JSON report"),
+    ("table", "Tabular report"),
+  ])
   assert_eq(
     render.errors.map(error => (error.name, error.kind, error.exit_code)),
     [
@@ -1869,6 +2026,8 @@ test "GOL-40 artifact fixture preserves rich metadata and client call shape" {
   assert_eq(status.idempotent, Some(true))
   assert_eq(status.args[0].source_param, "artifactId")
   assert_eq(status.args[0].name, Some("artifact-id"))
+  assert_eq(status.result.unwrap().doc, Some("Current status"))
+  assert_eq(status.result.unwrap().formatter_docs, [("json", "JSON status")])
   let registration = @formatter.impls_to_string(
     @lib.generate_tool_registration(tools) catch {
       error => fail("GOL-40 provider generation failed: " + repr(error))
@@ -1878,6 +2037,7 @@ test "GOL-40 artifact fixture preserves rich metadata and client call shape" {
   assert_true(registration.contains("aliases: [\"art\"]"))
   assert_true(registration.contains("name: \"render\""))
   assert_true(registration.contains("name: \"status\""))
+  assert_true(registration.contains("Some(\"render\")"))
   assert_true(registration.contains("@toolCommon.Constraint::RequiresAll"))
   assert_true(registration.contains("@toolCommon.Constraint::Implies"))
   assert_true(registration.contains("@toolCommon.Constraint::Forbids"))
@@ -1902,6 +2062,16 @@ test "GOL-40 artifact fixture preserves rich metadata and client call shape" {
     ),
   )
   assert_true(compact_registration.contains("RecordType([{name:\"stage\""))
+  assert_true(
+    compact_registration.contains("extensions=Some([\"wasm\",\"wat\"])"),
+  )
+  assert_true(compact_registration.contains("summary:\"Artifactreport\""))
+  assert_true(compact_registration.contains("summary:\"JSONreport\""))
+  assert_true(compact_registration.contains("summary:\"Tabularreport\""))
+  assert_true(compact_registration.contains("summary:\"Currentstatus\""))
+  assert_true(compact_registration.contains("summary:\"JSONstatus\""))
+  assert_true(compact_registration.contains("ToolLiteral::List([])"))
+  assert_true(compact_registration.contains("ToolLiteral::Map([])"))
   assert_true(registration.contains("principal : @tool.Principal"))
   let value_impls = @formatter.impls_to_string(
     @lib.generate_value_type_impls(
@@ -1911,6 +2081,21 @@ test "GOL-40 artifact fixture preserves rich metadata and client call shape" {
   )
   assert_true(value_impls.contains("@schema.TypeTag[@schema.Text[DigestText]]"))
   assert_true(value_impls.contains("Enum([\"queued\", \"ready\", \"failed\"])"))
+  assert_true(value_impls.contains("Some(\"ArtifactRequest\")"))
+  assert_true(value_impls.contains("Some(\"ArtifactReport\")"))
+  assert_true(value_impls.contains("Some(\"ValidationFailure\")"))
+  let compact_value_impls = value_impls.split(" ").join("").split("\n").join("")
+  assert_true(
+    compact_value_impls.contains("EnumType([\"eu-west-1\",\"us-east-1\"])"),
+  )
+  assert_true(compact_value_impls.contains("EnumType([\"debug\",\"release\"])"))
+  assert_true(compact_value_impls.contains("EnumType([\"json\",\"text\"])"))
+  assert_true(
+    compact_value_impls.contains("EnumType([\"auto\",\"always\",\"never\"])"),
+  )
+  assert_true(
+    compact_value_impls.contains("EnumType([\"queued\",\"ready\",\"failed\"])"),
+  )
   let clients = @formatter.impls_to_string(
     @lib.generate_tool_client_code(tools) catch {
       error => fail("GOL-40 client generation failed: " + repr(error))
@@ -1920,18 +2105,23 @@ test "GOL-40 artifact fixture preserves rich metadata and client call shape" {
   assert_true(clients.contains("ArtifactClient::new()"))
   assert_true(clients.contains("ArtifactClient::new_for"))
   assert_true(clients.contains("ArtifactClient::render"))
-  assert_true(clients.contains("ArtifactRenderClient::render"))
+  assert_true(clients.contains("ArtifactRenderClient::artifact_render"))
   assert_true(clients.contains("ArtifactRenderClient::status"))
   let mount_client = clients.split("ArtifactClient::render").last().unwrap()
-  assert_true(mount_client.contains("region : String"))
+  assert_true(mount_client.contains("region : Region"))
   assert_true(mount_client.contains("trace : Bool"))
   let render_client = clients
-    .split("ArtifactRenderClient::render")
+    .split("ArtifactRenderClient::artifact_render")
     .last()
     .unwrap()
   let profile = render_client.find("__golem_values.push(profile)").unwrap()
   let request = render_client.find("__golem_values.push(request)").unwrap()
   assert_true(profile < request)
+  assert_true(
+    render_client.contains(
+      "match stdin {\n        Some(__golem_stdin) => __golem_stdin.drop_sync()\n        None => ()",
+    ),
+  )
   assert_true(render_client.contains("ArtifactReport"))
   assert_true(render_client.contains("ArtifactError"))
 }

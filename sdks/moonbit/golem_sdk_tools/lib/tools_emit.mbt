@@ -152,6 +152,21 @@ fn emit_doc(description : String, examples : Array[ToolExample]) -> String {
 }
 
 ///|
+fn emit_doc_fields(
+  summary : String?,
+  description : String?,
+  examples : Array[ToolExample],
+) -> String {
+  "{ summary: \"" +
+  escape_string_lit(summary.unwrap_or("")) +
+  "\", description: \"" +
+  escape_string_lit(description.unwrap_or("")) +
+  "\", examples: " +
+  emit_examples(examples) +
+  " }"
+}
+
+///|
 fn emit_type(pt : ParamType) -> String {
   param_type_to_type_string(pt)
 }
@@ -206,6 +221,9 @@ fn has_refinements(arg : ToolArgInfo) -> String? {
   }
   if arg.mimes.length() > 0 {
     return Some("mime")
+  }
+  if arg.extensions.length() > 0 {
+    return Some("extension")
   }
   if arg.schemes.length() > 0 {
     return Some("scheme")
@@ -841,6 +859,7 @@ fn refined_graph(arg : ProjectedToolArg, wire? : Bool = false) -> String {
   }
   if info.direction is Some(_) ||
     info.mimes.length() > 0 ||
+    info.extensions.length() > 0 ||
     info.kind == Some("file") ||
     info.kind == Some("dir") {
     let direction = info.direction
@@ -864,6 +883,12 @@ fn refined_graph(arg : ProjectedToolArg, wire? : Bool = false) -> String {
       ", " +
       (if info.mimes.length() > 0 {
         "Some(" + emit_strings(info.mimes) + ")"
+      } else {
+        "None"
+      }) +
+      ", extensions=" +
+      (if info.extensions.length() > 0 {
+        "Some(" + emit_strings(info.extensions) + ")"
       } else {
         "None"
       }) +
@@ -969,7 +994,10 @@ fn emit_short(info : ToolArgInfo?) -> String {
 
 ///|
 fn emit_arg_doc(arg : ProjectedToolArg) -> String {
-  emit_doc(arg.info.flat_map(i => i.doc).unwrap_or(""), [])
+  match arg.info {
+    Some(info) => emit_doc_fields(info.doc, info.description, [])
+    None => emit_doc("", [])
+  }
 }
 
 ///|
@@ -1007,6 +1035,25 @@ fn emit_option(arg : ProjectedToolArg, wire? : Bool = false) -> String {
   } else {
     prefix + "Scalar(" + schema(arg) + ")"
   }
+  let default = if arg.info.map(i => i.defaults.is_empty()).unwrap_or(true) &&
+    (is_map(base) || list_item(base) is Some(_)) {
+    let literal = if is_map(base) {
+      "@tool.ToolLiteral::Map([])"
+    } else {
+      "@tool.ToolLiteral::List([])"
+    }
+    (if wire {
+      "Some(@tool.wire_tool_literal("
+    } else {
+      "Some(@tool.literal_to_schema_value("
+    }) +
+    refined_graph(arg, wire~) +
+    ", " +
+    literal +
+    "))"
+  } else {
+    emit_default(arg, wire~)
+  }
   "{ long: \"" +
   escape_string_lit(arg.canonical) +
   "\", short: " +
@@ -1020,7 +1067,7 @@ fn emit_option(arg : ProjectedToolArg, wire? : Bool = false) -> String {
   ", shape: " +
   shape +
   ", default: " +
-  emit_default(arg, wire~) +
+  default +
   ", required: " +
   arg.required.to_string() +
   ", env_var: " +
@@ -1220,10 +1267,15 @@ fn emit_result(command : ToolCommandInfo, wire? : Bool = false) -> String {
       "[" +
       r.formatters
       .map(formatter => {
+        let formatter_doc = r.formatter_docs
+          .iter()
+          .find_first(pair => pair.0 == formatter)
+          .map(pair => pair.1)
+          .unwrap_or("")
         "{ name: \"" +
         escape_string_lit(formatter) +
         "\", doc: " +
-        emit_doc("", []) +
+        emit_doc(formatter_doc, []) +
         " }"
       })
       .join(", ") +
@@ -1234,10 +1286,15 @@ fn emit_result(command : ToolCommandInfo, wire? : Bool = false) -> String {
     .map(r => r.defaults.get(0).unwrap_or(r.formatters[0]))
     .unwrap_or("default")
   let schema = graph(command.success_type.unwrap(), wire~)
+  let result_doc = match command.result {
+    Some(result) if result.doc is Some(_) || result.description is Some(_) =>
+      emit_doc_fields(result.doc, result.description, command.examples)
+    _ => emit_doc(command.description, command.examples)
+  }
   "Some({ type_: " +
   (if wire { "(" + schema + ").index" } else { schema }) +
   ", doc: " +
-  emit_doc(command.description, command.examples) +
+  result_doc +
   ", formatters: " +
   formatters +
   ", default_formatter: \"" +
@@ -1335,7 +1392,10 @@ fn emit_stream(command : ToolCommandInfo, hidden : ToolHiddenType) -> String {
       pair.1 == LabelledOptionalHidden(hidden) {
       let info = arg_info(command, pair.0)
       return "Some({ doc: " +
-        emit_doc(info.flat_map(i => i.doc).unwrap_or(""), []) +
+        (match info {
+          Some(value) => emit_doc_fields(value.doc, value.description, [])
+          None => emit_doc("", [])
+        }) +
         ", mime: " +
         emit_strings(info.map(i => i.mimes).unwrap_or([])) +
         ", required: " +
@@ -1978,6 +2038,14 @@ fn input_stream_source(command : ToolCommandInfo) -> String? {
     }
   }
   None
+}
+
+///|
+fn has_optional_input_stream(command : ToolCommandInfo) -> Bool {
+  command.params.any(pair => {
+    pair.1 == OptionalHidden(InputStream) ||
+    pair.1 == LabelledOptionalHidden(InputStream)
+  })
 }
 
 ///|
@@ -2958,6 +3026,7 @@ fn emit_tool_client_method(
     has_prefix,
     !has_output,
     input_stream_source(command),
+    has_optional_input_stream(command),
   )
   let mut stdin = "None"
   for arg in args {
