@@ -24,6 +24,7 @@ components:
       - golem-it:tool-streaming-rust-provider/typed-output-stream
       - golem-it:tool-streaming-rust-provider/secret-policy-probe
       - golem-it:tool-streaming-rust-provider/environment-probe
+      - golem-it:tool-streaming-rust-provider/matrix-core
   golem-it:tool-streaming-rust-middleware:
     dir: rust-middleware
     templates: rust, rust-test-component
@@ -37,6 +38,8 @@ tools:
   typed-output-stream: {}
   secret-policy-probe: {}
   environment-probe: {}
+  matrix-core:
+    component: golem-it:tool-streaming-rust-provider
 
 agents:
   ToolStreamingCaller:
@@ -44,6 +47,7 @@ agents:
       streaming: {}
       capable-streaming: {}
       typed-output-stream: {}
+      matrix-core: {}
   ToolSecretCaller:
     tools:
       secret-policy-probe: {}
@@ -60,6 +64,7 @@ bridge:
       - typed-output-stream
       - secret-policy-probe
       - environment-probe
+      - matrix-core
 
 environments:
   local:

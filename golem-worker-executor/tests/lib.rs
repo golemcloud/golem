@@ -293,6 +293,18 @@ test_component!(
     "golem:moonbit-examples"
 );
 test_component!(
+    tool_streaming_effect_provider,
+    "tool_streaming_effect_provider",
+    "golem_it_tool_streaming_effect_provider",
+    "golem-it:tool-streaming-effect-provider"
+);
+test_component!(
+    tool_streaming_effect_caller,
+    "tool_streaming_effect_caller",
+    "golem_it_tool_streaming_effect_caller",
+    "golem-it:tool-streaming-effect-caller"
+);
+test_component!(
     agent_counters,
     "agent_counters",
     "it_agent_counters_release",

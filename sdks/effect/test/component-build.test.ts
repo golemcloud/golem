@@ -422,8 +422,10 @@ describe("capability-sensitive component exports", () => {
       expect(
         runtime.golemTool010Guest.discoverTools().map((t: any) => t.commands.nodes[0].name),
       ).toEqual(tools ? ["double"] : [])
-      if (fixture === "tool-only")
+      if (fixture === "tool-only") {
+        expect(runtime.golemTool010Guest.discoverTools()[0].version).toBe("1.0.0")
         expect(runtime.golemTool010Guest.discoverTools()[0].requiresFilesystem).toBe(true)
+      }
       expect(runtime.toolMiddlewareGuest.discoverToolMiddlewares().map((m: any) => m.name)).toEqual(
         middleware ? ["passthrough"] : [],
       )

@@ -618,6 +618,7 @@ export function staticContracts(runtime, publicEntries) {
     const model = load("internal/tool/model.js")
     const definition = {
       name: builder.model.name,
+      version: builder.version,
       model: builder.model,
       requiresFilesystem: builder.requiresFilesystem,
     }

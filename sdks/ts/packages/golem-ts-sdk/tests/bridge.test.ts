@@ -18,11 +18,15 @@ const streamFailures = [
 ] satisfies ByteStreamFailure[];
 
 describe('public bridge runtime', () => {
-  it('validates both the graph and value of typed schema values', () => {
+  it('validates equivalent cross-graph schemas and their values', () => {
     const stringGraph = graph(bridge.t.string());
     const otherStringGraph = graph(
       bridge.schemaType({ tag: 'string' }, { ...bridge.emptyMetadata(), doc: 'different schema' }),
     );
+    const referencedStringGraph = {
+      defs: new Map([['example.String', { name: 'DisplayString', body: bridge.t.string() }]]),
+      root: bridge.schemaType({ tag: 'ref', id: 'example.String' }),
+    };
 
     expect(
       bridge.typedSchemaValueConforms(stringGraph, {
@@ -35,7 +39,13 @@ describe('public bridge runtime', () => {
         graph: otherStringGraph,
         value: bridge.v.string('structurally compatible with the expected value'),
       }),
-    ).toBe(false);
+    ).toBe(true);
+    expect(
+      bridge.typedSchemaValueConforms(stringGraph, {
+        graph: referencedStringGraph,
+        value: bridge.v.string('referenced schema'),
+      }),
+    ).toBe(true);
     expect(
       bridge.typedSchemaValueConforms(stringGraph, {
         graph: stringGraph,

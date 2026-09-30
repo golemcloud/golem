@@ -20,14 +20,17 @@ components:
     dependencies:
       tools:
         - golem-it:tool-streaming-ts-provider/ts-streaming
+        - golem-it:tool-streaming-ts-provider/matrix-core
 
 tools:
   ts-streaming: {}
+  matrix-core: {}
 
 agents:
   TsToolStreamingCaller:
     tools:
       ts-streaming: {}
+      matrix-core: {}
 
 environments:
   local:

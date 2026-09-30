@@ -82,6 +82,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use test_r::{inherit_test_dep, test, timeout};
 use tokio_stream::wrappers::ReceiverStream;
 
+mod matrix_conformance;
 mod middleware_acceptance;
 mod moonbit_exports;
 mod trapped_leaf_observers;
@@ -123,6 +124,14 @@ inherit_test_dep!(
 );
 inherit_test_dep!(
     #[tagged_as("tool_streaming_moonbit")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("tool_streaming_effect_provider")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("tool_streaming_effect_caller")]
     PrecompiledComponent
 );
 inherit_test_dep!(

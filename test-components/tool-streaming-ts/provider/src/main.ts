@@ -1,5 +1,90 @@
-import { err, ok, s, toolDefinition, ToolStreamError } from "@golemcloud/golem-ts-sdk";
+import {
+  command,
+  err,
+  getSelfMetadata,
+  ok,
+  type Principal,
+  s,
+  toolDefinition,
+  ToolStreamError,
+} from "@golemcloud/golem-ts-sdk";
 import { z } from "zod/v4";
+
+const U32 = s.u32() as unknown as z.ZodType<number, number>;
+
+const MatrixRequest = z.object({
+  source: z.string(),
+  dimensions: z.object({
+    width: U32,
+    height: U32,
+  }),
+  labels: z.array(z.string()),
+});
+
+const MatrixResult = z.object({
+  provider: z.string(),
+  command: z.string(),
+  normalizedSource: z.string(),
+  weightedSize: s.s64(),
+  labelSummary: z.string(),
+  principal: z.string(),
+  ownerAgentId: z.string(),
+});
+
+const MatrixRejection = z.object({
+  field: z.string(),
+  reason: z.string(),
+  retryable: z.boolean(),
+});
+
+function principalName(principal: Principal): string {
+  return principal.tag === "oidc" ? `oidc:${principal.sub}` : principal.tag;
+}
+
+toolDefinition("matrix-core")
+  .version("1.0.0")
+  .command("artifact", (artifact) =>
+    artifact.command("inspect", (inspect) =>
+      inspect.body((body) =>
+        body
+          .positional("request", MatrixRequest)
+          .positional("multiplier", s.s64())
+          .returns(MatrixResult)
+          .error("rejected", {
+            kind: "usage",
+            exitCode: 2,
+            payload: MatrixRejection,
+          }),
+      ),
+    ),
+  )
+  .implement({
+    artifact: command({
+      inspect: async ({ request, multiplier }, context) => {
+        if (request.source === "reject.me") {
+          return err("rejected", {
+            field: "request.source",
+            reason: "unsupported source",
+            retryable: false,
+          });
+        }
+
+        return ok({
+          provider: "typescript",
+          command: "artifact/inspect",
+          normalizedSource: request.source.toUpperCase(),
+          weightedSize:
+            BigInt(request.dimensions.width) *
+              BigInt(request.dimensions.height) *
+              multiplier +
+            BigInt(request.labels.length),
+          labelSummary: [...request.labels].reverse().join("|"),
+          principal: principalName(context.principal),
+          ownerAgentId: getSelfMetadata().agentId.agentId,
+        });
+      },
+    }),
+  });
 
 toolDefinition("ts-streaming")
   .body((body) =>

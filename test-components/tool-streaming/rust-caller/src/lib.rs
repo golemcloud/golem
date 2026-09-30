@@ -16,6 +16,9 @@ use golem_rust::{
     SchemaType, SchemaValue, TypedSchemaValue, WireSchema, agent_definition, agent_implementation,
     decode_typed_schema_value_owned, read_only,
 };
+use matrix_core_tool_guest_client::{
+    MatrixCoreArtifactInspectError, MatrixCoreClient, MatrixDimensions, MatrixRequest,
+};
 use secret_policy_probe_tool_guest_client::SecretPolicyProbeClient;
 use std::io::{Read, Write};
 use streaming_tool_guest_client::{StreamSummary, StreamingClient, StreamingRunError};
@@ -91,6 +94,21 @@ pub struct ClockedStreamEvidence {
     pub before_tool_nanos: u64,
     pub after_tool_nanos: u64,
     pub stream: StreamEvidence,
+}
+
+#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
+#[schema(rename_all = "camelCase")]
+pub struct MatrixObservation {
+    pub provider: String,
+    pub command: String,
+    pub normalized_source: String,
+    pub weighted_size: i64,
+    pub label_summary: String,
+    pub principal: String,
+    pub owner_agent_id: String,
+    pub error_field: String,
+    pub error_reason: String,
+    pub error_retryable: bool,
 }
 
 #[derive(IntoSchema)]
@@ -411,6 +429,7 @@ pub trait ToolStreamingCaller {
     async fn hold_completed_reconstruction_overlapping_custom(&self);
     async fn single_store_http_atomic_probe(&self);
     async fn principal_context(&self, principal: Principal) -> Vec<String>;
+    async fn matrix_core_observation(&self) -> MatrixObservation;
 }
 
 struct ToolStreamingCallerImpl;
@@ -3202,5 +3221,52 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             outer_class.to_string(),
             nested_class.to_string(),
         ]
+    }
+
+    async fn matrix_core_observation(&self) -> MatrixObservation {
+        let client = MatrixCoreClient::default().artifact();
+        let success = client
+            .inspect(
+                MatrixRequest {
+                    source: "matrix.sample".to_string(),
+                    dimensions: MatrixDimensions {
+                        width: 3,
+                        height: 5,
+                    },
+                    labels: vec!["north".to_string(), "east".to_string(), "south".to_string()],
+                },
+                7,
+            )
+            .await
+            .expect("matrix success invocation");
+        let error = client
+            .inspect(
+                MatrixRequest {
+                    source: "reject.me".to_string(),
+                    dimensions: MatrixDimensions {
+                        width: 1,
+                        height: 1,
+                    },
+                    labels: vec!["must-not-echo".to_string()],
+                },
+                99,
+            )
+            .await
+            .expect_err("matrix rejection invocation");
+        let ToolError::Tool(MatrixCoreArtifactInspectError::Rejected(rejection)) = error else {
+            panic!("matrix invocation returned the wrong error variant: {error:?}")
+        };
+        MatrixObservation {
+            provider: success.provider,
+            command: success.command,
+            normalized_source: success.normalized_source,
+            weighted_size: success.weighted_size,
+            label_summary: success.label_summary,
+            principal: success.principal,
+            owner_agent_id: success.owner_agent_id,
+            error_field: rejection.field,
+            error_reason: rejection.reason,
+            error_retryable: rejection.retryable,
+        }
     }
 }

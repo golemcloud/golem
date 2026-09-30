@@ -28,8 +28,20 @@ describe("BridgeTool", () => {
     ).toMatchObject({ tag: "tool", error: { name: "second" } })
   })
 
-  it("requires exact result graphs and values that conform to the expected graph", () => {
+  it("requires equivalent result graphs and values that conform to the expected graph", () => {
     const expected = { defs: new Map(), root: t.u32({ min: { tag: "unsigned", val: 1n } }) }
+    const referenced = {
+      defs: new Map([
+        [
+          "example.Number",
+          {
+            name: "DisplayNumber",
+            body: t.u32({ min: { tag: "unsigned", val: 1n } }),
+          },
+        ],
+      ]),
+      root: schemaType({ tag: "ref", id: "example.Number" }),
+    }
     expect(
       typedSchemaValueConforms(expected, {
         graph: expected,
@@ -44,6 +56,12 @@ describe("BridgeTool", () => {
     ).toBe(false)
     expect(
       typedSchemaValueConforms(expected, {
+        graph: referenced,
+        value: { tag: "u32", value: 1 },
+      }),
+    ).toBe(true)
+    expect(
+      typedSchemaValueConforms(expected, {
         graph: {
           defs: new Map(),
           root: schemaType(
@@ -56,7 +74,7 @@ describe("BridgeTool", () => {
         },
         value: { tag: "u32", value: 1 },
       }),
-    ).toBe(false)
+    ).toBe(true)
     expect(
       typedSchemaValueConforms(expected, {
         graph: expected,

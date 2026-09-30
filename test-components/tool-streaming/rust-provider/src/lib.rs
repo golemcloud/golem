@@ -14,6 +14,121 @@ use wasi::filesystem::types::{DescriptorFlags, OpenFlags, PathFlags};
 const MARKER: &[u8] = b"marker:";
 
 #[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
+#[schema(rename_all = "camelCase")]
+pub struct MatrixDimensions {
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
+#[schema(rename_all = "camelCase")]
+pub struct MatrixRequest {
+    pub source: String,
+    pub dimensions: MatrixDimensions,
+    pub labels: Vec<String>,
+}
+
+#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
+#[schema(rename_all = "camelCase")]
+pub struct MatrixResult {
+    pub provider: String,
+    pub command: String,
+    pub normalized_source: String,
+    pub weighted_size: i64,
+    pub label_summary: String,
+    pub principal: String,
+    pub owner_agent_id: String,
+}
+
+#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
+#[schema(rename_all = "camelCase")]
+pub struct MatrixRejection {
+    pub field: String,
+    pub reason: String,
+    pub retryable: bool,
+}
+
+#[derive(Debug, Clone, ToolError)]
+pub enum MatrixError {
+    #[tool_error(kind = "usage-error", exit_code = 2)]
+    Rejected(MatrixRejection),
+}
+
+pub struct MatrixArtifactSubtree;
+
+#[tool_definition(version = "1.0.0")]
+pub trait MatrixCore {
+    #[command(subtree = Artifact)]
+    fn artifact(&self) -> MatrixArtifactSubtree;
+}
+
+struct MatrixCoreImpl;
+
+#[tool_implementation]
+impl MatrixCore for MatrixCoreImpl {
+    fn artifact(&self) -> MatrixArtifactSubtree {
+        MatrixArtifactSubtree
+    }
+}
+
+#[tool_definition]
+pub trait Artifact {
+    async fn inspect(
+        &self,
+        request: MatrixRequest,
+        multiplier: i64,
+        principal: golem_rust::agentic::Principal,
+    ) -> Result<MatrixResult, MatrixError>;
+}
+
+struct MatrixArtifactImpl;
+
+fn matrix_principal(principal: &Principal) -> String {
+    match principal {
+        Principal::Anonymous => "anonymous".to_string(),
+        Principal::Oidc(value) => format!("oidc:{}", value.sub),
+        Principal::Agent(_) => "agent".to_string(),
+        Principal::GolemUser(_) => "golem-user".to_string(),
+    }
+}
+
+#[tool_implementation]
+impl Artifact for MatrixArtifactImpl {
+    async fn inspect(
+        &self,
+        request: MatrixRequest,
+        multiplier: i64,
+        principal: golem_rust::agentic::Principal,
+    ) -> Result<MatrixResult, MatrixError> {
+        if request.source == "reject.me" {
+            return Err(MatrixError::Rejected(MatrixRejection {
+                field: "request.source".to_string(),
+                reason: "unsupported source".to_string(),
+                retryable: false,
+            }));
+        }
+        let metadata = golem_rust::get_self_metadata().expect("matrix owner metadata");
+        Ok(MatrixResult {
+            provider: "rust".to_string(),
+            command: "artifact/inspect".to_string(),
+            normalized_source: request.source.to_uppercase(),
+            weighted_size: i64::from(request.dimensions.width)
+                * i64::from(request.dimensions.height)
+                * multiplier
+                + request.labels.len() as i64,
+            label_summary: request
+                .labels
+                .into_iter()
+                .rev()
+                .collect::<Vec<_>>()
+                .join("|"),
+            principal: matrix_principal(&principal),
+            owner_agent_id: metadata.agent_id.agent_id,
+        })
+    }
+}
+
+#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub struct EnvironmentProbeEvidence {
     pub marker: String,
     pub secret: String,
@@ -33,8 +148,8 @@ pub trait EnvironmentProbe {
 struct EnvironmentProbeImpl;
 
 fn owner_config_string(key: &str) -> Result<String, String> {
-    let graph = golem_rust::schema::try_into_schema_graph::<String>()
-        .map_err(|error| error.to_string())?;
+    let graph =
+        golem_rust::schema::try_into_schema_graph::<String>().map_err(|error| error.to_string())?;
     let expected = encode_schema_graph(&graph).map_err(|error| error.to_string())?;
     let value = agent_host::get_config_value(&[key.to_string()], &expected)
         .map_err(|error| format!("{error:?}"))?;

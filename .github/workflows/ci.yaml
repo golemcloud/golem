@@ -1026,6 +1026,7 @@ jobs:
     needs:
       - build-cli-test-bins
       - build-golem-ts
+      - build-golem-effect
       - build-golem-scala
       - list-test-component-groups
     strategy:
@@ -1078,6 +1079,16 @@ jobs:
       - name: Extract built TS SDK
         if: matrix.chunk.needs-node
         run: tar -xzf tmp/sdk-artifacts/golem-ts-sdk.tar.gz
+
+      - name: Restore built Effect SDK
+        if: matrix.chunk.needs-effect
+        uses: actions/download-artifact@v8
+        with:
+          name: golem-effect-sdk
+          path: tmp/effect-sdk-artifacts
+      - name: Extract built Effect SDK
+        if: matrix.chunk.needs-effect
+        run: tar -xzf tmp/effect-sdk-artifacts/golem-effect-sdk.tar.gz
 
       - name: Setup JS and WASM build tools
         if: matrix.chunk.needs-node

@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ES2022",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "paths": {
+      "matrix-core-tool-guest-client": [
+        "../golem-temp/bridge-sdk/effect/internal/matrix-core-tool-guest-client/matrix-core-tool-guest-client.ts"
+      ]
+    }
+  },
+  "include": [
+    "src/**/*.ts",
+    "../golem-temp/bridge-sdk/effect/internal/matrix-core-tool-guest-client/*.ts"
+  ]
+}

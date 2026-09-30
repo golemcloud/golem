@@ -7,7 +7,7 @@ import type {
   Secret as RawSecret,
 } from 'golem:core/types@2.0.0';
 import {
-  deepEqual,
+  schemaGraphsEquivalent,
   type SchemaGraph,
   type SchemaValue,
   type TypedSchemaValue,
@@ -80,7 +80,7 @@ export function typedSchemaValueConforms(
   typed: TypedSchemaValue,
 ): boolean {
   return (
-    deepEqual(typed.graph, expectedGraph) &&
+    schemaGraphsEquivalent(typed.graph, expectedGraph) &&
     schemaValueConforms(expectedGraph, expectedGraph.root, typed.value)
   );
 }

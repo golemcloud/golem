@@ -1,0 +1,36 @@
+manifestVersion: 1.6.0
+
+app: tool-streaming-effect
+
+includes:
+  - ../golem-test-components-common.yaml
+
+componentTemplates:
+  effect-test-component:
+    guestLanguage: effect
+    customCommands:
+      copy:
+        - command: cp "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.wasm" "{{ appRootDir }}/../{{ component_name | to_snake_case }}.wasm"
+
+components:
+  golem-it:tool-streaming-effect-provider:
+    dir: provider
+    templates: effect, effect-test-component
+  golem-it:tool-streaming-effect-caller:
+    dir: caller
+    templates: effect, effect-test-component
+    dependencies:
+      tools:
+        - golem-it:tool-streaming-effect-provider/matrix-core
+
+tools:
+  matrix-core: {}
+
+agents:
+  EffectToolStreamingCaller:
+    tools:
+      matrix-core: {}
+
+environments:
+  local:
+    server: local

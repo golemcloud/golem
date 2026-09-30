@@ -30,11 +30,13 @@ components:
 
 tools:
   moonbit-streaming: {}
+  matrix-core: {}
 
 agents:
   MoonBitToolStreamingCaller:
     tools:
       moonbit-streaming: {}
+      matrix-core: {}
 
 environments:
   local:

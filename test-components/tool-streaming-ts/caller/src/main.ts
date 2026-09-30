@@ -4,8 +4,22 @@ import {
   s,
   ToolStreamError,
 } from "@golemcloud/golem-ts-sdk";
+import { MatrixCoreClient } from "matrix-core-tool-guest-client";
 import { TsStreamingClient } from "ts-streaming-tool-guest-client";
 import { z } from "zod/v4";
+
+const MatrixCoreObservation = z.object({
+  provider: z.string(),
+  command: z.string(),
+  normalizedSource: z.string(),
+  weightedSize: s.s64(),
+  labelSummary: z.string(),
+  principal: z.string(),
+  ownerAgentId: z.string(),
+  errorField: z.string(),
+  errorReason: z.string(),
+  errorRetryable: z.boolean(),
+});
 
 const Evidence = z.object({
   output: s.bytes(),
@@ -60,12 +74,61 @@ const Caller = defineAgent({
       input: {},
       returns: DualOutputEvidence,
     }),
+    matrix_core_observation: method({
+      input: {},
+      returns: MatrixCoreObservation,
+    }),
   },
 });
 
 Caller.implement({
   init: () => ({}),
   methods: {
+    async matrix_core_observation() {
+      const client = MatrixCoreClient.newClient();
+      const success = await client.artifact().inspect(
+        {
+          source: "matrix.sample",
+          dimensions: { width: 3, height: 5 },
+          labels: ["north", "east", "south"],
+        },
+        7n,
+      );
+
+      try {
+        await client.artifact().inspect(
+          {
+            source: "reject.me",
+            dimensions: { width: 13, height: 5 },
+            labels: ["unused", "error"],
+          },
+          2n,
+        );
+        throw new Error("matrix-core reject.me unexpectedly succeeded");
+      } catch (error) {
+        const declared = error as {
+          tag?: unknown;
+          error?: {
+            tag?: unknown;
+            value?: { field: string; reason: string; retryable: boolean };
+          };
+        };
+        if (
+          declared.tag !== "tool" ||
+          declared.error?.tag !== "Rejected" ||
+          declared.error.value === undefined
+        ) {
+          throw error;
+        }
+        const payload = declared.error.value;
+        return {
+          ...success,
+          errorField: payload.field,
+          errorReason: payload.reason,
+          errorRetryable: payload.retryable,
+        };
+      }
+    },
     async dualOutputDeclaredError() {
       const invocation = TsStreamingClient.newClient().dual();
       if (!invocation.stdout || !invocation.stderr) {
