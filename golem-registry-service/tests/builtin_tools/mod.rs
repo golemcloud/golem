@@ -1,21 +1,17 @@
-use async_zip::tokio::write::ZipFileWriter;
-use async_zip::{Compression, ZipEntryBuilder};
 use golem_common::config::{DbConfig, DbSqliteConfig};
 use golem_common::model::Empty;
 use golem_common::model::account::AccountId;
 use golem_common::model::application::ApplicationName;
-use golem_common::model::component::{
-    AgentFilePath, AgentFilePermissions, ComponentName, ComponentRevision,
-};
+use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::environment::EnvironmentName;
-use golem_common::model::tool::{ToolName, ToolSource};
+use golem_common::model::tool::ToolSource;
 use golem_common::model::tool_release::ToolRelease;
 use golem_registry_service::bootstrap::Services;
 use golem_registry_service::config::{
     ComponentCompilationConfig, LoginConfig, RegistryServiceConfig,
 };
 use golem_registry_service::services::builtin_tool_provisioner::{
-    BuiltinToolDescriptor, BuiltinToolFile, provision_descriptors,
+    BuiltinToolDescriptor, provision_descriptors,
 };
 use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::model::auth::AuthCtx;
@@ -23,18 +19,6 @@ use test_r::{test, timeout};
 use tokio::task::JoinSet;
 
 pub mod native;
-
-async fn zip_bytes(entries: &[(&str, &[u8])]) -> &'static [u8] {
-    let archive = tempfile::NamedTempFile::new().unwrap();
-    let file = tokio::fs::File::from_std(archive.reopen().unwrap());
-    let mut writer = ZipFileWriter::with_tokio(file);
-    for (path, contents) in entries {
-        let entry = ZipEntryBuilder::new((*path).into(), Compression::Deflate);
-        writer.write_entry_whole(entry, contents).await.unwrap();
-    }
-    writer.close().await.unwrap();
-    Box::leak(std::fs::read(archive.path()).unwrap().into_boxed_slice())
-}
 
 #[test]
 #[timeout("120s")]
@@ -58,44 +42,18 @@ async fn provisions_component_tool_release_idempotently_and_rejects_mismatch_wit
     let owner = config.initial_accounts["builtin_tool_owner"].id;
     let mut join_set = JoinSet::new();
     let services = Services::new(&config, &mut join_set).await.unwrap();
-    let mut wasm = std::fs::read(concat!(
+    let wasm = std::fs::read(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../builtin-tools/filesystem-tools.wasm"
+        "/../test-components/",
+        "golem_it_tool_streaming_rust_provider_release.wasm"
     ))
-    .expect("build the filesystem tool component before running this test");
-    let mut replacements = 0;
-    for offset in 0..wasm.len().saturating_sub(5) {
-        if &wasm[offset..offset + 5] == b"0.3.0" {
-            wasm[offset..offset + 5].copy_from_slice(b"6.1.0");
-            replacements += 1;
-        }
-    }
-    assert!(replacements > 0);
-    let mut renamed_tools = 0;
-    for offset in 0..wasm.len().saturating_sub(9) {
-        if &wasm[offset..offset + 9] == b"read-file" {
-            wasm[offset..offset + 9].copy_from_slice(b"assetfile");
-            renamed_tools += 1;
-        }
-    }
-    assert!(renamed_tools > 0);
+    .expect("build the tool-streaming test component before running this test");
     let wasm = Box::leak(wasm.into_boxed_slice());
-    let files_archive_bytes = zip_bytes(&[("tool-data.txt", b"embedded tool data")]).await;
-    let files = Box::leak(
-        vec![BuiltinToolFile {
-            archive_path: "tool-data.txt",
-            target_path: "/builtin/tool-data.txt",
-            permissions: AgentFilePermissions::ReadOnly,
-        }]
-        .into_boxed_slice(),
-    );
     let descriptor = BuiltinToolDescriptor {
-        component_name: "builtin-tool-assets-test",
-        tool_name: "assetfile",
-        release_version: "6.1.0",
+        component_name: "builtin-tool-streaming-test",
+        tool_name: "streaming",
+        release_version: "1.0.0",
         wasm_bytes: wasm,
-        files_archive_bytes: Some(files_archive_bytes),
-        files,
     };
     let auth = AuthCtx::system();
 
@@ -137,20 +95,6 @@ async fn provisions_component_tool_release_idempotently_and_rejects_mismatch_wit
         .await
         .unwrap();
     let first_release = release_named(&services, owner, descriptor.tool_name).await;
-    let provisioned_files = &first_component.metadata.tools()
-        [&ToolName::try_from(descriptor.tool_name).unwrap()]
-        .provision
-        .files;
-    assert_eq!(provisioned_files.len(), 1);
-    assert_eq!(
-        provisioned_files[0].path,
-        AgentFilePath::from_abs_str("/builtin/tool-data.txt").unwrap()
-    );
-    assert_eq!(
-        provisioned_files[0].permissions,
-        AgentFilePermissions::ReadOnly
-    );
-    assert_eq!(provisioned_files[0].size, 18);
     let first_deployments = services
         .deployment_service
         .list_deployments(env.id, None, &auth)
@@ -277,16 +221,12 @@ async fn changed_component_creates_a_revision_without_repointing_the_old_release
         tool_name: "read-file",
         release_version: "7.2.0",
         wasm_bytes: first_wasm,
-        files_archive_bytes: None,
-        files: &[],
     };
     let second = BuiltinToolDescriptor {
         component_name: first.component_name,
         tool_name: first.tool_name,
         release_version: "7.3.0",
         wasm_bytes: changed_wasm,
-        files_archive_bytes: None,
-        files: &[],
     };
 
     provision(&services, owner, std::slice::from_ref(&first)).await;
@@ -357,16 +297,12 @@ async fn same_artifact_adds_missing_tool_with_complete_metadata_and_is_retry_saf
         tool_name: "read-file",
         release_version: "8.2.0",
         wasm_bytes: wasm,
-        files_archive_bytes: None,
-        files: &[],
     };
     let second = BuiltinToolDescriptor {
         component_name: first.component_name,
         tool_name: "write-file",
         release_version: first.release_version,
         wasm_bytes: wasm,
-        files_archive_bytes: None,
-        files: &[],
     };
 
     provision(&services, owner, std::slice::from_ref(&first)).await;

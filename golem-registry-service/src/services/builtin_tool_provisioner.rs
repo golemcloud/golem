@@ -23,10 +23,7 @@ use golem_common::model::agent::extraction::extract_component_metadata_from_byte
 use golem_common::model::application::{
     Application, ApplicationCreation, ApplicationId, ApplicationName,
 };
-use golem_common::model::component::{
-    AgentFileOptions, AgentFilePath, AgentFilePermissions, ArchiveFilePath, ComponentCreation,
-    ComponentName, ComponentUpdate,
-};
+use golem_common::model::component::{ComponentCreation, ComponentName, ComponentUpdate};
 use golem_common::model::component::{
     ToolDeploymentConfigCreation, ToolDeploymentConfigUpdate, ToolProvisionConfigCreation,
     ToolProvisionConfigUpdate,
@@ -41,29 +38,17 @@ use golem_common::schema::tool::Tool;
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::component::Component;
 use std::collections::BTreeMap;
-use std::io::Write;
 use std::sync::Arc;
-use tempfile::NamedTempFile;
 use uuid::Uuid;
 
 const SYSTEM_APP_NAME: &str = "golem-system";
 const SYSTEM_ENV_NAME: &str = "builtin-tools";
 
-#[derive(Clone, Copy)]
-pub struct BuiltinToolFile {
-    pub archive_path: &'static str,
-    pub target_path: &'static str,
-    pub permissions: AgentFilePermissions,
-}
-
-#[derive(Clone, Copy)]
 pub struct BuiltinToolDescriptor {
     pub component_name: &'static str,
     pub tool_name: &'static str,
     pub release_version: &'static str,
     pub wasm_bytes: &'static [u8],
-    pub files_archive_bytes: Option<&'static [u8]>,
-    pub files: &'static [BuiltinToolFile],
 }
 
 static BUILTIN_TOOLS: &[BuiltinToolDescriptor] = &[
@@ -72,24 +57,18 @@ static BUILTIN_TOOLS: &[BuiltinToolDescriptor] = &[
         tool_name: "read-file",
         release_version: "0.3.0",
         wasm_bytes: include_bytes!("../../../builtin-tools/filesystem-tools.wasm"),
-        files_archive_bytes: None,
-        files: &[],
     },
     BuiltinToolDescriptor {
         component_name: "filesystem-tools",
         tool_name: "write-file",
         release_version: "0.3.0",
         wasm_bytes: include_bytes!("../../../builtin-tools/filesystem-tools.wasm"),
-        files_archive_bytes: None,
-        files: &[],
     },
     BuiltinToolDescriptor {
         component_name: "filesystem-tools",
         tool_name: "edit-file",
         release_version: "0.3.0",
         wasm_bytes: include_bytes!("../../../builtin-tools/filesystem-tools.wasm"),
-        files_archive_bytes: None,
-        files: &[],
     },
 ];
 
@@ -220,10 +199,10 @@ pub async fn provision_descriptors(
         component_tools
             .entry(descriptor.component_name)
             .or_default()
-            .push((descriptor, tool.clone()));
+            .push(tool.clone());
     }
     let mut staged = BTreeMap::new();
-    for (component_name, descriptor_tools) in component_tools {
+    for (component_name, tools) in component_tools {
         let descriptor = descriptors
             .iter()
             .find(|descriptor| descriptor.component_name == component_name)
@@ -233,7 +212,7 @@ pub async fn provision_descriptors(
             components,
             environment.id,
             descriptor,
-            descriptor_tools,
+            tools,
             &auth,
         )
         .await?;
@@ -361,39 +340,34 @@ async fn upload_component(
     reads: &Arc<ComponentService>,
     env: EnvironmentId,
     descriptor: &BuiltinToolDescriptor,
-    descriptor_tools: Vec<(&BuiltinToolDescriptor, Tool)>,
+    tools: Vec<Tool>,
     auth: &AuthCtx,
 ) -> anyhow::Result<Component> {
     let name = ComponentName(descriptor.component_name.into());
-    let tools = descriptor_tools
+    let tool_deployment_configs = tools
         .iter()
-        .map(|(_, tool)| tool.clone())
-        .collect::<Vec<_>>();
-    let tool_deployment_configs = descriptor_tools
-        .iter()
-        .map(|(descriptor, tool)| {
+        .map(|tool| {
             let tool_name = ToolName::try_from(
                 tool.name()
                     .expect("built-in tool metadata was matched by a valid name"),
             )
             .expect("built-in tool metadata name was already validated");
-            Ok((
+            (
                 tool_name,
                 ToolDeploymentConfigCreation {
                     provision: ToolProvisionConfigCreation {
                         config: serde_json::json!({}).into(),
                         env: BTreeMap::new(),
                         plugin_installations: Vec::new(),
-                        files: descriptor_files(descriptor)?,
+                        files: BTreeMap::new(),
                     },
                     environment_binding: None,
                     agent_bindings: BTreeMap::new(),
                     component_bindings: BTreeMap::new(),
                 },
-            ))
+            )
         })
-        .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
-    let files_archive = component_files_archive(&descriptor_tools)?;
+        .collect();
     match writes
         .create(
             env,
@@ -409,7 +383,7 @@ async fn upload_component(
                 tool_middleware_provision_configs: BTreeMap::new(),
             },
             descriptor.wasm_bytes.to_vec(),
-            files_archive,
+            None,
             auth,
         )
         .await
@@ -419,27 +393,25 @@ async fn upload_component(
             let existing = reads.get_staged_component_by_name(env, &name, auth).await?;
             let expected =
                 golem_common::model::diff::Hash::new(blake3::hash(descriptor.wasm_bytes));
-            if existing.wasm_hash == expected
-                && component_has_intended_tools(&existing, &descriptor_tools)?
-            {
+            if existing.wasm_hash == expected && component_has_intended_tools(&existing, &tools) {
                 break Ok(existing);
             }
-            let tool_deployment_config_updates = descriptor_tools
+            let tool_deployment_config_updates = tools
                 .iter()
-                .map(|(descriptor, tool)| {
+                .map(|tool| {
                     let name = ToolName::try_from(
                         tool.name()
                             .expect("built-in tool metadata was matched by a valid name"),
                     )
                     .expect("built-in tool metadata name was already validated");
-                    Ok((
+                    (
                         name,
                         ToolDeploymentConfigUpdate {
                             provision: Some(ToolProvisionConfigUpdate {
                                 config: Some(serde_json::json!({}).into()),
                                 env: Some(BTreeMap::new()),
                                 plugin_updates: Vec::new(),
-                                files_to_add_or_update: descriptor_files(descriptor)?,
+                                files_to_add_or_update: BTreeMap::new(),
                                 files_to_remove: Vec::new(),
                                 file_permission_updates: BTreeMap::new(),
                             }),
@@ -447,10 +419,9 @@ async fn upload_component(
                             component_bindings: Some(BTreeMap::new()),
                             agent_bindings: Some(BTreeMap::new()),
                         },
-                    ))
+                    )
                 })
-                .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
-            let files_archive = component_files_archive(&descriptor_tools)?;
+                .collect();
             match writes
                 .update(
                     existing.id,
@@ -467,7 +438,7 @@ async fn upload_component(
                         allow_incompatible_config: false,
                     },
                     Some(descriptor.wasm_bytes.to_vec()),
-                    files_archive,
+                    None,
                     auth,
                 )
                 .await
@@ -481,89 +452,15 @@ async fn upload_component(
     }
 }
 
-fn descriptor_files(
-    descriptor: &BuiltinToolDescriptor,
-) -> anyhow::Result<BTreeMap<ArchiveFilePath, AgentFileOptions>> {
-    if !descriptor.files.is_empty() && descriptor.files_archive_bytes.is_none() {
-        anyhow::bail!(
-            "built-in tool '{}@{}' maps files without an embedded ZIP archive",
-            descriptor.tool_name,
-            descriptor.release_version
-        );
-    }
-    descriptor
-        .files
-        .iter()
-        .map(|file| {
-            Ok((
-                ArchiveFilePath::from_either_str(file.archive_path).map_err(anyhow::Error::msg)?,
-                AgentFileOptions {
-                    target_path: AgentFilePath::from_abs_str(file.target_path)
-                        .map_err(anyhow::Error::msg)?,
-                    permissions: file.permissions,
-                },
-            ))
-        })
-        .collect()
-}
-
-fn component_files_archive(
-    descriptor_tools: &[(&BuiltinToolDescriptor, Tool)],
-) -> anyhow::Result<Option<NamedTempFile>> {
-    let mut archive_bytes = None;
-    for (descriptor, _) in descriptor_tools {
-        let Some(bytes) = descriptor.files_archive_bytes else {
-            continue;
-        };
-        if let Some(existing) = archive_bytes
-            && blake3::hash(existing) != blake3::hash(bytes)
-        {
-            anyhow::bail!(
-                "built-in tool component '{}' has conflicting embedded file archives",
-                descriptor.component_name
-            );
-        }
-        archive_bytes = Some(bytes);
-    }
-    archive_bytes
-        .map(|bytes| {
-            let mut archive = NamedTempFile::new()?;
-            archive.write_all(bytes)?;
-            archive.flush()?;
-            Ok(archive)
-        })
-        .transpose()
-}
-
-fn component_has_intended_tools(
-    component: &Component,
-    descriptor_tools: &[(&BuiltinToolDescriptor, Tool)],
-) -> anyhow::Result<bool> {
+fn component_has_intended_tools(component: &Component, tools: &[Tool]) -> bool {
     let stored = component.metadata.tools();
-    if stored.len() != descriptor_tools.len() {
-        return Ok(false);
-    }
-    for (descriptor, tool) in descriptor_tools {
-        let Some(metadata) = tool
-            .name()
-            .and_then(|name| ToolName::try_from(name).ok())
-            .and_then(|name| stored.get(&name))
-        else {
-            return Ok(false);
-        };
-        let expected = descriptor_files(descriptor)?;
-        if metadata.definition != *tool
-            || metadata.provision.files.len() != expected.len()
-            || metadata.provision.files.iter().any(|file| {
-                !expected.values().any(|expected| {
-                    expected.target_path == file.path && expected.permissions == file.permissions
-                })
-            })
-        {
-            return Ok(false);
-        }
-    }
-    Ok(true)
+    stored.len() == tools.len()
+        && tools.iter().all(|tool| {
+            tool.name()
+                .and_then(|name| ToolName::try_from(name).ok())
+                .and_then(|name| stored.get(&name))
+                .is_some_and(|metadata| metadata.definition == *tool)
+        })
 }
 
 async fn deploy(
