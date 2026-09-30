@@ -1,7 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
-import { Context, Effect, Layer, Schema, SchemaGetter } from "effect"
+import { Context, Effect, Layer, Schema, SchemaGetter, Stream } from "effect"
 import { compile } from "../src/WitCodec.js"
-import { err, resetTools, toolDefinition } from "../src/Tool.js"
+import {
+  err,
+  type HandlerContext,
+  resetTools,
+  toolDefinition,
+  ToolInvokeError,
+} from "../src/Tool.js"
 import { invokeRegistered } from "../src/internal/tool/runtime.js"
 
 const input = () => {
@@ -161,6 +167,23 @@ describe("registered tool guest runtime", () => {
     expect(stdout.fail).not.toHaveBeenCalled()
   })
 
+  it("rejects an empty successful stdin chunk", async () => {
+    toolDefinition("empty-stdin-chunk")
+      .body((body) => body.input({ required: true }))
+      .implement({
+        emptyStdinChunk: (_input, context) => Stream.runDrain(context.stdin!),
+      })
+    const stdin = {
+      async *[Symbol.asyncIterator]() {
+        yield { tag: "ok" as const, val: new Uint8Array() }
+      },
+    }
+
+    await expect(
+      invokeRegistered("empty-stdin-chunk", [], input(), stdin, undefined, undefined, {}),
+    ).rejects.toMatchObject({ tag: "invalid-input" })
+  })
+
   it.each([false, true])(
     "settles both output terminals before returning when one finish fails (declared error: %s)",
     async (declaredError) => {
@@ -211,8 +234,119 @@ describe("registered tool guest runtime", () => {
       expect(settled).toBe(false)
       releaseStderr()
       if (declaredError) await expect(invocation).rejects.toMatchObject({ tag: "custom-error" })
-      else await expect(invocation).rejects.toThrow("stdout finish failed")
+      else await expect(invocation).resolves.toEqual({ result: undefined })
       expect(settled).toBe(true)
     },
   )
+
+  it("preserves independent stream terminals, structured outcomes, and stdin cleanup", async () => {
+    const terminalWriter = () => {
+      const bytes: number[] = []
+      let terminal: "ended" | "failed" | undefined
+      return {
+        bytes,
+        get terminal() {
+          return terminal
+        },
+        writer: {
+          write: vi.fn(async (chunk: Uint8Array) => bytes.push(...chunk)),
+          finish: vi.fn(async () => {
+            terminal = "ended"
+          }),
+          fail: vi.fn(async () => {
+            terminal = "failed"
+          }),
+        },
+      }
+    }
+    const run = async (
+      name: string,
+      handler: (
+        input: Record<string, never>,
+        context: HandlerContext,
+      ) => Effect.Effect<unknown, unknown, any>,
+    ) => {
+      toolDefinition(name)
+        .body((body) =>
+          body.input().output().stderr().returns(Schema.String).error("rejected", Schema.String),
+        )
+        .implement({
+          [name.replace(/-([a-z])/g, (_, c: string) => c.toUpperCase())]: handler,
+        } as never)
+      const stdin = iterator()
+      const stdout = terminalWriter()
+      const stderr = terminalWriter()
+      const outcome = await invokeRegistered(
+        name,
+        [],
+        input(),
+        stdin.value,
+        stdout.writer as never,
+        stderr.writer as never,
+        {},
+      ).then(
+        (result) => ({ tag: "success" as const, result }),
+        (error) => ({ tag: "failure" as const, error }),
+      )
+      return { outcome, stdin, stdout, stderr }
+    }
+    const partial = (context: any) =>
+      Effect.gen(function* () {
+        yield* context.stdout(Stream.make(Uint8Array.of(1), Uint8Array.of(2, 3)))
+        yield* context.stderr(Stream.succeed(Uint8Array.of(9)))
+      })
+
+    const success = await run("tuple-success", (_input, context) =>
+      partial(context).pipe(Effect.as("ok")),
+    )
+    expect(success.outcome.tag).toBe("success")
+    expect(success.stdout.bytes).toEqual([1, 2, 3])
+    expect(success.stderr.bytes).toEqual([9])
+    expect([success.stdout.terminal, success.stderr.terminal]).toEqual(["ended", "ended"])
+    expect(success.stdin.return_).toHaveBeenCalledOnce()
+
+    const declared = await run("tuple-declared", (_input, context) =>
+      partial(context).pipe(Effect.andThen(Effect.fail(err("rejected", "no")))),
+    )
+    expect(declared.outcome).toMatchObject({
+      tag: "failure",
+      error: { tag: "custom-error" },
+    })
+    expect(declared.stdout.bytes).toEqual([1, 2, 3])
+    expect([declared.stdout.terminal, declared.stderr.terminal]).toEqual(["ended", "ended"])
+    expect(declared.stdin.return_).toHaveBeenCalledOnce()
+
+    const explicitFailure = await run("tuple-explicit-failure", (_input, context) =>
+      context.stdout!(
+        Stream.concat(
+          Stream.succeed(Uint8Array.of(4, 5)),
+          Stream.fail(
+            new ToolInvokeError({ tag: "invalid-result", val: "explicit stdout failure" }),
+          ),
+        ),
+      ).pipe(Effect.ignore, Effect.as("ok")),
+    )
+    expect(explicitFailure.outcome.tag).toBe("success")
+    expect(explicitFailure.stdout.bytes).toEqual([4, 5])
+    expect([explicitFailure.stdout.terminal, explicitFailure.stderr.terminal]).toEqual([
+      "failed",
+      "ended",
+    ])
+
+    const exception = await run("tuple-exception", () => Effect.die("boom"))
+    expect(exception.outcome.tag).toBe("failure")
+    expect([exception.stdout.terminal, exception.stderr.terminal]).toEqual(["failed", "failed"])
+
+    const cancellation = await run("tuple-cancellation", () => Effect.interrupt)
+    expect(cancellation.outcome.tag).toBe("failure")
+    expect([cancellation.stdout.terminal, cancellation.stderr.terminal]).toEqual([
+      "failed",
+      "failed",
+    ])
+
+    const abandoned = await run("tuple-abandoned-writers", () => Effect.succeed("ok"))
+    expect(abandoned.outcome.tag).toBe("success")
+    expect(abandoned.stdout.bytes).toEqual([])
+    expect([abandoned.stdout.terminal, abandoned.stderr.terminal]).toEqual(["ended", "ended"])
+  })
 })
