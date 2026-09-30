@@ -187,7 +187,6 @@ use crate::worker::invocation::{
     materialize_streaming_result,
 };
 use crate::worker::owner_lane::{OwnerInvocationId, OwnerInvocationPermit};
-use crate::worker::snapshot_selection::SnapshotExclusions;
 use crate::worker::status::{
     calculate_last_known_status_with_checkpoint, calculate_pending_card_events,
 };
@@ -4354,7 +4353,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         .data()
                         .get_public_state()
                         .worker()
-                        .with_exclusions(|exclusions| exclusions.mark_unavailable(snapshot_index));
+                        .mark_periodic_unavailable(snapshot_index);
                     return SnapshotRecoveryResult::Retry(RetryDecision::Immediate);
                 }
                 return SnapshotRecoveryResult::Unavailable(WorkerExecutorError::runtime(error));
@@ -4546,7 +4545,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .data()
             .get_public_state()
             .worker()
-            .with_exclusions(|exclusions| exclusions.reject(snapshot_index));
+            .reject_periodic(snapshot_index);
         RetryDecision::Immediate
     }
 
@@ -6565,9 +6564,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
         match prepare_result {
             Ok(None) => {
                 let worker = store.as_context().data().get_public_state().worker();
-                if let Some(rejected) =
-                    worker.with_exclusions(|exclusions| exclusions.persisted_rejections())
-                {
+                if let Some(rejected) = worker.periodic_rejections() {
                     let metadata = worker.get_initial_worker_metadata();
                     let status = worker.get_non_detached_last_known_status().await;
                     worker
@@ -6580,7 +6577,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                         )
                         .await?;
                 }
-                worker.with_exclusions(SnapshotExclusions::clear_unavailable);
+                worker.clear_unavailable_periodic();
                 store.as_context_mut().data_mut().set_suspended();
                 Ok(None)
             }

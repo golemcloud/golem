@@ -29,7 +29,7 @@ use golem_common::model::{
 use std::collections::{BTreeSet, HashSet};
 
 /// The automatic snapshot entries that the starts of one agent exclude.
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct SnapshotExclusions {
     /// The entries whose application snapshot did not load or whose replay diverged. A start
     /// never selects them. The start that rejects one persists it for the incarnation after its
@@ -41,24 +41,31 @@ pub(crate) struct SnapshotExclusions {
 }
 
 impl SnapshotExclusions {
-    /// Rejects the entry at `index`.
-    pub(crate) fn reject(&mut self, index: OplogIndex) {
+    /// The exclusions with the entry at `index` rejected.
+    pub(crate) fn rejecting(mut self, index: OplogIndex) -> Self {
         self.rejected.insert(index);
+        self
     }
 
-    /// Adds the rejected entries that storage keeps for the incarnation.
-    pub(crate) fn add_persisted(&mut self, persisted: impl IntoIterator<Item = OplogIndex>) {
+    /// The exclusions with the rejected entries that storage keeps for the incarnation.
+    pub(crate) fn with_persisted(
+        mut self,
+        persisted: impl IntoIterator<Item = OplogIndex>,
+    ) -> Self {
         self.rejected.extend(persisted);
+        self
     }
 
-    /// Marks the entry at `index` unavailable for the current start attempt.
-    pub(crate) fn mark_unavailable(&mut self, index: OplogIndex) {
+    /// The exclusions with the entry at `index` unavailable for the current start attempt.
+    pub(crate) fn with_unavailable(mut self, index: OplogIndex) -> Self {
         self.unavailable.insert(index);
+        self
     }
 
-    /// Clears the unavailable entries.
-    pub(crate) fn clear_unavailable(&mut self) {
+    /// The exclusions without unavailable entries.
+    pub(crate) fn without_unavailable(mut self) -> Self {
         self.unavailable.clear();
+        self
     }
 
     /// The rejected entries to persist, or `None` when no entry is rejected.
@@ -212,9 +219,6 @@ fn passes(
         && (filter.filesystem_snapshots_enabled || !has_filesystem_snapshot)
 }
 
-/// Gives the component revision at the start of the replay: the revision of the selected
-/// automatic snapshot entry, else the target of a pending snapshot-based update, else the revision
-/// of the manual-update baseline.
 /// The rejected automatic snapshot entries of `rejected` that a start of `status` can still meet:
 /// the entries that are one of its two candidates, `last_automatic_snapshot` and
 /// `previous_usable_automatic_snapshot`. A start never selects another entry, so a stored
@@ -239,6 +243,9 @@ pub(crate) fn kept_rejections(
         .collect()
 }
 
+/// Gives the component revision at the start of the replay: the revision of the selected
+/// automatic snapshot entry, else the target of a pending snapshot-based update, else the revision
+/// of the manual-update baseline.
 fn component_revision_for_replay(
     status: &AgentStatusRecord,
     filter: AutomaticSnapshotFilter<'_>,
@@ -589,16 +596,18 @@ mod tests {
             component_revision: revision(2),
             filesystem_snapshot: Some(FilesystemSnapshotName::periodic()),
         });
-        let mut exclusions = SnapshotExclusions::default();
+        let exclusions = SnapshotExclusions::default();
         assert_eq!(exclusions.persisted_rejections(), None);
 
-        exclusions.mark_unavailable(OplogIndex::from_u64(10));
-        exclusions.mark_unavailable(OplogIndex::from_u64(5));
+        let exclusions = exclusions
+            .with_unavailable(OplogIndex::from_u64(10))
+            .with_unavailable(OplogIndex::from_u64(5));
         let unavailable = StartSelection::of(&status, &exclusions, true);
-        exclusions.clear_unavailable();
+        let exclusions = exclusions.without_unavailable();
         let cleared = selection_index(&StartSelection::of(&status, &exclusions, true));
-        exclusions.reject(OplogIndex::from_u64(10));
-        exclusions.add_persisted([OplogIndex::from_u64(5)]);
+        let exclusions = exclusions
+            .rejecting(OplogIndex::from_u64(10))
+            .with_persisted([OplogIndex::from_u64(5)]);
         let rejected = StartSelection::of(&status, &exclusions, true);
 
         assert_eq!(

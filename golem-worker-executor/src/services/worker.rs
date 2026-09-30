@@ -65,11 +65,10 @@ const STATUS_RECEIVED_CARD_TRANSFER_PREFIX: &str = "tr:";
 const INVOCATION_RESULT_INDEX_METADATA_FIELD: &str = "metadata";
 const INVOCATION_RESULT_INDEX_FIELD_PREFIX: &str = "ir:";
 
-/// The stored rejected automatic snapshot entries after `new` joins `current`, in index order, or
-/// `None` when `current` holds each entry of `new`.
-/// The stored rejected entries after `new` joins `current`, as [`kept_rejections`] keeps them for
-/// `status`, or `None` when they equal `current`.
-fn merged(
+/// The rejected automatic snapshot entries to store: `current` and `new` together, as
+/// [`kept_rejections`] keeps them for `status`, in index order. `None` when they equal `current`,
+/// so nothing needs a write.
+fn rejections_to_store(
     current: Vec<OplogIndex>,
     status: &AgentStatusRecord,
     new: &HashSet<OplogIndex>,
@@ -1830,10 +1829,10 @@ impl WorkerService for DefaultWorkerService {
                 }
                 None => Vec::new(),
             };
-            let Some(merged) = merged(current_indexes, status, oplog_indexes) else {
+            let Some(to_store) = rejections_to_store(current_indexes, status, oplog_indexes) else {
                 return Ok(());
             };
-            let encoded = serialize(&merged).map_err(WorkerExecutorError::runtime)?;
+            let encoded = serialize(&to_store).map_err(WorkerExecutorError::runtime)?;
             let updated = self
                 .key_value_storage
                 .with_entity("worker", "reject_periodic_snapshots", "oplog_indexes")
@@ -2799,20 +2798,20 @@ mod tests {
     }
 
     #[test]
-    fn merged_rejections_are_in_index_order_keep_only_candidates_and_nothing_when_unchanged() {
+    fn rejections_to_store_are_in_index_order_keep_only_candidates_and_nothing_when_unchanged() {
         let index = OplogIndex::from_u64;
         let status = with_candidates(7, Some(3));
         assert_eq!(
             [
-                merged(vec![index(7)], &status, &HashSet::from([index(3)])),
-                merged(
+                rejections_to_store(vec![index(7)], &status, &HashSet::from([index(3)])),
+                rejections_to_store(
                     vec![index(3), index(7)],
                     &status,
                     &HashSet::from([index(7), index(3)])
                 ),
-                merged(Vec::new(), &status, &HashSet::new()),
-                merged(Vec::new(), &status, &HashSet::from([index(5)])),
-                merged(vec![index(3), index(5)], &status, &HashSet::new()),
+                rejections_to_store(Vec::new(), &status, &HashSet::new()),
+                rejections_to_store(Vec::new(), &status, &HashSet::from([index(5)])),
+                rejections_to_store(vec![index(3), index(5)], &status, &HashSet::new()),
             ],
             [
                 Some(vec![index(3), index(7)]),

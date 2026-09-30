@@ -1203,16 +1203,63 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// The selection of a start of `status` under the exclusions of the agent now.
     fn start_selection(&self, status: &AgentStatusRecord) -> StartSelection {
         let enabled = self.filesystem_snapshots_enabled();
-        self.with_exclusions(|exclusions| StartSelection::of(status, exclusions, enabled))
+        StartSelection::of(status, &self.snapshot_exclusions(), enabled)
     }
 
-    /// Runs `f` on the automatic snapshot entries that the starts of the agent exclude, under
-    /// their lock.
-    pub(crate) fn with_exclusions<T>(&self, f: impl FnOnce(&mut SnapshotExclusions) -> T) -> T {
-        f(&mut self
+    /// Adds `persisted`, the rejected entries that storage keeps for the incarnation, to the
+    /// exclusions, and gives the selection of a start of `status` under them.
+    fn select_start_with_persisted(
+        &self,
+        status: &AgentStatusRecord,
+        persisted: HashSet<OplogIndex>,
+    ) -> StartSelection {
+        let enabled = self.filesystem_snapshots_enabled();
+        let exclusions = self.update_exclusions(|exclusions| exclusions.with_persisted(persisted));
+        StartSelection::of(status, &exclusions, enabled)
+    }
+
+    /// Rejects the automatic snapshot entry at `index` for the starts of this incarnation: its
+    /// application snapshot did not load, or the replay after it diverged.
+    pub(crate) fn reject_periodic(&self, index: OplogIndex) {
+        self.update_exclusions(|exclusions| exclusions.rejecting(index));
+    }
+
+    /// Skips the automatic snapshot entry at `index` until a start prepares the agent with
+    /// success: its payload or its filesystem snapshot could not be read.
+    pub(crate) fn mark_periodic_unavailable(&self, index: OplogIndex) {
+        self.update_exclusions(|exclusions| exclusions.with_unavailable(index));
+    }
+
+    /// Ends the skips of unavailable automatic snapshot entries.
+    pub(crate) fn clear_unavailable_periodic(&self) {
+        self.update_exclusions(SnapshotExclusions::without_unavailable);
+    }
+
+    /// The rejected automatic snapshot entries to persist, or `None` when none is rejected.
+    pub(crate) fn periodic_rejections(&self) -> Option<HashSet<OplogIndex>> {
+        self.snapshot_exclusions().persisted_rejections()
+    }
+
+    /// A copy of the exclusions of the agent now.
+    fn snapshot_exclusions(&self) -> SnapshotExclusions {
+        self.snapshot_exclusions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Replaces the exclusions of the agent with what `next` gives for them, under their lock,
+    /// and gives a copy of the new exclusions.
+    fn update_exclusions(
+        &self,
+        next: impl FnOnce(SnapshotExclusions) -> SnapshotExclusions,
+    ) -> SnapshotExclusions {
+        let mut exclusions = self
             .snapshot_exclusions
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner))
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *exclusions = next(std::mem::take(&mut *exclusions));
+        exclusions.clone()
     }
 
     pub(crate) async fn ensure_not_failed<T: HasAll<Ctx> + Send + Sync>(
@@ -2804,7 +2851,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 let start_attempt =
                     existing_start_attempt.or_else(|| this.startup_attempt.pending());
                 if start_attempt.is_none() {
-                    this.with_exclusions(SnapshotExclusions::clear_unavailable);
+                    this.clear_unavailable_periodic();
                 }
                 let memory_requirement = match this.memory_requirement().await {
                     Ok(memory_requirement) => memory_requirement,
@@ -5292,7 +5339,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         .lock()
                         .unwrap_or_else(std::sync::PoisonError::into_inner)
                         .as_ref()
-                        .is_some_and(|slot| slot.is_generation(mark)),
+                        .and_then(|slot| filesystem_snapshots::confirmed_slot(slot, &name, *mark))
+                        .is_some(),
                 }
             }
             (WorkerInstance::Running(_), filesystem_snapshots::Confirmer::Start(_)) => {
@@ -5323,14 +5371,16 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             filesystem_snapshots::Confirmer::Running(mark) => {
                 let name = name.clone();
                 Box::new(move |instance| {
-                    if let WorkerInstance::Running(running) = instance
-                        && let Some(slot) = running
+                    if let WorkerInstance::Running(running) = instance {
+                        let mut slot = running
                             .filesystem_snapshot_slot
                             .lock()
-                            .unwrap_or_else(std::sync::PoisonError::into_inner)
-                            .as_mut()
-                    {
-                        slot.confirm(name, mark);
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        if let Some(confirmed) = slot.as_ref().and_then(|current| {
+                            filesystem_snapshots::confirmed_slot(current, &name, mark)
+                        }) {
+                            *slot = Some(confirmed);
+                        }
                     }
                 })
             }
@@ -9013,12 +9063,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 self.initial_worker_metadata.fingerprint,
             )
             .await?;
-        let enabled = self.filesystem_snapshots_enabled();
         let replay_revision = self
-            .with_exclusions(|exclusions| {
-                exclusions.add_persisted(rejected);
-                StartSelection::of(status, exclusions, enabled)
-            })
+            .select_start_with_persisted(status, rejected)
             .replay_revision_without_unavailable;
         let replay_component = if active_component.revision == replay_revision {
             active_component.clone()
@@ -10875,11 +10921,7 @@ impl StartFilesystem {
                 parent.initial_worker_metadata.fingerprint,
             )
             .await?;
-        let enabled = parent.filesystem_snapshots_enabled();
-        let selection = parent.with_exclusions(|exclusions| {
-            exclusions.add_persisted(rejected);
-            StartSelection::of(status, exclusions, enabled)
-        });
+        let selection = parent.select_start_with_persisted(status, rejected);
         let baseline = RunningWorker::start_baseline(
             parent,
             status,
@@ -11257,7 +11299,7 @@ impl RunningWorker {
                     error = %error,
                     "The filesystem snapshot of an automatic snapshot record does not restore; the start uses the usable record before it"
                 );
-                parent.with_exclusions(|exclusions| exclusions.mark_unavailable(index));
+                parent.mark_periodic_unavailable(index);
                 restart
             }
             // On a lost shard nothing is written, and the update stays pending for the shard's
@@ -12695,11 +12737,7 @@ mod tests {
             ..Default::default()
         };
 
-        let rejecting = |index| {
-            let mut exclusions = SnapshotExclusions::default();
-            exclusions.reject(index);
-            exclusions
-        };
+        let rejecting = |index| SnapshotExclusions::default().rejecting(index);
         let rejected = rejecting(snapshot_index);
         let other = rejecting(OplogIndex::from_u64(9));
         assert_eq!(

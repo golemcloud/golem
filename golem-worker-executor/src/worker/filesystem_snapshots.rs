@@ -91,27 +91,31 @@ impl FilesystemSnapshotSlot {
         }
     }
 
-    /// Records the confirmation of `name`, whose capture has `mark`. A confirmation of another
-    /// generation changes nothing: the loop starts a new generation without the instance lock,
-    /// so the generation can change after the owner gate checked it.
-    pub(crate) fn confirm(&mut self, name: FilesystemSnapshotName, mark: TreeMark) {
-        if self.is_generation(&mark) {
-            self.confirmed = Some(ConfirmedFilesystemSnapshot {
-                name,
-                mark,
-                baseline: ConfirmedBaseline::Periodic,
-            });
-        }
-    }
-
     pub(crate) fn confirmed(&self) -> Option<&ConfirmedFilesystemSnapshot> {
         self.confirmed.as_ref()
     }
+}
 
-    /// Whether `mark` is a mark of the current generation.
-    pub(crate) fn is_generation(&self, mark: &TreeMark) -> bool {
-        self.generation.same_generation(mark)
-    }
+/// The slot after the confirmation of `name`, whose capture has `mark`, or `None` when the
+/// capture is of another generation than `slot`. A confirmation counts only for the generation
+/// that took its capture. The owner gate asks this before the append, and the append asks it
+/// again when it sets the slot, because the loop starts a new generation without the instance
+/// lock.
+pub(crate) fn confirmed_slot(
+    slot: &FilesystemSnapshotSlot,
+    name: &FilesystemSnapshotName,
+    mark: TreeMark,
+) -> Option<FilesystemSnapshotSlot> {
+    slot.generation
+        .same_generation(&mark)
+        .then(|| FilesystemSnapshotSlot {
+            generation: slot.generation,
+            confirmed: Some(ConfirmedFilesystemSnapshot {
+                name: name.clone(),
+                mark,
+                baseline: ConfirmedBaseline::Periodic,
+            }),
+        })
 }
 
 /// Gives the confirmed snapshot that a capture compares with: the confirmed snapshot of the slot
@@ -1770,18 +1774,26 @@ mod tests {
         let (other_generation, _) = marks();
         let restored = FilesystemSnapshotName::periodic();
         let confirmed_now = FilesystemSnapshotName::periodic();
-        let mut slot = FilesystemSnapshotSlot::at_start(
+        let slot = FilesystemSnapshotSlot::at_start(
             first,
             Some((restored.clone(), ConfirmedBaseline::Periodic)),
         );
 
-        slot.confirm(FilesystemSnapshotName::periodic(), other_generation);
-        let after_other = slot.confirmed().map(|confirmed| confirmed.name.clone());
-        slot.confirm(confirmed_now.clone(), later);
-        let after_own = slot.confirmed().cloned();
+        let after_other =
+            confirmed_slot(&slot, &FilesystemSnapshotName::periodic(), other_generation);
+        let after_own = confirmed_slot(&slot, &confirmed_now, later);
 
-        assert_eq!(after_other, Some(restored));
-        assert_eq!(after_own, Some(confirmed(&confirmed_now, later)));
+        assert!(after_other.is_none());
+        assert_eq!(
+            slot.confirmed().map(|confirmed| confirmed.name.clone()),
+            Some(restored)
+        );
+        assert_eq!(
+            after_own
+                .as_ref()
+                .and_then(|slot| slot.confirmed().cloned()),
+            Some(confirmed(&confirmed_now, later))
+        );
     }
 
     #[test]
