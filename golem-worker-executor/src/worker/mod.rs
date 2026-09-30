@@ -7100,6 +7100,16 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         idempotency_key: &IdempotencyKey,
     ) -> Result<Option<StreamSessionPreparedRecord>, WorkerExecutorError> {
+        let producer = self.durable_stream_producer().await?;
+        self.prepared_stream_session_with_producer(idempotency_key, &producer)
+            .await
+    }
+
+    async fn prepared_stream_session_with_producer(
+        &self,
+        idempotency_key: &IdempotencyKey,
+        producer: &DurableStreamStore,
+    ) -> Result<Option<StreamSessionPreparedRecord>, WorkerExecutorError> {
         let Some(index) = self
             .durable_stream_session_status(idempotency_key)
             .await?
@@ -7107,7 +7117,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         else {
             return Ok(None);
         };
-        match self.read_stream_session_record(index).await? {
+        match producer
+            .read_session_record(index)
+            .await
+            .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?
+        {
             StreamSessionRecord::Prepared(record) => Ok(Some(record)),
             _ => Err(WorkerExecutorError::runtime(
                 "stream session index does not refer to Prepared",
@@ -7949,7 +7963,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         .direction()
                         == SessionStreamRole::Output
                     && let Some(prepared) = self
-                        .prepared_stream_session(&source.idempotency_key)
+                        .prepared_stream_session_with_producer(&source.idempotency_key, &producer)
                         .await?
                     && stream_output_consumer_is_observer(&prepared.attempt, &key)?
                 {

@@ -607,11 +607,27 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             }
             return Err(WorkerExecutorError::invalid_request(error));
         }
-        scope
+        let retry_control = control.clone();
+        let result = scope
             .run(worker.control_durable_stream_attachment(control))
-            .await
-            .ok_or_else(|| WorkerExecutorError::invalid_request("Worker is being deleted"))?
-            .map(durable_stream_attachment_control_response::Result::Replayed)
+            .await;
+        drop(scope);
+        match result {
+            Some(result) => {
+                result.map(durable_stream_attachment_control_response::Result::Replayed)
+            }
+            None if !retry_control.operation.targets_consumer()
+                && worker.deletion_owns_retirement().await =>
+            {
+                worker
+                    .control_durable_stream_attachment(retry_control)
+                    .await
+                    .map(durable_stream_attachment_control_response::Result::Replayed)
+            }
+            None => Err(WorkerExecutorError::invalid_request(
+                "Worker is being deleted",
+            )),
+        }
     }
 
     async fn read_durable_stream_segment_internal(

@@ -17,6 +17,7 @@ use crate::components::registry_service::RegistryService;
 use crate::components::shard_manager::ShardManager;
 use crate::components::{ChildProcessLogger, is_serving_grpc};
 use async_trait::async_trait;
+use futures::FutureExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex, RwLock};
@@ -46,6 +47,37 @@ struct ProcessState {
     shutdown: tokio::sync::watch::Sender<bool>,
     child: Option<Child>,
     logger: Option<ChildProcessLogger>,
+}
+
+struct StartingChild(Option<Child>);
+
+impl StartingChild {
+    fn release(mut self) -> Child {
+        self.0.take().unwrap()
+    }
+}
+
+impl std::ops::Deref for StartingChild {
+    type Target = Child;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_ref().unwrap()
+    }
+}
+
+impl std::ops::DerefMut for StartingChild {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.0.as_mut().unwrap()
+    }
+}
+
+impl Drop for StartingChild {
+    fn drop(&mut self) {
+        if let Some(child) = self.0.as_mut() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
 }
 
 impl SpawnedShardManager {
@@ -132,27 +164,29 @@ impl SpawnedShardManager {
         otlp: bool,
         mut shutdown: Option<tokio::sync::watch::Receiver<bool>>,
     ) -> anyhow::Result<(Child, ChildProcessLogger)> {
-        let mut child = Command::new(executable)
-            .current_dir(working_directory)
-            .envs(
-                super::env_vars(
-                    number_of_shards_override,
-                    state_write_timeout_override,
-                    http_port,
-                    grpc_port,
-                    rdb,
-                    false,
-                    registry_service,
-                    verbosity,
-                    otlp,
+        let mut child = StartingChild(Some(
+            Command::new(executable)
+                .current_dir(working_directory)
+                .envs(
+                    super::env_vars(
+                        number_of_shards_override,
+                        state_write_timeout_override,
+                        http_port,
+                        grpc_port,
+                        rdb,
+                        false,
+                        registry_service,
+                        verbosity,
+                        otlp,
+                    )
+                    .await,
                 )
-                .await,
-            )
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|error| anyhow::anyhow!("Failed to spawn golem-shard-manager: {error}"))?;
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .map_err(|error| anyhow::anyhow!("Failed to spawn golem-shard-manager: {error}"))?,
+        ));
 
         let logger = ChildProcessLogger::log_child_process(
             "[shardmanager]",
@@ -209,7 +243,7 @@ impl SpawnedShardManager {
             }
         }
 
-        Ok((child, logger))
+        Ok((child.release(), logger))
     }
 
     fn blocking_kill(&self) {
@@ -217,6 +251,7 @@ impl SpawnedShardManager {
         let mut process = self.process.lock().unwrap();
         if let Some(mut child) = process.child.take() {
             let _ = child.kill();
+            let _ = child.wait();
         }
         process.logger.take();
     }
@@ -273,7 +308,7 @@ impl SpawnedShardManager {
                 let current_number_of_shards_override = *number_of_shards_override.read().unwrap();
 
                 let (mut restarted_child, restarted_logger) = loop {
-                    match Self::start(
+                    let restart = std::panic::AssertUnwindSafe(Self::start(
                         &executable,
                         &working_directory,
                         current_number_of_shards_override,
@@ -287,15 +322,23 @@ impl SpawnedShardManager {
                         err_level,
                         otlp,
                         Some(shutdown.clone()),
-                    )
-                    .await
-                    {
-                        Ok(restarted) => break restarted,
-                        Err(error) => {
+                    ))
+                    .catch_unwind()
+                    .await;
+                    match restart {
+                        Ok(Ok(restarted)) => break restarted,
+                        Ok(Err(error)) => {
                             if process.lock().unwrap().shutting_down {
                                 return;
                             }
                             warn!(%error, "Failed to restart spawned shard manager; retrying");
+                            tokio::time::sleep(Duration::from_secs(1)).await;
+                        }
+                        Err(_) => {
+                            if process.lock().unwrap().shutting_down {
+                                return;
+                            }
+                            warn!("Restarting the spawned shard manager panicked; retrying");
                             tokio::time::sleep(Duration::from_secs(1)).await;
                         }
                     }
@@ -305,6 +348,7 @@ impl SpawnedShardManager {
                 if state.shutting_down {
                     drop(state);
                     let _ = restarted_child.kill();
+                    let _ = restarted_child.wait();
                     return;
                 }
                 state.child = Some(restarted_child);
@@ -377,6 +421,7 @@ impl Drop for SpawnedShardManager {
         process.shutdown.send_replace(true);
         if let Some(mut child) = process.child.take() {
             let _ = child.kill();
+            let _ = child.wait();
         }
         process.logger.take();
     }
