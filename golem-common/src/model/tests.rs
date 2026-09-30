@@ -1639,6 +1639,28 @@ fn an_automatic_snapshot_is_usable_when_confirmed_or_without_a_name() {
 }
 
 #[test]
+fn the_files_of_an_automatic_snapshot_give_their_name_and_their_confirmation() {
+    use crate::model::SnapshotFiles;
+    let name = crate::model::oplog::FilesystemSnapshotName::periodic();
+    let files = [
+        SnapshotFiles::Unnamed,
+        SnapshotFiles::Unconfirmed(name.clone()),
+        SnapshotFiles::Confirmed(name.clone()),
+    ];
+
+    assert_eq!(
+        files
+            .each_ref()
+            .map(|files| (files.name().cloned(), files.is_confirmed())),
+        [
+            (None, false),
+            (Some(name.clone()), false),
+            (Some(name), true)
+        ]
+    );
+}
+
+#[test]
 fn only_the_named_filesystem_snapshot_of_an_automatic_snapshot_is_confirmed() {
     use crate::model::SnapshotFiles;
     let name = crate::model::oplog::FilesystemSnapshotName::periodic();
