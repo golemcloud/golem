@@ -12,6 +12,12 @@ The reusable Audit policy is implemented under `builtin-tools/audit-middleware/`
 `builtin-tools/audit-middleware.wasm`. Its package README defines the sink and idempotency contract
 and includes a runnable duplicate-occurrence binding.
 
+The reusable output-redaction middleware lives under `builtin-tools/output-redaction/` and builds
+to `builtin-tools/output-redaction.wasm`. It is published and installed through the normal tool
+middleware release and binding flow; unlike the universally provisioned filesystem releases, it
+is not automatically installed into environments. Its README defines the supported selector and
+literal-pattern policy and includes a complete binding example.
+
 ## Adding a component-implemented built-in tool
 
 1. Add a standalone tool component source and build it through its Golem application manifest. Do

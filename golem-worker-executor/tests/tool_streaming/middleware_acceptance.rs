@@ -1454,6 +1454,191 @@ async fn universal_middleware_preserves_native_modes_effects_and_completed_repla
 #[test]
 #[tracing::instrument]
 #[timeout("3m")]
+async fn output_redaction_preserves_structured_stream_error_and_completed_replay(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state.clone()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let middleware_component = executor
+        .component(
+            &context.default_environment_id,
+            "golem_output_redaction_release",
+        )
+        .name("golem:output-redaction-acceptance")
+        .store()
+        .await?;
+    let provider_metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", provider.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    let middleware_metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join("golem_output_redaction_release.wasm"),
+        false,
+        true,
+    )
+    .await?;
+    let redaction = middleware_metadata
+        .tool_middlewares
+        .iter()
+        .find(|definition| definition.name == "output-redaction")
+        .expect("output-redaction middleware metadata");
+    let agent_type = AgentTypeName("ToolStreamingCaller".to_string());
+    let mut deployment = deployment_state(
+        context.account_id,
+        provider_component.id,
+        provider_component.revision,
+        "golem-it:tool-streaming-rust-provider",
+        agent_type.0.as_str(),
+        provider_metadata.tools,
+    );
+    install_middleware_chain(
+        &mut deployment,
+        &agent_type,
+        &ToolName::try_from("middleware-probe").unwrap(),
+        middleware_component.id,
+        middleware_component.revision,
+        "golem:output-redaction",
+        &middleware_metadata.tool_middlewares,
+        vec![(
+            redaction.name.as_str(),
+            output_redaction_parameters(redaction, vec![("$", "secret", "[redacted]")], vec![]),
+        )],
+    );
+    install_middleware_chain(
+        &mut deployment,
+        &agent_type,
+        &ToolName::try_from("streaming").unwrap(),
+        middleware_component.id,
+        middleware_component.revision,
+        "golem:output-redaction",
+        &middleware_metadata.tool_middlewares,
+        vec![(
+            redaction.name.as_str(),
+            output_redaction_parameters(redaction, vec![], vec![("marker:", "[redacted]")]),
+        )],
+    );
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment),
+    );
+
+    let agent_id = agent_id!("ToolStreamingCaller", "output-redaction");
+    let worker_id = executor
+        .start_agent(&caller_component.id, agent_id.clone())
+        .await?;
+    let structured: String = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &agent_id,
+            "middleware_probe_once",
+            data_value!("visible-secret"),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(structured, "leaf(visible-[redacted])");
+
+    let declared: RedactionEvidence = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &agent_id,
+            "redaction_stream_case",
+            data_value!("declared-error"),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(declared.output, b"[redacted]");
+    assert_eq!(declared.stdout_terminal, "finished");
+    assert_eq!(declared.stderr_terminal, "absent");
+    assert!(declared.outcome.contains("Declared"));
+
+    let failed: RedactionEvidence = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &agent_id,
+            "redaction_stream_case",
+            data_value!("stream-failure-success"),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(failed.output, b"[redacted]");
+    assert_eq!(
+        failed.stdout_terminal,
+        "failed:ByteStreamFailure::Failed(\"stream producer failed\")"
+    );
+    assert_eq!(failed.stderr_terminal, "absent");
+    assert_eq!(failed.outcome, "ok");
+
+    let dual: RedactionEvidence = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &agent_id,
+            "redaction_dual_case",
+            data_value!(),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(dual.output, b"[redacted]");
+    assert_eq!(dual.stdout_terminal, "finished");
+    assert_eq!(dual.stderr, b"stderr-visible");
+    assert_eq!(dual.stderr_terminal, "finished");
+    assert_eq!(dual.outcome, "ok");
+
+    let before_replay = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let leaf_starts = entity_starts(&before_replay, PublicAgentEntityKind::Tool, "streaming").len();
+    assert_eq!(leaf_starts, 3);
+    executor.simulated_crash(&worker_id).await?;
+    executor.resume(&worker_id, true).await?;
+    let reconstructed: String = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &agent_id,
+            "read_owner_file",
+            data_value!("/redaction-replay-output"),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(reconstructed.as_bytes(), b"[redacted]");
+    let after_replay = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        entity_starts(&after_replay, PublicAgentEntityKind::Tool, "streaming").len(),
+        leaf_starts,
+        "completed replay must not rerun either streaming leaf"
+    );
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
 async fn middleware_race_cancels_loser_drops_observer_and_settles_all_siblings(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,

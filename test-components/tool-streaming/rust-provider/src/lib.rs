@@ -1029,8 +1029,18 @@ impl Streaming for StreamingImpl {
                 | "declared-error"
                 | "explicit-stdout-failure"
                 | "finish-failure"
+                | "stream-failure-success"
         ) {
-            summary.output_closed = !write_chunk(&mut stdout, MARKER.to_vec()).await;
+            if matches!(mode.as_str(), "declared-error" | "stream-failure-success") {
+                for byte in MARKER {
+                    if !write_chunk(&mut stdout, vec![*byte]).await {
+                        summary.output_closed = true;
+                        break;
+                    }
+                }
+            } else {
+                summary.output_closed = !write_chunk(&mut stdout, MARKER.to_vec()).await;
+            }
         }
 
         match mode.as_str() {
@@ -1147,6 +1157,14 @@ impl Streaming for StreamingImpl {
                 let _ = stdout.finish().await;
                 return Ok(summary);
             }
+            "stream-failure-success" => {
+                let _ = stdout
+                    .fail(ByteStreamFailure::Failed(
+                        "provider-selected-failure".to_string(),
+                    ))
+                    .await;
+                return Ok(summary);
+            }
             _ => {
                 while let Some(item) = stdin.next().await {
                     let Ok(chunk) = item else {
@@ -1203,6 +1221,21 @@ impl Streaming for StreamingImpl {
         mut stdout: OutputStream,
         mut diagnostics: OutputStream,
     ) -> Result<StreamSummary, StreamingError> {
+        if mode == "redaction-terminals" {
+            for byte in MARKER {
+                stdout.write(vec![*byte]).await.unwrap();
+            }
+            for byte in b"stderr-visible" {
+                diagnostics.write(vec![*byte]).await.unwrap();
+            }
+            stdout.finish().await.unwrap();
+            diagnostics.finish().await.unwrap();
+            return Ok(StreamSummary {
+                chunks_read: 0,
+                bytes_read: 0,
+                output_closed: false,
+            });
+        }
         announce_middleware_probe_effect(&format!("dual-reconstruct-{mode}")).await;
         match mode.as_str() {
             "before-either-output" => {}

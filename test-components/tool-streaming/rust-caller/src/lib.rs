@@ -71,6 +71,15 @@ pub struct StreamEvidence {
 }
 
 #[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
+pub struct RedactionEvidence {
+    pub output: Vec<u8>,
+    pub stdout_terminal: String,
+    pub stderr: Vec<u8>,
+    pub stderr_terminal: String,
+    pub outcome: String,
+}
+
+#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub struct StreamingBenchmarkResult {
     pub first_chunk_nanos: u64,
     pub total_nanos: u64,
@@ -329,6 +338,8 @@ pub trait ToolStreamingCaller {
     async fn rust_reflected_generated_parity(&self, capable_path: String) -> Vec<String>;
     async fn rust_provider_terminal_rows(&self) -> Vec<String>;
     async fn result_before_stdout(&self, mode: String) -> StreamEvidence;
+    async fn redaction_stream_case(&self, mode: String) -> RedactionEvidence;
+    async fn redaction_dual_case(&self) -> RedactionEvidence;
     async fn started_invocation_contracts(
         &self,
         capable_path: String,
@@ -1196,6 +1207,53 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         let result = invocation.result().await;
         let output = read_tool_stdout(invocation.stdout.expect("streaming tool has stdout")).await;
         evidence(result, output)
+    }
+
+    async fn redaction_stream_case(&self, mode: String) -> RedactionEvidence {
+        let invocation = StreamingClient::default()
+            .run(mode, input_stream(Vec::new()))
+            .await
+            .expect("start redaction stream case");
+        let outcome = match invocation.result().await {
+            Ok(_) => "ok".to_string(),
+            Err(error) => format!("{error:?}"),
+        };
+        let mut stdout = invocation.stdout.expect("streaming tool has stdout");
+        let mut output = Vec::new();
+        let stdout_terminal = loop {
+            match stdout.next().await {
+                Some(Ok(chunk)) => output.extend(chunk),
+                Some(Err(failure)) => break format!("failed:{failure:?}"),
+                None => break "finished".to_string(),
+            }
+        };
+        std::fs::write("/redaction-replay-output", &output)
+            .expect("persist redacted output for reconstruction assertion");
+        RedactionEvidence {
+            output,
+            stdout_terminal,
+            stderr: Vec::new(),
+            stderr_terminal: "absent".to_string(),
+            outcome,
+        }
+    }
+
+    async fn redaction_dual_case(&self) -> RedactionEvidence {
+        let invocation = StreamingClient::default()
+            .dual_reconstruct("redaction-terminals".to_string())
+            .await
+            .expect("start dual-output redaction case");
+        let collected = invocation
+            .collect()
+            .await
+            .expect("collect dual-output redaction case");
+        RedactionEvidence {
+            output: collected.stdout.expect("dual-output stdout is attached"),
+            stdout_terminal: "finished".to_string(),
+            stderr: collected.stderr.expect("dual-output stderr is attached"),
+            stderr_terminal: "finished".to_string(),
+            outcome: "ok".to_string(),
+        }
     }
 
     async fn started_invocation_contracts(

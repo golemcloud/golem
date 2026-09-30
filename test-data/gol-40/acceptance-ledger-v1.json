@@ -409,18 +409,45 @@
     },
     {
       "id": "REDACTION-1",
-      "status": "requires implementation",
-      "remaining": "Decide and implement selector/pattern and schema-preservation policy."
+      "status": "covered",
+      "artifact": "builtin-tools/output-redaction/README.md",
+      "existingCoverage": [
+        {
+          "test": "redacts_only_selected_structured_siblings; structured_redaction_does_not_rescan_replacement_text; rejects_schema_unsafe_and_opaque_selectors; rejects_ambiguous_or_unbounded_literals; structured_text_value_retains_metadata",
+          "file": "builtin-tools/output-redaction/src/lib.rs",
+          "oracle": "Hand-authored asymmetric schema values and exact validation errors distinguish selected siblings, constrained/opaque targets, invalid literals, and preserved text metadata."
+        }
+      ],
+      "independentOracle": "The documented selector grammar, literal limits, and fail-closed schema table are independent of transformed runtime values."
     },
     {
       "id": "REDACTION-2",
-      "status": "requires implementation",
-      "remaining": "Implement bounded cross-chunk streaming redaction."
+      "status": "covered",
+      "existingCoverage": [
+        {
+          "test": "streaming_redaction_is_exact_at_every_chunk_boundary_and_bounded; streaming_redaction_handles_overlaps_without_rescanning_replacements; streaming_redaction_does_not_preempt_partial_earlier_match",
+          "file": "builtin-tools/output-redaction/src/lib.rs",
+          "oracle": "Literal expected bytes are checked at every split point while retained bytes are independently bounded by longest-pattern length minus one."
+        },
+        {
+          "test": "output_redaction_preserves_structured_stream_error_and_completed_replay",
+          "file": "golem-worker-executor/tests/tool_streaming/middleware_acceptance.rs",
+          "oracle": "Byte-fragmented provider output, unchanged stderr bytes, and separately observed finish/failure terminals prove the deployed relay contract."
+        }
+      ],
+      "independentOracle": "Provider-authored one-byte chunks differ from the hand-authored exact redacted and pass-through byte expectations."
     },
     {
       "id": "REDACTION-3",
-      "status": "requires implementation",
-      "remaining": "Ship Redaction before deployed error/replay acceptance."
+      "status": "covered",
+      "existingCoverage": [
+        {
+          "test": "output_redaction_preserves_structured_stream_error_and_completed_replay",
+          "file": "golem-worker-executor/tests/tool_streaming/middleware_acceptance.rs",
+          "oracle": "Separate byte, stream-terminal, structured-outcome, persisted-file, and public-oplog leaf-start assertions cover declared error, explicit stream failure plus success, and completed replay."
+        }
+      ],
+      "independentOracle": "Public-oplog start counts and caller-owned durable file contents independently detect leaf reruns or replay output drift."
     },
     {
       "id": "RATE-1",

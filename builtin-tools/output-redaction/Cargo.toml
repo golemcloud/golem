@@ -1,0 +1,24 @@
+[workspace]
+resolver = "2"
+members = ["."]
+
+[package]
+name = "golem-output-redaction"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+harness = false
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = "symbols"
+
+[dependencies]
+futures-concurrency = "7.6.3"
+golem-rust = { path = "../../sdks/rust/golem-rust", features = ["export_golem_agentic", "rich-validation"] }
+
+[dev-dependencies]
+test-r = "3.0.9"

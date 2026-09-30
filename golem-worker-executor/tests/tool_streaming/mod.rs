@@ -726,6 +726,15 @@ struct StreamEvidence {
 }
 
 #[derive(Debug, FromSchema)]
+struct RedactionEvidence {
+    output: Vec<u8>,
+    stdout_terminal: String,
+    stderr: Vec<u8>,
+    stderr_terminal: String,
+    outcome: String,
+}
+
+#[derive(Debug, FromSchema)]
 struct ClockedStreamEvidence {
     before_tool_nanos: u64,
     after_tool_nanos: u64,
@@ -1190,6 +1199,43 @@ fn audit_middleware_parameters(
             fields: vec![
                 SchemaValue::String(label.to_string()),
                 SchemaValue::String(sink_url.to_string()),
+            ],
+        },
+    )
+}
+
+fn output_redaction_parameters(
+    definition: &ToolMiddleware,
+    structured: Vec<(&str, &str, &str)>,
+    stdout: Vec<(&str, &str)>,
+) -> TypedSchemaValue {
+    TypedSchemaValue::new(
+        definition.parameter_schema.clone(),
+        SchemaValue::Record {
+            fields: vec![
+                SchemaValue::List {
+                    elements: structured
+                        .into_iter()
+                        .map(|(selector, pattern, replacement)| SchemaValue::Record {
+                            fields: vec![
+                                SchemaValue::String(selector.to_string()),
+                                SchemaValue::String(pattern.to_string()),
+                                SchemaValue::String(replacement.to_string()),
+                            ],
+                        })
+                        .collect(),
+                },
+                SchemaValue::List {
+                    elements: stdout
+                        .into_iter()
+                        .map(|(pattern, replacement)| SchemaValue::Record {
+                            fields: vec![
+                                SchemaValue::String(pattern.to_string()),
+                                SchemaValue::String(replacement.to_string()),
+                            ],
+                        })
+                        .collect(),
+                },
             ],
         },
     )
