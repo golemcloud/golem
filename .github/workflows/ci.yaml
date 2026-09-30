@@ -73,14 +73,11 @@ jobs:
           mkdir tmp/golem-binaries
           tar --zstd -xvf tmp/golem-binaries.tar.zst -C tmp/golem-binaries
         timeout-minutes: 5
-      - name: Upload packaged binaries
-        uses: actions/upload-artifact@v6
+      - name: Save packaged binaries to cache
+        uses: actions/cache/save@v5
         with:
-          name: golem-binaries
           path: tmp/golem-binaries
-          compression-level: 0
-          overwrite: true
-          retention-days: 1
+          key: golem-binaries-${{ github.run_id }}
 
   check-clippy-and-format:
     env:
@@ -102,7 +99,7 @@ jobs:
       CARGO_BUILD_JOBS: 10
     runs-on: blacksmith-8vcpu-ubuntu-2204
     needs: build-and-store
-    timeout-minutes: 20
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
         with:
@@ -121,6 +118,7 @@ jobs:
         uses: sbt/setup-sbt@v1
       - uses: ./.github/actions/restore-binaries
         with:
+          run-id: ${{ github.run_id }}
           copy-to-target: 'true'
       # Bun is needed by check-openapi (which depends on check-docs-openapi)
       # and by check-docs-skills to regenerate docs from the in-tree
@@ -185,7 +183,11 @@ jobs:
           redis-version: latest
           auto-start: false
       - uses: ./.github/actions/restore-binaries
+        with:
+          run-id: ${{ github.run_id }}
       - uses: ./.github/actions/restore-test-components
+        with:
+          run-id: ${{ github.run_id }}
 
       - name: Worker Executor integration tests
         run: cargo make --profile ci worker-executor-tests-${{ matrix.group.name }}
@@ -212,7 +214,12 @@ jobs:
           use-cache: 'false'
           install-cargo-binstall: 'true'
       - uses: ./.github/actions/restore-binaries
+        with:
+          run-id: ${{ github.run_id }}
+          fail-on-cache-miss: 'true'
       - uses: ./.github/actions/restore-test-components
+        with:
+          run-id: ${{ github.run_id }}
       - name: Set up Lima
         id: lima
         env:
@@ -339,8 +346,11 @@ jobs:
 
       - uses: ./.github/actions/restore-binaries
         with:
+          run-id: ${{ github.run_id }}
           copy-to-target: 'true'
       - uses: ./.github/actions/restore-test-components
+        with:
+          run-id: ${{ github.run_id }}
 
       - name: ${{ matrix.group.description }}
         env:
@@ -483,6 +493,7 @@ jobs:
 
       - uses: ./.github/actions/restore-binaries
         with:
+          run-id: ${{ github.run_id }}
           copy-to-target: 'true'
 
       - name: Restore CLI test binaries
@@ -500,6 +511,8 @@ jobs:
       - name: Restore streaming test components
         if: matrix.group.shard == 'agents_streaming'
         uses: ./.github/actions/restore-test-components
+        with:
+          run-id: ${{ github.run_id }}
 
       - name: it-cli ${{ matrix.group.shard }}
         env:
@@ -604,6 +617,7 @@ jobs:
 
       - uses: ./.github/actions/restore-binaries
         with:
+          run-id: ${{ github.run_id }}
           copy-to-target: 'true'
 
       - name: Restore built TS SDK
@@ -1192,14 +1206,11 @@ jobs:
           count=$(find tmp/test-components-wasm -maxdepth 1 -name '*.wasm' | wc -l)
           echo "Total: $count WASM files"
 
-      - name: Upload merged WASMs
-        uses: actions/upload-artifact@v6
+      - name: Save merged WASMs to cache
+        uses: actions/cache/save@v5
         with:
-          name: golem-test-components
           path: tmp/test-components-wasm
-          compression-level: 0
-          overwrite: true
-          retention-days: 1
+          key: golem-test-components-${{ github.run_id }}
 
   detect-skill-changes:
     name: Detect golem-skills changes
