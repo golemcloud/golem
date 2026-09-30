@@ -49,7 +49,7 @@ object ToolCallBackendSpec extends ZIOSpecDefault {
       FlagShape.BoolFlag(BoolFlagShape(default = false, negatable = false)),
       None
     )
-    val body = ExtendedCommandBody(ExtendedPositionals.empty, Nil, Nil, Nil, None, None, None, Nil, None)
+    val body = ExtendedCommandBody(ExtendedPositionals.empty, Nil, Nil, Nil, None, None, None, None, Nil, None)
     ExtendedToolType(
       "0.1.0",
       Vector(
@@ -60,7 +60,10 @@ object ToolCallBackendSpec extends ZIOSpecDefault {
     )
   }
 
-  private final class EmptyStream extends ToolInputStream
+  private final class EmptyStream extends ToolInputStream {
+    val stream   = zio.blocks.streams.Stream.empty
+    def cancel() = Future.successful(())
+  }
 
   private final class FakeTransport(
     started: Either[ToolRpcFailure, ToolRpcStarted]
@@ -71,7 +74,8 @@ object ToolCallBackendSpec extends ZIOSpecDefault {
       commandPath: List[String],
       input: TypedSchemaValue,
       stdin: Option[ToolInputStream],
-      stdout: Boolean
+      stdout: Boolean,
+      stderr: Boolean
     ): Either[ToolRpcFailure, ToolRpcStarted] = {
       calls += 1
       started
@@ -88,9 +92,10 @@ object ToolCallBackendSpec extends ZIOSpecDefault {
   private def success(
     value: Option[TypedSchemaValue] = None,
     stdout: Option[ToolInputStream] = None,
+    stderr: Option[ToolInputStream] = None,
     terminal: Option[Future[Either[ToolRpcFailure, ToolInvokeResult]]] = None
   ): ToolRpcStarted =
-    ToolRpcStarted(stdout, terminal.getOrElse(Future.successful(Right(ToolInvokeResult(value)))), () => ())
+    ToolRpcStarted(stdout, stderr, terminal.getOrElse(Future.successful(Right(ToolInvokeResult(value)))), () => ())
 
   def spec: Spec[Any, Any] = suite("ToolCallBackendSpec")(
     test("awaited calls decode declared custom errors through the ambient policy") {
@@ -143,7 +148,7 @@ object ToolCallBackendSpec extends ZIOSpecDefault {
 
       started match {
         case Right(invocation) =>
-          val exposedBeforeCompletion = (invocation.stdout eq stream) && !invocation.result.isCompleted
+          val exposedBeforeCompletion = invocation.stdout.contains(stream) && !invocation.result.isCompleted
           terminal.success(Right(ToolInvokeResult(None)))
           ZIO.fromFuture(_ => invocation.result).map(result => assertTrue(exposedBeforeCompletion, result == Right(())))
         case Left(error) => ZIO.succeed(assertNever(s"expected started invocation, got $error"))

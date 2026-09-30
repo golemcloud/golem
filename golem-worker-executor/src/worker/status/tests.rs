@@ -115,6 +115,7 @@ async fn invalid_initial_pending_bounds_do_not_read_the_referent() {
                 timestamp: Timestamp::now_utc(),
                 entity_parent_start_index: None,
                 record: OplogPayload::Inline(Box::new(attached)),
+                summary: None,
             },
         )]);
         test_case.read_starts.lock().unwrap().clear();
@@ -225,6 +226,7 @@ fn cancellation_obligations_survive_status_checkpoint_without_local_prepared() {
         timestamp: Timestamp::now_utc(),
         entity_parent_start_index: None,
         record: OplogPayload::Inline(Box::new(record)),
+        summary: None,
     };
     let fold = |status, index, record| {
         update_status_with_new_entries(
@@ -303,6 +305,7 @@ fn stream_status_discards_reverted_sessions_and_cancellation_receipts_but_keeps_
         timestamp: Timestamp::now_utc(),
         entity_parent_start_index: None,
         record: OplogPayload::Inline(Box::new(record)),
+        summary: None,
     };
     for revert in [false, true] {
         let mut entries: BTreeMap<_, _> = [
@@ -503,6 +506,7 @@ fn export_fork_admission(target: AgentId, session: &str, updated_millis: u64) ->
                 credit_millis: updated_millis + 100,
             },
         ))),
+        summary: None,
     }
 }
 
@@ -569,6 +573,7 @@ fn export_fork_admission_fold_accepts_serialized_inline_payload() {
         timestamp,
         entity_parent_start_index,
         record: OplogPayload::Inline(record),
+        ..
     } = export_fork_admission(target.clone(), "s", 10)
     else {
         unreachable!()
@@ -583,6 +588,7 @@ fn export_fork_admission_fold_accepts_serialized_inline_payload() {
                 bytes,
                 cached: None,
             },
+            summary: None,
         },
     )]);
 
@@ -637,7 +643,7 @@ fn export_fork_admission_fold_accepts_cached_payloads_and_rejects_missing_extern
             export_admission_baseline(),
             BTreeMap::from([(
                 OplogIndex::from_u64(2),
-                OplogEntry::stream_session(None, payload),
+                OplogEntry::stream_session(None, payload, None),
             )]),
             &RetryConfig::default(),
         )
@@ -662,6 +668,7 @@ fn export_fork_admission_fold_accepts_cached_payloads_and_rejects_missing_extern
                     md5_hash: vec![0; 16],
                     cached: None,
                 },
+                None,
             ),
         )]),
         &RetryConfig::default(),
@@ -728,6 +735,7 @@ fn export_fork_admission_fold_distinguishes_atomic_skip_revert_and_new_owner() {
                 timestamp: Timestamp::now_utc(),
                 entity_parent_start_index: None,
                 record: OplogPayload::Inline(Box::new(StreamSessionRecord::ForkCut(cut))),
+                summary: None,
             },
         )]),
     )
@@ -769,6 +777,7 @@ fn export_fork_admission_fold_ignores_ancestor_after_reverting_before_fork_cut()
             OplogEntry::stream_session(
                 None,
                 OplogPayload::Inline(Box::new(StreamSessionRecord::ForkCut(cut))),
+                None,
             ),
         ),
     ]);
@@ -836,6 +845,7 @@ fn export_fork_admission_retry_before_publication_recovers_cut_and_budgets() {
         OplogEntry::stream_session(
             None,
             OplogPayload::Inline(Box::new(StreamSessionRecord::ExportForkAdmitted(accepted))),
+            None,
         ),
     )]);
     // No target exists yet; reconstruct solely from the source's committed admission.
@@ -913,6 +923,7 @@ fn export_fork_admission_retry_before_publication_recovers_cut_and_budgets() {
                 OplogPayload::Inline(Box::new(StreamSessionRecord::ExportForkAdmitted(
                     second_record,
                 ))),
+                None,
             ),
         )]),
         &RetryConfig::default(),
@@ -1055,6 +1066,51 @@ async fn recovery_failure_remains_failed_until_recovery_succeeds() {
             status.last_error_kind = None;
             status
         })
+        .build();
+
+    run_test_case(test_case).await;
+}
+
+#[test]
+async fn infrastructure_recovery_ignores_existing_semantic_retry_count() {
+    let retry_from = OplogIndex::from_u64(1);
+    let exhausted = RetryPolicyState::Counter(100);
+    let test_case = TestCase::builder(0)
+        .add(
+            OplogEntry::error(
+                None,
+                OplogErrorKind::Invocation,
+                AgentError::TransientError("semantic failure".to_string()),
+                retry_from,
+                false,
+                Some(exhausted.clone()),
+            ),
+            {
+                let exhausted = exhausted.clone();
+                move |mut status| {
+                    status.status = AgentStatus::Failed;
+                    status.last_error_kind = Some(OplogErrorKind::Invocation);
+                    status.current_retry_state.insert(retry_from, exhausted);
+                    status
+                }
+            },
+        )
+        .add(
+            OplogEntry::error(
+                None,
+                OplogErrorKind::Recovery,
+                AgentError::Unknown("payload backend unavailable".to_string()),
+                retry_from,
+                false,
+                None,
+            ),
+            move |mut status| {
+                status.status = AgentStatus::Retrying;
+                status.last_error_kind = Some(OplogErrorKind::Recovery);
+                status.current_retry_state.insert(retry_from, exhausted);
+                status
+            },
+        )
         .build();
 
     run_test_case(test_case).await;
@@ -2543,6 +2599,7 @@ impl TestCaseBuilder {
                 observational_owner: None,
                 request: Some(OplogPayload::Inline(Box::new(i))),
                 durable_function_type: func_type,
+                span_started: None,
             },
             |status| status,
         )
@@ -2552,6 +2609,8 @@ impl TestCaseBuilder {
                 start_index,
                 response: Some(OplogPayload::Inline(Box::new(o))),
                 forced_commit: false,
+                span_finished: None,
+                span_attributes: None,
             },
             |status| status,
         )
@@ -2932,6 +2991,7 @@ impl OplogService for TestCase {
         _initial_worker_metadata: AgentMetadata,
         _last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+        _shard_epoch: Option<golem_common::model::ShardEpoch>,
     ) -> Arc<dyn Oplog + 'static> {
         unreachable!()
     }
@@ -2945,6 +3005,7 @@ impl OplogService for TestCase {
         _initial_worker_metadata: AgentMetadata,
         _last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+        _shard_epoch: Option<golem_common::model::ShardEpoch>,
     ) -> Arc<dyn Oplog + 'static> {
         unreachable!()
     }
@@ -2958,6 +3019,7 @@ impl OplogService for TestCase {
         _initial_worker_metadata: AgentMetadata,
         _last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+        _shard_epoch: Option<golem_common::model::ShardEpoch>,
     ) -> Arc<dyn Oplog + 'static> {
         unreachable!()
     }
@@ -2970,12 +3032,22 @@ impl OplogService for TestCase {
         OplogIndex::from_u64(self.entries.len() as u64)
     }
 
+    async fn assert_owning_epoch(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _agent_mode: AgentMode,
+        _expected_epoch: golem_common::model::ShardEpoch,
+    ) -> Result<(), crate::services::oplog::OplogError> {
+        Ok(())
+    }
+
     async fn delete(
         &self,
         _lifecycle: &mut crate::services::oplog::OplogLifecycleGuard,
         _owned_agent_id: &OwnedAgentId,
         _agent_mode: AgentMode,
-    ) -> Result<(), String> {
+        _expected_epoch: Option<golem_common::model::ShardEpoch>,
+    ) -> Result<(), crate::services::oplog::OplogError> {
         unreachable!()
     }
 
@@ -3192,6 +3264,7 @@ async fn cold_recompute_downloads_uncached_external_stream_session_payload() {
                 md5_hash: vec![0; 16],
                 cached: None,
             },
+            summary: None,
         },
         expected_status: AgentStatusRecord::default(),
     });
@@ -3227,6 +3300,7 @@ async fn incremental_fold_does_not_download_payload_reverted_in_later_chunk() {
             md5_hash: vec![0; 16],
             cached: None,
         },
+        summary: None,
     };
     test_case.entries.push(TestEntry {
         oplog_entry: missing_payload(),

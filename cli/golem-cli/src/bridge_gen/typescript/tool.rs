@@ -307,18 +307,27 @@ impl TypeScriptToolBridgeGenerator {
                 .skip(1)
                 .collect::<Vec<_>>(),
         )?;
-        let value_type = if body.stdout.is_some() {
+        let has_stdout = body.stdout.is_some();
+        let has_stderr = body.stderr.is_some();
+        let has_output = has_stdout || has_stderr;
+        let value_type = if has_output {
             format!("base.StartedToolInvocation<{result}, {error_type}>")
         } else {
             result
         };
-        out.push_str(&format!("  {name}({}): Effect.Effect<{value_type}, base.ToolRuntimeError<{error_type}>, base.ToolRequirements> {{\n    const runtime = this.runtime; const inherited = this.inherited;\n    return Effect.gen(function*() {{\n      const typedInput: base.TypedSchemaValue = yield* Effect.try({{ try: () => {{ const fields: base.SchemaValue[] = [...inherited.map(encode => encode()), {encoded}]; return {{ graph: {graph}, value: {{ tag: 'record' as const, fields }} }}; }}, catch: error => protocol('failed to encode tool input', error) }});\n      const invocation = yield* runtime.start<{error_type}>({path}, typedInput, {stdin}, {});\n", params.join(", "), body.stdout.is_some()));
-        if body.stdout.is_some() {
-            out.push_str("      if (invocation.stdout === undefined) return yield* Effect.fail(protocol('tool invocation did not provide declared stdout stream'));\n      const decoded = invocation.result.pipe(Effect.flatMap(invocationResult => Effect.try({ try: () => {\n");
+        out.push_str(&format!("  {name}({}): Effect.Effect<{value_type}, base.ToolRuntimeError<{error_type}>, base.ToolRequirements> {{\n    const runtime = this.runtime; const inherited = this.inherited;\n    return Effect.gen(function*() {{\n      const typedInput: base.TypedSchemaValue = yield* Effect.try({{ try: () => {{ const fields: base.SchemaValue[] = [...inherited.map(encode => encode()), {encoded}]; return {{ graph: {graph}, value: {{ tag: 'record' as const, fields }} }}; }}, catch: error => protocol('failed to encode tool input', error) }});\n      const invocation = yield* runtime.start<{error_type}>({path}, typedInput, {stdin}, {has_stdout}, {has_stderr});\n", params.join(", ")));
+        if has_output {
+            if has_stdout {
+                out.push_str("      if (invocation.stdout === undefined) return yield* Effect.fail(protocol('tool invocation did not provide declared stdout stream'));\n");
+            }
+            if has_stderr {
+                out.push_str("      if (invocation.stderr === undefined) return yield* Effect.fail(protocol('tool invocation did not provide declared stderr stream'));\n");
+            }
+            out.push_str("      const decoded = invocation.result.pipe(Effect.flatMap(invocationResult => Effect.try({ try: () => {\n");
             self.write_result(out, body, true)?;
             out.push_str("      }, catch: error => protocol('invalid tool result', error) })), Effect.catch(error => { try {\n");
             self.write_invocation_error(out, body, error_type, "        ", SourceDialect::Effect);
-            out.push_str(&format!("      }} catch (mapped) {{ return Effect.fail(mapped as base.ToolRuntimeError<{error_type}>); }} }}));\n      return base.startedToolInvocation(invocation.stdout, decoded, invocation.cancel);\n"));
+            out.push_str(&format!("      }} catch (mapped) {{ return Effect.fail(mapped as base.ToolRuntimeError<{error_type}>); }} }}));\n      return base.startedToolInvocation(invocation.stdout, invocation.stderr, decoded, invocation.cancel);\n"));
         } else {
             out.push_str("      const invocationResult = yield* invocation.result.pipe(Effect.catch(error => { try {\n");
             self.write_invocation_error(out, body, error_type, "        ", SourceDialect::Effect);
@@ -382,21 +391,30 @@ impl TypeScriptToolBridgeGenerator {
                 .skip(1)
                 .collect::<Vec<_>>(),
         )?;
-        let method_return = if body.stdout.is_some() {
+        let has_stdout = body.stdout.is_some();
+        let has_stderr = body.stderr.is_some();
+        let has_output = has_stdout || has_stderr;
+        let method_return = if has_output {
             format!("base.StartedToolInvocation<{return_type}>")
         } else {
             format!("Promise<{return_type}>")
         };
-        let async_ = if body.stdout.is_some() { "" } else { "async " };
-        out.push_str(&format!("  {async_}{name}({}): {method_return} {{\n    let typedInput: base.TypedSchemaValue;\n    try {{\n      const fields: base.SchemaValue[] = [...this.inherited, {encoded}];\n      typedInput = {{ graph: {graph}, value: {{ tag: 'record', fields }} }};\n    }} catch (error) {{ throw protocol('failed to encode tool input', error); }}\n    let invocation: ReturnType<base.ToolClientRuntime['start']>;\n    try {{ invocation = this.runtime.start({path}, typedInput, {stdin}, {}); }} catch (error) {{\n", params.join(", "), body.stdout.is_some()));
+        let async_ = if has_output { "" } else { "async " };
+        out.push_str(&format!("  {async_}{name}({}): {method_return} {{\n    let typedInput: base.TypedSchemaValue;\n    try {{\n      const fields: base.SchemaValue[] = [...this.inherited, {encoded}];\n      typedInput = {{ graph: {graph}, value: {{ tag: 'record', fields }} }};\n    }} catch (error) {{ throw protocol('failed to encode tool input', error); }}\n    let invocation: ReturnType<base.ToolClientRuntime['start']>;\n    try {{ invocation = this.runtime.start({path}, typedInput, {stdin}, {has_stdout}, {has_stderr}); }} catch (error) {{\n", params.join(", ")));
         self.write_invocation_error(out, body, error_type, "      ", SourceDialect::Promise);
         out.push_str("    }\n");
-        if body.stdout.is_some() {
-            out.push_str("    if (invocation.stdout === undefined) { invocation.cancel(); throw protocol('tool invocation did not provide declared stdout stream'); }\n    const settledResult = base.mapSettledToolResult(invocation.settledResult, (invocationResult) => {\n      try {\n");
+        if has_output {
+            if has_stdout {
+                out.push_str("    if (invocation.stdout === undefined) { invocation.cancel(); throw protocol('tool invocation did not provide declared stdout stream'); }\n");
+            }
+            if has_stderr {
+                out.push_str("    if (invocation.stderr === undefined) { invocation.cancel(); throw protocol('tool invocation did not provide declared stderr stream'); }\n");
+            }
+            out.push_str("    const settledResult = base.mapSettledToolResult(invocation.settledResult, (invocationResult) => {\n      try {\n");
             self.write_result(out, body, false)?;
             out.push_str("      } catch (error) { throw protocol('invalid tool result', error); }\n    }, (error) => {\n");
             self.write_invocation_error(out, body, error_type, "      ", SourceDialect::Promise);
-            out.push_str("    });\n    return base.startedToolInvocation(invocation.stdout, settledResult, () => invocation.cancel());\n");
+            out.push_str("    });\n    return base.startedToolInvocation(invocation.stdout, invocation.stderr, settledResult, () => invocation.cancel());\n");
         } else {
             out.push_str("    const invocationOutcome = await invocation.settledResult;\n    if (invocationOutcome.status === 'rejected') { const error = invocationOutcome.reason;\n");
             self.write_invocation_error(out, body, error_type, "      ", SourceDialect::Promise);

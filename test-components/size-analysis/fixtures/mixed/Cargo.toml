@@ -1,0 +1,10 @@
+[package]
+name = "retention-mixed"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+golem-rust.workspace = true

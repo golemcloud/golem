@@ -32,6 +32,37 @@ fn[T : IntoSchema + FromSchema] rich_roundtrip(v : T) -> T raise {
 }
 
 ///|
+test "direct rich wire codecs preserve units and reject invalid quantity units" {
+  let tree : @types.SchemaValueTree = {
+    value_nodes: [
+      @types.UrlValue("https://example.com/a"),
+      @types.DurationValue({ nanoseconds: -42L, }),
+      @types.QuantityValueNode({ mantissa: 1500L, scale: 1, unit: "kb", }),
+      @types.TupleValue([0, 1, 2]),
+    ],
+    root: 3,
+  }
+  let result : (Url, Duration, Quantity[TestBytesUnit]) = from_wire(tree)
+  assert_eq(result.0, Url::new("https://example.com/a"))
+  assert_eq(result.1, Duration::new(-42L))
+  assert_eq(result.2, Quantity::new(1500L, 1, "kb"))
+  assert_eq(into_wire(result), tree)
+  let invalid : @types.SchemaValueTree = {
+    value_nodes: [
+      @types.QuantityValueNode({ mantissa: 1L, scale: 0, unit: "seconds", }),
+    ],
+    root: 0,
+  }
+  try {
+    let _ : Quantity[TestBytesUnit] = from_wire(invalid)
+  } catch {
+    WireError::Invalid(_) => ()
+  } noraise {
+    _ => fail("accepted a unit outside the declared quantity unit set")
+  }
+}
+
+///|
 test "rich type round-trips" {
   assert_eq(
     rich_roundtrip(Path::new("/tmp/data.txt")),

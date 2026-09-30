@@ -39,9 +39,16 @@ Effect components report TypeScript as their source language, so text output ren
 using TypeScript syntax. Multiple return values are rendered as a TypeScript tuple, for example
 `[1, "ok"]`. Methods returning `void` or no value print `void` in text mode.
 
-For machine-readable output, use `--format json` or `--format yaml`. A single return value includes
-`result` plus `result_json`; multiple return values include `result` plus `results_json`; methods
-returning `void` or no value omit result fields.
+For machine-readable output, use `--format json`, `--format yaml`, or `--format toon`. Streaming
+methods emit invocation lifecycle documents in order: `accepted`, `result`, any stream
+`item`/terminal events, and `finished`. Scalar fields accompanying streams are in the `result`
+event's `value`.
+
+In structured CLI formats, invocation output is a sequence of lifecycle documents rather than one
+object or array. Streaming invocation is durable: disconnecting or pressing Ctrl-C detaches the
+current transport without cancelling the invocation. The CLI does not retry automatically. Use
+`--save-session <PATH>` on the initial invocation, then `--resume-session <PATH>` after a detach or
+`--takeover-session <PATH>` to fence an attached transport explicitly.
 
 ## Agent ID Format
 

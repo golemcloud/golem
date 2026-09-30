@@ -15,7 +15,7 @@
 use super::*;
 use crate::durable_host::durable_stream::{
     CommittedProducerStreamEventPayload, DurableStreamStore, ExternalAppendOutcome,
-    ExternalProducer, StreamHandleReadResult, StreamStoreError, StreamWriteAdmission,
+    ExternalProducer, SessionError, StreamHandleReadResult, StreamStoreError, StreamWriteAdmission,
 };
 use golem_api_grpc::proto::golem::schema::{SchemaValue as ProtoValue, schema_value};
 use golem_common::model::DurableStreamPublicBinding;
@@ -254,7 +254,8 @@ fn append_error(error: StreamStoreError) -> WorkerExecutorError {
         | StreamStoreError::UnknownStream(_) => {
             WorkerExecutorError::invalid_request(error.to_string())
         }
-        _ => WorkerExecutorError::runtime(error.to_string()),
+        // A refused write keeps its type, so the caller is sent to the shard's new owner.
+        error => error.into_worker_executor_error(WorkerExecutorError::runtime),
     }
 }
 
@@ -420,11 +421,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let metadata = streams
             .current_control_metadata()
             .await
-            .map_err(WorkerExecutorError::runtime)?;
+            .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
         let epoch = streams
             .authoritative_attachment_state()
             .await
-            .map_err(WorkerExecutorError::runtime)?
+            .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?
             .epoch;
         let mut records = metadata
             .cancellation_records(epoch, &session_reference)
@@ -1491,7 +1492,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             prepared.stream_mappings.iter().cloned(),
         )
         .await
-        .map_err(WorkerExecutorError::runtime)?
+        .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?
         .with_rpc(self.rpc())
         .with_consumer_journal(self.durable_stream_consumer_journal())
         .with_auth_ctx(self.durable_stream_consumer_auth_ctx()?);
@@ -1509,9 +1510,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                             Some(&request.expected_method),
                         )
                         .await
-                        .map_err(|error| error.to_string())?
+                        .map_err(SessionError::from)?
                     else {
-                        return Ok::<_, String>(ExportStreamControlResult::NotFound);
+                        return Ok::<_, SessionError>(ExportStreamControlResult::NotFound);
                     };
                     let stream = match slot.source {
                         SlotSource::Tombstoned => return Ok(ExportStreamControlResult::Gone),
@@ -1535,7 +1536,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     })
                 })
                 .await
-                .map_err(WorkerExecutorError::runtime)
+                .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))
         } else {
             streams
                 .cancel_session_streams()
@@ -1547,7 +1548,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         ExportStreamControlResult::NotFound
                     }
                 })
-                .map_err(WorkerExecutorError::runtime)
+                .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))
         }
     }
 

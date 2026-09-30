@@ -1595,6 +1595,114 @@ async fn manual_update_on_idle(
     Ok(())
 }
 
+/// A stop arriving while a manual update is in flight must not deadlock either side.
+///
+/// The update is enqueued from the invocation loop, under the worker lifecycle lock, while an
+/// interrupt takes the same worker down. The order is forced: the loop is held inside its
+/// enqueue, the interrupt is issued against it, then the enqueue is released. Either outcome is
+/// legal, a hang is not - and the timeout is the assertion.
+#[test]
+#[tracing::instrument]
+#[timeout(120000)]
+async fn a_stop_racing_a_manual_update_never_deadlocks(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v2")] agent_update_v2: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let http_server = TestHttpServer::start().await;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), http_server.port().to_string());
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_update_v2)
+        .store()
+        .await?;
+    let agent_id = agent_id!("UpdateTest");
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
+        .await?;
+    let mut _log_output_guards = Vec::new();
+    _log_output_guards.push(executor.log_output_scoped(&worker_id).await?);
+
+    let updated_component = executor
+        .update_component(&component.id, "it_agent_update_v3_release")
+        .await?;
+
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "f1", data_value!(0u64))
+        .await?;
+
+    // The loop is held inside its enqueue of the update, under the worker lifecycle lock, and
+    // the interrupt is issued while it waits there.
+    let mut gate = executor.gate_next_pending_update_enqueue(&worker_id).await;
+    let update = {
+        let executor = executor.clone();
+        let worker_id = worker_id.clone();
+        let revision = updated_component.revision;
+        spawn(
+            async move {
+                executor
+                    .manual_update_worker(&worker_id, revision, false)
+                    .await
+            }
+            .in_current_span(),
+        )
+    };
+    tokio::time::timeout(Duration::from_secs(60), gate.entered())
+        .await
+        .map_err(|_| anyhow::anyhow!("the loop never reached the update's enqueue"))?;
+    let stop = {
+        let executor = executor.clone();
+        let worker_id = worker_id.clone();
+        spawn(async move { executor.interrupt(&worker_id).await }.in_current_span())
+    };
+    // The interrupt has to take the worker down while the loop holds the lock; a short wait
+    // without a hook for "the stop is waiting on the loop", then the enqueue is released.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    drop(gate);
+
+    let (update, stop) = tokio::time::timeout(Duration::from_secs(60), async {
+        tokio::join!(update, stop)
+    })
+    .await
+    .map_err(|_| {
+        anyhow::anyhow!("a stop racing a manual update deadlocked: neither call came back")
+    })?;
+    // Either may fail on its own terms - the worker is being stopped - but neither may hang, and
+    // the executor has to stay usable afterwards.
+    let _ = update?;
+    let _ = stop?;
+
+    // The worker is still answerable, and on a revision that is one of the two legal outcomes -
+    // the method set differs between them, so the probe is the metadata rather than a call.
+    let metadata = tokio::time::timeout(
+        Duration::from_secs(60),
+        executor.get_worker_metadata(&worker_id),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("the agent never answered again after the race"))??;
+    assert!(
+        metadata.component_revision == updated_component.revision
+            || metadata.component_revision == ComponentRevision::INITIAL,
+        "the update either landed or did not, but the revision must be one of the two, got {:?}",
+        metadata.component_revision
+    );
+    assert!(
+        !matches!(metadata.status, AgentStatus::Failed),
+        "a stop racing an update must not fail the agent, got {:?}",
+        metadata.status
+    );
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    drop(executor);
+    http_server.abort();
+    Ok(())
+}
+
 #[test]
 #[tracing::instrument]
 async fn manual_update_on_idle_without_save_snapshot(

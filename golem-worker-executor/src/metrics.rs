@@ -1301,6 +1301,13 @@ pub mod oplog {
             &["operation"]
         )
         .unwrap();
+        static ref OPLOG_EPOCH_FENCE_TOTAL: CounterVec = register_counter_vec!(
+            "oplog_epoch_fence_total",
+            "Oplog operations checked against the shard epoch: `op` is `record` for an open \
+             recording its epoch and `append` for a write, `outcome` is `accepted` or `refused`",
+            &["op", "outcome"]
+        )
+        .unwrap();
     }
 
     pub fn record_oplog_call(api_name: &'static str) {
@@ -1322,6 +1329,12 @@ pub mod oplog {
     pub fn record_archive_maintenance_failure(operation: &'static str) {
         OPLOG_ARCHIVE_MAINTENANCE_FAILURE_TOTAL
             .with_label_values(&[operation])
+            .inc();
+    }
+
+    pub fn record_oplog_epoch_fence(op: &'static str, refused: bool) {
+        OPLOG_EPOCH_FENCE_TOTAL
+            .with_label_values(&[op, if refused { "refused" } else { "accepted" }])
             .inc();
     }
 

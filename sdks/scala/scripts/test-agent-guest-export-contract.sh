@@ -3,8 +3,8 @@ set -euo pipefail
 
 sdk_root="$(cd "$(dirname "$0")/.." && pwd)"
 exports_dts="$sdk_root/wit/dts/exports.d.ts"
-guest_runtime="$sdk_root/core/js/src/main/scala/golem/runtime/guest/Guest.scala"
-middleware_guest_runtime="$sdk_root/core/js/src/main/scala/golem/runtime/guest/ToolMiddlewareGuest.scala"
+guest_runtime="$sdk_root/codegen/src/main/scala/golem/codegen/autoregister/AutoRegisterCodegen.scala"
+middleware_guest_runtime="$guest_runtime"
 
 test_generated_agent_guest_namespace_is_exported_by_scala_runtime() {
   local namespace

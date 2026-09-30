@@ -2,6 +2,7 @@
 
 componentTemplates:
   ts:
+    guestLanguage: ts
     presets:
       optimized:
         default: true

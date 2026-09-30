@@ -75,18 +75,18 @@ pub(all) struct ConstructedAgent {
 pub(all) struct SnapshotRestoreContext {
   agent_id : String
   agent_type : String
-  identity_fields : Array[@model.SchemaValue]
+  identity_fields : SnapshotIdentity
   phantom_id : @types.Uuid?
   principal : @common.Principal
 }
 
 ///|
 /// Decodes an identity field from the ambient agent ID.
-pub fn[T : @schema.FromSchema] SnapshotRestoreContext::identity(
+pub fn[T : @schema.FromWire] SnapshotRestoreContext::identity(
   self : SnapshotRestoreContext,
   index : Int,
 ) -> T raise @common.AgentError {
-  decode_param(self.identity_fields, index, "snapshot restoration")
+  decode_snapshot_identity_field(self.identity_fields, index)
 }
 
 ///|
@@ -183,6 +183,7 @@ pub async fn restore_and_set_instance(
   snapshot : Bytes,
   context : SnapshotRestoreContext,
 ) -> Result[Unit, String] {
+  defer context.identity_fields.abort()
   match get_registered_agent(agent_type) {
     None => Err("Agent type not found: \{agent_type}")
     Some(registered_agent) =>
@@ -190,11 +191,14 @@ pub async fn restore_and_set_instance(
         None => Err("Agent does not support snapshots")
         Some(load_snapshot) => {
           let principal = context.principal
-          finish_restoration(
-            registered_agent,
-            principal,
-            load_snapshot(snapshot, context),
-          )
+          let restored = match load_snapshot(snapshot, context) {
+            Ok(restored) => restored
+            Err(error) => return Err(error)
+          }
+          context.identity_fields.finish() catch {
+            error => return Err("Invalid agent identity: \{repr(error)}")
+          }
+          finish_restoration(registered_agent, principal, Ok(restored))
         }
       }
   }

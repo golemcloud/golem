@@ -3,49 +3,69 @@
 ///|
 #doc(hidden)
 pub fn wasmExportAsyncSave(event_raw : Int, waitable : Int, code : Int) -> Int {
-      @async-core.cb(event_raw, waitable, code)
+  @async-core.cb(event_raw, waitable, code)
 }
-///|
-fn wasmExportAsyncSaveTaskReturn(p0: Int, p1: Int, p2: Int, p3: Int) = "[export]golem:api/save-snapshot@1.5.0" "[task-return]save"
 
 ///|
-fn save_task_return(return_result: Ref[@host.Snapshot?]) -> Unit {
+fn wasmExportAsyncSaveTaskReturn(p0 : Int, p1 : Int, p2 : Int, p3 : Int) = "[export]golem:api/save-snapshot@1.5.0" "[task-return]save"
 
-      match return_result.val {
-            Some(return_value) => {
+///|
+fn save_task_return(return_result : Ref[@host.Snapshot?]) -> Unit {
+  match return_result.val {
+    Some(return_value) => {
+      let cleanup_list : Array[Int] = []
 
-                  let ptr = mbt_ffi_bytes2ptr((return_value).payload)
+      let ptr = mbt_ffi_bytes2ptr(return_value.payload)
 
-                  let ptr0 = mbt_ffi_str2ptr((return_value).mime_type)
+      let ptr0 = mbt_ffi_str2ptr(return_value.mime_type)
+      cleanup_list.push(ptr)
+      cleanup_list.push(ptr0)
 
-                  wasmExportAsyncSaveTaskReturn(ptr, (return_value).payload.length(), ptr0, (return_value).mime_type.length())
+      wasmExportAsyncSaveTaskReturn(
+        ptr,
+        return_value.payload.length(),
+        ptr0,
+        return_value.mime_type.length(),
+      )
 
-                  @async-core.task_returned()
+      cleanup_list.each(mbt_ffi_free)
 
-            }
-            None => ()
-      }
-
+      @async-core.task_returned()
+    }
+    None => ()
+  }
 }
 
 ///|
 #doc(hidden)
 pub fn wasmExportSave() -> Int {
-      @async-core.with_waitableset(async fn() {
-            @async-core.with_task_group(async fn(background_group) {
-
-                  let return_result: Ref[@host.Snapshot?] = Ref(None)
-                  return_result.val = Some(save(background_group))
-                  save_task_return(return_result)
-
-            })
-      })
+  @async-core.with_waitableset(async fn() {
+    @async-core.with_task_group(async fn(background_group) {
+      let return_result : Ref[@host.Snapshot?] = Ref(None)
+      return_result.val = Some(save(background_group))
+      save_task_return(return_result)
+    })
+  })
 }
+
 ///|
 #owned(bytes)
 extern "wasm" fn mbt_ffi_bytes2ptr(bytes : FixedArray[Byte]) -> Int =
-#|(func (param i32) (result i32) local.get 0)
+  #|(func (param i32) (result i32) local.get 0)
+
+///|
+extern "wasm" fn mbt_ffi_free(position : Int) =
+  #|(func (param i32) local.get 0 call $moonbit.decref)
+
+///|
+extern "wasm" fn mbt_ffi_load32(offset : Int) -> Int =
+  #|(func (param i32) (result i32) local.get 0 i32.load)
+
+///|
+extern "wasm" fn mbt_ffi_store32(offset : Int, value : Int) =
+  #|(func (param i32) (param i32) local.get 0 local.get 1 i32.store)
+
 ///|
 #owned(str)
 extern "wasm" fn mbt_ffi_str2ptr(str : String) -> Int =
-#|(func (param i32) (result i32) local.get 0)
+  #|(func (param i32) (result i32) local.get 0)

@@ -13,7 +13,8 @@ val result: Future[Either[ToolError[Nothing], String]] =
 ```
 
 Use the exact generated signature: a command with declared errors uses the error type declared by
-the tool method instead of `Nothing`. Commands without stdout, including stdin-only commands,
-return `Future[Either[ToolError[E], A]]`; stdin is a `ToolInputStream` parameter. A command with
-stdout returns `Either[ToolError[E], ToolInvocation[E, A]]`, whose invocation exposes the result and
-stream. Handle `ToolError.Tool` separately from protocol failures. Never edit generated clients.
+the tool method instead of `Nothing`. Commands without stdout or stderr, including stdin-only
+commands, return `Future[Either[ToolError[E], A]]`; stdin is a `ToolInputStream` parameter. A command
+with either output returns `Either[ToolError[E], ToolInvocation[E, A]]`, whose invocation exposes
+the result and independent stdout/stderr streams. Drain both outputs concurrently. Handle
+`ToolError.Tool` separately from protocol failures. Never edit generated clients.

@@ -7,12 +7,7 @@
 //     http://license.golem.cloud/LICENSE
 
 use golem_common::schema::graph::SchemaGraph;
-use golem_common::schema::metadata::{MetadataEnvelope, Role};
-use golem_common::schema::schema_type::{
-    BinaryRestrictions, DiscriminatorRule, NumericBound, NumericRestrictions, PathDirection,
-    PathKind, PathSpec, QuantitySpec, QuantityValue, QuotaTokenSpec, SchemaType, SecretSpec,
-    TextRestrictions, UrlRestrictions,
-};
+use golem_common::schema::wit::{encode_graph, wire};
 use proc_macro2::TokenStream;
 use quote::quote;
 
@@ -37,7 +32,7 @@ impl SchemaGraphRegistry {
             let name = graph_ident(index);
             let literal = emit_schema_graph_literal(graph);
             quote! {
-                static #name: std::sync::LazyLock<golem_rust::SchemaGraph> =
+                static #name: std::sync::LazyLock<golem_rust::schema::wit::wire::SchemaGraph> =
                     std::sync::LazyLock::new(|| #literal);
             }
         });
@@ -50,6 +45,10 @@ pub(crate) fn graph_clone(index: usize) -> TokenStream {
     quote! { (*#name).clone() }
 }
 
+pub(crate) fn emit_schema_graph_literal(graph: &SchemaGraph) -> TokenStream {
+    emit_wire_graph(&encode_graph(graph).expect("validated schema graph must be encodable"))
+}
+
 fn graph_ident(index: usize) -> syn::Ident {
     syn::Ident::new(
         &format!("__GOLEM_SCHEMA_GRAPH_{index}"),
@@ -57,247 +56,195 @@ fn graph_ident(index: usize) -> syn::Ident {
     )
 }
 
-pub(crate) fn emit_schema_graph_literal(graph: &SchemaGraph) -> TokenStream {
+fn emit_wire_graph(graph: &wire::SchemaGraph) -> TokenStream {
+    let nodes = graph.type_nodes.iter().map(emit_node);
     let defs = graph.defs.iter().map(|def| {
-        let id = def.id.as_str();
+        let id = &def.id;
         let name = option_string(def.name.as_deref());
-        let body = emit_schema_type(&def.body);
-        quote! {
-            golem_rust::schema::graph::SchemaTypeDef {
-                id: golem_rust::schema::metadata::TypeId::new(#id),
-                name: #name,
-                body: #body,
-            }
-        }
+        let body = def.body;
+        quote! { golem_rust::schema::wit::wire::SchemaTypeDef {
+            id: #id.to_string(), name: #name, body: #body,
+        } }
     });
-    let root = emit_schema_type(&graph.root);
-    quote! {
-        golem_rust::schema::graph::SchemaGraph {
-            defs: vec![#(#defs),*],
-            root: #root,
-        }
-    }
-}
-
-fn emit_schema_type(typ: &SchemaType) -> TokenStream {
-    use SchemaType::*;
-
-    let metadata = emit_metadata(typ.metadata());
-    match typ {
-        Ref { id, .. } => {
-            let id = id.as_str();
-            quote! { golem_rust::schema::schema_type::SchemaType::Ref {
-                id: golem_rust::schema::metadata::TypeId::new(#id),
-                metadata: #metadata,
-            } }
-        }
-        Bool { .. } => {
-            quote! { golem_rust::schema::schema_type::SchemaType::Bool { metadata: #metadata } }
-        }
-        S8 { restrictions, .. } => numeric("S8", restrictions.as_ref(), metadata),
-        S16 { restrictions, .. } => numeric("S16", restrictions.as_ref(), metadata),
-        S32 { restrictions, .. } => numeric("S32", restrictions.as_ref(), metadata),
-        S64 { restrictions, .. } => numeric("S64", restrictions.as_ref(), metadata),
-        U8 { restrictions, .. } => numeric("U8", restrictions.as_ref(), metadata),
-        U16 { restrictions, .. } => numeric("U16", restrictions.as_ref(), metadata),
-        U32 { restrictions, .. } => numeric("U32", restrictions.as_ref(), metadata),
-        U64 { restrictions, .. } => numeric("U64", restrictions.as_ref(), metadata),
-        F32 { restrictions, .. } => numeric("F32", restrictions.as_ref(), metadata),
-        F64 { restrictions, .. } => numeric("F64", restrictions.as_ref(), metadata),
-        Char { .. } => {
-            quote! { golem_rust::schema::schema_type::SchemaType::Char { metadata: #metadata } }
-        }
-        String { .. } => {
-            quote! { golem_rust::schema::schema_type::SchemaType::String { metadata: #metadata } }
-        }
-        Record { fields, .. } => {
-            let fields = fields.iter().map(|field| {
-                let name = &field.name;
-                let body = emit_schema_type(&field.body);
-                let metadata = emit_metadata(&field.metadata);
-                quote! { golem_rust::schema::schema_type::NamedFieldType {
-                    name: #name.to_string(), body: #body, metadata: #metadata,
-                } }
-            });
-            quote! { golem_rust::schema::schema_type::SchemaType::Record {
-                fields: vec![#(#fields),*], metadata: #metadata,
-            } }
-        }
-        Variant { cases, .. } => {
-            let cases = cases.iter().map(|case| {
-                let name = &case.name;
-                let payload = option_type(case.payload.as_ref());
-                let metadata = emit_metadata(&case.metadata);
-                quote! { golem_rust::schema::schema_type::VariantCaseType {
-                    name: #name.to_string(), payload: #payload, metadata: #metadata,
-                } }
-            });
-            quote! { golem_rust::schema::schema_type::SchemaType::Variant {
-                cases: vec![#(#cases),*], metadata: #metadata,
-            } }
-        }
-        Enum { cases, .. } => {
-            let cases = string_vec(cases);
-            quote! { golem_rust::schema::schema_type::SchemaType::Enum { cases: #cases, metadata: #metadata } }
-        }
-        Flags { flags, .. } => {
-            let flags = string_vec(flags);
-            quote! { golem_rust::schema::schema_type::SchemaType::Flags { flags: #flags, metadata: #metadata } }
-        }
-        Tuple { elements, .. } => {
-            let elements = elements.iter().map(emit_schema_type);
-            quote! { golem_rust::schema::schema_type::SchemaType::Tuple {
-                elements: vec![#(#elements),*], metadata: #metadata,
-            } }
-        }
-        List { element, .. } => {
-            let element = emit_schema_type(element);
-            quote! { golem_rust::schema::schema_type::SchemaType::List {
-                element: Box::new(#element), metadata: #metadata,
-            } }
-        }
-        FixedList {
-            element, length, ..
-        } => {
-            let element = emit_schema_type(element);
-            quote! { golem_rust::schema::schema_type::SchemaType::FixedList {
-                element: Box::new(#element), length: #length, metadata: #metadata,
-            } }
-        }
-        Map { key, value, .. } => {
-            let key = emit_schema_type(key);
-            let value = emit_schema_type(value);
-            quote! { golem_rust::schema::schema_type::SchemaType::Map {
-                key: Box::new(#key), value: Box::new(#value), metadata: #metadata,
-            } }
-        }
-        Option { inner, .. } => {
-            let inner = emit_schema_type(inner);
-            quote! { golem_rust::schema::schema_type::SchemaType::Option {
-                inner: Box::new(#inner), metadata: #metadata,
-            } }
-        }
-        Result { spec, .. } => {
-            let ok = option_boxed_type(spec.ok.as_deref());
-            let err = option_boxed_type(spec.err.as_deref());
-            quote! { golem_rust::schema::schema_type::SchemaType::Result {
-                spec: golem_rust::schema::schema_type::ResultSpec { ok: #ok, err: #err },
-                metadata: #metadata,
-            } }
-        }
-        Text { restrictions, .. } => {
-            let restrictions = text_restrictions(restrictions);
-            quote! { golem_rust::schema::schema_type::SchemaType::Text {
-                restrictions: #restrictions, metadata: #metadata,
-            } }
-        }
-        Binary { restrictions, .. } => {
-            let restrictions = binary_restrictions(restrictions);
-            quote! { golem_rust::schema::schema_type::SchemaType::Binary {
-                restrictions: #restrictions, metadata: #metadata,
-            } }
-        }
-        Path { spec, .. } => {
-            let spec = path_spec(spec);
-            quote! { golem_rust::schema::schema_type::SchemaType::Path { spec: #spec, metadata: #metadata } }
-        }
-        Url { restrictions, .. } => {
-            let restrictions = url_restrictions(restrictions);
-            quote! { golem_rust::schema::schema_type::SchemaType::Url {
-                restrictions: #restrictions, metadata: #metadata,
-            } }
-        }
-        Datetime { .. } => {
-            quote! { golem_rust::schema::schema_type::SchemaType::Datetime { metadata: #metadata } }
-        }
-        Duration { .. } => {
-            quote! { golem_rust::schema::schema_type::SchemaType::Duration { metadata: #metadata } }
-        }
-        Quantity { spec, .. } => {
-            let spec = quantity_spec(spec);
-            quote! { golem_rust::schema::schema_type::SchemaType::Quantity { spec: #spec, metadata: #metadata } }
-        }
-        Union { spec, .. } => {
-            let branches = spec.branches.iter().map(|branch| {
-                let tag = &branch.tag;
-                let body = emit_schema_type(&branch.body);
-                let discriminator = discriminator(&branch.discriminator);
-                let metadata = emit_metadata(&branch.metadata);
-                quote! { golem_rust::schema::schema_type::UnionBranch {
-                    tag: #tag.to_string(), body: #body, discriminator: #discriminator, metadata: #metadata,
-                } }
-            });
-            quote! { golem_rust::schema::schema_type::SchemaType::Union {
-                spec: golem_rust::schema::schema_type::UnionSpec { branches: vec![#(#branches),*] },
-                metadata: #metadata,
-            } }
-        }
-        Secret { spec, .. } => {
-            let spec = secret_spec(spec);
-            quote! { golem_rust::schema::schema_type::SchemaType::Secret { spec: #spec, metadata: #metadata } }
-        }
-        QuotaToken { spec, .. } => {
-            let spec = quota_token_spec(spec);
-            quote! { golem_rust::schema::schema_type::SchemaType::QuotaToken { spec: #spec, metadata: #metadata } }
-        }
-        PermissionCard { spec, .. } => {
-            let polymorphic = spec.polymorphic;
-            quote! { golem_rust::schema::schema_type::SchemaType::PermissionCard {
-                spec: golem_rust::schema::schema_type::PermissionCardSpec { polymorphic: #polymorphic },
-                metadata: #metadata,
-            } }
-        }
-        Future { inner, .. } => {
-            let inner = option_boxed_type(inner.as_deref());
-            quote! { golem_rust::schema::schema_type::SchemaType::Future { inner: #inner, metadata: #metadata } }
-        }
-        Stream { inner, .. } => {
-            let inner = option_boxed_type(inner.as_deref());
-            quote! { golem_rust::schema::schema_type::SchemaType::Stream { inner: #inner, metadata: #metadata } }
-        }
-    }
-}
-
-fn numeric(
-    name: &str,
-    restrictions: Option<&NumericRestrictions>,
-    metadata: TokenStream,
-) -> TokenStream {
-    let variant = syn::Ident::new(name, proc_macro2::Span::call_site());
-    let restrictions = option_numeric_restrictions(restrictions);
-    quote! { golem_rust::schema::schema_type::SchemaType::#variant {
-        restrictions: #restrictions, metadata: #metadata,
+    let root = graph.root;
+    quote! { golem_rust::schema::wit::wire::SchemaGraph {
+        type_nodes: vec![#(#nodes),*], defs: vec![#(#defs),*], root: #root,
     } }
 }
 
-fn option_numeric_restrictions(value: Option<&NumericRestrictions>) -> TokenStream {
-    value.map_or_else(
-        || quote! { None },
-        |value| {
-            let min = option_bound(value.min);
-            let max = option_bound(value.max);
-            let unit = option_string(value.unit.as_deref());
-            quote! { Some(golem_rust::schema::schema_type::NumericRestrictions {
-                min: #min, max: #max, unit: #unit,
-            }) }
-        },
-    )
+fn emit_node(node: &wire::SchemaTypeNode) -> TokenStream {
+    let body = emit_body(&node.body);
+    let metadata = emit_metadata(&node.metadata);
+    quote! { golem_rust::schema::wit::wire::SchemaTypeNode {
+        body: #body, metadata: #metadata,
+    } }
 }
 
-fn option_bound(value: Option<NumericBound>) -> TokenStream {
+fn emit_body(body: &wire::SchemaTypeBody) -> TokenStream {
+    use wire::SchemaTypeBody::*;
+    let path = quote! { golem_rust::schema::wit::wire::SchemaTypeBody };
+    match body {
+        RefType(value) => quote! { #path::RefType(#value) },
+        BoolType => quote! { #path::BoolType },
+        S8Type(value) => numeric_body("S8Type", value),
+        S16Type(value) => numeric_body("S16Type", value),
+        S32Type(value) => numeric_body("S32Type", value),
+        S64Type(value) => numeric_body("S64Type", value),
+        U8Type(value) => numeric_body("U8Type", value),
+        U16Type(value) => numeric_body("U16Type", value),
+        U32Type(value) => numeric_body("U32Type", value),
+        U64Type(value) => numeric_body("U64Type", value),
+        F32Type(value) => numeric_body("F32Type", value),
+        F64Type(value) => numeric_body("F64Type", value),
+        CharType => quote! { #path::CharType },
+        StringType => quote! { #path::StringType },
+        RecordType(fields) => {
+            let fields = fields.iter().map(emit_field);
+            quote! { #path::RecordType(vec![#(#fields),*]) }
+        }
+        VariantType(cases) => {
+            let cases = cases.iter().map(emit_case);
+            quote! { #path::VariantType(vec![#(#cases),*]) }
+        }
+        EnumType(values) => {
+            let values = string_vec(values);
+            quote! { #path::EnumType(#values) }
+        }
+        FlagsType(values) => {
+            let values = string_vec(values);
+            quote! { #path::FlagsType(#values) }
+        }
+        TupleType(values) => quote! { #path::TupleType(vec![#(#values),*]) },
+        ListType(value) => quote! { #path::ListType(#value) },
+        FixedListType(value) => {
+            let element = value.element;
+            let length = value.length;
+            quote! { #path::FixedListType(golem_rust::schema::wit::wire::FixedListSpec {
+                element: #element, length: #length,
+            }) }
+        }
+        MapType(value) => {
+            let key = value.key;
+            let val = value.value;
+            quote! { #path::MapType(golem_rust::schema::wit::wire::MapSpec { key: #key, value: #val }) }
+        }
+        OptionType(value) => quote! { #path::OptionType(#value) },
+        ResultType(value) => {
+            let ok = option_copy(value.ok);
+            let err = option_copy(value.err);
+            quote! { #path::ResultType(golem_rust::schema::wit::wire::ResultSpec { ok: #ok, err: #err }) }
+        }
+        TextType(value) => {
+            let value = text_restrictions(value);
+            quote! { #path::TextType(#value) }
+        }
+        BinaryType(value) => {
+            let value = binary_restrictions(value);
+            quote! { #path::BinaryType(#value) }
+        }
+        PathType(value) => {
+            let value = path_spec(value);
+            quote! { #path::PathType(#value) }
+        }
+        UrlType(value) => {
+            let value = url_restrictions(value);
+            quote! { #path::UrlType(#value) }
+        }
+        DatetimeType => quote! { #path::DatetimeType },
+        DurationType => quote! { #path::DurationType },
+        QuantityType(value) => {
+            let value = quantity_spec(value);
+            quote! { #path::QuantityType(#value) }
+        }
+        UnionType(value) => {
+            let branches = value.branches.iter().map(emit_branch);
+            quote! { #path::UnionType(golem_rust::schema::wit::wire::UnionSpec { branches: vec![#(#branches),*] }) }
+        }
+        SecretType(value) => {
+            let inner = value.inner;
+            let category = option_string(value.category.as_deref());
+            quote! { #path::SecretType(golem_rust::schema::wit::wire::SecretSpec { inner: #inner, category: #category }) }
+        }
+        QuotaTokenType(value) => {
+            let resource_name = option_string(value.resource_name.as_deref());
+            quote! { #path::QuotaTokenType(golem_rust::schema::wit::wire::QuotaTokenSpec { resource_name: #resource_name }) }
+        }
+        PermissionCardType(value) => {
+            let polymorphic = value.polymorphic;
+            quote! { #path::PermissionCardType(golem_rust::schema::wit::wire::PermissionCardSpec { polymorphic: #polymorphic }) }
+        }
+        FutureType(value) => {
+            let value = option_copy(*value);
+            quote! { #path::FutureType(#value) }
+        }
+        StreamType(value) => {
+            let value = option_copy(*value);
+            quote! { #path::StreamType(#value) }
+        }
+    }
+}
+
+fn emit_field(value: &wire::NamedFieldType) -> TokenStream {
+    let name = &value.name;
+    let body = value.body;
+    let metadata = emit_metadata(&value.metadata);
+    quote! { golem_rust::schema::wit::wire::NamedFieldType {
+        name: #name.to_string(), body: #body, metadata: #metadata,
+    } }
+}
+
+fn emit_case(value: &wire::VariantCaseType) -> TokenStream {
+    let name = &value.name;
+    let payload = option_copy(value.payload);
+    let metadata = emit_metadata(&value.metadata);
+    quote! { golem_rust::schema::wit::wire::VariantCaseType {
+        name: #name.to_string(), payload: #payload, metadata: #metadata,
+    } }
+}
+
+fn emit_branch(value: &wire::UnionBranch) -> TokenStream {
+    let tag = &value.tag;
+    let body = value.body;
+    let discriminator = emit_discriminator(&value.discriminator);
+    let metadata = emit_metadata(&value.metadata);
+    quote! { golem_rust::schema::wit::wire::UnionBranch {
+        tag: #tag.to_string(), body: #body, discriminator: #discriminator, metadata: #metadata,
+    } }
+}
+
+fn numeric_body(name: &str, value: &Option<wire::NumericRestrictions>) -> TokenStream {
+    let variant = syn::Ident::new(name, proc_macro2::Span::call_site());
+    let value = value.as_ref().map_or_else(
+        || quote! { None },
+        |value| {
+            let value = numeric_restrictions(value);
+            quote! { Some(#value) }
+        },
+    );
+    quote! { golem_rust::schema::wit::wire::SchemaTypeBody::#variant(#value) }
+}
+
+fn numeric_restrictions(value: &wire::NumericRestrictions) -> TokenStream {
+    let min = option_bound(value.min.as_ref());
+    let max = option_bound(value.max.as_ref());
+    let unit = option_string(value.unit.as_deref());
+    quote! { golem_rust::schema::wit::wire::NumericRestrictions { min: #min, max: #max, unit: #unit } }
+}
+
+fn option_bound(value: Option<&wire::NumericBound>) -> TokenStream {
     value.map_or_else(
         || quote! { None },
         |value| {
             let value = match value {
-                NumericBound::Signed(value) => {
-                    let value = i64_literal(value);
-                    quote! { golem_rust::schema::schema_type::NumericBound::Signed(#value) }
+                wire::NumericBound::Signed(value) => {
+                    let value = i64_literal(*value);
+                    quote! { golem_rust::schema::wit::wire::NumericBound::Signed(#value) }
                 }
-                NumericBound::Unsigned(value) => {
-                    quote! { golem_rust::schema::schema_type::NumericBound::Unsigned(#value) }
+                wire::NumericBound::Unsigned(value) => {
+                    quote! { golem_rust::schema::wit::wire::NumericBound::Unsigned(#value) }
                 }
-                NumericBound::FloatBits(value) => {
-                    quote! { golem_rust::schema::schema_type::NumericBound::FloatBits(#value) }
+                wire::NumericBound::FloatBits(value) => {
+                    quote! { golem_rust::schema::wit::wire::NumericBound::FloatBits(#value) }
                 }
             };
             quote! { Some(#value) }
@@ -305,7 +252,7 @@ fn option_bound(value: Option<NumericBound>) -> TokenStream {
     )
 }
 
-fn emit_metadata(value: &MetadataEnvelope) -> TokenStream {
+fn emit_metadata(value: &wire::MetadataEnvelope) -> TokenStream {
     let doc = option_string(value.doc.as_deref());
     let aliases = string_vec(&value.aliases);
     let examples = string_vec(&value.examples);
@@ -314,157 +261,104 @@ fn emit_metadata(value: &MetadataEnvelope) -> TokenStream {
         || quote! { None },
         |role| {
             let role = match role {
-                Role::Multimodal => quote! { golem_rust::schema::metadata::Role::Multimodal },
-                Role::UnstructuredText => {
-                    quote! { golem_rust::schema::metadata::Role::UnstructuredText }
+                wire::Role::Multimodal => {
+                    quote! { golem_rust::schema::wit::wire::Role::Multimodal }
                 }
-                Role::UnstructuredBinary => {
-                    quote! { golem_rust::schema::metadata::Role::UnstructuredBinary }
+                wire::Role::UnstructuredText => {
+                    quote! { golem_rust::schema::wit::wire::Role::UnstructuredText }
                 }
-                Role::Other(value) => {
-                    quote! { golem_rust::schema::metadata::Role::Other(#value.to_string()) }
+                wire::Role::UnstructuredBinary => {
+                    quote! { golem_rust::schema::wit::wire::Role::UnstructuredBinary }
+                }
+                wire::Role::Other(value) => {
+                    quote! { golem_rust::schema::wit::wire::Role::Other(#value.to_string()) }
                 }
             };
             quote! { Some(#role) }
         },
     );
-    quote! { golem_rust::schema::metadata::MetadataEnvelope {
+    quote! { golem_rust::schema::wit::wire::MetadataEnvelope {
         doc: #doc, aliases: #aliases, examples: #examples, deprecated: #deprecated, role: #role,
     } }
 }
 
-fn text_restrictions(value: &TextRestrictions) -> TokenStream {
+fn text_restrictions(value: &wire::TextRestrictions) -> TokenStream {
     let languages = option_string_vec(value.languages.as_deref());
     let min_length = option_copy(value.min_length);
     let max_length = option_copy(value.max_length);
     let regex = option_string(value.regex.as_deref());
-    quote! { golem_rust::schema::schema_type::TextRestrictions {
+    quote! { golem_rust::schema::wit::wire::TextRestrictions {
         languages: #languages, min_length: #min_length, max_length: #max_length, regex: #regex,
     } }
 }
 
-fn binary_restrictions(value: &BinaryRestrictions) -> TokenStream {
+fn binary_restrictions(value: &wire::BinaryRestrictions) -> TokenStream {
     let mime_types = option_string_vec(value.mime_types.as_deref());
     let min_bytes = option_copy(value.min_bytes);
     let max_bytes = option_copy(value.max_bytes);
-    quote! { golem_rust::schema::schema_type::BinaryRestrictions {
+    quote! { golem_rust::schema::wit::wire::BinaryRestrictions {
         mime_types: #mime_types, min_bytes: #min_bytes, max_bytes: #max_bytes,
     } }
 }
 
-fn path_spec(value: &PathSpec) -> TokenStream {
+fn path_spec(value: &wire::PathSpec) -> TokenStream {
     let direction = match value.direction {
-        PathDirection::Input => quote! { golem_rust::schema::schema_type::PathDirection::Input },
-        PathDirection::Output => quote! { golem_rust::schema::schema_type::PathDirection::Output },
-        PathDirection::InOut => quote! { golem_rust::schema::schema_type::PathDirection::InOut },
+        wire::PathDirection::Input => {
+            quote! { golem_rust::schema::wit::wire::PathDirection::Input }
+        }
+        wire::PathDirection::Output => {
+            quote! { golem_rust::schema::wit::wire::PathDirection::Output }
+        }
+        wire::PathDirection::InOut => {
+            quote! { golem_rust::schema::wit::wire::PathDirection::InOut }
+        }
     };
     let kind = match value.kind {
-        PathKind::File => quote! { golem_rust::schema::schema_type::PathKind::File },
-        PathKind::Directory => quote! { golem_rust::schema::schema_type::PathKind::Directory },
-        PathKind::Any => quote! { golem_rust::schema::schema_type::PathKind::Any },
+        wire::PathKind::File => quote! { golem_rust::schema::wit::wire::PathKind::File },
+        wire::PathKind::Directory => quote! { golem_rust::schema::wit::wire::PathKind::Directory },
+        wire::PathKind::Any => quote! { golem_rust::schema::wit::wire::PathKind::Any },
     };
     let allowed_mime_types = option_string_vec(value.allowed_mime_types.as_deref());
     let allowed_extensions = option_string_vec(value.allowed_extensions.as_deref());
-    quote! { golem_rust::schema::schema_type::PathSpec {
-        direction: #direction, kind: #kind,
-        allowed_mime_types: #allowed_mime_types, allowed_extensions: #allowed_extensions,
-    } }
+    quote! { golem_rust::schema::wit::wire::PathSpec { direction: #direction, kind: #kind, allowed_mime_types: #allowed_mime_types, allowed_extensions: #allowed_extensions } }
 }
 
-fn url_restrictions(value: &UrlRestrictions) -> TokenStream {
+fn url_restrictions(value: &wire::UrlRestrictions) -> TokenStream {
     let allowed_schemes = option_string_vec(value.allowed_schemes.as_deref());
     let allowed_hosts = option_string_vec(value.allowed_hosts.as_deref());
-    quote! { golem_rust::schema::schema_type::UrlRestrictions {
-        allowed_schemes: #allowed_schemes, allowed_hosts: #allowed_hosts,
-    } }
+    quote! { golem_rust::schema::wit::wire::UrlRestrictions { allowed_schemes: #allowed_schemes, allowed_hosts: #allowed_hosts } }
 }
 
-fn quantity_spec(value: &QuantitySpec) -> TokenStream {
+fn quantity_spec(value: &wire::QuantitySpec) -> TokenStream {
     let base_unit = &value.base_unit;
     let allowed_suffixes = string_vec(&value.allowed_suffixes);
     let min = option_quantity(value.min.as_ref());
     let max = option_quantity(value.max.as_ref());
-    quote! { golem_rust::schema::schema_type::QuantitySpec {
-        base_unit: #base_unit.to_string(), allowed_suffixes: #allowed_suffixes, min: #min, max: #max,
-    } }
+    quote! { golem_rust::schema::wit::wire::QuantitySpec { base_unit: #base_unit.to_string(), allowed_suffixes: #allowed_suffixes, min: #min, max: #max } }
 }
 
-fn option_quantity(value: Option<&QuantityValue>) -> TokenStream {
-    value.map_or_else(
-        || quote! { None },
-        |value| {
-            let mantissa = i64_literal(value.mantissa);
-            let scale = value.scale;
-            let unit = &value.unit;
-            quote! { Some(golem_rust::schema::schema_type::QuantityValue {
-                mantissa: #mantissa, scale: #scale, unit: #unit.to_string(),
-            }) }
-        },
-    )
+fn option_quantity(value: Option<&wire::QuantityValue>) -> TokenStream {
+    value.map_or_else(|| quote! { None }, |value| { let mantissa = i64_literal(value.mantissa); let scale = value.scale; let unit = &value.unit;
+        quote! { Some(golem_rust::schema::wit::wire::QuantityValue { mantissa: #mantissa, scale: #scale, unit: #unit.to_string() }) }
+    })
 }
 
-fn discriminator(value: &DiscriminatorRule) -> TokenStream {
+fn emit_discriminator(value: &wire::DiscriminatorRule) -> TokenStream {
+    let path = quote! { golem_rust::schema::wit::wire::DiscriminatorRule };
     match value {
-        DiscriminatorRule::Prefix { prefix } => quote! {
-            golem_rust::schema::schema_type::DiscriminatorRule::Prefix { prefix: #prefix.to_string() }
-        },
-        DiscriminatorRule::Suffix { suffix } => quote! {
-            golem_rust::schema::schema_type::DiscriminatorRule::Suffix { suffix: #suffix.to_string() }
-        },
-        DiscriminatorRule::Contains { substring } => quote! {
-            golem_rust::schema::schema_type::DiscriminatorRule::Contains { substring: #substring.to_string() }
-        },
-        DiscriminatorRule::Regex { regex } => quote! {
-            golem_rust::schema::schema_type::DiscriminatorRule::Regex { regex: #regex.to_string() }
-        },
-        DiscriminatorRule::FieldEquals(field) => {
-            let field_name = &field.field_name;
-            let literal = option_string(field.literal.as_deref());
-            quote! { golem_rust::schema::schema_type::DiscriminatorRule::FieldEquals(
-                golem_rust::schema::schema_type::FieldDiscriminator {
-                    field_name: #field_name.to_string(), literal: #literal,
-                }
-            ) }
+        wire::DiscriminatorRule::Prefix(value) => quote! { #path::Prefix(#value.to_string()) },
+        wire::DiscriminatorRule::Suffix(value) => quote! { #path::Suffix(#value.to_string()) },
+        wire::DiscriminatorRule::Contains(value) => quote! { #path::Contains(#value.to_string()) },
+        wire::DiscriminatorRule::Regex(value) => quote! { #path::Regex(#value.to_string()) },
+        wire::DiscriminatorRule::FieldEquals(value) => {
+            let field_name = &value.field_name;
+            let literal = option_string(value.literal.as_deref());
+            quote! { #path::FieldEquals(golem_rust::schema::wit::wire::FieldDiscriminator { field_name: #field_name.to_string(), literal: #literal }) }
         }
-        DiscriminatorRule::FieldAbsent { field_name } => quote! {
-            golem_rust::schema::schema_type::DiscriminatorRule::FieldAbsent {
-                field_name: #field_name.to_string(),
-            }
-        },
+        wire::DiscriminatorRule::FieldAbsent(value) => {
+            quote! { #path::FieldAbsent(#value.to_string()) }
+        }
     }
-}
-
-fn secret_spec(value: &SecretSpec) -> TokenStream {
-    let inner = emit_schema_type(&value.inner);
-    let category = option_string(value.category.as_deref());
-    quote! { golem_rust::schema::schema_type::SecretSpec {
-        inner: Box::new(#inner), category: #category,
-    } }
-}
-
-fn quota_token_spec(value: &QuotaTokenSpec) -> TokenStream {
-    let resource_name = option_string(value.resource_name.as_deref());
-    quote! { golem_rust::schema::schema_type::QuotaTokenSpec { resource_name: #resource_name } }
-}
-
-fn option_type(value: Option<&SchemaType>) -> TokenStream {
-    value.map_or_else(
-        || quote! { None },
-        |value| {
-            let value = emit_schema_type(value);
-            quote! { Some(#value) }
-        },
-    )
-}
-
-fn option_boxed_type(value: Option<&SchemaType>) -> TokenStream {
-    value.map_or_else(
-        || quote! { None },
-        |value| {
-            let value = emit_schema_type(value);
-            quote! { Some(Box::new(#value)) }
-        },
-    )
 }
 
 fn option_string(value: Option<&str>) -> TokenStream {
@@ -473,11 +367,9 @@ fn option_string(value: Option<&str>) -> TokenStream {
         |value| quote! { Some(#value.to_string()) },
     )
 }
-
 fn string_vec(values: &[String]) -> TokenStream {
     quote! { vec![#(#values.to_string()),*] }
 }
-
 fn option_string_vec(values: Option<&[String]>) -> TokenStream {
     values.map_or_else(
         || quote! { None },
@@ -487,11 +379,9 @@ fn option_string_vec(values: Option<&[String]>) -> TokenStream {
         },
     )
 }
-
 fn option_copy<T: quote::ToTokens>(value: Option<T>) -> TokenStream {
     value.map_or_else(|| quote! { None }, |value| quote! { Some(#value) })
 }
-
 fn i64_literal(value: i64) -> TokenStream {
     if value == i64::MIN {
         quote! { i64::MIN }
@@ -509,49 +399,41 @@ mod tests {
     use test_r::test;
 
     #[test]
-    fn exhaustive_literal_is_deterministic_and_preserves_edges() {
-        let graph = exhaustive_schema_graph();
-        let literal = emit_schema_graph_literal(&graph);
+    fn exhaustive_wire_literal_is_deterministic_and_preserves_edges() {
+        let graph = encode_graph(&exhaustive_schema_graph()).unwrap();
+        let literal = emit_wire_graph(&graph);
         let source = literal.to_string();
-
-        assert_eq!(source, emit_schema_graph_literal(&graph).to_string());
+        assert_eq!(source, emit_wire_graph(&graph).to_string());
         syn::parse2::<syn::Expr>(literal).unwrap();
         for expected in [
-            "i64 :: MIN",
-            "18446744073709551615u64",
-            "9223372036854775808u64",
-            "mantissa : i64 :: MIN",
-            "scale : - 2147483648i32",
-            "length : 4294967295u32",
+            "SchemaGraph",
+            "type_nodes",
+            "RefType",
+            "NumericRestrictions",
             "Role :: Multimodal",
-            "Role :: UnstructuredText",
-            "Role :: UnstructuredBinary",
-            "Role :: Other",
-            "DiscriminatorRule :: FieldEquals",
-            "DiscriminatorRule :: FieldAbsent",
-            "SchemaType :: Future",
-            "SchemaType :: Stream",
+            "FieldEquals",
+            "FutureType",
+            "StreamType",
             "fixture.Recursive",
         ] {
             assert!(source.contains(expected), "missing {expected}:\n{source}");
         }
-        assert!(source.contains(r#"quote \" slash \\"#));
+        assert!(!source.contains("schema :: graph :: SchemaGraph"));
+        assert!(!source.contains("encode_graph"));
     }
 
     #[test]
-    fn registry_deduplicates_exact_graphs_in_stable_order() {
+    fn registry_emits_flat_wire_graphs_and_deduplicates_in_stable_order() {
         let realistic = realistic_schema_graph();
         let exhaustive = exhaustive_schema_graph();
         let mut registry = SchemaGraphRegistry::default();
-
         assert_eq!(registry.intern(realistic.clone()), 0);
         assert_eq!(registry.intern(realistic), 0);
         assert_eq!(registry.intern(exhaustive), 1);
-
         let definitions = registry.definitions().to_string();
         assert_eq!(definitions.matches("static").count(), 2);
-        assert!(definitions.contains("__GOLEM_SCHEMA_GRAPH_0"));
-        assert!(definitions.contains("__GOLEM_SCHEMA_GRAPH_1"));
+        assert!(definitions.contains("wire :: SchemaGraph"));
+        assert!(!definitions.contains("schema :: graph :: SchemaGraph"));
         assert_eq!(
             graph_clone(0).to_string(),
             "(* __GOLEM_SCHEMA_GRAPH_0) . clone ()"

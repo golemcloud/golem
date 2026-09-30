@@ -307,7 +307,7 @@ pub async fn[T] Reader::read(self : Reader[T]) -> T? {
 /// Transfer this source once to an ordinary AgentStream for local iteration,
 /// nested/output values or RPC inputs. Producer failures propagate normally;
 /// use a result-valued stream when recoverable item errors are desired.
-pub fn[T : @schema.IntoSchema + @schema.FromSchema] Reader::into_stream(
+pub fn[T : @schema.IntoWire + @schema.FromWire] Reader::into_stream(
   self : Reader[T],
 ) -> @schema.AgentStream[T] raise {
   guard !self.transferred && self.lock.try_acquire() else {

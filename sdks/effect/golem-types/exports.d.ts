@@ -46,17 +46,18 @@ declare module 'agent-guest' {
      * `stream-spec`. The implementation writes while this function is still
      * running and explicitly finishes or fails the endpoint. Dropping an open
      * writer abandons it. The first selected terminal is immutable.
+     * `stderr` follows the same independent attachment contract as `stdout`.
      * `principal` carries the caller's authenticated identity for
      * authorization and audit, identical in semantics to the parameter
      * of the same name in `golem:agent/guest.invoke`.
      * @throws ToolError
      */
-    export function invoke(toolName: string, commandPath: string[], input: TypedSchemaValue, stdin: AsyncIterable<ByteStreamItem> | undefined, stdout: ToolStdoutWriter | undefined, principal: Principal): Promise<InvocationResult>;
+    export function invoke(toolName: string, commandPath: string[], input: TypedSchemaValue, stdin: AsyncIterable<ByteStreamItem> | undefined, stdout: ToolOutputWriter | undefined, stderr: ToolOutputWriter | undefined, principal: Principal): Promise<InvocationResult>;
     export type Tool = golemTool010Common.Tool;
     export type ToolError = golemTool010Common.ToolError;
     export type InvocationResult = golemTool010Common.InvocationResult;
     export type ByteStreamItem = golemTool010Streams.ByteStreamItem;
-    export type ToolStdoutWriter = golemTool010Streams.ToolStdoutWriter;
+    export type ToolOutputWriter = golemTool010Streams.ToolOutputWriter;
     export type TypedSchemaValue = golemCore200Types.TypedSchemaValue;
     export type Principal = golemAgent200Common.Principal;
     export type Result<T, E> = { tag: 'ok', val: T } | { tag: 'err', val: E };
@@ -79,13 +80,13 @@ declare module 'agent-guest' {
      * Invoke one middleware layer around its runtime-bound next inner layer.
      * @throws ToolError
      */
-    export function invokeToolMiddleware(middlewareName: string, toolName: string, toolMetadata: Tool, parameters: TypedSchemaValue, commandPath: string[], input: TypedSchemaValue, stdin: AsyncIterable<ByteStreamItem> | undefined, stdout: ToolStdoutWriter | undefined, principal: Principal, wrapped: UnderlyingTool): Promise<InvocationResult>;
+    export function invokeToolMiddleware(middlewareName: string, toolName: string, toolMetadata: Tool, parameters: TypedSchemaValue, commandPath: string[], input: TypedSchemaValue, stdin: AsyncIterable<ByteStreamItem> | undefined, stdout: ToolOutputWriter | undefined, stderr: ToolOutputWriter | undefined, principal: Principal, wrapped: UnderlyingTool): Promise<InvocationResult>;
     export type InvocationResult = golemTool010Common.InvocationResult;
     export type Tool = golemTool010Common.Tool;
     export type ToolError = golemTool010Common.ToolError;
     export type ToolMiddleware = golemTool010Common.ToolMiddleware;
     export type ByteStreamItem = golemTool010Streams.ByteStreamItem;
-    export type ToolStdoutWriter = golemTool010Streams.ToolStdoutWriter;
+    export type ToolOutputWriter = golemTool010Streams.ToolOutputWriter;
     export type UnderlyingTool = golemTool010Underlying.UnderlyingTool;
     export type Principal = golemAgent200Common.Principal;
     export type TypedSchemaValue = golemCore200Types.TypedSchemaValue;

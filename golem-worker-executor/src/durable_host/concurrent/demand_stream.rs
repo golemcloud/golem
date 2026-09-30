@@ -215,7 +215,7 @@ where
                 .await
                 .map(|_| CompletionDelivery::unarmed()),
             DemandDeliveryMode::Deferred => child
-                .complete_access_deferred(store, get_ctx, response, None)
+                .complete_access_deferred(store, get_ctx, response)
                 .await
                 .map(|(_, delivery)| delivery),
         }
@@ -248,6 +248,23 @@ where
     {
         self.parent
             .finish_access_deferred(store, get_ctx, response)
+            .await
+    }
+
+    pub(crate) async fn finish_deferred_with_span<T, D, Ctx>(
+        self,
+        store: &Accessor<T, D>,
+        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+        response: Parent::Resp,
+        span_finished: golem_common::model::oplog::SpanFinished,
+    ) -> Result<(Parent::Resp, CompletionDelivery), TerminalCallError>
+    where
+        T: 'static,
+        D: HasData + ?Sized,
+        Ctx: WorkerCtx,
+    {
+        self.parent
+            .finish_access_deferred_with_span(store, get_ctx, response, span_finished)
             .await
     }
 }

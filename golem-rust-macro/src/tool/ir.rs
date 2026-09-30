@@ -31,6 +31,8 @@ pub struct ToolDefinitionIr {
     pub trait_ident: Ident,
     /// Optional `version = "..."` from the `#[tool_definition(...)]` attribute.
     pub version: Option<String>,
+    /// Whether invocation requires a filesystem binding.
+    pub requires_filesystem: bool,
     /// Doc comment on the trait.
     pub doc: DocIr,
     /// One entry per trait method, in declaration order.
@@ -138,6 +140,12 @@ pub enum PathDirectionIr {
     InOut,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputChannelIr {
+    Stdout,
+    Stderr,
+}
+
 /// A single `#[arg(...)]` entry, fully parsed but not yet projected onto a
 /// schema type (that is metadata synthesis, which has the parameter's Rust type).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -175,6 +183,7 @@ pub struct ArgIr {
     pub path_kind: Option<PathKindIr>,
     pub direction: Option<PathDirectionIr>,
     pub mime: Option<Vec<String>>,
+    pub output_channel: Option<OutputChannelIr>,
 
     // --- url refinement ---
     pub schemes: Option<Vec<String>>,
@@ -219,6 +228,7 @@ impl ArgIr {
             path_kind: None,
             direction: None,
             mime: None,
+            output_channel: None,
             schemes: None,
             raw_min: None,
             raw_max: None,

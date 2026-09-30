@@ -113,11 +113,17 @@ trait ToolCallBackend {
   type StartedNoStdout[+E, +A]
   type StartedStdoutOnly[+E]
   type StartedValueStdout[+E, +A]
+  type StartedOutputs[+E, +A]
 
   def awaitNoStdout[E, A](call: PreparedToolCall[Stdin, E, A]): Awaited[E, A]
   def startNoStdout[E, A](call: PreparedToolCall[Stdin, E, A]): StartedNoStdout[E, A]
   def startStdoutOnly[E](call: PreparedToolCall[Stdin, E, Unit]): StartedStdoutOnly[E]
   def startValueStdout[E, A](call: PreparedToolCall[Stdin, E, A]): StartedValueStdout[E, A]
+  def startOutputs[E, A](
+    call: PreparedToolCall[Stdin, E, A],
+    stdout: Boolean,
+    stderr: Boolean
+  ): StartedOutputs[E, A]
 }
 
 /** @internal Ambient typed tool-call policy over an injected RPC transport. */
@@ -127,6 +133,7 @@ final class AmbientToolCallBackend(val transport: ToolRpcTransport) extends Tool
   type StartedNoStdout[+E, +A]    = Future[Either[ToolError[E], A]]
   type StartedStdoutOnly[+E]      = Either[ToolError[E], ToolInvocation[E, Unit]]
   type StartedValueStdout[+E, +A] = Either[ToolError[E], ToolInvocation[E, A]]
+  type StartedOutputs[+E, +A]     = Either[ToolError[E], ToolInvocation[E, A]]
 
   def awaitNoStdout[E, A](
     call: PreparedToolCall[ToolInputStream, E, A]
@@ -159,15 +166,24 @@ final class AmbientToolCallBackend(val transport: ToolRpcTransport) extends Tool
   def startStdoutOnly[E](
     call: PreparedToolCall[ToolInputStream, E, Unit]
   ): Either[ToolError[E], ToolInvocation[E, Unit]] =
-    startAmbient(call)
+    startAmbient(call, stdout = true, stderr = false)
 
   def startValueStdout[E, A](
     call: PreparedToolCall[ToolInputStream, E, A]
   ): Either[ToolError[E], ToolInvocation[E, A]] =
-    startAmbient(call)
+    startAmbient(call, stdout = true, stderr = false)
+
+  def startOutputs[E, A](
+    call: PreparedToolCall[ToolInputStream, E, A],
+    stdout: Boolean,
+    stderr: Boolean
+  ): Either[ToolError[E], ToolInvocation[E, A]] =
+    startAmbient(call, stdout, stderr)
 
   private def startAmbient[E, A](
-    call: PreparedToolCall[ToolInputStream, E, A]
+    call: PreparedToolCall[ToolInputStream, E, A],
+    stdout: Boolean,
+    stderr: Boolean
   ): Either[ToolError[E], ToolInvocation[E, A]] = {
     val decodeError = call.errors match {
       case ToolDeclaredErrorDecoder.NoDeclaredErrors =>
@@ -179,6 +195,8 @@ final class AmbientToolCallBackend(val transport: ToolRpcTransport) extends Tool
       call.commandPath,
       call.input.left.map(ambientError),
       call.stdin,
+      stdout,
+      stderr,
       decodeError
     )(decodeAmbient(call))
   }
@@ -206,6 +224,7 @@ final class UnderlyingToolCallBackend(
   type StartedNoStdout[+E, +A]    = ToolUnderlyingInvocation[E, A]
   type StartedStdoutOnly[+E]      = ToolUnderlyingInvocation[E, ToolMiddlewareOutputHandle]
   type StartedValueStdout[+E, +A] = ToolUnderlyingInvocation[E, (A, ToolMiddlewareOutputHandle)]
+  type StartedOutputs[+E, +A]     = ToolUnderlyingInvocation[E, ToolMiddlewareOutputs[A]]
 
   def awaitNoStdout[E, A](
     call: PreparedToolCall[ToolMiddlewareInputHandle, E, A]
@@ -219,6 +238,7 @@ final class UnderlyingToolCallBackend(
       start(call),
       result =>
         if (result.stdout.isDefined) Left("tool result unexpectedly contained stdout stream")
+        else if (result.stderr.isDefined) Left("tool result unexpectedly contained stderr stream")
         else call.decodeValue(result.result)
     )
 
@@ -244,6 +264,31 @@ final class UnderlyingToolCallBackend(
           value  <- call.decodeValue(result.result)
           stdout <- result.stdout.toRight("tool result did not contain declared stdout stream")
         } yield (value, stdout)
+    )
+
+  def startOutputs[E, A](
+    call: PreparedToolCall[ToolMiddlewareInputHandle, E, A],
+    stdout: Boolean,
+    stderr: Boolean
+  ): ToolUnderlyingInvocation[E, ToolMiddlewareOutputs[A]] =
+    complete(
+      start(call),
+      result =>
+        for {
+          value <- call.decodeValue(result.result)
+          _     <- Either.cond(
+                 result.stdout.isDefined == stdout,
+                 (),
+                 if (stdout) "tool result did not contain declared stdout stream"
+                 else "tool result unexpectedly contained stdout stream"
+               )
+          _ <- Either.cond(
+                 result.stderr.isDefined == stderr,
+                 (),
+                 if (stderr) "tool result did not contain declared stderr stream"
+                 else "tool result unexpectedly contained stderr stream"
+               )
+        } yield ToolMiddlewareOutputs(value, result.stdout, result.stderr)
     )
 
   private def start[E, A](

@@ -29,12 +29,12 @@ golem agent interrupt <AGENT_ID>
 
 Interrupt a specific agent instance:
 ```shell
-golem agent interrupt CounterAgent("my-counter")
+golem agent interrupt 'CounterAgent("my-counter")'
 ```
 
 Interrupt an agent in a specific environment:
 ```shell
-golem agent interrupt my-env/CounterAgent("my-counter")
+golem agent interrupt 'my-env/CounterAgent("my-counter")'
 ```
 
 ## `agent resume` — Resume an Interrupted Agent
@@ -49,32 +49,32 @@ golem agent resume <AGENT_ID>
 
 Resume a specific agent instance:
 ```shell
-golem agent resume CounterAgent("my-counter")
+golem agent resume 'CounterAgent("my-counter")'
 ```
 
 Resume an agent in a specific environment:
 ```shell
-golem agent resume my-env/CounterAgent("my-counter")
+golem agent resume 'my-env/CounterAgent("my-counter")'
 ```
 
 ## Typical Workflow
 
 1. **Interrupt** the agent to pause execution:
    ```shell
-   golem agent interrupt CounterAgent("my-counter")
+   golem agent interrupt 'CounterAgent("my-counter")'
    ```
 
 2. **Verify** the agent is interrupted (status shows `Interrupted`):
    ```shell
-   golem agent get CounterAgent("my-counter")
+   golem agent get 'CounterAgent("my-counter")'
    ```
 
 3. **Resume** the agent when ready:
    ```shell
-   golem agent resume CounterAgent("my-counter")
+   golem agent resume 'CounterAgent("my-counter")'
    ```
 
 4. **Verify** the agent is running again:
    ```shell
-   golem agent get CounterAgent("my-counter")
+   golem agent get 'CounterAgent("my-counter")'
    ```

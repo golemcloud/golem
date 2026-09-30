@@ -54,6 +54,7 @@ use golem_common::model::tool_release::ToolReleaseId;
 pub use golem_common::model::tool_release::{ToolPublicationPlanAction, ToolPublicationPlanEntry};
 use golem_common::schema::agent::{AgentMethodSchema, AgentTypeSchema};
 use golem_common::schema::graph::SchemaGraph;
+use golem_common::schema::validation::is_equivalent_cross_graph;
 use itertools::Itertools;
 use serde::ser::Serializer;
 use serde::{Deserialize, Serialize};
@@ -160,7 +161,10 @@ pub struct EnvironmentSetupResourceDisplay {
 pub struct EnvironmentSetupPlan {
     pub display: EnvironmentSetupDisplay,
     pub agent_secret_defaults: Vec<DeploymentAgentSecretDefault>,
-    pub skipped_existing_agent_secret_defaults: Vec<DeploymentAgentSecretDefault>,
+    /// Defaults of existing secrets whose type is not compatible with the declared type.
+    /// Values still contain unresolved environment variable references; they are only
+    /// resolved when incompatible existing secrets get replaced.
+    pub replaceable_agent_secret_defaults: Vec<DeploymentAgentSecretDefault>,
     pub retry_policy_defaults: Vec<DeploymentRetryPolicyDefault>,
     pub resource_defaults: Vec<ResourceDefinitionCreation>,
 }
@@ -344,18 +348,19 @@ pub fn preferred_source_language_for_setup(
 
 pub fn build_environment_setup_plan(
     masking: MaskingConfig,
-    resolved_agent_secret_defaults: Vec<DeploymentAgentSecretDefault>,
+    agent_secret_defaults: Vec<DeploymentAgentSecretDefault>,
     retry_policy_defaults: Vec<DeploymentRetryPolicyDefault>,
     resource_defaults: Vec<ResourceDefinitionCreation>,
     current_agent_secrets: Vec<AgentSecretDto>,
     current_retry_policies: Vec<RetryPolicyDto>,
     current_resources: Vec<ResourceDefinition>,
     secret_types_by_path: &BTreeMap<String, golem_common::schema::schema_type::SchemaType>,
+    secret_value_schemas_by_path: &BTreeMap<String, SchemaGraph>,
     source_language: &SourceLanguage,
 ) -> anyhow::Result<EnvironmentSetupPlan> {
     let mut display = EnvironmentSetupDisplay::default();
 
-    let local_secret_defaults = resolved_agent_secret_defaults
+    let local_secret_defaults = agent_secret_defaults
         .iter()
         .map(|default| {
             let canonical_path = CanonicalAgentSecretPath::from(default.path.clone());
@@ -373,29 +378,12 @@ pub fn build_environment_setup_plan(
         })
         .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
 
-    let current_secret_values = current_agent_secrets
-        .into_iter()
-        .map(|secret| {
-            let value = match secret.secret_value {
-                Some(value) => mask_json_secret_for_deploy_diff(masking, &value)?,
-                None => serde_json::Value::Null,
-            };
-            Ok((
-                secret.path.to_string(),
-                EnvironmentSetupSecretValueDisplay {
-                    secret_type: render_type_for_language(
-                        source_language,
-                        &secret.secret_type,
-                        &secret.secret_type.root,
-                        true,
-                    ),
-                    value,
-                },
-            ))
-        })
-        .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
+    let current_secrets_by_path = current_agent_secrets
+        .iter()
+        .map(|secret| (secret.path.to_string(), secret))
+        .collect::<BTreeMap<_, _>>();
 
-    let secret_defaults_by_path = resolved_agent_secret_defaults
+    let secret_defaults_by_path = agent_secret_defaults
         .iter()
         .map(|default| {
             (
@@ -406,25 +394,41 @@ pub fn build_environment_setup_plan(
         .collect::<BTreeMap<_, _>>();
 
     let mut to_be_applied_agent_secret_defaults = Vec::new();
-    let mut skipped_existing_agent_secret_defaults = Vec::new();
+    let mut replaceable_agent_secret_defaults = Vec::new();
 
-    classify_environment_setup_entries(
-        &mut display,
-        local_secret_defaults,
-        current_secret_values,
-        |section, key, value| {
-            section.secret_values.insert(key.clone(), value);
-            if let Some(default) = secret_defaults_by_path.get(&key) {
+    // A default is applied for missing secrets and for existing declarations without a value.
+    // Secrets with a value are kept; their default is only needed if their type is incompatible
+    // and the user accepts replacing them.
+    for (key, value) in local_secret_defaults {
+        let Some(default) = secret_defaults_by_path.get(&key) else {
+            continue;
+        };
+        match current_secrets_by_path.get(&key) {
+            Some(current) if current.secret_value.is_some() => {
+                display
+                    .skipped_already_exists
+                    .secret_values
+                    .insert(key.clone());
+                let incompatible = secret_value_schemas_by_path
+                    .get(&key)
+                    .is_some_and(|declared| {
+                        !is_equivalent_cross_graph(
+                            &current.secret_type,
+                            &current.secret_type.root,
+                            declared,
+                            &declared.root,
+                        )
+                    });
+                if incompatible {
+                    replaceable_agent_secret_defaults.push((*default).clone());
+                }
+            }
+            _ => {
+                display.to_be_applied.secret_values.insert(key, value);
                 to_be_applied_agent_secret_defaults.push((*default).clone());
             }
-        },
-        |section, key| {
-            section.secret_values.insert(key.clone());
-            if let Some(default) = secret_defaults_by_path.get(&key) {
-                skipped_existing_agent_secret_defaults.push((*default).clone());
-            }
-        },
-    );
+        }
+    }
 
     let local_retry_policy_defaults = retry_policy_defaults
         .iter()
@@ -511,7 +515,7 @@ pub fn build_environment_setup_plan(
     Ok(EnvironmentSetupPlan {
         display,
         agent_secret_defaults: to_be_applied_agent_secret_defaults,
-        skipped_existing_agent_secret_defaults,
+        replaceable_agent_secret_defaults,
         retry_policy_defaults,
         resource_defaults,
     })

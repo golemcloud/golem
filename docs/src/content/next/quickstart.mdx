@@ -145,7 +145,7 @@ To **build** the newly created component, use the following command:
 golem build
 ```
 
-This compiles the newly created application, which consists of a _single Golem component_ at the moment. An application can have multiple components, each implementing a different set of agent types. New components can be added to the application by using the `golem component new` command.
+This compiles the newly created application, which consists of a _single Golem component_ at the moment. An application can have multiple components, each implementing a different set of agent types. New components can be added to the application by using the `golem new` command with the `--component-name` option from within the application directory.
 
 ### Write the code
 
@@ -348,7 +348,7 @@ This is a simple example of an agent that does not communicate with other agents
 
 ### Uploading Your Component
 
-To upload your component to Golem, you can use the `app deploy` command.
+To upload your component to Golem, you can use the `deploy` command.
 
 ```shell copy
 golem deploy
@@ -374,7 +374,7 @@ First start the REPL using:
 golem repl
 ```
 
-The REPL by default is a TypeScript REPL, although we also have limited support for a Rust REPL as well. In the REPL we have access to all agents defined in the current application, we can get or create instances of them and invoke their methods:
+The REPL is a TypeScript REPL, regardless of the languages the application's components are written in. In the REPL we have access to all agents defined in the current application, we can get or create instances of them and invoke their methods:
 
 ```shell copy
 >>> const a1 = await CounterAgent.get("agent-1")

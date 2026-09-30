@@ -34,9 +34,16 @@ and entity bodies), `retries.md` (in-function versus trap-based retries), and
 
 2. **The resident runtime is disposable.** The Wasmtime `Store`, the worker task, the executor
    process, sockets, channels and subscriptions can vanish while work is pending. Suspension,
-   eviction, resharding, restart and crash must all be recoverable the same way: throw the
-   instance away, build a new `Store`, replay the oplog, continue. Lifecycle hints (`Suspend`,
+   eviction, restart and crash must all be recoverable the same way, on the same executor: throw
+   the instance away, build a new `Store`, replay the oplog, continue. Lifecycle hints (`Suspend`,
    `Interrupted`, `Restart`) change status and scheduling policy, not the recovery mechanism.
+   Losing the shard does not reconstruct in place: a durable agent's oplog asserts this
+   executor's shard epoch whenever it appends or deletes entries in storage, and once another
+   executor holds the shard, the write is refused (`OplogError::Fenced`) instead of accepted. The agent is then *retired for
+   its lost shard* (`InterruptKind::ShardLost`): that generation is stopped, dropped from this executor and never
+   restarted, and the executor that now holds the shard builds a new `Store` and replays — the
+   new owner, or this executor again if the shard came back to it at a higher epoch. See
+   "Resharding, revocation and the oplog epoch fence" below and `crash-matrix.md`.
    Owner: `worker/invocation_loop.rs::run` (outer loop: create instance → recover → run →
    suspend/retry) and `durable_host/mod.rs::prepare_instance`.
 
@@ -114,6 +121,31 @@ and the `RunningWorkers` recovery index remains synchronously flushed by the sta
 The unchanged synchronous `Create` write preserves an ephemeral agent's identity before execution;
 after executor loss, that identity reconstructs an observation-only owner, never a fresh execution.
 
+A commit can also be *refused*. A durable agent's primary oplog, opened while this executor holds
+the agent's shard, asserts that shard epoch whenever it appends or deletes entries in storage — an
+explicit commit, a threshold flush, a deletion — inside the storage transaction. Storage refuses the write with
+`OplogError::Fenced` unless the record it holds names that epoch: a newer epoch means another
+executor took over, and no record at all refuses too. An append only buffers, so it meets the check when the buffer is committed.
+`commit_oplog_and_update_state` and `add_and_commit_oplog` surface the refusal rather than
+swallowing it, so a refused `PendingAgentInvocation` commit is not acknowledged as accepted and a
+refused `AgentInvocationFinished` commit is not published to waiters. The first refusal latches:
+every later add or commit on that handle is refused locally, without reaching storage, and the
+agent is retired for its lost shard instead of retried. The refusal travels as a typed error
+(`OplogError::Fenced`, `StreamStoreError::Fenced`, `SessionError::Fenced`,
+`WorkerExecutorError::OplogFenced`) to whoever acts on it; nothing re-reads the latch to
+reinterpret a failure that already happened.
+
+The check sits at the commit, not at the effect. A call whose `Start` is only buffered when its
+effect runs — an idempotent `WriteRemote`, which opens no committed scope — can still run on an
+executor that has just lost the shard; its commit is then refused and the new owner runs it
+again, the same window as a crash before that commit. Non-idempotent, batched and transactional
+calls commit their scope `Start` first, so a refusal stops them before the effect. Oplogs that
+assert no epoch are never refused: ephemeral agents' oplogs (their archive layer appends without
+one), a handle opened before this executor has an assignment, fork stages and their publication,
+and compressed archive chunks. Nor do two writes a primary oplog makes outside its entries: the
+prefix it drops once the archive transfer has copied it (`drop_prefix` takes no epoch, and a
+latched fence does not stop the transfer), and blob uploads of large payloads.
+
 `worker/state_actor.rs::commit_and_update_state` samples the appended tip before its explicit
 commit and ignores receipt entries already folded into the published status. Primary/ephemeral
 threshold flushes and replica waits can commit outside the status actor, so even an empty receipt
@@ -170,8 +202,13 @@ tool owners instantiate the deployed component but never queue or replay an agen
 Replay starts from the chosen snapshot baseline
 (see Snapshots and updates), not necessarily from `OplogIndex::INITIAL`. Interruption kinds
 (`Worker::set_interrupting`): `Interrupt` stays interrupted, `Restart` is a simulated crash with
-automatic recovery, `Suspend` unloads and resumes on demand; all three end in the same
-reconstruction path. Eviction (`EvictionClass::{LoadedIdle, WarmRunnable}`) never unloads a
+automatic recovery, `Suspend` unloads and resumes on demand — each of these three reconstructs on
+this same executor. `ShardLost` does not: it means this executor lost the agent's shard (a
+revoked/reassigned shard, or an oplog write refused on the shard epoch), and instead of
+reconstructing, that generation is retired — stopped without writing its status, dropped from
+this executor and never restarted — and the executor that now holds the shard reconstructs it.
+
+Eviction (`EvictionClass::{LoadedIdle, WarmRunnable}`) never unloads a
 worker that is executing or holds non-durable in-memory work. Ephemeral agents are fail-stop:
 `reconstructed_ephemeral` rebuilds only for observation and result lookup, "but the instance must
 never be started again" (`worker/mod.rs`, `INACTIVE_EPHEMERAL_AGENT_ERROR`).
@@ -310,13 +347,64 @@ in a pending p3 wait). `Resumed` does not enqueue an invocation: the existing
 does not use this marker and retains its normal `Idle`/automatic-recovery semantics; ephemeral
 agents retain their clean fail-stop lifecycle and never append it.
 
+### Resharding, revocation and the oplog epoch fence
+
+Two triggers retire an agent for its lost shard rather than reconstructing it here, and both go
+through `Worker::interrupt_and_retire(InterruptKind::ShardLost)`, the one stop-and-drop path an
+owner leaves by:
+
+- **Assignment change.** A `RevokeShards` push (`grpc/mod.rs::revoke_shards_internal`), or any
+  delivered assignment — an `AssignShards` push, the set returned at registration, or a lease renewal that
+  corrects it, all through `apply_shard_assignment_effects` — that no longer holds the agent's
+  shard or holds it at a higher epoch than the agent's oplog was opened at (another executor may
+  have written to it meanwhile); a late check after construction uses it too. The reason names the
+  trigger, not the condition. `apply_shard_assignment_effects` then calls the *other*
+  `on_shard_assignment_changed` (`durable_host/mod.rs`, the `WorkerCtx` hook) to recover agents on
+  shards held now, the opposite direction from a retirement. An agent retired for an epoch bump is
+  reopened on this executor at the new epoch: by that recovery if it was in the running-workers
+  index, otherwise by its next invocation. The recovery waits for a live lease.
+- **Oplog epoch fence.** A durable agent's primary oplog asserts the epoch it was opened at
+  whenever it appends or deletes entries, inside the storage transaction, on every indexed-storage backend (a Lua
+  script on Redis, `FOR UPDATE` on Postgres, the single-connection write pool on SQLite, a held
+  entry lock in memory; `storage/indexed/*.rs`, surfaced through `services/oplog/primary.rs`). The
+  shard manager mints a new, higher epoch for each new owner, including a restarted executor
+  process at registration, so a write from an executor that has lost the shard is refused rather
+  than written (`OplogError::Fenced` / `OplogFence`, carrying the asserted and, when known, the
+  stored epoch). This protects an assignment change this executor has not yet heard about, and a
+  revoked lease it is still trying to renew. Once one write is refused the fence *latches*: every
+  later add or commit on that handle is refused without a second round trip to storage. A write
+  path that meets the refusal under the worker lifecycle lock records the kind in the owner
+  retirement synchronously (`Worker::record_retirement`); the stop follows once that lock is
+  released, and `stop_internal` hands the generation to `interrupt_and_retire(ShardLost)`, the
+  one retirement that fails the waiters and drops it.
+
+Recording a `ShardLost` retirement cancels `owner_retirement_requested`, so every owner write gate
+refuses at once, fences the durable stream producer, and stops the `AgentStatusFlusher` and
+`StatusCheckpointer`: those are unfenced key-value writes that belong to the new owner, and a stale
+one could overwrite its status or drop the row its crash recovery relies on. The retirement then
+stops the agent, drops it from this executor's `ActiveAgents`, and answers its waiters and callers
+with `ShardingNotReady` (`Worker::retirement_error`) rather than an in-place restart or a cached
+result, so the worker service refreshes its routing table and retries on the owner. Entries still buffered are committed only if
+storage still accepts this executor's epoch, so the oplog holds nothing the new owner has not
+seen. An invocation still pending in this executor's queue when it gives up is failed the same
+way: with a retriable error and no cached result, never with a result the queue happened to
+already hold, so a client retry runs it exactly once, on the owner. A deletion refused by the fence
+fails with the routing miss and stays cached in `Deleting` with the stages it completed, so a retry
+here is refused at entry and repeats no remote effect; the generation is evicted once the shard has
+left this executor. Stream cleanup confirms the epoch before it reaches any other agent, because a
+re-run (after a restart, or on another executor) finds its fenced records already written. `WorkerService::remove` confirms the epoch (`OplogService::assert_owning_epoch`)
+before removing anything, and deletes the oplog after everything it can rebuild. See `crash-matrix.md` for the fence's
+failure modes and `services/active_agents/mod.rs` for the sweep that retires agents on an
+assignment change.
+
 ## Oplog model
 
 Entries are positional or hints (`OplogEntry::is_hint()`). Replay consumes positional entries in
 order and skips hints. Key kinds:
 
-- `Start { parent_start_index, observational_owner, request }` paired with
-  `End { start_index, response }` or `Cancelled { start_index, partial }`. A call is identified by
+- `Start { parent_start_index, observational_owner, request, span_started }` paired with
+  `End { start_index, response, span_finished, span_attributes }` or
+  `Cancelled { start_index, partial, span_finished }`. A call is identified by
   its `Start` index; `End`/`Cancelled` is its *terminal*. A terminal is *visible* when it lies
   below the replay target and outside a `Jump`/`Revert`-skipped region
   (`has_visible_terminal` / `visible_terminal_record`, `replay_state/cursor.rs`). Request-less Start/End pairs are *scopes* (batched writes, transactions),
@@ -341,6 +429,21 @@ Hints are skipped by `skip_forward` (the physical cursor moves past them, but
 `last_replayed_non_hint_index` does not), take part in no `Start`/terminal pairing, and never
 satisfy a claim. `Jump`/`Revert` do not relocate entries: they mark a region as skipped or deleted,
 and the atomic-region logical counter is rebuilt from them (see RPC section).
+
+Span lifecycle is metadata on ordinary durable operations, not a second positional protocol.
+There are no standalone `StartSpan`, `FinishSpan`, or `SetSpanAttribute` entries. Replay first
+claims the operation by its normal function/owner/request identity, then the owning host path
+restores `SpanStarted` and applies `SpanFinished` or successful attribute updates. Span ids,
+timestamps, parents, and links never select a claim, and the generic cursor performs no
+span-specific terminal-tail consumption. Long-lived resource and guest spans therefore open on
+one operation and close through a later short local operation; a span lifetime never keeps the
+opening durable call or an atomic lease open.
+
+`AgentInvocationStarted` records the executing context, including the invocation span added by
+the invocation loop, for every invocation kind. The live hook passes that context explicitly to
+the oplog writer; it must not derive it from `AgentInvocation::into_parts`, which synthesizes a
+fresh context for oplog-processor invocations. Replay restores this recorded stack before guest
+execution so HTTP, RPC, and guest span parents resolve to the same ids as in the live execution.
 
 ## Durable host call lifecycle
 
@@ -502,7 +605,7 @@ reported if nobody claims it.
 
 ## Replay-to-live
 
-Positional operations (`NoOp`, `BeginAtomicRegion`, spans and retry-policy entries) use
+Positional operations (`NoOp`, `BeginAtomicRegion`, and retry-policy entries) use
 `get_oplog_entry_or_continue_live` and `prepare_live_continuation_at_replay_tail` in
 `durable_host/mod.rs`. The positional read waits out reserved completion-delivery gates and
 distinguishes an entry from `ReplayEnded`. Continuation is allowed only for the primary agent
@@ -673,6 +776,14 @@ delivery must be the tail operation of a host function. Tests: `tests/concurrent
 is not — the properties replay relies on), `replay_state` unit tests
 `switch_to_live_wakes_parked_awaiter_as_incomplete`, `await_natural_tail_end_returns_once_tail_drains`.
 
+For p3 HTTP sends, `TerminalConsumption::NotDelivered` is a positive guest
+cancellation/abandonment signal. Store teardown and observer supersession suppress it. The send's
+span-only cleanup is a short local durable operation: live drop submits its complete pair to the
+oplog actor, and replay cleanup is retained as one shared future so cancelling a waiter cannot
+re-submit or lose ownership. Failure terminals and response/body owners claim the same close once.
+This machinery changes only span ownership; network execution, call drop policy, terminals, and
+the existing non-span cancellation behavior stay with their original owners.
+
 Spawned tasks may park across invocation settlement at guest-driven waits or passive markerless replay-tail waits after durable finalization.
 Cursor operations and recorded-marker waits stay active; durable `Start`/`End` work must precede `AgentInvocationFinished` (`tail_work.rs`).
 
@@ -795,6 +906,9 @@ cursor (`OwnerExecution`, `worker/instance.rs`).
 - `HistoricalReconstruction` fences keep the primary's `PendingReplayToLive` fail-closed until
   every completed body has validated (`completed_reconstruction_claim_blocks_concurrent_replay_to_live`).
 - A body trap fails the owner invocation without inventing entity terminals.
+- Entity and native-tool invocation spans open on the invocation `Start` and close on its
+  `End`/`Cancelled` terminal. `set_entity_invocation_scope` restores the recorded invocation
+  context before the body runs; keep this reconstruction boundary covered.
 - The ambient call authorizes once against the outer surface. Its root `Start` records the pinned
   chain plan; descendants record root plus position, and every occurrence retains the original
   calling principal and typed static installation parameters. Component and host leaves use the
@@ -837,6 +951,7 @@ satisfies one does not imply the others.
 | "Cursor reached the end, so I can do the live effect now." | Liveness is `store_is_live(...)`: the primary needs `switch_to_live` to publish after reconstruction fences; an entity Store needs its own `local_live_tail`. Cursor exhaustion is neither. | `pending_replay_to_live_is_fail_closed_until_finished`, `entity_store_liveness_is_scoped_to_its_invocation_mode` |
 | "The voluntary-suspension predicate gates interruption or recovery." | It only defers proactive yielding while live work progresses; explicit interruption and arbitrary Store loss still use ordinary reconstruction. | Simulated-crash tests at arbitrary points (`simulated_crash`, `interrupt`) |
 | "Restart differs from suspend." | Both discard the `Store` and reconstruct. | `counter_resource_test_2_with_restart` (state continues across an executor restart), `reacquire_permits_restart_preserves_accepted_queued_live_invocation` |
+| "Losing a shard reconstructs the agent, like a restart." | It is retired instead: that generation is stopped without writing its status, dropped and never restarted. Only the executor now holding the shard reconstructs it — the new owner, or this one if the shard came back at a higher epoch. | `worker/mod.rs::a_failure_that_is_a_lost_shard_is_given_up_on_every_path`, `services/oplog/tests.rs::a_fenced_oplog_refuses_new_adds_and_keeps_the_indices_it_handed_out_readable`, the fence tests in `tests/indexed_storage.rs` |
 | "A retried RPC attempt executed the target again." | Same key ⇒ same target invocation; count target mutations, not attempts. | Provider-side counter tests in `tests/rpc.rs` |
 | "Atomic rollback should generate a fresh RPC key." | Logical counter is owned by the outermost atomic region; keys survive `Jump`. | `tests/transactions.rs`, `tests/revert.rs` |
 | "Equal return values prove deduplication." | Deterministic echoes are equal even with duplicate execution; count side effects. | Counter-based RPC tests |

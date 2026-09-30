@@ -8,7 +8,7 @@ import scala.quoted.*
 
 private[macros] object HttpDeclarationMacro {
   def has(using Quotes)(symbol: quotes.reflect.Symbol, name: String): Boolean =
-    symbol.annotations.exists(_.tpe.typeSymbol.fullName == s"golem.runtime.annotations.$name")
+    symbol.annotations.exists(_.tpe.dealias.typeSymbol.fullName == s"golem.runtime.annotations.$name")
 
   def isRouter(using Quotes)(symbol: quotes.reflect.Symbol): Boolean = has(symbol, "httpRouter")
 
@@ -16,7 +16,7 @@ private[macros] object HttpDeclarationMacro {
     Quotes
   )(symbol: quotes.reflect.Symbol, annotation: String, name: String, index: Int): Option[quotes.reflect.Term] = {
     import quotes.reflect.*
-    symbol.annotations.find(_.tpe.typeSymbol.fullName == s"golem.runtime.annotations.$annotation").flatMap {
+    symbol.annotations.find(_.tpe.dealias.typeSymbol.fullName == s"golem.runtime.annotations.$annotation").flatMap {
       case Apply(_, args) =>
         args.collectFirst { case NamedArg(`name`, value) => value }.orElse(args.lift(index).collect {
           case value if (value match { case NamedArg(_, _) => false; case _ => true }) => value
@@ -51,18 +51,24 @@ private[macros] object HttpDeclarationMacro {
   def mappings(using
     Quotes
   )(symbol: quotes.reflect.Symbol, annotation: String, name: String, index: Int): Expr[List[FileMapping]] = {
-    import quotes.reflect.*
-    val pairs = argument(symbol, annotation, name, index).toList.flatMap(elements).map {
-      case Apply(_, List(Literal(StringConstant(source)), Literal(StringConstant(target)))) => (source, target)
-      case value                                                                            => report.errorAndAbort(s"$name requires literal (route, path) pairs: ${value.show}")
-    }
-    val compiled = FileMappingParser.compile(pairs).fold(error => report.errorAndAbort(s"$name: $error"), identity)
+    val compiled = mappingValues(symbol, annotation, name, index)
     Expr.ofList(compiled.map {
       case FileMapping.Exact(public, file) =>
         '{ FileMapping.Exact(${ Expr.ofList(public.map(Expr(_))) }, ${ Expr(file) }) }
       case FileMapping.Subtree(public, root) =>
         '{ FileMapping.Subtree(${ Expr.ofList(public.map(Expr(_))) }, ${ Expr(root) }) }
     })
+  }
+
+  def mappingValues(using
+    Quotes
+  )(symbol: quotes.reflect.Symbol, annotation: String, name: String, index: Int): List[FileMapping] = {
+    import quotes.reflect.*
+    val pairs = argument(symbol, annotation, name, index).toList.flatMap(elements).map {
+      case Apply(_, List(Literal(StringConstant(source)), Literal(StringConstant(target)))) => (source, target)
+      case value                                                                            => report.errorAndAbort(s"$name requires literal (route, path) pairs: ${value.show}")
+    }
+    FileMappingParser.compile(pairs).fold(error => report.errorAndAbort(s"$name: $error"), identity)
   }
 
   def exposesFiles(using Quotes)(symbol: quotes.reflect.Symbol): Boolean =
@@ -105,5 +111,34 @@ private[macros] object HttpDeclarationMacro {
         )
       )
     }
+  }
+
+  def routerMountValue(using Quotes)(symbol: quotes.reflect.Symbol): HttpMountDetails = {
+    import quotes.reflect.*
+    val path = FileMappingParser
+      .publicPath(string(symbol, "mount", 1))
+      .fold(error => report.errorAndAbort(s"router-mount: $error"), identity)
+    val auth = argument(symbol, "httpRouter", "auth", 3) match {
+      case Some(Literal(BooleanConstant(value)))                  => value
+      case Some(value) if value.symbol.name.contains("$default$") => false
+      case None                                                   => false
+      case _                                                      => report.errorAndAbort("router auth must be a literal boolean")
+    }
+    val cors = argument(symbol, "httpRouter", "cors", 4).toList.flatMap(elements).map {
+      case Literal(StringConstant(value)) => value
+      case _                              => report.errorAndAbort("router cors must contain literal strings")
+    }
+    val providers = symbol.methodMembers.filter(has(_, "openApiProvider"))
+    if (providers.size > 1) report.errorAndAbort("router-method-role: at most one OpenAPI provider is allowed")
+    HttpMountDetails(
+      path.map(PathSegment.Literal.apply),
+      auth,
+      false,
+      cors,
+      Nil,
+      mappingValues(symbol, "httpRouter", "staticBindings", 2),
+      Nil,
+      providers.headOption.map(_.name)
+    )
   }
 }

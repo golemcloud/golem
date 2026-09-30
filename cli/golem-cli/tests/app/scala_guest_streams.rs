@@ -49,12 +49,12 @@ async fn deployed_scala_streams_context() -> TestContext {
     )
     .unwrap();
     fs::write_str(ctx.cwd_path_join("provider/src/lib.rs"), indoc! {r#"
-        use golem_rust::{agent_definition, agent_implementation, IntoSchema, FromSchema};
+        use golem_rust::{agent_definition, agent_implementation, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema};
         use golem_rust::agentic::{AgentStream, spawn_local};
 
-        #[derive(IntoSchema, FromSchema)]
+        #[derive(IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
         pub struct Item { pub label: String, pub children: Vec<Item> }
-        #[derive(IntoSchema, FromSchema)]
+        #[derive(IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
         pub struct Bundle { pub optional: Option<AgentStream<Item>>, pub siblings: Vec<AgentStream<Item>> }
 
         #[agent_definition]
@@ -119,11 +119,19 @@ async fn deployed_scala_streams_context() -> TestContext {
     fs::write_str(scala_dir.join("consumer/StreamConsumer.scala"), indoc! {r#"
         package consumer
         import golem.BaseAgent
-        import golem.runtime.annotations.{agentDefinition, agentImplementation}
+        import golem.reflection.{GolemReflectError, ToolClientDefinition}
+        import golem.runtime.annotations.{agentDefinition, agentImplementation, toolDefinition}
         import golem.schema.AgentStream
+        import golem.tool.ToolRpcFailure
         import golem.bridge.client.stream_provider.{StreamProviderClient, Item, Bundle}
         import scala.concurrent.Future
         import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+        import zio.blocks.streams.Stream
+
+        @toolDefinition(name = "scala-construction-probe")
+        trait ConstructionProbeTool {
+          def ping(): String
+        }
 
         @agentDefinition()
         trait StreamConsumer extends BaseAgent {
@@ -133,17 +141,12 @@ async fn deployed_scala_streams_context() -> TestContext {
           def cancel(): Future[String]
           def recoverable(): Future[String]
           def fatal(): Future[String]
+          def invalidToolTarget(): String
         }
         @agentImplementation()
         final class StreamConsumerImpl(private val name: String) extends StreamConsumer {
-          private def stream[A](values: List[A]): AgentStream[A] = {
-            var remaining = values
-            AgentStream.fromPull(() => {
-              val result = remaining.headOption
-              remaining = remaining.drop(1)
-              Future.successful(result)
-            })
-          }
+          private def stream[A](values: List[A]): AgentStream[A] =
+            AgentStream.fromStream(Stream.fromIterable(values))
           private def collect[A](input: AgentStream[A]): Future[List[A]] =
             input.pull().flatMap {
               case None => input.close().map(_ => Nil)
@@ -214,6 +217,17 @@ async fn deployed_scala_streams_context() -> TestContext {
             val provider = StreamProviderClient.get(name + "-fatal")
             provider.malformed().flatMap(collect).map(_ => "unexpected-clean-eof")
           }
+          def invalidToolTarget(): String = {
+            val definition = ToolClientDefinition.named("NOT-valid")(
+              (target: String) => ConstructionProbeToolClient(target)
+            )
+            definition.client match {
+              case Left(GolemReflectError.ToolRpc(ToolRpcFailure.ProtocolError(message))) =>
+                "scala-invalid-tool-recovered:" + message
+              case Left(error) => "unexpected-error:" + error.toString
+              case Right(_) => "unexpected-success"
+            }
+          }
         }
     "#}).unwrap();
     // Guest bridge sources belong to the consumer, not the provider's discovery input.
@@ -243,6 +257,17 @@ async fn test_scala_agent_guest_streams_e2e() {
         .await;
     assert!(output.success_or_dump());
     assert!(output.stdout_contains("scala-streams-ok"));
+    let invalid_target = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            "StreamConsumer(\"test\")",
+            "invalidToolTarget",
+        ])
+        .await;
+    assert!(invalid_target.success_or_dump());
+    assert!(invalid_target.stdout_contains("scala-invalid-tool-recovered:"));
     for (method, expected) in [("cancel", "scala-cancel-ok"), ("nested", "scala-nested-ok")] {
         let output = tokio::time::timeout(
             std::time::Duration::from_secs(120),

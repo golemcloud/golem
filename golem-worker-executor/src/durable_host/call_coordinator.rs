@@ -85,6 +85,21 @@ impl<'a, Ctx: WorkerCtx> DurableCallCoordinator<'a, Ctx> {
         Ok(DurableCallBoundary::from_begin_index(begin_index))
     }
 
+    pub(crate) async fn admit_with_span(
+        self,
+        admission: DurableCallAdmission<'_>,
+        span_started: golem_common::model::oplog::SpanStarted,
+    ) -> Result<(DurableCallBoundary, golem_common::model::oplog::SpanStarted), WorkerExecutorError>
+    {
+        self.check_allowed(admission)?;
+        self.ctx.synchronize_agent_wallet_at_boundary().await?;
+        let (begin_index, recorded) = self
+            .ctx
+            .begin_function_with_span(admission.function_type, span_started)
+            .await?;
+        Ok((DurableCallBoundary::from_begin_index(begin_index), recorded))
+    }
+
     pub(crate) async fn admit_with_agent_authority(
         self,
         admission: DurableCallAdmission<'_>,
@@ -125,9 +140,10 @@ impl<'a, Ctx: WorkerCtx> DurableCallCoordinator<'a, Ctx> {
         function_type: &DurableFunctionType,
         boundary: DurableCallBoundary,
         forced_commit: bool,
+        span_finished: Option<golem_common::model::oplog::SpanFinished>,
     ) -> Result<(), WorkerExecutorError> {
         self.ctx
-            .end_function(function_type, boundary.begin_index())
+            .end_function_impl(function_type, boundary.begin_index(), span_finished)
             .await?;
         if !self.ctx.state.snapshotting_mode
             && (function_type == &DurableFunctionType::WriteRemote
@@ -142,7 +158,7 @@ impl<'a, Ctx: WorkerCtx> DurableCallCoordinator<'a, Ctx> {
                 .public_state
                 .worker()
                 .commit_oplog_and_update_state(CommitLevel::DurableOnly)
-                .await;
+                .await?;
             // The status checkpoint is only safe after the durable boundary has committed.
             self.ctx.maybe_mid_invocation_checkpoint().await;
         }
@@ -694,7 +710,7 @@ where
             reason,
         ),
     };
-    worker.add_and_commit_oplog(entry).await;
+    worker.add_and_commit_oplog(entry).await?;
     Ok(())
 }
 
@@ -740,7 +756,7 @@ where
             reason,
         ),
     };
-    worker.add_and_commit_oplog(entry).await;
+    worker.add_and_commit_oplog(entry).await?;
     Ok(())
 }
 
@@ -802,7 +818,7 @@ where
                 card_id,
                 wallet_generation,
             ))
-            .await;
+            .await?;
     }
     Ok(())
 }
@@ -1045,7 +1061,7 @@ where
     }
     worker
         .queue_card_revocations_locked(&revoked_card_ids)
-        .await;
+        .await?;
     Ok(())
 }
 
@@ -1176,7 +1192,7 @@ where
             target_holder,
             store.with(|mut access| get_ctx(access.data_mut()).state.wallet_generation),
         ))
-        .await;
+        .await?;
 
     Ok(())
 }
@@ -1258,7 +1274,7 @@ where
             retry.installed_card.card_id(),
             target_holder,
         ))
-        .await;
+        .await?;
     Ok(())
 }
 
@@ -1327,7 +1343,7 @@ where
             affected_wallets,
             local_wallet_generation: wallet_generation,
         })
-        .await;
+        .await?;
     Ok(())
 }
 
@@ -1564,7 +1580,7 @@ where
             target_revision,
             Some(details.clone()),
         ))
-        .await;
+        .await?;
     tracing::warn!(
         "Worker failed to update to {}: {}, update attempt aborted",
         target_revision,
@@ -1600,6 +1616,6 @@ where
             component_size,
             active_plugins,
         )
-        .await;
+        .await?;
     Ok(())
 }

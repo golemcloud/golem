@@ -908,12 +908,12 @@ fn tool_wit_uses_directional_started_stream_contract() {
         .expect("core WIT must define tool-rpc-error");
 
     assert!(common.contains(
-        "record invocation-result {\n    %result: option<typed-schema-value>,\n    stdout:  option<stream<u8>>,\n  }"
+        "record invocation-result {\n    %result: option<typed-schema-value>,\n    stdout:  option<stream<u8>>,\n    stderr:  option<stream<u8>>,\n  }"
     ));
 
     for required in [
         "type byte-stream-item = result<list<u8>, byte-stream-failure>;",
-        "resource tool-stdout-writer {",
+        "resource tool-output-writer {",
         "write: async func(bytes: list<u8>) -> result<_, stream-write-error>;",
         "finish: async func() -> result<_, stream-write-error>;",
         "fail: async func(reason: byte-stream-failure) -> result<_, stream-write-error>;",
@@ -928,11 +928,12 @@ fn tool_wit_uses_directional_started_stream_contract() {
         "use golem:core/types@2.0.0.{typed-schema-value, component-id, tool-rpc-error};",
         "use streams.{byte-stream-failure, byte-stream-item, byte-stream-close-cause, stream-write-error};",
         "create-stdin: func() -> tuple<\n    own<tool-stdin-writer>,\n    own<tool-stdin>,\n    own<tool-stdin-closed>\n  >;",
-        "create-stdout: func() -> tuple<own<tool-stdout>, stream<byte-stream-item>>;",
+        "create-output: func() -> tuple<own<tool-output>, stream<byte-stream-item>>;",
         "write: async func(bytes: list<u8>) -> result<_, stream-write-error>;",
         "invoke-and-await: async func(",
         "stdin:        option<own<tool-stdin>>",
-        "stdout:       option<own<tool-stdout>>",
+        "stdout:       option<own<tool-output>>",
+        "stderr:       option<own<tool-output>>",
         "invoke: func(",
         "async-invoke-and-await: func(",
         "get: async func() -> result<invocation-result, tool-rpc-error>;",
@@ -948,9 +949,10 @@ fn tool_wit_uses_directional_started_stream_contract() {
     assert!(!host.contains("option<stream<u8>>"));
 
     for required in [
-        "use streams.{byte-stream-item, tool-stdout-writer};",
+        "use streams.{byte-stream-item, tool-output-writer};",
         "stdin:        option<stream<byte-stream-item>>",
-        "stdout:       option<own<tool-stdout-writer>>",
+        "stdout:       option<own<tool-output-writer>>",
+        "stderr:       option<own<tool-output-writer>>",
     ] {
         assert!(
             guest.contains(required),

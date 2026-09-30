@@ -13,7 +13,9 @@ Both `golem` and `golem-cli` can be used — all commands below work with either
 golem agent list
 ```
 
-Lists all agents across all deployed components in the current application. The output includes each agent's name, component, status, and revision.
+Lists agents across all deployed components in the current application. The output includes each agent's name, component, status, and revision.
+
+By default only durable agents are listed. Use `--mode ephemeral` or `--mode all` to include ephemeral agents (`--mode` is ignored when a `mode` filter is passed via `--filter`).
 
 ### Filtering by Agent Type
 
@@ -44,6 +46,7 @@ Use `--filter` to filter agents by metadata properties. Each filter has the form
 | `name` | `=`, `!=`, `like`, `notlike`, `startswith` | `--filter "name = CounterAgent(\"c1\")"` |
 | `status` | `=`, `!=`, `>`, `>=`, `<`, `<=` | `--filter "status = Running"` |
 | `revision` | `=`, `!=`, `>`, `>=`, `<`, `<=` | `--filter "revision >= 2"` |
+| `mode` | `=`, `!=` | `--filter "mode = ephemeral"` |
 | `created_at` | `=`, `!=`, `>`, `>=`, `<`, `<=` | `--filter "created_at > 2025-01-01T00:00:00Z"` |
 | `env.<VAR>` | `=`, `!=`, `like`, `notlike`, `startswith` | `--filter "env.MODE = production"` |
 
@@ -86,10 +89,10 @@ Use `--max-count` to limit the number of results and `--scan-cursor` to paginate
 
 ```shell
 golem agent list --max-count 10
-golem agent list --max-count 10 --scan-cursor 0/5
+golem agent list --max-count 10 --scan-cursor '<cursor-from-previous-output>'
 ```
 
-The cursor is returned in the output when there are more results. Use it in the next call to get the next page.
+The cursor is an opaque value returned in the output when there are more results. Pass it back unchanged in the next call to get the next page.
 
 > **Note**: `--scan-cursor` requires a single component to be selected (either via `--component-name` or by being in a single-component application directory).
 

@@ -118,6 +118,8 @@ fn context_for(
             has_stdin: false,
             has_stdout: false,
             declares_stdout: false,
+            has_stderr: false,
+            declares_stderr: false,
             output_contract: golem_common::model::entity::ToolOutputContract {
                 result: None,
                 errors: Vec::new(),
@@ -231,7 +233,7 @@ async fn attachment_admission_rejection_preselects_ordinary_terminal() {
     );
     stdout.write(vec![1, 2, 3]).await.unwrap();
     let stdout = stdout.controller();
-    assert!(operation.attach(None, Some(stdout.clone())));
+    assert!(operation.attach(None, Some(stdout.clone()), None));
 
     assert_eq!(
         operation.activate_live_attachment_memory_accounting().await,
@@ -292,9 +294,15 @@ async fn cancelled_multi_attachment_preparation_rolls_back_and_can_retry() {
             Some(MemoryGrant::inert(bytes))
         }),
     );
+    let (stdout, _stdout_consumer, _) = attachment_pair(
+        8,
+        AttachmentMemory::with_test_reservation(false, |bytes| async move {
+            Some(MemoryGrant::inert(bytes))
+        }),
+    );
     let attempts = Arc::new(AtomicUsize::new(0));
     let attempts_for_reservation = attempts.clone();
-    let (stdout, _stdout_consumer, _) = attachment_pair(
+    let (stderr, _stderr_consumer, _) = attachment_pair(
         8,
         AttachmentMemory::with_test_reservation(false, move |bytes| {
             let attempt = attempts_for_reservation.fetch_add(1, Ordering::AcqRel);
@@ -309,11 +317,14 @@ async fn cancelled_multi_attachment_preparation_rolls_back_and_can_retry() {
     );
     stdin.write(vec![1]).await.unwrap();
     stdout.write(vec![2]).await.unwrap();
+    stderr.write(vec![3]).await.unwrap();
     let stdin_controller = stdin.controller();
     let stdout_controller = stdout.controller();
+    let stderr_controller = stderr.controller();
     assert!(operation.attach(
         Some(stdin_controller.clone()),
-        Some(stdout_controller.clone())
+        Some(stdout_controller.clone()),
+        Some(stderr_controller.clone()),
     ));
 
     let preparing_operation = operation.clone();
@@ -336,8 +347,13 @@ async fn cancelled_multi_attachment_preparation_rolls_back_and_can_retry() {
         stdout_controller.live_memory_accounting_state(),
         (false, false)
     );
-    stdin.write(vec![3]).await.unwrap();
-    stdout.write(vec![4]).await.unwrap();
+    assert_eq!(
+        stderr_controller.live_memory_accounting_state(),
+        (false, false)
+    );
+    stdin.write(vec![4]).await.unwrap();
+    stdout.write(vec![5]).await.unwrap();
+    stderr.write(vec![6]).await.unwrap();
 
     assert_eq!(
         operation.activate_live_attachment_memory_accounting().await,
@@ -349,6 +365,10 @@ async fn cancelled_multi_attachment_preparation_rolls_back_and_can_retry() {
     );
     assert_eq!(
         stdout_controller.live_memory_accounting_state(),
+        (true, false)
+    );
+    assert_eq!(
+        stderr_controller.live_memory_accounting_state(),
         (true, false)
     );
 
@@ -377,7 +397,7 @@ async fn empty_incomplete_activation_does_not_skip_later_capable_attachments() {
     );
     stdout.write(vec![1, 2, 3]).await.unwrap();
     let stdout = stdout.controller();
-    assert!(operation.attach(None, Some(stdout)));
+    assert!(operation.attach(None, Some(stdout), None));
     assert_eq!(
         operation.activate_live_attachment_memory_accounting().await,
         ToolLiveAdmissionOutcome::ResourceExhausted
@@ -440,7 +460,8 @@ async fn owner_failure_during_capable_attachment_activation_rolls_back_the_batch
     let stdout_controller = stdout.controller();
     assert!(operation.attach(
         Some(stdin_controller.clone()),
-        Some(stdout_controller.clone())
+        Some(stdout_controller.clone()),
+        None,
     ));
 
     let activation = tokio::spawn({
@@ -508,7 +529,8 @@ async fn cancellation_during_capable_attachment_activation_rolls_back_the_batch(
     let stdout_controller = stdout.controller();
     assert!(operation.attach(
         Some(stdin_controller.clone()),
-        Some(stdout_controller.clone())
+        Some(stdout_controller.clone()),
+        None,
     ));
 
     let local_live_tail = Arc::new(AtomicBool::new(false));
@@ -587,7 +609,8 @@ async fn cancellation_during_failed_attachment_activation_rolls_back_the_batch()
     let stdout_controller = stdout.controller();
     assert!(operation.attach(
         Some(stdin_controller.clone()),
-        Some(stdout_controller.clone())
+        Some(stdout_controller.clone()),
+        None,
     ));
 
     let activation = tokio::spawn({
@@ -698,7 +721,7 @@ async fn metadata_exposes_mode_backpressure_and_sanitized_owner_failure() {
     let owner = OwnerToolOperations::new();
     let operation = accept_provisional(owner.create(context()), 2);
     let (stdout, _reader, _observer) = attachment_pair(4, AttachmentMemory::inert());
-    assert!(operation.attach(None, Some(stdout.controller())));
+    assert!(operation.attach(None, Some(stdout.controller()), None));
     assert!(stdout.configure_live());
     stdout.write(vec![1, 2, 3, 4]).await.unwrap();
 
@@ -754,7 +777,7 @@ async fn attaching_to_a_fenced_operation_fences_and_clears_local_attachments() {
             ))
             .await
     );
-    assert!(!operation.attach(None, Some(controller.clone())));
+    assert!(!operation.attach(None, Some(controller.clone()), None));
 
     let metadata = controller.metadata();
     assert!(metadata.owner_fenced);
@@ -830,6 +853,101 @@ async fn owner_failure_becomes_interruptible_only_after_operation_cleanup() {
         owner.interruptible_owner_failure(),
         Some(OwnerFailureWinner::Infrastructure(_))
     ));
+}
+
+#[test]
+#[timeout("30s")]
+async fn owner_failure_cleanup_outlives_observer_and_joins_before_generation_reset() {
+    let owner = OwnerToolOperations::new();
+    let operation = accept_provisional(owner.create(context()), 2);
+    let ancestor = accept_provisional(owner.create(context()), 3);
+    assert!(operation.select_trap(TrapType::Exit).await);
+    let token = operation.claim_owner_failure_cleanup().unwrap();
+    let (settled, settled_rx) = tokio::sync::oneshot::channel();
+    let (wake, mut wake_rx) = tokio::sync::oneshot::channel();
+    let observer = owner.start_owner_failure_cleanup(
+        token,
+        async move {
+            operation.settle().await;
+            settled.send(()).unwrap();
+            Ok(())
+        },
+        move || {
+            let _ = wake.send(());
+        },
+    );
+    settled_rx.await.unwrap();
+    drop(observer);
+    assert!(owner.begin_generation().is_err());
+    assert!(owner.interruptible_owner_failure().is_none());
+    assert!(matches!(
+        wake_rx.try_recv(),
+        Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+    ));
+    ancestor.settle().await;
+    owner.join_owner_failure_cleanup().await.unwrap();
+    wake_rx.await.unwrap();
+    assert!(matches!(
+        owner.interruptible_owner_failure(),
+        Some(OwnerFailureWinner::Trap(TrapType::Exit))
+    ));
+    owner.begin_generation().unwrap();
+    assert!(owner.selected_owner_failure().is_none());
+}
+
+#[test]
+#[timeout("30s")]
+async fn owner_failure_cleanup_retains_errors_and_panics_without_replacing_trap() {
+    for panic in [false, true] {
+        let owner = OwnerToolOperations::new();
+        let operation = accept_provisional(owner.create(context()), 2);
+        let ancestor = accept_provisional(owner.create(context()), 3);
+        assert!(operation.select_trap(TrapType::Exit).await);
+        let token = operation.claim_owner_failure_cleanup().unwrap();
+        let (wake, mut wake_rx) = tokio::sync::oneshot::channel();
+        let (settled, settled_rx) = tokio::sync::oneshot::channel();
+        drop(owner.start_owner_failure_cleanup(
+            token,
+            async move {
+                operation.settle().await;
+                settled.send(()).unwrap();
+                assert!(!panic, "injected cleanup panic");
+                Err(WorkerExecutorError::runtime("injected settlement failure"))
+            },
+            move || {
+                let _ = wake.send(());
+            },
+        ));
+        settled_rx.await.unwrap();
+        assert!(owner.interruptible_owner_failure().is_none());
+        if !panic {
+            assert!(owner.join_owner_failure_cleanup().now_or_never().is_none());
+            assert!(matches!(
+                wake_rx.try_recv(),
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+            ));
+        }
+        ancestor.settle().await;
+        for _ in 0..2 {
+            assert!(owner.join_owner_failure_cleanup().await.is_err());
+        }
+        if panic {
+            assert!(
+                wake_rx.await.is_err(),
+                "panicked cleanup must not authorize completion"
+            );
+            assert!(owner.interruptible_owner_failure().is_none());
+        } else {
+            wake_rx.await.unwrap();
+            assert!(owner.interruptible_owner_failure().is_some());
+        }
+        assert!(!owner.state.lock().unwrap().owner_failure_cleanup_complete);
+        assert!(owner.begin_generation().is_err());
+        assert!(matches!(
+            owner.selected_owner_failure(),
+            Some(OwnerFailureWinner::Trap(TrapType::Exit))
+        ));
+    }
 }
 
 #[test]
@@ -944,8 +1062,8 @@ async fn explicit_cancel_preserves_owner_interrupt_and_fences_streams_before_ret
         attachment_pair(16, AttachmentMemory::inert());
     let (_sibling_producer, sibling_consumer, sibling_observer) =
         attachment_pair(16, AttachmentMemory::inert());
-    assert!(cancelled.attach(None, Some(cancelled_consumer.controller())));
-    assert!(sibling.attach(None, Some(sibling_consumer.controller())));
+    assert!(cancelled.attach(None, Some(cancelled_consumer.controller()), None));
+    assert!(sibling.attach(None, Some(sibling_consumer.controller()), None));
 
     assert!(cancelled.begin_cancel());
     let selecting_owner = owner.clone();
@@ -987,12 +1105,12 @@ async fn explicit_cancel_preserves_owner_interrupt_and_fences_streams_before_ret
 }
 
 #[test]
-async fn lifecycle_winner_forces_a_losing_guest_trap_stdout_to_cancelled() {
+async fn lifecycle_winner_forces_a_losing_guest_trap_output_to_cancelled() {
     let owner = OwnerToolOperations::new();
     let operation = accept_provisional(owner.create(context()), 2);
     let (_producer, consumer, observer) = attachment_pair(16, AttachmentMemory::inert());
     let stdout = consumer.controller();
-    assert!(operation.attach(None, Some(stdout.clone())));
+    assert!(operation.attach(None, Some(stdout.clone()), None));
 
     assert!(
         owner
@@ -1000,7 +1118,7 @@ async fn lifecycle_winner_forces_a_losing_guest_trap_stdout_to_cancelled() {
             .await
     );
     let failure =
-        super::super::guest_trap_stdout_failure(&operation, TrapType::Exit, false, false).await;
+        super::super::guest_trap_output_failure(&operation, TrapType::Exit, false, false).await;
     assert!(matches!(failure, ByteStreamFailure::Cancelled));
     let _ = stdout.host_fail(failure);
     assert!(matches!(
@@ -1093,8 +1211,16 @@ async fn guest_trap_atomically_fences_siblings_and_preserves_exact_owner_winner(
     let trapped_stdout = trapped_stdout.controller();
     let sibling_stdin = sibling_stdin.controller();
     let sibling_stdout = sibling_stdout.controller();
-    assert!(trapped.attach(Some(trapped_stdin.clone()), Some(trapped_stdout.clone())));
-    assert!(sibling.attach(Some(sibling_stdin.clone()), Some(sibling_stdout.clone())));
+    assert!(trapped.attach(
+        Some(trapped_stdin.clone()),
+        Some(trapped_stdout.clone()),
+        None,
+    ));
+    assert!(sibling.attach(
+        Some(sibling_stdin.clone()),
+        Some(sibling_stdout.clone()),
+        None,
+    ));
     let trap = TrapType::Exit;
 
     assert!(trapped.select_trap(trap.clone()).await);
@@ -1320,7 +1446,7 @@ async fn capable_terminal_commit_returns_lane_before_completion_publication() {
         accepted_operation(&lane, EntityCallMode::Asynchronous, 2);
     let (stdout, _reader, _observer) = attachment_pair(16, AttachmentMemory::inert());
     let stdout_controller = stdout.controller();
-    assert!(operation.attach(None, Some(stdout_controller.clone())));
+    assert!(operation.attach(None, Some(stdout_controller.clone()), None));
     assert!(stdout.configure_completion());
     stdout.write(b"staged".to_vec()).await.unwrap();
     stdout.finish().unwrap();
@@ -1545,17 +1671,26 @@ async fn cancellation_selection_is_idempotent_until_its_terminal_commits() {
 async fn cancellation_selection_closes_attached_streams() {
     let owner = OwnerToolOperations::new();
     let operation = accept_provisional(owner.create(context()), 2);
-    let (_producer, consumer, observer) = attachment_pair(16, AttachmentMemory::inert());
-    assert!(operation.attach(None, Some(consumer.controller())));
+    let (_stdout_producer, stdout_consumer, stdout_observer) =
+        attachment_pair(16, AttachmentMemory::inert());
+    let (_stderr_producer, stderr_consumer, stderr_observer) =
+        attachment_pair(16, AttachmentMemory::inert());
+    assert!(operation.attach(
+        None,
+        Some(stdout_consumer.controller()),
+        Some(stderr_consumer.controller()),
+    ));
 
     assert!(operation.begin_cancel());
 
-    assert!(matches!(
-        observer.wait_terminal().await,
-        crate::preview2::golem::tool::host::ByteStreamCloseCause::Failed(
-            ByteStreamFailure::Cancelled
-        )
-    ));
+    for observer in [stdout_observer, stderr_observer] {
+        assert!(matches!(
+            observer.wait_terminal().await,
+            crate::preview2::golem::tool::host::ByteStreamCloseCause::Failed(
+                ByteStreamFailure::Cancelled
+            )
+        ));
+    }
     operation.resolve_cancel(true).await;
 }
 

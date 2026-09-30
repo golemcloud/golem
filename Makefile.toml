@@ -462,6 +462,20 @@ if ${marker_exists}
 end
 '''
 
+[tasks.check-sdk-scala-capability-fixtures]
+description = "Links and checks all Scala capability-sensitive export fixtures"
+cwd = "./sdks/scala"
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error sbt -batch "++3.8.2; emptyAutoRegisterFixture/fullLinkJS; toolExportsFixture/fullLinkJS; agentExportsFixture/fullLinkJS; middlewareGuestLinkFixture/fullLinkJS; mixedExportsFixture/fullLinkJS; clientExportsFixture/fullLinkJS"
+exec --fail-on-error node test-capability-exports/check.mjs empty test-empty-auto-register/target/scala-3.8.2/golem-scala-empty-auto-register-fixture-opt/main.js
+exec --fail-on-error node test-capability-exports/check.mjs tool test-capability-exports/toolExportsFixture/target/scala-3.8.2/toolexportsfixture-opt/main.js
+exec --fail-on-error node test-capability-exports/check.mjs agent test-capability-exports/agentExportsFixture/target/scala-3.8.2/agentexportsfixture-opt/main.js
+exec --fail-on-error node test-middleware-guest-link/check.mjs test-middleware-guest-link/target/scala-3.8.2/golem-scala-middleware-guest-link-fixture-opt/main.js
+exec --fail-on-error node test-capability-exports/check.mjs mixed test-capability-exports/mixedExportsFixture/target/scala-3.8.2/mixedexportsfixture-opt/main.js
+exec --fail-on-error node test-capability-exports/check-client.mjs test-capability-exports/toolExportsFixture/target/scala-3.8.2/toolexportsfixture-opt/main.js test-capability-exports/clientExportsFixture/target/scala-3.8.2/clientexportsfixture-opt/main.js
+'''
+
 [tasks.clean-sdk-moonbit]
 description = "Cleans the MoonBit SDK workspace"
 cwd = "./sdks/moonbit"
@@ -606,13 +620,16 @@ args = [
 
 [tasks.worker-executor-tests-misc]
 dependencies = ["wit"]
-description = "Runs only untagged and rdbms worker-executor-tests"
+description = "Runs untagged, sequential storage, oplog blob archive, and service-specific worker-executor tests"
 env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
+script_runner = "@duckscript"
 script = '''
-cargo-test-r run --package golem-common --test agent_extraction -- --report-time --nocapture $JUNIT_OPTS
-cargo-test-r run --package golem-worker-executor --test integration :tag: -- --report-time --nocapture $JUNIT_OPTS
-cargo-test-r run --package golem-worker-executor --test integration :tag:rdbms_service -- --flaky-run=5 --report-time --nocapture $JUNIT_OPTS
-cargo-test-r run --package golem-worker-executor --test integration :tag:ignite_service -- --flaky-run=5 --report-time --nocapture $JUNIT_OPTS
+exec --fail-on-error cargo-test-r run --package golem-common --test agent_extraction -- --report-time --nocapture %{JUNIT_OPTS}
+exec --fail-on-error cargo-test-r run --package golem-worker-executor --test integration ":tag:" -- --report-time --nocapture %{JUNIT_OPTS}
+exec --fail-on-error cargo-test-r run --package golem-worker-executor --test integration -- key_value_storage namespace_routed_key_value_storage indexed_storage --report-time --nocapture %{JUNIT_OPTS}
+exec --fail-on-error cargo-test-r run --package golem-worker-executor --test integration oplog_blob_archive -- --report-time --nocapture %{JUNIT_OPTS}
+exec --fail-on-error cargo-test-r run --package golem-worker-executor --test integration ":tag:rdbms_service" -- --flaky-run=5 --report-time --nocapture %{JUNIT_OPTS}
+exec --fail-on-error cargo-test-r run --package golem-worker-executor --test integration ":tag:ignite_service" -- --flaky-run=5 --report-time --nocapture %{JUNIT_OPTS}
 '''
 
 [tasks.worker-executor-tests-ignite-service]
@@ -725,6 +742,7 @@ cargo-test-r run --package golem-service-base --test '*' -- --nocapture --report
 cargo-test-r run --package golem-registry-service --test '*' -- --nocapture --report-time $JUNIT_OPTS
 cargo-test-r run --package golem-worker-service --test '*' -- --nocapture --report-time $JUNIT_OPTS
 cargo-test-r run --package golem-shard-manager --test integration -- --nocapture --report-time $JUNIT_OPTS
+cargo-test-r run --package golem-test-framework --test signal_unreaped_child -- --nocapture --report-time $JUNIT_OPTS
 '''
 
 [tasks.integration-tests-group6]
@@ -1135,6 +1153,20 @@ script = '''
       git --no-pager diff -- docs/src/content/next/how-to-guides/ docs/src/content/next/how-to-guides.mdx 1>&2
       exit 1
   fi
+'''
+
+[tasks.generate-reflection-conformance]
+description = "Embeds the reflection conformance corpus in Scala and MoonBit test sources"
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error node scripts/sync-reflection-conformance.mjs
+'''
+
+[tasks.check-reflection-conformance]
+description = "Fails if Scala or MoonBit reflection conformance embeds are stale"
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error node scripts/sync-reflection-conformance.mjs --check
 '''
 
 ## ** PUBLISH **
@@ -1609,18 +1641,21 @@ cd ../..
 ## BUILT-IN TOOLS
 [tasks.build-builtin-tools]
 dependencies = ["wit"]
-description = "Builds the representative built-in tool fixture (production descriptor inventories are currently empty)"
+description = "Builds the built-in filesystem tool component"
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo build -p golem-cli --bin golem-cli
-golem_cli = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/debug/golem-cli"
-rust_sdk = canonicalize sdks/rust/golem-rust
-set_env GOLEM_RUST_PATH ${rust_sdk}
-cd test-components/tool-streaming
-exec --fail-on-error ${golem_cli} --preset release build --yes --skip-check
-exec --fail-on-error ${golem_cli} --preset release exec copy
+exec --fail-on-error cargo build -p golem --bin golem
+golem = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/debug/golem"
+cd builtin-tools/filesystem-tools
+exec --fail-on-error ${golem} build -P release --force-build --yes
+exec --fail-on-error ${golem} exec -P release copy
 cd ../..
 '''
+
+[tasks.component-size-report]
+description = "Builds representative components and assembles a local size and retention report"
+command = "python3"
+args = ["test-components/size-analysis/report.py", "--out", "tmp/component-size-report"]
 
 ## ** BUILD TEST COMPONENTS **
 
@@ -1655,7 +1690,7 @@ rm -rf build-out
 '''
 
 [tasks.build-benchmark-components]
-description = "Rebuilds only the benchmark test WASM components"
+description = "Rebuilds and verifies the test WASM components required by the CI benchmark suite"
 dependencies = ["wit", "build-sdk-ts"]
 script_runner = "@duckscript"
 script = '''
@@ -1668,6 +1703,8 @@ if ${golem_cli_empty}
 end
 cd test-components
 exec --fail-on-error ./build-components.sh benchmarks rebuild
+cd ..
+exec --fail-on-error cargo run --profile benchmarks -p integration-tests --bin benchmarks -- suite --check-artifacts integration-tests/benchmark_suites/ci.yaml spawned
 '''
 
 [tasks.run-benchmark-suite-orb]

@@ -19,7 +19,7 @@ use crate::tool::helpers::{
     require_metadata_literal,
 };
 use crate::tool::ir::{
-    ArgIr, ArgPlacement, ArgSubKind, PathDirectionIr, PathKindIr, RepeatableMode,
+    ArgIr, ArgPlacement, ArgSubKind, OutputChannelIr, PathDirectionIr, PathKindIr, RepeatableMode,
 };
 use syn::spanned::Spanned;
 use syn::{Attribute, Error, Expr};
@@ -85,6 +85,18 @@ pub fn parse_arg(attr: &Attribute) -> Result<ArgIr, Error> {
             "max_length" => ir.max_length = Some(expr_u32(value, "max_length")?),
             "direction" => ir.direction = Some(parse_direction(value)?),
             "mime" => ir.mime = Some(expr_str_array(value, "mime")?),
+            "channel" => {
+                ir.output_channel = Some(match expr_str(value, "channel")?.as_str() {
+                    "stdout" => OutputChannelIr::Stdout,
+                    "stderr" => OutputChannelIr::Stderr,
+                    other => {
+                        return Err(Error::new(
+                            value.span(),
+                            format!("invalid output channel `{other}`; expected stdout or stderr"),
+                        ));
+                    }
+                })
+            }
             "schemes" => ir.schemes = Some(expr_str_array(value, "schemes")?),
             "unit" => ir.unit = Some(expr_str(value, "unit")?),
             "bounds" => ir.bounds = Some(parse_bounds(value)?),

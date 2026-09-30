@@ -10,6 +10,7 @@ environments:
     server: local
 componentTemplates:
   durable-streams:
+    guestLanguage: effect
     build:
       - command: npx --no rollup -- -c "{{ appRootDir }}/rollup.config.component.mjs" --input ./src/durable-streams-agent.ts
         dir: "{{ componentDir }}"

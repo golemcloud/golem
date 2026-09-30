@@ -304,9 +304,10 @@ pub struct DeploymentMiddlewareIdentity {
 
 impl DeploymentIdentity {
     pub fn into_plan(
-        self,
+        mut self,
         current_revision: Option<CurrentDeploymentRevision>,
     ) -> Result<DeploymentPlan, DeployRepoError> {
+        self.retain_dynamic_tool_bindings();
         let diffable = self.to_diffable()?;
         let remote_tools = diffable
             .remote_tools
@@ -383,9 +384,31 @@ impl DeploymentIdentity {
 }
 
 impl DeploymentIdentity {
+    fn retain_dynamic_tool_bindings(&mut self) {
+        let registered_tool_names = self
+            .tools
+            .iter()
+            .map(|tool| tool.tool_name.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        self.middleware
+            .environment_bindings
+            .retain(|name, _| !registered_tool_names.contains(name.as_str()));
+        for bindings in self.middleware.agent_bindings.values_mut() {
+            bindings.retain(|name, _| !registered_tool_names.contains(name.as_str()));
+        }
+        self.middleware
+            .agent_bindings
+            .retain(|_, bindings| !bindings.is_empty());
+    }
+
     pub fn to_diffable(&self) -> Result<diff::Deployment, DeployRepoError> {
         let mut remote_tools = std::collections::BTreeMap::new();
         let mut published_tools = std::collections::BTreeSet::new();
+        let registered_tool_names = self
+            .tools
+            .iter()
+            .map(|tool| tool.tool_name.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
         for tool in &self.tools {
             match (tool.tool_release_id, tool.published, tool.deployment_hash) {
                 (None, false, None) => {}
@@ -470,17 +493,20 @@ impl DeploymentIdentity {
                 .middleware
                 .environment_bindings
                 .iter()
+                .filter(|(name, _)| !registered_tool_names.contains(name.as_str()))
                 .map(|(n, b)| (n.to_string(), b.into()))
                 .collect(),
             agent_tool_middleware_bindings: self
                 .middleware
                 .agent_bindings
                 .iter()
-                .map(|(a, bs)| {
-                    (
-                        a.0.clone(),
-                        bs.iter().map(|(n, b)| (n.to_string(), b.into())).collect(),
-                    )
+                .filter_map(|(agent, bindings)| {
+                    let bindings = bindings
+                        .iter()
+                        .filter(|(name, _)| !registered_tool_names.contains(name.as_str()))
+                        .map(|(name, binding)| (name.to_string(), binding.into()))
+                        .collect::<std::collections::BTreeMap<_, _>>();
+                    (!bindings.is_empty()).then(|| (agent.0.clone(), bindings))
                 })
                 .collect(),
         })
@@ -494,7 +520,8 @@ pub struct DeployedDeploymentIdentity {
 
 impl TryFrom<DeployedDeploymentIdentity> for DeploymentSummary {
     type Error = DeployRepoError;
-    fn try_from(value: DeployedDeploymentIdentity) -> Result<Self, Self::Error> {
+    fn try_from(mut value: DeployedDeploymentIdentity) -> Result<Self, Self::Error> {
+        value.identity.retain_dynamic_tool_bindings();
         let diffable = value.identity.to_diffable()?;
         let remote_tools = diffable
             .remote_tools
@@ -1244,6 +1271,8 @@ impl DeploymentRevisionCreationRecord {
         let remote_tools = diff::remote_tool_deployments(
             registered_tools.clone(),
             agent_tool_bindings.clone(),
+            &middleware.environment_bindings,
+            &middleware.agent_bindings,
             &components
                 .iter()
                 .map(|component| (component.id, component.component_name.clone()))

@@ -24,15 +24,12 @@ use golem_common::model::oplog::{LogLevel, OplogEntry, OplogIndex};
 use golem_common::model::{AgentId, OwnedAgentId, ScanCursor};
 use golem_service_base::config::{S3BlobStorageConfig, S3BlobStorageCredentialsConfig};
 use golem_service_base::storage::blob::{BlobStorage, s3};
+use golem_test_framework::components::s3_mock::{DockerS3Mock, S3Mock};
 use golem_worker_executor::services::oplog::{BlobOplogArchiveService, OplogArchiveService};
 use pretty_assertions::assert_eq;
 use std::fmt::Debug;
 use std::sync::Arc;
-use std::time::Duration;
 use test_r::{define_matrix_dimension, test, test_dep};
-use testcontainers::core::{IntoContainerPort, WaitFor};
-use testcontainers::runners::AsyncRunner;
-use testcontainers::{ContainerAsync, GenericImage, ImageExt};
 use tokio::sync::Mutex;
 
 #[async_trait]
@@ -60,11 +57,11 @@ fn in_memory() -> Arc<dyn GetBlobStorage + Send + Sync> {
     Arc::new(InMemoryTest)
 }
 
-/// Spins up a fresh MinIO container per `get_blob_storage` call and keeps it
-/// alive for the lifetime of this (per-worker) dependency, so the returned S3
+/// Spins up a fresh S3Mock container per `get_blob_storage` call and keeps it
+/// alive for the lifetime of this per-worker dependency, so the returned S3
 /// blob storage remains usable for the whole test.
 struct S3Test {
-    containers: Mutex<Vec<ContainerAsync<GenericImage>>>,
+    s3_mock_instances: Mutex<Vec<DockerS3Mock>>,
 }
 
 impl Debug for S3Test {
@@ -76,56 +73,50 @@ impl Debug for S3Test {
 #[async_trait]
 impl GetBlobStorage for S3Test {
     async fn get_blob_storage(&self) -> Arc<dyn BlobStorage + Send + Sync> {
-        let container = tryhard::retry_fn(|| {
-            GenericImage::new("minio/minio", "RELEASE.2025-01-20T14-49-07Z")
-                .with_exposed_port(9000.tcp())
-                .with_wait_for(WaitFor::message_on_stderr("API:"))
-                .with_env_var("MINIO_CONSOLE_ADDRESS", ":9001")
-                .with_cmd(["server", "/data"])
-                .start()
-        })
-        .retries(5)
-        .exponential_backoff(Duration::from_millis(10))
-        .max_delay(Duration::from_secs(10))
-        .await
-        .expect("Failed to start MinIO");
-        let host_port = container
-            .get_host_port_ipv4(9000)
-            .await
-            .expect("Failed to get host port");
+        let s3_mock = DockerS3Mock::new().await;
 
         let config = S3BlobStorageConfig {
             retries: Default::default(),
             region: "us-east-1".to_string(),
             object_prefix: String::new(),
-            aws_endpoint_url: Some(format!("http://127.0.0.1:{host_port}")),
+            aws_endpoint_url: Some(s3_mock.endpoint()),
             aws_credentials: Some(S3BlobStorageCredentialsConfig::new(
-                "minioadmin",
-                "minioadmin",
+                s3_mock.access_key_id(),
+                s3_mock.secret_access_key(),
                 "test",
             )),
+            aws_path_style: Some(true),
             ..std::default::Default::default()
         };
-        create_buckets(host_port, &config).await;
+        create_buckets(&s3_mock, &config).await;
         let storage = s3::S3BlobStorage::new(config).await;
 
-        self.containers.lock().await.push(container);
+        self.s3_mock_instances.lock().await.push(s3_mock);
         Arc::new(storage)
     }
 }
 
-async fn create_buckets(host_port: u16, config: &S3BlobStorageConfig) {
-    let endpoint_uri = format!("http://127.0.0.1:{host_port}");
+async fn create_buckets(s3_mock: &dyn S3Mock, config: &S3BlobStorageConfig) {
     let region_provider = RegionProviderChain::default_provider().or_else("us-east-1");
-    let creds = Credentials::new("minioadmin", "minioadmin", None, None, "test");
+    let creds = Credentials::new(
+        s3_mock.access_key_id(),
+        s3_mock.secret_access_key(),
+        None,
+        None,
+        "test",
+    );
     let sdk_config = aws_config::defaults(BehaviorVersion::latest())
         .region(region_provider)
-        .endpoint_url(endpoint_uri)
+        .endpoint_url(s3_mock.endpoint())
         .credentials_provider(creds)
         .load()
         .await;
 
-    let client = Client::new(&sdk_config);
+    let client = Client::from_conf(
+        aws_sdk_s3::config::Builder::from(&sdk_config)
+            .force_path_style(true)
+            .build(),
+    );
     for bucket in &config.compressed_oplog_buckets {
         client.create_bucket().bucket(bucket).send().await.unwrap();
     }
@@ -134,7 +125,7 @@ async fn create_buckets(host_port: u16, config: &S3BlobStorageConfig) {
 #[test_dep(scope = PerWorker, tagged_as = "s3")]
 fn s3() -> Arc<dyn GetBlobStorage + Send + Sync> {
     Arc::new(S3Test {
-        containers: Mutex::new(Vec::new()),
+        s3_mock_instances: Mutex::new(Vec::new()),
     })
 }
 
@@ -154,6 +145,7 @@ async fn append_worker(
                 LogLevel::Debug,
                 "test".to_string(),
                 "test".to_string(),
+                None,
             ),
         )])
         .await
@@ -187,7 +179,7 @@ async fn drain(
 /// archived durable) workers. This test verifies that `scan_for_component`
 /// against the blob archive lists workers correctly and filters by agent mode,
 /// running the same checks against both an in-memory backend and a real
-/// S3-compatible (MinIO) backend.
+/// S3-compatible (Adobe S3Mock) backend.
 #[test]
 async fn blob_archive_scan_for_component_filters_by_mode(
     #[dimension(storage)] storage: &Arc<dyn GetBlobStorage + Send + Sync>,

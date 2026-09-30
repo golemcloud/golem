@@ -86,7 +86,14 @@ async fn gen_bridge_with_manifest_mode_filter_and_additional_collision_targets(
     additional_collision_targets: &[BridgeSdkTarget],
 ) -> anyhow::Result<()> {
     let plan = plan_bridge_generation(ctx, manifest_bridge_mode_filter).await?;
+    execute_bridge_generation_plan(ctx, plan, additional_collision_targets).await
+}
 
+async fn execute_bridge_generation_plan(
+    ctx: &BuildContext<'_>,
+    plan: BridgeGenerationPlan,
+    additional_collision_targets: &[BridgeSdkTarget],
+) -> anyhow::Result<()> {
     let mut collision_targets = additional_collision_targets.to_vec();
     collision_targets.extend(plan.targets.iter().cloned());
     validate_supported_bridge_targets(&collision_targets)?;
@@ -96,6 +103,7 @@ async fn gen_bridge_with_manifest_mode_filter_and_additional_collision_targets(
         if !additional_collision_targets.is_empty() {
             validate_no_output_dir_collisions(additional_collision_targets)?;
         }
+        write_repl_metadata(ctx, &plan).await?;
         return Ok(());
     }
 
@@ -125,23 +133,10 @@ pub(crate) async fn plan_bridge_generation(
 
     if let Some(target) = ctx.repl_bridge_sdk_target() {
         let repl_targets = collect_custom_targets(ctx, target).await?;
-
-        for target in &repl_targets {
-            let Some(agent_type) = target.subject.as_agent() else {
-                continue;
-            };
-            plan.repl_metadata_by_language
-                .entry(target.target_language)
-                .or_default()
-                .agents
-                .insert(
-                    agent_type.type_name.clone(),
-                    ReplAgentMetadata {
-                        client_dir: target.output_dir.clone(),
-                        mode: agent_type.mode,
-                    },
-                );
-        }
+        let repl_language = target
+            .target_language
+            .context("REPL bridge target requires a target language")?;
+        plan.repl_metadata_by_language = repl_metadata_for_targets(repl_language, &repl_targets);
 
         plan.targets.extend(repl_targets);
     }
@@ -248,9 +243,24 @@ pub(crate) async fn plan_repl_bridge_generation_lenient(
     repl_target: &CustomBridgeSdkTarget,
 ) -> anyhow::Result<BridgeGenerationPlan> {
     let targets = collect_custom_targets_lenient(ctx, repl_target).await?;
-    let mut repl_metadata_by_language = BTreeMap::<GuestLanguage, ReplMetadata>::new();
+    let repl_language = repl_target
+        .target_language
+        .context("REPL bridge target requires a target language")?;
+    let repl_metadata_by_language = repl_metadata_for_targets(repl_language, &targets);
 
-    for target in &targets {
+    Ok(BridgeGenerationPlan {
+        targets,
+        repl_metadata_by_language,
+    })
+}
+
+fn repl_metadata_for_targets(
+    repl_language: GuestLanguage,
+    targets: &[BridgeSdkTarget],
+) -> BTreeMap<GuestLanguage, ReplMetadata> {
+    let mut repl_metadata_by_language = BTreeMap::from([(repl_language, ReplMetadata::default())]);
+
+    for target in targets {
         let Some(agent_type) = target.subject.as_agent() else {
             continue;
         };
@@ -267,10 +277,7 @@ pub(crate) async fn plan_repl_bridge_generation_lenient(
             );
     }
 
-    Ok(BridgeGenerationPlan {
-        targets,
-        repl_metadata_by_language,
-    })
+    repl_metadata_by_language
 }
 
 pub(crate) async fn collect_manifest_external_bridge_targets_for_components_lenient(
@@ -305,7 +312,7 @@ pub(crate) async fn collect_custom_targets_lenient(
 
         let target_language = custom_target
             .target_language
-            .or_else(|| component.guess_language())
+            .or_else(|| component.guest_language())
             .unwrap_or(GuestLanguage::TypeScript);
 
         let mut agent_types = extract_and_store_component_metadata(ctx, component_name)
@@ -1101,7 +1108,7 @@ fn dependency_guest_bridge_target_languages(
         .filter_map(|consumer_component_name| {
             ctx.application()
                 .component(consumer_component_name)
-                .guess_language()
+                .guest_language()
         })
         .filter(|language| supported_dependency_guest_bridge_target_language(dependency, *language))
         .collect()
@@ -1133,7 +1140,7 @@ async fn collect_custom_targets(
         let component = ctx.application().component(component_name);
         let target_language = custom_target
             .target_language
-            .or_else(|| component.guess_language())
+            .or_else(|| component.guest_language())
             .unwrap_or(GuestLanguage::TypeScript);
 
         let agent_types = {
@@ -1795,6 +1802,7 @@ mcp:
       - url: https://tools.example/mcp
 componentTemplates:
   {language}-test:
+    guestLanguage: {language}
     componentWasm: consumer.wasm
 components:
   app:consumer:
@@ -1860,6 +1868,7 @@ environments:
     server: local
 componentTemplates:
   rust-test:
+    guestLanguage: rust
     componentWasm: consumer.wasm
 components:
   app:consumer:
@@ -1984,6 +1993,88 @@ components:
         deduplicate_bridge_targets(&mut targets);
 
         assert!(validate_no_output_dir_collisions(&targets).is_err());
+    }
+
+    #[test]
+    async fn empty_bridge_plan_replaces_stale_repl_metadata() {
+        let (application, _dir) = application_from_manifest(
+            r#"
+app: repl-metadata-test
+environments:
+  local:
+    server: local
+components:
+  app:component:
+    componentWasm: component.wasm
+"#,
+        );
+        let app_ctx = crate::app::context::ApplicationContext::for_test(application);
+        let build_config = crate::model::app::BuildConfig::default();
+        let ctx = BuildContext::new(&app_ctx, &build_config);
+        let metadata_path = ctx
+            .application()
+            .repl_metadata_json(GuestLanguage::TypeScript);
+        fs::write_str(&metadata_path, "stale").unwrap();
+        let plan = BridgeGenerationPlan {
+            targets: Vec::new(),
+            repl_metadata_by_language: repl_metadata_for_targets(GuestLanguage::TypeScript, &[]),
+        };
+
+        execute_bridge_generation_plan(&ctx, plan, &[])
+            .await
+            .unwrap();
+
+        let metadata: ReplMetadata =
+            serde_json::from_str(&std::fs::read_to_string(metadata_path).unwrap()).unwrap();
+        std::fs::remove_file(
+            ctx.application()
+                .repl_metadata_json(GuestLanguage::TypeScript),
+        )
+        .unwrap();
+        std::fs::remove_file(
+            ctx.application()
+                .repl_cli_commands_metadata_json(GuestLanguage::TypeScript),
+        )
+        .unwrap();
+        let repl_root = ctx.application().repl_root_dir(GuestLanguage::TypeScript);
+        let _ = std::fs::remove_dir(&repl_root);
+        if let Some(repl_dir) = repl_root.parent() {
+            let _ = std::fs::remove_dir(repl_dir);
+        }
+        let _ = std::fs::remove_dir(ctx.application().temp_dir());
+        assert!(metadata.agents.is_empty());
+    }
+
+    #[test]
+    async fn repl_planning_without_a_target_language_returns_an_error() {
+        let (application, _dir) = application_from_manifest(
+            r#"
+app: repl-language-test
+environments:
+  local:
+    server: local
+components:
+  app:component:
+    componentWasm: component.wasm
+"#,
+        );
+        let app_ctx = crate::app::context::ApplicationContext::for_test(application);
+        let build_config = crate::model::app::BuildConfig::default();
+        let ctx = BuildContext::new(&app_ctx, &build_config);
+        let target = CustomBridgeSdkTarget {
+            agent_type_names: HashSet::new(),
+            target_language: None,
+            output_dir: None,
+        };
+
+        let error = plan_repl_bridge_generation_lenient(&ctx, &target)
+            .await
+            .unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "REPL bridge target requires a target language"
+        );
     }
 
     #[test]
@@ -2381,6 +2472,7 @@ components:
     fn tool(name: &str) -> Tool {
         Tool {
             version: "1.0.0".to_string(),
+            requires_filesystem: false,
             commands: CommandTree {
                 nodes: vec![CommandNode {
                     name: name.to_string(),

@@ -216,12 +216,13 @@ async fn shutdown_fences_empty_and_idle_slots_without_flushing_buffered_entries(
                 timestamp: golem_common::model::Timestamp::now_utc(),
                 entity_parent_start_index: None,
             })
-            .await;
+            .await
+            .unwrap();
         let shutdown = slot.shutdown();
         assert!(slot.is_retired());
         shutdown.await.unwrap();
         slot.retire(unused_commit()).await.unwrap();
-        assert_eq!(oplog.commit(CommitLevel::Always).await.len(), 1);
+        assert_eq!(oplog.commit(CommitLevel::Always).await.unwrap().len(), 1);
     }
 }
 
@@ -257,8 +258,8 @@ async fn shutdown_waits_for_admitted_commit_tail_after_cancelled_waiter() {
             let reached = reached.clone();
             let release = release.clone();
             Box::pin(async move {
-                oplog.commit(CommitLevel::Always).await;
-                receipt.unwrap().send(()).unwrap();
+                oplog.commit(CommitLevel::Always).await.unwrap();
+                receipt.unwrap().send(Ok(())).unwrap();
                 reached.notify_one();
                 release.acquire().await.unwrap().forget();
             })

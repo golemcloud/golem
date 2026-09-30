@@ -228,6 +228,7 @@ fn mapping(high_water: Option<u64>) -> DurableStreamMapping {
             terminal: false,
         }),
         role: StreamMappingRole::Input as i32,
+        tool_byte_stream_role: None,
     }
 }
 
@@ -1094,6 +1095,7 @@ async fn oversized_output_fails_and_cleans_up() {
 #[test]
 #[test_timeout("10s")]
 async fn output_end_does_not_complete_session_and_it_remains_cancelable() {
+    let case = corpus_case("lifecycle-body-eof-still-cancellable");
     let mut h = harness(1);
     let mut session =
         HttpSession::start_with_transport(start(), h.transport.clone(), limits()).unwrap();
@@ -1147,14 +1149,41 @@ async fn output_end_does_not_complete_session_and_it_remains_cancelable() {
         "disposing a terminal output must be a no-op"
     );
     session.cancellation.cancel();
-    assert!(matches!(
+    let cancelled = matches!(
         event(&mut session).await,
         HttpSessionEvent::Error(HttpSessionError::Cancelled)
-    ));
-    timeout(Duration::from_secs(1), h.cleanups.recv())
+    );
+    assert!(cancelled, "{}", case["id"]);
+    assert_eq!(
+        !cancelled,
+        case["expect"]["successful_eof"].as_bool().unwrap(),
+        "{}",
+        case["id"]
+    );
+    let released = timeout(Duration::from_secs(1), h.cleanups.recv())
         .await
-        .unwrap()
-        .unwrap();
+        .ok()
+        .flatten()
+        .is_some();
+    assert_eq!(
+        released,
+        case["expect"]["resources_released"].as_bool().unwrap(),
+        "{}",
+        case["id"]
+    );
+    assert_eq!(
+        u64::from(released)
+            + u64::from(
+                timeout(Duration::from_millis(30), h.cleanups.recv())
+                    .await
+                    .ok()
+                    .flatten()
+                    .is_some(),
+            ),
+        case["expect"]["invocation_cancellations"].as_u64().unwrap(),
+        "{}",
+        case["id"]
+    );
 }
 
 #[test]

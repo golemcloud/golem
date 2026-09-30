@@ -240,6 +240,7 @@ async fn invoke_streaming_caller(
     .map_err(|error| BenchmarkError::new("stream-complete", error))?;
     Ok(InvokeResult {
         accumulated_time: started.elapsed(),
+        agent_id: Some(value.agent_id().clone()),
         value: value
             .into_return_value()
             .map(|value| vec![value])

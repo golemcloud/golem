@@ -53,7 +53,7 @@ declare module 'golem:tool/host@0.1.0' {
    * Creates the output target and caller-readable stream before invocation.
    * Dropping the reader cancels only this attachment's consumer role.
    */
-  export function createStdout(): [ToolStdout, AsyncIterable<ByteStreamItem>];
+  export function createOutput(): [ToolOutput, AsyncIterable<ByteStreamItem>];
   /**
    * Waits for an explicit set of result observers as one causal batch. The
    * input order controls the result order; filesystem-capable bodies become
@@ -79,7 +79,7 @@ declare module 'golem:tool/host@0.1.0' {
   export class ToolStdinClosed {
     wait(): Promise<ByteStreamCloseCause>;
   }
-  export class ToolStdout {
+  export class ToolOutput {
   }
   export class ToolRpc {
     /**
@@ -92,13 +92,13 @@ declare module 'golem:tool/host@0.1.0' {
      */
     static create(toolName: string): ToolRpc;
     /**
-     * Waits for the structured terminal. Callers that supplied stdout must
-     * drive this wait and the already-created reader concurrently. Callers
-     * that manually created an open stdin must likewise drive its writer
-     * concurrently; see `create-stdin`.
+     * Waits for the structured terminal. Callers that supplied stdout or
+     * stderr must drive this wait and every already-created reader
+     * concurrently. Callers that manually created an open stdin must likewise
+     * drive its writer concurrently; see `create-stdin`.
      * @throws ToolRpcError
      */
-    invokeAndAwait(commandPath: string[], input: TypedSchemaValue, stdin: ToolStdin | undefined, stdout: ToolStdout | undefined): Promise<InvocationResult>;
+    invokeAndAwait(commandPath: string[], input: TypedSchemaValue, stdin: ToolStdin | undefined, stdout: ToolOutput | undefined, stderr: ToolOutput | undefined): Promise<InvocationResult>;
     /**
      * Durably admits fire-and-forget work. Declared output is discarded by
      * the host so an absent caller reader cannot apply backpressure.
@@ -107,10 +107,10 @@ declare module 'golem:tool/host@0.1.0' {
     invoke(commandPath: string[], input: TypedSchemaValue, stdin: ToolStdin | undefined): void;
     /**
      * Durably admits work and returns an independently owned structured
-     * result observer. Stdout, when declared, was created by the caller and
-     * is observed independently from this future.
+     * result observer. Each requested output was created by the caller and is
+     * observed independently from this future.
      */
-    asyncInvokeAndAwait(commandPath: string[], input: TypedSchemaValue, stdin: ToolStdin | undefined, stdout: ToolStdout | undefined): FutureInvokeResult;
+    asyncInvokeAndAwait(commandPath: string[], input: TypedSchemaValue, stdin: ToolStdin | undefined, stdout: ToolOutput | undefined, stderr: ToolOutput | undefined): FutureInvokeResult;
   }
   export class FutureInvokeResult {
     /**

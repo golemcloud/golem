@@ -15,5 +15,12 @@
 export * from '../internal/schema-model';
 export * from './ref';
 export { registerSchemaWalker, registeredVendors, compileSchema } from './adapter';
-export type { SchemaCodec, SchemaWalker } from './codec';
+export {
+  directSchemaValueFromWit,
+  directSchemaValueToWit,
+  directTypedSchemaValueToWit,
+  SchemaValueReader,
+  SchemaValueWriter,
+} from './codec';
+export type { DirectSchemaCodec, SchemaCodec, SchemaWalker } from './codec';
 export type { StandardSchemaV1 } from './standardSchema';

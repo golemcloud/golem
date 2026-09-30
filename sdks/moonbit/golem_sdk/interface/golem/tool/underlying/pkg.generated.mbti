@@ -28,7 +28,7 @@ pub async fn UnderlyingInvokeResult::get(Self) -> Result[@types.TypedSchemaValue
 
 pub(all) struct UnderlyingTool(Int) derive(Eq, @debug.Debug)
 pub fn UnderlyingTool::drop(Self) -> Unit
-pub async fn UnderlyingTool::invoke(Self, Array[String], @types.TypedSchemaValue, @async-core.Stream[Result[FixedArray[Byte], @streams.ByteStreamFailure]]?) -> (UnderlyingInvokeResult, @async-core.Stream[Result[FixedArray[Byte], @streams.ByteStreamFailure]]?)
+pub async fn UnderlyingTool::invoke(Self, Array[String], @types.TypedSchemaValue, @async-core.Stream[Result[FixedArray[Byte], @streams.ByteStreamFailure]]?) -> (UnderlyingInvokeResult, @async-core.Stream[Result[FixedArray[Byte], @streams.ByteStreamFailure]]?, @async-core.Stream[Result[FixedArray[Byte], @streams.ByteStreamFailure]]?)
 
 // Type aliases
 

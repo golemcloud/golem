@@ -30,7 +30,11 @@ describe("AI tool model", () => {
     for (const maxStdoutBytes of [-1, 0.5, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1]) {
       expect(() => command([], { maxStdoutBytes })).toThrow(/non-negative safe integer/)
     }
+    for (const maxStderrBytes of [-1, 0.5, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1]) {
+      expect(() => command([], { maxStderrBytes })).toThrow(/non-negative safe integer/)
+    }
     expect(command([], { maxStdoutBytes: 0 }).options.maxStdoutBytes).toBe(0)
+    expect(command([], { maxStderrBytes: 0 }).options.maxStderrBytes).toBe(0)
   })
 
   it("combines command and stream documentation with MIME hints", () => {
@@ -43,6 +47,7 @@ describe("AI tool model", () => {
           doc: { description: "The source document." },
         },
         { mime: ["application/pdf"], doc: { summary: "Rendered PDF." } },
+        { mime: ["text/plain"], doc: { summary: "Diagnostics." } },
       ),
     ).toBe(
       [
@@ -52,6 +57,8 @@ describe("AI tool model", () => {
         "The source document.",
         "Stdout is returned as bounded captured bytes after the stream is fully drained. Declared MIME hints: application/pdf.",
         "Rendered PDF.",
+        "Stderr is returned as bounded captured bytes after the stream is fully drained. Declared MIME hints: text/plain.",
+        "Diagnostics.",
       ].join("\n\n"),
     )
   })

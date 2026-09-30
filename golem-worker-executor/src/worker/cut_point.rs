@@ -218,9 +218,6 @@ where
             | OplogEntry::DeactivatePlugin { .. }
             | OplogEntry::Revert { .. }
             | OplogEntry::CancelPendingInvocation { .. }
-            | OplogEntry::StartSpan { .. }
-            | OplogEntry::FinishSpan { .. }
-            | OplogEntry::SetSpanAttribute { .. }
             | OplogEntry::BeginRemoteTransaction {
                 original_begin_index: None,
                 ..
@@ -438,6 +435,7 @@ mod tests {
                     deleting_at_millis: 100,
                 },
             ))),
+            None,
         )
     }
 
@@ -569,8 +567,8 @@ mod tests {
     #[test]
     async fn clean_cut_is_accepted() {
         let entries = HashMap::from([
-            (2, OplogEntry::end(idx(1), None, false)),
-            (4, OplogEntry::end(idx(3), None, false)),
+            (2, OplogEntry::end(idx(1), None, false, None, None)),
+            (4, OplogEntry::end(idx(3), None, false, None, None)),
         ]);
         // Completed calls on either side do not constrain the cut.
         assert_eq!(scan(&entries, 2, 5, &deleted(vec![])).await, None);
@@ -579,14 +577,14 @@ mod tests {
     #[test]
     async fn durable_call_cuts_use_the_retained_prefix_not_future_completion() {
         for entries in [
-            HashMap::from([(5, OplogEntry::cancelled(idx(2), None))]),
-            HashMap::from([(5, OplogEntry::end(idx(2), None, false))]),
+            HashMap::from([(5, OplogEntry::cancelled(idx(2), None, None))]),
+            HashMap::from([(5, OplogEntry::end(idx(2), None, false, None, None))]),
             HashMap::from([
-                (5, OplogEntry::end(idx(2), None, false)),
+                (5, OplogEntry::end(idx(2), None, false, None, None)),
                 (8, OplogEntry::completion_delivered(idx(2))),
             ]),
             HashMap::from([
-                (5, OplogEntry::end(idx(2), None, false)),
+                (5, OplogEntry::end(idx(2), None, false, None, None)),
                 (8, OplogEntry::completion_discarded(idx(2))),
             ]),
         ] {
@@ -599,7 +597,7 @@ mod tests {
     #[test]
     async fn recoverable_call_does_not_hide_a_later_transaction_boundary() {
         let entries = HashMap::from([
-            (5, OplogEntry::end(idx(2), None, false)),
+            (5, OplogEntry::end(idx(2), None, false, None, None)),
             (7, OplogEntry::committed_remote_transaction(idx(3))),
         ]);
         assert_eq!(
@@ -718,21 +716,21 @@ mod tests {
 
     #[test]
     async fn terminal_inside_deleted_region_is_ignored() {
-        let entries = HashMap::from([(5, OplogEntry::end(idx(3), None, false))]);
+        let entries = HashMap::from([(5, OplogEntry::end(idx(3), None, false, None, None))]);
         assert_eq!(scan(&entries, 4, 6, &deleted(vec![(5, 6)])).await, None);
     }
 
     #[test]
     async fn orphan_terminal_with_deleted_start_is_ignored() {
         // The Start at 3 lies in a deleted region: its terminal is an orphan that replay drains
-        let entries = HashMap::from([(5, OplogEntry::end(idx(3), None, false))]);
+        let entries = HashMap::from([(5, OplogEntry::end(idx(3), None, false, None, None))]);
         assert_eq!(scan(&entries, 4, 6, &deleted(vec![(2, 3)])).await, None);
     }
 
     #[test]
     async fn terminal_referencing_start_after_cut_is_accepted() {
         // Both halves after the cut: nothing spans it
-        let entries = HashMap::from([(6, OplogEntry::end(idx(5), None, false))]);
+        let entries = HashMap::from([(6, OplogEntry::end(idx(5), None, false, None, None))]);
         assert_eq!(scan(&entries, 4, 6, &deleted(vec![])).await, None);
     }
 

@@ -54,6 +54,92 @@ pub struct ExtendedAgentConfigDeclaration {
 }
 
 impl ExtendedAgentType {
+    pub fn from_agent_type(agent: AgentType) -> Result<Self, crate::schema::wit::DecodeError> {
+        let decoder = crate::schema::wit::GraphDecoder::new(&agent.schema)?;
+        let defs = decoder.decode_defs()?;
+        let graph = |index| -> Result<SchemaGraph, crate::schema::wit::DecodeError> {
+            Ok(SchemaGraph {
+                root: decoder.decode_type_at(index)?,
+                defs: defs.clone(),
+            })
+        };
+        let input = |schema| -> Result<
+            Vec<(String, EnrichedParameterSchema)>,
+            crate::schema::wit::DecodeError,
+        > {
+            let InputSchema::Parameters(fields) = schema;
+            fields
+                .into_iter()
+                .map(|field| {
+                    Ok((
+                        field.name,
+                        match field.source {
+                            FieldSource::UserSupplied => {
+                                EnrichedParameterSchema::Value(graph(field.schema)?)
+                            }
+                            FieldSource::AutoInjected(AutoInjectedKind::Principal) => {
+                                EnrichedParameterSchema::AutoInject(
+                                    AutoInjectedParamType::Principal,
+                                )
+                            }
+                        },
+                    ))
+                })
+                .collect()
+        };
+        let methods = agent
+            .methods
+            .into_iter()
+            .map(|method| {
+                Ok(EnrichedAgentMethod {
+                    name: method.name,
+                    description: method.description,
+                    prompt_hint: method.prompt_hint,
+                    http_endpoint: method.http_endpoint,
+                    read_only: method.read_only,
+                    input_schema: input(method.input_schema)?,
+                    output_schema: match method.output_schema {
+                        OutputSchema::Unit => vec![],
+                        OutputSchema::Single(index) => {
+                            vec![("return_value".to_string(), graph(index)?)]
+                        }
+                    },
+                })
+            })
+            .collect::<Result<Vec<_>, crate::schema::wit::DecodeError>>()?;
+        let mut sorted_method_indices: Vec<usize> = (0..methods.len()).collect();
+        sorted_method_indices.sort_by(|a, b| methods[*a].name.cmp(&methods[*b].name));
+        Ok(Self {
+            type_name: agent.type_name,
+            kind: agent.kind,
+            description: agent.description,
+            source_language: agent.source_language,
+            constructor: ExtendedAgentConstructor {
+                name: agent.constructor.name,
+                description: agent.constructor.description,
+                prompt_hint: agent.constructor.prompt_hint,
+                input_schema: input(agent.constructor.input_schema)?,
+            },
+            methods,
+            dependencies: agent.dependencies,
+            mode: agent.mode,
+            http_mount: agent.http_mount,
+            snapshotting: agent.snapshotting,
+            config: agent
+                .config
+                .into_iter()
+                .map(|config| {
+                    Ok(ExtendedAgentConfigDeclaration {
+                        source: config.source,
+                        path: config.path,
+                        value_type: graph(config.value_type)?,
+                    })
+                })
+                .collect::<Result<_, crate::schema::wit::DecodeError>>()?,
+            sorted_method_indices,
+        })
+    }
+
     pub fn principal_params_in_constructor(&self) -> HashSet<String> {
         let mut principal_params = HashSet::new();
 

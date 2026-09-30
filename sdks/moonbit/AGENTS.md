@@ -154,13 +154,15 @@ files. Regenerate with the script, which requires this exact revision of the
 
 ```sh
 cargo install --locked --git https://github.com/golemcloud/wit-bindgen \
-  --rev 36866deb07e878430f61d02a28c52fac0fab5355 wit-bindgen-cli
+  --rev d1d16370eff379655f68df661891b7a2116c7557 wit-bindgen-cli
 ```
 
 The pin incorporates Bytecode Alliance's draft
 [MoonBit component-model async PR #1659](https://github.com/bytecodealliance/wit-bindgen/pull/1659)
 and Golem's additional outline-lift, named-memory-lowering, export-disambiguation, and deterministic
-emission changes. Released wit-bindgen and upstream `main` do not yet generate the async MoonBit
+emission changes, 64 KiB component byte-stream batching, and shared export ABI lifting and lowering
+for types used across exported interfaces.
+Released wit-bindgen and upstream `main` do not yet generate the async MoonBit
 exports required by this SDK.
 
 ```sh
@@ -177,10 +179,12 @@ The script (`scripts/regen-bindings.sh`):
    package metadata.
 5. Asserts the s8/s16 fix took effect.
 
-`--ignore-stub` means wit-bindgen will NOT (re)generate the stub files. The `stub.mbt` files under
-`gen/interface/` are the **SDK's implementation** of the WIT export interfaces — the dispatch logic
-the SDK actually runs. They are maintained by hand and operate purely on the new schema carrier
-(`@types.SchemaValueTree`); they contain no legacy value/type types.
+The regeneration script preserves hand-maintained `stub.mbt` files under `gen/interface/`.
+These implement the full world's exports with empty/error defaults. Generated `golem_exports.mbt`
+installs handlers only for categories found in source: `agent-exports` (including snapshots),
+`tool-exports`, and `tool-middleware-exports`. Keep full runtime imports out of the stubs so
+whole-program DCE can remove absent categories. Empty/error handlers must still release incoming
+capabilities, stdin, stdout, and underlying-tool resources.
 
 ### The Agent Registry Pattern
 
@@ -303,8 +307,8 @@ source via `moonbitlang/parser/fmt`. Two subcommands:
 
 ```sh
 cd golem_sdk_tools
-moon run cmd -- reexports <sdk-path> <target-dir> --role <role>
-# e.g.: moon run cmd -- reexports ../golem_sdk ../golem_sdk_example1/golem_moonbit_examples --role ordinary
+moon run cmd -- reexports <sdk-path> <target-dir>
+# e.g.: moon run cmd -- reexports ../golem_sdk ../golem_sdk_example1/golem_moonbit_examples
 ```
 
 Generates `golem_reexports.mbt` (re-exports the WASM entry points — `cabi_realloc`, `wasmExport*` —
@@ -316,8 +320,8 @@ from the SDK's `gen` package) and updates the target `moon.pkg`: it ensures the
 
 ```sh
 cd golem_sdk_tools
-moon run cmd -- agents <project-root> --component-dir <component-dir> --role <role>
-# e.g.: moon run cmd -- agents ../golem_sdk_example1 --component-dir golem_moonbit_examples --role ordinary
+moon run cmd -- agents <project-root> --component-dir <component-dir>
+# e.g.: moon run cmd -- agents ../golem_sdk_example1 --component-dir golem_moonbit_examples
 ```
 
 Generates, from source annotations:
@@ -329,6 +333,9 @@ Generates, from source annotations:
 2. **`golem_derive.mbt`** — `IntoSchema` / `FromSchema` impls for `#derive.golem_schema` types, and
    `MultimodalModality` impls for `#derive.multimodal` enums.
 3. **`golem_clients.mbt`** — RPC client stubs for agent-to-agent calls.
+4. **`golem_exports.mbt`** — source-derived runtime hooks for the full agent/tool/middleware world.
+   Both subcommands are required, including for empty and tool-only components. There is no role
+   argument or role-specific world. Generated imports are removed when a category disappears.
 
 Awaited RPC methods and scoped client helpers are generated as `async`; trigger and scheduling
 methods remain synchronous because they only enqueue work.
@@ -462,8 +469,8 @@ moon info && moon fmt             # Regenerate .mbti and format
 moon check
 moon test
 moon info && moon fmt
-moon run cmd -- reexports <sdk-path> <target-dir> --role <role>
-moon run cmd -- agents <project-root> --component-dir <component-dir> --role <role>
+moon run cmd -- reexports <sdk-path> <target-dir>
+moon run cmd -- agents <project-root> --component-dir <component-dir>
 
 # In golem_sdk_example1/ (the example/template):
 moon check --target wasm
@@ -528,9 +535,11 @@ published to mooncakes.io for the release template to work.
 ## Dependencies & Tools
 
 - **wit-bindgen** — Golem's fork pinned at
-  `36866deb07e878430f61d02a28c52fac0fab5355`. It combines draft upstream PR #1659's MoonBit
+  `d1d16370eff379655f68df661891b7a2116c7557`. It combines draft upstream PR #1659's MoonBit
   component-model async support with Golem's outline-lift, named-memory-lowering, and export
-  disambiguation changes, and emits deterministic bindings. Bindings are regenerated via
+  disambiguation changes, 64 KiB component byte-stream batching, shared cross-interface export ABI
+  lifting and lowering, and
+  deterministic bindings. Bindings are regenerated via
   `scripts/regen-bindings.sh`, which rejects any other generator revision and applies the s8/s16
   sign-extension fix in post-processing.
 - **wasm-tools** — `component embed` (adds WIT type info) and `component new` (creates the Component

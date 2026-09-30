@@ -6,7 +6,7 @@ This page shows how to define, test, bind, publish, and consume a [Golem-native 
 
 ## Define a tool
 
-The SDKs project the same model: a command tree, inherited global options and flags, command bodies, typed results, declared errors, and optional stdin/stdout byte streams.
+The SDKs project the same model: a command tree, inherited global options and flags, command bodies, typed results, declared errors, and optional stdin/stdout/stderr byte streams.
 
 <Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
   <Tabs.Tab>
@@ -20,6 +20,7 @@ export const files = toolDefinition('files')
   .command('read', command => command.body(body => body
     .positional('path', z.string())
     .stdout({ mime: ['application/octet-stream'], required: false })
+    .stderr({ mime: ['text/plain'], required: false })
     .returns(z.string())
     .error('not-found', { kind: 'runtime', exitCode: 2 })
   ));
@@ -72,7 +73,7 @@ impl Files for FilesImpl {
 }
 ```
 
-Use `InputStream` and `OutputStream` parameters for stdin and stdout. The macros generate discovery metadata and a typed client.
+Use `InputStream` and separately annotated `OutputStream` parameters for stdin, stdout, and stderr. The macros generate discovery metadata and a typed client.
   </Tabs.Tab>
   <Tabs.Tab>
 ```scala
@@ -95,7 +96,7 @@ final class FilesImpl extends Files {
 }
 ```
 
-`ToolInputStream` and `ToolOutputStream` add streaming stdin and stdout.
+`ToolInputStream` and separately annotated `ToolOutputStream` parameters add streaming stdin, stdout, and stderr.
   </Tabs.Tab>
   <Tabs.Tab>
 ```moonbit
@@ -113,7 +114,7 @@ pub fn Files::read(path : String) -> Result[String, FileError] {
 }
 ```
 
-Use `@asyncCore.Stream[Byte]` and `@tool.ProviderStdout` parameters for streaming.
+Use `@asyncCore.Stream[Byte]` for stdin and `@tool.ProviderOutput` for outputs. An unannotated provider output is stdout; select stderr with `#derive.arg("parameter-name", channel="stderr")`.
   </Tabs.Tab>
 </Tabs>
 
@@ -127,7 +128,7 @@ Prefer structure over parsing strings yourself:
 - **Options and flags** carry long names, aliases, defaults, repetition, delimiters, environment fallback, and documentation.
 - **Constraints** express requirements, all-or-none groups, implications, and exclusions.
 - **Results and errors** are typed. Declared errors include a stable name, category, optional payload, and exit code; transport or protocol failures remain RPC errors.
-- **stdin and stdout** are byte-stream slots with declared MIME metadata; each declared slot can be required or optional. They use backpressured streams rather than buffering a complete body.
+- **stdin, stdout, and stderr** are independent byte-stream slots with declared MIME metadata; each declared slot can be required or optional. They use backpressured streams rather than buffering a complete body. Stderr is data, not an implicit failed result.
 
 The command tree is metadata, not a spawned shell. A component cannot currently run an arbitrary native executable. Implement operations with code and libraries compiled into the component, or call an external service through supported network APIs.
 
@@ -146,6 +147,12 @@ bridge:
 ```
 
 Generated clients call the canonical name through `tool-rpc`; they do not embed a component ID, MCP endpoint, host-native implementation ID, or credential.
+
+### Drain output attachments concurrently
+
+Commands may declare neither output, stdout only, stderr only, or both. A started invocation exposes each declared output independently from its structured result. When both outputs are present, drain them concurrently: waiting for one channel to finish before reading the other can apply backpressure and stall the provider. A structured success can contain stderr bytes, and a structured failure can still have output attachments that must be drained or cancelled.
+
+Output stream state is durable. Golem records each channel under a distinct identity, checkpoints delivery separately, and reconstructs the same stdout/stderr separation after suspension or executor restart. Middleware must forward, consume, or cancel each attachment independently and must not relabel one channel as the other.
 
 ## Add middleware
 
@@ -237,11 +244,11 @@ Deployment reconciles the environment's release grant before reading metadata or
 ## Wrap MCP or a CLI
 
 - **MCP:** configure an MCP import in the environment. Golem discovers and projects its tools into the registry; generated clients still call `tool-rpc`. Resolve naming collisions explicitly—application and ambient names cannot collide, ambient tools take precedence over MCP projections, and earlier MCP imports precede later ones.
-- **CLI-shaped operation:** reproduce the required operation with libraries compiled into the component, or call an external service. Represent arguments as command metadata, stream bytes through stdin/stdout, and map failures to declared errors. Spawning an arbitrary native CLI inside a component is not currently supported.
+- **CLI-shaped operation:** reproduce the required operation with libraries compiled into the component, or call an external service. Represent arguments as command metadata, stream bytes through stdin/stdout/stderr, and map failures to declared errors. Spawning an arbitrary native CLI inside a component is not currently supported.
 
 ## Test the whole contract
 
-1. Unit-test metadata validation, handler results, declared errors, constraints, and stream cancellation/backpressure.
+1. Unit-test metadata validation, handler results, declared errors, constraints, all four stdout/stderr presence combinations, and per-channel cancellation/backpressure.
 2. Test middleware independently with a fake underlying handler, including rejection and transformed input/output.
 3. Build the component and run an integration call through `tool-rpc`; unit tests cannot prove discovery, instance isolation, runtime authorization, or middleware traversal.
 4. Deploy with the intended binding and permission cards. Test both missing-binding and missing-permission cases.

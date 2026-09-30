@@ -9,6 +9,7 @@ package example.integrationtests
 import golem.BaseAgent
 import golem.runtime.annotations.{agentDefinition, agentImplementation}
 import golem.schema.AgentStream
+import zio.blocks.streams.Stream
 import golem.streams.*
 import scala.concurrent.{ExecutionContext, Future}
 
@@ -39,12 +40,7 @@ final class DurableStreamsExampleImpl(url: String, producerId: String) extends D
     Future.successful(DurableStreams.bytes(url, DurableStreamReadOptions(DurableStreamCheckpoint(offset))))
 
   override def nested(offset: String): Future[AgentStream[AgentStream[Long]]] = readJson(offset).map { inner =>
-    var emitted = false
-    AgentStream.fromPull { () =>
-      val value = if (emitted) None else Some(inner)
-      emitted = true
-      Future.successful(value)
-    }
+    AgentStream.fromStream(Stream.succeed(inner))
   }
 
   override def consume(input: AgentStream[Long]): Future[Vector[Long]] = {

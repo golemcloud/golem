@@ -21,7 +21,7 @@ const host = ToolClient.of({
   getTool: vi.fn(),
   createStdin: vi.fn() as never,
   createStdinFromStream: vi.fn() as never,
-  createStdout: vi.fn() as never,
+  createOutput: vi.fn() as never,
   rpc: vi.fn() as never,
   createRpc: vi.fn() as never,
 })
@@ -33,6 +33,7 @@ describe("reflected Effect AI tool adapter", () => {
         .option("label", Schema.String)
         .input({ required: true, mime: ["text/plain"] })
         .output({ mime: ["text/plain"] })
+        .stderr({ mime: ["text/plain"] })
         .returns(Schema.BigInt),
     )
     const reflected = new ToolType(registration(definition))
@@ -40,11 +41,15 @@ describe("reflected Effect AI tool adapter", () => {
     const encodedInput = Effect.runSync(
       compile(Schema.Struct({ label: Schema.optionalKey(Schema.String) })),
     )
-    const start = vi.fn<ToolTransport["start"]>((tool, path, input, stdin, stdout) =>
+    let stderrDrained = false
+    let completeStderr!: () => void
+    const stderrDone = new Promise<void>((resolve) => (completeStderr = resolve))
+    const start = vi.fn<ToolTransport["start"]>((tool, path, input, stdin, stdout, stderr) =>
       Effect.gen(function* () {
         expect(tool).toBe("reflected-files")
         expect(path).toEqual([])
         expect(stdout).toBe(true)
+        expect(stderr).toBe(true)
         expect(yield* encodedInput.decode(input.value)).toEqual({})
         const bytes: number[] = []
         if (stdin)
@@ -52,22 +57,31 @@ describe("reflected Effect AI tool adapter", () => {
             for await (const item of stdin) if (item.tag === "ok") bytes.push(...item.val)
           })
         expect(new TextDecoder().decode(Uint8Array.from(bytes))).toBe("hello")
+        const resultValue = yield* encodedResult.encode(9007199254740993n)
         return {
           stdout: (async function* () {
             yield { tag: "ok", val: new TextEncoder().encode("printed output") } as const
           })(),
-          result: Effect.succeed({
-            result: {
-              graph: encodedResult.schemaGraph,
-              value: yield* encodedResult.encode(9007199254740993n),
-            },
+          stderr: (async function* () {
+            yield { tag: "ok", val: new TextEncoder().encode("diagnostic") } as const
+            stderrDrained = true
+            completeStderr()
+          })(),
+          result: Effect.promise(async () => {
+            await stderrDone
+            return {
+              result: {
+                graph: encodedResult.schemaGraph,
+                value: resultValue,
+              },
+            }
           }),
           cancel: Effect.void,
         }
       }),
     )
     const toolkit = await Effect.runPromise(
-      reflectedToolkit(reflected, [command([], { maxStdoutBytes: 7 })]).pipe(
+      reflectedToolkit(reflected, [command([], { maxStdoutBytes: 7, maxStderrBytes: 5 })]).pipe(
         Effect.provideService(ToolClient, host),
       ),
     )
@@ -88,8 +102,55 @@ describe("reflected Effect AI tool adapter", () => {
       status: "success",
       result: "9007199254740993",
       stdout: { data: "printed", encoding: "utf8", truncated: true, totalBytes: 14 },
+      stderr: { data: "diagn", encoding: "utf8", truncated: true, totalBytes: 10 },
     })
+    expect(stderrDrained).toBe(true)
     expect(start).toHaveBeenCalledOnce()
+  })
+
+  it("drains stderr-only output before observing a gated reflected result", async () => {
+    const definition = toolDefinition("reflected-diagnostics").body((body) =>
+      body.stderr({ mime: ["text/plain"] }),
+    )
+    const reflected = new ToolType(registration(definition))
+    let drained = false
+    let releaseResult!: () => void
+    const outputDone = new Promise<void>((resolve) => (releaseResult = resolve))
+    const start = vi.fn<ToolTransport["start"]>((_tool, _path, _input, _stdin, stdout, stderr) => {
+      expect(stdout).toBe(false)
+      expect(stderr).toBe(true)
+      return Effect.succeed({
+        stderr: (async function* () {
+          yield { tag: "ok", val: new TextEncoder().encode("warning") } as const
+          drained = true
+          releaseResult()
+        })(),
+        result: Effect.promise(async () => {
+          await outputDone
+          return {}
+        }),
+        cancel: Effect.void,
+      })
+    })
+    const toolkit = await Effect.runPromise(
+      reflectedToolkit(reflected, [command([], { maxStderrBytes: 7 })]).pipe(
+        Effect.provideService(ToolClient, host),
+      ),
+    )
+    const handled = await Effect.runPromise(
+      toolkit
+        .handle("reflected-diagnostics", {})
+        .pipe(
+          Effect.flatMap(Stream.runCollect),
+          Effect.provideService(ToolTransport, { start }),
+          Effect.provideService(ToolClient, host),
+        ),
+    )
+    expect(drained).toBe(true)
+    expect(Array.from(handled).at(-1)?.encodedResult).toEqual({
+      status: "success",
+      stderr: { data: "warning", encoding: "utf8", truncated: false, totalBytes: 7 },
+    })
   })
 
   it("accepts direct reflected commands and rejects duplicate model names", () => {
@@ -119,6 +180,8 @@ describe("reflected Effect AI tool adapter", () => {
       body
         .option("mode", Schema.String, { default: "safe" })
         .flag("verbose")
+        .output({ mime: ["text/plain"] })
+        .stderr({ mime: ["text/plain"] })
         .error("rejected", failure),
     )
     const reflected = new ToolType(registration(definition))
@@ -130,6 +193,12 @@ describe("reflected Effect AI tool adapter", () => {
       Effect.gen(function* () {
         expect(yield* encodedInput.decode(input.value)).toEqual({ mode: "safe", verbose: false })
         return {
+          stdout: (async function* () {
+            yield { tag: "ok", val: new TextEncoder().encode("partial-output") } as const
+          })(),
+          stderr: (async function* () {
+            yield { tag: "ok", val: new TextEncoder().encode("partial-diagnostic") } as const
+          })(),
           result: Effect.fail({
             tag: "remote-tool-error",
             val: {
@@ -148,7 +217,9 @@ describe("reflected Effect AI tool adapter", () => {
       }),
     )
     const toolkit = await Effect.runPromise(
-      reflectedToolkit(reflected, [command()]).pipe(Effect.provideService(ToolClient, host)),
+      reflectedToolkit(reflected, [command([], { maxStdoutBytes: 7, maxStderrBytes: 8 })]).pipe(
+        Effect.provideService(ToolClient, host),
+      ),
     )
 
     const handled = await Effect.runPromise(
@@ -164,6 +235,8 @@ describe("reflected Effect AI tool adapter", () => {
     expect(Array.from(handled).at(-1)?.encodedResult).toEqual({
       status: "error",
       error: { name: "rejected", value: { reason: "denied" } },
+      stdout: { data: "partial", encoding: "utf8", truncated: true, totalBytes: 14 },
+      stderr: { data: "partial-", encoding: "utf8", truncated: true, totalBytes: 18 },
     })
   })
 
@@ -477,5 +550,9 @@ describe("reflected Effect AI tool adapter", () => {
         reflectedToolkit([{ command: reflected.client.command([]), options: { maxStdoutBytes } }]),
       ).toThrow(/non-negative safe integer/)
     }
+    const diagnostics = new ToolType(
+      registration(toolDefinition("reflected-stderr-limit").body((body) => body.stderr())),
+    )
+    expect(() => reflectedToolkit(diagnostics, [command()])).toThrow(/requires maxStderrBytes/)
   })
 })

@@ -17,7 +17,7 @@ This directory contains the Scala SDK for building Golem components using Scala.
 
 ## Prerequisites
 
-- JDK 17+
+- JDK 21+
 - sbt 1.12+
 
 ## Building

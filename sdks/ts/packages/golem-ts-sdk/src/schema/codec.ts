@@ -25,6 +25,8 @@ import {
   SchemaType,
   SchemaValue,
   freezeSchemaValue,
+  schemaGraphToWit,
+  numericRestrictionsMatch,
 } from '../internal/schema-model';
 import {
   createUntrackedGuestSecretHandle,
@@ -50,8 +52,11 @@ import { PERMISSION_CARD_INTERNAL } from '../internal/schema-model/permissionCar
 import type {
   PermissionCard as RawPermissionCard,
   QuotaToken as RawQuotaToken,
+  SchemaValueNode as WireValueNode,
+  SchemaValueTree as WireValueTree,
   Secret as RawSecret,
 } from 'golem:core/types@2.0.0';
+import { Result } from '../host/result';
 import type { StandardSchemaV1 } from './standardSchema';
 
 /** An SDK codec rejected a value because its outer source shape does not match. */
@@ -67,6 +72,10 @@ export interface SchemaCodec {
   readonly graph: SchemaGraph;
   readonly toValue: (value: unknown) => SchemaValue;
   readonly fromValue: (value: SchemaValue) => unknown;
+  /** Direct flat-wire conversion. Absent when this codec can contain owned resources. */
+  readonly direct?: DirectSchemaCodec;
+  /** Source-shape information consumed by the static component codec emitter. */
+  readonly concrete?: ConcreteCodecMetadata;
   /** Source validator retained for metadata literals whose constraints are not representable in WIT. */
   readonly sourceSchema?: StandardSchemaV1;
   /**
@@ -99,9 +108,14 @@ export interface SchemaCodec {
   readonly optionInner?: SchemaCodec;
   /** Item codec for a WIT `list` or `fixed-list`. */
   readonly listItem?: SchemaCodec;
+  /** Item codec for a typed schema-value stream. */
+  readonly streamItem?: SchemaCodec;
   /** Child codecs for a WIT `map`, when the source schema exposes them. */
   readonly mapKey?: SchemaCodec;
   readonly mapValue?: SchemaCodec;
+  /** Arms for a WIT result. */
+  readonly resultOk?: SchemaCodec;
+  readonly resultErr?: SchemaCodec;
   /**
    * For SECRET markers (`s.secret(inner)`): the inner (revealed-value) codec —
    * the one that decodes the plaintext after `golem:secrets/reveal`. The
@@ -121,6 +135,318 @@ export interface SchemaCodec {
    * is unaffected (only a top-level parameter codec is auto-injected).
    */
   readonly autoInjected?: 'principal';
+}
+
+export type ConcreteCodecMetadata =
+  | { readonly tag: 'typed-array'; readonly constructor: string }
+  | {
+      readonly tag: 'variant';
+      readonly cases: ReadonlyArray<{ readonly codec?: SchemaCodec; readonly value?: unknown }>;
+      readonly discriminator?: string;
+      readonly sourceTag?: string;
+    }
+  | {
+      readonly tag: 'multimodal';
+      readonly cases: ReadonlyArray<{ name: string; codec: SchemaCodec }>;
+    }
+  | { readonly tag: 'unstructured-text' | 'unstructured-binary' }
+  | { readonly tag: 'principal' };
+
+/** Shared flat-value arena used while directly encoding child codecs. */
+export class SchemaValueWriter {
+  readonly valueNodes: WireValueNode[] = [];
+
+  add(node: WireValueNode): number {
+    this.valueNodes.push(node);
+    return this.valueNodes.length - 1;
+  }
+}
+
+/** Shared flat-value arena used while directly decoding child codecs. */
+export class SchemaValueReader {
+  private readonly active = new Set<number>();
+  private readonly read = new Set<number>();
+
+  constructor(readonly valueNodes: readonly WireValueNode[]) {}
+
+  node<T>(
+    index: number | undefined,
+    tag: WireValueNode['tag'],
+    decode: (node: WireValueNode) => T,
+  ): T {
+    if (
+      typeof index !== 'number' ||
+      !Number.isInteger(index) ||
+      index < 0 ||
+      index >= this.valueNodes.length
+    ) {
+      throw new TypeError(
+        `value node index out of range: ${index} (nodes: ${this.valueNodes.length})`,
+      );
+    }
+    if (this.active.has(index)) throw new TypeError(`cycle at value node index ${index}`);
+    if (this.read.has(index)) throw new TypeError(`aliased value node index ${index}`);
+    const node = this.valueNodes[index]!;
+    if (node.tag !== tag)
+      throw new TypeError(`expected ${tag} at value node index ${index}, got ${node.tag}`);
+    this.active.add(index);
+    this.read.add(index);
+    try {
+      return decode(node);
+    } finally {
+      this.active.delete(index);
+    }
+  }
+
+  finish(): void {
+    if (this.read.size !== this.valueNodes.length) {
+      throw new TypeError('flat value tree contains unreachable value nodes');
+    }
+  }
+}
+
+export interface DirectSchemaCodec {
+  write(value: unknown, writer: SchemaValueWriter): number | undefined;
+  read(reader: SchemaValueReader, index: number | undefined): unknown;
+}
+
+export function directSchemaValueToWit(codec: SchemaCodec, value: unknown): WireValueTree {
+  if (!codec.direct)
+    throw new TypeError('schema codec does not support direct flat-wire conversion');
+  const writer = new SchemaValueWriter();
+  const root = codec.direct.write(value, writer);
+  if (root === undefined) throw new TypeError('unit has no standalone flat-wire value');
+  const tree = { valueNodes: writer.valueNodes, root };
+  if (!deepEqual(directSchemaValueFromWit(codec, tree), value)) {
+    throw new TypeError('is not canonical for its declared schema');
+  }
+  return tree;
+}
+
+export function directSchemaValueFromWit(codec: SchemaCodec, tree: WireValueTree): unknown {
+  if (!codec.direct)
+    throw new TypeError('schema codec does not support direct flat-wire conversion');
+  const reader = new SchemaValueReader(tree.valueNodes);
+  const value = codec.direct.read(reader, tree.root);
+  reader.finish();
+  return value;
+}
+
+/** Encode a concrete value directly into its typed wire carrier. */
+export function directTypedSchemaValueToWit(codec: SchemaCodec, value: unknown) {
+  return { graph: schemaGraphToWit(codec.graph), value: directSchemaValueToWit(codec, value) };
+}
+
+/** Install direct operations from the explicit child links produced by schema constructors. */
+export function withDirectCodec(codec: SchemaCodec): SchemaCodec {
+  const direct = buildDirect(codec);
+  return direct ? { ...codec, direct } : codec;
+}
+
+function buildDirect(codec: SchemaCodec): DirectSchemaCodec | undefined {
+  const child = (value: SchemaCodec | undefined) => {
+    if (!value) return undefined;
+    if (value.direct) return value.direct;
+    return buildDirect(value);
+  };
+  if (codec.isUnit) {
+    return {
+      write: (value) => {
+        if (value !== undefined) throw new TypeError('unit value must be undefined');
+        return undefined;
+      },
+      read: (_reader, index) => {
+        if (index !== undefined) throw new TypeError('unit result arm has an unexpected payload');
+        return undefined;
+      },
+    };
+  }
+  if (codec.fields && !codec.optionInner) {
+    const fields = codec.fields.map((field) => ({ name: field.name, direct: child(field.codec) }));
+    if (fields.some((field) => !field.direct)) return undefined;
+    return {
+      write: (value, writer) =>
+        writer.add({
+          tag: 'record-value',
+          val: fields.map((field) =>
+            requiredIndex(
+              field.direct!.write((value as Record<string, unknown>)[field.name], writer),
+              'record field',
+            ),
+          ),
+        }),
+      read: (reader, index) =>
+        reader.node(index, 'record-value', (node) => {
+          const indices = (node as Extract<WireValueNode, { tag: 'record-value' }>).val;
+          if (indices.length !== fields.length)
+            throw new TypeError('record field count does not match schema');
+          return Object.fromEntries(
+            fields.map((field, i) => [field.name, field.direct!.read(reader, indices[i]!)]),
+          );
+        }),
+    };
+  }
+  if (codec.listItem) {
+    const item = child(codec.listItem);
+    if (!item) return undefined;
+    return {
+      write: (value, writer) =>
+        writer.add({
+          tag: 'list-value',
+          val: (value as unknown[]).map((v) => requiredIndex(item.write(v, writer), 'list item')),
+        }),
+      read: (reader, index) =>
+        reader.node(index, 'list-value', (node) =>
+          (node as Extract<WireValueNode, { tag: 'list-value' }>).val.map((i) =>
+            item.read(reader, i),
+          ),
+        ),
+    };
+  }
+  if (codec.optionInner) {
+    const inner = child(codec.optionInner);
+    if (!inner) return undefined;
+    const none = codec.optionKind === 'nullable' ? null : undefined;
+    return {
+      write: (value, writer) =>
+        writer.add({
+          tag: 'option-value',
+          val:
+            value === none
+              ? undefined
+              : requiredIndex(inner.write(value, writer), 'option payload'),
+        }),
+      read: (reader, index) =>
+        reader.node(index, 'option-value', (node) => {
+          const childIndex = (node as Extract<WireValueNode, { tag: 'option-value' }>).val;
+          return childIndex === undefined ? none : inner.read(reader, childIndex);
+        }),
+    };
+  }
+  if (codec.resultOk && codec.resultErr) {
+    const ok = child(codec.resultOk);
+    const err = child(codec.resultErr);
+    if (!ok || !err) return undefined;
+    const writeArm = (
+      arm: SchemaCodec,
+      direct: DirectSchemaCodec,
+      value: unknown,
+      writer: SchemaValueWriter,
+    ) => {
+      if (!arm.isUnit) return direct.write(value, writer);
+      if (value !== undefined) throw new TypeError('unit value must be undefined');
+      return writer.add({ tag: 'record-value', val: [] });
+    };
+    const readArm = (
+      arm: SchemaCodec,
+      direct: DirectSchemaCodec,
+      reader: SchemaValueReader,
+      index: number | undefined,
+    ) => {
+      if (!arm.isUnit || index === undefined) return direct.read(reader, index);
+      return reader.node(index, 'record-value', (node) => {
+        if ((node as Extract<WireValueNode, { tag: 'record-value' }>).val.length !== 0)
+          throw new TypeError('unit result arm must be an empty record');
+        return undefined;
+      });
+    };
+    return {
+      write: (value, writer) => {
+        const result = value as { tag: 'ok' | 'err'; val: unknown };
+        if (result.tag !== 'ok' && result.tag !== 'err') {
+          throw new TypeError('result value must have an ok or err tag');
+        }
+        const val =
+          result.tag === 'ok'
+            ? writeArm(codec.resultOk!, ok, result.val, writer)
+            : writeArm(codec.resultErr!, err, result.val, writer);
+        return writer.add({
+          tag: 'result-value',
+          val: { tag: result.tag === 'ok' ? 'ok-value' : 'err-value', val },
+        });
+      },
+      read: (reader, index) =>
+        reader.node(index, 'result-value', (node) => {
+          const result = (node as Extract<WireValueNode, { tag: 'result-value' }>).val;
+          return result.tag === 'ok-value'
+            ? Result.ok(readArm(codec.resultOk!, ok, reader, result.val))
+            : Result.err(readArm(codec.resultErr!, err, reader, result.val));
+        }),
+    };
+  }
+  const primitive = new Map<SchemaType['body']['tag'], WireValueNode['tag']>([
+    ['bool', 'bool-value'],
+    ['s8', 's8-value'],
+    ['s16', 's16-value'],
+    ['s32', 's32-value'],
+    ['s64', 's64-value'],
+    ['u8', 'u8-value'],
+    ['u16', 'u16-value'],
+    ['u32', 'u32-value'],
+    ['u64', 'u64-value'],
+    ['f32', 'f32-value'],
+    ['f64', 'f64-value'],
+    ['char', 'char-value'],
+    ['string', 'string-value'],
+  ]).get(codec.graph.root.body.tag);
+  if (!primitive) return undefined;
+  const body = codec.graph.root.body;
+  const tag = body.tag;
+  const restrictions = 'restrictions' in body ? body.restrictions : undefined;
+  const integerBits = /^(s|u)(8|16|32|64)$/.exec(tag);
+  const min = integerBits?.[1] === 's' ? -(2n ** (BigInt(integerBits[2]) - 1n)) : 0n;
+  const max = integerBits
+    ? 2n ** (BigInt(integerBits[2]) - (integerBits[1] === 's' ? 1n : 0n)) - 1n
+    : 0n;
+  const checked = (value: unknown): unknown => {
+    let valid: boolean;
+    if (integerBits) {
+      valid =
+        integerBits[2] === '64'
+          ? typeof value === 'bigint'
+          : typeof value === 'number' && Number.isInteger(value);
+      if (valid) {
+        const integer = BigInt(value as number | bigint);
+        valid =
+          integer >= min &&
+          integer <= max &&
+          numericRestrictionsMatch(
+            restrictions as Parameters<typeof numericRestrictionsMatch>[0],
+            integer,
+          );
+      }
+    } else if (tag === 'f32' || tag === 'f64') {
+      valid =
+        typeof value === 'number' &&
+        numericRestrictionsMatch(
+          restrictions as Parameters<typeof numericRestrictionsMatch>[0],
+          tag === 'f32' ? Math.fround(value) : value,
+        );
+    } else if (tag === 'bool') {
+      valid = typeof value === 'boolean';
+    } else {
+      valid = typeof value === 'string';
+      if (valid && tag === 'char') {
+        const points = [...(value as string)];
+        const code = points[0]?.codePointAt(0);
+        valid = points.length === 1 && code !== undefined && (code < 0xd800 || code > 0xdfff);
+      }
+    }
+    if (!valid) throw new TypeError('does not match its declared schema');
+    return tag === 'f32' ? Math.fround(value as number) : value;
+  };
+  return {
+    write: (value, writer) => writer.add({ tag: primitive, val: checked(value) } as WireValueNode),
+    read: (reader, index) =>
+      reader.node(index, primitive, (node) =>
+        checked((node as WireValueNode & { val: unknown }).val),
+      ),
+  };
+}
+
+function requiredIndex(index: number | undefined, position: string): number {
+  if (index === undefined) throw new TypeError(`${position} cannot be unit`);
+  return index;
 }
 
 /** Recursively freeze codec data once compilation is complete. */
@@ -150,6 +476,14 @@ function freezeCodec(
       if (child) freezeCodec(child, seenCodecs, seenGraphValues);
     },
   );
+  if (codec.concrete?.tag === 'variant' || codec.concrete?.tag === 'multimodal') {
+    codec.concrete.cases.forEach((entry) => {
+      if (entry.codec) freezeCodec(entry.codec, seenCodecs, seenGraphValues);
+      Object.freeze(entry);
+    });
+    Object.freeze(codec.concrete.cases);
+  }
+  if (codec.concrete) Object.freeze(codec.concrete);
   Object.freeze(codec);
 }
 

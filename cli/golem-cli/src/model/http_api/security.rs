@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::model::cli_output::StructuredOutput;
+use crate::model::create_action::CreateAction;
 use crate::model::masking::Masked;
 use crate::model::text_format::*;
 
@@ -20,20 +21,29 @@ use golem_client::model::SecuritySchemeDto;
 use serde_derive::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HttpSecuritySchemeCreateView(pub SecuritySchemeDto);
+pub struct HttpSecuritySchemeCreateView {
+    pub action: CreateAction,
+    #[serde(flatten)]
+    pub security_scheme: SecuritySchemeDto,
+}
 
 impl Masked for HttpSecuritySchemeCreateView {}
 
 impl MessageWithFields for HttpSecuritySchemeCreateView {
     fn message(&self) -> String {
-        format!(
-            "Created new HTTP API Security scheme {}",
-            format_message_highlight(&self.0.name),
-        )
+        let name = format_message_highlight(&self.security_scheme.name);
+        match self.action {
+            CreateAction::Created | CreateAction::Replaced => {
+                format!("Created new HTTP API Security scheme {name}")
+            }
+            CreateAction::Updated => {
+                format!("Updated existing HTTP API Security scheme {name}")
+            }
+        }
     }
 
     fn fields(&self) -> Vec<(String, String)> {
-        security_scheme_view_fields(&self.0)
+        security_scheme_view_fields(&self.security_scheme)
     }
 }
 

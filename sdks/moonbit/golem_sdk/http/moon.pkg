@@ -2,6 +2,7 @@ import {
   "golemcloud/golem_sdk/async-core" @asyncCore,
   "golemcloud/golem_sdk/interface/wasi/http/client",
   "golemcloud/golem_sdk/interface/wasi/http/types",
+  "golemcloud/golem_sdk/interface/golem/core/types" @coretypes,
   "golemcloud/golem_sdk/schema",
   "golemcloud/golem_sdk/schema_model" @model,
   "moonbitlang/core/encoding/utf8",
