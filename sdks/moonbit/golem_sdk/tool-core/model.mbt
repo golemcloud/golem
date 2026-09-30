@@ -18,6 +18,7 @@ pub suberror ToolBuildError {
 ///|
 pub(all) struct ToolDef {
   version : String
+  requires_filesystem : Bool
   commands : Array[CommandNodeDef]
 }
 
@@ -45,6 +46,7 @@ pub(all) struct CommandBodyDef {
   constraints : Array[ConstraintDef]
   stdin : @toolCommon.StreamSpec?
   stdout : @toolCommon.StreamSpec?
+  stderr : @toolCommon.StreamSpec?
   result : ResultSpecDef?
   errors : Array[ErrorCaseDef]
   annotations : @toolCommon.CommandAnnotations?
@@ -247,6 +249,7 @@ pub fn ToolDef::to_tool(
   }
   {
     version: self.version,
+    requires_filesystem: self.requires_filesystem,
     commands: @toolCommon.CommandTree::{ nodes, },
     schema,
   }
@@ -374,6 +377,7 @@ fn CommandBodyDef::to_command_body(
     },
     stdin: self.stdin,
     stdout: self.stdout,
+    stderr: self.stderr,
     result: match self.result {
       Some(result) => Some(result.to_result_spec(encoder))
       None => None

@@ -15,15 +15,29 @@
 use crate::golem_agentic::exports::golem::tool::guest::ToolError;
 use crate::golem_agentic::golem::agent::common::AgentError;
 use crate::schema::IntoTypedSchemaValue;
+use crate::schema::wit::wire;
 
 pub fn custom_error(msg: impl ToString) -> AgentError {
-    let typed = msg
-        .to_string()
-        .into_typed_schema_value()
-        .expect("failed to encode custom agent error");
-    let value =
-        crate::encode_typed_schema_value(&typed).expect("failed to encode custom agent error");
-    AgentError::CustomError(value)
+    AgentError::CustomError(wire::TypedSchemaValue {
+        graph: wire::SchemaGraph {
+            type_nodes: vec![wire::SchemaTypeNode {
+                body: wire::SchemaTypeBody::StringType,
+                metadata: wire::MetadataEnvelope {
+                    doc: None,
+                    aliases: vec![],
+                    examples: vec![],
+                    deprecated: None,
+                    role: None,
+                },
+            }],
+            defs: vec![],
+            root: 0,
+        },
+        value: wire::SchemaValueTree {
+            value_nodes: vec![wire::SchemaValueNode::StringValue(msg.to_string())],
+            root: 0,
+        },
+    })
 }
 
 pub fn internal_error(msg: impl ToString) -> AgentError {
@@ -67,4 +81,39 @@ pub fn custom_tool_error<T: IntoTypedSchemaValue>(name: impl Into<String>, value
         payload: crate::encode_typed_schema_value(&typed)
             .expect("failed to encode custom tool error"),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AgentError, custom_error, internal_error, wire};
+    use test_r::test;
+
+    #[test]
+    fn string_agent_errors_have_a_self_contained_wire_graph() {
+        for (error, expected) in [
+            (custom_error("error: árvíz 🦀"), "error: árvíz 🦀"),
+            (internal_error(173), "Internal error: 173"),
+            (custom_error(""), ""),
+        ] {
+            let AgentError::CustomError(typed) = error else {
+                panic!("expected custom error");
+            };
+            assert_eq!(typed.graph.root, 0);
+            assert!(typed.graph.defs.is_empty());
+            let [node] = typed.graph.type_nodes.as_slice() else {
+                panic!("expected one type node");
+            };
+            assert!(matches!(node.body, wire::SchemaTypeBody::StringType));
+            assert!(node.metadata.doc.is_none());
+            assert!(node.metadata.aliases.is_empty());
+            assert!(node.metadata.examples.is_empty());
+            assert!(node.metadata.deprecated.is_none());
+            assert!(node.metadata.role.is_none());
+            assert_eq!(typed.value.root, 0);
+            assert!(matches!(
+                typed.value.value_nodes.as_slice(),
+                [wire::SchemaValueNode::StringValue(value)] if value == expected
+            ));
+        }
+    }
 }

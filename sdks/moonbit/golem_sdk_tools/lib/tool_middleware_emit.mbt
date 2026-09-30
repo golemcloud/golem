@@ -123,7 +123,7 @@ fn middleware_descriptor_tools(
 
 ///|
 fn middleware_value_type(surface : ToolMiddlewareCommandInfo) -> ParamType? {
-  if surface.has_stdout {
+  if surface.has_stdout || surface.has_stderr {
     match surface.success_type {
       Tuple([value, _]) => Some(value)
       _ => None
@@ -236,11 +236,23 @@ fn emit_expected_underlying_method(
     } else {
       "decode_result_empty"
     }
+  } else if surface.has_stdout && surface.has_stderr {
+    if middleware_value_type(surface) is Some(_) {
+      "decode_result_with_outputs"
+    } else {
+      "decode_result_outputs_only"
+    }
   } else if surface.has_stdout {
     if middleware_value_type(surface) is Some(_) {
       "decode_result_with_stdout"
     } else {
       "decode_result_stdout_only"
+    }
+  } else if surface.has_stderr {
+    if middleware_value_type(surface) is Some(_) {
+      "decode_result_with_stderr"
+    } else {
+      "decode_result_stderr_only"
     }
   } else if middleware_value_type(surface) is Some(_) {
     "decode_result_value"
@@ -279,7 +291,9 @@ fn emit_expected_underlying(
     " { priv underlying : @toolMiddleware.UnderlyingTool }\n\n",
   )
   for surface in surfaces {
-    emit_expected_underlying_method(buf, expected, surface, false)
+    if !surface.has_stdout && !surface.has_stderr {
+      emit_expected_underlying_method(buf, expected, surface, false)
+    }
     emit_expected_underlying_method(buf, expected, surface, true)
   }
 }
@@ -332,13 +346,29 @@ fn emit_presented_success(
   surface : ToolMiddlewareCommandInfo,
   value : String,
 ) -> String {
-  if surface.has_stdout {
+  if surface.has_stdout && surface.has_stderr {
+    match middleware_value_type(surface) {
+      Some(_) =>
+        "let (__golem_value, __golem_outputs) = " +
+        value +
+        "\n        return __golem_invocation.typed_result_value_with_outputs(__golem_value, __golem_outputs)"
+      None => "return __golem_invocation.typed_result_outputs(" + value + ")"
+    }
+  } else if surface.has_stdout {
     match middleware_value_type(surface) {
       Some(_) =>
         "let (__golem_value, __golem_stdout) = " +
         value +
         "\n        return __golem_invocation.typed_result_value_with_stdout(__golem_value, __golem_stdout)"
       None => "return __golem_invocation.typed_result_stdout(" + value + ")"
+    }
+  } else if surface.has_stderr {
+    match middleware_value_type(surface) {
+      Some(_) =>
+        "let (__golem_value, __golem_stderr) = " +
+        value +
+        "\n        return __golem_invocation.typed_result_value_with_stderr(__golem_value, __golem_stderr)"
+      None => "return __golem_invocation.typed_result_stderr(" + value + ")"
     }
   } else {
     match middleware_value_type(surface) {

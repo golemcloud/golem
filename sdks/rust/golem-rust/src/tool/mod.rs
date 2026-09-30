@@ -15,19 +15,20 @@
 #[cfg(not(feature = "export_golem_agentic"))]
 pub use crate::bindings::golem::agent::common::Principal;
 #[cfg(not(feature = "export_golem_agentic"))]
-pub use crate::bindings::golem::tool::streams::ToolStdoutWriter;
+pub use crate::bindings::golem::tool::streams::ToolOutputWriter;
 #[cfg(feature = "export_golem_agentic")]
 pub use crate::golem_agentic::golem::agent::common::Principal;
 #[cfg(feature = "export_golem_agentic")]
-pub use crate::golem_agentic::golem::tool::streams::ToolStdoutWriter;
+pub use crate::golem_agentic::golem::tool::streams::ToolOutputWriter;
 pub use crate::schema::tool::Tool;
 pub use crate::schema::tool::{
     MonomorphicToolMiddlewareScope, ToolMiddleware, ToolMiddlewareScope,
 };
 pub use tool_middleware::{
     InputStream, InvocationResult, RawCustomToolError, ToolInvokeError, TypedUnderlyingInvocation,
-    UnderlyingInvocation, UnderlyingTool, decode_result_empty, decode_result_stdout_only,
-    decode_result_value, decode_result_with_stdout,
+    UnderlyingInvocation, UnderlyingTool, decode_result_empty, decode_result_outputs_only,
+    decode_result_stderr_only, decode_result_stdout_only, decode_result_value,
+    decode_result_with_outputs, decode_result_with_stderr, decode_result_with_stdout,
 };
 
 #[doc(hidden)]
@@ -68,6 +69,9 @@ pub(crate) mod invocation_result;
 mod tool_middleware;
 #[cfg(feature = "export_golem_agentic")]
 mod tool_middleware_impl;
+#[cfg(feature = "export_golem_agentic")]
+#[doc(hidden)]
+pub use tool_middleware_impl::install_middleware_exports;
 mod tool_middleware_registry;
 
 #[doc(hidden)]

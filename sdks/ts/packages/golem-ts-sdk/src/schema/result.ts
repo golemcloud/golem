@@ -36,6 +36,8 @@ export function buildResultCodec(okCodec: SchemaCodec, errCodec: SchemaCodec): S
   const defs = mergeGraphDefs([okCodec.graph, errCodec.graph]);
   return {
     graph: { defs, root: t.result(okCodec.graph.root, errCodec.graph.root) },
+    resultOk: okCodec,
+    resultErr: errCodec,
     toValue: (value) => {
       const r = value as Result<unknown, unknown>;
       return r.tag === 'ok' ? v.ok(okCodec.toValue(r.val)) : v.err(errCodec.toValue(r.val));

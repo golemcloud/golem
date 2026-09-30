@@ -5,7 +5,7 @@ export function getAllTools(): never {
 export const getTool = getAllTools
 export const createStdin = getAllTools
 export const createStdinFromStream = getAllTools
-export const createStdout = getAllTools
+export const createOutput = getAllTools
 export class ToolRpc {
   constructor() {
     getAllTools()

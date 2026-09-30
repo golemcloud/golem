@@ -127,6 +127,12 @@ pub struct RemoteToolDeployment {
     pub provision: ToolProvisionConfig,
     pub component_bindings: BTreeMap<String, EffectiveToolBinding>,
     pub bindings: BTreeMap<AgentTypeName, EffectiveToolBinding>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub environment_middleware_binding: Option<ToolMiddlewareBindingInput>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub component_middleware_bindings: BTreeMap<String, ToolMiddlewareBindingInput>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub agent_middleware_bindings: BTreeMap<AgentTypeName, ToolMiddlewareBindingInput>,
 }
 
 impl Hashable for RemoteToolDeployment {
@@ -160,6 +166,8 @@ impl Diffable for McpImport {
 pub fn remote_tool_deployments(
     registered_tools: impl IntoIterator<Item = RegisteredTool>,
     bindings: impl IntoIterator<Item = CompiledToolBinding>,
+    environment_tool_bindings: &BTreeMap<ToolName, ToolBindingInput>,
+    agent_tool_bindings: &BTreeMap<AgentTypeName, BTreeMap<ToolName, ToolBindingInput>>,
     component_names: &BTreeMap<ComponentId, ComponentName>,
     published_tools: &BTreeSet<String>,
 ) -> Result<BTreeMap<String, HashOf<RemoteToolDeployment>>, DiffError> {
@@ -227,6 +235,27 @@ pub fn remote_tool_deployments(
             };
             let bindings = bindings_by_tool.remove(&name).unwrap_or_default();
             let component_bindings = component_bindings_by_tool.remove(&name).unwrap_or_default();
+            let environment_middleware_binding = environment_tool_bindings
+                .get(&name)
+                .map(ToolMiddlewareBindingInput::from);
+            let component_middleware_bindings = tool
+                .component_bindings
+                .iter()
+                .map(|(component, binding)| {
+                    (
+                        component.0.clone(),
+                        ToolMiddlewareBindingInput::from(binding),
+                    )
+                })
+                .collect();
+            let agent_middleware_bindings = agent_tool_bindings
+                .iter()
+                .filter_map(|(agent, bindings)| {
+                    bindings
+                        .get(&name)
+                        .map(|binding| (agent.clone(), ToolMiddlewareBindingInput::from(binding)))
+                })
+                .collect();
             Some(Ok((
                 name.to_string(),
                 RemoteToolDeployment {
@@ -240,6 +269,9 @@ pub fn remote_tool_deployments(
                     provision: tool.provision,
                     component_bindings,
                     bindings,
+                    environment_middleware_binding,
+                    component_middleware_bindings,
+                    agent_middleware_bindings,
                 }
                 .into(),
             )))
@@ -527,8 +559,8 @@ impl Hashable for Deployment {
 #[cfg(test)]
 mod tests {
     use super::{
-        Deployment, EffectiveToolBinding, RemoteToolDeployment, effective_tool_binding,
-        remote_tool_deployments, remote_tool_middleware_deployments,
+        Deployment, EffectiveToolBinding, RemoteToolDeployment, ToolMiddlewareBindingInput,
+        effective_tool_binding, remote_tool_deployments, remote_tool_middleware_deployments,
     };
     use crate::model::account::{AccountEmail, AccountId};
     use crate::model::agent::AgentTypeName;
@@ -571,6 +603,9 @@ mod tests {
             provision: ToolProvisionConfig::default(),
             component_bindings: BTreeMap::new(),
             bindings: BTreeMap::new(),
+            environment_middleware_binding: None,
+            component_middleware_bindings: BTreeMap::new(),
+            agent_middleware_bindings: BTreeMap::new(),
         }
     }
 
@@ -586,6 +621,33 @@ mod tests {
         }
         .hash()
         .unwrap()
+    }
+
+    #[test]
+    fn remote_tool_middleware_binding_changes_deployment_hash() {
+        let agent = AgentTypeName("Agent".to_string());
+        let mut first = remote_tool();
+        first.agent_middleware_bindings.insert(
+            agent.clone(),
+            ToolMiddlewareBindingInput {
+                config_keys_readable: ConfigKeyScope::default(),
+                secret_keys_readable: SecretKeyScope::default(),
+                secret_keys_revealable: SecretKeyScope::default(),
+                middleware: None,
+                middleware_merge_mode: Some(ToolMiddlewareMergeMode::Append),
+            },
+        );
+        let mut changed = first.clone();
+        changed
+            .agent_middleware_bindings
+            .get_mut(&agent)
+            .unwrap()
+            .middleware_merge_mode = Some(ToolMiddlewareMergeMode::Replace);
+
+        assert_ne!(
+            deployment_hash(first, false),
+            deployment_hash(changed, false)
+        );
     }
 
     fn mcp_import() -> McpImport {
@@ -935,6 +997,7 @@ mod tests {
             deployment_revision: DeploymentRevision::INITIAL,
             release_id,
             definition: Tool {
+                requires_filesystem: false,
                 version: "1.0.0".to_string(),
                 commands: CommandTree {
                     nodes: vec![CommandNode {
@@ -993,6 +1056,8 @@ mod tests {
             [local, published, remote],
             Vec::new(),
             &BTreeMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
             &BTreeSet::from(["published".to_string()]),
         )
         .unwrap();
@@ -1018,8 +1083,15 @@ mod tests {
             None,
         );
 
-        let error = remote_tool_deployments([tool], Vec::new(), &BTreeMap::new(), &BTreeSet::new())
-            .unwrap_err();
+        let error = remote_tool_deployments(
+            [tool],
+            Vec::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &BTreeSet::new(),
+        )
+        .unwrap_err();
 
         assert!(
             error

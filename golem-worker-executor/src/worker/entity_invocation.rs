@@ -311,7 +311,7 @@ impl<Ctx: WorkerCtx> RetainedEntityStore for RetainedHostedInstance<Ctx> {
     }
 
     fn settle(
-        mut self: Box<Self>,
+        self: Box<Self>,
     ) -> Pin<Box<dyn Future<Output = Result<(), WorkerExecutorError>> + Send>> {
         Box::pin(async move {
             self.hosted.settle_tool_children(self.invocation).await?;

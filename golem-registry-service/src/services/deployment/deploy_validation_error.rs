@@ -193,6 +193,8 @@ pub enum DeployValidationError {
         tool_name: ToolName,
         errors: Vec<String>,
     },
+    #[error("Tool {tool_name} filesystem configuration is invalid: {error}")]
+    ToolFilesystemRequirement { tool_name: ToolName, error: String },
     #[error("Tool {tool_name} in component {component_name} could not be serialized: {error}")]
     ToolMetadataSerialization {
         component_name: ComponentName,

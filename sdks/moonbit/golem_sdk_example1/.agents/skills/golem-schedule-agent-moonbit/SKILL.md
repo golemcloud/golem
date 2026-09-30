@@ -81,14 +81,14 @@ If the agent's component has not been deployed yet and the CLI is run from an ap
 
 ## Value Syntax
 
-The agent ID parameters and method arguments use **Rust syntax**:
+The agent ID parameters and method arguments use **MoonBit syntax**:
 
 - Field names use `snake_case`
 - Options: `Some(value)` / `None`
-- Records: `MyRecord { field_one: 1, field_two: "hello" }`
+- Records: `MyRecord::{ field_one: 1, field_two: "hello" }`
 - Enums/Variants: `MyEnum::VariantName(value)`
 - Tuples: `(1, "hello")`
 
 ```shell
-golem agent invoke --trigger --schedule-at 2026-03-15T10:30:00Z 'MyAgent("user-123")' run_task 'TaskConfig { priority: 1, retry: true }'
+golem agent invoke --trigger --schedule-at 2026-03-15T10:30:00Z 'MyAgent("user-123")' run_task 'TaskConfig::{ priority: 1, retry: true }'
 ```

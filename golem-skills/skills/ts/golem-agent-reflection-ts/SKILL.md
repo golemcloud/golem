@@ -235,7 +235,7 @@ Validation happens at several boundaries:
 - The host authorizes the caller, resolves the environment-scoped identity, validates effective configuration, and checks the deployed input schema.
 - Awaited typed and reflected calls verify unit/non-unit cardinality and decode the declared result. Catch `RemoteCallError` with `isRemoteCallError(error)` and handle `error.cause` as a tagged value; do not parse messages.
 
-In Normal RPC and caller-defined static inputs, declare optional fields with the schema library, for example `z.string().optional()`, and omit them normally. Canonical reflected JSON records contain every field, so pass `null` for an absent option:
+In Normal RPC and caller-defined static inputs, declare optional fields with the schema library, for example `z.string().optional()`, and omit them normally. Reflected JSON accepts either an omitted option record field or an explicit `null` as absent; re-encoding may include the field with `null`. Reflection JSON Schema omits that field from `required`:
 
 ```typescript
 import { getReflectedAgentType } from '@golemcloud/golem-ts-sdk';
@@ -244,16 +244,17 @@ const type = getReflectedAgentType('SearchAgent');
 const search = type?.method('search');
 if (!type || !search || type.mode !== 'durable') throw new Error('SearchAgent.search unavailable');
 
-const checked = search.input.validateJson({ query: 'golem', cursor: null });
+const checked = search.input.validateJson({ query: 'golem' });
 if (!checked.success) throw new Error(JSON.stringify(checked.issues));
 const result = await type.client.get({ tenant: 'docs' }).method('search').invoke({
   query: 'golem',
-  cursor: null,
 });
 console.log(result.value);
 ```
 
 Canonical JSON represents `s64` and `u64` as decimal strings. Duration is `{ nanoseconds: "..." }`, and quantity uses a decimal-string `mantissa`. Smaller integers remain numbers. The generated JSON Schema uses matching patterns and exact range metadata.
+
+Capabilities, futures, and streams cannot be packed or unpacked as reflected JSON. Their reflection JSON Schema projection is unsatisfiable; use schema-native value APIs for those leaves.
 
 ## Cancellation, Streams, and Cleanup
 
@@ -281,7 +282,7 @@ const scheduled = add.schedule({ seconds: 1n, nanoseconds: 0 }, { by: 2 });
 scheduled.cancellationToken.cancel();
 ```
 
-Schema-native streams and opaque capabilities cannot be packed as JSON. Use `invokeValue`, transfer an owned input stream once, consume returned streams to EOF or call `return()` when abandoning them, and do not reuse transferred handles. For reflected tools, `startJson`/`startValue` return independent `stdout`, `result`, `collect()`, and `cancel()` handles. `collect()` settles both channels and reports a result failure before a stdout failure; always consume or cancel a started operation.
+Schema-native streams and opaque capabilities cannot be packed as JSON. Use `invokeValue`, transfer an owned input stream once, consume returned streams to EOF or call `return()` when abandoning them, and do not reuse transferred handles. For reflected tools, `startJson`/`startValue` return independent `stdout`, `stderr`, `result`, `collect()`, and `cancel()` handles. `collect()` concurrently settles both outputs and the result, reporting a result failure before output failures; always consume or cancel a started operation.
 
 ## Discovery to a Fully Dynamic Agent
 

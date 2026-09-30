@@ -147,7 +147,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     self.entity_parent_start_index(),
                     Box::new(named_policy.clone()),
                 ))
-                .await;
+                .await?;
         }
 
         self.state.apply_set_retry_policy(named_policy);
@@ -176,7 +176,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     self.entity_parent_start_index(),
                     name.clone(),
                 ))
-                .await;
+                .await?;
         }
 
         self.state.apply_remove_retry_policy(&name);

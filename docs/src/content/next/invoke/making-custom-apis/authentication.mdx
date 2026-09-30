@@ -31,8 +31,8 @@ golem api security-scheme create \
   --provider-type google \
   --client-id REPLACE_WITH_GOOGLE_CLIENT_ID \
   --client-secret REPLACE_WITH_GOOGLE_CLIENT_SECRET \
-  --redirect-url http://localhost:9006/auth/callback
-  --scope openid,email,profile \
+  --redirect-url http://localhost:9006/auth/callback \
+  --scope openid --scope email --scope profile \
   my-security
 ```
 

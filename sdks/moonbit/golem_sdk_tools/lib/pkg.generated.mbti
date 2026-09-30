@@ -34,11 +34,15 @@ pub fn generate_agent_registration(Array[AgentInfo]) -> @list.List[@syntax.Impl]
 
 pub fn generate_client_code(Array[AgentInfo], value_types? : Array[ValueTypeInfo], config_types? : Array[ConfigTypeInfo], agent_package? : String) -> @list.List[@syntax.Impl] raise AgentParseError
 
+pub fn generate_component_reexports(Array[FnSignature], Bool, Bool, Bool) -> @list.List[@syntax.Impl]
+
 pub fn generate_config_field_impls(Array[ConfigTypeInfo]) -> @list.List[@syntax.Impl]
 
 pub fn generate_config_override_types(Array[ConfigTypeInfo]) -> @list.List[@syntax.Impl]
 
 pub fn generate_config_override_walkers(Array[ConfigTypeInfo]) -> @list.List[@syntax.Impl]
+
+pub fn generate_export_hooks(Bool, Bool, Bool) -> (@list.List[@syntax.Impl], Array[(String, String)])
 
 pub fn generate_multimodal_impls(Array[MultimodalEnumInfo], type_id_prefix? : String) -> @list.List[@syntax.Impl]
 
@@ -346,6 +350,7 @@ pub(all) struct ToolArgInfo {
   min_length : String?
   max_length : String?
   direction : String?
+  channel : String?
   mimes : Array[String]
   schemes : Array[String]
   min : String?
@@ -410,12 +415,14 @@ pub(all) enum ToolHiddenType {
   Principal
   InputStream
   OutputStream
+  ErrorStream
 } derive(Eq, @debug.Debug)
 
 pub(all) struct ToolInfo {
   source_name : String
   name : String
   version : String?
+  requires_filesystem : Bool
   description : String
   examples : Array[ToolExample]
   commands : Array[ToolCommandInfo]
@@ -432,6 +439,7 @@ pub(all) struct ToolMiddlewareCommandInfo {
   success_type : ParamType
   error_type : ParamType
   has_stdout : Bool
+  has_stderr : Bool
 } derive(Eq, @debug.Debug)
 
 pub(all) struct ToolMiddlewareInfo {

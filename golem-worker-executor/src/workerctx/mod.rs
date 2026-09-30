@@ -53,9 +53,7 @@ use golem_common::model::component::{CanonicalFilePath, ComponentRevision};
 use golem_common::model::entity::{
     EntityInvocationScope, FilesystemCapability, InvocationExecutionMode, OwnerRuntime,
 };
-use golem_common::model::invocation_context::{
-    AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
-};
+use golem_common::model::invocation_context::{InvocationContextStack, SpanId};
 use golem_common::model::oplog::{
     AgentError, HostResponseEntityInvocation, TimestampedUpdateDescription,
 };
@@ -549,20 +547,22 @@ pub trait UpdateManagement {
     /// Marks the end of a snapshot function call. This can be used to re-enable persistence
     fn end_call_snapshotting_function(&mut self);
 
-    /// Called when an update attempt has failed
+    /// Called when an update attempt has failed. Fails when the oplog refused to record the
+    /// failure: the agent has been given up, and must not be rebuilt on its old revision here.
     async fn on_worker_update_failed(
         &self,
         target_revision: ComponentRevision,
         details: Option<String>,
-    );
+    ) -> Result<(), WorkerExecutorError>;
 
-    /// Called when an update attempt succeeded
+    /// Called when an update attempt succeeded. Fails when the oplog refused to record the
+    /// update: the agent has been given up, and the update must not be reported as applied.
     async fn on_worker_update_succeeded(
         &self,
         target_revision: ComponentRevision,
         new_component_size: u64,
         new_active_plugins: HashSet<EnvironmentPluginGrantId>,
-    );
+    ) -> Result<(), WorkerExecutorError>;
 }
 
 /// Operations not requiring an active worker context, but still depending on the
@@ -636,30 +636,8 @@ pub trait FileSystemReading {
 /// Functions to manipulate and query the current invocation context
 #[async_trait]
 pub trait InvocationContextManagement {
-    async fn start_span(
-        &mut self,
-        initial_attributes: &[(String, AttributeValue)],
-        activate: bool,
-    ) -> Result<Arc<InvocationContextSpan>, WorkerExecutorError>;
-
-    async fn start_child_span(
-        &mut self,
-        parent: &SpanId,
-        initial_attributes: &[(String, AttributeValue)],
-    ) -> Result<Arc<InvocationContextSpan>, WorkerExecutorError>;
-
     /// Removes an inherited span without finishing it
     fn remove_span(&mut self, span_id: &SpanId) -> Result<(), WorkerExecutorError>;
-
-    /// Removes and finishes a local span
-    async fn finish_span(&mut self, span_id: &SpanId) -> Result<(), WorkerExecutorError>;
-
-    async fn set_span_attribute(
-        &mut self,
-        span_id: &SpanId,
-        key: &str,
-        value: AttributeValue,
-    ) -> Result<(), WorkerExecutorError>;
 
     /// Clones every element of the stack belonging to the given current span id, and sets
     /// the inherited flag to true on them, without changing the spans in this invocation context.

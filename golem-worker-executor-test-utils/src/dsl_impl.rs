@@ -127,8 +127,16 @@ impl TestWorkerExecutor {
             match response.response {
                 Some(invocation_response::Response::Accepted(_)) => {}
                 Some(invocation_response::Response::Rejected(rejected)) => {
+                    // Kept alongside the message: a rejection is refused before acceptance, and
+                    // the reason says as what.
+                    let reason =
+                        golem_api_grpc::proto::golem::worker::InvocationRejectionReason::try_from(
+                            rejected.reason,
+                        )
+                        .map(|reason| reason.as_str_name())
+                        .unwrap_or("UNKNOWN");
                     terminal = Some(Err(anyhow!(
-                        "Agent invocation rejected: {}",
+                        "Agent invocation rejected ({reason}): {}",
                         rejected.error
                     )));
                 }
@@ -627,7 +635,7 @@ impl TestDsl for TestWorkerExecutor {
                 return Err(anyhow!("agent invocation returned an external-tool result"));
             }
         };
-        Ok(AgentResult::new(value))
+        Ok(AgentResult::new(value, worker_agent_id))
     }
 
     #[tracing::instrument(level = "info", skip_all, fields(%agent_id))]

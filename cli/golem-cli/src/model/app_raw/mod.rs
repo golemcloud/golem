@@ -865,6 +865,12 @@ impl ComponentDependencies {
 pub struct ComponentTemplate {
     #[serde(default, skip_serializing_if = "LenientTokenList::is_empty")]
     pub templates: LenientTokenList,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::model::language::manifest_guest_language"
+    )]
+    pub guest_language: Option<GuestLanguage>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub component_wasm: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -908,6 +914,7 @@ pub struct ComponentTemplate {
 impl ComponentTemplate {
     pub fn component_layer_properties(&self) -> ComponentLayerProperties {
         ComponentLayerProperties {
+            guest_language: self.guest_language,
             component_wasm: self.component_wasm.clone(),
             output_wasm: self.output_wasm.clone(),
             dependencies: self.dependencies.clone(),
@@ -982,6 +989,7 @@ pub struct Component {
 impl Component {
     pub fn component_layer_properties(&self) -> ComponentLayerProperties {
         ComponentLayerProperties {
+            guest_language: None,
             component_wasm: self.component_wasm.clone(),
             output_wasm: self.output_wasm.clone(),
             dependencies: self.dependencies.clone(),
@@ -1052,6 +1060,7 @@ pub struct ComponentPreset {
 impl ComponentPreset {
     pub fn into_component_layer_properties(self) -> ComponentLayerProperties {
         ComponentLayerProperties {
+            guest_language: None,
             component_wasm: self.component_wasm,
             output_wasm: self.output_wasm,
             dependencies: self.dependencies,
@@ -1669,6 +1678,8 @@ pub struct ManifestInitialCardBound {
 // strict unknown-field checks on manifest-facing structs that use deny_unknown_fields.
 #[derive(Clone, Debug)]
 pub struct ComponentLayerProperties {
+    // Only component templates declare a guest language.
+    pub guest_language: Option<GuestLanguage>,
     pub component_wasm: Option<String>,
     pub output_wasm: Option<String>,
     pub dependencies: ComponentDependencies,

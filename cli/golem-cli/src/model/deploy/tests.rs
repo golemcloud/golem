@@ -270,6 +270,7 @@ fn environment_setup_secret_type_rendering_matches_between_manifest_and_environm
         Vec::new(),
         Vec::new(),
         &secret_types,
+        &BTreeMap::new(),
         &SourceLanguage::TypeScript,
     )
     .unwrap();
@@ -310,6 +311,7 @@ fn environment_setup_classifies_secret_create_and_skip_existing() {
         Vec::new(),
         Vec::new(),
         &secret_types,
+        &BTreeMap::new(),
         &SourceLanguage::TypeScript,
     )
     .unwrap();
@@ -325,6 +327,72 @@ fn environment_setup_classifies_secret_create_and_skip_existing() {
             .skipped_already_exists
             .secret_values
             .contains("existingSecret")
+    );
+}
+
+#[test]
+fn environment_setup_sends_secret_defaults_only_when_needed() {
+    let secret_default = |name: &str| DeploymentAgentSecretDefault {
+        path: AgentSecretPath(vec![name.to_string()]),
+        secret_value: serde_json::json!(format!("{{{{ {name} }}}}")),
+    };
+    let string_schema = SchemaGraph::anonymous(SchemaType::string());
+    let secret_value_schemas = ["missing", "withoutValue", "compatible", "incompatible"]
+        .into_iter()
+        .map(|name| (name.to_string(), string_schema.clone()))
+        .collect::<BTreeMap<_, _>>();
+
+    let plan = build_environment_setup_plan(
+        MaskingConfig::hide_secrets(),
+        vec![
+            secret_default("missing"),
+            secret_default("withoutValue"),
+            secret_default("compatible"),
+            secret_default("incompatible"),
+        ],
+        Vec::new(),
+        Vec::new(),
+        vec![
+            secret_dto(&["withoutValue"], string_schema.clone(), None),
+            secret_dto(
+                &["compatible"],
+                string_schema.clone(),
+                Some(SchemaValue::String("env".to_string())),
+            ),
+            secret_dto(
+                &["incompatible"],
+                SchemaGraph::anonymous(SchemaType::u32()),
+                Some(SchemaValue::U32(1)),
+            ),
+        ],
+        Vec::new(),
+        Vec::new(),
+        &BTreeMap::new(),
+        &secret_value_schemas,
+        &SourceLanguage::TypeScript,
+    )
+    .unwrap();
+
+    assert_eq!(
+        plan.agent_secret_defaults,
+        vec![secret_default("missing"), secret_default("withoutValue")]
+    );
+    assert_eq!(
+        plan.replaceable_agent_secret_defaults,
+        vec![secret_default("incompatible")]
+    );
+    assert_eq!(
+        plan.display
+            .to_be_applied
+            .secret_values
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>(),
+        vec!["missing".to_string(), "withoutValue".to_string()]
+    );
+    assert_eq!(
+        plan.display.skipped_already_exists.secret_values,
+        BTreeSet::from(["compatible".to_string(), "incompatible".to_string()])
     );
 }
 
@@ -354,6 +422,7 @@ fn environment_setup_classifies_retry_policies_and_resources() {
         Vec::new(),
         vec![retry_policy("existing-policy", 999)],
         vec![resource("existing-resource", 999)],
+        &BTreeMap::new(),
         &BTreeMap::new(),
         &SourceLanguage::TypeScript,
     )

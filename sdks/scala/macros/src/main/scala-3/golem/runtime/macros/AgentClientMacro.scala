@@ -27,6 +27,8 @@ import golem.runtime.{
   ParamCodec
 }
 import golem.schema.{FromSchema, IntoSchema}
+import golem.schema.wire.ConcreteCodec
+import golem.runtime.{WireAgentClientType, WireClientMethod}
 // Macro annotations live in a separate module; do not depend on them here.
 
 import scala.quoted.*
@@ -38,6 +40,101 @@ object AgentClientMacro {
       "Use `final case class T(...) derives zio.blocks.schema.Schema` (or `given Schema[T] = Schema.derived`).\n"
   transparent inline def agentType[Trait]: AgentType[Trait, ?] =
     ${ agentTypeImpl[Trait] }
+
+  transparent inline def wireType[Trait]: WireAgentClientType[Trait, ?] =
+    ${ wireTypeImpl[Trait] }
+
+  private def wireTypeImpl[Trait: Type](using Quotes): Expr[WireAgentClientType[Trait, ?]] = {
+    import quotes.reflect.*
+    val traitRepr = TypeRepr.of[Trait]
+    val symbol    = traitRepr.typeSymbol
+    if !symbol.flags.is(Flags.Trait) then
+      report.errorAndAbort(s"Agent client target must be a trait, found: ${symbol.fullName}")
+    val params             = agentInputParams(traitRepr)
+    val ctorAccess         = methodAccess(params)
+    val ctorType           = inputTypeFor(ctorAccess, params)
+    val ctorContainsStream = params.exists { case (_, tpe) => containsStream(tpe, Set.empty) }
+    val methods            = symbol.methodMembers.collect {
+      case method if method.flags.is(Flags.Deferred) && method.isDefDef && method.name != "new" =>
+        val ps       = extractParameters(method)
+        val access   = methodAccess(ps)
+        val in       = inputTypeFor(access, ps)
+        val (_, out) = methodInvocationInfo(method)
+        (in.asType, out.asType) match {
+          case ('[i], '[o]) =>
+            val inCodec                                  = wireInputCodecExpr[i](access, ps)
+            val outCodec: Expr[Option[ConcreteCodec[o]]] =
+              if TypeRepr.of[o] =:= TypeRepr.of[Unit] then '{ None } else '{ Some(ConcreteCodec.derived[o]) }
+            val inputContainsStream = ps.exists { case (_, tpe) => containsStream(tpe, Set.empty) }
+            '{
+              WireClientMethod[Trait, i, o](${ Expr(method.name) }, $inCodec, ${ Expr(inputContainsStream) }, $outCodec)
+            }
+        }
+    }
+    ctorType.asType match {
+      case '[ctor] =>
+        val ctor       = wireInputCodecExpr[ctor](ctorAccess, params)
+        val methodList = Expr.ofList(methods)
+        '{
+          WireAgentClientType[Trait, ctor](
+            AgentDefinitionMacro.generateWire[Trait],
+            $ctor,
+            ${ Expr(ctorContainsStream) },
+            $methodList
+          )
+        }
+    }
+  }
+
+  private def containsStream(using Quotes)(tpe: quotes.reflect.TypeRepr, active: Set[String]): Boolean = {
+    import quotes.reflect.*
+    val ty  = tpe.dealias
+    val key = ty.show
+    if (active(key)) false
+    else
+      ty.asType match {
+        case '[golem.schema.AgentStream[t]] => true
+        case '[Option[t]]                   => containsStream(TypeRepr.of[t], active + key)
+        case '[List[t]]                     => containsStream(TypeRepr.of[t], active + key)
+        case '[Vector[t]]                   => containsStream(TypeRepr.of[t], active + key)
+        case '[Seq[t]]                      => containsStream(TypeRepr.of[t], active + key)
+        case '[Array[t]]                    => containsStream(TypeRepr.of[t], active + key)
+        case '[Map[k, v]]                   =>
+          containsStream(TypeRepr.of[k], active + key) || containsStream(TypeRepr.of[v], active + key)
+        case '[Either[e, a]] =>
+          containsStream(TypeRepr.of[e], active + key) || containsStream(TypeRepr.of[a], active + key)
+        case _ =>
+          val symbol = ty.typeSymbol
+          if (ty <:< TypeRepr.of[Tuple]) ty.typeArgs.exists(containsStream(_, active + key))
+          else if (symbol.flags.is(Flags.Case) || symbol.flags.is(Flags.Module))
+            symbol.caseFields.exists(field => containsStream(ty.memberType(field), active + key))
+          else if (symbol.flags.is(Flags.Sealed) || symbol.flags.is(Flags.Enum))
+            symbol.children.exists { child =>
+              val childType = if (child.isTerm) child.termRef else child.typeRef
+              child.caseFields.exists(field => containsStream(childType.memberType(field), active + key))
+            }
+          else false
+      }
+  }
+
+  private def wireInputCodecExpr[In: Type](using
+    Quotes
+  )(
+    access: MethodParamAccess,
+    params: List[(String, quotes.reflect.TypeRepr)]
+  ): Expr[ConcreteCodec[In]] = {
+    val fields = Expr.ofList(params.map { case (name, tpe) =>
+      tpe.asType match {
+        case '[a] => '{ (${ Expr(name) }, ConcreteCodec.derived[a].asInstanceOf[ConcreteCodec[Any]]) }
+      }
+    })
+    val record = '{ ConcreteCodec.record($fields.toVector) }
+    access match {
+      case MethodParamAccess.NoArgs    => '{ $record.xmap[In](_ => ().asInstanceOf[In], _ => Vector.empty) }
+      case MethodParamAccess.SingleArg => '{ $record.xmap[In](_.head.asInstanceOf[In], value => Vector(value)) }
+      case MethodParamAccess.MultiArgs => record.asExprOf[ConcreteCodec[In]]
+    }
+  }
 
   private def agentTypeImpl[Trait: Type](using Quotes): Expr[AgentType[Trait, ?]] = {
     import quotes.reflect.*

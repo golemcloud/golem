@@ -26,6 +26,11 @@ name = "oidc"
 path = "tests/oidc/lib.rs"
 harness = false
 
+[[test]]
+name = "blob-storage"
+path = "tests/blob_storage.rs"
+harness = false
+
 # [[bench]]
 # name = "tree"
 # harness = false
@@ -110,9 +115,13 @@ golem-common = { workspace = true, features = ["proptest"] }
 golem-test-framework.workspace = true
 
 assert2 = { workspace = true }
+aws-config = { workspace = true }
+aws-sdk-s3 = { workspace = true }
 criterion = { workspace = true, features = ["html_reports"] }
 fastrand = {workspace = true }
 h2 = { workspace = true }
+libsqlite3-sys = { workspace = true }
+pretty_assertions = { workspace = true }
 proptest = { workspace = true }
 reqwest = { workspace = true }
 rsa = { workspace = true }

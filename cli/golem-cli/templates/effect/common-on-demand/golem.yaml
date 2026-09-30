@@ -2,6 +2,7 @@
 
 componentTemplates:
   effect:
+    guestLanguage: effect
     presets:
       optimized:
         default: true

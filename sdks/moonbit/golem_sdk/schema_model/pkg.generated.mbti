@@ -142,7 +142,12 @@ pub(all) struct GuestSchemaValueStreamHandle {
 pub fn GuestSchemaValueStreamHandle::from_native(@async-core.Stream[@types.SchemaValueTree]) -> Self
 pub fn GuestSchemaValueStreamHandle::from_wrapped(@types.SchemaValueStream) -> Self
 pub fn GuestSchemaValueStreamHandle::is_present(Self) -> Bool
+pub async fn GuestSchemaValueStreamHandle::prepare_outgoing(Self) -> Unit
 pub async fn GuestSchemaValueStreamHandle::read_native(Self) -> FixedArray[@types.SchemaValueTree]?
+pub fn GuestSchemaValueStreamHandle::release(Self, (@types.SchemaValueStream) -> Unit, (@async-core.Stream[@types.SchemaValueTree]) -> Unit) -> Unit
+pub fn GuestSchemaValueStreamHandle::same_endpoint(Self, Self) -> Bool
+pub fn GuestSchemaValueStreamHandle::take_wrapped(Self) -> @types.SchemaValueStream?
+pub fn GuestSchemaValueStreamHandle::wrapped(Self) -> @types.SchemaValueStream?
 
 pub(all) struct GuestSecretHandle {
   // private fields

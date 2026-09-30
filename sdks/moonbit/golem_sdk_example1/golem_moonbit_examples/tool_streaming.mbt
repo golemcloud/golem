@@ -6,7 +6,7 @@ struct MoonBitStreaming {}
 pub async fn MoonBitStreaming::stream(
   mode : String,
   stdin : @asyncCore.Stream[Byte],
-  stdout : @tool.ProviderStdout,
+  stdout : @tool.ProviderOutput,
 ) -> UInt64 {
   if mode == "marker-echo" {
     guard (stdout.write_all_bytes(b"moonbit-marker:") catch { _ => false }) else {
@@ -58,7 +58,11 @@ pub async fn MoonBitToolStreamingCaller::marker_before_eof(
     Ok(invocation) => invocation
     Err(_) => abort("failed to start MoonBit streaming tool")
   }
-  let marker = match invocation.stdout.read(65536) {
+  let stdout = match invocation.stdout {
+    Some(stdout) => stdout
+    None => abort("MoonBit stdout stream is missing")
+  }
+  let marker = match stdout.read(65536) {
     Some(marker) => Bytes::from_array(marker)
     None => abort("MoonBit stdout closed before live marker")
   }
@@ -67,9 +71,13 @@ pub async fn MoonBitToolStreamingCaller::marker_before_eof(
   }
   ignore(release_input.complete(()))
   match invocation.collect() {
-    Ok((bytes_read, output)) => {
+    Ok(collected) => {
+      let output = match collected.stdout {
+        Some(output) => output
+        None => abort("MoonBit collected stdout is missing")
+      }
       guard output == payload else { abort("MoonBit echoed payload differs") }
-      bytes_read
+      collected.result
     }
     Err(_) => abort("MoonBit streaming tool failed")
   }

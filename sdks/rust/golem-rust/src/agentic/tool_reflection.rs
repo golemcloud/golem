@@ -224,7 +224,6 @@ impl ToolType {
             .body
             .as_ref()
             .expect("resolved body");
-        let input_graph = Arc::new(input.record_schema.clone());
         let mut arguments = Vec::with_capacity(input.fields.len());
         let surfaces = self.definition.canonical_input_surfaces(index);
         input
@@ -272,7 +271,7 @@ impl ToolType {
                     name: field.name.clone(),
                     aliases: field.aliases.clone(),
                     short: field.short,
-                    schema: SchemaRef::with_root(input_graph.clone(), field.type_.clone()),
+                    schema: SchemaRef::with_root(self.schema.clone(), field.type_.clone()),
                     required,
                     default,
                 });
@@ -297,7 +296,7 @@ impl ToolType {
             tool: self.clone(),
             index,
             path: canonical_path,
-            input: SchemaRef::with_root(input_graph, input.record_schema.root.clone()),
+            input: SchemaRef::with_root(self.schema.clone(), input.record_schema.root.clone()),
             wire_input: input.record_schema,
             arguments,
         })
@@ -540,6 +539,18 @@ impl ToolCommand {
                 ),
             ));
         }
+        if self
+            .body()
+            .stderr
+            .as_ref()
+            .is_some_and(|spec| spec.required)
+        {
+            return Err(ToolReflectionError::InvalidInput(
+                GolemReflectError::InvalidInput(
+                    "command requires caller-readable stderr".to_string(),
+                ),
+            ));
+        }
         if self.body().stdin.as_ref().is_some_and(|spec| spec.required) && stdin.is_none() {
             return Err(ToolReflectionError::InvalidInput(
                 GolemReflectError::InvalidInput("command requires stdin".to_string()),
@@ -556,6 +567,7 @@ impl ToolCommand {
             &self.path,
             &input,
             stdin.map(tool_client::pump_tool_stdin),
+            None,
             None,
             self.error_decoder(),
         )
@@ -602,12 +614,13 @@ impl ToolCommand {
             }))
         })?;
         let command = self.clone();
-        tool_client::start_tool_invocation_with_stdout(
+        tool_client::start_tool_invocation(
             &rpc,
             &self.path,
             &input,
             stdin,
             self.body().stdout.is_some(),
+            self.body().stderr.is_some(),
             move |result| command.decode_result(result),
             self.error_decoder(),
         )
@@ -628,6 +641,18 @@ impl ToolCommand {
             return Err(ToolReflectionError::InvalidInput(
                 GolemReflectError::InvalidInput(
                     "command requires caller-readable stdout".to_string(),
+                ),
+            ));
+        }
+        if self
+            .body()
+            .stderr
+            .as_ref()
+            .is_some_and(|spec| spec.required)
+        {
+            return Err(ToolReflectionError::InvalidInput(
+                GolemReflectError::InvalidInput(
+                    "command requires caller-readable stderr".to_string(),
                 ),
             ));
         }
@@ -979,6 +1004,7 @@ where
             &typed,
             None,
             None,
+            None,
             |name, payload| Ok(Some(ReflectedToolCustomError { name, payload })),
         )
         .await
@@ -1008,6 +1034,7 @@ impl<I: crate::IntoSchema> TypedUnitToolCommand<I> {
             self.rpc.as_ref(),
             &self.definition.path,
             &typed,
+            None,
             None,
             None,
             |name, payload| Ok(Some(ReflectedToolCustomError { name, payload })),
@@ -1082,6 +1109,7 @@ impl DynamicToolClient {
             input,
             stdin.map(tool_client::pump_tool_stdin),
             None,
+            None,
             |name, payload| Ok(Some(ReflectedToolCustomError { name, payload })),
         )
         .await
@@ -1093,6 +1121,7 @@ impl DynamicToolClient {
         input: &TypedSchemaValue,
         stdin: Option<InputStream>,
         attach_stdout: bool,
+        attach_stderr: bool,
     ) -> Result<
         ToolInvocation<InvocationResult, ReflectedToolCustomError>,
         ToolError<ReflectedToolCustomError>,
@@ -1102,12 +1131,13 @@ impl DynamicToolClient {
                 Ok::<Option<ReflectedToolCustomError>, String>(None)
             })
         })?;
-        tool_client::start_tool_invocation_with_stdout(
+        tool_client::start_tool_invocation(
             &rpc,
             path,
             input,
             stdin,
             attach_stdout,
+            attach_stderr,
             Ok,
             |name, payload| Ok(Some(ReflectedToolCustomError { name, payload })),
         )
@@ -1153,6 +1183,10 @@ mod tests {
     use test_r::test;
 
     fn sample() -> ToolType {
+        sample_with_outputs(false, false)
+    }
+
+    fn sample_with_outputs(stdout: bool, stderr: bool) -> ToolType {
         let doc = Doc {
             summary: String::new(),
             description: String::new(),
@@ -1175,7 +1209,16 @@ mod tests {
             flags: Vec::new(),
             constraints: Vec::new(),
             stdin: None,
-            stdout: None,
+            stdout: stdout.then(|| crate::schema::tool::StreamSpec {
+                doc: doc.clone(),
+                mime: Vec::new(),
+                required: true,
+            }),
+            stderr: stderr.then(|| crate::schema::tool::StreamSpec {
+                doc: doc.clone(),
+                mime: Vec::new(),
+                required: true,
+            }),
             result: Some(ResultSpec {
                 type_: SchemaType::s32(),
                 doc: doc.clone(),
@@ -1190,6 +1233,7 @@ mod tests {
             lookup_name: "sample".to_string(),
             definition: Arc::new(Tool {
                 version: "1".to_string(),
+                requires_filesystem: false,
                 commands: CommandTree {
                     nodes: vec![
                         CommandNode {
@@ -1229,6 +1273,34 @@ mod tests {
                 })
                 .is_err()
         );
+    }
+
+    #[test]
+    async fn scalar_and_trigger_calls_reject_each_required_output_before_rpc() {
+        for (stdout, stderr, expected) in [
+            (true, false, "command requires caller-readable stdout"),
+            (false, true, "command requires caller-readable stderr"),
+        ] {
+            let command = sample_with_outputs(stdout, stderr)
+                .command(&["run"])
+                .expect("command");
+            let input = SchemaValue::Record {
+                fields: vec![SchemaValue::String("hello".to_string())],
+            };
+
+            assert_eq!(
+                command
+                    .invoke_value(input.clone())
+                    .await
+                    .unwrap_err()
+                    .to_string(),
+                format!("invalid tool input: invalid input: {expected}")
+            );
+            assert_eq!(
+                command.trigger_value(input, None).unwrap_err().to_string(),
+                format!("invalid tool input: invalid input: {expected}")
+            );
+        }
     }
 
     #[test]
@@ -1321,7 +1393,7 @@ mod tests {
             env_var: None,
         });
         let command = tool.command(&["run"]).unwrap();
-        assert_eq!(command.input_schema().graph(), &command.wire_input);
+        assert_eq!(command.input_schema().root(), &command.wire_input.root);
         for fields in [
             vec![
                 SchemaValue::Option { inner: None },
@@ -1339,6 +1411,34 @@ mod tests {
             let value = SchemaValue::Record { fields };
             assert!(command.checked_input(value).is_ok());
         }
+    }
+
+    #[test]
+    fn repeated_command_lookup_shares_the_discovered_definition_pool() {
+        let tool = sample();
+        let first = tool.command(&["run"]).unwrap();
+        let second = tool.command(&["r"]).unwrap();
+
+        assert!(
+            first
+                .input_schema()
+                .shares_definition_pool_with(second.input_schema())
+        );
+        assert!(
+            first
+                .input_schema()
+                .shares_definition_pool_with(&first.arguments()[0].schema)
+        );
+        assert!(
+            first
+                .input_schema()
+                .shares_definition_pool_with(&first.output_schema().unwrap())
+        );
+        assert!(
+            !first
+                .input_schema()
+                .shares_definition_pool_with(&SchemaRef::new(first.wire_input.clone()))
+        );
     }
 
     #[test]

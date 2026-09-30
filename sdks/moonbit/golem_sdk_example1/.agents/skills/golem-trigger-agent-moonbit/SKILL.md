@@ -75,14 +75,14 @@ If the agent's component has not been deployed yet and the CLI is run from an ap
 
 ## Value Syntax
 
-The agent ID parameters and method arguments use **Rust syntax**:
+The agent ID parameters and method arguments use **MoonBit syntax**:
 
 - Field names use `snake_case`
 - Options: `Some(value)` / `None`
-- Records: `MyRecord { field_one: 1, field_two: "hello" }`
+- Records: `MyRecord::{ field_one: 1, field_two: "hello" }`
 - Enums/Variants: `MyEnum::VariantName(value)`
 - Tuples: `(1, "hello")`
 
 ```shell
-golem agent invoke --trigger 'MyAgent("user-123")' send_email 'EmailRequest { to: "alice@example.com", subject: "Hello", body: "World" }'
+golem agent invoke --trigger 'MyAgent("user-123")' send_email 'EmailRequest::{ to: "alice@example.com", subject: "Hello", body: "World" }'
 ```

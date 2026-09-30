@@ -553,6 +553,7 @@ impl ReplayCallHandle {
         self.start_idx
     }
 
+    #[cfg(test)]
     pub(crate) fn resolution_ready(&self) -> bool {
         !self.receiver.is_empty() || self.receiver.is_terminated()
     }
