@@ -1,11 +1,16 @@
 import {
+  acquireQuotaToken,
+  AgentStream,
   defineAgent,
   method,
   s,
   ToolStreamError,
 } from "@golemcloud/golem-ts-sdk";
 import { MatrixCoreClient } from "matrix-core-tool-guest-client";
+import { MatrixResourceClient } from "matrix-resource-tool-guest-client";
 import { TsStreamingClient } from "ts-streaming-tool-guest-client";
+import { getConfigValue } from "golem:agent/host@2.0.0";
+import type { SchemaGraph, Secret } from "golem:core/types@2.0.0";
 import { z } from "zod/v4";
 
 const MatrixCoreObservation = z.object({
@@ -20,6 +25,52 @@ const MatrixCoreObservation = z.object({
   errorReason: z.string(),
   errorRetryable: z.boolean(),
 });
+
+const MatrixResourceObservation = z.object({
+  secretFirstProvider: z.string(),
+  secretSecondProvider: z.string(),
+  secretFirstRevealed: z.boolean(),
+  secretSecondRevealed: z.boolean(),
+  secretPrincipal: z.string(),
+  secretOwnerAgentId: z.string(),
+  quotaProvider: z.string(),
+  quotaReserved: z.boolean(),
+  quotaReturnedUsable: z.boolean(),
+  quotaOriginalConsumed: z.boolean(),
+  quotaPrincipal: z.string(),
+  quotaOwnerAgentId: z.string(),
+  permissionSupported: z.boolean(),
+  permissionProvider: z.string(),
+  permissionSameIdentity: z.boolean(),
+  permissionOriginalConsumed: z.boolean(),
+  permissionPrincipal: z.string(),
+  permissionOwnerAgentId: z.string(),
+  typedValues: z.array(s.u32() as unknown as z.ZodType<number, number>),
+});
+
+const SECRET_STRING_GRAPH: SchemaGraph = {
+  typeNodes: [
+    {
+      body: { tag: "string-type" },
+      metadata: { aliases: [], examples: [] },
+    },
+    {
+      body: { tag: "secret-type", val: { inner: 0 } },
+      metadata: { aliases: [], examples: [] },
+    },
+  ],
+  defs: [],
+  root: 1,
+};
+
+function configuredSecret(): Secret {
+  const value = getConfigValue(["secret"], SECRET_STRING_GRAPH);
+  const root = value.valueNodes[value.root];
+  if (root?.tag !== "secret-value") {
+    throw new Error("config path 'secret' did not resolve to secret<string>");
+  }
+  return root.val;
+}
 
 const Evidence = z.object({
   output: s.bytes(),
@@ -38,14 +89,18 @@ const DualOutputEvidence = z.object({
   resultTerminal: z.string(),
 });
 
-async function collect(reader: ReadableStreamDefaultReader<Uint8Array>): Promise<Uint8Array> {
+async function collect(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+): Promise<Uint8Array> {
   const chunks: Uint8Array[] = [];
   while (true) {
     const item = await reader.read();
     if (item.done) break;
     chunks.push(item.value);
   }
-  const result = new Uint8Array(chunks.reduce((size, chunk) => size + chunk.byteLength, 0));
+  const result = new Uint8Array(
+    chunks.reduce((size, chunk) => size + chunk.byteLength, 0),
+  );
   let offset = 0;
   for (const chunk of chunks) {
     result.set(chunk, offset);
@@ -57,6 +112,9 @@ async function collect(reader: ReadableStreamDefaultReader<Uint8Array>): Promise
 const Caller = defineAgent({
   name: "TsToolStreamingCaller",
   id: { name: z.string() },
+  config: {
+    secret: s.secret(z.string()),
+  },
   methods: {
     markerBeforeEof: method({
       input: { payload: s.bytes() },
@@ -78,12 +136,65 @@ const Caller = defineAgent({
       input: {},
       returns: MatrixCoreObservation,
     }),
+    matrix_resource_observation: method({
+      input: {},
+      returns: MatrixResourceObservation,
+    }),
   },
 });
 
 Caller.implement({
   init: () => ({}),
   methods: {
+    async matrix_resource_observation() {
+      const client = MatrixResourceClient.newClient();
+      const secretFirst = await client.secret().exchange(configuredSecret());
+      const secretSecond = await client.secret().exchange(secretFirst.secret);
+
+      const originalQuota = acquireQuotaToken("matrix-capacity", 2n);
+      const quota = await client.quota().exchange(originalQuota);
+      let quotaOriginalConsumed = false;
+      try {
+        originalQuota.reserve(0n).unwrap().commit(0n);
+      } catch {
+        quotaOriginalConsumed = true;
+      }
+      let quotaReturnedUsable = false;
+      try {
+        quota.token.reserve(0n).unwrap().commit(0n);
+        quotaReturnedUsable = true;
+      } catch {
+        quotaReturnedUsable = false;
+      }
+
+      const typedValues: number[] = [];
+      const transformed = await client
+        .typed()
+        .transform(AgentStream.from([2, 5, 9]));
+      for await (const value of transformed) typedValues.push(value);
+
+      return {
+        secretFirstProvider: secretFirst.provider,
+        secretSecondProvider: secretSecond.provider,
+        secretFirstRevealed: secretFirst.revealed,
+        secretSecondRevealed: secretSecond.revealed,
+        secretPrincipal: secretFirst.principal,
+        secretOwnerAgentId: secretFirst.ownerAgentId,
+        quotaProvider: quota.provider,
+        quotaReserved: quota.reserved,
+        quotaReturnedUsable,
+        quotaOriginalConsumed,
+        quotaPrincipal: quota.principal,
+        quotaOwnerAgentId: quota.ownerAgentId,
+        permissionSupported: false,
+        permissionProvider: "",
+        permissionSameIdentity: false,
+        permissionOriginalConsumed: false,
+        permissionPrincipal: "",
+        permissionOwnerAgentId: "",
+        typedValues,
+      };
+    },
     async matrix_core_observation() {
       const client = MatrixCoreClient.newClient();
       const success = await client.artifact().inspect(
@@ -132,7 +243,9 @@ Caller.implement({
     async dualOutputDeclaredError() {
       const invocation = TsStreamingClient.newClient().dual();
       if (!invocation.stdout || !invocation.stderr) {
-        throw new Error("TypeScript dual-output invocation omitted a declared channel");
+        throw new Error(
+          "TypeScript dual-output invocation omitted a declared channel",
+        );
       }
       const [result, stdout, stderr] = await Promise.all([
         invocation.result.then(

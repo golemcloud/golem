@@ -1,4 +1,5 @@
 import {
+  AgentStream,
   command,
   err,
   getSelfMetadata,
@@ -8,6 +9,14 @@ import {
   toolDefinition,
   ToolStreamError,
 } from "@golemcloud/golem-ts-sdk";
+import type {
+  PermissionCard,
+  QuotaToken,
+  SchemaGraph,
+  Secret,
+} from "golem:core/types@2.0.0";
+import { Reservation, reserve } from "golem:quota/types@1.5.0";
+import { reveal } from "golem:secrets/reveal@0.1.0";
 import { z } from "zod/v4";
 
 const U32 = s.u32() as unknown as z.ZodType<number, number>;
@@ -40,6 +49,128 @@ const MatrixRejection = z.object({
 function principalName(principal: Principal): string {
   return principal.tag === "oidc" ? `oidc:${principal.sub}` : principal.tag;
 }
+
+const SecretExchange = z.object({
+  provider: z.string(),
+  principal: z.string(),
+  ownerAgentId: z.string(),
+  revealed: z.boolean(),
+  secret: s.secret(z.string()),
+});
+
+const QuotaExchange = z.object({
+  provider: z.string(),
+  principal: z.string(),
+  ownerAgentId: z.string(),
+  reserved: z.boolean(),
+  token: s.quotaToken(),
+});
+
+const PermissionExchange = z.object({
+  provider: z.string(),
+  principal: z.string(),
+  ownerAgentId: z.string(),
+  card: s.permissionCard({ polymorphic: false }),
+});
+
+const STRING_GRAPH: SchemaGraph = {
+  typeNodes: [
+    {
+      body: { tag: "string-type" },
+      metadata: { aliases: [], examples: [] },
+    },
+  ],
+  defs: [],
+  root: 0,
+};
+
+function revealString(secret: Secret): string {
+  const revealed = reveal(secret, STRING_GRAPH);
+  const value = revealed.valueNodes[revealed.root];
+  if (value?.tag !== "string-value") {
+    throw new Error("matrix secret did not reveal as a string");
+  }
+  return value.val;
+}
+
+function resourceEvidence(context: { principal: Principal }) {
+  return {
+    provider: "typescript",
+    principal: principalName(context.principal),
+    ownerAgentId: getSelfMetadata().agentId.agentId,
+  };
+}
+
+toolDefinition("matrix-resource")
+  .version("1.0.0")
+  .command("secret", (secret) =>
+    secret.command("exchange", (exchange) =>
+      exchange.body((body) =>
+        body.positional("secret", s.secret(z.string())).returns(SecretExchange),
+      ),
+    ),
+  )
+  .command("quota", (quota) =>
+    quota.command("exchange", (exchange) =>
+      exchange.body((body) =>
+        body.positional("token", s.quotaToken()).returns(QuotaExchange),
+      ),
+    ),
+  )
+  .command("permissions", (permissions) =>
+    permissions.command("exchange", (exchange) =>
+      exchange.body((body) =>
+        body
+          .positional("card", s.permissionCard({ polymorphic: false }))
+          .returns(PermissionExchange),
+      ),
+    ),
+  )
+  .command("typed", (typed) =>
+    typed.command("transform", (transform) =>
+      transform.body((body) =>
+        body.positional("input", s.stream(s.u32())).returns(s.stream(s.u32())),
+      ),
+    ),
+  )
+  .implement({
+    secret: command({
+      exchange: async ({ secret }: { secret: Secret }, context) =>
+        ok({
+          ...resourceEvidence(context),
+          revealed: revealString(secret) === "matrix-secret-value",
+          secret,
+        }),
+    }),
+    quota: command({
+      exchange: async ({ token }: { token: QuotaToken }, context) => {
+        let reserved = false;
+        try {
+          Reservation.commit(reserve(token, 1n), 1n);
+          reserved = true;
+        } catch {
+          reserved = false;
+        }
+        return ok({ ...resourceEvidence(context), reserved, token });
+      },
+    }),
+    permissions: command({
+      exchange: async ({ card }: { card: PermissionCard }, context) =>
+        ok({ ...resourceEvidence(context), card }),
+    }),
+    typed: command({
+      transform: async ({ input }: { input: AgentStream<number> }) =>
+        ok(
+          AgentStream.from(
+            (async function* () {
+              for await (const value of input) {
+                yield value * 3 + 1;
+              }
+            })(),
+          ),
+        ),
+    }),
+  });
 
 toolDefinition("matrix-core")
   .version("1.0.0")

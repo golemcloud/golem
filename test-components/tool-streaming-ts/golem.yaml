@@ -21,16 +21,29 @@ components:
       tools:
         - golem-it:tool-streaming-ts-provider/ts-streaming
         - golem-it:tool-streaming-ts-provider/matrix-core
+        - golem-it:tool-streaming-ts-provider/matrix-resource
 
 tools:
   ts-streaming: {}
   matrix-core: {}
+  matrix-resource: {}
 
 agents:
   TsToolStreamingCaller:
     tools:
       ts-streaming: {}
       matrix-core: {}
+      matrix-resource: {}
+
+resourceDefaults:
+  local:
+    matrix-capacity:
+      limit:
+        type: Capacity
+        value: 16
+      enforcementAction: reject
+      unit: operation
+      units: operations
 
 environments:
   local:
