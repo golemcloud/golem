@@ -1206,7 +1206,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// [`Worker::select_start`].
     fn selection_in_memory(&self, status: &AgentStatusRecord) -> StartSelection {
         let enabled = self.filesystem_snapshots_enabled();
-        StartSelection::of(status, &self.snapshot_exclusions(), enabled)
+        self.read_exclusions(|exclusions| StartSelection::of(status, exclusions, enabled))
     }
 
     /// Selects the start of `status`: it loads the rejected entries that storage keeps for the
@@ -1223,15 +1223,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             )
             .await?;
         let enabled = self.filesystem_snapshots_enabled();
-        let exclusions = self.update_exclusions(|exclusions| exclusions.with_persisted(persisted));
-        Ok(StartSelection::of(status, &exclusions, enabled))
+        Ok(self.update_exclusions(
+            |exclusions| exclusions.with_persisted(persisted, status),
+            |exclusions| StartSelection::of(status, exclusions, enabled),
+        ))
     }
 
     /// Settles the exclusions after the agent prepared with success: it stores the rejected
     /// entries for the incarnation, when there are any, and ends the skips of unavailable
     /// entries.
     pub(crate) async fn settle_exclusions_after_prepare(&self) -> Result<(), WorkerExecutorError> {
-        if let Some(rejected) = self.snapshot_exclusions().persisted_rejections() {
+        if let Some(rejected) = self.read_exclusions(SnapshotExclusions::persisted_rejections) {
             let status = self.get_non_detached_last_known_status().await;
             self.worker_service()
                 .reject_periodic_snapshots(
@@ -1249,40 +1251,44 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Rejects the automatic snapshot entry at `index` for the starts of this incarnation: its
     /// application snapshot did not load, or the replay after it diverged.
     pub(crate) fn reject_periodic(&self, index: OplogIndex) {
-        self.update_exclusions(|exclusions| exclusions.rejecting(index));
+        let status = self.last_known_status.load();
+        self.update_exclusions(|exclusions| exclusions.rejecting(index, &status), |_| ());
     }
 
     /// Skips the automatic snapshot entry at `index` until a start prepares the agent with
     /// success: its payload or its filesystem snapshot could not be read.
     pub(crate) fn mark_periodic_unavailable(&self, index: OplogIndex) {
-        self.update_exclusions(|exclusions| exclusions.with_unavailable(index));
+        self.update_exclusions(|exclusions| exclusions.with_unavailable(index), |_| ());
     }
 
     /// Ends the skips of unavailable automatic snapshot entries.
     fn clear_unavailable_periodic(&self) {
-        self.update_exclusions(SnapshotExclusions::without_unavailable);
+        self.update_exclusions(SnapshotExclusions::without_unavailable, |_| ());
     }
 
-    /// A copy of the exclusions of the agent now.
-    fn snapshot_exclusions(&self) -> SnapshotExclusions {
-        self.snapshot_exclusions
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()
+    /// Gives what `read` gives for the exclusions of the agent now, under their lock.
+    fn read_exclusions<T>(&self, read: impl FnOnce(&SnapshotExclusions) -> T) -> T {
+        read(
+            &self
+                .snapshot_exclusions
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )
     }
 
-    /// Replaces the exclusions of the agent with what `next` gives for them, under their lock,
-    /// and gives a copy of the new exclusions.
-    fn update_exclusions(
+    /// Replaces the exclusions of the agent with what `next` gives for them, and gives what
+    /// `read` gives for the new exclusions, both under one hold of their lock.
+    fn update_exclusions<T>(
         &self,
         next: impl FnOnce(SnapshotExclusions) -> SnapshotExclusions,
-    ) -> SnapshotExclusions {
+        read: impl FnOnce(&SnapshotExclusions) -> T,
+    ) -> T {
         let mut exclusions = self
             .snapshot_exclusions
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         *exclusions = next(std::mem::take(&mut *exclusions));
-        exclusions.clone()
+        read(&exclusions)
     }
 
     pub(crate) async fn ensure_not_failed<T: HasAll<Ctx> + Send + Sync>(
@@ -12721,7 +12727,7 @@ mod tests {
             ..Default::default()
         };
 
-        let rejecting = |index| SnapshotExclusions::default().rejecting(index);
+        let rejecting = |index| SnapshotExclusions::default().rejecting(index, &status);
         let rejected = rejecting(snapshot_index);
         let other = rejecting(OplogIndex::from_u64(9));
         assert_eq!(

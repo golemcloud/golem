@@ -33,7 +33,8 @@ use std::collections::{BTreeSet, HashSet};
 pub(crate) struct SnapshotExclusions {
     /// The entries whose application snapshot did not load or whose replay diverged. A start
     /// never selects them. The start that rejects one persists it for the incarnation after its
-    /// fallback succeeds.
+    /// fallback succeeds. Each change keeps only the entries that [`kept_rejections`] keeps, so
+    /// the set holds at most the two candidates of a start and the entry just rejected.
     rejected: HashSet<OplogIndex>,
     /// The entries whose payload or filesystem snapshot a start could not get. The starts skip
     /// them until a start prepares the agent with success, which clears them.
@@ -41,19 +42,29 @@ pub(crate) struct SnapshotExclusions {
 }
 
 impl SnapshotExclusions {
-    /// The exclusions with the entry at `index` rejected.
-    pub(crate) fn rejecting(mut self, index: OplogIndex) -> Self {
-        self.rejected.insert(index);
-        self
+    /// The exclusions with the entry at `index` rejected. The other rejected entries are kept
+    /// only while they are candidates of a start of `status`. The entry at `index` stays even
+    /// when `status` does not name it, so a start whose status differs cannot select it again
+    /// before its next selection prunes the set.
+    pub(crate) fn rejecting(self, index: OplogIndex, status: &AgentStatusRecord) -> Self {
+        let mut rejected: HashSet<OplogIndex> =
+            kept_rejections(status, self.rejected).into_iter().collect();
+        rejected.insert(index);
+        Self { rejected, ..self }
     }
 
-    /// The exclusions with the rejected entries that storage keeps for the incarnation.
+    /// The exclusions with the rejected entries that storage keeps for the incarnation, for a
+    /// start of `status`: only the rejected entries that are candidates of that start stay. A
+    /// start of `status` never selects another entry.
     pub(crate) fn with_persisted(
-        mut self,
+        self,
         persisted: impl IntoIterator<Item = OplogIndex>,
+        status: &AgentStatusRecord,
     ) -> Self {
-        self.rejected.extend(persisted);
-        self
+        let rejected = kept_rejections(status, self.rejected.into_iter().chain(persisted))
+            .into_iter()
+            .collect();
+        Self { rejected, ..self }
     }
 
     /// The exclusions with the entry at `index` unavailable for the current start attempt.
@@ -584,6 +595,47 @@ mod tests {
         assert_eq!(kept_rejections(&after, rejected), indexes(&[10]));
     }
 
+    #[test]
+    fn the_rejections_in_memory_keep_at_most_the_candidates_after_a_new_snapshot_entry() {
+        let name = FilesystemSnapshotName::periodic();
+        let before = status(Some(name.clone()), true, Some(None));
+        let after = AgentStatusRecord {
+            last_automatic_snapshot: Some(AutomaticSnapshot {
+                index: OplogIndex::from_u64(20),
+                timestamp: Timestamp::from(2_000),
+                component_revision: revision(2),
+                files: SnapshotFiles::Unconfirmed(FilesystemSnapshotName::periodic()),
+            }),
+            previous_usable_automatic_snapshot: Some(UsableAutomaticSnapshot {
+                index: OplogIndex::from_u64(10),
+                component_revision: revision(2),
+                filesystem_snapshot: Some(name),
+            }),
+            ..before.clone()
+        };
+        let rejected_before = SnapshotExclusions::default()
+            .rejecting(OplogIndex::from_u64(3), &before)
+            .rejecting(OplogIndex::from_u64(5), &before)
+            .rejecting(OplogIndex::from_u64(10), &before);
+
+        let persisted_after = rejected_before
+            .clone()
+            .with_persisted([OplogIndex::from_u64(1)], &after);
+        let rejected_after = rejected_before.rejecting(OplogIndex::from_u64(20), &after);
+
+        assert_eq!(
+            persisted_after.persisted_rejections(),
+            Some(HashSet::from([OplogIndex::from_u64(10)]))
+        );
+        assert_eq!(
+            rejected_after.persisted_rejections(),
+            Some(HashSet::from([
+                OplogIndex::from_u64(10),
+                OplogIndex::from_u64(20)
+            ]))
+        );
+    }
+
     fn selection_index(selection: &StartSelection) -> Option<u64> {
         selection
             .automatic
@@ -613,8 +665,8 @@ mod tests {
         let exclusions = exclusions.without_unavailable();
         let cleared = selection_index(&StartSelection::of(&status, &exclusions, true));
         let exclusions = exclusions
-            .rejecting(OplogIndex::from_u64(10))
-            .with_persisted([OplogIndex::from_u64(5)]);
+            .rejecting(OplogIndex::from_u64(10), &status)
+            .with_persisted([OplogIndex::from_u64(5)], &status);
         let rejected = StartSelection::of(&status, &exclusions, true);
 
         assert_eq!(
