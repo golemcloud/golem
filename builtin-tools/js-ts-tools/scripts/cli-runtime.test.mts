@@ -96,6 +96,41 @@ async function capturesErrors() {
   assert.match(stderr.text(), /synthetic failure/);
 }
 
+async function waitsForRuntimeIdleBeforeRestoringOutput() {
+  const stdout = capture();
+  const stderr = capture();
+  const runtimeProcess = process as NodeJS.Process & {
+    _awaitRuntimeIdle?: () => Promise<void>;
+  };
+  const original = runtimeProcess._awaitRuntimeIdle;
+  Object.defineProperty(runtimeProcess, '_awaitRuntimeIdle', {
+    value: () => new Promise<void>((resolve) => setTimeout(resolve, 30)),
+    configurable: true,
+  });
+
+  try {
+    const exitCode = await runCli(
+      { argv: ['node', '--eval'], cwd: '/', waitForRuntimeIdle: true },
+      { stdout: stdout.stream, stderr: stderr.stream },
+      (processFacade) => {
+        setTimeout(() => processFacade.stdout.write('late output'), 20);
+      },
+    );
+
+    assert.equal(exitCode, 0);
+    assert.equal(stdout.text(), 'late output');
+    assert.equal(stderr.text(), '');
+  } finally {
+    if (original === undefined) delete runtimeProcess._awaitRuntimeIdle;
+    else {
+      Object.defineProperty(runtimeProcess, '_awaitRuntimeIdle', {
+        value: original,
+        configurable: true,
+      });
+    }
+  }
+}
+
 async function restoresStateAfterSetupFailure() {
   const stdout = capture();
   const stderr = capture();
@@ -124,6 +159,7 @@ function validatesCwd() {
 await isolatesProcessStateAndForwardsOutput();
 await capturesExit();
 await capturesErrors();
+await waitsForRuntimeIdleBeforeRestoringOutput();
 await restoresStateAfterSetupFailure();
 validatesCwd();
 console.log('CLI runtime checks passed');

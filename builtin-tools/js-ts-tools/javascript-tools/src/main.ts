@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync, rmdirSync, unlinkSync } from 'node:fs';
+import { lstatSync, readFileSync, readdirSync, rmdirSync, unlinkSync } from 'node:fs';
 import fsPromises from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { ok, s, toolDefinition } from '@golemcloud/golem-ts-sdk';
@@ -112,7 +112,7 @@ async function runNpm(
     NPM_VERSION,
     NPM_VERSION,
     fsPromises,
-    { readdirSync, rmdirSync, unlinkSync },
+    { lstatSync, readdirSync, rmdirSync, unlinkSync },
     join,
   );
   const restorePrivateFiles = installPrivateReadOnlyFiles(NPM_ROOT, npmPrivateFiles);
@@ -177,6 +177,7 @@ async function runNode(
       },
       directories: [home],
       stopOnExit: true,
+      waitForRuntimeIdle: true,
     },
     streams,
     async () => {

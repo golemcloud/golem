@@ -1,4 +1,4 @@
-import type { Dirent } from 'node:fs';
+import type { Dirent, Stats } from 'node:fs';
 import { validatedCwd } from '../../shared/cli-runtime.js';
 
 export const NPM_VERSION = '10.9.9';
@@ -9,6 +9,7 @@ type FsPromisesWithRm = {
 };
 
 type SyncRemovalFs = {
+  lstatSync(path: string): Stats;
   readdirSync(path: string, options: { withFileTypes: true }): Dirent<string>[];
   rmdirSync(path: string): void;
   unlinkSync(path: string): void;
@@ -64,6 +65,18 @@ export function installNpmRecursiveRmPatch(
   let restored = false;
 
   const removeTree = (path: string, force: boolean): void => {
+    let stat: Stats;
+    try {
+      stat = syncFs.lstatSync(path);
+    } catch (error) {
+      if (force && (error as NodeJS.ErrnoException)?.code === 'ENOENT') return;
+      throw error;
+    }
+    if (stat.isSymbolicLink() || !stat.isDirectory()) {
+      syncFs.unlinkSync(path);
+      return;
+    }
+
     let entries: Dirent<string>[];
     try {
       entries = syncFs.readdirSync(path, { withFileTypes: true });
