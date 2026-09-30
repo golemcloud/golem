@@ -219,10 +219,17 @@ fn passes(
         && (filter.filesystem_snapshots_enabled || !has_filesystem_snapshot)
 }
 
-/// The rejected automatic snapshot entries of `rejected` that a start of `status` can still meet:
-/// the entries that are one of its two candidates, `last_automatic_snapshot` and
-/// `previous_usable_automatic_snapshot`. A start never selects another entry, so a stored
-/// rejection of one is dropped.
+/// The rejected automatic snapshot entries of `rejected` that are one of the two candidates of a
+/// start of `status`, `last_automatic_snapshot` and `previous_usable_automatic_snapshot`. A
+/// rejection of any other entry is dropped.
+///
+/// A revert can make an older entry a candidate again: it drops the region of the newer entries,
+/// and the fold from an earlier baseline gives the older entry back. When the rejection of that
+/// entry was dropped, a start after a restart of the executor selects it again, fails to load it
+/// or diverges from it again, rejects it again, and falls back. The cost is one more failed start
+/// attempt, and never a wrong tree or a wrong result, because both causes of a rejection are found
+/// at run time. The bound accepts that cost so that the stored set holds at most two entries and
+/// does not grow with the life of the agent.
 pub(crate) fn kept_rejections(
     status: &AgentStatusRecord,
     rejected: impl IntoIterator<Item = OplogIndex>,

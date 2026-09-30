@@ -972,7 +972,8 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
     /// still admits work of the agent, appends the confirmation record, commits, and decides from
     /// the folded status. A commit or append the oplog refuses because the shard has a new owner
     /// gives `Deferred`; the refusal has already started the retirement of the agent. An append
-    /// that fails for another cause also gives `Deferred`. The job never panics.
+    /// that fails for another cause also gives `Deferred`. A commit that fails for a cause other
+    /// than a fence panics in `commit_and_update_state`, as every commit of the status task does.
     async fn confirm_filesystem_snapshot(&self, name: FilesystemSnapshotName) -> ConfirmOutcome {
         if self
             .commit_and_update_state(CommitLevel::Always, None)

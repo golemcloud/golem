@@ -1471,9 +1471,11 @@ pub struct AgentStatusRecord {
     /// `previous_usable_automatic_snapshot`, then the last manual update snapshot, then a full
     /// replay.
     pub last_automatic_snapshot: Option<AutomaticSnapshot>,
-    /// The newest automatic snapshot entry before the last one that was usable when the last one
-    /// came: an entry with a confirmed filesystem snapshot, or an entry without a filesystem
-    /// snapshot name. A start uses it when the last automatic snapshot entry is not usable, or
+    /// The newest automatic snapshot entry before the last one that was usable when the entry
+    /// after it came: an entry with a confirmed filesystem snapshot, or an entry without a
+    /// filesystem snapshot name. A new entry that reuses the filesystem snapshot name of the last
+    /// entry holds the same tree, so it does not move the last entry here, and the older fallback
+    /// stays. A start uses this entry when the last automatic snapshot entry is not usable, or
     /// when the filesystem snapshot of the last entry does not restore. A successful update clears
     /// it together with the last automatic snapshot entry.
     pub previous_usable_automatic_snapshot: Option<UsableAutomaticSnapshot>,

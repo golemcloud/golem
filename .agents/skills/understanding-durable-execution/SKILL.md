@@ -714,7 +714,8 @@ oplog entries (`DurableCallSession` created with `persisted: false`; `durability
 is exactly `snapshotting_mode`).
 
 Which history the new instance replays is decided in `Worker` construction (`worker/mod.rs`,
-`create_instance`, with `worker/snapshot_selection.rs::StartSelection::of`). The status keeps two
+`create_instance`, through `Worker::select_start`, which loads the persisted rejections and
+selects with `worker/snapshot_selection.rs::StartSelection::of`). The status keeps two
 automatic snapshot records: the last one, `last_automatic_snapshot` (an `AutomaticSnapshot` with
 its index, time, revision, filesystem snapshot name and confirmation), and
 `previous_usable_automatic_snapshot`, the newest usable one before it. A record is usable when it
@@ -734,18 +735,20 @@ then branches on `PendingUpdate`:
   files of the new revision that fails at the end of the replay puts the update back as pending,
   so it takes the same path.
 - No pending update — `try_load_snapshot`; an automatic snapshot load failure or divergent replay
-  suffix rejects the exact index of that record (`SnapshotExclusions::reject`, through
-  `Worker::with_exclusions`) and returns
+  suffix rejects the exact index of that record (`Worker::reject_periodic`, which applies
+  `SnapshotExclusions::rejecting`) and returns
   `RetryDecision::Immediate`. The outer loop recreates the entire Store, component metadata,
   revision, and plugin context, and selects again: the other usable record, the manual-update
   baseline, or a full replay. It never replays pre-migration history. Only after preparation
   succeeds, and before readiness is published, is the rejected set merged into the persisted set
-  under the worker's `AgentFingerprint` (`WorkerService::reject_periodic_snapshots`). The set holds
+  under the worker's `AgentFingerprint` (`Worker::settle_exclusions_after_prepare`, through
+  `WorkerService::reject_periodic_snapshots`). The set holds
   exact indexes, so a newer record stays selectable.
 
 An automatic snapshot payload-download failure, or a failed restore of its filesystem snapshot,
-instead adds the index to the unavailable set of that startup attempt, so the retry skips the
-record without rejecting it; a successful preparation clears the set. A manual-update snapshot
+instead adds the index to the unavailable set of that startup attempt
+(`Worker::mark_periodic_unavailable`), so the retry skips the record without rejecting it; a
+successful preparation clears the set (`Worker::settle_exclusions_after_prepare`). A manual-update snapshot
 cannot be skipped: its load failure is terminal, wrapped as failure to resume while retaining the
 underlying cause.
 
@@ -756,10 +759,13 @@ With `filesystem_snapshots` set to `Managed`, a snapshot record also names a fil
 `worker/filesystem_snapshots.rs::periodic_snapshot`, which asks the service for admission, runs
 the guest snapshot hook (`snapshot_guest`), captures the tree (`agent_filesystem::capture`), appends the
 `Snapshot` entry, commits, and gives the capture to an upload job. The record has no name when the
-tree holds only the initial files of the agent. When the tree did not change since the last
-confirmed snapshot, the record reuses its name and the confirmation comes with it
+tree holds only the initial files of the agent; the worker slot (`SnapshotSlot`) then keeps the
+mark of that tree with no name. When the tree did not change since the last confirmed snapshot
+that a start would select now, the record reuses its name and the confirmation comes with it
 (`Snapshot` then `SnapshotConfirmed`); the status then keeps the older usable record as the
-fallback. A manual update uploads its filesystem snapshot before it writes `PendingUpdate`
+fallback. When the tree did not change since a record without a name that a start would select
+now, the record has no name again: no store call, no confirmation, and no check of the
+declarations and directories. A manual update uploads its filesystem snapshot before it writes `PendingUpdate`
 (`worker/filesystem_snapshots.rs::update_snapshot`). When a
 periodic upload of the agent runs, the update first stops the deletes that the running job makes
 after its save (`retention_stop`, a child of the job's stop); the job still ends its save and its
@@ -795,8 +801,10 @@ left of `confirmation_wait`, or for at most `store_check_limit` when it did not 
 holds it, the start appends `SnapshotConfirmed` as the owner of the agent. A terminal interrupt ends
 the wait. A start that finds no whole snapshot falls back to the previous usable record.
 
-`create_instance` restores the tree of the selected baseline (`Worker::start_baseline`): the
-filesystem snapshot of a named record, or the initial files for a record without a name. A
+`create_instance` restores the tree of the selected baseline. `RunningWorker::start_baseline`
+plans the baseline and makes its restore, and `StartFilesystem::materialize` applies it to the new
+filesystem through `materialize_baseline`: the filesystem snapshot of a named record, or the
+initial files for a record without a name. A
 manual-update record without a name restores the initial files of the source revision when they
 are all read-only, and then applies the initial files of the target revision.
 
