@@ -285,9 +285,11 @@ async fn rust_mcp_oauth_consent_invokes_over_tls_and_replays_offline() {
             fn new(_name: String) -> Self { Self { result: String::new() } }
             async fn run(&mut self) -> String {
                 let collected = OauthLookupClient::new().oauth_lookup("asymmetric".into()).await.unwrap().collect().await;
-                let stdout = String::from_utf8(collected.stdout.unwrap().unwrap_or_default()).unwrap();
                 let outcome = match collected.result {
-                    Ok(result) => format!("{}:{}:{stdout}", result.structured.answer, result.structured.score),
+                    Ok(result) => {
+                        let stdout = String::from_utf8(collected.stdout.unwrap().unwrap_or_default()).unwrap();
+                        format!("{}:{}:{stdout}", result.structured.answer, result.structured.score)
+                    }
                     Err(error) => format!("error:{error:?}"),
                 };
                 self.result.push_str(&outcome);
