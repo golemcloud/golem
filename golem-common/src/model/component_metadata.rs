@@ -2347,6 +2347,7 @@ mod tests {
 
     fn sample_tool() -> Tool {
         Tool {
+            requires_filesystem: false,
             version: "1.2.3".to_string(),
             commands: CommandTree {
                 nodes: vec![CommandNode {

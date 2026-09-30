@@ -8,7 +8,7 @@ use crate::durable_host::schema_value_stream::ExecutorProjectionStreams;
 use crate::durable_host::stream_bus::LiveStreamEventPayload;
 use crate::durable_host::stream_transport::{output_stream_pair, test_output_stream_pair};
 use crate::services::oplog::{CommitLevel, DurableStreamOplogRecord};
-use crate::services::rpc::{DurableStreamReadError, RpcDemand, RpcError};
+use crate::services::rpc::{DurableStreamRemoteError, RpcDemand, RpcError};
 use golem_api_grpc::proto::golem::schema::{ListValue, SchemaValueStreamReference, schema_value};
 use golem_common::base_model::component::{ComponentId, ComponentRevision};
 use golem_common::base_model::durable_stream::{
@@ -1908,7 +1908,7 @@ struct AttachedProducerRpc {
     producer: Arc<DurableStreamStore>,
     cancellation_owner: Option<Arc<DurableStreamStore>>,
     stall_next_cancel: std::sync::atomic::AtomicBool,
-    scripted_reads: Mutex<VecDeque<Result<Vec<u8>, DurableStreamReadError<RpcError>>>>,
+    scripted_reads: Mutex<VecDeque<Result<Vec<u8>, DurableStreamRemoteError<RpcError>>>>,
     pending_read: Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
     read_requests:
         Mutex<Vec<golem_common::base_model::durable_stream::AttachedStreamSegmentRequest>>,
@@ -1920,7 +1920,7 @@ impl Rpc for AttachedProducerRpc {
         &self,
         request: golem_common::base_model::durable_stream::StreamAttachmentControlRequest,
         _auth_ctx: &AuthCtx,
-    ) -> Result<bool, RpcError> {
+    ) -> Result<bool, DurableStreamRemoteError<RpcError>> {
         if self.stall_next_cancel.swap(false, Ordering::SeqCst) {
             std::future::pending::<()>().await;
         }
@@ -1949,8 +1949,10 @@ impl Rpc for AttachedProducerRpc {
                     .map(|_| false),
                 _ => panic!("unexpected control RPC"),
             }
-            .map_err(|error| RpcError::ProtocolError {
-                details: error.to_string(),
+            .map_err(|error| {
+                DurableStreamRemoteError::Other(RpcError::ProtocolError {
+                    details: error.to_string(),
+                })
             });
         }
         let owner = self.cancellation_owner.as_ref().unwrap();
@@ -2003,7 +2005,7 @@ impl Rpc for AttachedProducerRpc {
         &self,
         request: golem_common::base_model::durable_stream::DurableStreamReadRequest,
         _auth_ctx: &AuthCtx,
-    ) -> Result<Vec<u8>, DurableStreamReadError<RpcError>> {
+    ) -> Result<Vec<u8>, DurableStreamRemoteError<RpcError>> {
         let golem_common::base_model::durable_stream::DurableStreamReadRequest::AttachedConsumer(
             request,
         ) = request
@@ -2038,7 +2040,7 @@ impl Rpc for AttachedProducerRpc {
                 .await
         }
         .map_err(|error| {
-            DurableStreamReadError::from_producer(error, |details| RpcError::ProtocolError {
+            DurableStreamRemoteError::from_producer(error, |details| RpcError::ProtocolError {
                 details,
             })
         })?;
@@ -2141,8 +2143,8 @@ async fn routed_attached_reads_retry_only_unavailable_without_changing_the_curso
             }
         };
         rpc.scripted_reads.lock().await.extend([
-            Err(DurableStreamReadError::Unavailable),
-            Err(DurableStreamReadError::Unavailable),
+            Err(DurableStreamRemoteError::Unavailable),
+            Err(DurableStreamRemoteError::Unavailable),
             Ok(golem_common::serialization::serialize(&expected).unwrap()),
         ]);
         assert_eq!(read().await.unwrap(), expected);
@@ -2162,7 +2164,7 @@ async fn routed_attached_reads_retry_only_unavailable_without_changing_the_curso
         rpc.scripted_reads
             .lock()
             .await
-            .push_back(Err(DurableStreamReadError::Other(RpcError::Denied {
+            .push_back(Err(DurableStreamRemoteError::Other(RpcError::Denied {
                 details: "access revoked".to_string(),
             })));
         assert!(
@@ -2174,7 +2176,7 @@ async fn routed_attached_reads_retry_only_unavailable_without_changing_the_curso
         rpc.scripted_reads
             .lock()
             .await
-            .push_back(Err(DurableStreamReadError::Unavailable));
+            .push_back(Err(DurableStreamRemoteError::Unavailable));
         let mut pending = Box::pin(read());
         assert!(futures::poll!(pending.as_mut()).is_pending());
         assert_eq!(rpc.read_requests.lock().await.len(), 1);
@@ -2663,13 +2665,13 @@ async fn native_tool_results_bind_early_output_after_reconstruction_and_reject_c
                 &identity.invocation.idempotency_key,
             )
             .unwrap(),
-            role: SessionStreamRole::Output,
+            role: SessionStreamRole::ToolStdout,
         });
         let handle = producer.register(None, request).await.unwrap().value;
         let mapping = StreamSessionMappingRecord {
             transport_stream_id: 47,
             handle: handle.clone(),
-            role: SessionStreamRole::Output,
+            role: SessionStreamRole::ToolStdout,
         };
         producer
             .write_items(
@@ -2696,7 +2698,7 @@ async fn native_tool_results_bind_early_output_after_reconstruction_and_reject_c
         .await
         .unwrap();
         let binding = producer
-            .local_binding(47, &handle, SessionStreamRole::Output)
+            .local_binding(47, &handle, SessionStreamRole::ToolStdout)
             .await
             .unwrap();
         let streams = StreamSession::open(
@@ -2714,8 +2716,10 @@ async fn native_tool_results_bind_early_output_after_reconstruction_and_reject_c
                 stdout: Some(SchemaValueStream::from_host_endpoint(
                     RegisteredOutputStream {
                         transport_stream_id: 47,
+                        role: SessionStreamRole::ToolStdout,
                     },
                 )),
+                stderr: None,
             }
             .into_typed_schema_value()
             .unwrap()
@@ -7294,7 +7298,7 @@ async fn detach_resume_and_takeover_advance_authority_and_fence_old_epochs() {
     let mapping = StreamSessionMappingRecord {
         transport_stream_id: 7,
         handle: handle.clone(),
-        role: SessionStreamRole::Input,
+        role: SessionStreamRole::ToolStdin,
     };
     let output_handle = producer
         .register(
@@ -7381,12 +7385,12 @@ async fn detach_resume_and_takeover_advance_authority_and_fence_old_epochs() {
                 StreamSessionMappingRecord {
                     transport_stream_id: 7,
                     handle: handle.clone(),
-                    role: SessionStreamRole::Input,
+                    role: SessionStreamRole::ToolStdin,
                 },
                 StreamSessionMappingRecord {
                     transport_stream_id: 8,
                     handle: output_handle.clone(),
-                    role: SessionStreamRole::Output,
+                    role: SessionStreamRole::ToolStderr,
                 },
             ],
         )
@@ -7535,6 +7539,26 @@ async fn detach_resume_and_takeover_advance_authority_and_fence_old_epochs() {
     epoch3
         .cancel_stream(
             7,
+            StreamCancelRole::OutputConsumer,
+            StreamCancelReason::Cancelled,
+            None,
+            Some(3),
+        )
+        .await
+        .expect_err("tool stdin must reject output cancellation");
+    epoch3
+        .cancel_stream(
+            8,
+            StreamCancelRole::InputProducer,
+            StreamCancelReason::Cancelled,
+            None,
+            Some(3),
+        )
+        .await
+        .expect_err("tool stderr must reject input cancellation");
+    epoch3
+        .cancel_stream(
+            7,
             StreamCancelRole::InputProducer,
             StreamCancelReason::Cancelled,
             Some("explicit input cancellation".to_string()),
@@ -7602,14 +7626,14 @@ async fn detach_resume_and_takeover_advance_authority_and_fence_old_epochs() {
         (
             &handle,
             7,
-            SessionStreamRole::Input,
+            SessionStreamRole::ToolStdin,
             StreamCancelRole::InputProducer,
             StreamCancelReason::Cancelled,
         ),
         (
             &output_handle,
             8,
-            SessionStreamRole::Output,
+            SessionStreamRole::ToolStderr,
             StreamCancelRole::OutputConsumer,
             StreamCancelReason::GuestDrop,
         ),
@@ -7658,9 +7682,12 @@ async fn nested_consumer_mappings_preserve_the_parent_input_or_output_role() {
                 root_kind,
                 recursive_value_path: Vec::new(),
             },
-            match role {
+            match role.direction() {
                 SessionStreamRole::Input => StreamSourceKind::AgentHostedInput,
                 SessionStreamRole::Output => StreamSourceKind::InvocationOutput,
+                SessionStreamRole::ToolStdin
+                | SessionStreamRole::ToolStdout
+                | SessionStreamRole::ToolStderr => unreachable!(),
             },
         );
         root_request.session_mapping = Some(StreamSessionMapping {
@@ -7819,9 +7846,12 @@ async fn nested_consumer_mappings_preserve_the_parent_input_or_output_role() {
             restarted
                 .mapping_for_handle(
                     &nested,
-                    match role {
+                    match role.direction() {
                         SessionStreamRole::Input => SessionStreamRole::Output,
                         SessionStreamRole::Output => SessionStreamRole::Input,
+                        SessionStreamRole::ToolStdin
+                        | SessionStreamRole::ToolStdout
+                        | SessionStreamRole::ToolStderr => unreachable!(),
                     },
                 )
                 .is_none()

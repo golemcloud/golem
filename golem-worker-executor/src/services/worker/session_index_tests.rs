@@ -1542,7 +1542,7 @@ async fn forwarding_intent_reservation_is_indexed_in_both_owner_local_sessions()
         .lookup_durable_stream_control_metadata(
             &owner,
             AgentMode::Durable,
-            test_fingerprint(),
+            source.callee_fingerprint,
             &source,
         )
         .await
@@ -1577,7 +1577,7 @@ async fn forwarding_intent_reservation_is_indexed_in_both_owner_local_sessions()
         .lookup_durable_stream_control_metadata(
             &owner,
             AgentMode::Durable,
-            test_fingerprint(),
+            destination.callee_fingerprint,
             &destination,
         )
         .await
@@ -4216,11 +4216,11 @@ async fn raw_lookup_catches_up_archived_history_after_full_multilayer_reopen() {
         .expect("oplog write");
     assert_eq!(
         MultiLayerOplog::try_archive_blocking(&oplog).await,
-        Some(true)
+        Ok(Some(true))
     );
     assert_eq!(
         MultiLayerOplog::try_archive_blocking(&oplog).await,
-        Some(false)
+        Ok(Some(false))
     );
     drop(oplog);
     drop(worker_service);

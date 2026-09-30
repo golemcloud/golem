@@ -34,7 +34,11 @@ test "ambient tool facade preserves nominal source syntax after core split" {
     subcommands: [],
     body: None,
   }
-  let def : @tool.ToolDef = { version: "1.0.0", commands: [root], }
+  let def : @tool.ToolDef = {
+    version: "1.0.0",
+    requires_filesystem: false,
+    commands: [root],
+  }
   assert_true(def.tool_name() is Ok("facade"))
   let cases : Result[Array[@tool.ErrorCaseDef], @tool.ToolBuildError] = FacadeError::error_cases()
   assert_true(cases is Ok([]))

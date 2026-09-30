@@ -226,6 +226,7 @@ fn GraphEncoder::encode_body(
     Binary(restrictions) => @types.BinaryType(restrictions)
     Path(spec) => @types.PathType(spec)
     Url(restrictions) => @types.UrlType(restrictions)
+    Uuid => @types.UuidType
     Datetime => @types.DatetimeType
     Duration => @types.DurationType
     Quantity(spec) => @types.QuantityType(spec)
@@ -471,6 +472,7 @@ fn GraphDecoder::body_of(
     @types.BinaryType(restrictions) => Binary(restrictions)
     @types.PathType(spec) => Path(spec)
     @types.UrlType(restrictions) => Url(restrictions)
+    @types.UuidType => Uuid
     @types.DatetimeType => Datetime
     @types.DurationType => Duration
     @types.QuantityType(spec) => Quantity(spec)
@@ -625,6 +627,7 @@ fn ValueEncoder::emit_node(
     Binary(bytes, mime_type) => @types.BinaryValue({ bytes, mime_type, })
     Path(s) => @types.PathValue(s)
     Url(s) => @types.UrlValue(s)
+    Uuid(uuid) => @types.UuidValue(uuid)
     Datetime(dt) => {
       guard datetime_valid(dt) else {
         raise EncodeError(
@@ -1269,6 +1272,7 @@ fn ValueDecoder::from_node(
     @types.BinaryValue(bp) => Binary(bp.bytes, bp.mime_type)
     @types.PathValue(s) => Path(s)
     @types.UrlValue(s) => Url(s)
+    @types.UuidValue(uuid) => Uuid(uuid)
     @types.DatetimeValue(dt) => {
       guard datetime_valid(dt) else {
         raise DecodeError(

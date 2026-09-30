@@ -116,7 +116,6 @@ object ToolRpcCodegen {
   ) {
     private val clientName = s"${root.name}Client"
 
-    private val projectionName  = s"${root.name}CallProjection"
     private val wrapperDefs     = mutable.ListBuffer.empty[String]
     private val toolsByFqn      = allTools.map(tool => tool.fqn -> tool).toMap
     private val requiredImports = ToolProjectionIR
@@ -132,7 +131,7 @@ object ToolRpcCodegen {
 
     private def keptLeafParams(tool: Tool, m: Method, omitted: List[String]): List[Param] =
       (inheritedRootParams(tool, m) ++ m.params).filter { p =>
-        !p.isPrincipal && !p.isStdout && !omittedMatches(tool, m, p, omitted)
+        !p.isPrincipal && !p.isStdout && !p.isStderr && !omittedMatches(tool, m, p, omitted)
       }
 
     private def keptSubtreeParams(tool: Tool, m: Method, omitted: List[String]): List[Param] =
@@ -140,36 +139,28 @@ object ToolRpcCodegen {
         !p.isPrincipal && !omittedMatches(tool, m, p, omitted)
       }
 
-    private def okResultType(okType: Option[String], hasStdout: Boolean): String =
-      (okType, hasStdout) match {
-        case (Some(ok), true)  => ok
-        case (None, true)      => "_root_.scala.Unit"
-        case (Some(ok), false) => ok
-        case (None, false)     => "_root_.scala.Unit"
-      }
+    private def okResultType(okType: Option[String]): String =
+      okType.getOrElse("_root_.scala.Unit")
 
-    private def leafReturnType(shape: LeafReturn, hasStdout: Boolean): String = {
+    private def leafReturnType(shape: LeafReturn): String = {
       val err = shape.errType.getOrElse("_root_.scala.Nothing")
-      val ok  = okResultType(shape.okType, hasStdout)
-      if (hasStdout)
+      val ok  = okResultType(shape.okType)
+      if (shape.hasStdout || shape.hasStderr)
         s"_root_.scala.Either[_root_.golem.tool.ToolError[$err], _root_.golem.tool.ToolInvocation[$err, $ok]]"
       else
         s"_root_.scala.concurrent.Future[_root_.scala.Either[_root_.golem.tool.ToolError[$err], $ok]]"
     }
 
-    private def valueEntry(tool: Tool, method: Method, param: Param): String =
-      ToolProjectionRendering.valueEntry(projected(tool, method, param), AmbientClient)
+    private def macroTypeRef(tool: Tool): String =
+      if (tool.pkg.isEmpty) tool.name else s"_root_.${tool.fqn}"
 
-    private def prefixEntry(tool: Tool, m: Method, p: Param, model: String): String = {
-      val name        = canonicalValueName(tool, m, p)
-      val aliases     = canonicalAliases(tool, m, p)
-      val aliasesExpr =
-        if (aliases.isEmpty) "_root_.scala.Nil"
-        else aliases.map(a => s""""$a"""").mkString("_root_.scala.List(", ", ", ")")
-      if (isCountFlag(p))
-        s"""_root_.golem.tool.ToolClientRuntime.countFlagPrefixValue("$name", $aliasesExpr, ${p.ident})"""
-      else
-        s"""_root_.golem.tool.ToolClientRuntime.prefixValue("$name", $aliasesExpr, ${p.ident}, _root_.scala.Predef.implicitly[_root_.golem.schema.IntoSchema[${p.typeExpr}]], $model)"""
+    private def wireField(tool: Tool, method: Method, param: Param): String = {
+      val name  = canonicalValueName(tool, method, param)
+      val codec =
+        if (isCountFlag(param))
+          "_root_.golem.schema.wire.ConcreteCodec.uint.xmap[Int](_.value.toInt, v => _root_.golem.UInt(v.toLong))"
+        else s"_root_.golem.schema.wire.ConcreteCodec.derived[${param.typeExpr}]"
+      s"""_root_.golem.tool.WireToolInputField("$name", $codec.asInstanceOf[_root_.golem.schema.wire.ConcreteCodec[Any]], ${param.ident})"""
     }
 
     private def listExpr(entries: List[String], indent: String): String =
@@ -177,32 +168,114 @@ object ToolRpcCodegen {
       else
         entries.mkString(s"_root_.scala.List(\n$indent  ", s",\n$indent  ", s"\n$indent)")
 
-    /** Renders one leaf command method. */
+    private def wireInput(tool: Tool, method: Method, kept: List[Param]): (String, String) = {
+      val values = kept.filterNot(isStreamParam)
+      val fields = values.map { p =>
+        val codec =
+          if (isCountFlag(p))
+            "_root_.golem.schema.wire.ConcreteCodec.uint.xmap[Int](_.value.toInt, v => _root_.golem.UInt(v.toLong))"
+          else s"_root_.golem.schema.wire.ConcreteCodec.derived[${p.typeExpr}]"
+        s"""("${canonicalValueName(
+            tool,
+            method,
+            p
+          )}", $codec.asInstanceOf[_root_.golem.schema.wire.ConcreteCodec[Any]])"""
+      }
+      val valueType =
+        if (values.isEmpty) "_root_.scala.Unit"
+        else if (values.size == 1) values.head.typeExpr
+        else values.map(_.typeExpr).mkString("(", ", ", ")")
+      val valueExpr =
+        if (values.isEmpty) "()"
+        else if (values.size == 1) values.head.ident
+        else values.map(_.ident).mkString("(", ", ", ")")
+      val from =
+        if (values.isEmpty) "_ => ()"
+        else if (values.size == 1) s"_.head.asInstanceOf[$valueType]"
+        else values.indices.map(i => s"v($i).asInstanceOf[${values(i).typeExpr}]").mkString("v => (", ", ", ")")
+      val to =
+        if (values.isEmpty) "_ => _root_.scala.Vector.empty"
+        else if (values.size == 1) "v => _root_.scala.Vector(v)"
+        else values.indices.map(i => s"v._${i + 1}").mkString("v => _root_.scala.Vector(", ", ", ")")
+      val codec =
+        s"_root_.golem.schema.wire.ConcreteCodec.record(_root_.scala.Vector(${fields.mkString(", ")})).xmap[$valueType]($from, $to)"
+      (codec, valueExpr)
+    }
+
+    /**
+     * Renders one leaf command method. `contextId` is empty for the root
+     * client, otherwise the wrapper path (used for cache val naming);
+     * `isWrapper` selects the dynamic (inherited-prefix) input path.
+     */
     private def leafMethod(
       tool: Tool,
       m: Method,
       shape: LeafReturn,
       omitted: List[String],
+      commandPrefix: List[String],
       isWrapper: Boolean,
       indent: String
     ): String = {
       val kept    = keptLeafParams(tool, m, omitted)
       val stdin   = m.params.find(_.isStdin)
-      val retType = leafReturnType(shape, shape.hasStdout)
+      val retType = leafReturnType(shape)
 
-      val valueEntries = kept
-        .filterNot(isStreamParam)
-        .map(valueEntry(tool, m, _))
+      val schemaPath      = commandPrefix ++ m.localCommandPath
+      val commandPathExpr = ToolProjectionRendering.commandPath(None, schemaPath)
 
       val stdinExpr = stdin.map(p => s"_root_.scala.Some(${p.ident})").getOrElse("_root_.scala.None")
 
       val paramDecls = kept.map(paramDecl).mkString(", ")
-      val prefixExpr = if (isWrapper) "__inheritedPrefix" else "_root_.scala.Nil"
-      val operation  = if (shape.hasStdout) "__start" else "__await"
 
+      if (!isWrapper) {
+        val (codec, value) = wireInput(tool, m, kept)
+        val errorDecoder   = shape.errType match {
+          case Some(err) =>
+            s"_root_.golem.runtime.macros.ToolErrorSchemaDerivation.wireDecoder[$err]"
+          case None => "_ => _root_.scala.Left(\"unexpected remote tool error\")"
+        }
+        val wireDecode = shape.okType match {
+          case Some(ok) =>
+            s"_root_.golem.tool.WireToolClientRuntime.decodeValue(__r, _root_.golem.schema.wire.ConcreteCodec.derived[$ok])"
+          case None => "_root_.golem.tool.WireToolClientRuntime.decodeUnit(__r)"
+        }
+        val call =
+          if (shape.hasStdout || shape.hasStderr)
+            s"_root_.golem.tool.WireToolClientRuntime.start(__wireTransport, $commandPathExpr, __input, $stdinExpr, ${shape.hasStdout}, ${shape.hasStderr}, $errorDecoder)(__r => $wireDecode)"
+          else
+            s"_root_.golem.tool.WireToolClientRuntime.complete(_root_.golem.tool.WireToolClientRuntime.run(__wireTransport, $commandPathExpr, __input, $stdinExpr, $errorDecoder))(__r => $wireDecode)"
+        return s"""${indent}def ${m.name}(${kept.map(paramDecl).mkString(", ")}): $retType = {
+$indent  val __graph = _root_.golem.runtime.macros.WireToolMacro.inputGraph[${macroTypeRef(
+            tool
+          )}](${ToolProjectionRendering
+            .stringList(schemaPath)})
+$indent  val __input = _root_.golem.tool.WireToolClientRuntime.input($codec, __graph, $value)
+$indent  $call
+$indent}"""
+      }
+
+      val fields       = kept.filterNot(isStreamParam).map(wireField(tool, m, _))
+      val errorDecoder = shape.errType match {
+        case Some(err) => s"_root_.golem.runtime.macros.ToolErrorSchemaDerivation.wireDecoder[$err]"
+        case None      => "_ => _root_.scala.Left(\"unexpected remote tool error\")"
+      }
+      val wireDecode = shape.okType match {
+        case Some(ok) =>
+          s"_root_.golem.tool.WireToolClientRuntime.decodeValue(__r, _root_.golem.schema.wire.ConcreteCodec.derived[$ok])"
+        case None => "_root_.golem.tool.WireToolClientRuntime.decodeUnit(__r)"
+      }
+      val call =
+        if (shape.hasStdout || shape.hasStderr)
+          s"_root_.golem.tool.WireToolClientRuntime.start(__wireTransport, $commandPathExpr, __input, $stdinExpr, ${shape.hasStdout}, ${shape.hasStderr}, $errorDecoder)(__r => $wireDecode)"
+        else
+          s"_root_.golem.tool.WireToolClientRuntime.complete(_root_.golem.tool.WireToolClientRuntime.run(__wireTransport, $commandPathExpr, __input, $stdinExpr, $errorDecoder))(__r => $wireDecode)"
       s"""${indent}def ${m.name}($paramDecls): $retType = {
-$indent  val __params = _root_.golem.tool.ToolCallPreparation.encodeParams(${listExpr(valueEntries, s"$indent ")})
-$indent  $projectionName.${operation}_${m.name}(__backend, $prefixExpr, __params, $stdinExpr)
+$indent  val __graph = _root_.golem.runtime.macros.WireToolMacro.inputGraph[${macroTypeRef(root)}]($commandPathExpr)
+$indent  val __input = _root_.golem.tool.WireToolClientRuntime.inputFields(__graph, __inheritedPrefix ++ ${listExpr(
+          fields,
+          s"$indent "
+        )})
+$indent  $call
 $indent}"""
     }
 
@@ -240,7 +313,7 @@ $indent}"""
           !p.isPrincipal && !isStreamParam(p) && !omittedMatches(tool, m, p, omitted)
         }
       }
-      val prefixEntries = prefixParams.map(prefixEntry(tool, m, _, "__prefixModel"))
+      val prefixEntries = prefixParams.map(wireField(tool, m, _))
 
       val basePrefix = if (isWrapper) "__inheritedPrefix ++ " else ""
       val prefixExpr =
@@ -261,12 +334,9 @@ $indent}"""
 
       Some(
         s"""${indent}def ${m.name}($paramDecls): $clientName.$wrapperName = {
-$indent  val __prefixModel = $projectionName.__prefixInputModel(${ToolProjectionRendering.stringList(
-            fullCommandPath
-          )})
 $indent  val __prefix = $prefixExpr
 $indent  new $clientName.$wrapperName(
-$indent    __backend,
+$indent    __wireTransport,
 $indent    __prefix
 $indent  )
 $indent}"""
@@ -289,7 +359,7 @@ $indent}"""
         case shape: LeafReturn =>
           val kept = keptLeafParams(tool, m, Nil)
           Some(
-            s"  def ${m.name}(${kept.map(paramDecl).mkString(", ")}): ${leafReturnType(shape, shape.hasStdout)}"
+            s"  def ${m.name}(${kept.map(paramDecl).mkString(", ")}): ${leafReturnType(shape)}"
           )
       }
 
@@ -326,6 +396,7 @@ $indent}"""
                 m,
                 shape,
                 omitted,
+                commandPath,
                 isWrapper = true,
                 indent = "    "
               )
@@ -334,8 +405,8 @@ $indent}"""
       }
 
       wrapperDefs += s"""  final class $wrapperName private[$clientName] (
-    __backend: _root_.golem.tool.AmbientToolCallBackend,
-    __inheritedPrefix: _root_.scala.List[_root_.golem.tool.CanonicalInputValue]
+    __wireTransport: _root_.golem.tool.WireToolRpcTransport,
+    __inheritedPrefix: _root_.scala.List[_root_.golem.tool.WireToolInputField]
   ) {
 ${methods.mkString("\n\n")}
   }"""
@@ -364,7 +435,7 @@ ${methods.mkString("\n\n")}
                 None
             }
           case shape: LeafReturn =>
-            Some(leafMethod(root, m, shape, Nil, isWrapper = false, indent = "    "))
+            Some(leafMethod(root, m, shape, Nil, Nil, isWrapper = false, indent = "    "))
         }
       }
 
@@ -392,8 +463,8 @@ ${methods.mkString("\n\n")}
 
       sb.append(s"  private final class Root(lookupName: _root_.scala.Predef.String) extends $clientName {\n")
       sb.append(
-        "    private val __backend: _root_.golem.tool.AmbientToolCallBackend =\n" +
-          "      new _root_.golem.tool.AmbientToolCallBackend(_root_.golem.runtime.tool.client.ToolRpcClient.transport(lookupName))\n\n"
+        "    private val __wireTransport: _root_.golem.tool.WireToolRpcTransport =\n" +
+          "      _root_.golem.runtime.tool.client.ToolRpcClient.wireTransport(lookupName)\n\n"
       )
       sb.append(rootImpls.mkString("\n\n"))
       sb.append("\n  }\n")

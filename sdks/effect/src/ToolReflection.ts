@@ -54,46 +54,57 @@ export interface ReflectedToolFailure {
   readonly value?: JsonValue
 }
 
-/** A scoped command invocation with independent stdout and structured result. @since 1.6.0 @category streams */
+/** A scoped command invocation with independent outputs and structured result. @since 1.6.0 @category streams */
 export interface StartedToolInvocation<A, E = never> {
   readonly stdout: Stream.Stream<Uint8Array, ToolRuntimeError<never>>
+  readonly stderr: Stream.Stream<Uint8Array, ToolRuntimeError<never>>
   readonly result: Effect.Effect<A, ToolRuntimeError<E> | ToolReflectionError>
   readonly cancel: Effect.Effect<void>
   readonly collect: Effect.Effect<
-    { readonly result: A; readonly stdout: Uint8Array },
+    { readonly result: A; readonly stdout: Uint8Array; readonly stderr: Uint8Array },
     ToolRuntimeError<E> | ToolReflectionError
   >
 }
 
-const collectResultAndStdout = <
+const collectResultAndOutputs = <
   A,
   ResultError,
   StdoutError,
   ResultRequirements,
   StdoutRequirements,
+  StderrError,
+  StderrRequirements,
 >(
   result: Effect.Effect<A, ResultError, ResultRequirements>,
   stdout: Stream.Stream<Uint8Array, StdoutError, StdoutRequirements>,
+  stderr: Stream.Stream<Uint8Array, StderrError, StderrRequirements>,
 ): Effect.Effect<
-  { readonly result: A; readonly stdout: Uint8Array },
-  ResultError | StdoutError,
-  ResultRequirements | StdoutRequirements
+  { readonly result: A; readonly stdout: Uint8Array; readonly stderr: Uint8Array },
+  ResultError | StdoutError | StderrError,
+  ResultRequirements | StdoutRequirements | StderrRequirements
 > =>
   Effect.scoped(
-    Effect.all([Effect.exit(result), Effect.exit(Stream.runCollect(stdout))], {
-      concurrency: "unbounded",
-    }),
+    Effect.all(
+      [
+        Effect.exit(result),
+        Effect.exit(Stream.runCollect(stdout)),
+        Effect.exit(Stream.runCollect(stderr)),
+      ],
+      { concurrency: "unbounded" },
+    ),
   ).pipe(
     Effect.flatMap(
-      ([resultExit, stdoutExit]): Effect.Effect<
-        { readonly result: A; readonly stdout: Uint8Array },
-        ResultError | StdoutError
+      ([resultExit, stdoutExit, stderrExit]): Effect.Effect<
+        { readonly result: A; readonly stdout: Uint8Array; readonly stderr: Uint8Array },
+        ResultError | StdoutError | StderrError
       > => {
         if (Exit.isFailure(resultExit)) return Effect.failCause(resultExit.cause)
         if (Exit.isFailure(stdoutExit)) return Effect.failCause(stdoutExit.cause)
+        if (Exit.isFailure(stderrExit)) return Effect.failCause(stderrExit.cause)
         return Effect.succeed({
           result: resultExit.value,
           stdout: concatBytes(stdoutExit.value),
+          stderr: concatBytes(stderrExit.value),
         })
       },
     ),
@@ -111,6 +122,7 @@ export class ToolCommand {
   readonly inputSchema?: SchemaRef
   readonly stdin?: Common.StreamSpec
   readonly stdout?: Common.StreamSpec
+  readonly stderr?: Common.StreamSpec
   readonly result?: SchemaRef
   readonly errors: ReadonlyArray<{ readonly name: string; readonly payload?: SchemaRef }>
   readonly annotations?: Common.CommandAnnotations
@@ -192,6 +204,7 @@ export class ToolCommand {
     this.constraints = Object.freeze([...(body?.constraints ?? [])])
     this.stdin = body?.stdin
     this.stdout = body?.stdout
+    this.stderr = body?.stderr
     this.annotations = body?.annotations
     this.result = body?.result
       ? SchemaRef.fromImmutableGraph(graph, typeAt(body.result.type))
@@ -318,6 +331,7 @@ export class ToolCommand {
       wireGraph: this.wireGraph,
       stdin: this.stdin,
       stdout: this.stdout,
+      stderr: this.stderr,
       result: this.result,
       toolName: this.toolName,
       path: this.path,
@@ -341,8 +355,10 @@ export class ToolCommand {
         { graph: command.wireGraph, value: schemaValueFromWit(input) },
         stdin,
         command.stdout !== undefined,
+        command.stderr !== undefined,
       )
       const stdout = started.stdout ?? Stream.empty
+      const stderr = started.stderr ?? Stream.empty
       const result = started.result.pipe(
         Effect.mapError((error) => command.mapFailure(error)),
         Effect.flatMap((terminal) => {
@@ -371,8 +387,8 @@ export class ToolCommand {
           )
         }),
       )
-      const collect = collectResultAndStdout(result, stdout)
-      return { stdout, result, cancel: started.cancel, collect }
+      const collect = collectResultAndOutputs(result, stdout, stderr)
+      return { stdout, stderr, result, cancel: started.cancel, collect }
     })
   }
 
@@ -401,17 +417,23 @@ export class ToolCommand {
                 }),
           ),
         )
-        const collect = collectResultAndStdout(result, started.stdout)
-        return { stdout: started.stdout, result, cancel: started.cancel, collect }
+        const collect = collectResultAndOutputs(result, started.stdout, started.stderr)
+        return {
+          stdout: started.stdout,
+          stderr: started.stderr,
+          result,
+          cancel: started.cancel,
+          collect,
+        }
       }),
     )
   }
 
   /** Await a schema-native result, draining optional stdout concurrently. @since 1.6.0 @category invocation */
   invokeValue(input: Core.SchemaValueTree, stdin?: Stream.Stream<Uint8Array>) {
-    if (this.stdout?.required)
+    if (this.stdout?.required || this.stderr?.required)
       return Effect.fail(
-        new ToolReflectionError("input", "command requires caller-readable stdout"),
+        new ToolReflectionError("input", "command requires caller-readable output"),
       )
     return Effect.scoped(
       this.startValue(input, stdin).pipe(
@@ -446,14 +468,15 @@ export class ToolCommand {
       wireGraph: this.wireGraph,
       stdin: this.stdin,
       stdout: this.stdout,
+      stderr: this.stderr,
       toolName: this.toolName,
       path: this.path,
       validateConstraints: (value: Core.SchemaValueTree) => this.validateConstraints(value),
     }
     return Effect.gen(function* () {
-      if (command.stdout?.required)
+      if (command.stdout?.required || command.stderr?.required)
         return yield* Effect.fail(
-          new ToolReflectionError("input", "command requires caller-readable stdout"),
+          new ToolReflectionError("input", "command requires caller-readable output"),
         )
       if (command.stdin?.required && !stdin)
         return yield* Effect.fail(new ToolReflectionError("input", "command requires stdin"))
@@ -651,6 +674,7 @@ export class DynamicToolClient {
     input: Core.TypedSchemaValue,
     stdin?: Stream.Stream<Uint8Array>,
     withStdout = false,
+    withStderr = false,
   ): Effect.Effect<
     StartedToolInvocation<Core.TypedSchemaValue | undefined>,
     ToolReflectionError | ToolRuntimeError<never>,
@@ -670,11 +694,13 @@ export class DynamicToolClient {
         encoded,
         stdin,
         withStdout,
+        withStderr,
       )
       const stdout = started.stdout ?? Stream.empty
+      const stderr = started.stderr ?? Stream.empty
       const result = started.result.pipe(Effect.map((terminal) => terminal.result))
-      const collect = collectResultAndStdout(result, stdout)
-      return { stdout, result, cancel: started.cancel, collect }
+      const collect = collectResultAndOutputs(result, stdout, stderr)
+      return { stdout, stderr, result, cancel: started.cancel, collect }
     })
   }
 

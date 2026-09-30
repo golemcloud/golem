@@ -31,8 +31,8 @@ use golem_api_grpc::proto::golem::worker::{
     DurableStreamMapping, InputStreamEnd, InputStreamItem, InvocationAccepted, InvocationRejected,
     InvocationRejectionReason, InvocationRequest, InvocationResponse, InvocationSessionResult,
     OutputStreamEnd, OutputStreamError, OutputStreamItem, ResumeOperation, StreamCancel,
-    StreamCancelReason, StreamCancelRole, StreamCursor, StreamMappingRole, input_stream_item,
-    invocation_request, invocation_response, invocation_session_completion,
+    StreamCancelReason, StreamCancelRole, StreamCursor, StreamMappingRole, ToolByteStreamRole,
+    input_stream_item, invocation_request, invocation_response, invocation_session_completion,
     invocation_session_result,
 };
 use golem_common::SafeDisplay;
@@ -45,6 +45,7 @@ use golem_common::model::invocation_session_public::{
     PublicServerMessage, PublicStreamDirection, PublicStreamMapping, PublicTypedValue,
     decode_binary_message, decode_client_text, encode_binary_message, encode_text,
 };
+use golem_common::schema::agent::reachable_defs;
 use golem_common::schema::fingerprint::{
     SchemaFingerprintV1, resolve_stream_element_schema_v1, schema_fingerprint_v1,
 };
@@ -1106,6 +1107,7 @@ where
                         input,
                         stdin,
                         stdout,
+                        stderr,
                         ..
                     } => Ok(Some(InitialMessage::ToolStart {
                         start: PublicToolSessionStart {
@@ -1117,6 +1119,7 @@ where
                             input: *input,
                             stdin,
                             stdout,
+                            stderr,
                             idempotency_key,
                             attempt_id,
                             expected_deployment_revision: None,
@@ -2101,10 +2104,14 @@ fn translate_accepted(
         .map_err(|error| AdapterError::new(error.code, error.to_string()))?;
     if accepted.tool_name.is_some() {
         for mapping in &accepted.stream_mappings {
-            let role = match mapping.role() {
-                StreamMappingRole::Input => PublicByteStreamRole::Stdin,
-                StreamMappingRole::Output => PublicByteStreamRole::Stdout,
-                StreamMappingRole::Unspecified => continue,
+            let Some(role) = mapping.tool_byte_stream_role else {
+                continue;
+            };
+            let role = match ToolByteStreamRole::try_from(role) {
+                Ok(ToolByteStreamRole::Stdin) => PublicByteStreamRole::Stdin,
+                Ok(ToolByteStreamRole::Stdout) => PublicByteStreamRole::Stdout,
+                Ok(ToolByteStreamRole::Stderr) => PublicByteStreamRole::Stderr,
+                Err(_) => continue,
             };
             state.byte_roles.insert(mapping.transport_stream_id, role);
         }
@@ -2161,7 +2168,11 @@ fn translate_result(
                     Ok(reference)
                 },
             )?;
-            PublicInvocationResult::Value { value }
+            let graph = SchemaGraph {
+                defs: reachable_defs(&graph, &schema),
+                root: schema,
+            };
+            PublicInvocationResult::Value { graph, value }
         }
         Some(invocation_session_result::Result::ToolResult(value)) => {
             use golem_api_grpc::proto::golem::worker::{
@@ -2195,11 +2206,8 @@ fn translate_result(
                         Ok(reference)
                     },
                 )?;
-                Ok::<_, PublicSchemaValueError>(PublicTypedValue {
-                    schema: graph,
-                    value,
-                })
-                .map_err(AdapterError::from)
+                Ok::<_, PublicSchemaValueError>(PublicTypedValue { graph, value })
+                    .map_err(AdapterError::from)
             };
             match value
                 .result
@@ -3089,6 +3097,7 @@ mod tests {
             }),
             high_water: None,
             role: role as i32,
+            tool_byte_stream_role: None,
         }
     }
 
@@ -3188,7 +3197,7 @@ mod tests {
         PublicClientMessage::InputStreamItem {
             channel: 1,
             sequence: DecimalU64(sequence),
-            value: serde_json::json!(value),
+            value: serde_json::json!({"kind": "u8", "value": value}),
             version: 1,
         }
     }
@@ -3382,9 +3391,13 @@ mod tests {
             });
             state.application = Some("app".to_string());
             state.environment = Some("env".to_string());
-            let fingerprint = schema_fingerprint_v1(&SchemaGraph::empty(), Some(&SchemaType::u8()))
-                .unwrap()
-                .0;
+            let schema = SchemaType::u8();
+            let graph = SchemaGraph {
+                defs: Vec::new(),
+                root: SchemaType::stream(Some(schema.clone())),
+            };
+            state.graph = Some(graph.clone());
+            let fingerprint = schema_fingerprint_v1(&graph, Some(&schema)).unwrap().0;
             let accepted = translate_accepted(
                 &mut state,
                 InvocationAccepted {
@@ -3403,10 +3416,11 @@ mod tests {
                         Vec::new()
                     },
                     stream_mappings: if native {
-                        vec![
-                            private_mapping(7, StreamMappingRole::Input, fingerprint),
-                            private_mapping(8, StreamMappingRole::Output, fingerprint),
-                        ]
+                        let mut stdin = private_mapping(7, StreamMappingRole::Input, fingerprint);
+                        stdin.tool_byte_stream_role = Some(ToolByteStreamRole::Stdin as i32);
+                        let mut stdout = private_mapping(8, StreamMappingRole::Output, fingerprint);
+                        stdout.tool_byte_stream_role = Some(ToolByteStreamRole::Stdout as i32);
+                        vec![stdin, stdout]
                     } else {
                         Vec::new()
                     },
@@ -4115,14 +4129,17 @@ mod tests {
         else {
             panic!("stream result translated to the wrong public message")
         };
-        let PublicInvocationResult::Value { value } = *result else {
+        let PublicInvocationResult::Value { graph, value } = *result else {
             panic!("stream result translated to the wrong public value")
         };
+        assert_eq!(graph.root, SchemaType::stream(Some(SchemaType::u8())));
+        assert!(graph.defs.is_empty());
         assert_eq!(mappings.len(), 1);
         assert_eq!(mappings[0].direction, PublicStreamDirection::Output);
         assert_eq!(mappings[0].channel, 1);
+        assert_eq!(value["kind"], "stream");
         assert_eq!(
-            value["$stream"]["streamToken"],
+            value["value"]["streamToken"],
             serde_json::Value::String(mappings[0].stream_token.clone())
         );
         assert!(matches!(

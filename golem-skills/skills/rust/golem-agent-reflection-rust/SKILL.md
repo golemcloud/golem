@@ -29,7 +29,7 @@ Validation happens at three different boundaries:
 | Boundary | What Rust validates | What remains authoritative remotely |
 |---|---|---|
 | Definition/build | Schema well-formedness, duplicate caller-owned tool paths, command-tree restrictions | Whether an optimistic caller-defined target is deployed |
-| Pack/create/start | JSON shape, exact integer range, constructor/config shape, required stdin/stdout, defaults, `Present`, nested `ValueIs`, and command constraints | Authorization, registered lifecycle, effective config and secrets |
+| Pack/create/start | JSON shape, exact integer range, constructor/config shape, required stdin/stdout/stderr, defaults, `Present`, nested `ValueIs`, and command constraints | Authorization, registered lifecycle, effective config and secrets |
 | Completion | Result cardinality, resolved graph equivalence, declared custom-error payloads, and value decoding | Execution failures and undeclared remote errors |
 
 Normal RPC and caller-defined Rust values use `Option<T>`. Reflected canonical JSON
@@ -371,13 +371,13 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-`invoke_value` is the simple awaited path. For independently consumed stdout,
+`invoke_value` is the simple awaited path. For independently consumed stdout or stderr,
 call `start_value`; it consumes the optional stdin carrier and returns a
-`ToolInvocation` containing the stdout reader plus cancellation/result handles.
-Move stdout to a concurrent consumer or call `collect()`, which drives stdout
-and structured completion together. `collect()` reports the structured result
-error first when both channels fail. Call `cancel()` when abandoning work and
-`close()` on stdout when abandoning only that attachment. A declared custom
+`ToolInvocation` containing both output readers plus cancellation/result handles.
+Move each declared output to a concurrent consumer or call `collect()`, which drives stdout,
+stderr, and structured completion together. `collect()` reports the structured result
+error first when multiple channels fail. Call `cancel()` when abandoning work and
+`close()` on an output when abandoning only that attachment. A declared custom
 error is returned as `ToolError::Tool(ReflectedToolCustomError)` with its typed
 payload; structural host failures and undeclared custom errors remain distinct.
 

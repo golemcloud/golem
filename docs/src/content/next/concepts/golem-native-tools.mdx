@@ -95,7 +95,7 @@ While a value remains opaque, its serialized representation carries identity rat
 
 One tool definition describes its command tree, inputs, outputs, declared errors, and streams. Golem uses that metadata for discovery, help, runtime validation, and generated or definition-owned typed clients. A tool authored in one supported language can be called from another without reducing its contract to untyped JSON.
 
-The command model is intentionally CLI-shaped: nested commands, global options, flags, fixed and variadic positionals, stdin, stdout, structured results, and exit-coded errors. You can therefore wrap `git`, `curl`, or another executable behind a typed, permission-aware surface. MCP imports are projected into the same registry and called through the same typed runtime boundary; the generated client does not embed the MCP endpoint or credentials.
+The command model is intentionally CLI-shaped: nested commands, global options, flags, fixed and variadic positionals, independent stdin/stdout/stderr attachments, structured results, and exit-coded errors. Stdout and stderr are optional durable byte channels rather than success/failure indicators; callers drain or cancel each independently. You can therefore wrap `git`, `curl`, or another executable behind a typed, permission-aware surface. MCP imports are projected into the same registry and called through the same typed runtime boundary; the generated client does not embed the MCP endpoint or credentials.
 
 ## Choose the right boundary
 

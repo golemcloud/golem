@@ -27,7 +27,8 @@ import golem.schema.{
   SchemaGraph,
   SchemaValue
 }
-import golem.schema.wire.SchemaWire
+import golem.schema.wire.{SchemaWire, WitSchemaValueTree}
+import golem.runtime.WireAgentInputError
 import scala.concurrent.Future
 import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
 import scala.util.{Failure, Success}
@@ -47,6 +48,23 @@ import scala.util.control.NonFatal
  * model.
  */
 object SchemaPayload {
+
+  private[autowire] def withWireInput[A](input: JsSchemaValueTree)(use: WitSchemaValueTree => Future[A]): Future[A] = {
+    val ownership = new AgentStreamOwnership
+    val result    = try {
+      val value =
+        try AgentStreamOwnership.capture(ownership)(SchemaWireInterop.valueTreeFromJs(input))
+        catch { case NonFatal(error) => throw WireAgentInputError(String.valueOf(error.getMessage)) }
+      use(value)
+    } catch {
+      case error: WireAgentInputError =>
+        Future.failed(
+          scala.scalajs.js.JavaScriptException(golem.host.js.schema.JsAgentError.invalidInput(error.message))
+        )
+      case NonFatal(error) => Future.failed(error)
+    }
+    result.transformWith(completed => ownership.close().flatMap(_ => Future.fromTry(completed)))
+  }
 
   /** The self-contained JS schema graph for `A`. */
   def graph[A](implicit ev: IntoSchema[A]): JsSchemaGraph =

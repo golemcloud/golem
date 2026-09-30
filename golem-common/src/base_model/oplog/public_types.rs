@@ -299,6 +299,11 @@ declare_structs! {
         pub has_stdout: bool,
         /// Whether the tool declares stdout support. Stdout bytes are not recorded in the oplog.
         pub declares_stdout: bool,
+        /// Whether a live stderr attachment was requested. Stderr bytes are not recorded in the
+        /// oplog.
+        pub has_stderr: bool,
+        /// Whether the tool declares stderr support. Stderr bytes are not recorded in the oplog.
+        pub declares_stderr: bool,
     }
 }
 

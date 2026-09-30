@@ -1,0 +1,148 @@
+import { Callout, Tabs } from "nextra/components"
+
+# Embedded Databases in Agents
+
+An agent can own an embedded SQL database when its data is local to that agent. Golem supports
+embedded SQLite databases in TypeScript, Effect TypeScript, and Rust agents. SQLite can run in
+memory or store data in the agent filesystem. An experimental in-memory Turso integration is also
+available for Rust.
+
+Embedded databases are not a replacement for a shared database. Use [Golem's relational database
+API](/next/develop/rdbms) when multiple agents need to query the same data, when an independent
+service must own the data, or when the data can exceed one agent's resource limits.
+
+## SQLite
+
+SQLite can run in memory or store a database in the agent's isolated filesystem.
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust"]} storageKey="nextra-tabs-language-sdk">
+  <Tabs.Tab>
+    TypeScript agents have `node:sqlite` built in. Do not install a native npm SQLite package.
+
+    ```typescript
+    import { DatabaseSync } from "node:sqlite"
+
+    const db = new DatabaseSync(":memory:")
+    db.exec("CREATE TABLE notes (id INTEGER PRIMARY KEY, text TEXT NOT NULL)")
+    db.prepare("INSERT INTO notes (text) VALUES (?)").run("hello")
+    const rows = db.prepare("SELECT text FROM notes ORDER BY id").all()
+    ```
+
+    With schema-driven snapshots, keep each `DatabaseSync` as a top-level field of the state
+    returned by `init`. Include only ordinary fields in the state schema; the SDK saves database
+    contents separately and restores them when loading a snapshot. Commit or roll back transactions
+    before a handler returns, and do not retain statement or session objects in snapshotted state.
+
+    See [Using Embedded SQLite from TypeScript](/next/how-to-guides/ts/golem-add-sqlite-ts) for a
+    complete agent.
+  </Tabs.Tab>
+  <Tabs.Tab>
+    Effect agents can use the SDK's SQLite client with Effect's SQL APIs:
+
+    ```typescript
+    import { Effect } from "effect"
+    import { SqliteClient } from "@golemcloud/effect-golem/sqlite"
+
+    const useDatabase = Effect.gen(function* () {
+      const sql = yield* SqliteClient.make({ filename: ":memory:" })
+      yield* sql.exec(
+        "CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY, text TEXT NOT NULL)",
+      )
+      yield* sql`INSERT INTO notes (text) VALUES (${"hello"})`
+      return yield* sql`SELECT text FROM notes ORDER BY id`
+    }).pipe(Effect.scoped)
+    ```
+
+    Declare named databases in `Snapshot.define(...)` and expose each client from the
+    implementation's snapshot strategy. The SDK saves and restores those database images alongside
+    the schema-defined state.
+
+    See [Using Embedded SQLite from Effect TypeScript](/next/how-to-guides/effect/golem-add-sqlite-effect)
+    for a complete agent.
+  </Tabs.Tab>
+  <Tabs.Tab>
+    Rust agents can use the patched `rusqlite` configuration:
+
+    ```toml
+    [dependencies]
+    rusqlite = { version = "0.38.0", default-features = false, features = ["bundled", "wasm32-wasi-vfs"] }
+
+    [patch.crates-io]
+    rusqlite = { git = "https://github.com/golemcloud/rusqlite", rev = "40024c3f7a2e1dfc2b36aac33e3d84ee04bfb700" }
+    libsqlite3-sys = { git = "https://github.com/golemcloud/rusqlite", rev = "40024c3f7a2e1dfc2b36aac33e3d84ee04bfb700" }
+    ```
+
+    `Connection::open_in_memory()` stores the database in memory. To store it in the agent
+    filesystem, create the parent directory and use `Connection::open("/data/agent.db")`. Rust does
+    not automatically include a `Connection` in snapshots; snapshotting database state requires
+    explicit serialization and restoration. File-backed databases also require their contents to
+    be saved and restored during manual updates. See [Snapshotting](/next/develop/snapshotting) and
+    [Agent Filesystem](/next/develop/agent-filesystem) for the relevant lifecycle details.
+
+    See [Using Embedded SQLite from Rust](/next/how-to-guides/rust/golem-add-sqlite-rust) for the
+    full setup.
+  </Tabs.Tab>
+</Tabs>
+
+<Callout type="warning">
+  Keep one connection open per database file. Concurrent connections to the same file are not
+  supported.
+</Callout>
+
+### SQLite limitations
+
+- Keep SQLite temporary storage in memory; temporary files are not supported.
+- Do not use `journal_mode=TRUNCATE`; avoid `journal_mode=PERSIST` with attached databases.
+- Dynamically loaded extensions are not supported.
+- Keep database paths under 512 bytes.
+
+## Turso
+
+Turso support is experimental and currently limited to in-memory use. This integration does not
+support file-backed persistence, snapshot recovery, or remote Turso service connectivity.
+
+<Tabs items={["Rust"]} storageKey="nextra-tabs-language-sdk">
+  <Tabs.Tab>
+    Turso can run as a pure-Rust in-memory database:
+
+    ```toml
+    [dependencies]
+    turso = { version = "=0.8.0-pre.11", default-features = false }
+    ```
+
+    ```rust
+    let database = turso::Builder::new_local(":memory:")
+        .with_io(turso::IoBackend::Memory)
+        .build()
+        .await?;
+    let connection = database.connect()?;
+    ```
+
+    Version `0.8.0-pre.11` is a prerelease. Pin the exact version and retest before upgrading.
+
+    <Callout type="warning">
+      The linked example creates a fresh database inside each invocation and does not retain data
+      between calls.
+    </Callout>
+
+    See [Using In-Memory Turso from Rust](/next/how-to-guides/rust/golem-add-turso-rust) for a
+    complete agent.
+  </Tabs.Tab>
+</Tabs>
+
+## Memory and disk limits
+
+Embedded databases share the agent's resource limits:
+
+- In-memory SQLite and Turso databases, temporary tables, caches, and query results consume
+  WebAssembly linear memory.
+- File-backed SQLite databases, journals, and auxiliary files consume the agent's filesystem
+  allowance.
+- Snapshot payloads copy an in-memory database during snapshot creation, so leave memory headroom
+  for both the live database and serialization work.
+- A file-backed database can temporarily need more disk than the main database file because of its
+  journal and other auxiliary files.
+
+Run `golem account limits show` against the selected environment to see the effective per-agent
+memory and filesystem limits. Limits depend on the account plan and deployment configuration; do
+not design against a hard-coded value.

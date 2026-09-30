@@ -3664,6 +3664,8 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::PublicEntityInvocationOperati
                 has_stdin: tool.has_stdin,
                 has_stdout: tool.has_stdout,
                 declares_stdout: tool.declares_stdout,
+                has_stderr: tool.has_stderr,
+                declares_stderr: tool.declares_stderr,
             })),
         }
     }
@@ -3682,6 +3684,8 @@ impl From<PublicEntityInvocationOperation>
                     has_stdin: tool.has_stdin,
                     has_stdout: tool.has_stdout,
                     declares_stdout: tool.declares_stdout,
+                    has_stderr: tool.has_stderr,
+                    declares_stderr: tool.declares_stderr,
                 },
             ),
         };

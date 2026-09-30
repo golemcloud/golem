@@ -108,12 +108,19 @@ fn leaf_paired() -> BoxedStrategy<(SchemaType, SchemaValue)> {
             }),
             SchemaValue::Path { path: p }
         )),
-        Just((
-            SchemaType::url(UrlRestrictions::default()),
-            SchemaValue::Url {
-                url: "https://example.com/".to_string()
-            }
-        )),
+        Just(if cfg!(feature = "url") {
+            (
+                SchemaType::url(UrlRestrictions::default()),
+                SchemaValue::Url {
+                    url: "https://example.com/".to_string(),
+                },
+            )
+        } else {
+            (
+                SchemaType::string(),
+                SchemaValue::String("https://example.com/".to_string()),
+            )
+        }),
         Just((
             SchemaType::datetime(),
             SchemaValue::Datetime { value: Utc::now() }
@@ -928,6 +935,7 @@ fn nested_recursive_value_validates_every_level() {
 
 // --- URL restrictions ---
 
+#[cfg(feature = "url")]
 fn url_with_restrictions(restrictions: UrlRestrictions) -> SchemaType {
     SchemaType::Url {
         restrictions,
@@ -935,11 +943,13 @@ fn url_with_restrictions(restrictions: UrlRestrictions) -> SchemaType {
     }
 }
 
+#[cfg(feature = "url")]
 fn url_value(s: &str) -> SchemaValue {
     SchemaValue::Url { url: s.to_string() }
 }
 
 #[test]
+#[cfg(feature = "url")]
 fn url_unrestricted_accepts_any_well_formed_url() {
     let ty = url_with_restrictions(UrlRestrictions::default());
     let graph = SchemaGraph::anonymous(ty.clone());
@@ -948,6 +958,7 @@ fn url_unrestricted_accepts_any_well_formed_url() {
 }
 
 #[test]
+#[cfg(feature = "url")]
 fn url_invalid_syntax_is_reported() {
     let ty = url_with_restrictions(UrlRestrictions::default());
     let graph = SchemaGraph::anonymous(ty.clone());
@@ -962,6 +973,7 @@ fn url_invalid_syntax_is_reported() {
 }
 
 #[test]
+#[cfg(feature = "url")]
 fn url_empty_is_reported() {
     let ty = url_with_restrictions(UrlRestrictions::default());
     let graph = SchemaGraph::anonymous(ty.clone());
@@ -975,6 +987,7 @@ fn url_empty_is_reported() {
 }
 
 #[test]
+#[cfg(feature = "url")]
 fn url_scheme_allow_list_accepts_listed() {
     let ty = url_with_restrictions(UrlRestrictions {
         allowed_schemes: Some(vec!["https".to_string(), "wss".to_string()]),
@@ -987,6 +1000,7 @@ fn url_scheme_allow_list_accepts_listed() {
 }
 
 #[test]
+#[cfg(feature = "url")]
 fn url_scheme_allow_list_rejects_unlisted() {
     let ty = url_with_restrictions(UrlRestrictions {
         allowed_schemes: Some(vec!["https".to_string()]),
@@ -1004,6 +1018,7 @@ fn url_scheme_allow_list_rejects_unlisted() {
 }
 
 #[test]
+#[cfg(feature = "url")]
 fn url_host_allow_list_accepts_listed() {
     let ty = url_with_restrictions(UrlRestrictions {
         allowed_schemes: None,
@@ -1017,6 +1032,7 @@ fn url_host_allow_list_accepts_listed() {
 }
 
 #[test]
+#[cfg(feature = "url")]
 fn url_host_allow_list_rejects_unlisted() {
     let ty = url_with_restrictions(UrlRestrictions {
         allowed_schemes: None,
@@ -1034,6 +1050,7 @@ fn url_host_allow_list_rejects_unlisted() {
 }
 
 #[test]
+#[cfg(feature = "url")]
 fn url_host_allow_list_rejects_missing_host() {
     let ty = url_with_restrictions(UrlRestrictions {
         allowed_schemes: None,
@@ -1052,6 +1069,7 @@ fn url_host_allow_list_rejects_missing_host() {
 }
 
 #[test]
+#[cfg(feature = "url")]
 fn url_userinfo_confusion_does_not_bypass_host_allow_list() {
     // `https://example.com@attacker.com/` parses with host=`attacker.com`
     // (the `example.com` segment is userinfo). The validator must reject
@@ -1073,6 +1091,7 @@ fn url_userinfo_confusion_does_not_bypass_host_allow_list() {
 }
 
 #[test]
+#[cfg(feature = "url")]
 fn url_subdomain_is_not_implicitly_allowed_by_parent_host() {
     // Exact host match only — no wildcard/suffix semantics.
     let ty = url_with_restrictions(UrlRestrictions {

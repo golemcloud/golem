@@ -39,6 +39,8 @@ use golem_common::schema::schema_value::{ResultValuePayload, VariantValuePayload
 use golem_common::{agent_id, data_value};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
+use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
+use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace, join_blob_key};
 use golem_test_framework::dsl::TestDsl;
 use golem_test_framework::dsl::{
     AgentResult, drain_connection, stdout_event_matching, stdout_events,
@@ -2773,11 +2775,8 @@ async fn get_workers_from_worker(
         executor: &TestWorkerExecutor,
     ) -> anyhow::Result<()> {
         let component_id_value = {
-            let (high, low) = component.id.0.as_u64_pair();
             SchemaValue::Record {
-                fields: vec![SchemaValue::Record {
-                    fields: vec![SchemaValue::U64(high), SchemaValue::U64(low)],
-                }],
+                fields: vec![SchemaValue::Uuid(component.id.0)],
             }
         };
 
@@ -2951,13 +2950,8 @@ async fn get_workers_opaque_cursor_replays_after_restart(
         .await?
         .into_return_value()
         .ok_or_else(|| anyhow!("expected promise id"))?;
-    let component_id_value = {
-        let (high, low) = component.id.0.as_u64_pair();
-        SchemaValue::Record {
-            fields: vec![SchemaValue::Record {
-                fields: vec![SchemaValue::U64(high), SchemaValue::U64(low)],
-            }],
-        }
+    let component_id_value = SchemaValue::Record {
+        fields: vec![SchemaValue::Uuid(component.id.0)],
     };
     let params = crate::raw_params(vec![component_id_value, promise_id_value.clone()]);
     let resumed_params = params.clone();
@@ -3067,13 +3061,10 @@ async fn get_metadata_from_worker(
         component_id: &ComponentId,
         agent_id: &golem_common::model::agent::ParsedAgentId,
     ) -> SchemaValue {
-        let (high, low) = component_id.0.as_u64_pair();
         SchemaValue::Record {
             fields: vec![
                 SchemaValue::Record {
-                    fields: vec![SchemaValue::Record {
-                        fields: vec![SchemaValue::U64(high), SchemaValue::U64(low)],
-                    }],
+                    fields: vec![SchemaValue::Uuid(component_id.0)],
                 },
                 SchemaValue::String(agent_id.to_string()),
             ],
@@ -5059,10 +5050,10 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
     )?;
     let artifact_fingerprint =
         golem_common::wasmtime_config::wasmtime_artifact_fingerprint(&engine);
-    let compiled_component_path = deps.blob_storage_root().join(format!(
-        "compilation_cache/{}/{}/0/{}.cwasm",
-        component.environment_id, component.id, artifact_fingerprint
-    ));
+    let compiled_component_path = join_blob_key(
+        &format!("{}/0", component.id),
+        &format!("{artifact_fingerprint}.cwasm"),
+    );
 
     let span = Span::current();
     tokio::task::spawn_blocking(move || {
@@ -5076,13 +5067,23 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
         file.write_at(&[1, 2, 3, 4], 0)
             .expect("Failed to write to component file");
         file.flush().expect("Failed to flush component file");
-
-        debug!("Deleting {:?}", compiled_component_path);
-        std::fs::remove_file(&compiled_component_path)
-            .expect("Failed to delete compiled component");
     })
     .await
     .unwrap();
+
+    debug!("Deleting {:?}", compiled_component_path);
+    FileSystemBlobStorage::new(&deps.blob_storage_root())
+        .await?
+        .delete(
+            "test",
+            "delete-compiled-component",
+            BlobStorageNamespace::CompilationCache {
+                environment_id: component.environment_id,
+            },
+            compiled_component_path.as_ref(),
+        )
+        .await
+        .expect("Failed to delete compiled component");
 
     let executor = start(deps, &context).await?;
 

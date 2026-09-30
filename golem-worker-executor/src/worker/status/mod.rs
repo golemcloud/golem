@@ -815,15 +815,17 @@ fn calculate_latest_worker_status(
                     .get(retry_from)
                     .map(|s| s.retry_count())
                     .unwrap_or_default();
-                if is_worker_error_retriable(
-                    current_retry_policy
-                        .as_ref()
-                        .unwrap_or(default_retry_policy),
-                    error,
-                    count,
-                    *inside_atomic_region,
-                    retry_policy_state.as_ref(),
-                ) {
+                if (*kind == OplogErrorKind::Recovery && retry_policy_state.is_none())
+                    || is_worker_error_retriable(
+                        current_retry_policy
+                            .as_ref()
+                            .unwrap_or(default_retry_policy),
+                        error,
+                        count,
+                        *inside_atomic_region,
+                        retry_policy_state.as_ref(),
+                    )
+                {
                     current_status = AgentStatus::Retrying;
                 } else {
                     current_status = AgentStatus::Failed;

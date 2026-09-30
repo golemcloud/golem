@@ -54,16 +54,11 @@ impl SnapshotCounter for SnapshotCounterImpl {
         } else {
             return Err(format!("Invalid snapshot size: {}", bytes.len()));
         };
-        let golem_rust::SchemaValue::Record { fields } = context.parameters else {
-            return Err("Invalid snapshot restore parameters".to_string());
-        };
-        let [golem_rust::SchemaValue::String(id)] = fields.as_slice() else {
-            return Err("Invalid snapshot restore parameters".to_string());
-        };
-        Ok(Self {
-            count,
-            _id: id.clone(),
-        })
+        let mut parameters = golem_rust::agentic::DirectAgentInput::new(context.parameters)
+            .map_err(|e| e.to_string())?;
+        let id = parameters.take::<String>().map_err(|e| e.to_string())?;
+        parameters.finish().map_err(|e| e.to_string())?;
+        Ok(Self { count, _id: id })
     }
 }
 

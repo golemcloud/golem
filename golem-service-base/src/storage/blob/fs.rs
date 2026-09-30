@@ -15,7 +15,8 @@
 use super::ErasedReplayableStream;
 use crate::storage::blob::{
     BLOB_STREAM_CHUNK_SIZE, BlobMetadata, BlobRangeStream, BlobStorage, BlobStorageNamespace,
-    ExistsResult, blob_path_is_root, validate_range, validate_relative_blob_path,
+    ExistsResult, blob_parent_to_string, blob_path_is_root, blob_path_to_string, validate_range,
+    validate_relative_blob_path,
 };
 use anyhow::{Context, Error, anyhow};
 use async_trait::async_trait;
@@ -27,6 +28,7 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio_stream::StreamExt;
+use typed_path::{Utf8UnixComponent, Utf8UnixPath, Utf8UnixPathBuf};
 
 #[derive(Debug)]
 pub struct FileSystemBlobStorage {
@@ -79,7 +81,7 @@ impl FileSystemBlobStorage {
         Ok(Self { root: canonical })
     }
 
-    fn path_of(&self, namespace: &BlobStorageNamespace, path: &Path) -> PathBuf {
+    fn namespace_path(&self, namespace: &BlobStorageNamespace) -> PathBuf {
         let mut result = self.root.clone();
 
         match namespace {
@@ -125,8 +127,81 @@ impl FileSystemBlobStorage {
             }
         }
 
-        result.push(path);
         result
+    }
+
+    fn encode_path_component(component: &str) -> Vec<String> {
+        let encoded = hex::encode(component);
+        let chunks = encoded.as_bytes().chunks(240);
+        let chunk_count = chunks.len();
+        chunks
+            .enumerate()
+            .map(|(index, chunk)| {
+                let marker = if index + 1 == chunk_count { "e-" } else { "c-" };
+                format!("{marker}{}", str::from_utf8(chunk).unwrap())
+            })
+            .collect()
+    }
+
+    fn decode_path_component(encoded: &str) -> Result<String, Error> {
+        let decoded = hex::decode(encoded)
+            .with_context(|| format!("Invalid filesystem blob path component: {encoded:?}"))?;
+        String::from_utf8(decoded)
+            .with_context(|| format!("Invalid UTF-8 filesystem blob path component: {encoded:?}"))
+    }
+
+    fn path_of(&self, namespace: &BlobStorageNamespace, path: &Path) -> Result<PathBuf, Error> {
+        validate_relative_blob_path(path)?;
+        let path = blob_path_to_string(path)?;
+        let mut result = self.namespace_path(namespace);
+
+        for component in Utf8UnixPath::new(&path).components() {
+            match component {
+                Utf8UnixComponent::Normal(component) => {
+                    for encoded in Self::encode_path_component(component) {
+                        result.push(encoded);
+                    }
+                }
+                Utf8UnixComponent::CurDir => {}
+                Utf8UnixComponent::ParentDir | Utf8UnixComponent::RootDir => unreachable!(),
+            }
+        }
+
+        Ok(result)
+    }
+
+    fn logical_path(
+        &self,
+        namespace: &BlobStorageNamespace,
+        path: &Path,
+    ) -> Result<PathBuf, Error> {
+        let relative = path.strip_prefix(self.namespace_path(namespace))?;
+        let mut result = Utf8UnixPathBuf::new();
+        let mut encoded = String::new();
+
+        for component in relative.components() {
+            let component = component
+                .as_os_str()
+                .to_str()
+                .ok_or_else(|| anyhow!("Invalid UTF-8 filesystem blob path: {path:?}"))?;
+            if let Some(chunk) = component.strip_prefix("c-") {
+                encoded.push_str(chunk);
+            } else if let Some(chunk) = component.strip_prefix("e-") {
+                encoded.push_str(chunk);
+                result.push(Self::decode_path_component(&encoded)?);
+                encoded.clear();
+            } else {
+                return Err(anyhow!(
+                    "Invalid filesystem blob path component: {component:?}"
+                ));
+            }
+        }
+
+        if !encoded.is_empty() {
+            return Err(anyhow!("Incomplete filesystem blob path: {path:?}"));
+        }
+
+        Ok(PathBuf::from(result.as_str()))
     }
 
     fn ensure_path_is_inside_root(&self, path: &Path) -> Result<(), Error> {
@@ -174,7 +249,7 @@ impl BlobStorage for FileSystemBlobStorage {
         path: &Path,
     ) -> Result<Option<Vec<u8>>, Error> {
         validate_relative_blob_path(path)?;
-        let full_path = self.path_of(&namespace, path);
+        let full_path = self.path_of(&namespace, path)?;
         self.ensure_path_is_inside_root(&full_path)?;
 
         if async_fs::metadata(&full_path).await.is_ok() {
@@ -193,7 +268,7 @@ impl BlobStorage for FileSystemBlobStorage {
         path: &Path,
     ) -> Result<Option<BoxStream<'static, Result<Bytes, Error>>>, Error> {
         validate_relative_blob_path(path)?;
-        let full_path = self.path_of(&namespace, path);
+        let full_path = self.path_of(&namespace, path)?;
         self.ensure_path_is_inside_root(&full_path)?;
 
         if async_fs::metadata(&full_path).await.is_ok() {
@@ -215,7 +290,7 @@ impl BlobStorage for FileSystemBlobStorage {
         length: u64,
     ) -> Result<Option<BlobRangeStream>, Error> {
         validate_relative_blob_path(path)?;
-        let full_path = self.path_of(&namespace, path);
+        let full_path = self.path_of(&namespace, path)?;
         self.ensure_path_is_inside_root(&full_path)?;
         let mut file = match tokio::fs::File::open(full_path).await {
             Ok(file) => file,
@@ -243,7 +318,7 @@ impl BlobStorage for FileSystemBlobStorage {
         path: &Path,
     ) -> Result<Option<BlobMetadata>, Error> {
         validate_relative_blob_path(path)?;
-        let full_path = self.path_of(&namespace, path);
+        let full_path = self.path_of(&namespace, path)?;
         self.ensure_path_is_inside_root(&full_path)?;
 
         if let Ok(metadata) = async_fs::metadata(&full_path).await {
@@ -269,7 +344,7 @@ impl BlobStorage for FileSystemBlobStorage {
         data: &[u8],
     ) -> Result<(), Error> {
         validate_relative_blob_path(path)?;
-        let full_path = self.path_of(&namespace, path);
+        let full_path = self.path_of(&namespace, path)?;
         self.ensure_path_is_inside_root(&full_path)?;
 
         if let Some(parent) = full_path.parent()
@@ -292,7 +367,7 @@ impl BlobStorage for FileSystemBlobStorage {
         stream: &dyn ErasedReplayableStream<Item = Result<Vec<u8>, Error>, Error = Error>,
     ) -> Result<(), Error> {
         validate_relative_blob_path(path)?;
-        let full_path = self.path_of(&namespace, path);
+        let full_path = self.path_of(&namespace, path)?;
         self.ensure_path_is_inside_root(&full_path)?;
 
         if let Some(parent) = full_path.parent()
@@ -323,7 +398,7 @@ impl BlobStorage for FileSystemBlobStorage {
         path: &Path,
     ) -> Result<(), Error> {
         validate_relative_blob_path(path)?;
-        let full_path = self.path_of(&namespace, path);
+        let full_path = self.path_of(&namespace, path)?;
         self.ensure_path_is_inside_root(&full_path)?;
 
         async_fs::remove_file(&full_path).await?;
@@ -338,7 +413,7 @@ impl BlobStorage for FileSystemBlobStorage {
         path: &Path,
     ) -> Result<(), Error> {
         validate_relative_blob_path(path)?;
-        let full_path = self.path_of(&namespace, path);
+        let full_path = self.path_of(&namespace, path)?;
         self.ensure_path_is_inside_root(&full_path)?;
 
         async_fs::create_dir_all(&full_path).await?;
@@ -354,16 +429,31 @@ impl BlobStorage for FileSystemBlobStorage {
         path: &Path,
     ) -> Result<Vec<PathBuf>, Error> {
         validate_relative_blob_path(path)?;
-        let namespace_root = self.path_of(&namespace, Path::new(""));
-        let full_path = self.path_of(&namespace, path);
+        let full_path = self.path_of(&namespace, path)?;
         self.ensure_path_is_inside_root(&full_path)?;
 
         let mut entries = async_fs::read_dir(&full_path).await?;
 
         let mut result = Vec::new();
+        let mut pending = Vec::new();
         while let Some(entry) = TryStreamExt::try_next(&mut entries).await? {
-            if let Ok(path) = entry.path().strip_prefix(&namespace_root) {
-                result.push(path.to_path_buf());
+            pending.push(entry.path());
+        }
+
+        while let Some(path) = pending.pop() {
+            let name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .ok_or_else(|| anyhow!("Invalid UTF-8 filesystem blob path: {path:?}"))?;
+            if name.starts_with("c-") {
+                let mut entries = async_fs::read_dir(&path).await?;
+                while let Some(entry) = TryStreamExt::try_next(&mut entries).await? {
+                    pending.push(entry.path());
+                }
+            } else if name.starts_with("e-") {
+                result.push(self.logical_path(&namespace, &path)?);
+            } else {
+                return Err(anyhow!("Invalid filesystem blob path component: {name:?}"));
             }
         }
         Ok(result)
@@ -382,7 +472,7 @@ impl BlobStorage for FileSystemBlobStorage {
             return Ok(false);
         }
 
-        let full_path = self.path_of(&namespace, path);
+        let full_path = self.path_of(&namespace, path)?;
         self.ensure_path_is_inside_root(&full_path)?;
 
         let result = async_fs::remove_dir_all(&full_path).await;
@@ -406,7 +496,7 @@ impl BlobStorage for FileSystemBlobStorage {
         path: &Path,
     ) -> Result<ExistsResult, Error> {
         validate_relative_blob_path(path)?;
-        let full_path = self.path_of(&namespace, path);
+        let full_path = self.path_of(&namespace, path)?;
         self.ensure_path_is_inside_root(&full_path)?;
 
         if let Ok(metadata) = async_fs::metadata(&full_path).await {
@@ -430,12 +520,94 @@ impl BlobStorage for FileSystemBlobStorage {
     ) -> Result<(), Error> {
         validate_relative_blob_path(from)?;
         validate_relative_blob_path(to)?;
-        let from_full_path = self.path_of(&namespace, from);
-        let to_full_path = self.path_of(&namespace, to);
+        let from_full_path = self.path_of(&namespace, from)?;
+        let to_full_path = self.path_of(&namespace, to)?;
         self.ensure_path_is_inside_root(&from_full_path)?;
         self.ensure_path_is_inside_root(&to_full_path)?;
 
+        let logical_parent = blob_parent_to_string(to)?;
+        let logical_parent_path = self.path_of(&namespace, Path::new(&logical_parent))?;
+        let metadata = async_fs::metadata(&logical_parent_path).await?;
+        if !metadata.is_dir() {
+            return Err(anyhow!(
+                "Blob destination parent is not a directory: {logical_parent:?}"
+            ));
+        }
+        if let Some(encoded_parent) = to_full_path.parent()
+            && encoded_parent != logical_parent_path
+        {
+            async_fs::create_dir_all(encoded_parent).await?;
+        }
+
         async_fs::copy(&from_full_path, &to_full_path).await?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::FileSystemBlobStorage;
+    use crate::storage::blob::BlobStorageNamespace;
+    use golem_common::model::environment::EnvironmentId;
+    use std::path::{Component, Path, PathBuf};
+    use test_r::test;
+
+    #[test]
+    fn filesystem_paths_encode_contract_components() {
+        let storage = FileSystemBlobStorage {
+            root: PathBuf::from("root"),
+        };
+        let namespace = BlobStorageNamespace::CustomStorage {
+            environment_id: EnvironmentId::new(),
+        };
+
+        for logical in [
+            r"photos/animals\cat.png",
+            r"photos/..\..\other-environment\victim",
+            r"photos/C:\cats\kitten.png",
+            r"photos/\\server\share\kitten.png",
+        ] {
+            let physical = storage.path_of(&namespace, Path::new(logical)).unwrap();
+            assert!(
+                !physical
+                    .components()
+                    .any(|component| matches!(component, Component::ParentDir))
+            );
+            assert_eq!(
+                storage.logical_path(&namespace, &physical).unwrap(),
+                PathBuf::from(logical)
+            );
+        }
+
+        assert_ne!(
+            storage
+                .path_of(&namespace, Path::new("photos/animals/cat.png"))
+                .unwrap(),
+            storage
+                .path_of(&namespace, Path::new(r"photos/animals\cat.png"))
+                .unwrap()
+        );
+
+        let first = storage.path_of(&namespace, Path::new("AAA")).unwrap();
+        let second = storage.path_of(&namespace, Path::new("AA[")).unwrap();
+        assert!(
+            !first
+                .to_str()
+                .unwrap()
+                .eq_ignore_ascii_case(second.to_str().unwrap())
+        );
+
+        let long_name = "a".repeat(255);
+        let physical = storage.path_of(&namespace, Path::new(&long_name)).unwrap();
+        assert!(physical.components().all(|component| {
+            component
+                .as_os_str()
+                .to_str()
+                .is_some_and(|component| component.len() <= 242)
+        }));
+        assert_eq!(
+            storage.logical_path(&namespace, &physical).unwrap(),
+            PathBuf::from(long_name)
+        );
     }
 }

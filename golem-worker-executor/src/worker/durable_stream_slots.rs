@@ -1195,7 +1195,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub async fn read_stream_slot(
         self: &Arc<Self>,
         request: ReadStreamSlotRequest,
-    ) -> Result<Option<ReadStreamSlotResult>, DurableStreamReadError<WorkerExecutorError>> {
+    ) -> Result<Option<ReadStreamSlotResult>, DurableStreamRemoteError<WorkerExecutorError>> {
         let requested_wait_millis = request.wait_millis;
         let touching = matches!(
             &request.admission,
@@ -1209,7 +1209,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             });
         let after = request.from_offset;
         let producer = self.load_durable_stream_producer().await.map_err(|error| {
-            DurableStreamReadError::from_producer(error, WorkerExecutorError::runtime)
+            DurableStreamRemoteError::from_producer(error, WorkerExecutorError::runtime)
         })?;
         validate_durable_stream_session_id(&request.session)
             .map_err(WorkerExecutorError::invalid_request)?;
@@ -1249,7 +1249,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ))
             .await
             .map_err(|error| {
-                DurableStreamReadError::from_producer(error, WorkerExecutorError::runtime)
+                DurableStreamRemoteError::from_producer(error, WorkerExecutorError::runtime)
             })??
         else {
             return Ok(None);
@@ -1272,7 +1272,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 ))
                 .await
                 .map_err(|error| {
-                    DurableStreamReadError::from_producer(error, WorkerExecutorError::runtime)
+                    DurableStreamRemoteError::from_producer(error, WorkerExecutorError::runtime)
                 })??
             else {
                 return Ok(None);
@@ -1410,7 +1410,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             SlotSource::Tombstoned => {}
         }
         producer.ensure_healthy().map_err(|error| {
-            DurableStreamReadError::from_producer(error, WorkerExecutorError::runtime)
+            DurableStreamRemoteError::from_producer(error, WorkerExecutorError::runtime)
         })?;
         if !matches!(request.admission, StreamSlotReadAdmission::Continuation(_)) {
             let refresh = touching && (!response.tombstoned || request.slot.is_empty());

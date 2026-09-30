@@ -191,6 +191,7 @@ fn encode(
         (SchemaType::Url { .. }, SchemaValue::Url { url }) => {
             canonical::url::to_json(url).map_err(RenderError::from)
         }
+        (SchemaType::Uuid { .. }, SchemaValue::Uuid(value)) => Ok(canonical::uuid::to_json(value)),
         (SchemaType::Datetime { .. }, SchemaValue::Datetime { value }) => {
             canonical::datetime::to_json(value).map_err(RenderError::from)
         }
@@ -453,7 +454,7 @@ fn encode_union(
     // Sanity check: the produced JSON should match the branch's
     // discriminator rule. Validation should have caught a tag/body
     // disagreement at construction time; this is the runtime safety net.
-    if !rule_matches(&branch.discriminator, &rendered) {
+    if !rule_matches(&branch.discriminator, &rendered)? {
         return Err(RenderError::UnionTagMismatch {
             tag: payload.tag.clone(),
             reason: format!(
@@ -622,6 +623,10 @@ fn from_json_body(
         SchemaType::Url { .. } => {
             let s = canonical::url::from_json(json)?;
             Ok(SchemaValue::Url { url: s })
+        }
+        SchemaType::Uuid { .. } => {
+            let value = canonical::uuid::from_json(json)?;
+            Ok(SchemaValue::Uuid(value))
         }
         SchemaType::Datetime { .. } => {
             let dt = canonical::datetime::from_json(json)?;
@@ -975,7 +980,7 @@ fn decode_union(
     // time; a runtime safety net catches the case where the value is bad.
     let mut matched: Vec<&UnionBranch> = Vec::new();
     for branch in spec.branches.iter() {
-        if rule_matches(&branch.discriminator, json) {
+        if rule_matches(&branch.discriminator, json)? {
             matched.push(branch);
         }
     }
@@ -1001,8 +1006,8 @@ fn decode_union(
 // ----------------------------------------------------------- discriminators
 
 /// Whether a [`DiscriminatorRule`] matches a raw JSON value.
-fn rule_matches(rule: &DiscriminatorRule, json: &Value) -> bool {
-    match rule {
+fn rule_matches(rule: &DiscriminatorRule, json: &Value) -> Result<bool, RenderError> {
+    Ok(match rule {
         DiscriminatorRule::Prefix { prefix } => json
             .as_str()
             .map(|s| s.starts_with(prefix.as_str()))
@@ -1015,6 +1020,9 @@ fn rule_matches(rule: &DiscriminatorRule, json: &Value) -> bool {
             .as_str()
             .map(|s| s.contains(substring.as_str()))
             .unwrap_or(false),
+        #[cfg(not(feature = "regex"))]
+        DiscriminatorRule::Regex { .. } => return Err(RenderError::Unsupported("feature `regex`")),
+        #[cfg(feature = "regex")]
         DiscriminatorRule::Regex { regex } => match (json.as_str(), regex::Regex::new(regex)) {
             (Some(s), Ok(re)) => re.is_match(s),
             _ => false,
@@ -1031,7 +1039,7 @@ fn rule_matches(rule: &DiscriminatorRule, json: &Value) -> bool {
             .as_object()
             .map(|obj| !obj.contains_key(field_name.as_str()))
             .unwrap_or(false),
-    }
+    })
 }
 
 fn rule_label(rule: &DiscriminatorRule) -> String {
@@ -1199,6 +1207,7 @@ fn type_name(ty: &SchemaType) -> &'static str {
         SchemaType::Binary { .. } => "binary",
         SchemaType::Path { .. } => "path",
         SchemaType::Url { .. } => "url",
+        SchemaType::Uuid { .. } => "uuid",
         SchemaType::Datetime { .. } => "datetime",
         SchemaType::Duration { .. } => "duration",
         SchemaType::Quantity { .. } => "quantity",
@@ -1240,6 +1249,7 @@ fn value_name(value: &SchemaValue) -> &'static str {
         SchemaValue::Binary(_) => "binary",
         SchemaValue::Path { .. } => "path",
         SchemaValue::Url { .. } => "url",
+        SchemaValue::Uuid(_) => "uuid",
         SchemaValue::Datetime { .. } => "datetime",
         SchemaValue::Duration(_) => "duration",
         SchemaValue::Quantity(_) => "quantity",

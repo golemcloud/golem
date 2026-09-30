@@ -1991,7 +1991,7 @@ paths:
       - Agent
       summary: Invoke a tool on an existing agent or a fresh ephemeral component owner
       description: |-
-        Uses normal invocation permissions, queueing and idempotency. Byte stdin and stdout
+        Uses normal invocation permissions, queueing and idempotency. Byte stdin, stdout and stderr
         require an attached invocation session rather than this scalar endpoint.
       parameters:
       - name: Idempotency-Key
@@ -3930,6 +3930,11 @@ components:
           allOf:
           - $ref: '#/components/schemas/StreamSpec'
           - nullable: true
+        stderr:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/StreamSpec'
+          - nullable: true
         result:
           nullable: true
           allOf:
@@ -4336,35 +4341,74 @@ components:
           format: uint64
         description:
           $ref: '#/components/schemas/AgentResourceDescription'
+    ExternalBinaryValuePayload:
+      type: object
+      required:
+      - bytes
+      properties:
+        bytes:
+          type: array
+          items:
+            type: integer
+            format: uint8
+        mimeType:
+          type: string
+    ExternalDurationValuePayload:
+      type: object
+      required:
+      - nanoseconds
+      properties:
+        nanoseconds:
+          type: string
+    ExternalQuantityValue:
+      type: object
+      required:
+      - mantissa
+      - scale
+      - unit
+      properties:
+        mantissa:
+          type: string
+        scale:
+          type: integer
+          format: int32
+        unit:
+          type: string
     ExternalResultValuePayload:
       type: object
       oneOf:
       - type: object
         required:
         - tag
+        - value
         properties:
           tag:
             type: string
             enum:
             - ok
           value:
-            nullable: true
-            allOf:
+            oneOf:
             - $ref: '#/components/schemas/ExternalSchemaValue'
-            - nullable: true
+            - type: object
+              enum:
+              - null
+              nullable: true
       - type: object
         required:
         - tag
+        - value
         properties:
           tag:
             type: string
             enum:
             - err
           value:
-            nullable: true
-            allOf:
+            oneOf:
             - $ref: '#/components/schemas/ExternalSchemaValue'
-            - nullable: true
+            - type: object
+              enum:
+              - null
+              nullable: true
     ExternalSchemaValue:
       type: object
       oneOf:
@@ -4425,8 +4469,7 @@ components:
             enum:
             - s64
           value:
-            type: integer
-            format: int64
+            type: string
       - type: object
         required:
         - kind
@@ -4473,8 +4516,7 @@ components:
             enum:
             - u64
           value:
-            type: integer
-            format: uint64
+            type: string
       - type: object
         required:
         - kind
@@ -4485,8 +4527,18 @@ components:
             enum:
             - f32
           value:
-            type: number
-            format: float
+            oneOf:
+            - type: number
+            - type: object
+              required:
+              - $float
+              properties:
+                $float:
+                  type: string
+                  enum:
+                  - nan
+                  - positive-infinity
+                  - negative-infinity
       - type: object
         required:
         - kind
@@ -4497,8 +4549,18 @@ components:
             enum:
             - f64
           value:
-            type: number
-            format: double
+            oneOf:
+            - type: number
+            - type: object
+              required:
+              - $float
+              properties:
+                $float:
+                  type: string
+                  enum:
+                  - nan
+                  - positive-infinity
+                  - negative-infinity
       - type: object
         required:
         - kind
@@ -4521,6 +4583,18 @@ components:
             - string
           value:
             type: string
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - uuid
+          value:
+            type: string
+            format: uuid
       - type: object
         required:
         - kind
@@ -4672,12 +4746,16 @@ components:
             - option
           value:
             type: object
+            required:
+            - inner
             properties:
               inner:
-                nullable: true
-                allOf:
+                oneOf:
                 - $ref: '#/components/schemas/ExternalSchemaValue'
-                - nullable: true
+                - type: object
+                  enum:
+                  - null
+                  nullable: true
       - type: object
         required:
         - kind
@@ -4699,7 +4777,7 @@ components:
             enum:
             - text
           value:
-            $ref: '#/components/schemas/TextValuePayload'
+            $ref: '#/components/schemas/ExternalTextValuePayload'
       - type: object
         required:
         - kind
@@ -4710,7 +4788,7 @@ components:
             enum:
             - binary
           value:
-            $ref: '#/components/schemas/BinaryValuePayload'
+            $ref: '#/components/schemas/ExternalBinaryValuePayload'
       - type: object
         required:
         - kind
@@ -4770,7 +4848,7 @@ components:
             enum:
             - duration
           value:
-            $ref: '#/components/schemas/DurationValuePayload'
+            $ref: '#/components/schemas/ExternalDurationValuePayload'
       - type: object
         required:
         - kind
@@ -4781,7 +4859,7 @@ components:
             enum:
             - quantity
           value:
-            $ref: '#/components/schemas/QuantityValue'
+            $ref: '#/components/schemas/ExternalQuantityValue'
       - type: object
         required:
         - kind
@@ -4793,6 +4871,15 @@ components:
             - union
           value:
             $ref: '#/components/schemas/ExternalUnionValuePayload'
+    ExternalTextValuePayload:
+      type: object
+      required:
+      - text
+      properties:
+        text:
+          type: string
+        language:
+          type: string
     ExternalToolInvocationParameters:
       type: object
       title: ExternalToolInvocationParameters
@@ -4864,10 +4951,7 @@ components:
           type: integer
           format: uint32
         payload:
-          nullable: true
-          allOf:
-          - $ref: '#/components/schemas/ExternalSchemaValue'
-          - nullable: true
+          $ref: '#/components/schemas/ExternalSchemaValue'
     FailedUpdate:
       type: object
       title: FailedUpdate
@@ -7576,6 +7660,8 @@ components:
       - hasStdin
       - hasStdout
       - declaresStdout
+      - hasStderr
+      - declaresStderr
       properties:
         commandPath:
           type: array
@@ -7592,6 +7678,14 @@ components:
         declaresStdout:
           type: boolean
           description: Whether the tool declares stdout support. Stdout bytes are not recorded in the oplog.
+        hasStderr:
+          type: boolean
+          description: |-
+            Whether a live stderr attachment was requested. Stderr bytes are not recorded in the
+            oplog.
+        declaresStderr:
+          type: boolean
+          description: Whether the tool declares stderr support. Stderr bytes are not recorded in the oplog.
     PublicTypedAgentConfigEntry:
       type: object
       title: PublicTypedAgentConfigEntry
@@ -8519,6 +8613,20 @@ components:
           kind:
             type: string
             enum:
+            - uuid
+          value:
+            type: object
+            properties:
+              metadata:
+                $ref: '#/components/schemas/MetadataEnvelope'
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
             - datetime
           value:
             type: object
@@ -9066,6 +9174,18 @@ components:
           kind:
             type: string
             enum:
+            - uuid
+          value:
+            type: string
+            format: uuid
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
             - datetime
           value:
             type: object
@@ -9529,10 +9649,13 @@ components:
       type: object
       required:
       - version
+      - requires_filesystem
       - commands
       properties:
         version:
           type: string
+        requires_filesystem:
+          type: boolean
         commands:
           $ref: '#/components/schemas/CommandTree'
         schema:

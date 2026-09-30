@@ -57,7 +57,7 @@ use crate::services::oplog::{
     CommitLevel, DurableStreamOplogRecord, Oplog, OplogError, OplogFence, OplogOps, OplogService,
     OplogServiceOps,
 };
-use crate::services::rpc::{DurableStreamReadError, Rpc};
+use crate::services::rpc::{DurableStreamRemoteError, Rpc};
 use crate::services::worker::WorkerService;
 use crate::services::worker_fork::lineage::StreamForkLineage;
 use async_trait::async_trait;
@@ -285,6 +285,7 @@ pub enum NestedStreamWrite {
 pub enum ProducerOutputSource {
     New(ProducerRegistrationRequest),
     Existing(DurableStreamHandle),
+    Registered(DurableStreamHandle, StreamRecordReference),
 }
 
 /// Associates a transport output slot with its durable producer source.
@@ -292,6 +293,7 @@ pub struct ProducerOutputRegistration {
     pub transport_stream_id: u64,
     pub source: ProducerOutputSource,
     pub cancellation_epoch: Option<u64>,
+    pub role: SessionStreamRole,
 }
 
 /// A cancellation whose oplog record is durable but whose postcommit publication is pending.
@@ -436,7 +438,9 @@ impl From<OplogError> for StreamStoreError {
     fn from(error: OplogError) -> Self {
         match error {
             OplogError::Fenced(fence) => Self::Fenced(fence),
-            error @ OplogError::Payload(_) => Self::Oplog(error.to_string()),
+            error @ (OplogError::Payload(_) | OplogError::Maintenance(_)) => {
+                Self::Oplog(error.to_string())
+            }
         }
     }
 }
@@ -515,7 +519,9 @@ impl From<OplogError> for SessionError {
     fn from(error: OplogError) -> Self {
         match error {
             OplogError::Fenced(fence) => Self::Fenced(fence),
-            error @ OplogError::Payload(_) => Self::Failed(error.to_string()),
+            error @ (OplogError::Payload(_) | OplogError::Maintenance(_)) => {
+                Self::Failed(error.to_string())
+            }
         }
     }
 }

@@ -49,12 +49,12 @@ async fn deployed_scala_streams_context() -> TestContext {
     )
     .unwrap();
     fs::write_str(ctx.cwd_path_join("provider/src/lib.rs"), indoc! {r#"
-        use golem_rust::{agent_definition, agent_implementation, IntoSchema, FromSchema};
+        use golem_rust::{agent_definition, agent_implementation, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema};
         use golem_rust::agentic::{AgentStream, spawn_local};
 
-        #[derive(IntoSchema, FromSchema)]
+        #[derive(IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
         pub struct Item { pub label: String, pub children: Vec<Item> }
-        #[derive(IntoSchema, FromSchema)]
+        #[derive(IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
         pub struct Bundle { pub optional: Option<AgentStream<Item>>, pub siblings: Vec<AgentStream<Item>> }
 
         #[agent_definition]
@@ -126,6 +126,7 @@ async fn deployed_scala_streams_context() -> TestContext {
         import golem.bridge.client.stream_provider.{StreamProviderClient, Item, Bundle}
         import scala.concurrent.Future
         import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+        import zio.blocks.streams.Stream
 
         @toolDefinition(name = "scala-construction-probe")
         trait ConstructionProbeTool {
@@ -144,14 +145,8 @@ async fn deployed_scala_streams_context() -> TestContext {
         }
         @agentImplementation()
         final class StreamConsumerImpl(private val name: String) extends StreamConsumer {
-          private def stream[A](values: List[A]): AgentStream[A] = {
-            var remaining = values
-            AgentStream.fromPull(() => {
-              val result = remaining.headOption
-              remaining = remaining.drop(1)
-              Future.successful(result)
-            })
-          }
+          private def stream[A](values: List[A]): AgentStream[A] =
+            AgentStream.fromStream(Stream.fromIterable(values))
           private def collect[A](input: AgentStream[A]): Future[List[A]] =
             input.pull().flatMap {
               case None => input.close().map(_ => Nil)

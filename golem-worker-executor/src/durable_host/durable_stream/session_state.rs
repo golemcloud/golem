@@ -369,9 +369,12 @@ impl SessionControlMetadata {
                         consumer_invocation: session_reference.idempotency_key().clone(),
                         source: binding.source.clone(),
                         epoch,
-                        role: match binding.role {
+                        role: match binding.role.direction() {
                             SessionStreamRole::Input => StreamCancelRole::InputProducer,
                             SessionStreamRole::Output => StreamCancelRole::OutputConsumer,
+                            SessionStreamRole::ToolStdin
+                            | SessionStreamRole::ToolStdout
+                            | SessionStreamRole::ToolStderr => unreachable!(),
                         },
                         reason: StreamCancelReason::Cancelled,
                         details: None,
@@ -389,7 +392,7 @@ impl SessionControlMetadata {
             deleted_outputs: self
                 .tombstoned_slots
                 .iter()
-                .filter(|(_, role)| **role == SessionStreamRole::Output)
+                .filter(|(_, role)| role.direction() == SessionStreamRole::Output)
                 .map(|(slot, _)| slot.clone())
                 .collect(),
             existing_intents: self.cancel_intents.keys().cloned().collect(),
@@ -956,7 +959,7 @@ impl SessionControlMetadata {
             }
             StreamSessionRecord::Prepared(record) if record_matches => {
                 for mapping in &record.stream_mappings {
-                    if mapping.role == SessionStreamRole::Output
+                    if mapping.role.direction() == SessionStreamRole::Output
                         && !self.root_outputs.contains(&mapping.transport_stream_id)
                     {
                         self.root_outputs.push(mapping.transport_stream_id);
@@ -976,7 +979,7 @@ impl SessionControlMetadata {
             StreamSessionRecord::InvocationResult(record) if record_matches => {
                 self.invocation_result.get_or_insert(index);
                 for mapping in &record.stream_mappings {
-                    if mapping.role == SessionStreamRole::Output
+                    if mapping.role.direction() == SessionStreamRole::Output
                         && !self.root_outputs.contains(&mapping.transport_stream_id)
                     {
                         self.root_outputs.push(mapping.transport_stream_id);

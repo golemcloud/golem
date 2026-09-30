@@ -15,6 +15,7 @@
 use crate::model::invocation_session_public::{
     MAX_COLLECTION_SIZE, MAX_JSON_DEPTH, MAX_LOGICAL_VALUE_SIZE, MAX_TOKEN_SIZE, PublicErrorCode,
 };
+use crate::schema::external::{decode_external_schema_value, encode_external_schema_value};
 use crate::schema::stream::SchemaValueStream;
 use crate::schema::validation::value::validate_value;
 use crate::schema::{
@@ -22,7 +23,7 @@ use crate::schema::{
     SchemaValue, UnionValuePayload, VariantValuePayload,
 };
 use base64::Engine;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::engine::general_purpose::STANDARD;
 use golem_schema::schema::render::{from_json_value, to_json_value};
 use serde_json::{Map, Number, Value};
 use std::collections::HashSet;
@@ -135,6 +136,7 @@ pub fn encode_public_schema_value_with_charge(
         Option<&SchemaType>,
     ) -> Result<PublicStreamReference, PublicSchemaValueError>,
 ) -> Result<(Value, usize), PublicSchemaValueError> {
+    inspect_schema_value(value, 0)?;
     validate_value(graph, ty, value).map_err(|_| {
         PublicSchemaValueError::validation("value does not satisfy the selected schema")
     })?;
@@ -175,6 +177,13 @@ where
         }
         self.charge(1)?;
         let ty = resolve_type(self.graph, ty)?;
+        if !inspect_public_json(json, 0)? {
+            let value = decode_external_schema_value(json).map_err(external_decode_error)?;
+            validate_public_binary_mime_types(&value)?;
+            self.charge_external_value(&value, self.depth, true)?;
+            self.depth -= 1;
+            return Ok(value);
+        }
         let result = match ty {
             SchemaType::S64 { .. } => {
                 self.charge(8)?;
@@ -221,39 +230,25 @@ where
                 }))
             }
             SchemaType::Record { fields, .. } => {
-                let object = json.as_object().ok_or_else(|| {
-                    PublicSchemaValueError::validation("record must be a JSON object")
-                })?;
-                self.collection(object.len())?;
-                if object.len() != fields.len()
-                    || object
-                        .keys()
-                        .any(|name| !fields.iter().any(|field| field.name == *name))
-                {
-                    return Err(PublicSchemaValueError::validation(
-                        "record members must exactly match the schema",
-                    ));
-                }
+                let payload = native_payload(json, "record")?;
+                let object = exact_object(payload, &["fields"])?;
+                let field_values = exact_array(&object["fields"], fields.len(), "record fields")?;
+                self.collection(field_values.len())?;
                 let mut values = Vec::with_capacity(fields.len());
-                for field in fields {
-                    let json = object.get(&field.name).ok_or_else(|| {
-                        PublicSchemaValueError::validation("record field is missing")
-                    })?;
-                    self.charge(field.name.len() as u64)?;
+                for (field, json) in fields.iter().zip(field_values) {
                     values.push(self.decode(&field.body, json)?);
                 }
                 Ok(SchemaValue::Record { fields: values })
             }
             SchemaType::Variant { cases, .. } => {
-                let object = tagged_object(json, "$case")?;
-                let name = required_string(object, "$case")?;
-                let (index, case) = cases
-                    .iter()
-                    .enumerate()
-                    .find(|(_, case)| case.name == name)
-                    .ok_or_else(|| PublicSchemaValueError::validation("unknown variant case"))?;
-                self.charge(name.len() as u64)?;
-                let payload = match (&case.payload, object.get("value")) {
+                let payload = native_payload(json, "variant")?;
+                let object = object_with_optional(payload, &["case"], &["payload"])?;
+                let index = parse_u32(&object["case"], "variant case")?;
+                let case = cases.get(index as usize).ok_or_else(|| {
+                    PublicSchemaValueError::validation("variant case is out of range")
+                })?;
+                self.charge(4)?;
+                let payload = match (&case.payload, object.get("payload")) {
                     (None, None) => None,
                     (Some(ty), Some(value)) => Some(Box::new(self.decode(ty, value)?)),
                     _ => {
@@ -263,7 +258,7 @@ where
                     }
                 };
                 Ok(SchemaValue::Variant(VariantValuePayload {
-                    case: index as u32,
+                    case: index,
                     payload,
                 }))
             }
@@ -305,7 +300,9 @@ where
                 Ok(SchemaValue::Flags { bits })
             }
             SchemaType::Tuple { elements, .. } => {
-                let values = exact_array(json, elements.len(), "tuple")?;
+                let payload = native_payload(json, "tuple")?;
+                let object = exact_object(payload, &["elements"])?;
+                let values = exact_array(&object["elements"], elements.len(), "tuple")?;
                 self.collection(values.len())?;
                 let mut decoded = Vec::with_capacity(values.len());
                 for (ty, value) in elements.iter().zip(values) {
@@ -314,7 +311,9 @@ where
                 Ok(SchemaValue::Tuple { elements: decoded })
             }
             SchemaType::List { element, .. } => {
-                let values = array(json, "list")?;
+                let payload = native_payload(json, "list")?;
+                let object = exact_object(payload, &["elements"])?;
+                let values = array(&object["elements"], "list elements")?;
                 self.collection(values.len())?;
                 let mut decoded = Vec::with_capacity(values.len());
                 for value in values {
@@ -325,7 +324,10 @@ where
             SchemaType::FixedList {
                 element, length, ..
             } => {
-                let values = exact_array(json, *length as usize, "fixed list")?;
+                let payload = native_payload(json, "fixed-list")?;
+                let object = exact_object(payload, &["elements"])?;
+                let values =
+                    exact_array(&object["elements"], *length as usize, "fixed list elements")?;
                 self.collection(values.len())?;
                 let mut decoded = Vec::with_capacity(values.len());
                 for value in values {
@@ -334,7 +336,9 @@ where
                 Ok(SchemaValue::FixedList { elements: decoded })
             }
             SchemaType::Map { key, value, .. } => {
-                let entries = array(json, "map")?;
+                let payload = native_payload(json, "map")?;
+                let object = exact_object(payload, &["entries"])?;
+                let entries = array(&object["entries"], "map entries")?;
                 self.collection(entries.len())?;
                 let mut decoded = Vec::with_capacity(entries.len());
                 for entry in entries {
@@ -344,29 +348,20 @@ where
                 Ok(SchemaValue::Map { entries: decoded })
             }
             SchemaType::Option { inner, .. } => {
-                let object = tagged_object(json, "$option")?;
-                let discriminator = required_string(object, "$option")?;
-                self.charge(discriminator.len() as u64)?;
-                match discriminator {
-                    "none" if !object.contains_key("value") => {
-                        Ok(SchemaValue::Option { inner: None })
-                    }
-                    "some" => {
-                        let value = object.get("value").ok_or_else(|| {
-                            PublicSchemaValueError::validation("some option requires a value")
-                        })?;
-                        Ok(SchemaValue::Option {
-                            inner: Some(Box::new(self.decode(inner, value)?)),
-                        })
-                    }
-                    _ => Err(PublicSchemaValueError::validation(
-                        "invalid option representation",
-                    )),
-                }
+                let payload = native_payload(json, "option")?;
+                let object = exact_object(payload, &["inner"])?;
+                Ok(SchemaValue::Option {
+                    inner: if object["inner"].is_null() {
+                        None
+                    } else {
+                        Some(Box::new(self.decode(inner, &object["inner"])?))
+                    },
+                })
             }
             SchemaType::Result { spec, .. } => {
-                let object = tagged_object(json, "$result")?;
-                let arm = required_string(object, "$result")?;
+                let payload = native_payload(json, "result")?;
+                let object = exact_object(payload, &["tag", "value"])?;
+                let arm = required_string(object, "tag")?;
                 self.charge(arm.len() as u64)?;
                 let (ty, ok) = match arm {
                     "ok" => (spec.ok.as_deref(), true),
@@ -377,9 +372,10 @@ where
                         ));
                     }
                 };
-                let payload = match (ty, object.get("value")) {
-                    (None, None) => None,
-                    (Some(ty), Some(value)) => Some(Box::new(self.decode(ty, value)?)),
+                let value = &object["value"];
+                let payload = match (ty, value.is_null()) {
+                    (None, true) => None,
+                    (Some(ty), false) => Some(Box::new(self.decode(ty, value)?)),
                     _ => {
                         return Err(PublicSchemaValueError::validation(
                             "result payload presence does not match the schema",
@@ -397,20 +393,18 @@ where
                 }
             }
             SchemaType::Union { spec, .. } => {
-                let object = tagged_object(json, "$union")?;
-                let tag = required_string(object, "$union")?;
+                let payload = native_payload(json, "union")?;
+                let object = exact_object(payload, &["tag", "body"])?;
+                let tag = required_string(object, "tag")?;
                 self.charge(tag.len() as u64)?;
                 let branch = spec
                     .branches
                     .iter()
                     .find(|branch| branch.tag == tag)
                     .ok_or_else(|| PublicSchemaValueError::validation("unknown union branch"))?;
-                let value = object
-                    .get("value")
-                    .ok_or_else(|| PublicSchemaValueError::validation("union requires a value"))?;
                 Ok(SchemaValue::Union(UnionValuePayload {
                     tag: tag.to_string(),
-                    body: Box::new(self.decode(&branch.body, value)?),
+                    body: Box::new(self.decode(&branch.body, &object["body"])?),
                 }))
             }
             SchemaType::Stream { inner, .. } => self.stream(json, inner.as_deref()),
@@ -446,12 +440,12 @@ where
             ));
         }
         let encoded = required_string(object, "bytes")?;
-        let bytes = URL_SAFE_NO_PAD.decode(encoded).map_err(|_| {
-            PublicSchemaValueError::malformed("binary bytes are not canonical unpadded base64url")
+        let bytes = STANDARD.decode(encoded).map_err(|_| {
+            PublicSchemaValueError::malformed("binary bytes are not canonical padded base64")
         })?;
-        if URL_SAFE_NO_PAD.encode(&bytes) != encoded {
+        if STANDARD.encode(&bytes) != encoded {
             return Err(PublicSchemaValueError::malformed(
-                "binary bytes are not canonical unpadded base64url",
+                "binary bytes are not canonical padded base64",
             ));
         }
         let mime_type = object
@@ -479,10 +473,10 @@ where
         json: &Value,
         element: Option<&SchemaType>,
     ) -> Result<SchemaValue, PublicSchemaValueError> {
-        let outer = exact_object(json, &["$stream"])?;
-        let inner = outer["$stream"]
+        let payload = native_payload(json, "stream")?;
+        let inner = payload
             .as_object()
-            .ok_or_else(|| PublicSchemaValueError::validation("$stream must be an object"))?;
+            .ok_or_else(|| PublicSchemaValueError::validation("stream value must be an object"))?;
         if inner.len() != 1 {
             return Err(PublicSchemaValueError::validation(
                 "stream reference must have exactly one identity",
@@ -539,6 +533,16 @@ where
         self.charge(4)
     }
 
+    fn charge_external_value(
+        &mut self,
+        value: &SchemaValue,
+        depth: usize,
+        root: bool,
+    ) -> Result<(), PublicSchemaValueError> {
+        let charge = external_value_charge(value, depth, root)?;
+        self.charge(charge)
+    }
+
     fn charge(&mut self, bytes: u64) -> Result<(), PublicSchemaValueError> {
         self.charge = self
             .charge
@@ -576,6 +580,16 @@ where
         }
         self.charge(1)?;
         let ty = resolve_type(self.graph, ty)?;
+        if !contains_stream_value(value) {
+            self.charge_external_value(value, self.depth, true)?;
+            let json = encode_external_schema_value(value).map_err(|error| {
+                PublicSchemaValueError::validation(format!(
+                    "value cannot cross the public boundary: {error}"
+                ))
+            })?;
+            self.depth -= 1;
+            return Ok(json);
+        }
         let result = match (ty, value) {
             (SchemaType::S64 { .. }, SchemaValue::S64(value)) => {
                 self.charge(8)?;
@@ -605,7 +619,7 @@ where
                 let mut object = Map::new();
                 object.insert(
                     "bytes".to_string(),
-                    Value::String(URL_SAFE_NO_PAD.encode(&value.bytes)),
+                    Value::String(STANDARD.encode(&value.bytes)),
                 );
                 if let Some(mime_type) = &value.mime_type {
                     object.insert("mimeType".to_string(), Value::String(mime_type.clone()));
@@ -632,24 +646,26 @@ where
             }
             (SchemaType::Record { fields, .. }, SchemaValue::Record { fields: values }) => {
                 self.collection(fields.len())?;
-                let mut object = Map::new();
+                let mut encoded = Vec::with_capacity(values.len());
                 for (field, value) in fields.iter().zip(values) {
-                    self.charge(field.name.len() as u64)?;
-                    object.insert(field.name.clone(), self.encode(&field.body, value)?);
+                    encoded.push(self.encode(&field.body, value)?);
                 }
-                Ok(Value::Object(object))
+                Ok(native_value(
+                    "record",
+                    serde_json::json!({ "fields": encoded }),
+                ))
             }
             (SchemaType::Variant { cases, .. }, SchemaValue::Variant(value)) => {
                 let case = cases.get(value.case as usize).ok_or_else(|| {
                     PublicSchemaValueError::validation("variant case is out of range")
                 })?;
-                self.charge(case.name.len() as u64)?;
+                self.charge(4)?;
                 let mut object = Map::new();
-                object.insert("$case".to_string(), Value::String(case.name.clone()));
+                object.insert("case".to_string(), Value::Number(value.case.into()));
                 if let (Some(ty), Some(payload)) = (&case.payload, &value.payload) {
-                    object.insert("value".to_string(), self.encode(ty, payload)?);
+                    object.insert("payload".to_string(), self.encode(ty, payload)?);
                 }
-                Ok(Value::Object(object))
+                Ok(native_value("variant", Value::Object(object)))
             }
             (SchemaType::Enum { cases, .. }, SchemaValue::Enum { case }) => {
                 let name = cases.get(*case as usize).ok_or_else(|| {
@@ -678,12 +694,29 @@ where
             }
             (SchemaType::Tuple { elements, .. }, SchemaValue::Tuple { elements: values }) => {
                 self.collection(elements.len())?;
-                self.encode_list(elements.iter().zip(values))
+                Ok(native_value(
+                    "tuple",
+                    serde_json::json!({
+                        "elements": self.encode_list(elements.iter().zip(values))?
+                    }),
+                ))
             }
             (SchemaType::List { element, .. }, SchemaValue::List { elements })
             | (SchemaType::FixedList { element, .. }, SchemaValue::FixedList { elements }) => {
                 self.collection(elements.len())?;
-                self.encode_list(elements.iter().map(|value| (element.as_ref(), value)))
+                let kind = if matches!(ty, SchemaType::List { .. }) {
+                    "list"
+                } else {
+                    "fixed-list"
+                };
+                Ok(native_value(
+                    kind,
+                    serde_json::json!({
+                        "elements": self.encode_list(
+                            elements.iter().map(|value| (element.as_ref(), value))
+                        )?
+                    }),
+                ))
             }
             (SchemaType::Map { key, value: ty, .. }, SchemaValue::Map { entries }) => {
                 self.collection(entries.len())?;
@@ -694,42 +727,46 @@ where
                         self.encode(ty, value)?,
                     ]));
                 }
-                Ok(Value::Array(encoded))
+                Ok(native_value(
+                    "map",
+                    serde_json::json!({ "entries": encoded }),
+                ))
             }
             (SchemaType::Option { inner, .. }, SchemaValue::Option { inner: value }) => {
                 let mut object = Map::new();
                 match value {
                     None => {
-                        self.charge(4)?;
-                        object.insert("$option".to_string(), Value::String("none".to_string()));
+                        object.insert("inner".to_string(), Value::Null);
                     }
                     Some(value) => {
-                        self.charge(4)?;
-                        object.insert("$option".to_string(), Value::String("some".to_string()));
-                        object.insert("value".to_string(), self.encode(inner, value)?);
+                        object.insert("inner".to_string(), self.encode(inner, value)?);
                     }
                 }
-                Ok(Value::Object(object))
+                Ok(native_value("option", Value::Object(object)))
             }
             (SchemaType::Result { spec, .. }, SchemaValue::Result(value)) => {
                 let mut object = Map::new();
                 match value {
                     ResultValuePayload::Ok { value } => {
                         self.charge(2)?;
-                        object.insert("$result".to_string(), Value::String("ok".to_string()));
+                        object.insert("tag".to_string(), Value::String("ok".to_string()));
                         if let (Some(ty), Some(value)) = (&spec.ok, value) {
                             object.insert("value".to_string(), self.encode(ty, value)?);
+                        } else {
+                            object.insert("value".to_string(), Value::Null);
                         }
                     }
                     ResultValuePayload::Err { value } => {
                         self.charge(3)?;
-                        object.insert("$result".to_string(), Value::String("err".to_string()));
+                        object.insert("tag".to_string(), Value::String("err".to_string()));
                         if let (Some(ty), Some(value)) = (&spec.err, value) {
                             object.insert("value".to_string(), self.encode(ty, value)?);
+                        } else {
+                            object.insert("value".to_string(), Value::Null);
                         }
                     }
                 }
-                Ok(Value::Object(object))
+                Ok(native_value("result", Value::Object(object)))
             }
             (SchemaType::Union { spec, .. }, SchemaValue::Union(value)) => {
                 let branch = spec
@@ -739,9 +776,9 @@ where
                     .ok_or_else(|| PublicSchemaValueError::validation("unknown union branch"))?;
                 self.charge(value.tag.len() as u64)?;
                 let mut object = Map::new();
-                object.insert("$union".to_string(), Value::String(value.tag.clone()));
-                object.insert("value".to_string(), self.encode(&branch.body, &value.body)?);
-                Ok(Value::Object(object))
+                object.insert("tag".to_string(), Value::String(value.tag.clone()));
+                object.insert("body".to_string(), self.encode(&branch.body, &value.body)?);
+                Ok(native_value("union", Value::Object(object)))
             }
             (SchemaType::Stream { inner, .. }, SchemaValue::Stream(value)) => {
                 let reference = (self.resolve_stream)(value, inner.as_deref())?;
@@ -766,7 +803,8 @@ where
                     }
                 }
                 let mut outer = Map::new();
-                outer.insert("$stream".to_string(), Value::Object(inner));
+                outer.insert("kind".to_string(), Value::String("stream".to_string()));
+                outer.insert("value".to_string(), Value::Object(inner));
                 Ok(Value::Object(outer))
             }
             (SchemaType::Secret { .. }, _)
@@ -806,6 +844,16 @@ where
         self.charge(4)
     }
 
+    fn charge_external_value(
+        &mut self,
+        value: &SchemaValue,
+        depth: usize,
+        root: bool,
+    ) -> Result<(), PublicSchemaValueError> {
+        let charge = external_value_charge(value, depth, root)?;
+        self.charge(charge)
+    }
+
     fn charge(&mut self, bytes: u64) -> Result<(), PublicSchemaValueError> {
         self.charge = self
             .charge
@@ -818,6 +866,27 @@ where
     }
 }
 
+fn native_payload<'a>(
+    json: &'a Value,
+    expected_kind: &str,
+) -> Result<&'a Value, PublicSchemaValueError> {
+    let object = exact_object(json, &["kind", "value"])?;
+    let kind = required_string(object, "kind")?;
+    if kind != expected_kind {
+        return Err(PublicSchemaValueError::validation(format!(
+            "expected schema value kind `{expected_kind}`, found `{kind}`"
+        )));
+    }
+    Ok(&object["value"])
+}
+
+fn native_value(kind: &str, value: Value) -> Value {
+    Value::Object(Map::from_iter([
+        ("kind".to_string(), Value::String(kind.to_string())),
+        ("value".to_string(), value),
+    ]))
+}
+
 fn resolve_type<'a>(
     graph: &'a SchemaGraph,
     ty: &'a SchemaType,
@@ -825,6 +894,382 @@ fn resolve_type<'a>(
     graph.resolve_ref(ty).map_err(|_| {
         PublicSchemaValueError::validation("schema reference cannot be resolved at this position")
     })
+}
+
+fn inspect_public_json(value: &Value, depth: usize) -> Result<bool, PublicSchemaValueError> {
+    if depth > MAX_JSON_DEPTH {
+        return Err(resource_error("schema value nesting exceeds 64 levels"));
+    }
+    match value {
+        Value::Object(object) => {
+            if object.len() > MAX_COLLECTION_SIZE {
+                return Err(resource_error("JSON object exceeds 100000 members"));
+            }
+            let mut contains_stream = object.get("kind").and_then(Value::as_str) == Some("stream");
+            for value in object.values() {
+                if inspect_public_json(value, depth + 1)? {
+                    contains_stream = true;
+                }
+            }
+            Ok(contains_stream)
+        }
+        Value::Array(values) => {
+            if values.len() > MAX_COLLECTION_SIZE {
+                return Err(resource_error("JSON collection exceeds 100000 elements"));
+            }
+            let mut contains_stream = false;
+            for value in values {
+                if inspect_public_json(value, depth + 1)? {
+                    contains_stream = true;
+                }
+            }
+            Ok(contains_stream)
+        }
+        _ => Ok(false),
+    }
+}
+
+fn validate_public_binary_mime_types(value: &SchemaValue) -> Result<(), PublicSchemaValueError> {
+    match value {
+        SchemaValue::Binary(value) => {
+            if value
+                .mime_type
+                .as_deref()
+                .is_some_and(|value| !valid_mime_type(value))
+            {
+                return Err(PublicSchemaValueError::validation(
+                    "invalid binary MIME type",
+                ));
+            }
+        }
+        SchemaValue::Record { fields } => {
+            for value in fields {
+                validate_public_binary_mime_types(value)?;
+            }
+        }
+        SchemaValue::Variant(value) => {
+            if let Some(value) = value.payload.as_deref() {
+                validate_public_binary_mime_types(value)?;
+            }
+        }
+        SchemaValue::Tuple { elements }
+        | SchemaValue::List { elements }
+        | SchemaValue::FixedList { elements } => {
+            for value in elements {
+                validate_public_binary_mime_types(value)?;
+            }
+        }
+        SchemaValue::Map { entries } => {
+            for (key, value) in entries {
+                validate_public_binary_mime_types(key)?;
+                validate_public_binary_mime_types(value)?;
+            }
+        }
+        SchemaValue::Option { inner } => {
+            if let Some(value) = inner.as_deref() {
+                validate_public_binary_mime_types(value)?;
+            }
+        }
+        SchemaValue::Result(ResultValuePayload::Ok { value })
+        | SchemaValue::Result(ResultValuePayload::Err { value }) => {
+            if let Some(value) = value.as_deref() {
+                validate_public_binary_mime_types(value)?;
+            }
+        }
+        SchemaValue::Union(value) => validate_public_binary_mime_types(&value.body)?,
+        _ => {}
+    }
+    Ok(())
+}
+
+fn inspect_schema_value(
+    value: &SchemaValue,
+    json_depth: usize,
+) -> Result<bool, PublicSchemaValueError> {
+    check_json_depth(json_depth)?;
+    let inspect_values = |values: &[SchemaValue], child_depth: usize| {
+        check_collection_size(values.len())?;
+        let mut contains_stream = false;
+        for value in values {
+            if inspect_schema_value(value, child_depth)? {
+                contains_stream = true;
+            }
+        }
+        Ok(contains_stream)
+    };
+
+    match value {
+        SchemaValue::F32(value) => {
+            check_json_depth(json_depth + if value.is_finite() { 1 } else { 2 })?;
+            Ok(false)
+        }
+        SchemaValue::F64(value) => {
+            check_json_depth(json_depth + if value.is_finite() { 1 } else { 2 })?;
+            Ok(false)
+        }
+        SchemaValue::Record { fields } => {
+            check_json_depth(json_depth + 2)?;
+            inspect_values(fields, json_depth + 3)
+        }
+        SchemaValue::Variant(value) => {
+            check_json_depth(json_depth + 2)?;
+            value
+                .payload
+                .as_deref()
+                .map(|value| inspect_schema_value(value, json_depth + 2))
+                .transpose()
+                .map(|value| value.unwrap_or(false))
+        }
+        SchemaValue::Enum { .. }
+        | SchemaValue::Text(_)
+        | SchemaValue::Path { .. }
+        | SchemaValue::Url { .. }
+        | SchemaValue::Datetime { .. }
+        | SchemaValue::Duration(_)
+        | SchemaValue::Quantity(_) => {
+            check_json_depth(json_depth + 2)?;
+            Ok(false)
+        }
+        SchemaValue::Flags { bits } => {
+            check_json_depth(json_depth + if bits.is_empty() { 2 } else { 3 })?;
+            check_collection_size(bits.len())?;
+            Ok(false)
+        }
+        SchemaValue::Tuple { elements }
+        | SchemaValue::List { elements }
+        | SchemaValue::FixedList { elements } => {
+            check_json_depth(json_depth + 2)?;
+            inspect_values(elements, json_depth + 3)
+        }
+        SchemaValue::Map { entries } => {
+            check_json_depth(json_depth + if entries.is_empty() { 2 } else { 3 })?;
+            check_collection_size(entries.len())?;
+            let mut contains_stream = false;
+            for (key, value) in entries {
+                if inspect_schema_value(key, json_depth + 4)?
+                    | inspect_schema_value(value, json_depth + 4)?
+                {
+                    contains_stream = true;
+                }
+            }
+            Ok(contains_stream)
+        }
+        SchemaValue::Option { inner } => {
+            check_json_depth(json_depth + 2)?;
+            inner
+                .as_deref()
+                .map(|value| inspect_schema_value(value, json_depth + 2))
+                .transpose()
+                .map(|value| value.unwrap_or(false))
+        }
+        SchemaValue::Result(ResultValuePayload::Ok { value })
+        | SchemaValue::Result(ResultValuePayload::Err { value }) => {
+            check_json_depth(json_depth + 2)?;
+            value
+                .as_deref()
+                .map(|value| inspect_schema_value(value, json_depth + 2))
+                .transpose()
+                .map(|value| value.unwrap_or(false))
+        }
+        SchemaValue::Binary(value) => {
+            check_json_depth(json_depth + if value.bytes.is_empty() { 2 } else { 3 })?;
+            check_collection_size(value.bytes.len())?;
+            Ok(false)
+        }
+        SchemaValue::Union(value) => {
+            check_json_depth(json_depth + 2)?;
+            inspect_schema_value(&value.body, json_depth + 2)
+        }
+        SchemaValue::Stream(_) => {
+            check_json_depth(json_depth + 2)?;
+            Ok(true)
+        }
+        SchemaValue::Bool(_)
+        | SchemaValue::S8(_)
+        | SchemaValue::S16(_)
+        | SchemaValue::S32(_)
+        | SchemaValue::S64(_)
+        | SchemaValue::U8(_)
+        | SchemaValue::U16(_)
+        | SchemaValue::U32(_)
+        | SchemaValue::U64(_)
+        | SchemaValue::Char(_)
+        | SchemaValue::String(_)
+        | SchemaValue::Uuid(_)
+        | SchemaValue::Secret(_)
+        | SchemaValue::QuotaToken(_)
+        | SchemaValue::PermissionCard(_) => {
+            check_json_depth(json_depth + 1)?;
+            Ok(false)
+        }
+    }
+}
+
+fn check_json_depth(depth: usize) -> Result<(), PublicSchemaValueError> {
+    if depth > MAX_JSON_DEPTH {
+        Err(resource_error("schema value nesting exceeds 64 levels"))
+    } else {
+        Ok(())
+    }
+}
+
+fn check_collection_size(len: usize) -> Result<(), PublicSchemaValueError> {
+    if len > MAX_COLLECTION_SIZE {
+        Err(resource_error("JSON collection exceeds 100000 elements"))
+    } else {
+        Ok(())
+    }
+}
+
+fn contains_stream_value(value: &SchemaValue) -> bool {
+    match value {
+        SchemaValue::Stream(_) => true,
+        SchemaValue::Record { fields } => fields.iter().any(contains_stream_value),
+        SchemaValue::Variant(value) => value.payload.as_deref().is_some_and(contains_stream_value),
+        SchemaValue::Tuple { elements }
+        | SchemaValue::List { elements }
+        | SchemaValue::FixedList { elements } => elements.iter().any(contains_stream_value),
+        SchemaValue::Map { entries } => entries
+            .iter()
+            .any(|(key, value)| contains_stream_value(key) || contains_stream_value(value)),
+        SchemaValue::Option { inner } => inner.as_deref().is_some_and(contains_stream_value),
+        SchemaValue::Result(ResultValuePayload::Ok { value })
+        | SchemaValue::Result(ResultValuePayload::Err { value }) => {
+            value.as_deref().is_some_and(contains_stream_value)
+        }
+        SchemaValue::Union(value) => contains_stream_value(&value.body),
+        _ => false,
+    }
+}
+
+fn external_decode_error(error: String) -> PublicSchemaValueError {
+    if error.contains("canonical")
+        || error.contains("unknown exceptional")
+        || error.contains("object members")
+        || error.contains("unknown external schema value kind")
+    {
+        PublicSchemaValueError::malformed(error)
+    } else {
+        PublicSchemaValueError::validation(error)
+    }
+}
+
+fn external_value_charge(
+    value: &SchemaValue,
+    depth: usize,
+    root: bool,
+) -> Result<u64, PublicSchemaValueError> {
+    if depth > MAX_JSON_DEPTH {
+        return Err(resource_error("schema value nesting exceeds 64 levels"));
+    }
+    let node: u64 = if root { 0 } else { 1 };
+    let collection = |len: usize| {
+        if len > MAX_COLLECTION_SIZE {
+            Err(resource_error("collection exceeds 100000 entries"))
+        } else {
+            Ok(4)
+        }
+    };
+    let sum = |values: &[SchemaValue]| -> Result<u64, PublicSchemaValueError> {
+        values.iter().try_fold(0u64, |total, value| {
+            total
+                .checked_add(external_value_charge(value, depth + 1, false)?)
+                .ok_or_else(|| resource_error("schema value byte charge overflows"))
+        })
+    };
+
+    let payload = match value {
+        SchemaValue::Bool(_) | SchemaValue::S8(_) | SchemaValue::U8(_) => 1,
+        SchemaValue::S16(_) | SchemaValue::U16(_) => 2,
+        SchemaValue::S32(_) | SchemaValue::U32(_) | SchemaValue::F32(_) => 4,
+        SchemaValue::S64(_) | SchemaValue::U64(_) | SchemaValue::F64(_) => 8,
+        SchemaValue::Char(value) => value.len_utf8() as u64,
+        SchemaValue::String(value) => value.len() as u64,
+        SchemaValue::Uuid(_) => 36,
+        SchemaValue::Record { fields } => collection(fields.len())? + sum(fields)?,
+        SchemaValue::Variant(value) => {
+            4 + value
+                .payload
+                .as_deref()
+                .map(|value| external_value_charge(value, depth + 1, false))
+                .transpose()?
+                .unwrap_or(0)
+        }
+        SchemaValue::Enum { .. } => 4,
+        SchemaValue::Flags { bits } => collection(bits.len())? + bits.len() as u64,
+        SchemaValue::Tuple { elements }
+        | SchemaValue::List { elements }
+        | SchemaValue::FixedList { elements } => collection(elements.len())? + sum(elements)?,
+        SchemaValue::Map { entries } => {
+            let mut total = collection(entries.len())?;
+            for (key, value) in entries {
+                let key = external_value_charge(key, depth + 1, false)?;
+                let value = external_value_charge(value, depth + 1, false)?;
+                total = total
+                    .checked_add(key)
+                    .and_then(|total| total.checked_add(value))
+                    .ok_or_else(|| resource_error("schema value byte charge overflows"))?;
+            }
+            total
+        }
+        SchemaValue::Option { inner } => inner
+            .as_deref()
+            .map(|value| external_value_charge(value, depth + 1, false))
+            .transpose()?
+            .unwrap_or(0),
+        SchemaValue::Result(result) => match result {
+            ResultValuePayload::Ok { value } => {
+                2 + value
+                    .as_deref()
+                    .map(|value| external_value_charge(value, depth + 1, false))
+                    .transpose()?
+                    .unwrap_or(0)
+            }
+            ResultValuePayload::Err { value } => {
+                3 + value
+                    .as_deref()
+                    .map(|value| external_value_charge(value, depth + 1, false))
+                    .transpose()?
+                    .unwrap_or(0)
+            }
+        },
+        SchemaValue::Text(value) => {
+            value.text.len() as u64
+                + value
+                    .language
+                    .as_ref()
+                    .map_or(0, |value| value.len() as u64)
+        }
+        SchemaValue::Binary(value) => {
+            if value.bytes.len() > MAX_COLLECTION_SIZE {
+                return Err(resource_error("binary exceeds 100000 bytes"));
+            }
+            value.bytes.len() as u64
+                + value
+                    .mime_type
+                    .as_ref()
+                    .map_or(0, |value| value.len() as u64)
+        }
+        SchemaValue::Path { path } => path.len() as u64,
+        SchemaValue::Url { url } => url.len() as u64,
+        SchemaValue::Datetime { value } => value.to_rfc3339().len() as u64,
+        SchemaValue::Duration(_) => 8,
+        SchemaValue::Quantity(value) => 12 + value.unit.len() as u64,
+        SchemaValue::Union(value) => {
+            value.tag.len() as u64 + external_value_charge(&value.body, depth + 1, false)?
+        }
+        SchemaValue::Secret(_)
+        | SchemaValue::QuotaToken(_)
+        | SchemaValue::PermissionCard(_)
+        | SchemaValue::Stream(_) => {
+            return Err(PublicSchemaValueError::new(
+                PublicErrorCode::UnsupportedValue,
+                "host-managed capabilities cannot cross the public boundary",
+            ));
+        }
+    };
+    node.checked_add(payload)
+        .ok_or_else(|| resource_error("schema value byte charge overflows"))
 }
 
 fn parse_s64(json: &Value) -> Result<i64, PublicSchemaValueError> {
@@ -938,22 +1383,33 @@ fn exact_object<'a>(
     Ok(object)
 }
 
-fn tagged_object<'a>(
+fn object_with_optional<'a>(
     json: &'a Value,
-    tag: &str,
+    required_fields: &[&str],
+    optional_fields: &[&str],
 ) -> Result<&'a Map<String, Value>, PublicSchemaValueError> {
     let object = json
         .as_object()
-        .ok_or_else(|| PublicSchemaValueError::validation("expected a tagged JSON object"))?;
-    if !object.contains_key(tag)
-        || object.len() > 2
-        || object.keys().any(|key| key != tag && key != "value")
+        .ok_or_else(|| PublicSchemaValueError::validation("expected a JSON object"))?;
+    if required_fields
+        .iter()
+        .any(|field| !object.contains_key(*field))
+        || object.keys().any(|key| {
+            !required_fields.iter().any(|field| *field == key)
+                && !optional_fields.iter().any(|field| *field == key)
+        })
     {
         return Err(PublicSchemaValueError::validation(
-            "tagged value contains invalid members",
+            "object members do not match the expected representation",
         ));
     }
     Ok(object)
+}
+
+fn parse_u32(json: &Value, name: &str) -> Result<u32, PublicSchemaValueError> {
+    json.as_u64()
+        .and_then(|value| value.try_into().ok())
+        .ok_or_else(|| PublicSchemaValueError::validation(format!("{name} must be a u32")))
 }
 
 fn required_string<'a>(
@@ -1008,6 +1464,10 @@ fn scalar_payload_charge(value: &SchemaValue, json: &Value) -> Result<u64, Publi
                 .unwrap_or_default()),
         SchemaValue::Path { path } => Ok(path.len() as u64),
         SchemaValue::Url { url } => Ok(url.len() as u64),
+        SchemaValue::Uuid(_) => json
+            .as_str()
+            .map(|value| value.len() as u64)
+            .ok_or_else(|| PublicSchemaValueError::validation("uuid must be a string")),
         SchemaValue::Datetime { .. } => json
             .as_str()
             .map(|value| value.len() as u64)
@@ -1047,7 +1507,7 @@ mod tests {
         decode_public_schema_value, encode_public_schema_value,
     };
     use crate::model::invocation_session_public::{
-        MAX_LOGICAL_VALUE_SIZE, PublicErrorCode, encode_json_value,
+        MAX_COLLECTION_SIZE, MAX_LOGICAL_VALUE_SIZE, PublicErrorCode, encode_json_value,
     };
     use crate::schema::stream::SchemaValueStream;
     use crate::schema::{
@@ -1357,11 +1817,11 @@ mod tests {
     }
 
     #[test]
-    fn safe_integers_and_base64url_round_trip() {
+    fn safe_integers_and_standard_base64_round_trip() {
         assert_eq!(
             decode(
                 &SchemaType::u64(),
-                json!("18446744073709551615"),
+                json!({"kind":"u64","value":"18446744073709551615"}),
                 PublicStreamReferencePolicy::None,
             )
             .unwrap(),
@@ -1370,7 +1830,7 @@ mod tests {
         assert!(
             decode(
                 &SchemaType::u64(),
-                json!(18446744073709551615u64),
+                json!({"kind":"u64","value":18446744073709551615u64}),
                 PublicStreamReferencePolicy::None,
             )
             .is_err()
@@ -1378,7 +1838,7 @@ mod tests {
         assert_eq!(
             decode(
                 &SchemaType::binary(BinaryRestrictions::default()),
-                json!({"bytes":"-_8","mimeType":"application/octet-stream"}),
+                json!({"kind":"binary","value":{"bytes":[251,255],"mimeType":"application/octet-stream"}}),
                 PublicStreamReferencePolicy::None,
             )
             .unwrap(),
@@ -1401,7 +1861,13 @@ mod tests {
         }]);
         let graph = SchemaGraph::anonymous(ty.clone());
         let json = json!({
-            "value":{"$option":"some","value":{"$result":"ok","value":"42"}}
+            "kind":"record","value":{"fields":[
+                {"kind":"option","value":{"inner":
+                    {"kind":"result","value":{"tag":"ok","value":
+                        {"kind":"u64","value":"42"}
+                    }}
+                }}
+            ]}
         });
         let value = decode_public_schema_value(
             &graph,
@@ -1417,6 +1883,60 @@ mod tests {
     }
 
     #[test]
+    fn nested_stream_callbacks_keep_the_pinned_element_schema() {
+        let element = SchemaType::binary(BinaryRestrictions::default());
+        let ty = SchemaType::record(vec![NamedFieldType {
+            name: "items".to_string(),
+            body: SchemaType::list(SchemaType::result(ResultSpec {
+                ok: Some(Box::new(SchemaType::stream(Some(element.clone())))),
+                err: Some(Box::new(SchemaType::string())),
+            })),
+            metadata: Default::default(),
+        }]);
+        let graph = SchemaGraph::anonymous(ty.clone());
+        let json = json!({
+            "kind":"record","value":{"fields":[
+                {"kind":"list","value":{"elements":[
+                    {"kind":"result","value":{"tag":"ok","value":
+                        {"kind":"stream","value":{"streamToken":"opaque-stream-token"}}
+                    }}
+                ]}}
+            ]}
+        });
+
+        let mut decoded_streams = 0;
+        let value = decode_public_schema_value(
+            &graph,
+            &ty,
+            &json,
+            PublicStreamReferencePolicy::Stable,
+            |reference, pinned_element| {
+                decoded_streams += 1;
+                assert_eq!(pinned_element, Some(&element));
+                assert_eq!(
+                    reference,
+                    PublicStreamReference::Stable("opaque-stream-token".to_string())
+                );
+                Ok(SchemaValueStream::from_host_endpoint(reference))
+            },
+        )
+        .unwrap();
+        assert_eq!(decoded_streams, 1);
+
+        let mut encoded_streams = 0;
+        let encoded = encode_public_schema_value(&graph, &ty, &value, |stream, pinned_element| {
+            encoded_streams += 1;
+            assert_eq!(pinned_element, Some(&element));
+            stream
+                .take_host_endpoint::<PublicStreamReference>()
+                .map_err(|_| PublicSchemaValueError::validation("stream already consumed"))
+        })
+        .unwrap();
+        assert_eq!(encoded_streams, 1);
+        assert_eq!(encoded, json);
+    }
+
+    #[test]
     fn floating_point_canonical_forms_are_preserved() {
         let graph = SchemaGraph::anonymous(SchemaType::f64());
         let encoded = encode_public_schema_value(
@@ -1426,7 +1946,10 @@ mod tests {
             |_, _| unreachable!(),
         )
         .unwrap();
-        assert_eq!(encode_json_value(&encoded).unwrap(), "-0");
+        assert_eq!(
+            encode_json_value(&encoded).unwrap(),
+            "{\"kind\":\"f64\",\"value\":-0}"
+        );
 
         let graph = SchemaGraph::anonymous(SchemaType::f32());
         let encoded = encode_public_schema_value(
@@ -1436,7 +1959,10 @@ mod tests {
             |_, _| unreachable!(),
         )
         .unwrap();
-        assert_eq!(encode_json_value(&encoded).unwrap(), "0.1");
+        assert_eq!(
+            encode_json_value(&encoded).unwrap(),
+            "{\"kind\":\"f32\",\"value\":0.1}"
+        );
     }
 
     #[test]
@@ -1445,10 +1971,10 @@ mod tests {
         let reference = "0dff1c71-f12f-4bb1-996c-23d693bdc825";
         let error = decode(
             &ty,
-            json!([
-                {"$stream":{"provisionalRef":reference}},
-                {"$stream":{"provisionalRef":reference}}
-            ]),
+            json!({"kind":"list","value":{"elements":[
+                {"kind":"stream","value":{"provisionalRef":reference}},
+                {"kind":"stream","value":{"provisionalRef":reference}}
+            ]}}),
             PublicStreamReferencePolicy::Provisional,
         )
         .unwrap_err();
@@ -1465,7 +1991,7 @@ mod tests {
         ] {
             let error = decode(
                 &ty,
-                json!({"$stream":{"provisionalRef":reference}}),
+                json!({"kind":"stream","value":{"provisionalRef":reference}}),
                 PublicStreamReferencePolicy::Provisional,
             )
             .unwrap_err();
@@ -1480,7 +2006,7 @@ mod tests {
         let value = decode_public_schema_value(
             &graph,
             &ty,
-            &json!({"$stream":{"streamToken":"opaque-stream-token"}}),
+            &json!({"kind":"stream","value":{"streamToken":"opaque-stream-token"}}),
             PublicStreamReferencePolicy::Stable,
             |reference, _| {
                 assert_eq!(
@@ -1505,7 +2031,7 @@ mod tests {
             decode_public_schema_value(
                 &graph,
                 &ty,
-                &json!(boundary),
+                &json!({"kind":"string","value":boundary}),
                 PublicStreamReferencePolicy::None,
                 |_, _| unreachable!(),
             )
@@ -1514,7 +2040,7 @@ mod tests {
         let decode_error = decode_public_schema_value(
             &graph,
             &ty,
-            &json!(oversized.clone()),
+            &json!({"kind":"string","value":oversized.clone()}),
             PublicStreamReferencePolicy::None,
             |_, _| unreachable!(),
         )
@@ -1532,31 +2058,110 @@ mod tests {
     }
 
     #[test]
+    fn native_binary_respects_the_json_collection_limit() {
+        let ty = SchemaType::binary(BinaryRestrictions::default());
+        let graph = SchemaGraph::anonymous(ty.clone());
+        let boundary = SchemaValue::Binary(crate::schema::BinaryValuePayload {
+            bytes: vec![1; MAX_COLLECTION_SIZE],
+            mime_type: Some("application/octet-stream".to_string()),
+        });
+        let encoded =
+            encode_public_schema_value(&graph, &ty, &boundary, |_, _| unreachable!()).unwrap();
+        let decoded = decode_public_schema_value(
+            &graph,
+            &ty,
+            &encoded,
+            PublicStreamReferencePolicy::None,
+            |_, _| unreachable!(),
+        )
+        .unwrap();
+        assert_eq!(decoded, boundary);
+
+        let oversized = SchemaValue::Binary(crate::schema::BinaryValuePayload {
+            bytes: vec![1; MAX_COLLECTION_SIZE + 1],
+            mime_type: None,
+        });
+        let encode_error =
+            encode_public_schema_value(&graph, &ty, &oversized, |_, _| unreachable!()).unwrap_err();
+        assert_eq!(encode_error.code, PublicErrorCode::ResourceExhausted);
+
+        let decode_error = decode_public_schema_value(
+            &graph,
+            &ty,
+            &json!({"kind":"binary","value":{"bytes":vec![1; MAX_COLLECTION_SIZE + 1]}}),
+            PublicStreamReferencePolicy::None,
+            |_, _| unreachable!(),
+        )
+        .unwrap_err();
+        assert_eq!(decode_error.code, PublicErrorCode::ResourceExhausted);
+    }
+
+    #[test]
+    fn encoding_respects_the_native_json_depth_limit() {
+        fn nested_options(depth: usize) -> (SchemaType, SchemaValue) {
+            let mut ty = SchemaType::bool();
+            let mut value = SchemaValue::Bool(true);
+            for _ in 0..depth {
+                ty = SchemaType::option(ty);
+                value = SchemaValue::Option {
+                    inner: Some(Box::new(value)),
+                };
+            }
+            (ty, value)
+        }
+
+        let (boundary_ty, boundary_value) = nested_options(31);
+        let boundary_graph = SchemaGraph::anonymous(boundary_ty.clone());
+        let encoded = encode_public_schema_value(
+            &boundary_graph,
+            &boundary_ty,
+            &boundary_value,
+            |_, _| unreachable!(),
+        )
+        .unwrap();
+        let decoded = decode_public_schema_value(
+            &boundary_graph,
+            &boundary_ty,
+            &encoded,
+            PublicStreamReferencePolicy::None,
+            |_, _| unreachable!(),
+        )
+        .unwrap();
+        assert_eq!(decoded, boundary_value);
+
+        let (oversized_ty, oversized_value) = nested_options(32);
+        let oversized_graph = SchemaGraph::anonymous(oversized_ty.clone());
+        let error = encode_public_schema_value(
+            &oversized_graph,
+            &oversized_ty,
+            &oversized_value,
+            |_, _| unreachable!(),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, PublicErrorCode::ResourceExhausted);
+    }
+
+    #[test]
     fn malformed_schema_value_vectors_have_frozen_error_codes() {
         let vectors = [
             (
                 SchemaType::u64(),
-                json!(9007199254740993u64),
+                json!({"kind":"u64","value":9007199254740993u64}),
+                PublicErrorCode::MalformedMessage,
+            ),
+            (
+                SchemaType::binary(BinaryRestrictions::default()),
+                json!({"kind":"binary","value":{"bytes":"-_8=","mimeType":"application/octet-stream"}}),
                 PublicErrorCode::ValidationError,
             ),
             (
                 SchemaType::binary(BinaryRestrictions::default()),
-                json!({"bytes":"+/8=","mimeType":"application/octet-stream"}),
-                PublicErrorCode::MalformedMessage,
-            ),
-            (
-                SchemaType::binary(BinaryRestrictions::default()),
-                json!({"bytes":"-_8=","mimeType":"application/octet-stream"}),
-                PublicErrorCode::MalformedMessage,
-            ),
-            (
-                SchemaType::binary(BinaryRestrictions::default()),
-                json!({"bytes":"-_9","mimeType":"application/octet-stream"}),
-                PublicErrorCode::MalformedMessage,
+                json!({"kind":"binary","value":{"bytes":[256],"mimeType":"application/octet-stream"}}),
+                PublicErrorCode::ValidationError,
             ),
             (
                 SchemaType::f64(),
-                json!({"$float":"infinity"}),
+                json!({"kind":"f64","value":{"$float":"infinity"}}),
                 PublicErrorCode::MalformedMessage,
             ),
         ];

@@ -20,6 +20,7 @@ import {
   type SchemaTypeBody,
   type SchemaValue,
 } from '../internal/schema-model';
+import { Uuid } from '../uuid';
 import { datetimeFromISOString, datetimeToISOString } from '../bridge/schema';
 import { SchemaRenderError, type JsonValue } from './ref';
 
@@ -79,6 +80,14 @@ export function fromCanonicalJson(
     }
     case 'string':
       return { tag: 'string', value: expectString(json, path) };
+    case 'uuid': {
+      const input = expectString(json, path);
+      try {
+        return { tag: 'uuid', value: Uuid.parse(input) };
+      } catch {
+        fail(path, 'expected a UUID');
+      }
+    }
     case 'text':
       return decodeText(json, path);
     case 'binary':
@@ -258,6 +267,8 @@ export function toCanonicalJson(
     case 'path':
     case 'url':
       return value.value;
+    case 'uuid':
+      return value.value.toString();
     case 'text':
       return {
         text: value.text,
@@ -478,6 +489,9 @@ function renderSchema(graph: SchemaGraph, type: SchemaType): Record<string, Json
       break;
     case 'string':
       rendered = { type: 'string' };
+      break;
+    case 'uuid':
+      rendered = { type: 'string', format: 'uuid' };
       break;
     case 'text': {
       const text: Record<string, JsonValue> = { type: 'string' };

@@ -1314,6 +1314,9 @@ pub fn worker_error_message(error: &WorkerExecutorError) -> String {
         WorkerExecutorError::Runtime { details } => {
             format!("Runtime error: {}", details)
         }
+        WorkerExecutorError::RecoveryRequired { details, .. } => {
+            format!("Runtime reconstruction required: {}", details)
+        }
         WorkerExecutorError::InvalidShardId {
             shard_id,
             shard_ids,
