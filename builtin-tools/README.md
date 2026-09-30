@@ -14,6 +14,9 @@ into `builtin-tools/filesystem-tools.wasm`. The component provides the `read-fil
    not invoke its language compiler directly.
 2. Add the committed WASM to `BuiltinToolDescriptor`, using `include_bytes!` so startup never
    depends on a filesystem path.
+   If a tool needs immutable runtime files, also commit one ZIP beside the WASM, embed it through
+   `files_archive_bytes`, and map only that tool's required entries through `files`. Components
+   may share one archive while giving different tools different file sets.
 3. Set `component_name`, `tool_name`, and `release_version` to the artifact's exported metadata.
    Provisioning validates these values before writing anything.
 4. Add the component to `build-builtin-tools` in the root `Makefile.toml` and run
