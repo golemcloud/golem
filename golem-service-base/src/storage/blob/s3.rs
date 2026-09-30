@@ -1271,7 +1271,7 @@ mod tests {
     use axum::Router;
     use axum::body::Body;
     use axum::extract::State;
-    use axum::http::{Response, StatusCode};
+    use axum::http::{Response, StatusCode, Uri};
     use axum::routing::put;
     use golem_common::model::RetryConfig;
     use golem_common::model::environment::EnvironmentId;
@@ -1301,11 +1301,17 @@ mod tests {
     #[derive(Clone)]
     struct PutServerState {
         bodies: Arc<Mutex<Vec<Bytes>>>,
+        uris: Arc<Mutex<Vec<Uri>>>,
         statuses: Arc<Mutex<Vec<StatusCode>>>,
     }
 
-    async fn handle_put(State(state): State<PutServerState>, body: Bytes) -> Response<Body> {
+    async fn handle_put(
+        State(state): State<PutServerState>,
+        uri: Uri,
+        body: Bytes,
+    ) -> Response<Body> {
         state.bodies.lock().unwrap().push(body);
+        state.uris.lock().unwrap().push(uri);
         let status = state.statuses.lock().unwrap().remove(0);
         let body = if status.is_success() {
             Body::empty()
@@ -1326,11 +1332,14 @@ mod tests {
     ) -> (
         S3BlobStorage,
         Arc<Mutex<Vec<Bytes>>>,
+        Arc<Mutex<Vec<Uri>>>,
         tokio::task::JoinHandle<()>,
     ) {
         let bodies = Arc::new(Mutex::new(Vec::new()));
+        let uris = Arc::new(Mutex::new(Vec::new()));
         let state = PutServerState {
             bodies: bodies.clone(),
+            uris: uris.clone(),
             statuses: Arc::new(Mutex::new(statuses)),
         };
         let app = Router::new().fallback(put(handle_put)).with_state(state);
@@ -1378,6 +1387,7 @@ mod tests {
                 config,
             },
             bodies,
+            uris,
             server,
         )
     }
@@ -1385,7 +1395,7 @@ mod tests {
     #[test]
     #[timeout("10s")]
     async fn put_raw_golem_retries_preserve_nonempty_payload() {
-        let (storage, bodies, server) = test_storage(vec![
+        let (storage, bodies, _, server) = test_storage(vec![
             StatusCode::INTERNAL_SERVER_ERROR,
             StatusCode::INTERNAL_SERVER_ERROR,
             StatusCode::OK,
@@ -1420,7 +1430,7 @@ mod tests {
     #[test]
     #[timeout("10s")]
     async fn put_raw_golem_retries_preserve_empty_payload_and_final_error() {
-        let (storage, bodies, server) = test_storage(vec![
+        let (storage, bodies, _, server) = test_storage(vec![
             StatusCode::INTERNAL_SERVER_ERROR,
             StatusCode::INTERNAL_SERVER_ERROR,
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -1450,8 +1460,37 @@ mod tests {
 
     #[test]
     #[timeout("10s")]
+    async fn put_raw_percent_encodes_backslash_in_request_path() {
+        let (storage, _, uris, server) = test_storage(vec![StatusCode::OK]).await;
+        let environment_id =
+            EnvironmentId(uuid::Uuid::parse_str("4c8c5ff4-2a42-4e81-ac48-e63005f609fd").unwrap());
+
+        let result = storage
+            .put_raw(
+                "test",
+                "put_raw",
+                BlobStorageNamespace::CustomStorage { environment_id },
+                Path::new(r"photos/animals\cat.png"),
+                b"payload",
+            )
+            .await;
+        server.abort();
+
+        result.unwrap();
+        assert_eq!(
+            uris.lock().unwrap().as_slice(),
+            [
+                format!("/custom-data/{environment_id}/photos/animals%5Ccat.png?x-id=PutObject")
+                    .parse::<Uri>()
+                    .unwrap()
+            ]
+        );
+    }
+
+    #[test]
+    #[timeout("10s")]
     async fn storage_keys_use_contract_separator() {
-        let (mut storage, _, server) = test_storage(vec![]).await;
+        let (mut storage, _, _, server) = test_storage(vec![]).await;
         storage.config.object_prefix = "root/prefix".to_string();
         let namespace = BlobStorageNamespace::CustomStorage {
             environment_id: EnvironmentId(

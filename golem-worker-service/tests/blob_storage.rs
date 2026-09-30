@@ -1456,8 +1456,8 @@ async fn reject_parent_traversal_in_put_raw(
 
 #[test]
 #[tracing::instrument]
-async fn backslash_is_not_a_contract_path_separator(
-    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+async fn filesystem_backslash_is_not_a_contract_path_separator(
+    #[tagged_as("fs")] test: &Arc<dyn GetBlobStorage + Send + Sync>,
     #[dimension(ns)] namespace: &BlobStorageNamespace,
 ) {
     let storage = test.get_blob_storage().await;
