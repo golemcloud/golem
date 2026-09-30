@@ -169,16 +169,31 @@ impl SecuritySchemeService {
         data: SecuritySchemeCreation,
         auth: &AuthCtx,
     ) -> Result<SecurityScheme, SecuritySchemeError> {
-        let environment = self
-            .environment_service
-            .get(environment_id, false, auth)
-            .await
-            .map_err(|err| match err {
-                EnvironmentError::EnvironmentNotFound(_) => {
-                    SecuritySchemeError::ParentEnvironmentNotFound(environment_id)
-                }
-                other => other.into(),
-            })?;
+        let (http_routing_epoch, environment) =
+            crate::services::capture_http_routing_epoch_before_snapshot(
+                async {
+                    self.deployment_repo
+                        .get_http_routing_epoch_if_exists(environment_id.0)
+                        .await
+                        .map_err(anyhow::Error::from)
+                        .map_err(SecuritySchemeError::from)
+                },
+                || async {
+                    self.environment_service
+                        .get(environment_id, false, auth)
+                        .await
+                        .map_err(|err| match err {
+                            EnvironmentError::EnvironmentNotFound(_) => {
+                                SecuritySchemeError::ParentEnvironmentNotFound(environment_id)
+                            }
+                            other => other.into(),
+                        })
+                },
+            )
+            .await?;
+        let http_routing_epoch = http_routing_epoch.ok_or(
+            SecuritySchemeError::ParentEnvironmentNotFound(environment_id),
+        )?;
 
         authorize_security_scheme_permission(
             auth,
@@ -200,21 +215,33 @@ impl SecuritySchemeService {
         let redirect_url: RedirectUrl = RedirectUrl::new(data.redirect_url)
             .map_err(|_| SecuritySchemeError::InvalidRedirectUrl)?;
         let scopes: Vec<Scope> = data.scopes.into_iter().map(Scope::new).collect();
-
-        let record = SecuritySchemeRevisionRecord::creation(
+        let security_scheme = SecurityScheme {
             id,
-            data.provider_type,
-            data.client_id,
-            data.client_secret,
-            &redirect_url,
-            &scopes,
-            &data.login,
-            auth.actor_account_id(),
+            revision: SecuritySchemeRevision::INITIAL,
+            name: data.name.clone(),
+            environment_id,
+            provider_type: data.provider_type,
+            client_id: ClientId::new(data.client_id),
+            client_secret: ClientSecret::new(data.client_secret),
+            redirect_url,
+            scopes,
+            login: data.login,
+        };
+        self.validate_current_deployment(&security_scheme, false)
+            .await?;
+        let record = SecuritySchemeRevisionRecord::from_model(
+            security_scheme,
+            DeletableRevisionAuditFields::new(auth.actor_account_id().0),
         );
 
         let result = self
             .security_scheme_repo
-            .create(environment_id.0, data.name.0.clone(), record)
+            .create(
+                environment_id.0,
+                http_routing_epoch,
+                data.name.0.clone(),
+                record,
+            )
             .await;
 
         match result {
@@ -224,6 +251,9 @@ impl SecuritySchemeService {
             Err(SecuritySchemeRepoError::SecuritySchemeViolatesUniqueness) => Err(
                 SecuritySchemeError::SecuritySchemeWithNameAlreadyExists(data.name),
             ),
+            Err(SecuritySchemeRepoError::ConcurrentModification) => {
+                Err(SecuritySchemeError::ConcurrentUpdateAttempt)
+            }
             Err(other) => Err(other.into()),
         }
     }
@@ -234,8 +264,20 @@ impl SecuritySchemeService {
         update: SecuritySchemeUpdate,
         auth: &AuthCtx,
     ) -> Result<SecurityScheme, SecuritySchemeError> {
-        let (mut security_scheme, owner) =
-            self.get_with_environment(security_scheme_id, auth).await?;
+        let (http_routing_epoch, (mut security_scheme, owner)) =
+            crate::services::capture_http_routing_epoch_before_snapshot(
+                async {
+                    self.security_scheme_repo
+                        .get_http_routing_epoch_for_scheme(security_scheme_id.0)
+                        .await
+                        .map_err(SecuritySchemeError::from)
+                },
+                || self.get_with_environment(security_scheme_id, auth),
+            )
+            .await?;
+        let http_routing_epoch = http_routing_epoch.ok_or(
+            SecuritySchemeError::SecuritySchemeNotFound(security_scheme_id),
+        )?;
 
         authorize_security_scheme_permission_for_owner(
             auth,
@@ -280,7 +322,8 @@ impl SecuritySchemeService {
             security_scheme.login = login;
         }
 
-        self.validate_active_deployments(&security_scheme).await?;
+        self.validate_current_deployment(&security_scheme, false)
+            .await?;
 
         let audit = DeletableRevisionAuditFields::new(auth.actor_account_id().0);
 
@@ -290,6 +333,7 @@ impl SecuritySchemeService {
             .security_scheme_repo
             .update(
                 environment_id.0,
+                http_routing_epoch,
                 SecuritySchemeRevisionRecord::from_model(security_scheme, audit),
             )
             .await;
@@ -311,8 +355,20 @@ impl SecuritySchemeService {
         current_revision: SecuritySchemeRevision,
         auth: &AuthCtx,
     ) -> Result<SecurityScheme, SecuritySchemeError> {
-        let (mut security_scheme, owner) =
-            self.get_with_environment(security_scheme_id, auth).await?;
+        let (http_routing_epoch, (mut security_scheme, owner)) =
+            crate::services::capture_http_routing_epoch_before_snapshot(
+                async {
+                    self.security_scheme_repo
+                        .get_http_routing_epoch_for_scheme(security_scheme_id.0)
+                        .await
+                        .map_err(SecuritySchemeError::from)
+                },
+                || self.get_with_environment(security_scheme_id, auth),
+            )
+            .await?;
+        let http_routing_epoch = http_routing_epoch.ok_or(
+            SecuritySchemeError::SecuritySchemeNotFound(security_scheme_id),
+        )?;
 
         authorize_security_scheme_permission_for_owner(
             auth,
@@ -329,12 +385,16 @@ impl SecuritySchemeService {
 
         let environment_id = security_scheme.environment_id;
 
+        self.validate_current_deployment(&security_scheme, true)
+            .await?;
+
         let audit = DeletableRevisionAuditFields::deletion(auth.actor_account_id().0);
 
         let result = self
             .security_scheme_repo
             .delete(
                 environment_id.0,
+                http_routing_epoch,
                 SecuritySchemeRevisionRecord::from_model(security_scheme, audit),
             )
             .await;
@@ -486,23 +546,36 @@ impl SecuritySchemeService {
         Ok((security_scheme, owner))
     }
 
-    async fn validate_active_deployments(
+    async fn validate_current_deployment(
         &self,
         candidate: &SecurityScheme,
+        deleting: bool,
     ) -> Result<(), SecuritySchemeError> {
         use crate::services::deployment::validate_final_http_api_router_for_origin;
         use golem_service_base::custom_api::{RouteBehaviour, SecuritySchemeDetails};
         use std::collections::HashMap;
 
+        let Some(deployment) = self
+            .deployment_repo
+            .get_currently_deployed_revision(candidate.environment_id.0)
+            .await
+            .map_err(anyhow::Error::from)?
+        else {
+            return Ok(());
+        };
         for domain in self
             .deployment_repo
-            .list_active_domains_for_environment(candidate.environment_id.0)
+            .list_domains_for_deployment(candidate.environment_id.0, deployment.revision_id)
             .await
             .map_err(anyhow::Error::from)?
         {
             let bound_routes: Vec<BoundCompiledRoute> = self
                 .deployment_repo
-                .list_active_compiled_routes_for_domain(&domain)
+                .list_compiled_routes_for_domain_and_deployment(
+                    candidate.environment_id.0,
+                    deployment.revision_id,
+                    &domain,
+                )
                 .await
                 .map_err(anyhow::Error::from)?
                 .into_iter()
@@ -512,16 +585,21 @@ impl SecuritySchemeService {
             let mut schemes = HashMap::new();
             let mut routes = Vec::with_capacity(bound_routes.len());
             for bound in bound_routes {
-                if bound.environment_id != candidate.environment_id {
-                    continue;
-                }
                 if let Some(details) = bound.security_scheme {
                     schemes.insert(details.name.clone(), details);
                 }
                 routes.push(bound.route);
             }
-            if !schemes.values().any(|details| details.id == candidate.id) {
+            if !routes
+                .iter()
+                .any(|route| route.security_scheme().as_ref() == Some(&candidate.name))
+            {
                 continue;
+            }
+            if deleting {
+                return Err(SecuritySchemeError::InvalidLoginConfiguration(
+                    "security scheme is used by an active deployment".into(),
+                ));
             }
             schemes.insert(
                 candidate.name.clone(),

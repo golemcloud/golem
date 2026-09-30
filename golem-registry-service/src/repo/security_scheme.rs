@@ -28,17 +28,24 @@ use futures::FutureExt;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{LabelledPoolApi, Pool, PoolApi};
-use golem_service_base::repo::ResultExt;
+use golem_service_base::repo::{RepoError, ResultExt};
 use indoc::indoc;
+use sqlx::Row;
 use tracing::{Instrument, Span, info_span};
 use uuid::Uuid;
 
 #[async_trait]
 pub trait SecuritySchemeRepo: Send + Sync {
+    async fn get_http_routing_epoch_for_scheme(
+        &self,
+        security_scheme_id: Uuid,
+    ) -> Result<Option<i64>, SecuritySchemeRepoError>;
+
     /// Create a security scheme and record a change event in the same transaction.
     async fn create(
         &self,
         environment_id: Uuid,
+        expected_http_routing_epoch: i64,
         name: String,
         revision: SecuritySchemeRevisionRecord,
     ) -> Result<RequiresNotificationSignal<SecuritySchemeExtRevisionRecord>, SecuritySchemeRepoError>;
@@ -47,6 +54,7 @@ pub trait SecuritySchemeRepo: Send + Sync {
     async fn update(
         &self,
         environment_id: Uuid,
+        expected_http_routing_epoch: i64,
         revision: SecuritySchemeRevisionRecord,
     ) -> Result<RequiresNotificationSignal<SecuritySchemeExtRevisionRecord>, SecuritySchemeRepoError>;
 
@@ -54,6 +62,7 @@ pub trait SecuritySchemeRepo: Send + Sync {
     async fn delete(
         &self,
         environment_id: Uuid,
+        expected_http_routing_epoch: i64,
         revision: SecuritySchemeRevisionRecord,
     ) -> Result<RequiresNotificationSignal<SecuritySchemeExtRevisionRecord>, SecuritySchemeRepoError>;
 
@@ -96,16 +105,27 @@ impl<Repo: SecuritySchemeRepo> LoggedSecuritySchemeRepo<Repo> {
 
 #[async_trait]
 impl<Repo: SecuritySchemeRepo> SecuritySchemeRepo for LoggedSecuritySchemeRepo<Repo> {
+    async fn get_http_routing_epoch_for_scheme(
+        &self,
+        security_scheme_id: Uuid,
+    ) -> Result<Option<i64>, SecuritySchemeRepoError> {
+        self.repo
+            .get_http_routing_epoch_for_scheme(security_scheme_id)
+            .instrument(Self::span_security_scheme_id(security_scheme_id))
+            .await
+    }
+
     async fn create(
         &self,
         environment_id: Uuid,
+        expected_http_routing_epoch: i64,
         name: String,
         revision: SecuritySchemeRevisionRecord,
     ) -> Result<RequiresNotificationSignal<SecuritySchemeExtRevisionRecord>, SecuritySchemeRepoError>
     {
         let span = Self::span_environment_id(environment_id);
         self.repo
-            .create(environment_id, name, revision)
+            .create(environment_id, expected_http_routing_epoch, name, revision)
             .instrument(span)
             .await
     }
@@ -113,12 +133,13 @@ impl<Repo: SecuritySchemeRepo> SecuritySchemeRepo for LoggedSecuritySchemeRepo<R
     async fn update(
         &self,
         environment_id: Uuid,
+        expected_http_routing_epoch: i64,
         revision: SecuritySchemeRevisionRecord,
     ) -> Result<RequiresNotificationSignal<SecuritySchemeExtRevisionRecord>, SecuritySchemeRepoError>
     {
         let span = Self::span_security_scheme_id(revision.security_scheme_id);
         self.repo
-            .update(environment_id, revision)
+            .update(environment_id, expected_http_routing_epoch, revision)
             .instrument(span)
             .await
     }
@@ -126,12 +147,13 @@ impl<Repo: SecuritySchemeRepo> SecuritySchemeRepo for LoggedSecuritySchemeRepo<R
     async fn delete(
         &self,
         environment_id: Uuid,
+        expected_http_routing_epoch: i64,
         revision: SecuritySchemeRevisionRecord,
     ) -> Result<RequiresNotificationSignal<SecuritySchemeExtRevisionRecord>, SecuritySchemeRepoError>
     {
         let span = Self::span_security_scheme_id(revision.security_scheme_id);
         self.repo
-            .delete(environment_id, revision)
+            .delete(environment_id, expected_http_routing_epoch, revision)
             .instrument(span)
             .await
     }
@@ -207,6 +229,28 @@ impl<DBP: Pool> DbSecuritySchemeRepo<DBP> {
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 impl DbSecuritySchemeRepo<PostgresPool> {
+    async fn claim_http_routing_epoch(
+        tx: &mut <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction,
+        environment_id: Uuid,
+        expected_epoch: i64,
+    ) -> Result<(), SecuritySchemeRepoError> {
+        let result = tx
+            .execute(
+                sqlx::query(indoc! { r#"
+                    UPDATE environments
+                    SET http_routing_mutation_epoch = http_routing_mutation_epoch + 1
+                    WHERE environment_id = $1 AND http_routing_mutation_epoch = $2
+                "# })
+                .bind(environment_id)
+                .bind(expected_epoch),
+            )
+            .await?;
+        if result.rows_affected() == 0 {
+            return Err(SecuritySchemeRepoError::ConcurrentModification);
+        }
+        Ok(())
+    }
+
     async fn insert_revision(
         tx: &mut <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction,
         revision: SecuritySchemeRevisionRecord,
@@ -241,9 +285,34 @@ impl DbSecuritySchemeRepo<PostgresPool> {
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
 impl SecuritySchemeRepo for DbSecuritySchemeRepo<PostgresPool> {
+    async fn get_http_routing_epoch_for_scheme(
+        &self,
+        security_scheme_id: Uuid,
+    ) -> Result<Option<i64>, SecuritySchemeRepoError> {
+        let row = self
+            .with_ro("get_http_routing_epoch_for_scheme")
+            .fetch_optional(
+                sqlx::query(indoc! { r#"
+                    SELECT e.http_routing_mutation_epoch
+                    FROM security_schemes s
+                    JOIN environments e ON e.environment_id = s.environment_id
+                    WHERE s.security_scheme_id = $1
+                "# })
+                .bind(security_scheme_id),
+            )
+            .await?;
+        row.map(|row| {
+            row.try_get("http_routing_mutation_epoch")
+                .map_err(RepoError::from)
+                .map_err(Into::into)
+        })
+        .transpose()
+    }
+
     async fn create(
         &self,
         environment_id: Uuid,
+        expected_http_routing_epoch: i64,
         name: String,
         revision: SecuritySchemeRevisionRecord,
     ) -> Result<RequiresNotificationSignal<SecuritySchemeExtRevisionRecord>, SecuritySchemeRepoError>
@@ -251,6 +320,13 @@ impl SecuritySchemeRepo for DbSecuritySchemeRepo<PostgresPool> {
         let result = self
             .with_tx_err("create", |tx| {
                 async move {
+                    Self::claim_http_routing_epoch(
+                        tx,
+                        environment_id,
+                        expected_http_routing_epoch,
+                    )
+                    .await?;
+
                     let security_scheme_record: SecuritySchemeRecord = tx
                         .fetch_one_as(
                             sqlx::query_as(indoc! {r#"
@@ -295,12 +371,20 @@ impl SecuritySchemeRepo for DbSecuritySchemeRepo<PostgresPool> {
     async fn update(
         &self,
         environment_id: Uuid,
+        expected_http_routing_epoch: i64,
         revision: SecuritySchemeRevisionRecord,
     ) -> Result<RequiresNotificationSignal<SecuritySchemeExtRevisionRecord>, SecuritySchemeRepoError>
     {
         let result = self
             .with_tx_err("update", |tx| {
                 async move {
+                    Self::claim_http_routing_epoch(
+                        tx,
+                        environment_id,
+                        expected_http_routing_epoch,
+                    )
+                    .await?;
+
                     let revision = Self::insert_revision(tx, revision).await?;
 
                     let security_scheme_record: SecuritySchemeRecord = tx
@@ -343,12 +427,20 @@ impl SecuritySchemeRepo for DbSecuritySchemeRepo<PostgresPool> {
     async fn delete(
         &self,
         environment_id: Uuid,
+        expected_http_routing_epoch: i64,
         revision: SecuritySchemeRevisionRecord,
     ) -> Result<RequiresNotificationSignal<SecuritySchemeExtRevisionRecord>, SecuritySchemeRepoError>
     {
         let result = self
             .with_tx_err("delete", |tx| {
                 async move {
+                    Self::claim_http_routing_epoch(
+                        tx,
+                        environment_id,
+                        expected_http_routing_epoch,
+                    )
+                    .await?;
+
                     let revision = Self::insert_revision(tx, revision.clone()).await?;
 
                     let security_scheme_record: SecuritySchemeRecord = tx

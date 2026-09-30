@@ -237,7 +237,7 @@ async fn make_pool(config: &DbPostgresConfig) -> PostgresPool {
     PostgresPool::configured(config).await.unwrap()
 }
 
-async fn make_deps(pool: PostgresPool) -> Deps {
+async fn make_deps(pool: PostgresPool, routing_test_pool: PostgresPool) -> Deps {
     let deps = Deps {
         account_repo: Box::new(DbAccountRepo::logged(pool.clone())),
         account_usage_repo: std::sync::Arc::new(DbAccountUsageRepo::logged(pool.clone())),
@@ -263,6 +263,7 @@ async fn make_deps(pool: PostgresPool) -> Deps {
         tool_release_repo: Box::new(DbToolReleaseRepo::logged(pool.clone())),
         tool_middleware_release_repo: Box::new(DbToolMiddlewareReleaseRepo::logged(pool.clone())),
         test_db: TestDb::Postgres(pool.clone()),
+        routing_test_db: TestDb::Postgres(routing_test_pool),
     };
     deps.setup().await;
     deps
@@ -282,7 +283,11 @@ async fn postgres_db(_tracing: &Tracing) -> PostgresDb {
 
 #[test_dep(scope = Shared, tagged_as = "postgres")]
 async fn postgres_deps(db: &PostgresDb) -> Deps {
-    make_deps(db.pool.clone()).await
+    make_deps(
+        db.pool.clone(),
+        PostgresPool::configured(&db.config).await.unwrap(),
+    )
+    .await
 }
 
 #[test_dep(scope = Shared)]
@@ -298,7 +303,11 @@ async fn postgres_tls_db(_tracing: &Tracing) -> PostgresTlsDb {
 
 #[test_dep(scope = Shared, tagged_as = "postgres_tls")]
 async fn postgres_tls_deps(db: &PostgresTlsDb) -> Deps {
-    make_deps(db.pool.clone()).await
+    make_deps(
+        db.pool.clone(),
+        PostgresPool::configured(&db.config).await.unwrap(),
+    )
+    .await
 }
 
 #[test]
@@ -642,6 +651,16 @@ async fn test_security_scheme_login_persistence(#[dimension(postgres_variant)] d
 }
 
 #[test]
+async fn test_http_routing_mutation_epoch_serializes_scheme_and_deployment_writes(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::common::test_http_routing_mutation_epoch_serializes_scheme_and_deployment_writes(
+        deps,
+    )
+    .await;
+}
+
+#[test]
 async fn test_resolve_agent_type_nonexistent_revision_returns_none(
     #[dimension(postgres_variant)] deps: &Deps,
 ) {
@@ -706,7 +725,7 @@ async fn test_tool_middleware_release_and_grant_repository_contracts(
 
 #[test]
 async fn test_tool_depublication_waits_for_grant_eligibility_lock(db: &PostgresDb) {
-    let deps = make_deps(db.pool.clone()).await;
+    let deps = make_deps(db.pool.clone(), db.pool.clone()).await;
     let owner = deps.create_account().await;
     let actor = AccountId(owner.revision.account_id);
     let app = deps.create_application(actor.0).await;
