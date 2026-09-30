@@ -37,7 +37,7 @@ async fn copied(
 ) -> Result<FilesystemCapture, CaptureError> {
     outcome.await.map(|outcome| match outcome {
         CaptureOutcome::Captured { capture, .. } => capture,
-        CaptureOutcome::Unchanged | CaptureOutcome::InitialFiles => {
+        CaptureOutcome::Unchanged | CaptureOutcome::InitialFiles { .. } => {
             panic!("the capture copied nothing")
         }
     })
@@ -346,6 +346,58 @@ async fn capture_waits_for_a_dropped_call_that_still_runs() {
         .unwrap();
     control.push_close(Ok(()));
     close(OpenNode::File(file)).await.unwrap();
+    delete_scripted_resident(&control, filesystem).await;
+}
+
+#[test]
+#[timeout("10s")]
+async fn a_capture_against_the_mark_of_a_tree_of_initial_files_checks_nothing_until_a_change() {
+    let (filesystem, control, window) = metered_resident().await;
+    control.push_open(Ok(SandboxOpened::scripted_directory(1)));
+    control.push_read_directory(Ok(vec![]));
+    control.push_close(Ok(()));
+
+    let first = capture(&filesystem, Duration::from_secs(5), None)
+        .await
+        .unwrap();
+    let CaptureOutcome::InitialFiles { mark } = first else {
+        panic!("a capture of an empty tree without initial files copied the tree");
+    };
+    let calls_after_first = control.calls().len();
+    let second = capture(&filesystem, Duration::from_secs(5), Some(mark))
+        .await
+        .unwrap();
+    let calls_after_second = control.calls().len();
+    let generation_handle = resident_generation_handle(&filesystem);
+    control.push_get_attributes(Err(missing("agent directory before insert")));
+    control.push_create_directory(Ok(()));
+    edit_namespace(
+        &generation_handle,
+        NamespaceEdit::Insert {
+            destination: PathTarget::at_root(&generation_handle, "agent-directory").unwrap(),
+            object: NewObject::Directory,
+        },
+    )
+    .unwrap()
+    .await
+    .unwrap();
+    push_root_with_an_agent_file(&control);
+    control.push_copy_contents(Ok(Box::new([])));
+    let third = copied(capture(&filesystem, Duration::from_secs(5), Some(mark)))
+        .await
+        .unwrap();
+
+    assert!(matches!(second, CaptureOutcome::Unchanged));
+    assert_eq!(
+        calls_after_second, calls_after_first,
+        "a capture against the mark of a tree of initial files checks no declaration and no \
+         directory"
+    );
+    assert!(has_call(&control, "copy_contents("));
+    third.discard().await.unwrap();
+    close_window(window, Instant::now() + Duration::from_secs(1))
+        .await
+        .unwrap();
     delete_scripted_resident(&control, filesystem).await;
 }
 
@@ -3604,7 +3656,7 @@ async fn check_restore_against_replay(
         ));
     }
     let outcome = capture(&captured, Duration::from_secs(5), None).await;
-    if let Ok(CaptureOutcome::InitialFiles) = outcome {
+    if let Ok(CaptureOutcome::InitialFiles { .. }) = outcome {
         let at_capture = tree_without_times(&agents.root(&captured_agent));
         delete(seal(captured)).await.unwrap();
         compare_start_from_initial_files(
@@ -3627,7 +3679,7 @@ async fn check_restore_against_replay(
     }
     let snapshot = outcome.map(|outcome| match outcome {
         CaptureOutcome::Captured { capture, .. } => capture,
-        CaptureOutcome::Unchanged | CaptureOutcome::InitialFiles => {
+        CaptureOutcome::Unchanged | CaptureOutcome::InitialFiles { .. } => {
             unreachable!("a capture without a mark gives a copy or a tree of initial files")
         }
     });

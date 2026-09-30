@@ -36,7 +36,7 @@ enum Seen {
 async fn look(filesystem: &ResidentFilesystem, since: TreeMark) -> (Seen, TreeMark) {
     match capture(filesystem, WAIT, Some(since)).await.unwrap() {
         CaptureOutcome::Unchanged => (Seen::Unchanged, since),
-        CaptureOutcome::InitialFiles => (Seen::InitialFiles, since),
+        CaptureOutcome::InitialFiles { .. } => (Seen::InitialFiles, since),
         CaptureOutcome::Captured {
             capture,
             mark,
@@ -56,7 +56,7 @@ async fn look(filesystem: &ResidentFilesystem, since: TreeMark) -> (Seen, TreeMa
 async fn look_without_mark(filesystem: &ResidentFilesystem) -> Seen {
     match capture(filesystem, WAIT, None).await.unwrap() {
         CaptureOutcome::Unchanged => Seen::Unchanged,
-        CaptureOutcome::InitialFiles => Seen::InitialFiles,
+        CaptureOutcome::InitialFiles { .. } => Seen::InitialFiles,
         CaptureOutcome::Captured {
             capture, detection, ..
         } => {
@@ -81,7 +81,7 @@ async fn first_mark(filesystem: &ResidentFilesystem) -> TreeMark {
             capture.discard().await.unwrap();
             mark
         }
-        CaptureOutcome::Unchanged | CaptureOutcome::InitialFiles => {
+        CaptureOutcome::Unchanged | CaptureOutcome::InitialFiles { .. } => {
             panic!("a capture without a mark of a changed tree copied nothing")
         }
     }
@@ -91,7 +91,7 @@ async fn first_mark(filesystem: &ResidentFilesystem) -> TreeMark {
 async fn copy_of(filesystem: &ResidentFilesystem) -> FilesystemCapture {
     match capture(filesystem, WAIT, None).await.unwrap() {
         CaptureOutcome::Captured { capture, .. } => capture,
-        CaptureOutcome::Unchanged | CaptureOutcome::InitialFiles => {
+        CaptureOutcome::Unchanged | CaptureOutcome::InitialFiles { .. } => {
             panic!("a capture of a changed tree copied nothing")
         }
     }
@@ -1318,7 +1318,10 @@ fn each_capture_result_has_its_metric_label() {
     assert_eq!(
         [
             CaptureOutcome::Unchanged.label(),
-            CaptureOutcome::InitialFiles.label(),
+            CaptureOutcome::InitialFiles {
+                mark: test_tree_marks().0
+            }
+            .label(),
             WholeCapture::InitialFiles.label(),
             CaptureError::Busy.label(),
             CaptureError::Invalidated.label(),

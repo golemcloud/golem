@@ -177,8 +177,9 @@ pub(crate) enum CaptureOutcome {
     /// The tree is the tree of the mark that the caller gave. The capture copied nothing.
     Unchanged,
     /// The tree is what a start from the initial files of the generation gives. The capture
-    /// copied nothing.
-    InitialFiles,
+    /// copied nothing. `mark` is the mark of the tree, so a later capture against it gives
+    /// [`CaptureOutcome::Unchanged`] until a change.
+    InitialFiles { mark: TreeMark },
     /// The capture copied the tree. `mark` is the mark of the copied tree, and `detection` tells
     /// how a save can compare it with the tree of the mark that the caller gave.
     Captured {
@@ -193,7 +194,7 @@ impl CaptureOutcome {
     pub(crate) fn label(&self) -> &'static str {
         match self {
             Self::Unchanged => "unchanged",
-            Self::InitialFiles => "initial_files",
+            Self::InitialFiles { .. } => "initial_files",
             Self::Captured { .. } => "captured",
         }
     }
@@ -202,7 +203,7 @@ impl CaptureOutcome {
     fn into_copy(self) -> Option<FilesystemCapture> {
         match self {
             Self::Captured { capture, .. } => Some(capture),
-            Self::Unchanged | Self::InitialFiles => None,
+            Self::Unchanged | Self::InitialFiles { .. } => None,
         }
     }
 }
@@ -356,7 +357,8 @@ fn record_error(source: anyhow::Error) -> Error {
 /// - When the counters equal `since`, the tree is the tree of `since`. The result is
 ///   [`CaptureOutcome::Unchanged`], and the capture makes no host directory.
 /// - When the tree is what a start from the initial files gives, the result is
-///   [`CaptureOutcome::InitialFiles`], and the capture makes no host directory. That is true when
+///   [`CaptureOutcome::InitialFiles`] with the mark of the tree, and the capture makes no host
+///   directory. That is true when
 ///   each declaration is a read-only initial file, each of these files is Golem's file with a
 ///   single name, the tree holds nothing else except the directories on the way to these files,
 ///   and no call outside an install put a chosen modification time at a path. The check does not
@@ -405,7 +407,9 @@ pub(crate) fn capture<Adapter: SandboxFilesystemAdapter>(
                 return Ok(CaptureOutcome::Unchanged);
             }
             Ok(match copy_fenced(&generation).await? {
-                WholeCapture::InitialFiles => CaptureOutcome::InitialFiles,
+                WholeCapture::InitialFiles => CaptureOutcome::InitialFiles {
+                    mark: counters.mark(number),
+                },
                 WholeCapture::Captured { capture, mark } => CaptureOutcome::Captured {
                     capture,
                     mark,

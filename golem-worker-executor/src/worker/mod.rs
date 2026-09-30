@@ -5339,7 +5339,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         .lock()
                         .unwrap_or_else(std::sync::PoisonError::into_inner)
                         .as_ref()
-                        .and_then(|slot| filesystem_snapshots::confirmed_slot(slot, &name, *mark))
+                        .and_then(|slot| {
+                            filesystem_snapshots::confirmed_slot(slot, Some(&name), *mark)
+                        })
                         .is_some(),
                 }
             }
@@ -5377,7 +5379,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                             .lock()
                             .unwrap_or_else(std::sync::PoisonError::into_inner);
                         if let Some(confirmed) = slot.as_ref().and_then(|current| {
-                            filesystem_snapshots::confirmed_slot(current, &name, mark)
+                            filesystem_snapshots::confirmed_slot(current, Some(&name), mark)
                         }) {
                             *slot = Some(confirmed);
                         }

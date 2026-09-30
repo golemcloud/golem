@@ -32,8 +32,8 @@ use crate::services::{
 };
 use crate::worker::filesystem_snapshots::{
     ConfirmedFilesystemSnapshot, PeriodicFailure, PeriodicResult, PeriodicSnapshotHost,
-    SnapshotSlot, UpdateSnapshot, UpdateSnapshotHost, confirm_by, periodic_snapshot,
-    update_snapshot,
+    SnapshotSlot, UpdateSnapshot, UpdateSnapshotHost, confirm_by, confirmed_slot,
+    periodic_snapshot, update_snapshot,
 };
 use crate::worker::interrupt::Interrupts;
 use crate::worker::invocation::{
@@ -3754,6 +3754,20 @@ impl<Ctx: WorkerCtx> PeriodicSnapshotHost for PeriodicHost<'_, '_, Ctx> {
 
     fn confirm(&self, mark: TreeMark) -> Confirm {
         confirm_by(Arc::downgrade(&self.0.parent), mark)
+    }
+
+    fn initial_files_written(&self, mark: TreeMark) {
+        let mut slot = self
+            .0
+            .filesystem_snapshot_slot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(written) = slot
+            .as_ref()
+            .and_then(|current| confirmed_slot(current, None, mark))
+        {
+            *slot = Some(written);
+        }
     }
 }
 

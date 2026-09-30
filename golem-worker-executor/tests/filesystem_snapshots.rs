@@ -1058,6 +1058,10 @@ async fn a_tree_of_initial_files_writes_records_without_a_name_and_uses_no_store
     })
     .await?;
     let records = agent.records(&executor).await?;
+    executor.release().await?;
+    let executor =
+        start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+    let restarted = agent.describe(&executor).await?;
     let updated = executor
         .update_component_with_files(
             &agent.component.id,
@@ -1099,6 +1103,8 @@ async fn a_tree_of_initial_files_writes_records_without_a_name_and_uses_no_store
         ]
         .map(String::from)
     );
+    // A restart from a record without a name seeds the initial files, as a full replay does.
+    assert_eq!(restarted, live);
     // The update keeps the directory that held the file that it removed, as a replay of the
     // update does.
     assert_eq!(

@@ -53,10 +53,11 @@ pub(crate) enum ConfirmedBaseline {
     ManualUpdate(OplogIndex),
 }
 
-/// The last confirmed filesystem snapshot of a worker, with the mark of its tree.
+/// The last confirmed filesystem snapshot of a worker, with the mark of its tree. A snapshot
+/// without a name is the record of a tree of initial files, which needs no confirmation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ConfirmedFilesystemSnapshot {
-    pub(crate) name: FilesystemSnapshotName,
+    pub(crate) name: Option<FilesystemSnapshotName>,
     pub(crate) mark: TreeMark,
     pub(crate) baseline: ConfirmedBaseline,
 }
@@ -70,7 +71,8 @@ pub(crate) type SnapshotSlot = std::sync::Arc<std::sync::Mutex<Option<Filesystem
 pub(crate) struct FilesystemSnapshotSlot {
     /// The mark of the baseline of the current generation.
     generation: TreeMark,
-    /// The last confirmed filesystem snapshot of the current generation.
+    /// The last confirmed filesystem snapshot of the current generation, or the last written
+    /// record of a tree of initial files, which has no name.
     confirmed: Option<ConfirmedFilesystemSnapshot>,
 }
 
@@ -84,7 +86,7 @@ impl FilesystemSnapshotSlot {
         Self {
             generation: mark,
             confirmed: restored.map(|(name, baseline)| ConfirmedFilesystemSnapshot {
-                name,
+                name: Some(name),
                 mark,
                 baseline,
             }),
@@ -97,13 +99,14 @@ impl FilesystemSnapshotSlot {
 }
 
 /// The slot after the confirmation of `name`, whose capture has `mark`, or `None` when the
-/// capture is of another generation than `slot`. A confirmation counts only for the generation
-/// that took its capture. The owner gate asks this before the append, and the append asks it
-/// again when it sets the slot, because the loop starts a new generation without the instance
-/// lock.
+/// capture is of another generation than `slot`. `name` is `None` for the written record of a
+/// tree of initial files at `mark`. A confirmation or such a record counts only for the
+/// generation that took its capture. The owner gate asks this before the append, and the append
+/// asks it again when it sets the slot, because the loop starts a new generation without the
+/// instance lock.
 pub(crate) fn confirmed_slot(
     slot: &FilesystemSnapshotSlot,
-    name: &FilesystemSnapshotName,
+    name: Option<&FilesystemSnapshotName>,
     mark: TreeMark,
 ) -> Option<FilesystemSnapshotSlot> {
     slot.generation
@@ -111,7 +114,7 @@ pub(crate) fn confirmed_slot(
         .then(|| FilesystemSnapshotSlot {
             generation: slot.generation,
             confirmed: Some(ConfirmedFilesystemSnapshot {
-                name: name.clone(),
+                name: name.cloned(),
                 mark,
                 baseline: ConfirmedBaseline::Periodic,
             }),
@@ -119,8 +122,9 @@ pub(crate) fn confirmed_slot(
 }
 
 /// Gives the confirmed snapshot that a capture compares with: the confirmed snapshot of the slot
-/// while a start would restore its name now. `selected` is the automatic snapshot record that a
-/// start selects now, and `last_manual_update` the index of the manual-update baseline.
+/// while a start would restore its name now. A snapshot without a name matches a selected record
+/// without a name. `selected` is the automatic snapshot record that a start selects now, and
+/// `last_manual_update` the index of the manual-update baseline.
 pub(crate) fn since(
     confirmed: Option<&ConfirmedFilesystemSnapshot>,
     selected: Option<&UsableAutomaticSnapshot>,
@@ -128,7 +132,7 @@ pub(crate) fn since(
 ) -> Option<ConfirmedFilesystemSnapshot> {
     let confirmed = confirmed?;
     let selected_now = match (selected, confirmed.baseline) {
-        (Some(selected), _) => selected.filesystem_snapshot.as_ref() == Some(&confirmed.name),
+        (Some(selected), _) => selected.filesystem_snapshot == confirmed.name,
         (None, ConfirmedBaseline::ManualUpdate(index)) => last_manual_update == Some(index),
         (None, ConfirmedBaseline::Periodic) => false,
     };
@@ -140,7 +144,9 @@ pub(crate) fn since(
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CaptureFinding<Copy> {
     Unchanged,
-    InitialFiles,
+    InitialFiles {
+        mark: TreeMark,
+    },
     Captured {
         copy: Copy,
         detection: ChangeDetection,
@@ -152,7 +158,7 @@ impl CaptureFinding<(FilesystemCapture, TreeMark)> {
     fn of(outcome: CaptureOutcome) -> Self {
         match outcome {
             CaptureOutcome::Unchanged => Self::Unchanged,
-            CaptureOutcome::InitialFiles => Self::InitialFiles,
+            CaptureOutcome::InitialFiles { mark } => Self::InitialFiles { mark },
             CaptureOutcome::Captured {
                 capture,
                 mark,
@@ -173,6 +179,9 @@ enum PeriodicRecord<Copy> {
     Skipped,
     /// The record has no name. Nothing is uploaded.
     WithoutName,
+    /// The record has no name, and the tree at `mark` holds only initial files. Nothing is
+    /// uploaded, and the slot keeps the mark once the record is written.
+    InitialFiles { mark: TreeMark },
     /// The record has the name of the admission, and `copy` is uploaded with `parent`.
     Own {
         copy: Copy,
@@ -183,24 +192,27 @@ enum PeriodicRecord<Copy> {
 }
 
 /// Decides the record of a periodic snapshot from the finding of the capture and the confirmed
-/// snapshot that the capture compared with.
+/// snapshot that the capture compared with. An unchanged tree reuses the name of that snapshot,
+/// or writes a record without a name when that snapshot has none.
 fn plan_periodic_record<Copy>(
     finding: CaptureFinding<Copy>,
     since: Option<&ConfirmedFilesystemSnapshot>,
 ) -> PeriodicRecord<Copy> {
-    match (finding, since) {
-        (CaptureFinding::Unchanged, Some(since)) => PeriodicRecord::Reused(since.name.clone()),
+    let since_name = since.map(|since| since.name.clone());
+    match (finding, since_name) {
+        (CaptureFinding::Unchanged, Some(Some(name))) => PeriodicRecord::Reused(name),
+        (CaptureFinding::Unchanged, Some(None)) => PeriodicRecord::WithoutName,
         (CaptureFinding::Unchanged, None) => PeriodicRecord::Skipped,
-        (CaptureFinding::InitialFiles, _) => PeriodicRecord::WithoutName,
+        (CaptureFinding::InitialFiles { mark }, _) => PeriodicRecord::InitialFiles { mark },
         (
             CaptureFinding::Captured {
                 copy,
                 detection: ChangeDetection::SizeMtime,
             },
-            Some(since),
+            Some(Some(name)),
         ) => PeriodicRecord::Own {
             copy,
-            parent: Some((since.name.clone(), StoreChangeDetection::SizeMtime)),
+            parent: Some((name, StoreChangeDetection::SizeMtime)),
         },
         (CaptureFinding::Captured { copy, .. }, _) => PeriodicRecord::Own { copy, parent: None },
     }
@@ -211,6 +223,7 @@ fn plan_periodic_record<Copy>(
 struct PeriodicPlan {
     name: Option<FilesystemSnapshotName>,
     confirmed_at_once: Option<FilesystemSnapshotName>,
+    initial_files: Option<TreeMark>,
     upload: Option<PendingUpload>,
 }
 
@@ -238,6 +251,7 @@ impl PeriodicPlan {
         let without_name = Self {
             name: None,
             confirmed_at_once: None,
+            initial_files: None,
             upload: None,
         };
         let Some((admission, since, outcome)) = capture else {
@@ -246,9 +260,14 @@ impl PeriodicPlan {
         match plan_periodic_record(CaptureFinding::of(outcome), since.as_ref()) {
             PeriodicRecord::Skipped => None,
             PeriodicRecord::WithoutName => Some(without_name),
+            PeriodicRecord::InitialFiles { mark } => Some(Self {
+                initial_files: Some(mark),
+                ..without_name
+            }),
             PeriodicRecord::Reused(name) => Some(Self {
                 name: Some(name.clone()),
                 confirmed_at_once: Some(name),
+                initial_files: None,
                 upload: None,
             }),
             PeriodicRecord::Own {
@@ -257,6 +276,7 @@ impl PeriodicPlan {
             } => Some(Self {
                 name: Some(admission.name().clone()),
                 confirmed_at_once: None,
+                initial_files: None,
                 upload: Some(PendingUpload {
                     admission,
                     tree,
@@ -275,6 +295,12 @@ impl PeriodicPlan {
     /// The name whose confirmation record follows the record at once, in one append.
     fn confirmed_at_once(&self) -> Option<FilesystemSnapshotName> {
         self.confirmed_at_once.clone()
+    }
+
+    /// The mark of the tree of initial files of the record, which the slot keeps once the record
+    /// is written.
+    fn initial_files(&self) -> Option<TreeMark> {
+        self.initial_files
     }
 
     /// Starts the upload of a written record. `confirm` gives the confirmation of the capture
@@ -346,6 +372,9 @@ pub(crate) trait PeriodicSnapshotHost {
     ) -> impl Future<Output = Result<(), OplogError>> + Send;
     /// The confirmation of an upload whose capture has `mark`.
     fn confirm(&self, mark: TreeMark) -> Confirm;
+    /// Keeps the mark of a tree of initial files whose record without a name is written, so the
+    /// next capture compares with it.
+    fn initial_files_written(&self, mark: TreeMark);
 }
 
 /// How a periodic snapshot ended.
@@ -365,7 +394,7 @@ pub(crate) enum PeriodicResult<Stop> {
 /// of the status, then the upload. An admission that the service refuses skips the snapshot,
 /// and a disabled service gives a record without a name. A capture that fails writes no
 /// record. A record that does not reach the oplog drops the admission and discards the capture
-/// at one place.
+/// at one place. A written record of a tree of initial files gives its mark to the slot.
 pub(crate) async fn periodic_snapshot<Host: PeriodicSnapshotHost>(
     host: &mut Host,
     snapshots: &AgentFilesystemSnapshots,
@@ -411,6 +440,9 @@ pub(crate) async fn periodic_snapshot<Host: PeriodicSnapshotHost>(
     };
     match written {
         Ok(()) => {
+            if let Some(mark) = plan.initial_files() {
+                host.initial_files_written(mark);
+            }
             plan.submit(|mark| host.confirm(mark));
             PeriodicResult::Continue
         }
@@ -930,7 +962,15 @@ mod tests {
 
     fn confirmed(name: &FilesystemSnapshotName, mark: TreeMark) -> ConfirmedFilesystemSnapshot {
         ConfirmedFilesystemSnapshot {
-            name: name.clone(),
+            name: Some(name.clone()),
+            mark,
+            baseline: ConfirmedBaseline::Periodic,
+        }
+    }
+
+    fn without_name(mark: TreeMark) -> ConfirmedFilesystemSnapshot {
+        ConfirmedFilesystemSnapshot {
+            name: None,
             mark,
             baseline: ConfirmedBaseline::Periodic,
         }
@@ -977,6 +1017,22 @@ mod tests {
         );
     }
 
+    #[test]
+    async fn a_snapshot_without_a_name_is_compared_with_only_while_a_start_selects_a_record_without_a_name()
+     {
+        let (mark, _) = marks();
+        let written = without_name(mark);
+        let name = FilesystemSnapshotName::periodic();
+
+        let cases = [
+            since(Some(&written), Some(&selected(None)), None),
+            since(Some(&written), Some(&selected(Some(&name))), None),
+            since(Some(&written), None, None),
+        ];
+
+        assert_eq!(cases, [Some(written), None, None]);
+    }
+
     fn captured(detection: ChangeDetection) -> CaptureFinding<u8> {
         CaptureFinding::Captured { copy: 1, detection }
     }
@@ -987,12 +1043,16 @@ mod tests {
         let name = FilesystemSnapshotName::periodic();
         let since = confirmed(&name, mark);
 
+        let initial = without_name(mark);
+
         let cases = [
             plan_periodic_record(CaptureFinding::Unchanged, Some(&since)),
+            plan_periodic_record(CaptureFinding::Unchanged, Some(&initial)),
             plan_periodic_record(CaptureFinding::Unchanged, None),
-            plan_periodic_record(CaptureFinding::InitialFiles, Some(&since)),
-            plan_periodic_record(CaptureFinding::InitialFiles, None),
+            plan_periodic_record(CaptureFinding::InitialFiles { mark }, Some(&since)),
+            plan_periodic_record(CaptureFinding::InitialFiles { mark }, None),
             plan_periodic_record(captured(ChangeDetection::SizeMtime), Some(&since)),
+            plan_periodic_record(captured(ChangeDetection::SizeMtime), Some(&initial)),
             plan_periodic_record(captured(ChangeDetection::Full), Some(&since)),
             plan_periodic_record(captured(ChangeDetection::Full), None),
         ];
@@ -1001,12 +1061,17 @@ mod tests {
             cases,
             [
                 PeriodicRecord::Reused(name.clone()),
+                PeriodicRecord::WithoutName,
                 PeriodicRecord::Skipped,
-                PeriodicRecord::WithoutName,
-                PeriodicRecord::WithoutName,
+                PeriodicRecord::InitialFiles { mark },
+                PeriodicRecord::InitialFiles { mark },
                 PeriodicRecord::Own {
                     copy: 1,
                     parent: Some((name, StoreChangeDetection::SizeMtime)),
+                },
+                PeriodicRecord::Own {
+                    copy: 1,
+                    parent: None
                 },
                 PeriodicRecord::Own {
                     copy: 1,
@@ -1435,6 +1500,10 @@ mod tests {
             self.call("confirm".to_string());
             Box::new(|_| Box::pin(async { ConfirmOutcome::Deferred }))
         }
+
+        fn initial_files_written(&self, _mark: TreeMark) {
+            self.call("initial_files_written".to_string());
+        }
     }
 
     impl UpdateSnapshotHost for ScriptedHost {
@@ -1591,7 +1660,7 @@ mod tests {
         let capture_failed =
             outcome(&periodic_snapshot(&mut failed_capture, &snapshots, &agent).await);
         let mut initial = ScriptedHost {
-            capture: std::sync::Mutex::new(Some(CaptureOutcome::InitialFiles)),
+            capture: std::sync::Mutex::new(Some(CaptureOutcome::InitialFiles { mark })),
             ..ScriptedHost::new()
         };
         let initial_files = outcome(&periodic_snapshot(&mut initial, &snapshots, &agent).await);
@@ -1603,7 +1672,7 @@ mod tests {
         let reused = outcome(&periodic_snapshot(&mut unchanged, &snapshots, &agent).await);
         let free_after = snapshots.admit_periodic(&agent).await.is_ok();
 
-        let name = since.name.as_str().to_string();
+        let name = since.name.as_ref().unwrap().as_str().to_string();
         assert_eq!(
             (while_held, refused.calls()),
             ("Continue".to_string(), vec![])
@@ -1627,7 +1696,8 @@ mod tests {
                     "since",
                     "capture(false)",
                     "entry(none)",
-                    "write(none)"
+                    "write(none)",
+                    "initial_files_written"
                 ]
                 .into_iter()
                 .map(String::from)
@@ -1779,14 +1849,17 @@ mod tests {
             Some((restored.clone(), ConfirmedBaseline::Periodic)),
         );
 
-        let after_other =
-            confirmed_slot(&slot, &FilesystemSnapshotName::periodic(), other_generation);
-        let after_own = confirmed_slot(&slot, &confirmed_now, later);
+        let after_other = confirmed_slot(
+            &slot,
+            Some(&FilesystemSnapshotName::periodic()),
+            other_generation,
+        );
+        let after_own = confirmed_slot(&slot, Some(&confirmed_now), later);
 
         assert!(after_other.is_none());
         assert_eq!(
             slot.confirmed().map(|confirmed| confirmed.name.clone()),
-            Some(restored)
+            Some(Some(restored))
         );
         assert_eq!(
             after_own
@@ -1846,6 +1919,83 @@ mod tests {
         let (disabled, _disabled_shutdown) = disabled_service();
 
         assert_eq!((enabled.is_enabled(), disabled.is_enabled()), (true, false));
+    }
+
+    #[test]
+    async fn a_written_record_of_initial_files_sets_the_slot_without_a_name_only_in_its_generation()
+    {
+        let (first, later) = marks();
+        let (other_generation, _) = marks();
+        let restored = FilesystemSnapshotName::periodic();
+        let slot = FilesystemSnapshotSlot::at_start(
+            first,
+            Some((restored.clone(), ConfirmedBaseline::Periodic)),
+        );
+
+        let after_other = confirmed_slot(&slot, None, other_generation);
+        let after_own = confirmed_slot(&slot, None, later);
+
+        assert!(after_other.is_none());
+        assert_eq!(
+            after_own
+                .as_ref()
+                .and_then(|slot| slot.confirmed().cloned()),
+            Some(without_name(later))
+        );
+    }
+
+    #[test]
+    async fn an_unchanged_tree_of_initial_files_writes_a_record_without_a_name_and_confirms_nothing()
+     {
+        let (mark, _) = marks();
+        let (snapshots, _shutdown) = enabled_service();
+        let agent = agent_snapshots("periodic-initial-files");
+        let mut unchanged = ScriptedHost {
+            since: Some(without_name(mark)),
+            capture: std::sync::Mutex::new(Some(CaptureOutcome::Unchanged)),
+            ..ScriptedHost::new()
+        };
+        let mut not_written = ScriptedHost {
+            capture: std::sync::Mutex::new(Some(CaptureOutcome::InitialFiles { mark })),
+            write_fails: true,
+            ..ScriptedHost::new()
+        };
+
+        let unchanged_result =
+            outcome(&periodic_snapshot(&mut unchanged, &snapshots, &agent).await);
+        let not_written_result =
+            outcome(&periodic_snapshot(&mut not_written, &snapshots, &agent).await);
+
+        assert_eq!(
+            (unchanged_result, unchanged.calls()),
+            (
+                "Continue".to_string(),
+                [
+                    "snapshot_guest",
+                    "since",
+                    "capture(true)",
+                    "entry(none)",
+                    "write(none)"
+                ]
+                .map(String::from)
+                .to_vec()
+            )
+        );
+        assert_eq!(
+            (not_written_result, not_written.calls()),
+            (
+                "NotWritten(Write(Payload(\"refused\")))".to_string(),
+                [
+                    "snapshot_guest",
+                    "since",
+                    "capture(false)",
+                    "entry(none)",
+                    "write(none)"
+                ]
+                .map(String::from)
+                .to_vec()
+            )
+        );
     }
 
     #[test]
