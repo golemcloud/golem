@@ -200,20 +200,13 @@ async fn changed_component_creates_a_revision_without_repointing_the_old_release
     ))
     .expect("build the filesystem tool component before running this test");
     let mut first_wasm = wasm;
-    let mut replacements = 0;
-    for offset in 0..first_wasm.len().saturating_sub(5) {
-        if &first_wasm[offset..offset + 5] == b"0.3.0" {
-            first_wasm[offset..offset + 5].copy_from_slice(b"7.2.0");
-            replacements += 1;
-        }
-    }
-    assert!(replacements > 0);
+    let replacements = replace_embedded_tool_versions(&mut first_wasm, b"0.1.0", b"7.2.0");
+    assert_eq!(replacements, 5);
     let mut changed_wasm = first_wasm.clone();
-    for offset in 0..changed_wasm.len().saturating_sub(5) {
-        if &changed_wasm[offset..offset + 5] == b"7.2.0" {
-            changed_wasm[offset..offset + 5].copy_from_slice(b"7.3.0");
-        }
-    }
+    assert_eq!(
+        replace_embedded_tool_versions(&mut changed_wasm, b"7.2.0", b"7.3.0"),
+        5
+    );
     let artifacts = BTreeMap::from([
         ("filesystem_tools_first", Arc::new(first_wasm)),
         ("filesystem_tools_second", Arc::new(changed_wasm)),
@@ -287,14 +280,8 @@ async fn same_artifact_adds_missing_tool_with_complete_metadata_and_is_retry_saf
         "/../builtin-tools/filesystem-tools.wasm"
     ))
     .expect("build the filesystem tool component before running this test");
-    let mut replacements = 0;
-    for offset in 0..wasm.len().saturating_sub(5) {
-        if &wasm[offset..offset + 5] == b"0.3.0" {
-            wasm[offset..offset + 5].copy_from_slice(b"8.2.0");
-            replacements += 1;
-        }
-    }
-    assert!(replacements > 0);
+    let replacements = replace_embedded_tool_versions(&mut wasm, b"0.1.0", b"8.2.0");
+    assert_eq!(replacements, 5);
     let artifacts = BTreeMap::from([("filesystem_tools", Arc::new(wasm))]);
     let first = BuiltinToolDescriptor {
         component_name: "filesystem-tools",
@@ -376,6 +363,64 @@ async fn provision(
     )
     .await
     .unwrap();
+}
+
+fn replace_embedded_tool_versions(wasm: &mut [u8], from: &[u8; 5], to: &[u8; 5]) -> usize {
+    let (start, end) = first_core_module_data_section(wasm);
+    assert!(end - start >= from.len());
+    let mut replacements = 0;
+    for offset in start..=end - from.len() {
+        if &wasm[offset..offset + from.len()] == from {
+            wasm[offset..offset + to.len()].copy_from_slice(to);
+            replacements += 1;
+        }
+    }
+    replacements
+}
+
+fn first_core_module_data_section(wasm: &[u8]) -> (usize, usize) {
+    assert_eq!(&wasm[..8], b"\0asm\r\0\x01\0");
+    let mut cursor = 8;
+    while cursor < wasm.len() {
+        let section_id = wasm[cursor];
+        cursor += 1;
+        let section_size = read_unsigned_leb128(wasm, &mut cursor);
+        let section_end = cursor + section_size;
+        assert!(section_end <= wasm.len());
+        if section_id == 1 {
+            assert_eq!(&wasm[cursor..cursor + 8], b"\0asm\x01\0\0\0");
+            let mut module_cursor = cursor + 8;
+            while module_cursor < section_end {
+                let module_section_id = wasm[module_cursor];
+                module_cursor += 1;
+                let module_section_size = read_unsigned_leb128(wasm, &mut module_cursor);
+                let module_section_end = module_cursor + module_section_size;
+                assert!(module_section_end <= section_end);
+                if module_section_id == 11 {
+                    return (module_cursor, module_section_end);
+                }
+                module_cursor = module_section_end;
+            }
+            panic!("first core module has no data section");
+        }
+        cursor = section_end;
+    }
+    panic!("component has no core module");
+}
+
+fn read_unsigned_leb128(bytes: &[u8], cursor: &mut usize) -> usize {
+    let mut value = 0usize;
+    let mut shift = 0;
+    loop {
+        let byte = bytes[*cursor];
+        *cursor += 1;
+        value |= usize::from(byte & 0x7f) << shift;
+        if byte & 0x80 == 0 {
+            return value;
+        }
+        shift += 7;
+        assert!(shift < usize::BITS);
+    }
 }
 
 async fn release_named(services: &Services, owner: AccountId, name: &str) -> ToolRelease {

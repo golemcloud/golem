@@ -10,8 +10,8 @@ deployment-specific cache placement and source overrides; it does not duplicate 
 release catalog.
 
 The filesystem tools are implemented in Rust under `builtin-tools/filesystem-tools/` and built
-into `builtin-tools/filesystem-tools.wasm`. The component provides the `read-file`, `write-file`, and
-`edit-file` tools.
+into `builtin-tools/filesystem-tools.wasm`. The component provides the `read-file`, `write-file`,
+`edit-file`, `ls`, and `grep` tools.
 
 The JavaScript and TypeScript tools are implemented under `builtin-tools/js-ts-tools/`. The
 `javascript-tools` component provides `node`, `npm`, and `npx`; the `typescript-tools` component
@@ -68,7 +68,7 @@ tools:
     release:
       account: builtin-tool-owner@golem.cloud
       name: read-file
-      version: 0.3.0
+      version: 0.1.0
 
 agents:
   FileReader:
@@ -82,3 +82,9 @@ filesystem access but provision no files of their own. This example explicitly g
 `filesystemAccess: allowed` on the agent binding; if it is omitted and no grant is inherited,
 deployment fails with an error requesting that permission. This fails closed rather than exposing
 the agent's filesystem.
+
+`ls` and `grep` intentionally discover paths below their explicit root argument. A middleware that
+allows such a call authorizes inspection of the selected subtree; include/exclude globs select
+results but are not an authorization boundary. The tools never follow symbolic links. Configurable
+allowed-root policy belongs in a tool middleware, while the WASI sandbox remains the component's
+filesystem confinement boundary.
