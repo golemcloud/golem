@@ -916,9 +916,9 @@ impl<T, E> ToolInvocation<T, E> {
     }
 
     /// Drives both outputs and structured completion concurrently.
-    pub async fn collect(self) -> Result<CollectedToolInvocation<T>, ToolError<E>> {
+    pub async fn collect(self) -> CollectedToolInvocation<T, E> {
         let result = self.result();
-        let collect_output = |mut output: Option<ToolInvocationOutput>, channel: &'static str| async move {
+        let collect_output = |mut output: Option<ToolInvocationOutput>| async move {
             let Some(ref mut output) = output else {
                 return Ok(None);
             };
@@ -927,46 +927,28 @@ impl<T, E> ToolInvocation<T, E> {
                 match output.next().await {
                     None => return Ok(Some(bytes)),
                     Some(Ok(chunk)) => bytes.extend(chunk),
-                    Some(Err(reason)) => {
-                        return Err(tool_protocol_error(format!(
-                            "tool {channel} failed: {reason:?}"
-                        )));
-                    }
+                    Some(Err(reason)) => return Err(reason),
                 }
             }
         };
         let outputs = async {
-            let stdout = collect_output(self.stdout, "stdout");
-            let stderr = collect_output(self.stderr, "stderr");
+            let stdout = collect_output(self.stdout);
+            let stderr = collect_output(self.stderr);
             join(stdout, stderr).await
         };
-        let (result, outputs) = join(result, outputs).await;
-        finish_collection(result, outputs)
+        let (result, (stdout, stderr)) = join(result, outputs).await;
+        CollectedToolInvocation {
+            result,
+            stdout,
+            stderr,
+        }
     }
 }
 
-fn finish_collection<T, E>(
-    result: Result<T, ToolError<E>>,
-    outputs: (
-        Result<Option<Vec<u8>>, ToolError<E>>,
-        Result<Option<Vec<u8>>, ToolError<E>>,
-    ),
-) -> Result<CollectedToolInvocation<T>, ToolError<E>> {
-    let result = result?;
-    let (stdout, stderr) = outputs;
-    let stdout = stdout?;
-    let stderr = stderr?;
-    Ok(CollectedToolInvocation {
-        result,
-        stdout,
-        stderr,
-    })
-}
-
-pub struct CollectedToolInvocation<T> {
-    pub result: T,
-    pub stdout: Option<Vec<u8>>,
-    pub stderr: Option<Vec<u8>>,
+pub struct CollectedToolInvocation<T, E> {
+    pub result: Result<T, ToolError<E>>,
+    pub stdout: Result<Option<Vec<u8>>, agentic_host_api::ByteStreamFailure>,
+    pub stderr: Result<Option<Vec<u8>>, agentic_host_api::ByteStreamFailure>,
 }
 
 fn decode_wire_invocation_result<E>(
@@ -1337,28 +1319,23 @@ mod tests {
     }
 
     #[test]
-    fn collection_preserves_structured_error_precedence_over_each_output_failure() {
-        for outputs in [
-            (
-                Err(ToolError::MalformedRemoteOutput(
-                    "stdout failed".to_string(),
-                )),
-                Ok(None),
-            ),
-            (
-                Ok(None),
-                Err(ToolError::MalformedRemoteOutput(
-                    "stderr failed".to_string(),
-                )),
-            ),
-        ] {
-            match finish_collection::<(), _>(Err(declared_error()), outputs) {
-                Err(ToolError::Tool(DeclaredError::Usage(payload))) => {
-                    assert_eq!(payload.message, "selected")
-                }
-                _ => panic!("structured error must take precedence over output failure"),
+    fn collection_preserves_each_result_and_output_outcome() {
+        let collected = CollectedToolInvocation::<(), _> {
+            result: Err(declared_error()),
+            stdout: Err(agentic_host_api::ByteStreamFailure::ResourceExhausted),
+            stderr: Ok(Some(vec![2, 3])),
+        };
+        match collected.result {
+            Err(ToolError::Tool(DeclaredError::Usage(payload))) => {
+                assert_eq!(payload.message, "selected")
             }
+            _ => panic!("structured error must remain independently observable"),
         }
+        assert!(matches!(
+            collected.stdout,
+            Err(agentic_host_api::ByteStreamFailure::ResourceExhausted)
+        ));
+        assert!(matches!(collected.stderr, Ok(Some(bytes)) if bytes == vec![2, 3]));
     }
 
     #[test]

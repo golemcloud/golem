@@ -2307,6 +2307,16 @@ where
                             let _ = cancel_input.send(true);
                         }
                         ServerFrame::Message(PublicServerMessage::InvocationFinished { outcome, .. }) => {
+                            if has_stdout && !stdout_admission.1 {
+                                return Err(SessionTransportError::Protocol(
+                                    "native invocation finished before stdout".to_string(),
+                                ));
+                            }
+                            if has_stderr && !stderr_admission.1 {
+                                return Err(SessionTransportError::Protocol(
+                                    "native invocation finished before stderr".to_string(),
+                                ));
+                            }
                             if let PublicInvocationOutcome::Failure { code, message } = outcome {
                                 completion_failure = Some(format!("{}: {message}", code.as_str()));
                             }
@@ -4382,6 +4392,122 @@ mod tests {
     #[test]
     async fn native_tool_session_preserves_custom_failure_after_stdout_terminal() {
         verify_native_tool_session(false).await;
+    }
+
+    async fn verify_native_tool_session_rejects_completion_before_output(
+        role: PublicByteStreamRole,
+    ) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let attempt_id = uuid::Uuid::new_v4();
+        let mut initial = tool_start_request(attempt_id);
+        let PublicClientMessage::ToolStart {
+            stdin,
+            stdout,
+            stderr,
+            ..
+        } = &mut initial
+        else {
+            unreachable!()
+        };
+        *stdin = false;
+        *stdout = role == PublicByteStreamRole::Stdout;
+        *stderr = role == PublicByteStreamRole::Stderr;
+        let server_initial = initial.clone();
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut socket = accept_hdr_async(socket, |request: &Request, response: Response| {
+                Ok(select_session_subprotocol(request, response))
+            })
+            .await
+            .unwrap();
+            assert_eq!(receive_client_message(&mut socket).await, server_initial);
+            socket
+                .send(Message::Text(
+                    encode_text(&PublicServerMessage::InvocationAccepted {
+                        attempt_id,
+                        idempotency_key: "tool-invocation-key".to_string(),
+                        mappings: vec![native_output_mapping(12, role, "native-output")],
+                        session_token: "native-session".to_string(),
+                        version: 1,
+                    })
+                    .unwrap()
+                    .into(),
+                ))
+                .await
+                .unwrap();
+            socket
+                .send(Message::Text(
+                    encode_text(&PublicServerMessage::InvocationResult {
+                        mappings: Vec::new(),
+                        result: Box::new(PublicInvocationResult::ToolSuccess { result: None }),
+                        version: 1,
+                    })
+                    .unwrap()
+                    .into(),
+                ))
+                .await
+                .unwrap();
+            socket
+                .send(Message::Text(
+                    encode_text(&PublicServerMessage::InvocationFinished {
+                        outcome: PublicInvocationOutcome::Success,
+                        version: 1,
+                    })
+                    .unwrap()
+                    .into(),
+                ))
+                .await
+                .unwrap();
+        });
+
+        let session = InvocationSession::open(
+            Arc::new(StaticRequestProvider(format!("ws://{address}"))),
+            None,
+            InvocationSessionStateSnapshot {
+                delivered_output_cursors: BTreeMap::new(),
+                stable_stream_bindings: BTreeMap::new(),
+                pending_operation: Some(initial),
+                session_token: None,
+            },
+            false,
+            Arc::new(()),
+        )
+        .await
+        .unwrap();
+        let mut stdout = tokio::io::sink();
+        let mut stderr = tokio::io::sink();
+        let error = tokio::time::timeout(
+            Duration::from_secs(5),
+            drive_native_tool_session(
+                session,
+                Option::<tokio::io::Empty>::None,
+                &mut stdout,
+                &mut stderr,
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap_err();
+        let channel = match role {
+            PublicByteStreamRole::Stdout => "stdout",
+            PublicByteStreamRole::Stderr => "stderr",
+            PublicByteStreamRole::Stdin => unreachable!(),
+        };
+        assert!(matches!(
+            error,
+            SessionTransportError::Protocol(message)
+                if message == format!("native invocation finished before {channel}")
+        ));
+        server.await.unwrap();
+    }
+
+    #[test]
+    async fn native_tool_session_rejects_completion_before_output_terminal() {
+        verify_native_tool_session_rejects_completion_before_output(PublicByteStreamRole::Stdout)
+            .await;
+        verify_native_tool_session_rejects_completion_before_output(PublicByteStreamRole::Stderr)
+            .await;
     }
 
     async fn verify_native_tool_session_cancels_open_streams(output_failure: bool) {

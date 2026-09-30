@@ -55,7 +55,8 @@ use golem_common::model::environment_tool_middleware_grant::{
     EnvironmentToolMiddlewareGrantCreation, EnvironmentToolMiddlewareGrantDeletion,
 };
 use golem_common::model::invocation_session_public::{
-    INVOCATION_SESSION_VERSION, PublicClientMessage, PublicNativeToolTarget, PublicTypedValue,
+    INVOCATION_SESSION_VERSION, PublicClientMessage, PublicInvocationResult,
+    PublicNativeToolTarget, PublicTypedValue,
 };
 use golem_common::model::tool_middleware_release::{
     ToolMiddlewareReleaseByCoordinates, ToolMiddlewareReleaseById, ToolMiddlewareReleaseReference,
@@ -513,7 +514,7 @@ impl ToolCommandHandler {
                 return Ok(());
             }
             if report_destination == LiveReportDestination::Suppress {
-                return Ok(());
+                return finish_suppressed_live_report(&view.result);
             }
             return self.ctx.log_handler().log_output(view);
         }
@@ -852,13 +853,26 @@ fn live_report_destination(raw_stdout: bool, raw_stderr: bool) -> LiveReportDest
     }
 }
 
+fn finish_suppressed_live_report(result: &PublicInvocationResult) -> anyhow::Result<()> {
+    if matches!(result, PublicInvocationResult::ToolFailure { .. }) {
+        Err(anyhow!(PipedExitCode(1)))
+    } else {
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{LiveReportDestination, live_report_destination, public_typed_value};
+    use super::{
+        LiveReportDestination, finish_suppressed_live_report, live_report_destination,
+        public_typed_value,
+    };
+    use crate::error::PipedExitCode;
     use crate::log::{
         Output, RawOutputReservation, TracingSuppression, TracingWriter, reservation_aware_output,
         tracing_writer,
     };
+    use golem_common::model::invocation_session_public::PublicInvocationResult;
     use golem_common::schema::{
         NamedFieldType, SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue,
     };
@@ -932,6 +946,24 @@ mod tests {
             assert_eq!(reservation_aware_output(Output::Stdout), Output::None);
             assert_eq!(reservation_aware_output(Output::Stderr), Output::None);
         }
+    }
+
+    #[test]
+    fn suppressed_live_report_uses_failure_exit_status() {
+        assert!(
+            finish_suppressed_live_report(&PublicInvocationResult::ToolSuccess { result: None })
+                .is_ok()
+        );
+        let error = finish_suppressed_live_report(&PublicInvocationResult::ToolFailure {
+            code: "custom-error".to_string(),
+            message: Some("broken".to_string()),
+            custom_error: None,
+        })
+        .unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<PipedExitCode>().map(|exit| exit.0),
+            Some(1)
+        );
     }
 
     #[test]

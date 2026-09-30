@@ -37,16 +37,10 @@ fn release_optional_value(
 }
 
 ///|
-priv enum CollectedOutput {
-  Collected(Bytes?)
-  Failed(Error)
-}
-
-///|
-pub(all) struct CollectedToolInvocation[T] {
-  result : T
-  stdout : Bytes?
-  stderr : Bytes?
+pub(all) struct CollectedToolInvocation[T, E] {
+  result : Result[T, ToolError[E]]
+  stdout : Result[Bytes?, ToolStreamError]
+  stderr : Result[Bytes?, ToolStreamError]
 }
 
 ///|
@@ -160,19 +154,12 @@ pub async fn[T, E] TypedToolInvocation::get(
 ///|
 pub async fn[T, E] TypedToolInvocation::collect(
   self : TypedToolInvocation[T, E],
-) -> Result[CollectedToolInvocation[T], ToolError[E]] {
-  match self.invocation.collect() {
-    Err(error) => Err(error)
-    Ok(collected) =>
-      match (self.decode)(collected.result) {
-        Ok(value) =>
-          Ok({
-            result: value,
-            stdout: collected.stdout,
-            stderr: collected.stderr,
-          })
-        Err(error) => Err(error)
-      }
+) -> CollectedToolInvocation[T, E] {
+  let collected = self.invocation.collect()
+  {
+    result: collected.result.bind(self.decode),
+    stdout: collected.stdout,
+    stderr: collected.stderr,
   }
 }
 
@@ -226,9 +213,11 @@ pub async fn[E] ToolInvocation::get(
 ///|
 pub async fn[E] ToolInvocation::collect(
   self : ToolInvocation[E],
-) -> Result[CollectedToolInvocation[@toolCommon.InvocationResult], ToolError[E]] {
+) -> CollectedToolInvocation[@toolCommon.InvocationResult, E] {
   @async-core.with_task_group(async fn(group) {
-    let collect = async fn(stream : @async-core.Stream[Byte]?) {
+    let collect = async fn(
+      stream : @async-core.Stream[Byte]?,
+    ) -> Result[Bytes?, ToolStreamError] {
       try {
         let collected = match stream {
           None => None
@@ -243,9 +232,15 @@ pub async fn[E] ToolInvocation::collect(
             Some(Bytes::from_array(bytes))
           }
         }
-        CollectedOutput::Collected(collected)
+        Ok(collected)
       } catch {
-        error => CollectedOutput::Failed(error)
+        ToolStreamError::Cancelled => Err(ToolStreamError::Cancelled)
+        ToolStreamError::Abandoned => Err(ToolStreamError::Abandoned)
+        ToolStreamError::ResourceExhausted =>
+          Err(ToolStreamError::ResourceExhausted)
+        ToolStreamError::Failed(message) =>
+          Err(ToolStreamError::Failed(message))
+        error => raise error
       }
     }
     let stdout = group.spawn(() => collect(self.stdout))
@@ -260,19 +255,10 @@ pub async fn[E] ToolInvocation::collect(
 ///|
 fn[T, E] select_collected_terminals(
   result : Result[T, ToolError[E]],
-  stdout : CollectedOutput,
-  stderr : CollectedOutput,
-) -> Result[CollectedToolInvocation[T], ToolError[E]] raise {
-  match result {
-    Err(error) => Err(error)
-    Ok(result) =>
-      match (stdout, stderr) {
-        (Failed(error), _) => raise error
-        (_, Failed(error)) => raise error
-        (Collected(stdout), Collected(stderr)) =>
-          Ok({ result, stdout, stderr, })
-      }
-  }
+  stdout : Result[Bytes?, ToolStreamError],
+  stderr : Result[Bytes?, ToolStreamError],
+) -> CollectedToolInvocation[T, E] {
+  { result, stdout, stderr, }
 }
 
 ///|

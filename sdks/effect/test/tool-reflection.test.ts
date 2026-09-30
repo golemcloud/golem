@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest"
-import { Effect, Schema } from "effect"
+import { Effect, Result, Schema } from "effect"
 import { c, compileDefinition, toolDefinition } from "../src/internal/tool/model.js"
 import { ToolType } from "../src/ToolReflection.js"
 import { toolClientDefinition, ToolTransport } from "../src/Tool.js"
@@ -305,7 +305,7 @@ describe("native tool reflection", () => {
     expect(cancel).toHaveBeenCalledTimes(1)
   })
 
-  it("settles result and stdout and gives the result error precedence", async () => {
+  it("settles result and stdout and preserves both failures", async () => {
     const streaming = toolDefinition("settle-both").body((body) =>
       body.positional("name", Schema.String).output().returns(Schema.String),
     )
@@ -338,7 +338,7 @@ describe("native tool reflection", () => {
       rpc: vi.fn() as never,
       createRpc: vi.fn() as never,
     })
-    const failure = new ToolType(registration).client
+    const collected = new ToolType(registration).client
       .command([])
       .startJson({ name: "hello" })
       .pipe(
@@ -346,13 +346,18 @@ describe("native tool reflection", () => {
         Effect.provideService(ToolTransport, transport),
         Effect.provideService(ToolClient, host),
         Effect.scoped,
-        Effect.flip,
       )
 
-    await expect(Effect.runPromise(failure)).resolves.toMatchObject({
+    const outcomes = await Effect.runPromise(collected)
+    expect(Result.isFailure(outcomes.result) && outcomes.result.failure).toMatchObject({
       tag: "rpc",
       error: { tag: "denied", val: "result failed" },
     })
+    expect(Result.isFailure(outcomes.stdout) && outcomes.stdout.failure).toMatchObject({
+      tag: "rpc",
+      error: { tag: "protocol-error", val: "tool stdout failed" },
+    })
+    expect(outcomes.stderr).toEqual(Result.succeed(undefined))
     expect(stdoutSettled).toBe(true)
   })
 

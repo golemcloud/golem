@@ -95,7 +95,7 @@ golem tool invoke --component my-app:tool-owner \
 
 These examples assume `file-tools transform` declares byte stdin, stdout, and stderr. `--stdin -` reads process stdin. `--stdout` writes tool stdout to process stdout unless `--output PATH` selects a file; `--stderr` similarly writes tool stderr to process stderr unless `--stderr-output PATH` selects a file. `-` is a literal output filename for both output options.
 
-The completion report uses stdout when neither process output fd carries raw tool bytes. If only stdout is raw, the report and routine diagnostics use stderr; if only stderr is raw, they use stdout. When both are raw, the report is suppressed for structured success and tool failure so neither byte channel is corrupted. Direct CLI failures still use stderr. Direct at least one tool output to a file when you need both raw bytes and the structured report. Non-empty stderr does not make a successful tool result fail.
+The completion report uses stdout when neither process output fd carries raw tool bytes. If only stdout is raw, the report and routine diagnostics use stderr; if only stderr is raw, they use stdout. When both are raw, the report is suppressed for structured success and tool failure so neither byte channel is corrupted. A structured success exits with status 0, while a tool failure exits with status 1. Direct CLI failures still use stderr. Direct at least one tool output to a file when you need both raw bytes and the structured report. Non-empty stderr does not make a successful tool result fail.
 
 Streams use the ordinary resumable invocation transport and are checkpointed independently.
 

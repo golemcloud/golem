@@ -312,10 +312,14 @@ object ToolReflectionSpec extends ZIOSpecDefault {
       val terminal: Future[Either[ToolError[NamedToolError], Option[SchemaValue]]] = Future.successful(Right(None))
       val invocation                                                               = ReflectedToolInvocation(Some(broken), None, terminal, () => ())
       ZIO.fromFuture(_ => invocation.collect()(using ExecutionContext.global)).map { result =>
-        assertTrue(result.left.toOption.exists(_.isInstanceOf[ToolError.Rpc]))
+        assertTrue(
+          result.result == Right(None),
+          result.stdout == Left(ByteStreamFailure.Failed("broken")),
+          result.stderr == Right(None)
+        )
       }
     },
-    test("declared tool errors win after stdout failure while both channels settle") {
+    test("declared tool and stdout failures are both retained after all channels settle") {
       val broken = new ToolInputStream {
         override def read(): Future[Either[ByteStreamFailure, Option[Array[Byte]]]] =
           Future.successful(Left(ByteStreamFailure.Failed("broken")))
@@ -326,7 +330,11 @@ object ToolReflectionSpec extends ZIOSpecDefault {
       val payload    = TypedSchemaValue(stringGraph, StringValue("details"))
       terminal.success(Left(ToolError.Tool(NamedToolError("declared", payload))))
       ZIO.fromFuture(_ => collected).map { result =>
-        assertTrue(result == Left(ToolError.Tool(NamedToolError("declared", payload))))
+        assertTrue(
+          result.result == Left(ToolError.Tool(NamedToolError("declared", payload))),
+          result.stdout == Left(ByteStreamFailure.Failed("broken")),
+          result.stderr == Right(None)
+        )
       }
     }
   )

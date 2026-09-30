@@ -146,11 +146,9 @@ object ToolClientSpec extends ZIOSpecDefault {
       val invocation = ToolInvocation[Nothing, String](Some(stream), None, Future.successful(Right("done")), () => ())
       ZIO.fromFuture(ec => invocation.collect()(ec)).map { result =>
         assertTrue(
-          result.exists(value =>
-            value.result == "done" &&
-              value.stdout.exists(_.sameElements(Array[Byte](1, 2, 3))) &&
-              value.stderr.isEmpty
-          )
+          result.result == Right("done"),
+          result.stdout.exists(_.exists(_.sameElements(Array[Byte](1, 2, 3)))),
+          result.stderr == Right(None)
         )
       }
     },
@@ -180,7 +178,11 @@ object ToolClientSpec extends ZIOSpecDefault {
         () => ()
       )
       ZIO.fromFuture(ec => invocation.collect()(ec)).map { result =>
-        assertTrue(result == Left(ToolError.Tool(declared)))
+        assertTrue(
+          result.result == Left(ToolError.Tool(declared)),
+          result.stdout == Left(ByteStreamFailure.ResourceExhausted),
+          result.stderr == Right(None)
+        )
       }
     },
     test("started invocation cancellation is explicit and observer drop does not invoke it") {
