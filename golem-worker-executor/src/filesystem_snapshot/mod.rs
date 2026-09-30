@@ -190,7 +190,7 @@ impl std::error::Error for SnapshotStoreError {
     }
 }
 
-/// Keeps directory trees as named filesystem snapshots, apart for each agent.
+/// Keeps directory trees as named filesystem snapshots, separately for each agent.
 ///
 /// A snapshot keeps the relative path and the kind of each entry below the tree. It also keeps the
 /// content of a file, the target of a symlink, the permission bits and the modification time. It
@@ -198,11 +198,12 @@ impl std::error::Error for SnapshotStoreError {
 /// the tree. An entry that is not a regular file, a directory or a symlink is outside this
 /// contract.
 ///
-/// The snapshots of one agent can have more than one writer at the same time, and no method locks. A delete of one
-/// name never damages a restore of another name. A restore of a name that is deleted at the same
-/// time gives the whole tree, `NotFound` or `Corrupt`. No method blocks the async runtime. `save`
-/// costs the bytes that changed since the last snapshot of the agent, plus one metadata read for
-/// each file. `restore` costs the size of the tree. `stat` and `list` cost a few small reads.
+/// The snapshots of one agent can have more than one writer at the same time, and no method
+/// locks. A delete of one name never damages a restore of another name. A restore of a name that
+/// is deleted at the same time gives the whole tree, `NotFound` or `Corrupt`. No method blocks
+/// the async runtime. `save` costs the bytes that changed since the last snapshot of the agent,
+/// plus one metadata read for each file. `restore` costs the size of the tree. `stat` and `list`
+/// cost a few small reads.
 #[async_trait]
 pub(crate) trait FilesystemSnapshotStore: Send + Sync {
     /// Saves a directory tree as a snapshot with the name, and waits until it is durable.
@@ -342,8 +343,8 @@ fn newest_first(
 /// Gives the time of a new snapshot: `now`, or one millisecond after `newest` when `now` is not
 /// later than `newest`.
 ///
-/// `newest` is the time of the newest snapshot that the scope holds when the save starts. So the
-/// time of a new snapshot is later than the time of each snapshot in the scope. This holds also
+/// `newest` is the time of the newest snapshot of the agent when the save starts. So the time of
+/// a new snapshot is later than the time of each snapshot of the agent. This holds also
 /// when the clocks of two executors differ.
 fn snapshot_time(now: Timestamp, newest: Option<Timestamp>) -> Timestamp {
     newest.map_or(now, |newest| {

@@ -18,6 +18,7 @@
 use crate::filesystem_snapshot::{SnapshotInfo, SnapshotName};
 use golem_common::model::oplog::FilesystemSnapshotName;
 use std::time::Duration;
+
 /// The largest difference between the clocks of two executors that retention allows for. A
 /// snapshot whose time is this close to the time of the own snapshot is neither counted nor
 /// deleted, because another executor gave it its time.
