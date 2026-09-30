@@ -500,9 +500,9 @@ impl BlobOplogArchive {
             .collect::<OplogArchiveResult<BTreeMap<OplogIndex, PathBuf>>>()
     }
 
-    pub(crate) fn path_to_oplog_index(path: &Path) -> OplogIndex {
+    pub(crate) fn path_to_oplog_index(path: &Path) -> OplogArchiveResult<OplogIndex> {
         blob_file_name_to_string(path)
-            .and_then(|s| s.to_str())
+            .ok()
             .and_then(|s| s.parse::<u64>().ok())
             .map(OplogIndex::from_u64)
             .ok_or_else(|| format!("failed to parse oplog index from path: {path:?}"))
