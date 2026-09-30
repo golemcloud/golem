@@ -263,6 +263,7 @@ private[reflection] object CanonicalJson {
         )
       case PathType(_)  => typed("string", "format" -> Json.String("file-path"))
       case UrlType(_)   => typed("string", "format" -> Json.String("uri"))
+      case UuidType     => typed("string", "format" -> Json.String("uuid"))
       case DatetimeType => typed("string", "format" -> Json.String("date-time"))
       case DurationType =>
         typed(
@@ -481,8 +482,10 @@ private[reflection] object CanonicalJson {
           decodeBase64Url(string(jsonFields.getOrElse("bytes", fail("missing field 'bytes'")))),
           mimeType
         )
-      case PathType(_)  => PathValue(string(json))
-      case UrlType(_)   => UrlValue(string(json))
+      case PathType(_) => PathValue(string(json))
+      case UrlType(_)  => UrlValue(string(json))
+      case UuidType    =>
+        UuidValue(golem.Uuid.fromStandardString(string(json)).fold(fail, identity))
       case DatetimeType =>
         val instant = java.time.Instant.parse(string(json))
         DatetimeValue(Datetime(instant.getEpochSecond, instant.getNano))
@@ -591,6 +594,7 @@ private[reflection] object CanonicalJson {
         )
       case (PathType(_), PathValue(x))      => Json.String(x)
       case (UrlType(_), UrlValue(x))        => Json.String(x)
+      case (UuidType, UuidValue(x))         => Json.String(golem.Uuid.toStandardString(x))
       case (DatetimeType, DatetimeValue(x)) =>
         Json.String(java.time.Instant.ofEpochSecond(x.seconds, x.nanoseconds.toLong).toString)
       case (DurationType, DurationValue(x)) =>

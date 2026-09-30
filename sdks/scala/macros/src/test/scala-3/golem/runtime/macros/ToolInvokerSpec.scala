@@ -70,8 +70,7 @@ object ToolInvokerSpec extends ZIOSpecDefault {
   }
 
   private final case class FakeStdin(content: String) extends ToolInputStream {
-    override def read(): Future[Either[ByteStreamFailure, Option[Array[Byte]]]] =
-      Future.successful(Right(None))
+    override val stream                 = zio.blocks.streams.Stream.empty
     override def cancel(): Future[Unit] = Future.successful(())
   }
 

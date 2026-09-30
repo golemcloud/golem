@@ -28,7 +28,7 @@ use golem_shard_manager::config::{
 use golem_shard_manager::{
     Deployment, EtcdRoutingTablePersistence, ExecutorAddr, ExecutorId, LEADER_ELECTION_NAME,
     LeaderElection, LeaderFence, LeaseKeepAlive, LeaseLossReason, LeaseLost, NO_REVISION,
-    RoutingTablePersistence, RunDetails, STATE_KEY, ShardLeaseState, ShardManagerError,
+    ReadRetry, RoutingTablePersistence, RunDetails, STATE_KEY, ShardLeaseState, ShardManagerError,
 };
 use golem_test_framework::components::etcd::docker_etcd::DockerEtcd;
 use std::collections::BTreeSet;
@@ -1026,9 +1026,7 @@ async fn a_dead_member_in_the_endpoint_list_does_not_fail_startup(etcd: &Arc<Doc
         NUMBER_OF_SHARDS,
         LeaderFence::for_test("/golem/test/unread-by-a-read", 1),
         0,
-        EtcdConfig::default().read_retry_timeout,
-        EtcdConfig::default().retry_min_delay,
-        EtcdConfig::default().retry_max_delay,
+        ReadRetry::from_config(&EtcdConfig::default()),
     );
     for read in 0..PROBE_READS {
         persistence.read().await.unwrap_or_else(|err| {
@@ -1084,9 +1082,7 @@ async fn a_read_through_a_stalled_etcd_survives_it(etcd: &Arc<DockerEtcd>) {
         NUMBER_OF_SHARDS,
         LeaderFence::for_test("/golem/test/unread-by-a-read", 1),
         0,
-        EtcdConfig::default().read_retry_timeout,
-        EtcdConfig::default().retry_min_delay,
-        EtcdConfig::default().retry_max_delay,
+        ReadRetry::from_config(&EtcdConfig::default()),
     );
     persistence
         .read()

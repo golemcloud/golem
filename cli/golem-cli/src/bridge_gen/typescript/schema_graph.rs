@@ -176,6 +176,7 @@ fn emit_schema_type(typ: &SchemaType) -> String {
             "{{ tag: 'url', restrictions: {} }}",
             url_restrictions(restrictions)
         ),
+        Uuid { .. } => "{ tag: 'uuid' }".to_string(),
         Datetime { .. } => "{ tag: 'datetime' }".to_string(),
         Duration { .. } => "{ tag: 'duration' }".to_string(),
         Quantity { spec, .. } => {

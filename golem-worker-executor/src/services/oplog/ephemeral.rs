@@ -14,8 +14,9 @@
 
 use crate::metrics::oplog::record_oplog_call;
 use crate::services::oplog::multilayer::{
-    BackgroundTransferMessage, InstrumentedOplogArchive, MultiLayerOplogService, OplogArchive,
-    TransferFiber, WrappedOplogArchive, transfer_between_lower_layers,
+    ArchiveSource, BackgroundTransferMessage, InstrumentedOplogArchive, MultiLayerOplogService,
+    OplogArchive, OplogArchiveResult, TransferFiber, WrappedOplogArchive,
+    transfer_between_lower_layers,
 };
 use crate::services::oplog::reader::{
     OplogRead, OplogReadError, OplogReadSource, checked_range_end, fail_stop,
@@ -23,7 +24,7 @@ use crate::services::oplog::reader::{
 use crate::services::oplog::{
     CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, Oplog, OplogAddReceipt,
     OplogCloseCompletion, OplogError, OplogService, OrderedOplogStart, PendingUpload,
-    ReservedRawStartBuilder, downcast_oplog,
+    RawOplogPayloadDownloadError, ReservedRawStartBuilder, downcast_oplog,
 };
 use async_trait::async_trait;
 use futures::FutureExt;
@@ -484,7 +485,9 @@ impl EphemeralOplog {
             match command {
                 WriteCommand::Append { entries, barrier } => {
                     if let Some((end, _)) = entries.last() {
-                        target.append(&entries).await;
+                        target.append(&entries).await.unwrap_or_else(|error| {
+                            panic!("Failed to commit required ephemeral oplog entries: {error}")
+                        });
                         watermark.store(end.as_u64(), Ordering::Release);
                     }
                     if let Some(barrier) = barrier {
@@ -519,27 +522,33 @@ impl EphemeralOplog {
         }
     }
 
-    pub async fn try_archive(this: &Arc<dyn Oplog>) -> Option<bool> {
-        let this = downcast_oplog::<EphemeralOplog>(this)?;
-        Some(this.archive(false, false).await)
+    pub async fn try_archive(this: &Arc<dyn Oplog>) -> OplogArchiveResult<Option<bool>> {
+        let Some(this) = downcast_oplog::<EphemeralOplog>(this) else {
+            return Ok(None);
+        };
+        this.archive(false, false).await.map(Some)
     }
 
-    pub async fn try_archive_blocking(this: &Arc<dyn Oplog>) -> Option<bool> {
-        let this = downcast_oplog::<EphemeralOplog>(this)?;
-        Some(this.archive(true, false).await)
+    pub async fn try_archive_blocking(this: &Arc<dyn Oplog>) -> OplogArchiveResult<Option<bool>> {
+        let Some(this) = downcast_oplog::<EphemeralOplog>(this) else {
+            return Ok(None);
+        };
+        this.archive(true, false).await.map(Some)
     }
 
-    pub async fn try_archive_background(this: &Arc<dyn Oplog>) -> Option<bool> {
-        let this = downcast_oplog::<EphemeralOplog>(this)?;
-        Some(this.archive(false, true).await)
+    pub async fn try_archive_background(this: &Arc<dyn Oplog>) -> OplogArchiveResult<Option<bool>> {
+        let Some(this) = downcast_oplog::<EphemeralOplog>(this) else {
+            return Ok(None);
+        };
+        this.archive(false, true).await.map(Some)
     }
 
-    async fn archive(self: &Arc<Self>, blocking: bool, drain: bool) -> bool {
+    async fn archive(self: &Arc<Self>, blocking: bool, drain: bool) -> OplogArchiveResult<bool> {
         self.run_job(|done| EphemeralJob::Drain { done }).await;
 
         // With only one lower layer there is nowhere to transfer to.
         if self.lower.len().get() <= 1 {
-            return false;
+            return Ok(false);
         }
 
         let (done_tx, done_rx) = if blocking {
@@ -553,14 +562,24 @@ impl EphemeralOplog {
         let last_movable = self.lower.len().get() - 1;
         let mut first_non_empty = None;
         for i in 0..last_movable {
-            if self.lower[i].length().await > 0 {
+            if self.lower[i].length().await? > 0 {
                 first_non_empty = Some(i);
                 break;
             }
         }
 
         let result = if let Some(source) = first_non_empty {
-            let last_idx = self.lower[source].current_oplog_index().await;
+            let last_idx = self.lower[source].current_oplog_index().await?;
+            if !self
+                .multi_layer_oplog_service
+                .begin_archive_attempt(&self.owned_agent_id, ArchiveSource::Lower(source))
+            {
+                return if blocking {
+                    Err("Oplog archive retry is backed off after a previous failure".to_string())
+                } else {
+                    Ok(true)
+                };
+            }
             info!(
                 "Transferring oplog entries up to index {last_idx} of ephemeral oplog layer {source} to the next layer"
             );
@@ -575,20 +594,19 @@ impl EphemeralOplog {
                     transfer_origin: TraceOrigin::capture_current(),
                 })
                 .expect("Failed to enqueue transfer of ephemeral oplog entries");
-            // Return true if there are more movable layers that could still hold data
-            source + 1 < last_movable
+            !blocking || source + 1 < last_movable
         } else {
             // Fully archived, and no transfer was enqueued to wait for
-            return false;
+            return Ok(false);
         };
 
         if let Some(done_rx) = done_rx {
-            done_rx
-                .await
-                .expect("Failed to wait for the archiving to finish");
+            done_rx.await.map_err(|_| {
+                "Ephemeral oplog archive transfer stopped before reporting completion".to_string()
+            })??;
         }
 
-        result
+        Ok(result)
     }
 
     /// Spawns the background transfer fiber that processes `TransferFromLower`
@@ -596,12 +614,14 @@ impl EphemeralOplog {
     pub fn spawn_background_transfer(
         owned_agent_id: OwnedAgentId,
         lower: NEVec<Arc<dyn OplogArchive + Send + Sync>>,
+        multi_layer_oplog_service: MultiLayerOplogService,
         rx: UnboundedReceiver<BackgroundTransferMessage>,
         start: tokio::sync::oneshot::Receiver<()>,
     ) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             if start.await.is_ok() {
-                Self::background_transfer(owned_agent_id, lower, rx).await;
+                Self::background_transfer(owned_agent_id, lower, multi_layer_oplog_service, rx)
+                    .await;
             }
         })
     }
@@ -609,6 +629,7 @@ impl EphemeralOplog {
     async fn background_transfer(
         owned_agent_id: OwnedAgentId,
         lower: NEVec<Arc<dyn OplogArchive + Send + Sync>>,
+        multi_layer_oplog_service: MultiLayerOplogService,
         mut rx: UnboundedReceiver<BackgroundTransferMessage>,
     ) {
         while let Some(msg) = rx.recv().await {
@@ -628,30 +649,55 @@ impl EphemeralOplog {
                             );
                             let _ = keep_alive.take();
                             if let Some(done) = done {
-                                let _ = done.send(());
+                                let _ = done.send(Ok(()));
                             }
                             return;
                         }
 
+                        multi_layer_oplog_service
+                            .wait_until_archive_ready(
+                                &owned_agent_id,
+                                ArchiveSource::Lower(source),
+                            )
+                            .await;
                         info!(
                             "Transferring oplog entries up to index {last_transferred_idx} of ephemeral oplog layer {source} to the next layer"
                         );
                         debug!("Reading entries from ephemeral oplog layer {source}");
 
-                        transfer_between_lower_layers(
+                        let result = transfer_between_lower_layers(
                             source,
                             last_transferred_idx,
                             lower.clone(),
                         )
                         .await;
 
-                        if drain && let Some(oplog) = keep_alive.as_ref() {
-                            let _ = EphemeralOplog::try_archive_background(oplog).await;
+                        match &result {
+                            Ok(()) => {
+                                multi_layer_oplog_service
+                                    .record_archive_success(
+                                        &owned_agent_id,
+                                        ArchiveSource::Lower(source),
+                                    );
+                                if drain && let Some(oplog) = keep_alive.as_ref() {
+                                    let _ = EphemeralOplog::try_archive_background(oplog).await;
+                                }
+                            }
+                            Err(error) => {
+                                multi_layer_oplog_service
+                                    .record_archive_failure(
+                                        &owned_agent_id,
+                                        ArchiveSource::Lower(source),
+                                    );
+                                crate::metrics::oplog::record_archive_maintenance_failure(
+                                    "ephemeral_transfer",
+                                );
+                                warn!(error = %error, "Failed to archive ephemeral oplog; the source entries remain available for retry");
+                            }
                         }
-
                         let _ = keep_alive.take();
                         if let Some(done) = done {
-                            let _ = done.send(());
+                            let _ = done.send(result);
                         }
                     }
                     .instrument(related_span!(
@@ -678,7 +724,7 @@ impl EphemeralOplog {
                         );
                         let _ = keep_alive.take();
                         if let Some(done) = done {
-                            let _ = done.send(());
+                            let _ = done.send(Ok(()));
                         }
                     }
                     .instrument(related_span!(
@@ -704,6 +750,7 @@ impl EphemeralOplog {
         account_id: golem_common::model::account::AccountId,
         entry_count_limit: u64,
         transfer_tx: &UnboundedSender<BackgroundTransferMessage>,
+        multi_layer_oplog_service: &MultiLayerOplogService,
         fresh: bool,
     ) -> NEVec<Arc<dyn OplogArchive + Send + Sync>> {
         let mut lower: Vec<Arc<dyn OplogArchive + Send + Sync>> = Vec::new();
@@ -724,6 +771,8 @@ impl EphemeralOplog {
                         i,
                         instrumented,
                         transfer_tx.clone(),
+                        owned_agent_id.clone(),
+                        multi_layer_oplog_service.clone(),
                         entry_count_limit,
                     )
                 } else {
@@ -731,6 +780,8 @@ impl EphemeralOplog {
                         i,
                         instrumented,
                         transfer_tx.clone(),
+                        owned_agent_id.clone(),
+                        multi_layer_oplog_service.clone(),
                         entry_count_limit,
                     )
                     .await
@@ -890,8 +941,13 @@ impl Oplog for EphemeralOplog {
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> u64 {
         record_oplog_call("drop_prefix");
         let mut dropped = 0;
-        for layer in &self.lower {
-            dropped += layer.drop_prefix(last_dropped_id).await;
+        for (level, layer) in self.lower.iter().enumerate() {
+            dropped += layer
+                .drop_prefix(last_dropped_id)
+                .await
+                .unwrap_or_else(|error| {
+                    panic!("Failed to drop ephemeral oplog archive layer {level} prefix: {error}")
+                });
         }
         dropped
     }
@@ -1048,7 +1104,9 @@ impl Oplog for EphemeralOplog {
 
         for (level, layer) in self.lower.iter().enumerate() {
             if let Some((start, count)) = read.next_range() {
-                let entries = layer.read_source(start, count).await;
+                let entries = layer.read_source(start, count).await.unwrap_or_else(|error| {
+                    panic!("Oplog read failed: failed to read oplog data from archive layer {level}: {error}")
+                });
                 fail_stop(read.add_source(OplogReadSource::Archive(level), entries));
             } else {
                 break;
@@ -1061,8 +1119,10 @@ impl Oplog for EphemeralOplog {
     async fn length(&self) -> u64 {
         record_oplog_call("length");
         let mut total = 0;
-        for layer in &self.lower {
-            total += layer.length().await;
+        for (level, layer) in self.lower.iter().enumerate() {
+            total += layer.length().await.unwrap_or_else(|error| {
+                panic!("Failed to read ephemeral oplog archive layer {level} length: {error}")
+            });
         }
         total
     }
@@ -1080,6 +1140,21 @@ impl Oplog for EphemeralOplog {
     ) -> Result<Vec<u8>, String> {
         self.primary_service
             .download_raw_payload(&self.owned_agent_id, self.agent_mode, payload_id, md5_hash)
+            .await
+    }
+
+    async fn download_raw_payload_classified(
+        &self,
+        payload_id: PayloadId,
+        md5_hash: Vec<u8>,
+    ) -> Result<Vec<u8>, RawOplogPayloadDownloadError> {
+        self.primary_service
+            .download_raw_payload_classified(
+                &self.owned_agent_id,
+                self.agent_mode,
+                payload_id,
+                md5_hash,
+            )
             .await
     }
 }

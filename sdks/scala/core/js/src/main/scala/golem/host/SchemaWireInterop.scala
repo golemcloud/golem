@@ -28,6 +28,8 @@ import scala.concurrent.{Future, Promise}
 import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
 import scala.util.{Failure, Success, Try}
 import golem.FutureInterop
+import zio.blocks.async.*
+import zio.blocks.streams.{JvmType, Stream}
 
 /**
  * Mechanical mapping between the host-agnostic flat carrier
@@ -512,6 +514,7 @@ object SchemaWireInterop {
       case BinaryType(r)         => JsSchemaTypeBody.binaryType(binRToJs(r))
       case PathType(s)           => JsSchemaTypeBody.pathType(pathToJs(s))
       case UrlType(r)            => JsSchemaTypeBody.urlType(urlRToJs(r))
+      case UuidType              => JsSchemaTypeBody.uuidType
       case DatetimeType          => JsSchemaTypeBody.datetimeType
       case DurationType          => JsSchemaTypeBody.durationType
       case QuantityType(s)       => JsSchemaTypeBody.quantityType(quantToJs(s))
@@ -561,6 +564,7 @@ object SchemaWireInterop {
       case "binary-type"          => BinaryType(binRFromJs(valOf(j).asInstanceOf[JsBinaryRestrictions]))
       case "path-type"            => PathType(pathFromJs(valOf(j).asInstanceOf[JsPathSpec]))
       case "url-type"             => UrlType(urlRFromJs(valOf(j).asInstanceOf[JsUrlRestrictions]))
+      case "uuid-type"            => UuidType
       case "datetime-type"        => DatetimeType
       case "duration-type"        => DurationType
       case "quantity-type"        => QuantityType(quantFromJs(valOf(j).asInstanceOf[JsQuantitySpec]))
@@ -707,8 +711,10 @@ object SchemaWireInterop {
       case TextValue(p)       => JsSchemaValueNode.textValue(JsTextValuePayload(p.text, p.language.orUndefined))
       case BinaryValue(p)     =>
         JsSchemaValueNode.binaryValue(JsBinaryValuePayload(bytesToJs(p.bytes), p.mimeType.orUndefined))
-      case PathValue(v)     => JsSchemaValueNode.pathValue(v)
-      case UrlValue(v)      => JsSchemaValueNode.urlValue(v)
+      case PathValue(v) => JsSchemaValueNode.pathValue(v)
+      case UrlValue(v)  => JsSchemaValueNode.urlValue(v)
+      case UuidValue(v) =>
+        JsSchemaValueNode.uuidValue(JsUuid(js.BigInt(v.highBits.toString), js.BigInt(v.lowBits.toString)))
       case DatetimeValue(v) => JsSchemaValueNode.datetimeValue(datetimeToJs(v))
       case DurationValue(p) =>
         JsSchemaValueNode.durationValue(JsDurationValuePayload(js.BigInt(p.nanoseconds.toString)))
@@ -884,36 +890,63 @@ object SchemaWireInterop {
   }
 
   private def wrappedStreamHandle(raw: JsSchemaValueStream): GuestSchemaValueStreamHandle = {
+    object End
     lazy val endpoint: GuestSchemaValueStream.Wrapped = GuestSchemaValueStream.Wrapped(
       raw,
       () =>
         FutureInterop.fromPromise(JsSchemaValueStreamUnwrap.unwrap(raw)).map { iterable =>
           val lifecycle = new JsSchemaValueIteratorLifecycle(iterable.iterator())
-          AgentStream.fromPull(
-            () =>
-              FutureInterop
-                .fromPromise(lifecycle.iterator.next())
+          val stream    = Stream
+            .unfoldAsync(()) { _ =>
+              val next = FutureInterop.fromPromise(lifecycle.iterator.next())
+              next.foreach { result =>
+                if (!result.done && !lifecycle.acceptItem()) drainJsCapabilityHandles(result.value.valueNodes)
+              }
+              Async
+                .fromFuture(next)
                 .map { result =>
                   if (result.done) {
                     lifecycle.complete()
                     None
                   } else if (lifecycle.acceptItem())
-                    Some(
-                      AgentStreamOwnership.capture(endpoint.activeOwnership) {
-                        valueTreeFromJs(result.value)
-                      }
-                    )
-                  else {
-                    drainJsCapabilityHandles(result.value.valueNodes)
-                    throw new IllegalStateException("schema value stream iterator was closed")
-                  }
+                    Some(result.value -> ())
+                  else throw new IllegalStateException("schema value stream iterator was closed")
                 }
-                .transformWith {
-                  case success @ Success(_) => Future.fromTry(success)
-                  case Failure(error)       =>
-                    AgentStreamOwnership.cleanup(lifecycle.close()).flatMap(_ => Future.failed(error))
+            }(using JvmType.Infer.boxed[JsSchemaValueTree])
+          val reader = stream.startAsync.toFuture
+          AgentStream.fromPull(
+            () =>
+              reader
+                .flatMap(_.read[Any](End).toFuture)
+                .flatMap { value =>
+                  if (value.asInstanceOf[AnyRef] eq End) Future.successful(None)
+                  else {
+                    val inherited = endpoint.activeOwnership
+                    val itemOwner = new AgentStreamOwnership
+                    Try(
+                      AgentStreamOwnership.capture(itemOwner) {
+                        valueTreeFromJs(value.asInstanceOf[JsSchemaValueTree])
+                      }
+                    ) match {
+                      case Failure(error) =>
+                        AgentStreamOwnership.cleanup(itemOwner.close()).flatMap(_ => Future.failed(error))
+                      case Success(decoded) if lifecycle.acceptItem() =>
+                        inherited.fold(itemOwner.handoff())(itemOwner.transferTo)
+                        Future.successful(Some(decoded))
+                      case Success(_) =>
+                        itemOwner
+                          .close()
+                          .flatMap(_ =>
+                            Future.failed(new IllegalStateException("schema value stream iterator was closed"))
+                          )
+                    }
+                  }
                 },
-            () => lifecycle.close().flatMap(_ => endpoint.closeTransferredOwnership())
+            () =>
+              lifecycle
+                .close()
+                .flatMap(_ => reader.flatMap(_.close().toFuture))
+                .flatMap(_ => endpoint.closeTransferredOwnership())
           )
         }
     )
@@ -991,8 +1024,11 @@ object SchemaWireInterop {
       case "binary-value" =>
         val p = valOf(j).asInstanceOf[JsBinaryValuePayload]
         BinaryValue(WitBinaryValuePayload(bytesFromJs(p.bytes), p.mimeType.toOption))
-      case "path-value"     => PathValue(valOf(j).asInstanceOf[String])
-      case "url-value"      => UrlValue(valOf(j).asInstanceOf[String])
+      case "path-value" => PathValue(valOf(j).asInstanceOf[String])
+      case "url-value"  => UrlValue(valOf(j).asInstanceOf[String])
+      case "uuid-value" =>
+        val uuid = valOf(j).asInstanceOf[JsUuid]
+        UuidValue(golem.Uuid(BigInt(uuid.highBits.toString), BigInt(uuid.lowBits.toString)))
       case "datetime-value" => DatetimeValue(datetimeFromJs(valOf(j).asInstanceOf[JsDatetime]))
       case "duration-value" =>
         val p = valOf(j).asInstanceOf[JsDurationValuePayload]

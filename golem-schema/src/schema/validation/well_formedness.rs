@@ -440,6 +440,7 @@ fn check_type(
         SchemaType::Bool { .. }
         | SchemaType::Char { .. }
         | SchemaType::String { .. }
+        | SchemaType::Uuid { .. }
         | SchemaType::Datetime { .. }
         | SchemaType::Duration { .. }
         | SchemaType::QuotaToken { .. }

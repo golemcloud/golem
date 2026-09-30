@@ -211,7 +211,7 @@ async fn compressed_fixture() -> Fixture {
     let fixture = open_fixture(ENTRY_COUNT).await;
     assert_eq!(
         MultiLayerOplog::try_archive_blocking(&fixture.oplog).await,
-        Some(true)
+        Ok(Some(true))
     );
     fixture
 }
@@ -220,7 +220,7 @@ async fn blob_fixture() -> Fixture {
     let fixture = compressed_fixture().await;
     assert_eq!(
         MultiLayerOplog::try_archive_blocking(&fixture.oplog).await,
-        Some(false)
+        Ok(Some(false))
     );
     fixture
 }
@@ -229,7 +229,7 @@ async fn cross_tier_fixture() -> Fixture {
     let fixture = open_fixture(ARCHIVE_BOUNDARY).await;
     assert_eq!(
         MultiLayerOplog::try_archive_blocking(&fixture.oplog).await,
-        Some(true)
+        Ok(Some(true))
     );
     for value in ARCHIVE_BOUNDARY..ENTRY_COUNT {
         fixture.oplog.add(entry(value)).await.unwrap();

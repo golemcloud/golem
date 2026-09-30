@@ -641,6 +641,8 @@ pub enum QuotaError {
     LeaseNotFound(String),
     #[error("Stale epoch: {0}")]
     StaleEpoch(String),
+    #[error("Shard manager leadership lost: {0}")]
+    LeadershipLost(String),
     #[error("Conversion error: {0}")]
     ConversionError(String),
     #[error("Internal server error: {0}")]
@@ -664,6 +666,7 @@ impl SafeDisplay for QuotaError {
         match self {
             Self::LeaseNotFound(_) => self.to_string(),
             Self::StaleEpoch(_) => self.to_string(),
+            Self::LeadershipLost(_) => self.to_string(),
             Self::ConversionError(_) => self.to_string(),
             Self::InternalServerError(_) => "Internal error".to_string(),
             Self::InternalClientError(_) => "Internal error".to_string(),
@@ -684,6 +687,7 @@ impl From<golem_api_grpc::proto::golem::shardmanager::v1::QuotaError> for QuotaE
             Some(Error::LeaseNotFound(body)) => Self::LeaseNotFound(body.error),
             Some(Error::StaleEpoch(body)) => Self::StaleEpoch(body.error),
             Some(Error::Internal(body)) => Self::InternalServerError(body.error),
+            Some(Error::LeadershipLost(body)) => Self::LeadershipLost(body.error),
             None => Self::internal_client_error("Missing error field"),
         }
     }

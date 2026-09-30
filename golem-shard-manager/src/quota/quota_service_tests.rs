@@ -13,11 +13,17 @@
 // limitations under the License.
 
 use super::quota_lease::QuotaLease;
-use super::quota_repo::{QuotaLeaseRecord, QuotaRepo, QuotaRepoError, QuotaResourceRecord};
+use super::quota_repo::{
+    QuotaLeaseRecord, QuotaRepo, QuotaRepoError, QuotaResourceRecord, StoredQuotaResource,
+    StoredQuotaState,
+};
 use super::quota_service::{QuotaError, QuotaService};
+use super::quota_state::{MAX_RECLAIMED_PER_WRITE, PodLease, QuotaState};
 use super::resource_definition_fetcher::{FetchError, ResourceDefinitionFetcher};
 use crate::config::QuotaServiceConfig;
+use crate::sharding::persistence::ExternalRevision;
 use async_trait::async_trait;
+use chrono::Utc;
 use golem_common::model::Pod;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::quota::LeaseEpoch;
@@ -35,7 +41,8 @@ use test_r::test;
 use tokio::sync::RwLock;
 
 /// A [`QuotaRepo`] that persists nothing, so these tests exercise the service and state
-/// machinery without a database.
+/// machinery without a database. Every write succeeds and reports the next revision, as a store
+/// that accepted it would.
 #[derive(Debug, Default)]
 struct InMemoryQuotaRepo;
 
@@ -44,29 +51,29 @@ impl QuotaRepo for InMemoryQuotaRepo {
     async fn save_lease_change(
         &self,
         _resource: &QuotaResourceRecord,
-        _previous_resource_revision: i64,
+        previous_revision: ExternalRevision,
         _lease: &QuotaLeaseRecord,
         _expired_pods: &[(Blob<IpAddr>, i32)],
-    ) -> Result<(), QuotaRepoError> {
-        Ok(())
+    ) -> Result<ExternalRevision, QuotaRepoError> {
+        Ok(previous_revision + 1)
     }
 
     async fn save_lease_release(
         &self,
         _resource: &QuotaResourceRecord,
-        _previous_resource_revision: i64,
+        previous_revision: ExternalRevision,
         _pod_ip: Blob<IpAddr>,
         _pod_port: i32,
-    ) -> Result<(), QuotaRepoError> {
-        Ok(())
+    ) -> Result<ExternalRevision, QuotaRepoError> {
+        Ok(previous_revision + 1)
     }
 
     async fn save_resource(
         &self,
         _record: &QuotaResourceRecord,
-        _previous_revision: i64,
-    ) -> Result<(), QuotaRepoError> {
-        Ok(())
+        previous_revision: ExternalRevision,
+    ) -> Result<ExternalRevision, QuotaRepoError> {
+        Ok(previous_revision + 1)
     }
 
     async fn delete_resource_and_leases(
@@ -76,12 +83,15 @@ impl QuotaRepo for InMemoryQuotaRepo {
         Ok(())
     }
 
-    async fn get_all_resources(&self) -> Result<Vec<QuotaResourceRecord>, QuotaRepoError> {
-        Ok(Vec::new())
+    async fn get_all(&self) -> Result<StoredQuotaState, QuotaRepoError> {
+        Ok(StoredQuotaState::default())
     }
 
-    async fn get_all_leases(&self) -> Result<Vec<QuotaLeaseRecord>, QuotaRepoError> {
-        Ok(Vec::new())
+    async fn get_resource(
+        &self,
+        _resource_definition_id: ResourceDefinitionId,
+    ) -> Result<Option<(StoredQuotaResource, Vec<QuotaLeaseRecord>)>, QuotaRepoError> {
+        Ok(None)
     }
 
     async fn delete_leases_for_resource(
@@ -1243,4 +1253,85 @@ async fn capacity_limit_does_not_refill() {
         .await
         .unwrap();
     assert_eq!(l2.allocated_amount(), 0);
+}
+
+/// `count` one-slot leases on a 200-slot concurrency resource, all expired, the `i`-th expiring
+/// `i` milliseconds after the first.
+fn state_with_expired_leases(count: usize) -> QuotaState {
+    let first_expiry = Utc::now() - chrono::Duration::minutes(5);
+    let leases = (0..count)
+        .map(|i| {
+            let pod = Pod {
+                ip: IpAddr::V4(Ipv4Addr::new(10, 0, (i / 256) as u8, (i % 256) as u8)),
+                port: 9000,
+            };
+            let lease = PodLease {
+                epoch: LeaseEpoch(1),
+                allocated: 1,
+                granted_at: first_expiry - chrono::Duration::minutes(1),
+                expires_at: first_expiry + chrono::Duration::milliseconds(i as i64),
+                pending_reservations: vec![],
+            };
+            (pod, lease)
+        })
+        .collect();
+    QuotaState::from_persisted(
+        make_concurrency_definition(env_id(), "slots", 200),
+        200 - count as u64,
+        Utc::now(),
+        Utc::now(),
+        leases,
+    )
+}
+
+#[test]
+// One lease change is one etcd transaction, which etcd caps at 128 operations. Reclaiming every
+// expired lease at once would make the write for a mass expiry impossible to commit, and retrying
+// it would build the same oversized transaction forever.
+fn reclaim_is_capped_per_write_and_takes_the_earliest_expiries_first() {
+    let mut state = state_with_expired_leases(130);
+    let latest_ten: Vec<Pod> = {
+        let mut by_expiry: Vec<_> = state.leases.iter().collect();
+        by_expiry.sort_by_key(|(_, lease)| lease.expires_at);
+        by_expiry[120..].iter().map(|(pod, _)| **pod).collect()
+    };
+
+    let first = state.reclaim_expired();
+    assert_eq!(first.len(), MAX_RECLAIMED_PER_WRITE);
+    assert_eq!(state.remaining, 70 + 120);
+    let mut left: Vec<Pod> = state.leases.keys().copied().collect();
+    left.sort();
+    let mut expected = latest_ten.clone();
+    expected.sort();
+    assert_eq!(
+        left, expected,
+        "the latest expiries were not the ones left for later"
+    );
+
+    let second = state.reclaim_expired();
+    assert_eq!(second.len(), 10);
+    assert!(state.leases.is_empty());
+    assert_eq!(state.remaining, 200, "a slot was lost or counted twice");
+    assert!(state.reclaim_expired().is_empty());
+}
+
+#[test]
+// `ensure_entry` keeps an existing entry, so an acquisition racing the removal of its resource can
+// find the removal's tombstone still in place. That must fail the one request, not panic.
+async fn acquiring_a_resource_that_is_being_removed_fails_without_panicking() {
+    let fetcher = Arc::new(InMemoryFetcher::new());
+    let env = env_id();
+    let definition = make_definition(env, "being-removed");
+    fetcher.put(definition.clone()).await;
+    let svc = QuotaService::new(test_config(), fetcher, test_repo());
+
+    svc.insert_tombstone(definition.id).await;
+
+    let result = svc
+        .acquire_lease(env, definition.name.clone(), test_pod())
+        .await;
+    assert!(
+        matches!(result, Err(QuotaError::InternalError(_))),
+        "expected the acquisition to fail cleanly, got {result:?}"
+    );
 }

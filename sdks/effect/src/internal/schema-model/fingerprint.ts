@@ -285,6 +285,9 @@ function encodeType(encoder: CborEncoder, type: SchemaType): void {
       encodeOptionalSet(encoder, "url.allowed_hosts", body.restrictions.allowedHosts)
       encodeMetadata(encoder, type.metadata)
       break
+    case "uuid":
+      leaf(38)
+      break
     case "datetime":
       leaf(29)
       break

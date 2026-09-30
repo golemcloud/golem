@@ -160,6 +160,7 @@ use golem_common::model::{
 use golem_common::one_shot::OneShotEvent;
 use golem_common::read_only_lock;
 use golem_common::related_span;
+use golem_common::retries::get_delay;
 use golem_common::schema::TypedSchemaValue;
 use golem_common::tracing::TraceOrigin;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
@@ -168,7 +169,7 @@ use golem_service_base::model::GetFileSystemNodeResult;
 use golem_service_base::model::auth::AuthCtx;
 use prost::Message;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 use tokio::sync::broadcast::Receiver;
@@ -684,6 +685,8 @@ pub struct ResolvedWorkerData<Ctx: WorkerCtx> {
     /// Lifecycle request shared across resident worker generations. A terminal request is retained
     /// until the worker stops so permit reacquisition cannot lose it between `RunningWorker`s.
     interrupt_signal: Arc<async_lock::Mutex<WorkerInterruptState>>,
+    infrastructure_recovery_retry_config: RetryConfig,
+    infrastructure_recovery_attempt: AtomicU32,
     oom_retry_config: RetryConfig,
     snapshot_policy: SnapshotPolicy,
 
@@ -1163,6 +1166,7 @@ fn recovery_agent_error(error: &WorkerExecutorError) -> AgentError {
             AgentError::InternalError(error.to_string())
         }
         WorkerExecutorError::Runtime { .. }
+        | WorkerExecutorError::RecoveryRequired { .. }
         | WorkerExecutorError::Unknown { .. }
         | WorkerExecutorError::AgentCreationFailed { .. }
         | WorkerExecutorError::ComponentNotFound { .. }
@@ -1176,12 +1180,21 @@ fn recovery_agent_error(error: &WorkerExecutorError) -> AgentError {
     }
 }
 
+fn recovery_retry_from(error: &WorkerExecutorError) -> Option<OplogIndex> {
+    match error {
+        WorkerExecutorError::RecoveryRequired { retry_from, .. } => *retry_from,
+        WorkerExecutorError::FailedToResumeAgent { reason, .. } => recovery_retry_from(reason),
+        _ => None,
+    }
+}
+
 fn is_infrastructure_recovery_error(error: &WorkerExecutorError) -> bool {
     match error {
         WorkerExecutorError::FailedToResumeAgent { reason, .. } => {
             is_infrastructure_recovery_error(reason)
         }
         WorkerExecutorError::Runtime { .. }
+        | WorkerExecutorError::RecoveryRequired { .. }
         | WorkerExecutorError::Unknown { .. }
         | WorkerExecutorError::AgentCreationFailed { .. }
         | WorkerExecutorError::ComponentNotFound { .. }
@@ -1553,7 +1566,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         if let Err(error) = self.add_and_commit_oplog(entry).await {
                             let fence = match error {
                                 OplogError::Fenced(fence) => Some(fence),
-                                OplogError::Payload(_) => None,
+                                OplogError::Payload(_) | OplogError::Maintenance(_) => None,
                             };
                             self.record_retirement(
                                 InterruptKind::ShardLost,
@@ -2428,6 +2441,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             startup_attempt: StartupAttemptTracker::default(),
             linear_memory_grant: StdMutex::new(None),
             interrupt_signal: Arc::new(async_lock::Mutex::new(WorkerInterruptState::default())),
+            infrastructure_recovery_retry_config: deps.config().retry.clone(),
+            infrastructure_recovery_attempt: AtomicU32::new(0),
             execution_status,
             initial_worker_metadata,
             resource_entry,
@@ -2752,6 +2767,24 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self.oom_retry_config
     }
 
+    pub(crate) fn next_infrastructure_recovery_delay(&self) -> Duration {
+        let attempt = self
+            .infrastructure_recovery_attempt
+            .fetch_add(1, Ordering::AcqRel);
+        let capped_attempt = attempt.min(
+            self.infrastructure_recovery_retry_config
+                .max_attempts
+                .saturating_sub(1),
+        );
+        get_delay(&self.infrastructure_recovery_retry_config, capped_attempt)
+            .unwrap_or(self.infrastructure_recovery_retry_config.max_delay)
+    }
+
+    pub(crate) fn reset_infrastructure_recovery_backoff(&self) {
+        self.infrastructure_recovery_attempt
+            .store(0, Ordering::Release);
+    }
+
     pub(crate) fn snapshot_policy(&self) -> &SnapshotPolicy {
         &self.snapshot_policy
     }
@@ -2945,23 +2978,29 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ));
         }
         drop(instance);
-        if self
+        let current_oplog_index = self
             .oplog_service()
-            .get_last_index(&self.owned_agent_id, self.agent_mode())
+            .try_get_last_index(&self.owned_agent_id, self.agent_mode())
             .await
-            != last_oplog_index
-        {
+            .map_err(WorkerExecutorError::runtime)?;
+        if !scheduled_archive_is_current(current_oplog_index, last_oplog_index) {
             return Ok(None);
         }
         let result = match wait {
             ArchiveWait::Queued => match MultiLayerOplog::try_archive(&self.oplog).await {
-                Some(more) => Some(more),
-                None => EphemeralOplog::try_archive(&self.oplog).await,
+                Ok(Some(more)) => Some(more),
+                Ok(None) => EphemeralOplog::try_archive(&self.oplog)
+                    .await
+                    .map_err(WorkerExecutorError::runtime)?,
+                Err(error) => return Err(WorkerExecutorError::runtime(error)),
             },
             ArchiveWait::Finished => match MultiLayerOplog::try_archive_blocking(&self.oplog).await
             {
-                Some(more) => Some(more),
-                None => EphemeralOplog::try_archive_blocking(&self.oplog).await,
+                Ok(Some(more)) => Some(more),
+                Ok(None) => EphemeralOplog::try_archive_blocking(&self.oplog)
+                    .await
+                    .map_err(WorkerExecutorError::runtime)?,
+                Err(error) => return Err(WorkerExecutorError::runtime(error)),
             },
         };
         if result == Some(false) {
@@ -3627,9 +3666,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         } else {
             None
         };
-        let retry_from = previous_error
-            .as_ref()
-            .map(|error| error.retry_from)
+        let retry_from = recovery_retry_from(error)
+            .or_else(|| previous_error.as_ref().map(|error| error.retry_from))
             .unwrap_or(self.oplog.current_oplog_index().await);
         let infrastructure_failure = is_infrastructure_recovery_error(error);
         let error = recovery_agent_error(error);
@@ -10241,6 +10279,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 }
 
+// A scheduled archive may outlive later commits. Archiving the current prefix preserves the
+// retry; an index behind the scheduled one indicates stale or recreated state.
+fn scheduled_archive_is_current(current: OplogIndex, scheduled: OplogIndex) -> bool {
+    current >= scheduled
+}
+
 #[derive(Debug)]
 struct WorkerStatusMetric {
     status: StdMutex<AgentStatus>,
@@ -12080,6 +12124,20 @@ mod tests {
     }
 
     #[test]
+    fn scheduled_archive_remains_valid_after_the_oplog_advances() {
+        let scheduled = OplogIndex::from_u64(10);
+        assert!(scheduled_archive_is_current(scheduled, scheduled));
+        assert!(scheduled_archive_is_current(
+            OplogIndex::from_u64(11),
+            scheduled
+        ));
+        assert!(!scheduled_archive_is_current(
+            OplogIndex::from_u64(9),
+            scheduled
+        ));
+    }
+
+    #[test]
     fn cancelled_resident_requests_are_pruned_without_dropping_snapshots() {
         let (sender, receiver) = tokio::sync::oneshot::channel();
         let read = QueuedWorkerInvocation::ReadFile {
@@ -12196,6 +12254,9 @@ mod tests {
         let component_id = ComponentId::new();
         assert!(is_infrastructure_recovery_error(
             &WorkerExecutorError::ComponentNotFound { component_id }
+        ));
+        assert!(is_infrastructure_recovery_error(
+            &WorkerExecutorError::recovery_required("payload backend unavailable")
         ));
         assert!(!is_infrastructure_recovery_error(
             &WorkerExecutorError::ComponentParseFailed {

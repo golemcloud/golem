@@ -136,6 +136,7 @@ object SchemaWireInteropSpec extends ZIOSpecDefault {
     PathType(pathOut),
     UrlType(urlFull),
     UrlType(urlNone),
+    UuidType,
     DatetimeType,
     DurationType,
     QuantityType(quantFull),
@@ -168,6 +169,7 @@ object SchemaWireInteropSpec extends ZIOSpecDefault {
   // --- value nodes: one (or more) per WitSchemaValueNode case ---------------
 
   private val datetime = Datetime(1_700_000_000L, 123_456_789)
+  private val uuid     = golem.Uuid(BigInt("1311768465173141112"), BigInt("1311768465173141112"))
 
   // Quota-token handle nodes are intentionally excluded from this structural
   // round-trip vector: an owned `quota-token` handle is affine, so encoding
@@ -208,6 +210,7 @@ object SchemaWireInteropSpec extends ZIOSpecDefault {
     BinaryValue(WitBinaryValuePayload(Vector.empty, None)),
     PathValue("/tmp/x"),
     UrlValue("https://example.com"),
+    UuidValue(uuid),
     DatetimeValue(datetime),
     DurationValue(WitDurationValuePayload(987654321L)),
     QuantityValueNode(qvalue),
@@ -838,6 +841,48 @@ object SchemaWireInteropSpec extends ZIOSpecDefault {
           )
         }
       },
+      test("schema value stream: close during inbound lifting disposes nested streams") {
+        ZIO.fromFuture { implicit ec =>
+          streamMock.reset()
+          val childClosed = Promise[Unit]()
+          val child       = iteratorFixture(
+            () => js.Promise.resolve(js.Dynamic.literal("done" -> true)),
+            withReturn = true,
+            onReturn = () => childClosed.trySuccess(())
+          )
+          var stream = Option.empty[AgentStream[AgentStream[String]]]
+          val item   = js.Dynamic.literal("root" -> 0)
+          js.Dynamic.global.Object.defineProperty(
+            item,
+            "valueNodes",
+            js.Dynamic.literal(
+              "get" -> (((() => {
+                stream.foreach(_.close())
+                js.Array(JsSchemaValueNode.streamValue(child.raw))
+              }): js.Function0[js.Array[JsSchemaValueNode]]))
+            )
+          )
+          val parent = iteratorFixture(
+            () => js.Promise.resolve(js.Dynamic.literal("done" -> false, "value" -> item)),
+            withReturn = true
+          )
+          val tree    = JsSchemaValueTree(js.Array(JsSchemaValueNode.streamValue(parent.raw)), 0)
+          val value   = SchemaWire.schemaValueFromWit(SchemaWireInterop.valueTreeFromJs(tree))
+          val decoded = FromSchema[AgentStream[AgentStream[String]]]
+            .fromValue(value)
+            .fold(throw _, identity)
+          stream = Some(decoded)
+
+          for {
+            _ <- decoded.pull().failed
+            _ <- childClosed.future
+          } yield assertTrue(
+            parent.returnCount() == 1,
+            child.iteratorCount() == 1,
+            child.returnCount() == 1
+          )
+        }
+      },
       test("schema value stream: inbound close without iterator return is a no-op") {
         ZIO.fromFuture { implicit ec =>
           streamMock.reset()
@@ -974,6 +1019,16 @@ object SchemaWireInteropSpec extends ZIOSpecDefault {
       },
       test("raw JS shape: quantity value node tag is `quantity-value-node`") {
         assertTrue(singleValueNodeJs(QuantityValueNode(qvalue)).tag == "quantity-value-node")
+      },
+      test("raw JS shape: UUID uses first-class type and value tags") {
+        val node = singleValueNodeJs(UuidValue(uuid))
+        val raw  = rawVal(node).asInstanceOf[golem.host.js.schema.JsUuid]
+        assertTrue(
+          singleTypeBodyJs(UuidType).tag == "uuid-type",
+          node.tag == "uuid-value",
+          BigInt(raw.highBits.toString) == uuid.highBits,
+          BigInt(raw.lowBits.toString) == uuid.lowBits
+        )
       },
       test("raw JS shape: result value tags are `ok-value` / `err-value`") {
         val ok  = valDict(singleValueNodeJs(ResultValue(WitResultValuePayload.OkValue(Some(9)))))

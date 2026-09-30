@@ -192,6 +192,14 @@ impl From<QuotaError> for golem::shardmanager::v1::QuotaError {
                     },
                 )),
             },
+            QuotaError::LeadershipLost { .. } => golem::shardmanager::v1::QuotaError {
+                error: Some(grpc_quota_error::Error::LeadershipLost(
+                    golem::common::ErrorBody {
+                        error: value.to_string(),
+                        code: api::error_code::INTERNAL_UNKNOWN.to_string(),
+                    },
+                )),
+            },
             QuotaError::InternalError(_) => golem::shardmanager::v1::QuotaError {
                 error: Some(grpc_quota_error::Error::Internal(
                     golem::common::ErrorBody {

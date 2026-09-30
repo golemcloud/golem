@@ -91,6 +91,7 @@ message SchemaType {
     golem.common.Empty datetime_type = 44;
     golem.common.Empty duration_type = 45;
     QuantitySpec quantity_type = 46;
+    golem.common.Empty uuid_type = 47;
 
     // Discriminated union (closed, inferred-tag)
     UnionSpec union_type = 60;
@@ -328,6 +329,7 @@ message SchemaValue {
     DatetimeValue datetime_value = 44;
     DurationValue duration_value = 45;
     QuantityValue quantity_value = 46;
+    golem.common.UUID uuid_value = 47;
 
     // Discriminated union
     UnionValue union_value = 60;

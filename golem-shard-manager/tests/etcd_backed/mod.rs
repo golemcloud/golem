@@ -19,6 +19,7 @@ mod distributed_startup;
 mod leader_election;
 pub(crate) mod persistence;
 mod proxy;
+mod quota;
 mod service;
 
 use crate::etcd_backed::persistence::GetRoutingTablePersistence;

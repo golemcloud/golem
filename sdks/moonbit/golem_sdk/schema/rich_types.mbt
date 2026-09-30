@@ -138,6 +138,30 @@ pub impl FromSchema for Url with fn from_value(v) {
 }
 
 ///|
+pub impl IntoSchema for @types.Uuid with fn type_id() {
+  "golem.core.Uuid"
+}
+
+///|
+pub impl IntoSchema for @types.Uuid with fn register_in(_b) {
+  @model.schema_type(Uuid)
+}
+
+///|
+pub impl IntoSchema for @types.Uuid with fn to_value(self) {
+  Uuid(self)
+}
+
+///|
+pub impl FromSchema for @types.Uuid with fn from_value(v) {
+  match v {
+    Uuid(value) => value
+    other =>
+      raise FromSchemaError::shape_mismatch("uuid", value_kind(other), "Uuid")
+  }
+}
+
+///|
 pub impl IntoSchema for @types.Datetime with fn type_id() {
   "golem.core.Datetime"
 }

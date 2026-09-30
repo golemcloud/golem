@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import type { SchemaCodec } from '../../schema/codec';
+import { Uuid } from '../../uuid';
 import {
   assertSchemaValueRepresentable,
   cloneSchemaValue,
@@ -702,6 +703,8 @@ function schemaValueMatches(graph: SchemaGraph, type: SchemaType, value: SchemaV
       return value.tag === 'char' && isUnicodeScalar(value.value);
     case 'string':
       return value.tag === 'string' && typeof value.value === 'string';
+    case 'uuid':
+      return value.tag === 'uuid' && value.value instanceof Uuid;
     case 'path':
       return (
         value.tag === 'path' &&

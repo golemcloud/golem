@@ -20,6 +20,7 @@
 //! Worth having because tonic keeps an unreachable endpoint in the balancer's rotation, so with
 //! several endpoints a share of reads fail fast until it is back; a slow answer counts too.
 
+use crate::config::EtcdConfig;
 use crate::sharding::error::ShardManagerError;
 use golem_common::retriable_error::IsRetriableError;
 use std::future::Future;
@@ -40,6 +41,33 @@ fn is_request_timeout(err: &ShardManagerError) -> bool {
         ShardManagerError::EtcdError(etcd_client::Error::GRpcStatus(status))
             if status.code() == Code::Cancelled
     )
+}
+
+/// How long a read may keep retrying, and how it backs off between attempts, as configured.
+#[derive(Clone, Copy, Debug)]
+pub struct ReadRetry {
+    pub timeout: Duration,
+    pub min_delay: Duration,
+    pub max_delay: Duration,
+}
+
+impl ReadRetry {
+    pub fn from_config(config: &EtcdConfig) -> Self {
+        Self {
+            timeout: config.read_retry_timeout,
+            min_delay: config.retry_min_delay,
+            max_delay: config.retry_max_delay,
+        }
+    }
+
+    /// The instant a read starting now gives up.
+    pub fn deadline(&self) -> Result<Instant, ShardManagerError> {
+        Instant::now().checked_add(self.timeout).ok_or_else(|| {
+            ShardManagerError::Internal(
+                "Configured etcd read retry timeout exceeds the clock range".to_string(),
+            )
+        })
+    }
 }
 
 /// What ends a retry loop that has nothing else to stop it.
