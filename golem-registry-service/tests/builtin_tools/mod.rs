@@ -15,7 +15,7 @@ use golem_registry_service::config::{
     ComponentCompilationConfig, LoginConfig, RegistryServiceConfig,
 };
 use golem_registry_service::services::builtin_tool_provisioner::{
-    BuiltinToolDescriptor, provision_descriptors,
+    BuiltinToolDescriptor, BuiltinToolFile, provision_descriptors,
 };
 use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::model::auth::AuthCtx;
@@ -81,15 +81,21 @@ async fn provisions_component_tool_release_idempotently_and_rejects_mismatch_wit
     assert!(renamed_tools > 0);
     let wasm = Box::leak(wasm.into_boxed_slice());
     let files_archive_bytes = zip_bytes(&[("tool-data.txt", b"embedded tool data")]).await;
+    let files = Box::leak(
+        vec![BuiltinToolFile {
+            archive_path: "tool-data.txt",
+            target_path: "/builtin/tool-data.txt",
+            permissions: AgentFilePermissions::ReadOnly,
+        }]
+        .into_boxed_slice(),
+    );
     let descriptor = BuiltinToolDescriptor {
         component_name: "builtin-tool-assets-test",
         tool_name: "assetfile",
         release_version: "6.1.0",
         wasm_bytes: wasm,
         files_archive_bytes: Some(files_archive_bytes),
-        files_manifest_bytes: Some(
-            br#"[{"archivePath":"tool-data.txt","targetPath":"/builtin/tool-data.txt","permissions":"read-only"}]"#,
-        ),
+        files,
     };
     let auth = AuthCtx::system();
 
@@ -272,7 +278,7 @@ async fn changed_component_creates_a_revision_without_repointing_the_old_release
         release_version: "7.2.0",
         wasm_bytes: first_wasm,
         files_archive_bytes: None,
-        files_manifest_bytes: None,
+        files: &[],
     };
     let second = BuiltinToolDescriptor {
         component_name: first.component_name,
@@ -280,7 +286,7 @@ async fn changed_component_creates_a_revision_without_repointing_the_old_release
         release_version: "7.3.0",
         wasm_bytes: changed_wasm,
         files_archive_bytes: None,
-        files_manifest_bytes: None,
+        files: &[],
     };
 
     provision(&services, owner, std::slice::from_ref(&first)).await;
@@ -352,7 +358,7 @@ async fn same_artifact_adds_missing_tool_with_complete_metadata_and_is_retry_saf
         release_version: "8.2.0",
         wasm_bytes: wasm,
         files_archive_bytes: None,
-        files_manifest_bytes: None,
+        files: &[],
     };
     let second = BuiltinToolDescriptor {
         component_name: first.component_name,
@@ -360,7 +366,7 @@ async fn same_artifact_adds_missing_tool_with_complete_metadata_and_is_retry_saf
         release_version: first.release_version,
         wasm_bytes: wasm,
         files_archive_bytes: None,
-        files_manifest_bytes: None,
+        files: &[],
     };
 
     provision(&services, owner, std::slice::from_ref(&first)).await;
