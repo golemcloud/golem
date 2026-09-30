@@ -15,6 +15,7 @@
 use super::*;
 use crate::filesystem_snapshot::{InMemorySnapshotStore, SpacedTimes};
 use crate::services::agent_filesystem::RestoreTree;
+use crate::services::golem_config::FilesystemSnapshotUploadValues;
 use async_trait::async_trait;
 use futures::StreamExt as _;
 use golem_common::model::RetryConfig;
@@ -410,22 +411,29 @@ fn retry(max_attempts: u32) -> RetryConfig {
     }
 }
 
+fn values(
+    max_uploads: usize,
+    max_restores: usize,
+    max_attempts: u32,
+) -> FilesystemSnapshotUploadValues {
+    FilesystemSnapshotUploadValues {
+        max_concurrent_uploads: max_uploads,
+        max_concurrent_restores: max_restores,
+        confirmation_wait: Duration::from_secs(60),
+        store_check_limit: Duration::from_secs(5),
+        capture_wait: Duration::from_secs(5),
+        retained_periodic_snapshots: 2,
+        retained_update_snapshots: 2,
+        upload_retry: retry(max_attempts),
+    }
+}
+
 fn settings(
     max_uploads: usize,
     max_restores: usize,
     max_attempts: u32,
 ) -> FilesystemSnapshotUploadConfig {
-    FilesystemSnapshotUploadConfig::new(
-        max_uploads,
-        max_restores,
-        Duration::from_secs(60),
-        Duration::from_secs(5),
-        Duration::from_secs(5),
-        2,
-        2,
-        retry(max_attempts),
-    )
-    .unwrap()
+    FilesystemSnapshotUploadConfig::new(values(max_uploads, max_restores, max_attempts)).unwrap()
 }
 
 /// A service over `store` with `settings`, and room on the volume.
@@ -655,17 +663,11 @@ fn an_error_that_allows_no_retry_ends_the_job_after_one_attempt() {
 /// and whether the store holds each older one.
 async fn after_older_uploads(outcome: ConfirmOutcome) -> (Vec<String>, String, bool, Vec<bool>) {
     let store = Arc::new(ScriptedStore::default());
-    let mut settings = settings(4, 4, 1);
-    settings = FilesystemSnapshotUploadConfig::new(
-        settings.max_concurrent_uploads().get(),
-        settings.max_concurrent_restores().get(),
-        settings.confirmation_wait(),
-        settings.store_check_limit(),
-        settings.capture_wait(),
-        3,
-        2,
-        settings.upload_retry().clone(),
-    )
+    let settings = FilesystemSnapshotUploadConfig::new(FilesystemSnapshotUploadValues {
+        retained_periodic_snapshots: 3,
+        retained_update_snapshots: 2,
+        ..values(4, 4, 1)
+    })
     .unwrap();
     let snapshots = service(&store, settings);
     let agent = agent_snapshots("dropped-confirmation");
@@ -1740,17 +1742,11 @@ async fn with_a_delete_held(
     Arc<Gate>,
 ) {
     let store = Arc::new(ScriptedStore::default());
-    let mut settings = settings(4, 4, 1);
-    settings = FilesystemSnapshotUploadConfig::new(
-        settings.max_concurrent_uploads().get(),
-        settings.max_concurrent_restores().get(),
-        settings.confirmation_wait(),
-        settings.store_check_limit(),
-        settings.capture_wait(),
-        1,
-        1,
-        settings.upload_retry().clone(),
-    )
+    let settings = FilesystemSnapshotUploadConfig::new(FilesystemSnapshotUploadValues {
+        retained_periodic_snapshots: 1,
+        retained_update_snapshots: 1,
+        ..values(4, 4, 1)
+    })
     .unwrap();
     let snapshots = service(&store, settings);
     let agent = agent_snapshots("held-delete");

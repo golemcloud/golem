@@ -2457,18 +2457,49 @@ fn default_filesystem_snapshot_upload_retry() -> RetryConfig {
     }
 }
 
+/// The values of a [`FilesystemSnapshotUploadConfig`] before [`FilesystemSnapshotUploadConfig::new`]
+/// checks them. The default holds the default of each setting.
+#[derive(Clone, Debug)]
+pub struct FilesystemSnapshotUploadValues {
+    pub max_concurrent_uploads: usize,
+    pub max_concurrent_restores: usize,
+    pub confirmation_wait: Duration,
+    pub store_check_limit: Duration,
+    pub capture_wait: Duration,
+    pub retained_periodic_snapshots: usize,
+    pub retained_update_snapshots: usize,
+    pub upload_retry: RetryConfig,
+}
+
+impl Default for FilesystemSnapshotUploadValues {
+    fn default() -> Self {
+        Self {
+            max_concurrent_uploads: DEFAULT_FILESYSTEM_SNAPSHOT_MAX_CONCURRENT_UPLOADS,
+            max_concurrent_restores: DEFAULT_FILESYSTEM_SNAPSHOT_MAX_CONCURRENT_RESTORES,
+            confirmation_wait: DEFAULT_FILESYSTEM_SNAPSHOT_CONFIRMATION_WAIT,
+            store_check_limit: DEFAULT_FILESYSTEM_SNAPSHOT_STORE_CHECK_LIMIT,
+            capture_wait: DEFAULT_FILESYSTEM_SNAPSHOT_CAPTURE_WAIT,
+            retained_periodic_snapshots: DEFAULT_FILESYSTEM_SNAPSHOT_RETAINED,
+            retained_update_snapshots: DEFAULT_FILESYSTEM_SNAPSHOT_RETAINED,
+            upload_retry: default_filesystem_snapshot_upload_retry(),
+        }
+    }
+}
+
 impl FilesystemSnapshotUploadConfig {
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        max_concurrent_uploads: usize,
-        max_concurrent_restores: usize,
-        confirmation_wait: Duration,
-        store_check_limit: Duration,
-        capture_wait: Duration,
-        retained_periodic_snapshots: usize,
-        retained_update_snapshots: usize,
-        upload_retry: RetryConfig,
-    ) -> Result<Self, String> {
+    /// Checks `values`: each count and each wait must be greater than zero, and the retry must
+    /// make an attempt with a growing delay.
+    pub fn new(values: FilesystemSnapshotUploadValues) -> Result<Self, String> {
+        let FilesystemSnapshotUploadValues {
+            max_concurrent_uploads,
+            max_concurrent_restores,
+            confirmation_wait,
+            store_check_limit,
+            capture_wait,
+            retained_periodic_snapshots,
+            retained_update_snapshots,
+            upload_retry,
+        } = values;
         let count = |value: usize, name: &str| {
             NonZeroUsize::new(value).ok_or_else(|| format!("{name} must be greater than zero"))
         };
@@ -2541,17 +2572,8 @@ impl FilesystemSnapshotUploadConfig {
 
 impl Default for FilesystemSnapshotUploadConfig {
     fn default() -> Self {
-        Self::new(
-            DEFAULT_FILESYSTEM_SNAPSHOT_MAX_CONCURRENT_UPLOADS,
-            DEFAULT_FILESYSTEM_SNAPSHOT_MAX_CONCURRENT_RESTORES,
-            DEFAULT_FILESYSTEM_SNAPSHOT_CONFIRMATION_WAIT,
-            DEFAULT_FILESYSTEM_SNAPSHOT_STORE_CHECK_LIMIT,
-            DEFAULT_FILESYSTEM_SNAPSHOT_CAPTURE_WAIT,
-            DEFAULT_FILESYSTEM_SNAPSHOT_RETAINED,
-            DEFAULT_FILESYSTEM_SNAPSHOT_RETAINED,
-            default_filesystem_snapshot_upload_retry(),
-        )
-        .expect("the default filesystem snapshot upload settings are valid")
+        Self::new(FilesystemSnapshotUploadValues::default())
+            .expect("the default filesystem snapshot upload settings are valid")
     }
 }
 
@@ -2730,16 +2752,16 @@ impl<'de> Deserialize<'de> for FilesystemSnapshotStoreConfig {
         D: Deserializer<'de>,
     {
         let raw = RawFilesystemSnapshotStoreConfig::deserialize(deserializer)?;
-        let uploads = FilesystemSnapshotUploadConfig::new(
-            raw.max_concurrent_uploads,
-            raw.max_concurrent_restores,
-            raw.confirmation_wait,
-            raw.store_check_limit,
-            raw.capture_wait,
-            raw.retained_periodic_snapshots,
-            raw.retained_update_snapshots,
-            raw.upload_retry,
-        )
+        let uploads = FilesystemSnapshotUploadConfig::new(FilesystemSnapshotUploadValues {
+            max_concurrent_uploads: raw.max_concurrent_uploads,
+            max_concurrent_restores: raw.max_concurrent_restores,
+            confirmation_wait: raw.confirmation_wait,
+            store_check_limit: raw.store_check_limit,
+            capture_wait: raw.capture_wait,
+            retained_periodic_snapshots: raw.retained_periodic_snapshots,
+            retained_update_snapshots: raw.retained_update_snapshots,
+            upload_retry: raw.upload_retry,
+        })
         .map_err(D::Error::custom)?;
         Self::new(
             &raw.repository_key,

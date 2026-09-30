@@ -29,8 +29,8 @@ use golem_test_framework::dsl::TestDsl;
 use golem_test_framework::model::IFSEntry;
 use golem_worker_executor::filesystem_snapshot_testing::TestFilesystemSnapshotStore;
 use golem_worker_executor::services::golem_config::{
-    FilesystemSnapshotStoreConfig, FilesystemSnapshotUploadConfig, FilesystemSnapshotsConfig,
-    SnapshotPolicy,
+    FilesystemSnapshotStoreConfig, FilesystemSnapshotUploadConfig, FilesystemSnapshotUploadValues,
+    FilesystemSnapshotsConfig, SnapshotPolicy,
 };
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
@@ -56,22 +56,22 @@ const AGENT_TYPE: &str = "SnapshotTree";
 /// The upload settings of the tests: one attempt for each save, so an injected failure ends the
 /// upload at once, and a short wait of a start for an upload.
 fn uploads(confirmation_wait: Duration) -> FilesystemSnapshotUploadConfig {
-    FilesystemSnapshotUploadConfig::new(
-        4,
-        4,
+    FilesystemSnapshotUploadConfig::new(FilesystemSnapshotUploadValues {
+        max_concurrent_uploads: 4,
+        max_concurrent_restores: 4,
         confirmation_wait,
-        Duration::from_secs(5),
-        Duration::from_secs(5),
-        2,
-        2,
-        golem_common::model::RetryConfig {
+        store_check_limit: Duration::from_secs(5),
+        capture_wait: Duration::from_secs(5),
+        retained_periodic_snapshots: 2,
+        retained_update_snapshots: 2,
+        upload_retry: golem_common::model::RetryConfig {
             max_attempts: 1,
             min_delay: Duration::from_millis(10),
             max_delay: Duration::from_millis(10),
             multiplier: 2.0,
             max_jitter_factor: None,
         },
-    )
+    })
     .expect("valid upload settings")
 }
 
