@@ -126,24 +126,17 @@ pub(super) struct RunningJob {
     pub(super) retention_stop: CancellationToken,
 }
 
-/// An admitted job.
-#[derive(Debug)]
-pub(super) struct Admitted {
-    pub(super) id: JobId,
-    /// Stops the deletes of the job after its save. It is a child of the stop of the job.
-    pub(super) retention_stop: CancellationToken,
-}
-
 /// Admits a job with `name` for `agent`, in the order room, delete of all snapshots, running job.
-/// `stop` stops the job, and `room` tells whether the volume has room for a capture. The stop of
-/// the deletes of the job is made here, as a child of `stop`.
+/// `stop` stops the job, `retention_stop` stops its deletes after its save, and `room` tells
+/// whether the volume has room for a capture. Gives the next state and the job, or the refusal.
 pub(super) fn admit(
-    state: &mut State,
+    mut state: State,
     agent: &AgentSnapshots,
     name: &FilesystemSnapshotName,
     stop: CancellationToken,
+    retention_stop: CancellationToken,
     room: bool,
-) -> Result<Admitted, Refusal> {
+) -> (State, Result<JobId, Refusal>) {
     let running = state.jobs.get(agent).map(|job| RunningJob {
         id: job.id,
         retention_stop: job.retention_stop.clone(),
@@ -158,11 +151,10 @@ pub(super) fn admit(
         None
     };
     if let Some(skip) = skip {
-        return Err(Refusal { skip, running });
+        return (state, Err(Refusal { skip, running }));
     }
     state.last_job += 1;
     let id = state.last_job;
-    let retention_stop = stop.child_token();
     state.jobs.insert(
         agent.clone(),
         Job {
@@ -170,49 +162,56 @@ pub(super) fn admit(
             name: name.clone(),
             phase: JobPhase::Admitted,
             stop,
-            retention_stop: retention_stop.clone(),
+            retention_stop,
             waiters: 0,
         },
     );
-    Ok(Admitted { id, retention_stop })
+    (state, Ok(id))
 }
 
 /// The job `id` has started saving: it got a slot of the uploads. The phase only moves forward.
-pub(super) fn saving(state: &mut State, agent: &AgentSnapshots, id: JobId) {
-    if let Some(job) = live(state, agent, id)
+pub(super) fn saving(mut state: State, agent: &AgentSnapshots, id: JobId) -> State {
+    if let Some(job) = live(&mut state, agent, id)
         && job.phase == JobPhase::Admitted
     {
         job.phase = JobPhase::Saving;
     }
+    state
 }
 
 /// The job `id` decided. The first decision stays.
-pub(super) fn decide(state: &mut State, agent: &AgentSnapshots, id: JobId, decision: JobDecision) {
-    if let Some(job) = live(state, agent, id)
+pub(super) fn decide(
+    mut state: State,
+    agent: &AgentSnapshots,
+    id: JobId,
+    decision: JobDecision,
+) -> State {
+    if let Some(job) = live(&mut state, agent, id)
         && !matches!(job.phase, JobPhase::Decided(_))
     {
         job.phase = JobPhase::Decided(decision);
     }
+    state
 }
 
-/// A delete of all snapshots of `agent` is queued. Gives the stop of the job of the agent, when one
-/// runs.
+/// A delete of all snapshots of `agent` is queued. Gives the next state and the stop of the job
+/// of the agent, when one runs.
 pub(super) fn delete_all_snapshots(
-    state: &mut State,
+    mut state: State,
     agent: &AgentSnapshots,
-) -> Option<CancellationToken> {
+) -> (State, Option<CancellationToken>) {
     let stop = state.jobs.get(agent).map(|job| job.stop.clone());
     state
         .deleting
         .entry(agent.clone())
         .and_modify(|count| *count = count.saturating_add(1))
         .or_insert(NonZeroU32::MIN);
-    stop
+    (state, stop)
 }
 
 /// A delete of all snapshots of `agent` ended. The last one frees the agent and the ended decision
 /// of the agent.
-pub(super) fn all_snapshots_deleted(state: &mut State, agent: &AgentSnapshots) {
+pub(super) fn all_snapshots_deleted(mut state: State, agent: &AgentSnapshots) -> State {
     let left = state
         .deleting
         .get(agent)
@@ -226,15 +225,16 @@ pub(super) fn all_snapshots_deleted(state: &mut State, agent: &AgentSnapshots) {
         }
     }
     state.ended.remove(agent);
+    state
 }
 
-/// The live job `id` of `agent`.
+/// The live job `id` of `agent` in a state that a rule owns.
 fn live<'a>(state: &'a mut State, agent: &AgentSnapshots, id: JobId) -> Option<&'a mut Job> {
     state.jobs.get_mut(agent).filter(|job| job.id == id)
 }
 
 /// Frees the agent of the job `id`, and keeps its decision while starts wait for it.
-pub(super) fn end(state: &mut State, agent: &AgentSnapshots, id: JobId) {
+pub(super) fn end(mut state: State, agent: &AgentSnapshots, id: JobId) -> State {
     if state.jobs.get(agent).is_some_and(|job| job.id == id)
         && let Some(job) = state.jobs.remove(agent)
         && let Some(waiters) = NonZeroU32::new(job.waiters)
@@ -252,17 +252,19 @@ pub(super) fn end(state: &mut State, agent: &AgentSnapshots, id: JobId) {
             },
         );
     }
+    state
 }
 
 /// A start waits only for a job of the agent with the name that has started saving and has not
 /// decided. It then registers as a waiter in the same transition and gets the job. A
-/// start that does not wait gets the decision of the job with the name, when known.
+/// start that does not wait gets the decision of the job with the name, when known. Gives the
+/// next state and the answer.
 pub(super) fn start_wait(
-    state: &mut State,
+    mut state: State,
     agent: &AgentSnapshots,
     name: &FilesystemSnapshotName,
-) -> Result<JobId, Option<JobDecision>> {
-    match state.jobs.get_mut(agent).filter(|job| &job.name == name) {
+) -> (State, Result<JobId, Option<JobDecision>>) {
+    let answer = match state.jobs.get_mut(agent).filter(|job| &job.name == name) {
         Some(job) => match job.phase {
             JobPhase::Saving => {
                 job.waiters += 1;
@@ -272,14 +274,15 @@ pub(super) fn start_wait(
             JobPhase::Admitted => Err(None),
         },
         None => Err(None),
-    }
+    };
+    (state, answer)
 }
 
 /// Takes one waiter from the job `id`, live or ended.
-pub(super) fn unwatch(state: &mut State, agent: &AgentSnapshots, id: JobId) {
-    if let Some(job) = live(state, agent, id) {
+pub(super) fn unwatch(mut state: State, agent: &AgentSnapshots, id: JobId) -> State {
+    if let Some(job) = live(&mut state, agent, id) {
         job.waiters = job.waiters.saturating_sub(1);
-        return;
+        return state;
     }
     let left = state
         .ended
@@ -297,6 +300,7 @@ pub(super) fn unwatch(state: &mut State, agent: &AgentSnapshots, id: JobId) {
         }
         None => {}
     }
+    state
 }
 
 /// The decision of the job `id` of `agent`, or `None` while it runs undecided. A job that ended
@@ -507,13 +511,68 @@ mod tests {
         ))
     }
 
+    /// Runs the rule `rule` on the state in `state`, puts its next state back, and gives its
+    /// answer, as the registry does.
+    fn step<T>(state: &mut State, rule: impl FnOnce(State) -> (State, T)) -> T {
+        let (next, answer) = rule(std::mem::take(state));
+        *state = next;
+        answer
+    }
+
+    fn saving(state: &mut State, agent: &AgentSnapshots, id: JobId) {
+        step(state, |state| (super::saving(state, agent, id), ()))
+    }
+
+    fn decide(state: &mut State, agent: &AgentSnapshots, id: JobId, decision: JobDecision) {
+        step(state, |state| {
+            (super::decide(state, agent, id, decision), ())
+        })
+    }
+
+    fn delete_all_snapshots(
+        state: &mut State,
+        agent: &AgentSnapshots,
+    ) -> Option<CancellationToken> {
+        step(state, |state| super::delete_all_snapshots(state, agent))
+    }
+
+    fn all_snapshots_deleted(state: &mut State, agent: &AgentSnapshots) {
+        step(state, |state| {
+            (super::all_snapshots_deleted(state, agent), ())
+        })
+    }
+
+    fn unwatch(state: &mut State, agent: &AgentSnapshots, id: JobId) {
+        step(state, |state| (super::unwatch(state, agent, id), ()))
+    }
+
+    fn admit(
+        state: &mut State,
+        agent: &AgentSnapshots,
+        name: &FilesystemSnapshotName,
+        stop: CancellationToken,
+        retention_stop: CancellationToken,
+        room: bool,
+    ) -> Result<JobId, Refusal> {
+        step(state, |state| {
+            super::admit(state, agent, name, stop, retention_stop, room)
+        })
+    }
+
     fn try_admit(
         state: &mut State,
         agent: &AgentSnapshots,
         name: &FilesystemSnapshotName,
         room: bool,
     ) -> Result<JobId, Refusal> {
-        admit(state, agent, name, CancellationToken::new(), room).map(|admitted| admitted.id)
+        admit(
+            state,
+            agent,
+            name,
+            CancellationToken::new(),
+            CancellationToken::new(),
+            room,
+        )
     }
 
     fn admitted(state: &mut State, agent: &AgentSnapshots, name: &FilesystemSnapshotName) -> JobId {
@@ -527,7 +586,7 @@ mod tests {
     }
 
     fn end_job(state: &mut State, agent: &AgentSnapshots, id: JobId) {
-        end(state, agent, id);
+        step(state, |state| (end(state, agent, id), ()))
     }
 
     fn wait(
@@ -535,7 +594,7 @@ mod tests {
         agent: &AgentSnapshots,
         name: &FilesystemSnapshotName,
     ) -> Result<JobId, Option<JobDecision>> {
-        start_wait(state, agent, name)
+        step(state, |state| start_wait(state, agent, name))
     }
 
     #[test]
@@ -887,16 +946,17 @@ mod tests {
     fn a_refused_admission_carries_the_retention_stop_of_the_running_job() {
         let mut state = State::default();
         let agent = agent_snapshots("retention-stop");
-        let other = agent_snapshots("stopped-with-the-job");
         let name = FilesystemSnapshotName::periodic();
         let stop = CancellationToken::new();
-        let other_stop = CancellationToken::new();
-        let retention_stop = admit(&mut state, &agent, &name, stop.clone(), true)
-            .map(|admitted| admitted.retention_stop)
-            .ok();
-        let other_retention_stop = admit(&mut state, &other, &name, other_stop.clone(), true)
-            .map(|admitted| admitted.retention_stop)
-            .ok();
+        let retention_stop = stop.child_token();
+        let admitted = admit(
+            &mut state,
+            &agent,
+            &name,
+            stop.clone(),
+            retention_stop.clone(),
+            true,
+        );
 
         let refusal = try_admit(&mut state, &agent, &name, true).err();
         if let Some(running) = refusal
@@ -905,15 +965,14 @@ mod tests {
         {
             running.retention_stop.cancel();
         }
-        other_stop.cancel();
 
+        assert!(admitted.is_ok());
         assert_eq!(
             refusal.map(|refusal| refusal.skip),
             Some(SnapshotSkip::UploadInFlight)
         );
-        assert!(retention_stop.is_some_and(|token| token.is_cancelled()));
+        assert!(retention_stop.is_cancelled());
         assert!(!stop.is_cancelled());
-        assert!(other_retention_stop.is_some_and(|token| token.is_cancelled()));
     }
 
     fn running(id: JobId) -> RunningJob {

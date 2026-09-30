@@ -42,11 +42,17 @@ pub(super) struct Registry {
 }
 
 impl Registry {
-    /// Applies the transition `f`, which is the transition `transition` of [`rules`], and wakes
-    /// the waiters when [`rules::wakes`] says so. No lock is held across an await, so the state
-    /// of a poisoned lock are used as they are.
-    fn apply<T>(&self, transition: Transition, f: impl FnOnce(&mut State) -> T) -> T {
-        let answer = f(&mut self.state.lock().unwrap_or_else(PoisonError::into_inner));
+    /// Runs `rule`, the rule of the transition `transition` of [`rules`], on the state: the state
+    /// moves out of the lock into the rule, and the next state that the rule gives moves back.
+    /// Then it wakes the waiters when [`rules::wakes`] says so. No lock is held across an await,
+    /// so the state of a poisoned lock is used as it is.
+    fn apply<T>(&self, transition: Transition, rule: impl FnOnce(State) -> (State, T)) -> T {
+        let answer = {
+            let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+            let (next, answer) = rule(std::mem::take(&mut *state));
+            *state = next;
+            answer
+        };
         if rules::wakes(transition) {
             self.changed.send_modify(|()| {});
         }
@@ -97,8 +103,8 @@ pub(super) struct JobTicket {
 
 impl JobTicket {
     /// Admits a job with `name` for `agent`. `stop` stops the job, and `room` tells whether the
-    /// volume has room for a capture. The stop of the deletes of the job is a child of `stop`,
-    /// and the state of the job holds the same token.
+    /// volume has room for a capture. This is the only place that makes the stop of the deletes
+    /// of a job: a child of `stop`, which the state of the job holds too.
     pub(super) fn admit(
         registry: &Arc<Registry>,
         agent: &AgentSnapshots,
@@ -106,10 +112,17 @@ impl JobTicket {
         stop: CancellationToken,
         room: bool,
     ) -> Result<Self, Refusal> {
-        let rules::Admitted { id, retention_stop } = registry
-            .apply(Transition::Admit, |state| {
-                rules::admit(state, agent, name, stop.clone(), room)
-            })?;
+        let retention_stop = stop.child_token();
+        let id = registry.apply(Transition::Admit, |state| {
+            rules::admit(
+                state,
+                agent,
+                name,
+                stop.clone(),
+                retention_stop.clone(),
+                room,
+            )
+        })?;
         Ok(Self {
             registry: Arc::clone(registry),
             agent: agent.clone(),
@@ -122,14 +135,14 @@ impl JobTicket {
     /// The job has started saving: it got a slot of the uploads.
     pub(super) fn saving(&self) {
         self.registry.apply(Transition::Saving, |state| {
-            rules::saving(state, &self.agent, self.id)
+            (rules::saving(state, &self.agent, self.id), ())
         });
     }
 
     /// Records the decision of the job. The first decision stays.
     pub(super) fn decide(&self, decision: JobDecision) {
         self.registry.apply(Transition::Decide, |state| {
-            rules::decide(state, &self.agent, self.id, decision)
+            (rules::decide(state, &self.agent, self.id, decision), ())
         });
     }
 
@@ -152,7 +165,7 @@ impl JobTicket {
 impl Drop for JobTicket {
     fn drop(&mut self) {
         self.registry.apply(Transition::End, |state| {
-            rules::end(state, &self.agent, self.id)
+            (rules::end(state, &self.agent, self.id), ())
         });
     }
 }
@@ -192,7 +205,7 @@ impl Drop for DeleteAllTicket {
     fn drop(&mut self) {
         self.registry
             .apply(Transition::AllSnapshotsDeleted, |state| {
-                rules::all_snapshots_deleted(state, &self.agent)
+                (rules::all_snapshots_deleted(state, &self.agent), ())
             });
     }
 }
@@ -235,7 +248,7 @@ impl WaitTicket {
 impl Drop for WaitTicket {
     fn drop(&mut self) {
         self.registry.apply(Transition::Unwatch, |state| {
-            rules::unwatch(state, &self.agent, self.id)
+            (rules::unwatch(state, &self.agent, self.id), ())
         });
     }
 }
@@ -281,5 +294,28 @@ mod tests {
                 Some(JobDecision::Stopped)
             )
         );
+    }
+
+    #[test]
+    fn the_stop_of_the_deletes_of_a_job_is_a_child_of_its_stop_and_the_state_holds_it() {
+        let registry = Arc::new(Registry::default());
+        let agent = AgentSnapshots::agent(&OwnedAgentId::new(
+            EnvironmentId::new(),
+            &AgentId {
+                component_id: ComponentId::new(),
+                agent_id: "retention-stop".to_string(),
+            },
+        ));
+        let name = FilesystemSnapshotName::periodic();
+        let stop = CancellationToken::new();
+        let job = JobTicket::admit(&registry, &agent, &name, stop.clone(), true).expect("admitted");
+        let refused = JobTicket::admit(&registry, &agent, &name, CancellationToken::new(), true)
+            .err()
+            .and_then(|refusal| refusal.running);
+
+        stop.cancel();
+
+        assert!(job.retention_stop().is_cancelled());
+        assert!(refused.is_some_and(|running| running.retention_stop.is_cancelled()));
     }
 }
