@@ -239,10 +239,6 @@ impl OplogArchive for RecordingArchive {
     fn fence(&self) -> Option<OplogFence> {
         self.inner.fence()
     }
-
-    async fn release(&self) {
-        self.inner.release().await
-    }
 }
 
 pub(super) fn make_agent_metadata(
@@ -461,10 +457,6 @@ impl OplogArchive for BlockingArchive {
 
     fn fence(&self) -> Option<OplogFence> {
         self.inner.fence()
-    }
-
-    async fn release(&self) {
-        self.inner.release().await
     }
 }
 
@@ -10674,18 +10666,26 @@ async fn a_stale_archive_level_handle_cannot_trim_the_owners_level(_tracing: &Tr
 }
 
 #[test]
-async fn a_fully_archived_ephemeral_oplog_leaves_no_epoch_record_behind(_tracing: &Tracing) {
+async fn an_older_ephemeral_handle_stays_fenced_after_a_newer_owner_archives(_tracing: &Tracing) {
     let tempdir = tempfile::TempDir::new().unwrap();
     for (backend, storage) in archive_storages(&tempdir).await {
         let executor = archiving_executor(&storage, 1, true, None).await;
         let owned_agent_id = archiving_agent("archived-ephemeral");
-        let oplog = executor.open_ephemeral(&owned_agent_id, 5).await;
-        oplog.add(OplogEntry::suspend().rounded()).await.unwrap();
-        oplog.commit(CommitLevel::Always).await.unwrap();
 
-        // Archived as at the end of the instance: every entry moves to the blob layer, and the
-        // emptied level forgets the generation it recorded.
-        while EphemeralOplog::try_archive_blocking(&oplog).await == Some(true) {}
+        // Each generation writes and is archived as at the end of its instance: every entry moves
+        // to the blob layer, and the emptied level is deleted.
+        let older = executor.open_ephemeral(&owned_agent_id, 5).await;
+        older.add(OplogEntry::suspend().rounded()).await.unwrap();
+        older.commit(CommitLevel::Always).await.unwrap();
+        while EphemeralOplog::try_archive_blocking(&older).await == Some(true) {}
+
+        let newer = executor.open_ephemeral(&owned_agent_id, 6).await;
+        newer.add(OplogEntry::exited().rounded()).await.unwrap();
+        newer.commit(CommitLevel::Always).await.unwrap();
+        while EphemeralOplog::try_archive_blocking(&newer).await == Some(true) {}
+
+        // The emptied level keeps the newer generation, so the older handle's next write is
+        // refused.
         assert!(
             !CompressedOplogArchiveService::new(storage.clone(), 1, RetryConfig::default())
                 .exists(&owned_agent_id, AgentMode::Ephemeral)
@@ -10693,26 +10693,15 @@ async fn a_fully_archived_ephemeral_oplog_leaves_no_epoch_record_behind(_tracing
             "{backend}"
         );
         assert!(
-            !level_refuses(&storage, &owned_agent_id, AgentMode::Ephemeral, 1, 1).await,
-            "{backend}: the emptied level kept the epoch record of an archived oplog"
+            level_refuses(&storage, &owned_agent_id, AgentMode::Ephemeral, 1, 5).await,
+            "{backend}: the emptied level forgot the newer generation"
         );
-        assert_eq!(
-            oplog.read_exact(OplogIndex::INITIAL, 1).await.len(),
-            1,
-            "{backend}"
-        );
-
-        // The handle can still write the level: it records its generation again first.
-        oplog.add(OplogEntry::exited().rounded()).await.unwrap();
-        oplog.commit(CommitLevel::Always).await.unwrap();
-        assert!(
-            level_refuses(&storage, &owned_agent_id, AgentMode::Ephemeral, 1, 4).await,
-            "{backend}"
-        );
-        assert_eq!(
-            oplog.read_exact(OplogIndex::INITIAL, 2).await.len(),
-            2,
-            "{backend}"
-        );
+        let refused = async {
+            older.add(OplogEntry::exited().rounded()).await?;
+            older.commit(CommitLevel::Always).await
+        }
+        .await;
+        assert!(matches!(refused, Err(OplogError::Fenced(_))), "{backend}");
+        assert_fenced_by(backend, older.fence(), 5, Some(6));
     }
 }

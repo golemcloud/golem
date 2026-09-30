@@ -177,11 +177,6 @@ pub trait OplogArchive: Debug {
     fn fence(&self) -> Option<OplogFence> {
         None
     }
-
-    /// Forgets the writer generation this archive recorded at open, once it holds no entries, for
-    /// an oplog that is fully archived: the record would otherwise outlive the emptied archive. A
-    /// later write through this handle records the generation again first.
-    async fn release(&self) {}
 }
 
 /// The first refusal any of `layers` has latched.
@@ -278,10 +273,6 @@ impl OplogArchive for InstrumentedOplogArchive {
 
     fn fence(&self) -> Option<OplogFence> {
         self.inner.fence()
-    }
-
-    async fn release(&self) {
-        self.inner.release().await
     }
 }
 
@@ -1660,10 +1651,6 @@ impl OplogArchive for WrappedOplogArchive {
 
     fn fence(&self) -> Option<OplogFence> {
         self.archive.fence()
-    }
-
-    async fn release(&self) {
-        self.archive.release().await
     }
 }
 

@@ -386,12 +386,11 @@ owner leaves by:
   primary oplog, or at an ephemeral oplog's first level, records nothing on the remaining levels:
   the handle is finished and never writes them. An emptied level is
   removed with `delete_empty_with_epoch`, which keeps its epoch record: the owner keeps writing
-  the level, and an older owner is still refused. Once an ephemeral oplog is fully archived to
-  its last layer, `EphemeralOplog::archive` releases the emptied levels (`OplogArchive::release`,
-  a fenced `delete_with_epoch`), so no record outlives its data; a later write through the same
-  handle records the epoch again first. Deleting the agent removes the records with it,
-  so a transfer still in flight on an older owner cannot write the deleted agent's archive back.
-  An ephemeral oplog's writer task latches a refused batch, and the next add or commit fails with
+  the level, and an older owner is still refused. A fully archived ephemeral oplog's emptied
+  levels keep their records too: removing one would leave nothing that remembers the newest
+  owner, and any older handle could claim the level again. Deleting the agent removes the
+  records with it, so a transfer still in flight on an older owner cannot write the deleted
+  agent's archive back. An ephemeral oplog's writer task latches a refused batch, and the next add or commit fails with
   it; the open-oplog cache replaces an ephemeral handle for an opener at a newer epoch, as it
   replaces a primary one. The blob archive layer has no conditional write and stays outside the
   fence.

@@ -590,20 +590,21 @@ impl IndexedStorage for InMemoryIndexedStorage {
         expected_epoch: Option<ShardEpoch>,
     ) -> Result<bool, IndexedStorageError> {
         let composite_key = Self::composite_key(namespace, key);
-        // The record's guard is held across the emptiness test and the removal, in the order an
-        // append takes them, so no fenced writer can add an entry in between.
+        // The record's guard and then the key's entry are held across the emptiness test and the
+        // removal, in the order a fenced append takes them, so no writer can add an entry in
+        // between: a fenced one waits on the record, an unfenced one on the entry.
         let record = self.key_epochs.entry_async(composite_key.clone()).await;
         if let Some(expected) = expected_epoch {
             self.check_record(key, expected, &record)?;
         }
-        let empty = self
-            .data
-            .read_async(&composite_key, |_, entries| entries.is_empty())
-            .await
-            .unwrap_or(true);
-        if empty {
-            self.data.remove_async(&composite_key).await;
-        }
+        let empty = match self.data.entry_async(composite_key).await {
+            scc::hash_map::Entry::Occupied(entries) if entries.get().is_empty() => {
+                let _ = entries.remove_entry();
+                true
+            }
+            scc::hash_map::Entry::Occupied(_) => false,
+            scc::hash_map::Entry::Vacant(_) => true,
+        };
         drop(record);
         Ok(empty)
     }
@@ -1525,5 +1526,84 @@ mod tests {
             .unwrap();
 
         check!(result == vec![(3, 300), (4, 400)]);
+    }
+
+    /// An unfenced append racing the delete of an emptied key lands either before the delete,
+    /// which then keeps the key, or after it, into a new key: an acknowledged entry is never
+    /// removed.
+    #[test]
+    fn an_unfenced_append_racing_delete_empty_is_never_lost() {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(4)
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let storage = std::sync::Arc::new(super::InMemoryIndexedStorage::new());
+            for round in 0..5000u64 {
+                let key = format!("delete-empty-race-{round}");
+                storage
+                    .append(
+                        "test",
+                        "append",
+                        "entry",
+                        primary_namespace(),
+                        &key,
+                        1,
+                        b"one".to_vec(),
+                        None,
+                    )
+                    .await
+                    .unwrap();
+                storage
+                    .drop_prefix("test", "drop_prefix", primary_namespace(), &key, 1, None)
+                    .await
+                    .unwrap();
+
+                let append = tokio::spawn({
+                    let storage = storage.clone();
+                    let key = key.clone();
+                    async move {
+                        storage
+                            .append(
+                                "test",
+                                "append",
+                                "entry",
+                                primary_namespace(),
+                                &key,
+                                2,
+                                b"two".to_vec(),
+                                None,
+                            )
+                            .await
+                    }
+                });
+                let delete = tokio::spawn({
+                    let storage = storage.clone();
+                    let key = key.clone();
+                    async move {
+                        storage
+                            .delete_empty_with_epoch(
+                                "test",
+                                "delete_empty",
+                                primary_namespace(),
+                                &key,
+                                None,
+                            )
+                            .await
+                    }
+                });
+                append.await.unwrap().unwrap();
+                delete.await.unwrap().unwrap();
+
+                check!(
+                    storage
+                        .length("test", "length", primary_namespace(), &key)
+                        .await
+                        .unwrap()
+                        == 1,
+                    "round {round}: an acknowledged append was removed"
+                );
+            }
+        });
     }
 }

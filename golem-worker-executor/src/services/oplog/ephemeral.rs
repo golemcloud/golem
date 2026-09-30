@@ -646,7 +646,6 @@ impl EphemeralOplog {
             source + 1 < last_movable
         } else {
             // Fully archived, and no transfer was enqueued to wait for
-            self.release_archive_layers().await;
             return false;
         };
 
@@ -654,21 +653,9 @@ impl EphemeralOplog {
             done_rx
                 .await
                 .expect("Failed to wait for the archiving to finish");
-            if !result {
-                self.release_archive_layers().await;
-            }
         }
 
         result
-    }
-
-    /// Forgets the writer generation each emptied archive layer recorded at open, once this oplog
-    /// has moved down to its last layer. Archiving runs with no live writer, so nothing refills
-    /// an emptied layer here; each record would otherwise outlive it, one per ephemeral agent.
-    async fn release_archive_layers(&self) {
-        for layer in &self.lower {
-            layer.release().await;
-        }
     }
 
     /// Spawns the background transfer fiber that processes `TransferFromLower`
