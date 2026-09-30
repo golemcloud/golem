@@ -950,7 +950,12 @@ impl Streaming for StreamingImpl {
 
         if matches!(
             mode.as_str(),
-            "marker-echo" | "trap" | "trap-after-clean-eof" | "declared-error"
+            "marker-echo"
+                | "trap"
+                | "trap-after-clean-eof"
+                | "declared-error"
+                | "explicit-stdout-failure"
+                | "finish-failure"
         ) {
             summary.output_closed = !write_chunk(&mut stdout, MARKER.to_vec()).await;
         }
@@ -998,6 +1003,15 @@ impl Streaming for StreamingImpl {
                         summary.bytes_read += chunk.len() as u64;
                     }
                 }
+                return Ok(summary);
+            }
+            "explicit-stdout-failure" => {
+                stdout
+                    .fail(ByteStreamFailure::Failed(
+                        "rust provider explicit stdout failure".to_string(),
+                    ))
+                    .await
+                    .expect("fail stdout explicitly");
                 return Ok(summary);
             }
             "hold-after-eof" => {
@@ -1089,7 +1103,7 @@ impl Streaming for StreamingImpl {
             panic!("deterministic streaming tool trap after clean stdout");
         }
 
-        let _ = stdout.finish().await;
+        summary.output_closed |= stdout.finish().await.is_err();
         Ok(summary)
     }
 

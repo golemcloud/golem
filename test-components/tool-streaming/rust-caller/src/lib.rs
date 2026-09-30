@@ -18,6 +18,38 @@ use std::io::{Read, Write};
 use streaming_tool_guest_client::{StreamSummary, StreamingClient, StreamingRunError};
 use typed_output_stream_tool_guest_client::TypedOutputStreamClient;
 
+#[allow(dead_code)]
+mod definition_owned_proxy {
+    use golem_rust::agentic::{InputStream, OutputStream};
+    use golem_rust::{FromSchema, FromWire, IntoSchema, IntoWire, WireSchema, tool_definition};
+
+    #[derive(Debug, Clone, IntoSchema, FromSchema, FromWire, IntoWire, WireSchema)]
+    pub struct StreamSummary {
+        pub chunks_read: u32,
+        pub bytes_read: u64,
+        pub output_closed: bool,
+    }
+
+    #[derive(Debug, Clone, golem_rust::ToolError)]
+    pub enum StreamingError {
+        #[tool_error(kind = "runtime-error", exit_code = 7)]
+        Declared { bytes_read: u64 },
+    }
+
+    #[tool_definition(version = "1.0.0")]
+    pub trait Streaming {
+        async fn run(
+            &self,
+            mode: String,
+            stdin: InputStream,
+            stdout: OutputStream,
+            principal: golem_rust::agentic::Principal,
+        ) -> Result<StreamSummary, StreamingError>;
+
+        async fn no_stream(&self, value: String) -> Result<String, StreamingError>;
+    }
+}
+
 #[unsafe(export_name = "_initialize")]
 pub extern "C" fn initialize_component_baseline_clock() {
     if std::env::var_os("FORBID_AGENT_CONSTRUCTION").is_some() {
@@ -231,6 +263,9 @@ pub trait ToolStreamingCaller {
         chunk_size: u32,
     ) -> StreamingBenchmarkResult;
     async fn collect(&self, mode: String, input: Vec<u8>, fragment_size: u32) -> StreamEvidence;
+    async fn rust_proxy_generated_parity(&self) -> Vec<String>;
+    async fn rust_reflected_generated_parity(&self, capable_path: String) -> Vec<String>;
+    async fn rust_provider_terminal_rows(&self) -> Vec<String>;
     async fn result_before_stdout(&self, mode: String) -> StreamEvidence;
     async fn started_invocation_contracts(
         &self,
@@ -815,6 +850,221 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         output
             .extend(read_tool_stdout(invocation.stdout.expect("streaming tool has stdout")).await);
         evidence(result, output)
+    }
+
+    async fn rust_proxy_generated_parity(&self) -> Vec<String> {
+        let generated_success = StreamingClient::default()
+            .no_stream("proxy-parity".to_string())
+            .await
+            .expect("invoke generated client success");
+        let proxy_success = definition_owned_proxy::StreamingClient::default()
+            .no_stream("proxy-parity".to_string())
+            .await
+            .expect("invoke definition-owned proxy success");
+
+        let generated_error = StreamingClient::default()
+            .no_stream("native-error".to_string())
+            .await
+            .expect_err("generated client observes declared error");
+        let proxy_error = definition_owned_proxy::StreamingClient::default()
+            .no_stream("native-error".to_string())
+            .await
+            .expect_err("definition-owned proxy observes declared error");
+
+        let generated_stream = StreamingClient::default()
+            .run("principal".to_string(), input_stream(Vec::new()))
+            .await
+            .expect("start generated streaming call")
+            .collect()
+            .await
+            .expect("collect generated streaming call");
+        let proxy_stream = definition_owned_proxy::StreamingClient::default()
+            .run("principal".to_string(), input_stream(Vec::new()))
+            .await
+            .expect("start definition-owned streaming call")
+            .collect()
+            .await
+            .expect("collect definition-owned streaming call");
+
+        assert_eq!(proxy_success, generated_success);
+        assert_eq!(format!("{proxy_error:?}"), format!("{generated_error:?}"));
+        assert_eq!(proxy_stream.stdout, generated_stream.stdout);
+        assert_eq!(
+            proxy_stream.result.bytes_read,
+            generated_stream.result.bytes_read
+        );
+        assert_eq!(
+            proxy_stream.result.output_closed,
+            generated_stream.result.output_closed
+        );
+
+        vec![
+            generated_success,
+            format!("{generated_error:?}"),
+            format!("{:?}", generated_stream.stdout),
+        ]
+    }
+
+    async fn rust_reflected_generated_parity(&self, capable_path: String) -> Vec<String> {
+        let generated = StreamingClient::default()
+            .no_stream("reflection-parity".to_string())
+            .await
+            .expect("invoke generated client");
+        let command = golem_rust::agentic::get_tool_type("streaming")
+            .expect("discover streaming tool")
+            .client()
+            .command(&["no-stream"])
+            .expect("resolve reflected no-stream command");
+        let reflected = command
+            .invoke_value(SchemaValue::Record {
+                fields: vec![SchemaValue::String("reflection-parity".to_string())],
+            })
+            .await
+            .expect("invoke reflected client")
+            .expect("no-stream returns a value");
+        let SchemaValue::String(reflected) = reflected else {
+            panic!("no-stream returns text")
+        };
+
+        let reflected_error = command
+            .invoke_value(SchemaValue::Record {
+                fields: vec![SchemaValue::String("native-error".to_string())],
+            })
+            .await
+            .expect_err("reflected client observes declared error");
+        let generated_error = StreamingClient::default()
+            .no_stream("native-error".to_string())
+            .await
+            .expect_err("generated client observes declared error");
+
+        let generated_stream = StreamingClient::default()
+            .run("principal".to_string(), input_stream(Vec::new()))
+            .await
+            .expect("start generated principal stream")
+            .collect()
+            .await
+            .expect("collect generated principal stream");
+        let stream_command = golem_rust::agentic::get_tool_type("streaming")
+            .expect("discover streaming tool")
+            .client()
+            .command(&["run"])
+            .expect("resolve reflected run command");
+        let mut reflected_stream = stream_command
+            .start_value(
+                SchemaValue::Record {
+                    fields: vec![SchemaValue::String("principal".to_string())],
+                },
+                Some(input_stream(Vec::new())),
+            )
+            .await
+            .expect("start reflected principal stream");
+        let reflected_output = read_tool_stdout(
+            reflected_stream
+                .stdout
+                .take()
+                .expect("reflected run has stdout"),
+        )
+        .await;
+        let reflected_result = reflected_stream
+            .result()
+            .await
+            .expect("reflected principal stream succeeds")
+            .expect("reflected run returns a structured result");
+
+        assert_eq!(reflected, generated);
+        assert!(format!("{reflected_error:?}").contains("declared"));
+        assert!(format!("{generated_error:?}").contains("Declared"));
+        assert_eq!(reflected_output, generated_stream.stdout.unwrap());
+        assert!(matches!(reflected_result, SchemaValue::Record { .. }));
+
+        let generated_capable = CapableStreamingClient::default()
+            .run_capable(capable_path.clone(), input_stream(Vec::new()))
+            .await
+            .expect("start generated capable stream")
+            .collect()
+            .await
+            .expect("collect generated capable stream");
+        let capable_command = golem_rust::agentic::get_tool_type("capable-streaming")
+            .expect("discover capable streaming tool")
+            .client()
+            .command(&["run-capable"])
+            .expect("resolve reflected capable command");
+        let mut reflected_capable = capable_command
+            .start_value(
+                SchemaValue::Record {
+                    fields: vec![SchemaValue::String(capable_path)],
+                },
+                Some(input_stream(Vec::new())),
+            )
+            .await
+            .expect("start reflected capable stream");
+        let reflected_capable_output = read_tool_stdout(
+            reflected_capable
+                .stdout
+                .take()
+                .expect("reflected capable call has stdout"),
+        )
+        .await;
+        let reflected_capable_result = reflected_capable
+            .result()
+            .await
+            .expect("reflected capable stream succeeds")
+            .expect("reflected capable call returns a structured result");
+        assert_eq!(reflected_capable_output, generated_capable.stdout.unwrap());
+        assert!(matches!(
+            reflected_capable_result,
+            SchemaValue::Record { .. }
+        ));
+        vec![
+            generated,
+            "declared".to_string(),
+            "stream-ended".to_string(),
+            "capability-stream-ended".to_string(),
+        ]
+    }
+
+    async fn rust_provider_terminal_rows(&self) -> Vec<String> {
+        let mut failed = StreamingClient::default()
+            .run(
+                "explicit-stdout-failure".to_string(),
+                input_stream(Vec::new()),
+            )
+            .await
+            .expect("start explicit stdout failure case");
+        let failed_prefix = first_chunk(&mut failed).await;
+        let failed_terminal = match failed
+            .stdout
+            .as_mut()
+            .expect("streaming tool has stdout")
+            .next()
+            .await
+        {
+            Some(Err(ByteStreamFailure::Failed(reason))) => reason,
+            other => panic!("expected explicit failed stdout terminal, got {other:?}"),
+        };
+        let failed_result = failed
+            .result()
+            .await
+            .expect("explicit stdout failure preserves structured success");
+
+        let mut abandoned = StreamingClient::default()
+            .run("finish-failure".to_string(), input_stream(Vec::new()))
+            .await
+            .expect("start finish failure case");
+        let abandoned_prefix = first_chunk(&mut abandoned).await;
+        drop(abandoned.stdout.take().expect("streaming tool has stdout"));
+        let abandoned_result = abandoned
+            .result()
+            .await
+            .expect("finish failure preserves structured success");
+
+        vec![
+            String::from_utf8(failed_prefix).expect("marker is UTF-8"),
+            failed_terminal,
+            failed_result.output_closed.to_string(),
+            String::from_utf8(abandoned_prefix).expect("marker is UTF-8"),
+            abandoned_result.output_closed.to_string(),
+        ]
     }
 
     async fn benchmark_producer(
