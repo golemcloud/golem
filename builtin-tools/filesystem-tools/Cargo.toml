@@ -4,7 +4,7 @@ members = ["."]
 
 [package]
 name = "golem_filesystem_tools"
-version = "0.3.0"
+version = "0.1.0"
 edition = "2024"
 
 [lib]
@@ -16,4 +16,7 @@ lto = true
 strip = "symbols"
 
 [dependencies]
+globset = { version = "0.4.20", default-features = false }
 golem-rust = { path = "../../sdks/rust/golem-rust", features = ["export_golem_agentic"] }
+regex = { version = "1.13.1", default-features = false, features = ["std", "perf", "unicode"] }
+sha2 = "0.10.9"

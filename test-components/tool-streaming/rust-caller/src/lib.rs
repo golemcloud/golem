@@ -18,6 +18,9 @@ use std::io::{Read, Write};
 use streaming_tool_guest_client::{StreamSummary, StreamingClient, StreamingRunError};
 use typed_output_stream_tool_guest_client::TypedOutputStreamClient;
 
+#[path = "../../../../builtin-tools/filesystem-tools/src/bounded_stream.rs"]
+mod bounded_stream;
+
 #[unsafe(export_name = "_initialize")]
 pub extern "C" fn initialize_component_baseline_clock() {
     if std::env::var_os("FORBID_AGENT_CONSTRUCTION").is_some() {
@@ -127,6 +130,155 @@ struct RawEditFileResult {
     bytes_after: u64,
 }
 
+#[derive(IntoSchema, FromSchema)]
+#[schema(named = "golem_filesystem_tools.DirectoryFrame")]
+struct RawDirectoryFrame {
+    after: Option<String>,
+}
+
+#[derive(IntoSchema, FromSchema)]
+#[schema(named = "golem_filesystem_tools.TreeCursor")]
+struct RawTreeCursor {
+    frames: Vec<RawDirectoryFrame>,
+}
+
+#[derive(IntoSchema, FromSchema)]
+#[schema(named = "golem_filesystem_tools.LsQuery")]
+struct RawLsQuery {
+    path: String,
+    max_depth: u32,
+    glob: Option<String>,
+    limit: u32,
+}
+
+#[derive(IntoSchema, FromSchema)]
+#[schema(named = "golem_filesystem_tools.LsCursor")]
+struct RawLsCursor {
+    query: RawLsQuery,
+    tree: RawTreeCursor,
+}
+
+#[derive(IntoSchema)]
+#[schema(rename_all = "kebab-case")]
+struct RawLsInput {
+    path: String,
+    max_depth: Option<u32>,
+    glob: Option<String>,
+    limit: Option<u32>,
+    cursor: Option<RawLsCursor>,
+}
+
+#[derive(FromSchema)]
+#[schema(named = "golem_filesystem_tools.EntryKind")]
+enum RawEntryKind {
+    File(u64),
+    Directory,
+    Symlink,
+    Other,
+}
+
+#[derive(FromSchema)]
+#[schema(named = "golem_filesystem_tools.LsEntry")]
+struct RawLsEntry {
+    path: String,
+    kind: RawEntryKind,
+}
+
+#[derive(FromSchema)]
+#[schema(named = "golem_filesystem_tools.DiagnosticKind")]
+enum RawDiagnosticKind {
+    Io,
+    Binary,
+    Unsupported,
+    SymlinkSkipped,
+    DirectoryTooLarge,
+    FileTooLarge,
+    LineTooLong,
+    PathTooLong,
+}
+
+#[derive(FromSchema)]
+#[schema(named = "golem_filesystem_tools.DiscoveryDiagnostic")]
+struct RawDiscoveryDiagnostic {
+    path: String,
+    kind: RawDiagnosticKind,
+    message: String,
+}
+
+#[derive(FromSchema)]
+struct RawLsResult {
+    entries: Vec<RawLsEntry>,
+    diagnostics: Vec<RawDiscoveryDiagnostic>,
+    next_cursor: Option<RawLsCursor>,
+}
+
+#[derive(IntoSchema, FromSchema)]
+#[schema(named = "golem_filesystem_tools.SearchMode")]
+enum RawSearchMode {
+    Literal,
+    Regex,
+}
+
+#[derive(IntoSchema, FromSchema)]
+#[schema(named = "golem_filesystem_tools.GrepQuery")]
+struct RawGrepQuery {
+    path: String,
+    pattern: String,
+    mode: RawSearchMode,
+    case_sensitive: bool,
+    max_depth: u32,
+    include_globs: Vec<String>,
+    exclude_globs: Vec<String>,
+    limit: u32,
+}
+
+#[derive(IntoSchema, FromSchema)]
+#[schema(named = "golem_filesystem_tools.GrepFileCursor")]
+struct RawGrepFileCursor {
+    tree: Option<RawTreeCursor>,
+    next_byte: u64,
+    next_line: u64,
+    content_sha256: String,
+}
+
+#[derive(IntoSchema, FromSchema)]
+#[schema(named = "golem_filesystem_tools.GrepCursor")]
+struct RawGrepCursor {
+    query: RawGrepQuery,
+    tree: Option<RawTreeCursor>,
+    file: Option<RawGrepFileCursor>,
+}
+
+#[derive(IntoSchema)]
+#[schema(rename_all = "kebab-case")]
+struct RawGrepInput {
+    path: String,
+    pattern: String,
+    mode: Option<RawSearchMode>,
+    max_depth: Option<u32>,
+    limit: Option<u32>,
+    cursor: Option<RawGrepCursor>,
+    include_globs: Vec<String>,
+    exclude_globs: Vec<String>,
+    case_insensitive: bool,
+}
+
+#[derive(FromSchema)]
+#[schema(named = "golem_filesystem_tools.GrepMatch")]
+struct RawGrepMatch {
+    path: String,
+    line: u64,
+    text: String,
+    text_truncated: bool,
+}
+
+#[derive(FromSchema)]
+struct RawGrepResult {
+    matches: Vec<RawGrepMatch>,
+    diagnostics: Vec<RawDiscoveryDiagnostic>,
+    next_cursor: Option<RawGrepCursor>,
+}
+
 #[derive(Debug, Clone, IntoSchema, FromSchema, FromWire, IntoWire, WireSchema)]
 struct TypedInputItem {
     ordinal: u32,
@@ -229,6 +381,9 @@ pub trait ToolStreamingCaller {
     fn replay_probe(&self) -> String;
     #[read_only]
     fn read_owner_file(&self, path: String) -> String;
+    fn prepare_filesystem_limit_fixtures(&self);
+    async fn probe_bounded_wasi_stream(&self) -> Vec<u64>;
+    async fn filesystem_limit_roundtrip(&self) -> Vec<u64>;
     async fn concurrent_attempt_identity_replay(&self) -> Vec<String>;
     async fn marker_before_eof(&self, first: Vec<u8>, rest: Vec<u8>) -> StreamEvidence;
     async fn alternating_echo(&self, chunk_count: u32, chunk_size: u32) -> StreamEvidence;
@@ -564,6 +719,46 @@ async fn invoke_filesystem_tool<T: FromSchema>(
         .unwrap_or_else(|error| panic!("convert filesystem tool '{name}' result: {error}"))
 }
 
+async fn write_filesystem_file(path: String, content: String) -> RawWriteFileResult {
+    invoke_filesystem_tool(
+        "write-file".to_string(),
+        raw_filesystem_input(vec![
+            ("path", SchemaType::string(), SchemaValue::String(path)),
+            (
+                "content",
+                SchemaType::string(),
+                SchemaValue::String(content),
+            ),
+            (
+                "create-parent-directories",
+                SchemaType::bool(),
+                SchemaValue::Bool(true),
+            ),
+        ]),
+    )
+    .await
+}
+
+fn format_diagnostics(diagnostics: &[RawDiscoveryDiagnostic]) -> String {
+    diagnostics
+        .iter()
+        .map(|diagnostic| {
+            let kind = match diagnostic.kind {
+                RawDiagnosticKind::Io => "io",
+                RawDiagnosticKind::Binary => "binary",
+                RawDiagnosticKind::Unsupported => "unsupported",
+                RawDiagnosticKind::SymlinkSkipped => "symlink-skipped",
+                RawDiagnosticKind::DirectoryTooLarge => "directory-too-large",
+                RawDiagnosticKind::FileTooLarge => "file-too-large",
+                RawDiagnosticKind::LineTooLong => "line-too-long",
+                RawDiagnosticKind::PathTooLong => "path-too-long",
+            };
+            format!("{}:{kind}:{}", diagnostic.path, diagnostic.message)
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 fn gated_typed_input<T: IntoWire + FromWire + 'static>(items: [T; 3]) -> AgentStream<T> {
     let (mut writer, input) = AgentStream::new();
     spawn_local(async move {
@@ -797,6 +992,86 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             .and_then(|mut file| file.read_to_string(&mut contents))
             .expect("read owner file");
         contents
+    }
+
+    fn prepare_filesystem_limit_fixtures(&self) {
+        let directory = "workspace/filesystem-tools/oversized-directory";
+        std::fs::create_dir_all(directory).expect("create oversized directory fixture");
+        for index in 0..=4096 {
+            std::fs::write(format!("{directory}/{index:04}.txt"), b"")
+                .expect("create oversized directory entry");
+        }
+
+        let mut content = String::with_capacity(1024 * 1024);
+        for index in 0..16384 {
+            content.push_str(&format!("{index:05}:{}\n", "x".repeat(57)));
+        }
+        assert_eq!(content.len(), 1024 * 1024);
+        std::fs::write("workspace/filesystem-tools/bounded-read.txt", content)
+            .expect("create bounded read fixture");
+    }
+
+    async fn probe_bounded_wasi_stream(&self) -> Vec<u64> {
+        let (mut writer, reader) = golem_rust::wasip3::wit_stream::new::<u8>();
+        let read = bounded_stream::read_bounded(reader, 4, |mut reader, bytes| async move {
+            let (_, returned) = reader.read(bytes).await;
+            (reader, returned)
+        });
+        let write = async move {
+            let unwritten = writer.write_all(vec![1, 2, 3, 4, 5, 6, 7, 8]).await;
+            drop(writer);
+            unwritten.len() as u64
+        };
+        let ((bytes, at_eof), unwritten) = (read, write).join().await;
+        vec![bytes.len() as u64, u64::from(at_eof), unwritten]
+    }
+
+    async fn filesystem_limit_roundtrip(&self) -> Vec<u64> {
+        let path = "workspace/filesystem-tools/bounded-read.txt".to_string();
+        let mut cursor = None;
+        let mut first_next_byte = 0;
+        let mut first_next_line = 0;
+        let mut pages = 0;
+        let mut diagnostics = 0;
+        loop {
+            let result: RawGrepResult = invoke_filesystem_tool(
+                "grep".to_string(),
+                golem_rust::encode_typed_schema_value(
+                    &RawGrepInput {
+                        path: path.clone(),
+                        pattern: "not-present".to_string(),
+                        mode: None,
+                        case_insensitive: false,
+                        max_depth: None,
+                        include_globs: Vec::new(),
+                        exclude_globs: Vec::new(),
+                        limit: None,
+                        cursor,
+                    }
+                    .into_typed_schema_value()
+                    .expect("encode bounded grep input"),
+                )
+                .expect("encode bounded grep wire input"),
+            )
+            .await;
+            pages += 1;
+            diagnostics += result.diagnostics.len() as u64;
+            assert!(result.matches.is_empty());
+            cursor = result.next_cursor;
+            if pages == 1 {
+                let file = cursor
+                    .as_ref()
+                    .and_then(|cursor| cursor.file.as_ref())
+                    .expect("first bounded grep page has a file cursor");
+                first_next_byte = file.next_byte;
+                first_next_line = file.next_line;
+            }
+            if cursor.is_none() {
+                break;
+            }
+            assert!(pages < 10, "bounded grep pagination did not converge");
+        }
+        vec![first_next_byte, first_next_line, pages, diagnostics]
     }
 
     async fn concurrent_attempt_identity_replay(&self) -> Vec<String> {
@@ -1453,7 +1728,8 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
     }
 
     async fn filesystem_tool_roundtrip(&self) -> Vec<String> {
-        let path = "workspace/guest-filesystem-tools/notes.txt".to_string();
+        let root = "workspace/guest-filesystem-tools".to_string();
+        let path = format!("{root}/notes.txt");
         let write: RawWriteFileResult = invoke_filesystem_tool(
             "write-file".to_string(),
             raw_filesystem_input(vec![
@@ -1493,7 +1769,11 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         let edit: RawEditFileResult = invoke_filesystem_tool(
             "edit-file".to_string(),
             raw_filesystem_input(vec![
-                ("path", SchemaType::string(), SchemaValue::String(path)),
+                (
+                    "path",
+                    SchemaType::string(),
+                    SchemaValue::String(path.clone()),
+                ),
                 (
                     "old-text",
                     SchemaType::string(),
@@ -1507,6 +1787,130 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             ]),
         )
         .await;
+        write_filesystem_file(format!("{root}/second.txt"), "TWO second".to_string()).await;
+        write_filesystem_file(
+            format!("{root}/nested/hidden.txt"),
+            "TWO hidden".to_string(),
+        )
+        .await;
+        write_filesystem_file(format!("{root}/ignored.log"), "TWO ignored".to_string()).await;
+        write_filesystem_file(format!("{root}/long.txt"), "x".repeat(64 * 1024 + 1)).await;
+
+        let mut ls_cursor = None;
+        let mut ls_entries = Vec::new();
+        let mut ls_pages = 0;
+        loop {
+            let ls: RawLsResult = invoke_filesystem_tool(
+                "ls".to_string(),
+                golem_rust::encode_typed_schema_value(
+                    &RawLsInput {
+                        path: root.clone(),
+                        max_depth: Some(2),
+                        glob: Some("**/*.txt".to_string()),
+                        limit: Some(1),
+                        cursor: ls_cursor,
+                    }
+                    .into_typed_schema_value()
+                    .expect("encode ls input"),
+                )
+                .expect("encode ls wire input"),
+            )
+            .await;
+            ls_pages += 1;
+            assert!(
+                ls.diagnostics.is_empty(),
+                "ls diagnostics: {}",
+                format_diagnostics(&ls.diagnostics)
+            );
+            ls_entries.extend(ls.entries);
+            ls_cursor = ls.next_cursor;
+            if ls_cursor.is_none() {
+                break;
+            }
+            assert!(ls_pages < 10, "ls pagination did not converge");
+        }
+        assert!(ls_pages > 1, "ls did not return a continuation cursor");
+        let listed_paths = ls_entries
+            .iter()
+            .map(|entry| entry.path.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            listed_paths,
+            [
+                format!("{root}/long.txt"),
+                format!("{root}/nested/hidden.txt"),
+                path.clone(),
+                format!("{root}/second.txt"),
+            ]
+        );
+        let notes_size = ls_entries
+            .iter()
+            .find_map(|entry| {
+                if entry.path == path {
+                    match entry.kind {
+                        RawEntryKind::File(size) => Some(size),
+                        RawEntryKind::Directory => panic!("ls returned notes.txt as a directory"),
+                        RawEntryKind::Symlink => panic!("ls returned notes.txt as a symlink"),
+                        RawEntryKind::Other => {
+                            panic!("ls returned notes.txt as an unsupported entry")
+                        }
+                    }
+                } else {
+                    None
+                }
+            })
+            .expect("ls returned notes.txt");
+
+        let mut grep_cursor = None;
+        let mut grep_matches = Vec::new();
+        let mut grep_diagnostics = Vec::new();
+        let mut grep_pages = 0;
+        loop {
+            let grep: RawGrepResult = invoke_filesystem_tool(
+                "grep".to_string(),
+                golem_rust::encode_typed_schema_value(
+                    &RawGrepInput {
+                        path: root.clone(),
+                        pattern: "T.O".to_string(),
+                        mode: Some(RawSearchMode::Regex),
+                        case_insensitive: false,
+                        max_depth: Some(2),
+                        include_globs: vec!["**/*.txt".to_string()],
+                        exclude_globs: vec!["nested".to_string()],
+                        limit: Some(1),
+                        cursor: grep_cursor,
+                    }
+                    .into_typed_schema_value()
+                    .expect("encode grep input"),
+                )
+                .expect("encode grep wire input"),
+            )
+            .await;
+            grep_pages += 1;
+            grep_matches.extend(grep.matches);
+            grep_diagnostics.extend(grep.diagnostics);
+            grep_cursor = grep.next_cursor;
+            if grep_cursor.is_none() {
+                break;
+            }
+            assert!(grep_pages < 10, "grep pagination did not converge");
+        }
+        assert!(grep_pages > 1, "grep did not return a continuation cursor");
+        assert_eq!(grep_matches.len(), 2);
+        assert_eq!(grep_matches[0].path, path);
+        assert_eq!(grep_matches[0].line, 2);
+        assert_eq!(grep_matches[0].text, "TWO");
+        assert!(!grep_matches[0].text_truncated);
+        assert_eq!(grep_matches[1].path, format!("{root}/second.txt"));
+        assert_eq!(grep_matches[1].line, 1);
+        assert_eq!(grep_matches[1].text, "TWO second");
+        assert!(!grep_matches[1].text_truncated);
+        assert_eq!(grep_diagnostics.len(), 1);
+        assert!(matches!(
+            grep_diagnostics[0].kind,
+            RawDiagnosticKind::LineTooLong
+        ));
+        assert_eq!(grep_diagnostics[0].path, format!("{root}/long.txt"));
 
         vec![
             match write.disposition {
@@ -1524,6 +1928,15 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             edit.replacements.to_string(),
             edit.bytes_before.to_string(),
             edit.bytes_after.to_string(),
+            format!("{}:file:{notes_size}:pages={ls_pages}", path),
+            format!(
+                "{}:{}:{}:matches={}:diagnostics={}:pages={grep_pages}",
+                grep_matches[0].path,
+                grep_matches[0].line,
+                grep_matches[0].text,
+                grep_matches.len(),
+                grep_diagnostics.len(),
+            ),
         ]
     }
 
