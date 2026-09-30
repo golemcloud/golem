@@ -149,12 +149,12 @@ impl JobTicket {
 
     /// Completes when the job is stopped: by a delete of all snapshots of the agent, by the
     /// shutdown, or by [`JobTicket::stop_job`].
-    pub(super) fn stopped(&self) -> WaitForCancellationFuture<'_> {
+    pub(super) fn until_stopped(&self) -> WaitForCancellationFuture<'_> {
         self.stop.cancelled()
     }
 
-    /// Whether the job is stopped.
-    pub(super) fn is_stopped(&self) -> bool {
+    /// Whether a stop of the job was asked for.
+    pub(super) fn stop_requested(&self) -> bool {
         self.stop.is_cancelled()
     }
 
@@ -165,12 +165,12 @@ impl JobTicket {
 
     /// Completes when the deletes of the job after its save are stopped. The stop of the job
     /// stops them too, and so does a manual update of the agent that finds the job running.
-    pub(super) fn deletes_stopped(&self) -> WaitForCancellationFuture<'_> {
+    pub(super) fn until_deletes_stopped(&self) -> WaitForCancellationFuture<'_> {
         self.retention_stop.cancelled()
     }
 
-    /// Whether the deletes of the job after its save are stopped.
-    pub(super) fn are_deletes_stopped(&self) -> bool {
+    /// Whether a stop of the deletes of the job after its save was asked for.
+    pub(super) fn deletes_stop_requested(&self) -> bool {
         self.retention_stop.is_cancelled()
     }
 
@@ -325,7 +325,7 @@ mod tests {
 
         stop.cancel();
 
-        assert!(job.are_deletes_stopped());
+        assert!(job.deletes_stop_requested());
         assert!(refused.is_some_and(|running| running.retention_stop.is_cancelled()));
     }
 }

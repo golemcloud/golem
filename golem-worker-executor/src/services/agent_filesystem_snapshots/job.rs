@@ -120,12 +120,12 @@ pub(super) async fn run_job(
         UploadOutcome::Stopped => return,
     };
     crate::metrics::filesystem_snapshots::record_uploaded_bytes(kind.label(), info.bytes);
-    if ticket.is_stopped() {
+    if ticket.stop_requested() {
         return;
     }
     let outcome = tokio::select! {
         outcome = confirm(name.clone()) => outcome,
-        () = ticket.stopped() => return,
+        () = ticket.until_stopped() => return,
     };
     ticket.decide(JobDecision::Confirmed(outcome));
     crate::metrics::filesystem_snapshots::record_upload(
@@ -252,7 +252,7 @@ async fn upload(
     // The stops that the `select!` below watches. An attempt that sees one after its grant gives
     // its slot back and waits for that `select!` to end the upload in the same poll.
     let stopped =
-        || ticket.is_stopped() || futures::FutureExt::now_or_never(stop.clone()).is_some();
+        || ticket.stop_requested() || futures::FutureExt::now_or_never(stop.clone()).is_some();
     let attempt = || async {
         let slot = match Arc::clone(&core.uploads).acquire_owned().await {
             Ok(permit) => UploadSlot::new(permit, core),
@@ -291,7 +291,7 @@ async fn upload(
     let saved = tokio::select! {
         biased;
         saved = retrying(core.settings.upload_retry(), attempt) => Some(saved),
-        () = ticket.stopped() => None,
+        () = ticket.until_stopped() => None,
         () = stop.clone() => None,
     };
     match saved {
@@ -306,10 +306,10 @@ async fn upload(
 async fn delete_slot(core: &Core, ticket: &JobTicket) -> Option<OwnedSemaphorePermit> {
     let slot = tokio::select! {
         biased;
-        () = ticket.deletes_stopped() => return None,
+        () = ticket.until_deletes_stopped() => return None,
         slot = Arc::clone(&core.uploads).acquire_owned() => slot.ok()?,
     };
-    (!ticket.are_deletes_stopped()).then_some(slot)
+    (!ticket.deletes_stop_requested()).then_some(slot)
 }
 
 /// Keeps the own snapshot and the newest older snapshots of its kind, and deletes the rest of
@@ -363,7 +363,7 @@ pub(super) async fn delete_older_snapshots(
     };
     tokio::select! {
         biased;
-        () = ticket.deletes_stopped() => {}
+        () = ticket.until_deletes_stopped() => {}
         () = retention => {}
     }
 }
@@ -395,7 +395,7 @@ async fn delete_superseded(core: &Core, ticket: &JobTicket, name: &FilesystemSna
     };
     tokio::select! {
         biased;
-        () = ticket.deletes_stopped() => {}
+        () = ticket.until_deletes_stopped() => {}
         () = delete => {}
     }
 }
