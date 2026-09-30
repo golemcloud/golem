@@ -11369,11 +11369,15 @@ async fn builtin_web_fetch_has_expected_behavior_and_replays_after_restart(
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let overrides = TestExecutorOverrides {
-        environment_state_service: Some(environment_state.clone()),
-        ..Default::default()
-    };
-    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state.clone()),
+            ..Default::default()
+        },
+    )
+    .await?;
     let caller_component = executor
         .component_dep(&context.default_environment_id, caller)
         .store()
@@ -11685,40 +11689,37 @@ async fn builtin_web_fetch_has_expected_behavior_and_replays_after_restart(
     let interrupted_key = IdempotencyKey::fresh();
     let interrupted_input =
         web_fetch_input(source_url("/interrupted"), Some(10_000), None, None, None);
-    {
-        let interrupted = invoke_web_fetch(
-            &executor,
-            &worker_id,
-            fingerprint,
-            principal.clone(),
-            &definition,
-            interrupted_key.clone(),
-            interrupted_input.clone(),
-        );
-        tokio::pin!(interrupted);
-        tokio::time::timeout(std::time::Duration::from_secs(2), async {
-            tokio::select! {
-                started = interrupted_started => started
-                    .map_err(|_| anyhow::anyhow!("interrupted response producer stopped before starting")),
-                result = &mut interrupted => anyhow::bail!(
-                    "web-fetch completed before the executor interruption: {result:?}"
-                ),
-            }
-        })
-        .await
-        .expect("interrupted response body did not start")?;
-    }
+    let interrupted = invoke_web_fetch(
+        &executor,
+        &worker_id,
+        fingerprint,
+        principal.clone(),
+        &definition,
+        interrupted_key.clone(),
+        interrupted_input.clone(),
+    );
+    tokio::pin!(interrupted);
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        tokio::select! {
+            started = interrupted_started => started
+                .map_err(|_| anyhow::anyhow!("interrupted response producer stopped before starting")),
+            result = &mut interrupted => anyhow::bail!(
+                "web-fetch completed before the worker interruption: {result:?}"
+            ),
+        }
+    })
+    .await
+    .expect("interrupted response body did not start")?;
     assert_eq!(interrupted_requests.load(Ordering::SeqCst), 1);
     let source_requests_before_restart = source_requests.load(Ordering::SeqCst);
 
-    executor.shutdown_and_wait_for_invocation_loops().await?;
-    drop(executor);
-    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
-    let replay_probe: String = executor
-        .invoke_and_await_agent(&caller_component, &agent_id, "replay_probe", data_value!())
-        .await?
-        .into_typed()?;
-    assert_eq!(replay_probe, "replayed");
+    executor.simulated_crash(&worker_id).await?;
+    let interrupted_result = expect_web_fetch_success(
+        tokio::time::timeout(std::time::Duration::from_secs(10), &mut interrupted)
+            .await
+            .expect("interrupted web-fetch did not recover after the simulated crash")?,
+    )?;
+    assert_eq!(interrupted_result.3, "retried after interruption");
     assert_eq!(
         interrupted_requests.load(Ordering::SeqCst),
         2,
@@ -11734,7 +11735,7 @@ async fn builtin_web_fetch_has_expected_behavior_and_replays_after_restart(
         target_requests_before_restart,
         "component reconstruction must replay completed redirected requests without repeating HTTP"
     );
-    let interrupted_result = expect_web_fetch_success(
+    let replayed_interrupted = expect_web_fetch_success(
         invoke_web_fetch(
             &executor,
             &worker_id,
@@ -11746,7 +11747,7 @@ async fn builtin_web_fetch_has_expected_behavior_and_replays_after_restart(
         )
         .await?,
     )?;
-    assert_eq!(interrupted_result.3, "retried after interruption");
+    assert_eq!(replayed_interrupted, interrupted_result);
 
     let replayed = expect_web_fetch_success(
         invoke_web_fetch(
@@ -11764,7 +11765,7 @@ async fn builtin_web_fetch_has_expected_behavior_and_replays_after_restart(
     assert_eq!(
         target_requests.load(Ordering::SeqCst),
         target_requests_before_restart,
-        "completed fetch must replay after executor restart without repeating HTTP"
+        "completed fetch must replay after worker restart without repeating HTTP"
     );
     assert_eq!(
         interrupted_requests.load(Ordering::SeqCst),
@@ -11777,6 +11778,7 @@ async fn builtin_web_fetch_has_expected_behavior_and_replays_after_restart(
         "retrying recovered and completed fetches must not repeat HTTP"
     );
 
+    executor.shutdown_and_wait_for_invocation_loops().await?;
     source_server.abort();
     target_server.abort();
     Ok(())
