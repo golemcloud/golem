@@ -36,6 +36,7 @@ use golem_common::model::quota::{
     EnforcementAction, LeaseEpoch, ResourceConcurrencyLimit, ResourceDefinition,
     ResourceDefinitionId, ResourceDefinitionRevision, ResourceLimit, ResourceName,
 };
+use golem_service_base::model::quota_lease::PendingReservation;
 use golem_service_base::repo::{Blob, NumericU64, SqlDateTime};
 use golem_shard_manager::config::QuotaServiceConfig;
 use golem_shard_manager::quota::quota_repo::{
@@ -43,13 +44,14 @@ use golem_shard_manager::quota::quota_repo::{
 };
 use golem_shard_manager::quota::resource_definition_fetcher::FetchError;
 use golem_shard_manager::quota::{
-    QuotaError, QuotaLease, QuotaRepo, QuotaService, ResourceDefinitionFetcher,
+    EtcdQuotaRepo, QuotaError, QuotaLease, QuotaRepo, QuotaService, ResourceDefinitionFetcher,
 };
 use golem_shard_manager::{ExternalRevision, NO_REVISION};
 use golem_test_framework::components::etcd::docker_etcd::DockerEtcd;
 use std::collections::BTreeSet;
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::time::Duration;
 use test_r::{define_matrix_dimension, inherit_test_dep, test};
 use uuid::Uuid;
@@ -1174,10 +1176,13 @@ async fn assert_refused_as_leadership_lost(
 
 #[test]
 #[tracing::instrument]
-// Startup reads the whole quota state back a page at a time. More keys than fit in one page must
-// all come back, each exactly once.
-async fn reads_page_through_more_keys_than_fit_in_one_response(etcd: &Arc<DockerEtcd>) {
+// Reads come back a page at a time. More keys than fit in one page must all come back, each exactly
+// once - and so must pages whose keys fit the page size but whose values do not fit etcd-client's
+// 4 MiB response limit: here a first page of 1,000 leases of about 6 KiB each, carrying long
+// pending-reservation lists.
+async fn reads_page_through_more_keys_and_bytes_than_fit_in_one_response(etcd: &Arc<DockerEtcd>) {
     const LEASES: usize = 1001;
+    const RESERVATIONS: usize = 400;
 
     let store = EtcdRoutingTablePersistenceFactory { etcd: etcd.clone() }
         .new_etcd_store()
@@ -1187,13 +1192,17 @@ async fn reads_page_through_more_keys_than_fit_in_one_response(etcd: &Arc<Docker
 
     let mut revision = NO_REVISION;
     for n in 0..LEASES {
+        let mut lease = lease(&definition, pod(n), 1, in_a_minute());
+        lease.pending_reservations = Blob::new(
+            (0..RESERVATIONS)
+                .map(|i| PendingReservation {
+                    amount: i as u64,
+                    priority: 1.0,
+                })
+                .collect(),
+        );
         revision = repo
-            .save_lease_change(
-                &resource(&definition, SLOTS),
-                revision,
-                &lease(&definition, pod(n), 1, in_a_minute()),
-                &[],
-            )
+            .save_lease_change(&resource(&definition, SLOTS), revision, &lease, &[])
             .await
             .expect("storing a lease should succeed");
     }
@@ -1212,5 +1221,173 @@ async fn reads_page_through_more_keys_than_fit_in_one_response(etcd: &Arc<Docker
         .collect();
     assert_eq!(leases.len(), LEASES, "a lease was read twice or not at all");
     assert_eq!(pods, (0..LEASES).map(pod).collect());
+    assert!(
+        leases
+            .iter()
+            .all(|lease| lease.pending_reservations.value().len() == RESERVATIONS),
+        "a lease came back without its pending reservations"
+    );
     assert_eq!(stored_resources(&repo).await.len(), 1);
+}
+
+/// Stores `definition` with leases for pods 1, 2 and 3 and returns the revision it is stored at.
+/// Read two keys a page, the leases of pods 1 and 2 come first; pod 3's lease and the resource's
+/// `state` key follow on the second page.
+async fn three_leases(
+    repo: &Arc<dyn QuotaRepo>,
+    definition: &ResourceDefinition,
+) -> ExternalRevision {
+    let mut revision = NO_REVISION;
+    for n in 1..=3 {
+        revision = repo
+            .save_lease_change(
+                &resource(definition, SLOTS - n as u64),
+                revision,
+                &lease(definition, pod(n), 1, in_a_minute()),
+                &[],
+            )
+            .await
+            .expect("storing a lease should succeed");
+    }
+    revision
+}
+
+/// A reader of two keys a page that, the first time it is between pages, commits a change through
+/// `writer`: pod 1's lease reclaimed, pod 2's renewed, the balance changed. That is the write a
+/// cancelled request can still commit while the next operation is reloading the resource. With
+/// `compact`, it also compacts the history up to that write. Returns the reader and where the write
+/// was stored, once it has been.
+fn reader_with_a_write_between_pages(
+    client: etcd_client::Client,
+    fence: golem_shard_manager::LeaderFence,
+    writer: Arc<dyn QuotaRepo>,
+    definition: &ResourceDefinition,
+    guarded_by: ExternalRevision,
+    compact: Option<etcd_client::Client>,
+) -> (EtcdQuotaRepo, Arc<AtomicI64>) {
+    let fired = Arc::new(AtomicBool::new(false));
+    let written = Arc::new(AtomicI64::new(NO_REVISION));
+    let definition = definition.clone();
+    let written_at = written.clone();
+    let reader = EtcdQuotaRepo::new(client, fence).with_read_pages(2, move || {
+        let (writer, definition, fired, written_at, compact) = (
+            writer.clone(),
+            definition.clone(),
+            fired.clone(),
+            written_at.clone(),
+            compact.clone(),
+        );
+        Box::pin(async move {
+            if fired.swap(true, Ordering::SeqCst) {
+                return;
+            }
+            let revision = writer
+                .save_lease_change(
+                    &resource(&definition, 150),
+                    guarded_by,
+                    &lease(&definition, pod(2), 2, in_a_minute()),
+                    &[expired(pod(1))],
+                )
+                .await
+                .expect("the write between pages should commit");
+            written_at.store(revision, Ordering::SeqCst);
+            if let Some(client) = compact {
+                client
+                    .kv_client()
+                    .compact(revision, None)
+                    .await
+                    .expect("compacting up to the write should succeed");
+            }
+        })
+    });
+    (reader, written)
+}
+
+#[test]
+#[tracing::instrument]
+// A read spanning several pages must see one revision. Were later pages read at the latest one, a
+// write committing between pages would pair the leases from before it with the resource from
+// after it: here pod 1's reclaimed lease would reappear next to the balance that already returned
+// its allocation, and the next write - guarded by the new revision - would store that mix.
+async fn a_read_spanning_pages_sees_one_revision(etcd: &Arc<DockerEtcd>) {
+    let store = EtcdRoutingTablePersistenceFactory { etcd: etcd.clone() }
+        .new_etcd_store()
+        .await;
+    let (_, fence) = store.mint_leader_key().await;
+    let writer = store.quota_repo_with(fence.clone()).await;
+    let definition = definition();
+    let before = three_leases(&writer, &definition).await;
+
+    let (reader, written) = reader_with_a_write_between_pages(
+        store.client().await,
+        fence,
+        writer,
+        &definition,
+        before,
+        None,
+    );
+    let (resource, leases) = reader
+        .get_resource(definition.id)
+        .await
+        .expect("the read should succeed")
+        .expect("the resource should be stored");
+
+    assert_ne!(
+        written.load(Ordering::SeqCst),
+        NO_REVISION,
+        "the read should have spanned more than one page, with the write between them"
+    );
+    assert_eq!(resource.revision, before, "the read mixed two revisions");
+    assert_eq!(resource.record.remaining.get(), SLOTS - 3);
+    assert_eq!(
+        leases
+            .iter()
+            .map(|lease| *lease.pod_ip.value())
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([pod(1).ip, pod(2).ip, pod(3).ip])
+    );
+}
+
+#[test]
+#[tracing::instrument]
+// A read pinned to a revision that is compacted before its last page arrives cannot finish at that
+// revision. It must start over and return one consistent, newer view, rather than fail the restore
+// or the reload that needed it.
+async fn a_read_whose_revision_is_compacted_starts_over(etcd: &Arc<DockerEtcd>) {
+    let store = EtcdRoutingTablePersistenceFactory { etcd: etcd.clone() }
+        .new_etcd_store()
+        .await;
+    let (_, fence) = store.mint_leader_key().await;
+    let writer = store.quota_repo_with(fence.clone()).await;
+    let definition = definition();
+    let before = three_leases(&writer, &definition).await;
+
+    let (reader, written) = reader_with_a_write_between_pages(
+        store.client().await,
+        fence,
+        writer,
+        &definition,
+        before,
+        Some(store.client().await),
+    );
+    let (resource, leases) = reader
+        .get_resource(definition.id)
+        .await
+        .expect("the read should start over rather than fail")
+        .expect("the resource should be stored");
+
+    let after = written.load(Ordering::SeqCst);
+    assert_ne!(after, NO_REVISION, "the write between pages never ran");
+    assert_eq!(
+        resource.revision, after,
+        "the restarted read should see the newer state"
+    );
+    assert_eq!(resource.record.remaining.get(), 150);
+    assert_eq!(
+        leases
+            .iter()
+            .map(|lease| *lease.pod_ip.value())
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([pod(2).ip, pod(3).ip])
+    );
 }

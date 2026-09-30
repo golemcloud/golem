@@ -24,6 +24,7 @@ use etcd_client::{
     Client, Compare, CompareOp, DeleteOptions, GetOptions, KeyValue, Txn, TxnOp, TxnResponse,
 };
 use futures::FutureExt;
+use futures::future::BoxFuture;
 use golem_common::error_forwarding;
 use golem_common::model::quota::{ResourceDefinition, ResourceDefinitionId};
 use golem_common::serialization::{serialize, try_deserialize};
@@ -35,9 +36,11 @@ use golem_service_base::repo::{Blob, NumericU64, RepoError, SqlDateTime};
 use indoc::indoc;
 use std::fmt::Debug;
 use std::net::{IpAddr, SocketAddr};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::Instant;
-use tracing::{Instrument, info_span};
+use tonic::Code;
+use tracing::{Instrument, debug, info_span};
 use uuid::Uuid;
 
 #[derive(Debug, thiserror::Error)]
@@ -623,9 +626,14 @@ impl DbQuotaRepo<PostgresPool> {
 /// Prefix of every key the quota state is stored under in distributed mode.
 pub const QUOTA_KEY_PREFIX: &str = "/golem/quota/";
 
-/// How many keys one read of the quota state returns. Startup reads page through the prefix, so
-/// the whole quota state never has to fit in one response under etcd-client's message size limit.
+/// How many keys one read of the quota state asks for. Reads page through a prefix, so the whole
+/// quota state never has to fit in one response under etcd-client's message size limit; a page
+/// that still exceeds it is asked for again with fewer keys.
 const READ_PAGE_SIZE: i64 = 1000;
+
+/// How many times a paged read starts over because the revision it was pinned to was compacted
+/// before its last page arrived.
+const READ_COMPACTED_RESTARTS: u32 = 3;
 
 /// How long a read of the quota state may spend retrying transient failures.
 const READ_RETRY_BUDGET: Duration = Duration::from_secs(10);
@@ -743,11 +751,42 @@ fn etcd_error(err: etcd_client::Error) -> QuotaRepoError {
 pub struct EtcdQuotaRepo {
     client: Client,
     fence: LeaderFence,
+    page_size: i64,
+    between_pages: Option<BetweenPages>,
+}
+
+/// Runs between two pages of a paged read, so a test can commit a write in the middle of one.
+type BetweenPages = Arc<dyn Fn() -> BoxFuture<'static, ()> + Send + Sync>;
+
+/// Why one page of a read failed.
+enum PageError {
+    /// The response would exceed etcd-client's message size limit.
+    TooLarge,
+    /// The revision the read is pinned to has been compacted away.
+    Compacted,
+    Other(ShardManagerError),
 }
 
 impl EtcdQuotaRepo {
     pub fn new(client: Client, fence: LeaderFence) -> Self {
-        Self { client, fence }
+        Self {
+            client,
+            fence,
+            page_size: READ_PAGE_SIZE,
+            between_pages: None,
+        }
+    }
+
+    /// Reads a page of `page_size` keys and runs `between_pages` after every page but the last.
+    #[doc(hidden)]
+    pub fn with_read_pages(
+        mut self,
+        page_size: i64,
+        between_pages: impl Fn() -> BoxFuture<'static, ()> + Send + Sync + 'static,
+    ) -> Self {
+        self.page_size = page_size;
+        self.between_pages = Some(Arc::new(between_pages));
+        self
     }
 
     pub fn logged(client: Client, fence: LeaderFence) -> LoggedQuotaRepo<Self> {
@@ -898,29 +937,90 @@ impl EtcdQuotaRepo {
         Ok(state)
     }
 
-    /// Every key under `prefix`, a page at a time. Unfenced, like the shard state read: only the
-    /// leader writes, and it holds the lock of whatever it is reading.
+    /// Every key under `prefix` as of one revision, a page at a time. Unfenced, like the shard
+    /// state read: a read that has fallen behind is caught by the revision check of the next write.
+    ///
+    /// Every page after the first is pinned to the revision the first one was read at. A write can
+    /// still commit while a read is in progress - one from a request that was cancelled mid-flight -
+    /// and without the pin a read spanning several pages could pair leases from before that write
+    /// with the resource state from after it. If the pinned revision is compacted before the last
+    /// page arrives, the read starts over from the latest revision.
     async fn read_prefix(&self, prefix: &str) -> Result<Vec<KeyValue>, QuotaRepoError> {
+        let mut restarts = 0;
+        loop {
+            match self.read_prefix_once(prefix).await? {
+                Some(kvs) => return Ok(kvs),
+                None if restarts < READ_COMPACTED_RESTARTS => {
+                    restarts += 1;
+                    debug!(
+                        prefix,
+                        restarts, "Quota read outlived its revision; starting over"
+                    );
+                }
+                None => {
+                    return Err(QuotaRepoError::InternalError(anyhow::anyhow!(
+                        "reading {prefix} was compacted from under it {} times in a row",
+                        restarts + 1
+                    )));
+                }
+            }
+        }
+    }
+
+    /// One pass of [`Self::read_prefix`], or `None` if its revision was compacted before it
+    /// finished.
+    async fn read_prefix_once(
+        &self,
+        prefix: &str,
+    ) -> Result<Option<Vec<KeyValue>>, QuotaRepoError> {
         let end = prefix_range_end(prefix);
         let mut next_key = prefix.as_bytes().to_vec();
+        let mut page_size = self.page_size;
+        let mut revision = None;
         let mut kvs = Vec::new();
 
         loop {
-            let options = GetOptions::new()
+            let mut options = GetOptions::new()
                 .with_range(end.clone())
-                .with_limit(READ_PAGE_SIZE);
-            let page = retry_retriable_until(
-                "reading the quota state",
-                || {
-                    let mut kv = self.client.kv_client();
-                    let key = next_key.clone();
-                    let options = options.clone();
-                    async move { Ok::<_, ShardManagerError>(kv.get(key, Some(options)).await?) }
-                },
-                Instant::now() + READ_RETRY_BUDGET,
-            )
-            .await
-            .map_err(|err| QuotaRepoError::InternalError(anyhow::Error::from(err)))?;
+                .with_limit(page_size);
+            if let Some(revision) = revision {
+                options = options.with_revision(revision);
+            }
+
+            let page = match self.read_page(&next_key, options).await {
+                Ok(page) => page,
+                // One key fits unless the cluster accepts requests near the 4 MiB limit: etcd's
+                // default request size limit keeps every stored value under 1.5 MiB.
+                Err(PageError::TooLarge) if page_size > 1 => {
+                    page_size = (page_size / 2).max(1);
+                    debug!(
+                        prefix,
+                        page_size, "Quota read page too large; asking for fewer keys"
+                    );
+                    continue;
+                }
+                Err(PageError::TooLarge) => {
+                    return Err(QuotaRepoError::InternalError(anyhow::anyhow!(
+                        "a single key under {prefix} exceeds the etcd response size limit"
+                    )));
+                }
+                Err(PageError::Compacted) => return Ok(None),
+                Err(PageError::Other(err)) => {
+                    return Err(QuotaRepoError::InternalError(anyhow::Error::from(err)));
+                }
+            };
+
+            if revision.is_none() {
+                revision = Some(
+                    page.header()
+                        .ok_or_else(|| {
+                            QuotaRepoError::InternalError(anyhow::anyhow!(
+                                "etcd range response carried no header"
+                            ))
+                        })?
+                        .revision(),
+                );
+            }
 
             let more = page.more();
             if let Some(last) = page.kvs().last() {
@@ -931,9 +1031,49 @@ impl EtcdQuotaRepo {
             kvs.extend(page.kvs().iter().cloned());
 
             if !more {
-                return Ok(kvs);
+                return Ok(Some(kvs));
+            }
+            if let Some(between_pages) = &self.between_pages {
+                between_pages().await;
             }
         }
+    }
+
+    async fn read_page(
+        &self,
+        key: &[u8],
+        options: GetOptions,
+    ) -> Result<etcd_client::GetResponse, PageError> {
+        retry_retriable_until(
+            "reading the quota state",
+            || {
+                let mut kv = self.client.kv_client();
+                let key = key.to_vec();
+                let options = options.clone();
+                async move { Ok::<_, ShardManagerError>(kv.get(key, Some(options)).await?) }
+            },
+            Instant::now() + READ_RETRY_BUDGET,
+        )
+        .await
+        .map_err(|err| match &err {
+            // Both arrive as OUT_OF_RANGE, one from the client's decoder and one from etcd, so
+            // only the message tells them apart. Neither is retried by the call above.
+            ShardManagerError::EtcdError(etcd_client::Error::GRpcStatus(status))
+                if status.code() == Code::OutOfRange
+                    && status.message().contains("message length too large") =>
+            {
+                PageError::TooLarge
+            }
+            ShardManagerError::EtcdError(etcd_client::Error::GRpcStatus(status))
+                if status.code() == Code::OutOfRange
+                    && status
+                        .message()
+                        .contains("required revision has been compacted") =>
+            {
+                PageError::Compacted
+            }
+            _ => PageError::Other(err),
+        })
     }
 }
 

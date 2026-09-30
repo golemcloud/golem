@@ -453,11 +453,14 @@ impl EtcdStore {
         )
     }
 
-    pub(crate) async fn quota_repo_with(&self, fence: LeaderFence) -> Arc<dyn QuotaRepo> {
-        let client = etcd_client::Client::connect(&self.config.endpoints, None)
+    pub(crate) async fn client(&self) -> etcd_client::Client {
+        etcd_client::Client::connect(&self.config.endpoints, None)
             .await
-            .expect("Cannot connect to etcd");
-        Arc::new(EtcdQuotaRepo::new(client, fence))
+            .expect("Cannot connect to etcd")
+    }
+
+    pub(crate) async fn quota_repo_with(&self, fence: LeaderFence) -> Arc<dyn QuotaRepo> {
+        Arc::new(EtcdQuotaRepo::new(self.client().await, fence))
     }
 }
 
