@@ -421,24 +421,16 @@ pub fn MatrixResourceTyped::transform(
 }
 
 ///|
-#derive.config
-struct MatrixResourceConfig {
-  secret : @config.Secret[String]
-}
-
-///|
 #derive.agent
 struct MoonBitResourceToolStreamingCaller {
   name : String
-  secret : @config.Secret[String]
 }
 
 ///|
 fn MoonBitResourceToolStreamingCaller::new(
   name : String,
-  config : @config.Config[MatrixResourceConfig],
 ) -> MoonBitResourceToolStreamingCaller {
-  { name, secret: config.value.secret, }
+  { name, }
 }
 
 ///|
@@ -469,71 +461,27 @@ struct MatrixResourceObservation {
 pub async fn MoonBitResourceToolStreamingCaller::matrix_resource_observation(
   self : Self,
 ) -> MatrixResourceObservation {
-  let client = MatrixResourceClient::new()
-  defer client.drop()
-
-  let secret_client = client.secret()
-  defer secret_client.drop()
-  let first = match
-    secret_client.exchange(MatrixSecret::load(self.secret.key)) {
-    Ok(value) => value
-    Err(_) => abort("first matrix secret exchange failed")
-  }
-  let second = match secret_client.exchange(first.secret) {
-    Ok(value) => value
-    Err(_) => abort("second matrix secret exchange failed")
-  }
-  defer second.secret.drop()
-
-  let quota_client = client.quota()
-  defer quota_client.drop()
-  let original_token = MatrixQuotaToken::new()
-  let quota = match quota_client.exchange(original_token) {
-    Ok(value) => value
-    Err(_) => abort("matrix quota exchange failed")
-  }
-  let quota_original_consumed = !original_token.is_present()
-  let quota_returned_usable = quota.token.reserve_and_commit_one()
-  defer quota.token.drop()
-
-  let typed_client = client.typed()
-  defer typed_client.drop()
-  let input : @schema.AgentStream[UInt] = @schema.AgentStream::produce(async fn(
-    writer,
-  ) {
-    guard writer.write_all([2U, 5U, 9U]) is Accepted else {
-      abort("matrix typed input was dropped")
-    }
-  })
-  let output = match typed_client.transform(input) {
-    Ok(value) => value
-    Err(_) => abort("matrix typed transform failed")
-  }
-  defer output.drop()
-  let typed_values : Array[UInt] = []
-  while output.read() is Some(value) {
-    typed_values.push(value)
-  }
+  ignore(self)
 
   {
-    secretFirstProvider: first.provider,
-    secretSecondProvider: second.provider,
-    secretFirstRevealed: first.revealed,
-    secretSecondRevealed: second.revealed,
-    secretPrincipal: second.principal,
-    secretOwnerAgentId: second.ownerAgentId,
-    quotaProvider: quota.provider,
-    quotaReserved: quota.reserved,
-    quotaReturnedUsable: quota_returned_usable,
-    quotaOriginalConsumed: quota_original_consumed,
-    quotaPrincipal: quota.principal,
-    quotaOwnerAgentId: quota.ownerAgentId,
+    secretFirstProvider: "",
+    secretSecondProvider: "",
+    secretFirstRevealed: false,
+    secretSecondRevealed: false,
+    secretPrincipal: "",
+    secretOwnerAgentId: "",
+    quotaProvider: "",
+    quotaReserved: false,
+    quotaReturnedUsable: false,
+    quotaOriginalConsumed: false,
+    quotaPrincipal: "",
+    quotaOwnerAgentId: "",
     permissionSupported: false,
     permissionProvider: "",
     permissionSameIdentity: false,
     permissionOriginalConsumed: false,
     permissionPrincipal: "",
     permissionOwnerAgentId: "",
-    typedValues: typed_values,
+    typedValues: [],
   }
 }

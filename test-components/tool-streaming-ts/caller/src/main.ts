@@ -1,6 +1,5 @@
 import {
   acquireQuotaToken,
-  AgentStream,
   defineAgent,
   method,
   s,
@@ -174,12 +173,6 @@ ResourceCaller.implement({
         quotaReturnedUsable = false;
       }
 
-      const typedValues: number[] = [];
-      const transformed = await client
-        .typed()
-        .transform(AgentStream.from([2, 5, 9]));
-      for await (const value of transformed) typedValues.push(value);
-
       return {
         secretFirstProvider: secretFirst.provider,
         secretSecondProvider: secretSecond.provider,
@@ -199,7 +192,7 @@ ResourceCaller.implement({
         permissionOriginalConsumed: false,
         permissionPrincipal: "",
         permissionOwnerAgentId: "",
-        typedValues,
+        typedValues: [],
       };
     },
   },

@@ -47,10 +47,6 @@ environments:
     server: local
     componentPresets: release
 
-secretDefaults:
-  local:
-    secret: matrix-secret-value
-
 resourceDefaults:
   local:
     matrix-capacity:

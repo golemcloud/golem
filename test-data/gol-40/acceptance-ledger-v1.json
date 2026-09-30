@@ -29,8 +29,14 @@
     },
     {
       "id": "SDK-METADATA",
-      "status": "new integration boundary",
-      "remaining": "Author the rich definition in Rust, TypeScript, Scala, and MoonBit and compare each complete emitted record independently with CONTRACT-1."
+      "status": "covered",
+      "existingCoverage": [
+        {
+          "test": "rich_tool_metadata_matches_across_rust_typescript_scala_and_moonbit",
+          "file": "cli/golem-cli/tests/app/tool_metadata_conformance.rs",
+          "oracle": "Each SDK authors the rich definition independently; the test extracts each real component and compares its complete canonical record against the hand-authored CONTRACT-1 JSON with exact mismatch paths."
+        }
+      ]
     },
     {
       "id": "SDK-PROXY",
@@ -63,33 +69,70 @@
     },
     {
       "id": "METADATA-1",
-      "status": "new integration boundary",
-      "remaining": "Build all four SDK fixtures through the CLI/component path and compare each canonical record with CONTRACT-1."
+      "status": "covered",
+      "existingCoverage": [
+        {
+          "test": "rich_tool_metadata_matches_across_rust_typescript_scala_and_moonbit",
+          "file": "cli/golem-cli/tests/app/tool_metadata_conformance.rs",
+          "oracle": "Real Rust, TypeScript, Scala, and MoonBit CLI builds are extracted independently and compared to CONTRACT-1; canonicalization is limited to JSON object ordering and demonstrated graph-reference forms."
+        }
+      ]
     },
     {
       "id": "CLIENT-1",
-      "status": "new integration boundary",
-      "remaining": "Assemble the data-driven 5×5 producer/consumer matrix."
+      "status": "covered",
+      "existingCoverage": [
+        {
+          "test": "generated_clients_invoke_every_sdk_provider_and_preserve_runtime_identity",
+          "file": "golem-worker-executor/tests/tool_streaming/matrix_conformance.rs",
+          "oracle": "A descriptor-driven 5×5 deployment matrix compares every Rust, TypeScript, Scala, MoonBit, and Effect caller/provider cell with fixed asymmetric request, success, command, and declared-error observations."
+        }
+      ]
     },
     {
       "id": "CLIENT-2",
-      "status": "new assertion",
-      "remaining": "Observe runtime principal and owner independently for representative foreign-language pairs."
+      "status": "covered",
+      "existingCoverage": [
+        {
+          "test": "generated_clients_invoke_every_sdk_provider_and_preserve_runtime_identity",
+          "file": "golem-worker-executor/tests/tool_streaming/matrix_conformance.rs",
+          "oracle": "Five foreign caller/provider pairs run under two OIDC principals; literal provider evidence must change principal while preserving the independently derived owner agent ID."
+        }
+      ]
     },
     {
       "id": "CLIENT-SECRET",
-      "status": "new integration boundary",
-      "remaining": "Exercise named secret-capability transfer for every caller language against rotated foreign providers."
+      "status": "requires implementation",
+      "existingCoverage": [
+        {
+          "test": "generated_clients_transfer_supported_resources_and_typed_streams",
+          "file": "golem-worker-executor/tests/tool_streaming/matrix_conformance.rs",
+          "oracle": "Rust-to-MoonBit performs two secret exchanges and TypeScript performs two same-schema exchanges; fixed reveal booleans, runtime principal, owner ID, and post-invocation resource cleanup are checked independently."
+        }
+      ],
+      "remaining": "Scala and Effect cannot encode a generated-client secret handle with their current public surfaces. MoonBit's generated client traps with an unknown returned-handle index on the second exchange. TypeScript cannot rotate to the named foreign-provider schema because its public quota schema omits resourceName."
     },
     {
       "id": "CLIENT-QUOTA",
-      "status": "new integration boundary",
-      "remaining": "Exercise quota-token and permission-card transfer where the client surface supports it."
+      "status": "requires implementation",
+      "existingCoverage": [
+        {
+          "test": "generated_clients_transfer_supported_resources_and_typed_streams",
+          "file": "golem-worker-executor/tests/tool_streaming/matrix_conformance.rs",
+          "oracle": "Rust-to-MoonBit and TypeScript same-schema quota exchanges assert reservation, consumed original handles, usable returned handles, runtime principal, owner ID, and cleanup with literal per-field diagnostics."
+        }
+      ],
+      "remaining": "Scala cannot derive quota or permission-card codecs. MoonBit returned quota handles trap with an unknown handle index. Effect quota exchange traps Error: rpc. No guest SDK currently supplies a runtime-stable permission-card acquisition path for this matrix."
     },
     {
       "id": "CLIENT-STREAM",
       "status": "new assertion",
       "existingCoverage": [
+        {
+          "test": "generated_clients_transfer_supported_resources_and_typed_streams",
+          "file": "golem-worker-executor/tests/tool_streaming/matrix_conformance.rs",
+          "oracle": "Rust, Scala, and Effect typed input/output cells compare [2,5,9] with the fixed [7,16,28] result and require tool-operation, lane, slot, and invocation cleanup."
+        },
         {
           "test": "node test.mjs",
           "file": "sdks/effect/integration-test/cross-sdk/package.json",
@@ -98,7 +141,7 @@
           "covers": "Asymmetric nested streams, bounded pulls, and early closure for a subset of language pairs."
         }
       ],
-      "remaining": "Rotate providers across all languages and assert byte streams, typed streams, terminals, outcomes, and cleanup independently."
+      "remaining": "TypeScript typed-tool output fails shared runtime encoding with 'native schema value streams require asynchronous encoding'; MoonBit typed-tool consumption traps with an unknown handle index. Existing byte-stream lifecycle tests remain green for Rust, TypeScript, Scala, and MoonBit."
     },
     {
       "id": "MANIFEST-1",
@@ -341,19 +384,38 @@
     },
     {
       "id": "SOURCE-NATIVE",
-      "status": "new assertion",
+      "status": "covered",
       "existingCoverage": [
         {
           "test": "rust_ambient_native_client_executes_through_golem",
           "file": "cli/golem-cli/tests/app/agents.rs",
           "oracle": "A deterministic catalog fixture shared by registry and executor is enabled only for the subprocess test; the test separately inspects the generated client artifact and absence of a local provider, then asserts hand-authored structured success, declared error, finite stdout/result tuple, granted-versus-ungranted authorization, and middleware-transformed output from CLI invocations through Golem."
+        },
+        {
+          "test": "typescript_ambient_native_client_covers_contract_without_local_provider",
+          "file": "cli/golem-cli/tests/app/typescript_native_source.rs",
+          "oracle": "A generated TypeScript ambient client with no provider component is compiled, deployed, and compared with literal structured, declared-error, finite-stream, authorization, and middleware observations."
+        },
+        {
+          "test": "scala_generated_client_invokes_ambient_native_tool_through_golem",
+          "file": "cli/golem-cli/tests/app/scala_tool_sources.rs",
+          "oracle": "A generated Scala ambient client with no provider component is compiled, deployed, and compared with literal structured, declared-error, finite-stream, authorization, and middleware observations."
+        },
+        {
+          "test": "moonbit_ambient_native_client_executes_through_golem",
+          "file": "cli/golem-cli/tests/app/moonbit_native_tool.rs",
+          "oracle": "A generated MoonBit ambient client with no provider component is compiled, deployed, and compared with literal structured, declared-error, finite-stream, authorization, and middleware observations."
+        },
+        {
+          "test": "effect_ambient_native_client_executes_through_golem",
+          "file": "cli/golem-cli/tests/app/effect_source_conformance.rs",
+          "oracle": "A generated Effect ambient client with no provider component is compiled, deployed, and compared with literal structured, declared-error, finite-stream, authorization, and middleware observations."
         }
-      ],
-      "remaining": "Add the same ambient native compile-and-invoke boundary for TypeScript, Scala, MoonBit, and Effect."
+      ]
     },
     {
       "id": "SOURCE-MCP",
-      "status": "new integration boundary",
+      "status": "covered",
       "existingCoverage": [
         {
           "test": "rust_mcp_clients_use_registry_credentials_and_replay_offline",
@@ -369,13 +431,32 @@
           "test": "dynamic_mcp_executes_genuine_monomorphic_middleware_and_replays_offline",
           "file": "golem-worker-executor/tests/tool_streaming/mod.rs",
           "oracle": "External MCP request body/count and environment-service counters prove argument transformation and no offline rediscovery."
+        },
+        {
+          "test": "typescript_mcp_client_projects_contract_and_runs_imported_middleware",
+          "file": "cli/golem-cli/tests/app/mcp_import.rs",
+          "oracle": "An authenticated independent MCP stub records restored arguments and imported middleware while the generated TypeScript client is compared with literal CONTRACT-2 structured, streamed, blocks, metadata, and error projections."
+        },
+        {
+          "test": "scala_generated_client_invokes_imported_mcp_projection_through_golem",
+          "file": "cli/golem-cli/tests/app/scala_tool_sources.rs",
+          "oracle": "An authenticated independent MCP stub records arguments and middleware while the generated Scala client is compared with literal CONTRACT-2 structured, streamed, blocks, metadata, and error projections."
+        },
+        {
+          "test": "moonbit_mcp_client_projects_contract_and_runs_imported_middleware",
+          "file": "cli/golem-cli/tests/app/moonbit_mcp_import.rs",
+          "oracle": "An authenticated independent MCP stub records arguments and middleware while the generated MoonBit client is compared with literal CONTRACT-2 structured, streamed, blocks, metadata, and error projections."
+        },
+        {
+          "test": "effect_imported_mcp_client_projects_contract_and_runs_middleware",
+          "file": "cli/golem-cli/tests/app/effect_source_conformance.rs",
+          "oracle": "An authenticated independent MCP stub records restored arguments and imported middleware while the generated Effect client is compared with literal CONTRACT-2 structured, streamed, blocks, metadata, and error projections."
         }
-      ],
-      "remaining": "Keep the Rust baseline and add CONTRACT-2 invocation through Golem for TypeScript, Scala, MoonBit, and Effect."
+      ]
     },
     {
       "id": "SOURCE-REFRESH",
-      "status": "new integration boundary",
+      "status": "covered",
       "existingCoverage": [
         {
           "test": "bridge_sdk_marker_hash_source_includes_bridge_mode",
@@ -411,9 +492,13 @@
           "test": "rust_mcp_clients_use_registry_credentials_and_replay_offline",
           "file": "cli/golem-cli/tests/app/mcp_import.rs",
           "oracle": "Independent upstream listing/call records, serialized bridge markers, generated source, and a generation-2 result prove unchanged cache reuse, explicit MCP schema refresh, recompilation, deployment, invocation of the new contract, and preservation of the last good client after an inaccessible refresh."
+        },
+        {
+          "test": "rust_ambient_native_client_executes_through_golem",
+          "file": "cli/golem-cli/tests/app/agents.rs",
+          "oracle": "The opt-in native catalog is restarted with fixture version 2; regenerated Rust source is required to contain and invoke the new refreshed method, distinguishing a real catalog rebuild from stale source reuse."
         }
-      ],
-      "remaining": "Extend the real rebuild/execute scenario with a native catalog metadata change; MCP cache hit/miss, inaccessible-source failure, regeneration, and invocation of the new MCP contract are covered."
+      ]
     },
     {
       "id": "MCP-EXPORT-1",
