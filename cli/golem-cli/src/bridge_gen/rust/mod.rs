@@ -3009,6 +3009,9 @@ impl RustBridgeGenerator {
             SchemaType::Url { .. } => {
                 quote! { Ok(crate::__golem_bridge_runtime::schema::SchemaValue::Url { url: #val }) }
             }
+            SchemaType::Uuid { .. } => {
+                quote! { Ok(crate::__golem_bridge_runtime::schema::SchemaValue::Uuid(#val)) }
+            }
             SchemaType::Datetime { .. } => {
                 quote! {
                     chrono::DateTime::parse_from_rfc3339(&#val)
@@ -3334,6 +3337,9 @@ impl RustBridgeGenerator {
             SchemaType::Url { .. } => quote! {
                 match #val { crate::__golem_bridge_runtime::schema::SchemaValue::Url { url } => Ok(url), __other => Err(format!("Expected url value, got {:?}", __other)) }
             },
+            SchemaType::Uuid { .. } => quote! {
+                match #val { crate::__golem_bridge_runtime::schema::SchemaValue::Uuid(uuid) => Ok(uuid), __other => Err(format!("Expected UUID value, got {:?}", __other)) }
+            },
             SchemaType::Datetime { .. } => quote! {
                 match #val { crate::__golem_bridge_runtime::schema::SchemaValue::Datetime { value } => Ok(value.to_rfc3339()), __other => Err(format!("Expected datetime value, got {:?}", __other)) }
             },
@@ -3517,6 +3523,10 @@ impl RustBridgeGenerator {
             )),
             SchemaType::Path { .. } => Ok(quote! { String }),
             SchemaType::Url { .. } => Ok(quote! { String }),
+            SchemaType::Uuid { .. } => Ok(match self.mode {
+                RustBridgeMode::ExternalRest => quote! { uuid::Uuid },
+                RustBridgeMode::GuestWasmRpc => quote! { golem_rust::Uuid },
+            }),
             SchemaType::Datetime { .. } => Ok(quote! { String }),
             SchemaType::Duration { .. } => Ok(quote! { i64 }),
             SchemaType::Secret { .. } if self.mode == RustBridgeMode::GuestWasmRpc => {

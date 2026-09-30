@@ -111,9 +111,9 @@ redis.call('DEL', KEYS[1], KEYS[2])
 return redis.status_reply('OK')
 "#;
 
-    /// `KEYS`: the stream, then its epoch record. `ARGV`: the lowest id to keep, then the epoch the
-    /// trim asserts, compared the way [`Self::FENCED_APPEND_SCRIPT`] does. A refused trim removes
-    /// nothing.
+    /// `KEYS`: the stream, then its epoch record. `ARGV`: the lowest id to keep, the epoch the
+    /// trim asserts, compared the way [`Self::FENCED_APPEND_SCRIPT`] does, and `1` to delete the
+    /// stream when the trim empties it (never the record). A refused trim removes nothing.
     const FENCED_DROP_PREFIX_SCRIPT: &'static str = r#"
 local stored = redis.call('HGET', KEYS[2], 'epoch')
 if stored == false then
@@ -123,6 +123,9 @@ if stored ~= ARGV[2] then
   return redis.error_reply('FENCED ' .. stored)
 end
 redis.call('XTRIM', KEYS[1], 'MINID', ARGV[1])
+if ARGV[3] == '1' and redis.call('XLEN', KEYS[1]) == 0 then
+  redis.call('DEL', KEYS[1])
+end
 return redis.status_reply('OK')
 "#;
 
@@ -781,16 +784,24 @@ impl IndexedStorage for RedisIndexedStorage {
         last_dropped_id: u64,
         expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
+        let delete_if_empty = matches!(&namespace, IndexedStorageNamespace::CompressedOpLog { .. });
         let Some(expected) = expected_epoch else {
-            let _: u64 = self
-                .redis
-                .with(svc_name, api_name)
-                .xtrim(
-                    Self::composite_key(namespace, key),
-                    (XCapKind::MinID, last_dropped_id + 1),
-                )
-                .await
-                .map_err(|e| IndexedStorageError::Other(e.to_string()))?;
+            let composite_key = Self::composite_key(namespace, key);
+            if delete_if_empty {
+                let _: u64 = self
+                    .redis
+                    .with(svc_name, api_name)
+                    .xtrim_and_delete_if_empty(composite_key, last_dropped_id + 1)
+                    .await
+                    .map_err(|e| IndexedStorageError::Other(e.to_string()))?;
+            } else {
+                let _: u64 = self
+                    .redis
+                    .with(svc_name, api_name)
+                    .xtrim(composite_key, (XCapKind::MinID, last_dropped_id + 1))
+                    .await
+                    .map_err(|e| IndexedStorageError::Other(e.to_string()))?;
+            }
             return Ok(());
         };
         self.redis
@@ -804,6 +815,7 @@ impl IndexedStorage for RedisIndexedStorage {
                 vec![
                     Value::from((last_dropped_id + 1).to_string()),
                     Value::from(expected.0.to_string()),
+                    Value::from(if delete_if_empty { "1" } else { "0" }),
                 ],
                 None,
             )

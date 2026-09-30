@@ -777,6 +777,7 @@ impl IndexedStorage for SqliteIndexedStorage {
         last_dropped_id: u64,
         expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
+        let delete_if_empty = matches!(&namespace, IndexedStorageNamespace::CompressedOpLog { .. });
         let namespace = Self::namespace(namespace);
         let key = key.to_string();
         self.pool
@@ -792,6 +793,15 @@ impl IndexedStorage for SqliteIndexedStorage {
                         .bind(format!("{namespace}-present")).bind(&key).bind(&namespace).bind(&key)).await?;
                     tx.execute(sqlx::query("DELETE FROM index_storage WHERE namespace = ? AND key = ? AND id <= ?;")
                         .bind(&namespace).bind(&key).bind(sqlx::types::Json(last_dropped_id))).await?;
+                    if delete_if_empty {
+                        tx.execute(sqlx::query(
+                            "DELETE FROM index_storage WHERE namespace = ? AND key = ? AND NOT EXISTS (SELECT 1 FROM index_storage WHERE namespace = ? AND key = ?);",
+                        )
+                        .bind(format!("{namespace}-present"))
+                        .bind(&key)
+                        .bind(&namespace)
+                        .bind(&key)).await?;
+                    }
                     Ok(())
                 })
             })

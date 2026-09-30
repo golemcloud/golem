@@ -200,6 +200,7 @@ fn collect_stream_elements<'a>(ty: &'a SchemaType, elements: &mut Vec<Option<&'a
         | SchemaType::Binary { .. }
         | SchemaType::Path { .. }
         | SchemaType::Url { .. }
+        | SchemaType::Uuid { .. }
         | SchemaType::Datetime { .. }
         | SchemaType::Duration { .. }
         | SchemaType::Quantity { .. }
@@ -440,6 +441,7 @@ fn encode_type(
             restrictions,
             metadata,
         } => encode_url(encoder, restrictions, metadata)?,
+        SchemaType::Uuid { metadata } => encode_leaf(encoder, 38, metadata)?,
         SchemaType::Datetime { metadata } => encode_leaf(encoder, 29, metadata)?,
         SchemaType::Duration { metadata } => encode_leaf(encoder, 30, metadata)?,
         SchemaType::Quantity { spec, metadata } => {

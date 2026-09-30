@@ -1558,7 +1558,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         if let Err(error) = self.add_and_commit_oplog(entry).await {
                             let fence = match error {
                                 OplogError::Fenced(fence) => Some(fence),
-                                OplogError::Payload(_) => None,
+                                OplogError::Payload(_) | OplogError::Maintenance(_) => None,
                             };
                             self.record_retirement(
                                 InterruptKind::ShardLost,
@@ -2970,23 +2970,29 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ));
         }
         drop(instance);
-        if self
+        let current_oplog_index = self
             .oplog_service()
-            .get_last_index(&self.owned_agent_id, self.agent_mode())
+            .try_get_last_index(&self.owned_agent_id, self.agent_mode())
             .await
-            != last_oplog_index
-        {
+            .map_err(WorkerExecutorError::runtime)?;
+        if !scheduled_archive_is_current(current_oplog_index, last_oplog_index) {
             return Ok(None);
         }
         let result = match wait {
             ArchiveWait::Queued => match MultiLayerOplog::try_archive(&self.oplog).await {
-                Some(more) => Some(more),
-                None => EphemeralOplog::try_archive(&self.oplog).await,
+                Ok(Some(more)) => Some(more),
+                Ok(None) => EphemeralOplog::try_archive(&self.oplog)
+                    .await
+                    .map_err(WorkerExecutorError::runtime)?,
+                Err(error) => return Err(WorkerExecutorError::runtime(error)),
             },
             ArchiveWait::Finished => match MultiLayerOplog::try_archive_blocking(&self.oplog).await
             {
-                Some(more) => Some(more),
-                None => EphemeralOplog::try_archive_blocking(&self.oplog).await,
+                Ok(Some(more)) => Some(more),
+                Ok(None) => EphemeralOplog::try_archive_blocking(&self.oplog)
+                    .await
+                    .map_err(WorkerExecutorError::runtime)?,
+                Err(error) => return Err(WorkerExecutorError::runtime(error)),
             },
         };
         if result == Some(false) {
@@ -10238,6 +10244,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 }
 
+// A scheduled archive may outlive later commits. Archiving the current prefix preserves the
+// retry; an index behind the scheduled one indicates stale or recreated state.
+fn scheduled_archive_is_current(current: OplogIndex, scheduled: OplogIndex) -> bool {
+    current >= scheduled
+}
+
 #[derive(Debug)]
 struct WorkerStatusMetric {
     status: StdMutex<AgentStatus>,
@@ -12074,6 +12086,20 @@ mod tests {
         ));
         // An agent asserting nothing, such as one still being created, is judged by membership.
         assert!(!retired_by_assignment(Some(&at_epoch(1)), &agent, None));
+    }
+
+    #[test]
+    fn scheduled_archive_remains_valid_after_the_oplog_advances() {
+        let scheduled = OplogIndex::from_u64(10);
+        assert!(scheduled_archive_is_current(scheduled, scheduled));
+        assert!(scheduled_archive_is_current(
+            OplogIndex::from_u64(11),
+            scheduled
+        ));
+        assert!(!scheduled_archive_is_current(
+            OplogIndex::from_u64(9),
+            scheduled
+        ));
     }
 
     #[test]

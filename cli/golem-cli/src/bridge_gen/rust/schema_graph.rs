@@ -150,6 +150,7 @@ fn emit_body(body: &wire::SchemaTypeBody) -> TokenStream {
             let value = url_restrictions(value);
             quote! { #path::UrlType(#value) }
         }
+        UuidType => quote! { #path::UuidType },
         DatetimeType => quote! { #path::DatetimeType },
         DurationType => quote! { #path::DurationType },
         QuantityType(value) => {

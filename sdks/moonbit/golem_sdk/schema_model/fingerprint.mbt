@@ -305,6 +305,7 @@ fn encode_type(
       encode_optional_set(e, "url.allowed_hosts", r.allowed_hosts)
       encode_metadata(e, ty.metadata)
     }
+    Uuid => encode_leaf(e, 38, ty.metadata)
     Datetime => encode_leaf(e, 29, ty.metadata)
     Duration => encode_leaf(e, 30, ty.metadata)
     Quantity(spec) => {

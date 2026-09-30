@@ -561,6 +561,7 @@ impl IndexedStorage for InMemoryIndexedStorage {
         last_dropped_id: u64,
         expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
+        let delete_if_empty = matches!(&namespace, IndexedStorageNamespace::CompressedOpLog { .. });
         let composite_key = Self::composite_key(namespace, key);
         // The record's guard is held across the trim, in the order an append takes them, so
         // nobody can record a new generation between the check and the trim.
@@ -577,6 +578,11 @@ impl IndexedStorage for InMemoryIndexedStorage {
                 entry.retain(|k, _| *k > last_dropped_id);
             })
             .await;
+        if delete_if_empty {
+            self.data
+                .remove_if_async(&composite_key, |entry| entry.is_empty())
+                .await;
+        }
         drop(record);
         Ok(())
     }

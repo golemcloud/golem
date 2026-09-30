@@ -28,8 +28,8 @@ use crate::services::oplog::{
     OplogAddReceipt, OplogCloseCompletion, OplogConstructor, OplogError, OplogFence,
     OplogLifecycleGuard, OplogService, OrderedOplogStart, PendingUpload,
     RawOplogPayloadDownloadError, ReservedPayload, ReservedRawStartBuilder, decode_scan_cursor,
-    next_scan_cursor, record_owning_epoch, refuse_if_fenced, retry_scan_storage_op,
-    retry_storage_op_fenceable,
+    next_scan_cursor, record_epoch_verdict, record_owning_epoch, refuse_if_fenced,
+    retry_scan_storage_op,
 };
 use crate::storage::indexed::{
     IndexedStorage, IndexedStorageError, IndexedStorageLabelledApi, IndexedStorageMetaNamespace,
@@ -79,9 +79,86 @@ where
     F: FnMut() -> Fut,
     Fut: std::future::Future<Output = Result<T, IndexedStorageError>>,
 {
-    match retry_storage_op_fenceable(retry_config, op_name, key, op).await {
-        Ok(val) => val,
-        Err(err) => panic!("Indexed storage operation '{op_name}' failed for key '{key}': {err}"),
+    retry_storage_op_result(retry_config, op_name, key, op)
+        .await
+        .unwrap_or_else(|error| panic!("{error}"))
+}
+
+async fn retry_storage_op_result<T, F, Fut>(
+    retry_config: &RetryConfig,
+    op_name: &str,
+    key: &str,
+    mut op: F,
+) -> Result<T, String>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T, IndexedStorageError>>,
+{
+    let mut attempts = 0u32;
+    loop {
+        attempts += 1;
+        match op().await {
+            Ok(val) => return Ok(val),
+            Err(IndexedStorageError::Transient(msg)) => {
+                if let Some(delay) = get_delay(retry_config, attempts) {
+                    record_oplog_storage_retry(op_name);
+                    warn!(
+                        op = op_name,
+                        key = key,
+                        attempt = attempts,
+                        delay_ms = delay.as_millis() as u64,
+                        "Transient indexed storage error, retrying: {msg}"
+                    );
+                    tokio::time::sleep(delay).await;
+                } else {
+                    return Err(format!(
+                        "Indexed storage operation '{op_name}' failed for key '{key}' after {attempts} attempts: Transient storage error: {msg}"
+                    ));
+                }
+            }
+            Err(err) => {
+                return Err(format!(
+                    "Indexed storage operation '{op_name}' failed for key '{key}': {err}"
+                ));
+            }
+        }
+    }
+}
+
+/// Retries transient failures of an oplog maintenance operation and returns anything else, a
+/// fence included, for the caller to classify.
+async fn retry_maintenance_storage_op<T, F, Fut>(
+    retry_config: &RetryConfig,
+    op_name: &str,
+    key: &str,
+    mut op: F,
+) -> Result<T, IndexedStorageError>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T, IndexedStorageError>>,
+{
+    let mut attempts = 0u32;
+    loop {
+        attempts += 1;
+        match op().await {
+            Ok(val) => return Ok(val),
+            Err(error @ IndexedStorageError::Transient(_)) => {
+                if let Some(delay) = get_delay(retry_config, attempts) {
+                    record_oplog_storage_retry(op_name);
+                    warn!(
+                        op = op_name,
+                        key = key,
+                        attempt = attempts,
+                        delay_ms = delay.as_millis() as u64,
+                        "Transient indexed storage error during oplog maintenance, retrying: {error}"
+                    );
+                    tokio::time::sleep(delay).await;
+                } else {
+                    return Err(error);
+                }
+            }
+            Err(error) => return Err(error),
+        }
     }
 }
 
@@ -492,10 +569,26 @@ impl PrimaryOplogService {
         agent_mode: AgentMode,
         retry_config: &RetryConfig,
     ) -> OplogIndex {
+        Self::try_get_last_index_from_storage(
+            indexed_storage,
+            owned_agent_id,
+            agent_mode,
+            retry_config,
+        )
+        .await
+        .unwrap_or_else(|error| panic!("{error}"))
+    }
+
+    async fn try_get_last_index_from_storage(
+        indexed_storage: &(dyn IndexedStorage + Send + Sync),
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        retry_config: &RetryConfig,
+    ) -> Result<OplogIndex, String> {
         let key = Self::oplog_key(&owned_agent_id.agent_id);
         let agent_id = owned_agent_id.agent_id();
-        OplogIndex::from_u64(
-            retry_storage_op(retry_config, "get_last_index", &key, || {
+        Ok(OplogIndex::from_u64(
+            retry_storage_op_result(retry_config, "get_last_index", &key, || {
                 let ns = IndexedStorageNamespace::OpLog {
                     agent_id: agent_id.clone(),
                     agent_mode,
@@ -508,9 +601,9 @@ impl PrimaryOplogService {
                         .await
                 }
             })
-            .await
+            .await?
             .unwrap_or_default(),
-        )
+        ))
     }
 
     pub fn get_agent_id_from_key(key: &str, component_id: &ComponentId) -> AgentId {
@@ -910,6 +1003,21 @@ impl OplogService for PrimaryOplogService {
         .await
     }
 
+    async fn try_get_last_index(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+    ) -> Result<OplogIndex, String> {
+        record_oplog_call("get_last_index");
+        Self::try_get_last_index_from_storage(
+            &*self.indexed_storage,
+            owned_agent_id,
+            agent_mode,
+            &self.retry_config,
+        )
+        .await
+    }
+
     async fn assert_owning_epoch(
         &self,
         owned_agent_id: &OwnedAgentId,
@@ -949,7 +1057,7 @@ impl OplogService for PrimaryOplogService {
         // The entries and the epoch record go in one step, and only while the record is still
         // this executor's: a delete that outlived the agent's shard is refused like a write, and
         // leaves the new owner's oplog alone.
-        let outcome = retry_storage_op_fenceable(&self.retry_config, "delete", &key, || {
+        let outcome = retry_maintenance_storage_op(&self.retry_config, "delete", &key, || {
             let is = is.clone();
             let ns = IndexedStorageNamespace::OpLog {
                 agent_id: agent_id.clone(),
@@ -962,16 +1070,22 @@ impl OplogService for PrimaryOplogService {
             }
         })
         .await;
-        outcome.map_err(|error| {
-            let fence = OplogFence::refused(agent_id, error);
-            warn!(
-                agent_id = %owned_agent_id,
-                expected_epoch = fence.expected_epoch.0,
-                actual_epoch = ?fence.actual_epoch.map(|epoch| epoch.0),
-                "Oplog delete refused: the shard has a new owner"
-            );
-            OplogError::Fenced(fence)
-        })
+        match outcome {
+            Ok(()) => Ok(()),
+            Err(error @ IndexedStorageError::Fenced { .. }) => {
+                let fence = OplogFence::refused(agent_id, error);
+                warn!(
+                    agent_id = %owned_agent_id,
+                    expected_epoch = fence.expected_epoch.0,
+                    actual_epoch = ?fence.actual_epoch.map(|epoch| epoch.0),
+                    "Oplog delete refused: the shard has a new owner"
+                );
+                Err(OplogError::Fenced(fence))
+            }
+            Err(other) => Err(OplogError::Maintenance(format!(
+                "Failed to delete primary oplog for {agent_id}: {other}"
+            ))),
+        }
     }
 
     async fn read_exact(
@@ -1023,13 +1137,23 @@ impl OplogService for PrimaryOplogService {
     }
 
     async fn exists(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) -> bool {
+        self.try_exists(owned_agent_id, agent_mode)
+            .await
+            .unwrap_or_else(|error| panic!("{error}"))
+    }
+
+    async fn try_exists(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+    ) -> Result<bool, String> {
         record_oplog_call("exists");
 
-        {
+        Ok({
             let is = self.indexed_storage.clone();
             let agent_id = owned_agent_id.agent_id();
             let key = Self::oplog_key(&owned_agent_id.agent_id);
-            retry_storage_op(&self.retry_config, "exists", &key, || {
+            retry_storage_op_result(&self.retry_config, "exists", &key, || {
                 let is = is.clone();
                 let ns = IndexedStorageNamespace::OpLog {
                     agent_id: agent_id.clone(),
@@ -1038,8 +1162,8 @@ impl OplogService for PrimaryOplogService {
                 let key = key.clone();
                 async move { is.with("oplog", "exists").exists(ns, &key).await }
             })
-            .await
-        }
+            .await?
+        })
     }
 
     async fn scan_for_component(
@@ -1371,7 +1495,7 @@ enum OplogJob {
     },
     DropPrefix {
         last_dropped_id: OplogIndex,
-        done: tokio::sync::oneshot::Sender<u64>,
+        done: tokio::sync::oneshot::Sender<Result<u64, String>>,
     },
     CurrentIndex {
         done: tokio::sync::oneshot::Sender<OplogIndex>,
@@ -1673,21 +1797,26 @@ impl PrimaryOplog {
                         last_dropped_id,
                         done,
                     } => {
-                        let before = state.reader().length().await;
-                        state.drop_prefix(last_dropped_id).await;
-                        let remaining = state.reader().length().await;
-                        let dropped = before - remaining;
-                        if dropped > 0 {
-                            let account_id = state.account_id.to_string();
-                            let environment_id = state.owned_agent_id.environment_id().to_string();
-                            record_storage_objects_deleted(
-                                STORAGE_TYPE_OPLOG,
-                                &account_id,
-                                &environment_id,
-                                dropped,
-                            );
+                        let result = async {
+                            let before = state.reader().try_length().await?;
+                            state.try_drop_prefix(last_dropped_id).await?;
+                            let remaining = state.reader().try_length().await?;
+                            let dropped = before - remaining;
+                            if dropped > 0 {
+                                let account_id = state.account_id.to_string();
+                                let environment_id =
+                                    state.owned_agent_id.environment_id().to_string();
+                                record_storage_objects_deleted(
+                                    STORAGE_TYPE_OPLOG,
+                                    &account_id,
+                                    &environment_id,
+                                    dropped,
+                                );
+                            }
+                            Ok(dropped)
                         }
-                        let _ = done.send(dropped);
+                        .await;
+                        let _ = done.send(result);
                     }
                     OplogJob::CurrentIndex { done } => {
                         let _ = done.send(state.last_oplog_idx);
@@ -1855,10 +1984,22 @@ impl OplogReader {
         oplog_index: OplogIndex,
         n: u64,
     ) -> BTreeMap<OplogIndex, OplogEntry> {
+        self.try_read_source(oplog_index, n)
+            .await
+            .unwrap_or_else(|error| panic!("{error}"))
+    }
+
+    async fn try_read_source(
+        &self,
+        oplog_index: OplogIndex,
+        n: u64,
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, String> {
         record_oplog_call("read_exact");
 
-        let Some(last_idx) = fail_stop(checked_range_end(oplog_index, n)) else {
-            return BTreeMap::new();
+        let Some(last_idx) =
+            checked_range_end(oplog_index, n).map_err(|error| error.to_string())?
+        else {
+            return Ok(BTreeMap::new());
         };
 
         let mut result: BTreeMap<OplogIndex, OplogEntry> = if oplog_index <= self.last_committed_idx
@@ -1868,13 +2009,13 @@ impl OplogReader {
             let key = self.key.clone();
             let start: u64 = oplog_index.into();
             let end: u64 = min(last_idx, self.last_committed_idx).into();
-            retry_storage_op(&self.retry_config, "read_exact", &key, || {
+            retry_storage_op_result(&self.retry_config, "read_exact", &key, || {
                 let is = is.clone();
                 let ns = namespace.clone();
                 let key = key.clone();
                 async move { read_persisted_oplog_entries(is, ns, key, start, end).await }
             })
-            .await
+            .await?
             .into_iter()
             .map(|(idx, entry)| (OplogIndex::from_u64(idx), entry))
             .collect()
@@ -1905,24 +2046,30 @@ impl OplogReader {
             }
         }
 
-        result
+        Ok(result)
     }
 
     async fn length(&self) -> u64 {
+        self.try_length()
+            .await
+            .unwrap_or_else(|error| panic!("{error}"))
+    }
+
+    async fn try_length(&self) -> Result<u64, String> {
         record_oplog_call("length");
 
-        {
+        Ok({
             let is = self.indexed_storage.clone();
             let namespace = self.namespace.clone();
             let key = self.key.clone();
-            retry_storage_op(&self.retry_config, "length", &key, || {
+            retry_storage_op_result(&self.retry_config, "length", &key, || {
                 let is = is.clone();
                 let ns = namespace.clone();
                 let key = key.clone();
                 async move { is.with("oplog", "length").length(ns, &key).await }
             })
-            .await
-        }
+            .await?
+        })
     }
 }
 
@@ -2257,11 +2404,12 @@ impl PrimaryOplogState {
 
     /// Trims the entries an archive transfer has copied, asserting the epoch this oplog was opened
     /// with in the same step. A refusal removes nothing and latches the fence: the oplog belongs to
-    /// a newer owner, whose own transfer decides what leaves it.
-    async fn drop_prefix(&self, last_dropped_id: OplogIndex) {
+    /// a newer owner, whose own transfer decides what leaves it, so there is nothing to retry. Any
+    /// other failure is returned for the archive maintenance to retry later.
+    async fn try_drop_prefix(&self, last_dropped_id: OplogIndex) -> Result<(), String> {
         record_oplog_call("drop_prefix");
         if self.fence.get().is_some() {
-            return;
+            return Ok(());
         }
 
         let is = self.indexed_storage.clone();
@@ -2269,7 +2417,7 @@ impl PrimaryOplogState {
         let key = self.key.clone();
         let dropped_id: u64 = last_dropped_id.into();
         let shard_epoch = self.shard_epoch;
-        let trimmed = retry_storage_op_fenceable(&self.retry_config, "drop_prefix", &key, || {
+        let trimmed = retry_maintenance_storage_op(&self.retry_config, "drop_prefix", &key, || {
             let is = is.clone();
             let ns = namespace.clone();
             let key = key.clone();
@@ -2279,20 +2427,27 @@ impl PrimaryOplogState {
                     .await
             }
         })
-        .await
-        .map_err(|err| Self::as_oplog_error(&self.owned_agent_id, err));
+        .await;
         if self.shard_epoch.is_some() {
-            record_oplog_epoch_fence("drop_prefix", trimmed.is_err());
+            record_epoch_verdict("drop_prefix", &trimmed);
         }
-        if let Err(OplogError::Fenced(fence)) = trimmed
-            && self.fence.set(fence.clone()).is_ok()
-        {
-            warn!(
-                agent_id = %self.owned_agent_id,
-                expected_epoch = fence.expected_epoch.0,
-                actual_epoch = ?fence.actual_epoch.map(|epoch| epoch.0),
-                "Oplog trim fenced: the shard has a new owner, refusing further writes"
-            );
+        match trimmed {
+            Ok(()) => Ok(()),
+            Err(error @ IndexedStorageError::Fenced { .. }) => {
+                let fence = OplogFence::refused(self.owned_agent_id.agent_id(), error);
+                if self.fence.set(fence.clone()).is_ok() {
+                    warn!(
+                        agent_id = %self.owned_agent_id,
+                        expected_epoch = fence.expected_epoch.0,
+                        actual_epoch = ?fence.actual_epoch.map(|epoch| epoch.0),
+                        "Oplog trim fenced: the shard has a new owner, refusing further writes"
+                    );
+                }
+                Ok(())
+            }
+            Err(error) => Err(format!(
+                "Indexed storage operation 'drop_prefix' failed for key '{key}': {error}"
+            )),
         }
     }
 }
@@ -2370,6 +2525,12 @@ impl Oplog for PrimaryOplog {
     }
 
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> u64 {
+        self.try_drop_prefix(last_dropped_id)
+            .await
+            .unwrap_or_else(|error| panic!("{error}"))
+    }
+
+    async fn try_drop_prefix(&self, last_dropped_id: OplogIndex) -> Result<u64, String> {
         self.run_job(|done| OplogJob::DropPrefix {
             last_dropped_id,
             done,
@@ -2386,6 +2547,10 @@ impl Oplog for PrimaryOplog {
 
     async fn current_oplog_index(&self) -> OplogIndex {
         self.run_job(|done| OplogJob::CurrentIndex { done }).await
+    }
+
+    async fn try_current_oplog_index(&self) -> Result<OplogIndex, String> {
+        Ok(self.current_oplog_index().await)
     }
 
     async fn raw_durable_stream_session_status(
@@ -2484,6 +2649,15 @@ impl Oplog for PrimaryOplog {
         reader.read_source(oplog_index, n).await
     }
 
+    async fn try_read_source(
+        &self,
+        oplog_index: OplogIndex,
+        n: u64,
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, String> {
+        let reader = self.run_job(|done| OplogJob::Reader { done }).await;
+        reader.try_read_source(oplog_index, n).await
+    }
+
     async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
         let reader = self.run_job(|done| OplogJob::Reader { done }).await;
         reader.read(oplog_index).await
@@ -2492,6 +2666,11 @@ impl Oplog for PrimaryOplog {
     async fn length(&self) -> u64 {
         let reader = self.run_job(|done| OplogJob::Reader { done }).await;
         reader.length().await
+    }
+
+    async fn try_length(&self) -> Result<u64, String> {
+        let reader = self.run_job(|done| OplogJob::Reader { done }).await;
+        reader.try_length().await
     }
 
     async fn upload_raw_payload(&self, data: Vec<u8>) -> Result<RawOplogPayload, String> {

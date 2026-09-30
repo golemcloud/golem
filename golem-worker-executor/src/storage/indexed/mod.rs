@@ -440,7 +440,10 @@ pub trait IndexedStorage: Debug + Sync {
 
     /// Deletes the entry with the closest id to the given id in the index of the given key,
     /// in a way that `last_dropped_id` is greater to the id of the deleted entries.
-    /// The key remains present even when every entry is removed. Missing keys stay missing.
+    /// Primary oplog keys remain present even when every entry is removed, preserving the creation
+    /// fence. Compressed archive keys are removed atomically when trimming leaves them empty, so a
+    /// later retry may append the same final chunk id; their epoch record stays. Missing keys stay
+    /// missing.
     ///
     /// Fenced on the writer generation as an append is, checked in the same atomic step as the
     /// trim: refused with [`IndexedStorageError::Fenced`], removing nothing, when `expected_epoch`

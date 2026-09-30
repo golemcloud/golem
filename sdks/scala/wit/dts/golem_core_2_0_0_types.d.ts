@@ -539,6 +539,9 @@ declare module 'golem:core/types@2.0.0' {
     val: UrlRestrictions
   } |
   {
+    tag: 'uuid-type'
+  } |
+  {
     tag: 'datetime-type'
   } |
   {
@@ -775,6 +778,10 @@ declare module 'golem:core/types@2.0.0' {
   {
     tag: 'url-value'
     val: string
+  } |
+  {
+    tag: 'uuid-value'
+    val: Uuid
   } |
   {
     tag: 'datetime-value'

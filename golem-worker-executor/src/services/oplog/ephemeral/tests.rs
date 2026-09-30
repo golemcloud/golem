@@ -14,7 +14,7 @@
 
 use super::*;
 use crate::services::oplog::multilayer::{
-    MultiLayerOplogService, OplogArchiveService, new_transfer_fiber,
+    MultiLayerOplogService, OplogArchiveResult, OplogArchiveService, new_transfer_fiber,
 };
 use crate::services::oplog::primary::PrimaryOplogService;
 use crate::storage::indexed::memory::InMemoryIndexedStorage;
@@ -80,21 +80,30 @@ impl GatedArchive {
 
 #[async_trait]
 impl OplogArchive for GatedArchive {
-    async fn read_source(&self, idx: OplogIndex, n: u64) -> BTreeMap<OplogIndex, OplogEntry> {
+    async fn read_source(
+        &self,
+        idx: OplogIndex,
+        n: u64,
+    ) -> OplogArchiveResult<BTreeMap<OplogIndex, OplogEntry>> {
         self.read_calls.fetch_add(1, Ordering::Relaxed);
         let end = idx.as_u64().saturating_add(n);
-        self.entries
+        Ok(self
+            .entries
             .lock()
             .unwrap()
             .range(idx..OplogIndex::from_u64(end))
             .map(|(idx, entry)| (*idx, entry.clone()))
-            .collect()
+            .collect())
     }
 
     async fn append(&self, chunk: &[(OplogIndex, OplogEntry)]) -> Result<u64, OplogError> {
         self.append_calls.fetch_add(1, Ordering::Release);
         self.append_started.notify_one();
-        self.append_permits.acquire().await.unwrap().forget();
+        self.append_permits
+            .acquire()
+            .await
+            .map_err(|error| OplogError::Maintenance(error.to_string()))?
+            .forget();
         if let Some(fence) = self.refusal.lock().unwrap().clone() {
             return Err(OplogError::Fenced(fence));
         }
@@ -102,15 +111,21 @@ impl OplogArchive for GatedArchive {
         Ok(chunk.len() as u64)
     }
 
-    async fn verify_persisted(&self, _entries: &[(OplogIndex, OplogEntry)]) {}
+    async fn verify_persisted(
+        &self,
+        _entries: &[(OplogIndex, OplogEntry)],
+    ) -> OplogArchiveResult<()> {
+        Ok(())
+    }
 
-    async fn current_oplog_index(&self) -> OplogIndex {
-        self.entries
+    async fn current_oplog_index(&self) -> OplogArchiveResult<OplogIndex> {
+        Ok(self
+            .entries
             .lock()
             .unwrap()
             .last_key_value()
             .map(|(idx, _)| *idx)
-            .unwrap_or(OplogIndex::NONE)
+            .unwrap_or(OplogIndex::NONE))
     }
 
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> Result<u64, OplogError> {
@@ -120,11 +135,11 @@ impl OplogArchive for GatedArchive {
         Ok((old - entries.len()) as u64)
     }
 
-    async fn length(&self) -> u64 {
-        self.entries.lock().unwrap().len() as u64
+    async fn length(&self) -> OplogArchiveResult<u64> {
+        Ok(self.entries.lock().unwrap().len() as u64)
     }
 
-    async fn get_last_index(&self) -> OplogIndex {
+    async fn get_last_index(&self) -> OplogArchiveResult<OplogIndex> {
         self.current_oplog_index().await
     }
 }
@@ -155,7 +170,9 @@ impl OplogArchiveService for SingletonArchiveService {
     ) -> Arc<dyn OplogArchive + Send + Sync> {
         self.0.clone()
     }
-    async fn delete(&self, _: &OwnedAgentId, _: AgentMode) {}
+    async fn delete(&self, _: &OwnedAgentId, _: AgentMode) -> OplogArchiveResult<()> {
+        Ok(())
+    }
     async fn read_source(
         &self,
         _: &OwnedAgentId,
@@ -163,10 +180,10 @@ impl OplogArchiveService for SingletonArchiveService {
         idx: OplogIndex,
         n: u64,
     ) -> BTreeMap<OplogIndex, OplogEntry> {
-        self.0.read_source(idx, n).await
+        self.0.read_source(idx, n).await.unwrap()
     }
     async fn exists(&self, _: &OwnedAgentId, _: AgentMode) -> bool {
-        self.0.length().await != 0
+        self.0.length().await.unwrap() != 0
     }
     async fn scan_for_component(
         &self,
@@ -179,7 +196,7 @@ impl OplogArchiveService for SingletonArchiveService {
         Ok((cursor, Vec::new()))
     }
     async fn get_last_index(&self, _: &OwnedAgentId, _: AgentMode) -> OplogIndex {
-        self.0.get_last_index().await
+        self.0.get_last_index().await.unwrap()
     }
 }
 
@@ -220,6 +237,7 @@ async fn fixture(threshold: u64) -> Fixture {
     let transfer = EphemeralOplog::spawn_background_transfer(
         owned_agent_id.clone(),
         lower.clone(),
+        service.clone(),
         transfer_rx,
         start_rx,
     );
@@ -358,7 +376,7 @@ async fn bounded_writer_queue_backpressures_fourth_threshold_flush_and_close_dra
     fixture.oplog.retire();
     fixture.archive.release(3);
     assert_eq!(closed.await, Ok(()));
-    assert_eq!(fixture.archive.length().await, 4);
+    assert_eq!(fixture.archive.length().await.unwrap(), 4);
 }
 
 #[test]
@@ -384,6 +402,7 @@ async fn receipt_overflow_retains_a_detectable_gap_and_storage_barrier_covers_it
             .archive
             .read_source(OplogIndex::INITIAL, count as u64)
             .await
+            .unwrap()
             .into_values()
             .collect::<Vec<_>>(),
         expected
@@ -401,7 +420,7 @@ async fn failed_writer_is_joined_and_reported_by_close() {
     fixture.archive.append_permits.close();
     fixture.oplog.retire();
     assert!(fixture.oplog.closed().await.is_err());
-    assert_eq!(fixture.archive.length().await, 0);
+    assert_eq!(fixture.archive.length().await.unwrap(), 0);
 }
 
 fn refusal(fixture: &Fixture) -> OplogFence {
@@ -440,7 +459,7 @@ async fn a_refused_batch_fails_the_commit_waiting_on_it_and_every_later_write() 
         Err(OplogError::Fenced(_))
     ));
     assert_eq!(fixture.archive.append_calls.load(Ordering::Relaxed), 1);
-    assert_eq!(fixture.archive.length().await, 0);
+    assert_eq!(fixture.archive.length().await, Ok(0));
 
     // The refused entry was never committed, and this handle still reads it.
     assert_eq!(

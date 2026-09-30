@@ -88,6 +88,16 @@ describe('s.principal() marker', () => {
 
     const wire = codec.toValue(input) as SchemaValue & { caseIndex: number };
     expect(wire.caseIndex).toBe(1);
+    const agentPrincipal = (wire as Extract<SchemaValue, { tag: 'variant' }>).payload as Extract<
+      SchemaValue,
+      { tag: 'record' }
+    >;
+    const agentId = agentPrincipal.fields[0] as Extract<SchemaValue, { tag: 'record' }>;
+    const componentId = agentId.fields[0] as Extract<SchemaValue, { tag: 'record' }>;
+    expect(componentId.fields[0]).toMatchObject({
+      tag: 'uuid',
+      value: { highBits: 1n, lowBits: 2n },
+    });
 
     const decoded = codec.fromValue(wire) as Principal;
     expect(decoded.tag).toBe('agent');

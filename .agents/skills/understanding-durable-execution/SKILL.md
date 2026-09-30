@@ -252,6 +252,14 @@ forwarding wrapper may be reused by the next worker, so ordinary retirement does
 task admission or forwarding. Deletion claims ownership under the same owner-cleanup lock, then
 drains the resident stream producer before running maintenance on a private producer. Failed
 maintenance is drained before a retry; only deletion closes the oplog generation permanently.
+Archive transfers append and verify the destination before dropping the source. Archive storage
+failures therefore fail only that maintenance attempt: they are logged, never fail the agent,
+the authoritative source remains intact, and threshold, scheduled or sweep maintenance retries
+with per-agent backoff. A scheduled retry remains valid when later commits advance the oplog tip.
+An archive read needed for replay still fails recovery rather than being treated as absent data.
+A write the shard-epoch fence refuses is not a storage failure: it ends the transfer as
+`OplogError::Fenced`, latches the oplog's fence and is never retried, because the oplog now
+belongs to the shard's new owner (see "Resharding, revocation and the oplog epoch fence").
 
 Cold acquisition reserves one unresolved `Worker` in `ActiveAgents`. `initialize_with` owns one
 shared attempt independently of request cancellation. `finish_construction` prepares resolved data

@@ -211,6 +211,7 @@ fn schema_kind_name(ty: &SchemaType) -> &'static str {
         SchemaType::Text { .. } => "text",
         SchemaType::Path { .. } => "path",
         SchemaType::Url { .. } => "url",
+        SchemaType::Uuid { .. } => "uuid",
         SchemaType::Record { .. } => "record",
         SchemaType::Variant { .. } => "variant",
         SchemaType::Enum { .. } => "enum",
