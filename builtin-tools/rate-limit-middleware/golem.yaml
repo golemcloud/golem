@@ -1,0 +1,30 @@
+# Schema for IDEA:
+# $schema: https://schema.golem.cloud/app/golem/1.6.0-dev.9/golem.schema.json
+manifestVersion: 1.6.0
+app: rate-limit-middleware
+
+components:
+  golem:rate-limit-middleware:
+    dir: "."
+    templates: rust
+
+tools:
+  middleware:
+    persistent-rate-limit:
+      component: golem:rate-limit-middleware
+
+toolMiddlewareReleases:
+  local:
+    persistent-rate-limit: {}
+
+environments:
+  local:
+    server: local
+    componentPresets: release
+    tools:
+      middleware:
+        - name: persistent-rate-limit
+          parameters:
+            policy: default
+            limit: 100
+            windowMilliseconds: 60000

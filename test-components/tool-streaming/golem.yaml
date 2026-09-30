@@ -27,6 +27,9 @@ components:
   golem-it:tool-streaming-rust-middleware:
     dir: rust-middleware
     templates: rust, rust-test-component
+  golem:rate-limit-middleware:
+    dir: ../../builtin-tools/rate-limit-middleware
+    templates: rust, rust-test-component
 
 tools:
   streaming: {}

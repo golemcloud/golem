@@ -164,6 +164,10 @@ impl MiddlewareProbe for MiddlewareProbeImpl {
         if value.starts_with("cascade-trap(") {
             panic!("mixed lifecycle cascade trap");
         }
+        if value.starts_with("rate-limit-crash(") {
+            announce_middleware_probe_effect(&value).await;
+            wait_at_crash_checkpoint(&value, "rate-limit-leaf-after-effect").await;
+        }
         format!("leaf({value})")
     }
 }

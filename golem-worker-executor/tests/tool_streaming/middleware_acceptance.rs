@@ -25,6 +25,131 @@ inherit_test_dep!(
     #[tagged_as("audit_middleware")]
     PrecompiledComponent
 );
+inherit_test_dep!(
+    #[tagged_as("rate_limit_middleware")]
+    PrecompiledComponent
+);
+
+#[derive(Debug, FromSchema)]
+struct RateLimitBackendStats {
+    attempts: u64,
+    committed_charges: u64,
+    recorded_decisions: u64,
+}
+
+fn rate_limit_parameters(
+    definition: &ToolMiddleware,
+    policy: &str,
+    limit: u64,
+    window_milliseconds: u64,
+) -> TypedSchemaValue {
+    TypedSchemaValue::new(
+        definition.parameter_schema.clone(),
+        SchemaValue::Record {
+            fields: vec![
+                SchemaValue::String(policy.to_string()),
+                SchemaValue::U64(limit),
+                SchemaValue::U64(window_milliseconds),
+            ],
+        },
+    )
+}
+
+fn oidc_principal(subject: &str) -> Principal {
+    Principal::Oidc(OidcPrincipal {
+        sub: subject.to_string(),
+        issuer: "https://rate-limit.test".to_string(),
+        email: None,
+        name: None,
+        email_verified: None,
+        given_name: None,
+        family_name: None,
+        picture: None,
+        preferred_username: None,
+        claims: "{}".to_string(),
+    })
+}
+
+macro_rules! setup_rate_limit_chain {
+    ($last:expr, $deps:expr, $provider:expr, $caller:expr, $rate_limit:expr,
+     $policy:expr, $limit:expr,
+     $context:ident, $environment:ident, $executor:ident, $provider_component:ident,
+     $caller_component:ident, $rate_limit_component:ident, $agent_type:ident) => {
+        let $context = TestContext::new($last);
+        let $environment = Arc::new(TestEnvironmentStateService::default());
+        let $executor = start_with_overrides(
+            $deps,
+            &$context,
+            TestExecutorOverrides {
+                environment_state_service: Some($environment.clone()),
+                ..Default::default()
+            },
+        )
+        .await?;
+        let $provider_component = $executor
+            .component_dep(&$context.default_environment_id, $provider)
+            .store()
+            .await?;
+        let $caller_component = $executor
+            .component_dep(&$context.default_environment_id, $caller)
+            .store()
+            .await?;
+        let $rate_limit_component = $executor
+            .component_dep(&$context.default_environment_id, $rate_limit)
+            .store()
+            .await?;
+        let provider_metadata = extract_component_metadata(
+            &$deps
+                .component_directory
+                .join(format!("{}.wasm", $provider.wasm_name)),
+            false,
+            true,
+        )
+        .await?;
+        let middleware_metadata = extract_component_metadata(
+            &$deps
+                .component_directory
+                .join(format!("{}.wasm", $rate_limit.wasm_name)),
+            false,
+            true,
+        )
+        .await?;
+        let definition = middleware_metadata
+            .tool_middlewares
+            .iter()
+            .find(|definition| definition.name == "persistent-rate-limit")
+            .expect("persistent rate-limit middleware metadata");
+        let $agent_type = AgentTypeName("ToolStreamingCaller".to_string());
+        let tool_name = ToolName::try_from("middleware-probe").unwrap();
+        let mut deployment = deployment_state(
+            $context.account_id,
+            $provider_component.id,
+            $provider_component.revision,
+            "golem-it:tool-streaming-rust-provider",
+            $agent_type.0.as_str(),
+            provider_metadata.tools,
+        );
+        install_middleware_chain(
+            &mut deployment,
+            &$agent_type,
+            &tool_name,
+            $rate_limit_component.id,
+            $rate_limit_component.revision,
+            "golem:rate-limit-middleware",
+            &middleware_metadata.tool_middlewares,
+            vec![(
+                definition.name.as_str(),
+                rate_limit_parameters(definition, $policy, $limit, 3_600_000),
+            )],
+        );
+        $environment.set_tool_deployment(
+            $context.default_environment_id,
+            $caller_component.id,
+            $caller_component.revision,
+            Some(deployment),
+        );
+    };
+}
 
 macro_rules! setup_probe_chain {
     ($last:expr, $deps:expr, $provider:expr, $caller:expr, $names:expr,
@@ -1695,6 +1820,301 @@ async fn incapable_middleware_preserves_capable_streaming_staging_and_reconstruc
     {
         assert_one_terminal_before_finished(&oplog, start.oplog_index, finished);
     }
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
+async fn rate_1_enforces_boundary_before_dispatch_and_partitions_principals(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    #[tagged_as("rate_limit_middleware")] rate_limit: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    setup_rate_limit_chain!(
+        last_unique_id,
+        deps,
+        provider,
+        caller,
+        rate_limit,
+        "rate-1",
+        3,
+        context,
+        environment,
+        executor,
+        provider_component,
+        caller_component,
+        rate_limit_component,
+        agent_type
+    );
+    let agent_id = agent_id!("ToolStreamingCaller", "rate-1-owner");
+    let worker_id = executor
+        .start_agent(&caller_component.id, agent_id.clone())
+        .await?;
+    let principal_a = oidc_principal("principal-a");
+
+    for ordinal in 1..=3 {
+        let result: String = executor
+            .invoke_and_await_agent_as_principal(
+                &caller_component,
+                &agent_id,
+                principal_a.clone(),
+                "middleware_probe_once",
+                data_value!(format!("a-{ordinal}")),
+            )
+            .await?
+            .into_typed()?;
+        assert_eq!(result, format!("leaf(a-{ordinal})"));
+    }
+    let rejected = executor
+        .invoke_and_await_agent_as_principal(
+            &caller_component,
+            &agent_id,
+            principal_a,
+            "middleware_probe_once",
+            data_value!("a-4"),
+        )
+        .await;
+    assert!(rejected.is_err(), "call N+1 must be rejected");
+
+    let independent_agent_id = agent_id!("ToolStreamingCaller", "rate-1-independent-owner");
+    let independent_worker_id = executor
+        .start_agent(&caller_component.id, independent_agent_id.clone())
+        .await?;
+    let independent: String = executor
+        .invoke_and_await_agent_as_principal(
+            &caller_component,
+            &independent_agent_id,
+            oidc_principal("principal-b"),
+            "middleware_probe_once",
+            data_value!("b-1"),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(independent, "leaf(b-1)");
+
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let independent_oplog = executor
+        .get_oplog(&independent_worker_id, OplogIndex::INITIAL)
+        .await?;
+    assert_eq!(
+        entity_starts(&oplog, PublicAgentEntityKind::Tool, "middleware-probe").len()
+            + entity_starts(
+                &independent_oplog,
+                PublicAgentEntityKind::Tool,
+                "middleware-probe"
+            )
+            .len(),
+        4,
+        "the rejected call must not reach the wrapped tool"
+    );
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
+async fn rate_2_distinct_concurrent_owners_share_one_atomic_principal_limit(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    #[tagged_as("rate_limit_middleware")] rate_limit: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    const LIMIT: usize = 11;
+    const OWNERS: usize = 32;
+    setup_rate_limit_chain!(
+        last_unique_id,
+        deps,
+        provider,
+        caller,
+        rate_limit,
+        "rate-2",
+        LIMIT as u64,
+        context,
+        environment,
+        executor,
+        provider_component,
+        caller_component,
+        rate_limit_component,
+        agent_type
+    );
+    let mut owners = Vec::with_capacity(OWNERS);
+    for ordinal in 0..OWNERS {
+        let agent_id = agent_id!("ToolStreamingCaller", format!("rate-2-owner-{ordinal}"));
+        let worker_id = executor
+            .start_agent(&caller_component.id, agent_id.clone())
+            .await?;
+        owners.push((agent_id, worker_id));
+    }
+
+    let barrier = Arc::new(tokio::sync::Barrier::new(OWNERS));
+    let principal = oidc_principal("shared-principal");
+    let calls = owners.iter().enumerate().map(|(ordinal, (agent_id, _))| {
+        let barrier = barrier.clone();
+        let principal = principal.clone();
+        let executor = &executor;
+        let caller_component = &caller_component;
+        let agent_id = agent_id.clone();
+        async move {
+            barrier.wait().await;
+            executor
+                .invoke_and_await_agent_as_principal(
+                    caller_component,
+                    &agent_id,
+                    principal,
+                    "middleware_probe_once",
+                    data_value!(format!("owner-{ordinal}")),
+                )
+                .await
+        }
+    });
+    let results = futures::future::join_all(calls).await;
+    assert_eq!(
+        results.iter().filter(|result| result.is_ok()).count(),
+        LIMIT
+    );
+
+    let mut leaf_calls = 0;
+    for (_, worker_id) in &owners {
+        let oplog = executor.get_oplog(worker_id, OplogIndex::INITIAL).await?;
+        leaf_calls += entity_starts(&oplog, PublicAgentEntityKind::Tool, "middleware-probe").len();
+    }
+    assert_eq!(leaf_calls, LIMIT, "atomic admission must not lose updates");
+
+    let backend_id = agent_id!("RateLimitBackend", "rate-2");
+    let stats: RateLimitBackendStats = executor
+        .invoke_and_await_agent(&rate_limit_component, &backend_id, "stats", data_value!())
+        .await?
+        .into_typed()?;
+    assert_eq!(stats.attempts, OWNERS as u64);
+    assert_eq!(stats.committed_charges, LIMIT as u64);
+    assert_eq!(stats.recorded_decisions, OWNERS as u64);
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
+async fn rate_3_crash_after_leaf_effect_replays_without_an_extra_charge_or_effect(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    #[tagged_as("rate_limit_middleware")] rate_limit: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    setup_rate_limit_chain!(
+        last_unique_id,
+        deps,
+        provider,
+        caller,
+        rate_limit,
+        "rate-3",
+        2,
+        context,
+        environment,
+        executor,
+        provider_component,
+        caller_component,
+        rate_limit_component,
+        agent_type
+    );
+    let (effect_port, mut effects, effect_server) = start_probe_effect_server().await;
+    let (checkpoint_port, checkpoint_gate_port, checkpoint_server, mut arrivals) =
+        start_crash_checkpoint_server().await;
+    let agent_id = agent_id!("ToolStreamingCaller", "rate-3-owner");
+    let worker_id = executor
+        .start_agent_with(
+            &caller_component.id,
+            agent_id.clone(),
+            HashMap::from([
+                (
+                    "MIDDLEWARE_PROBE_EFFECT_PORT".to_string(),
+                    effect_port.to_string(),
+                ),
+                (
+                    "CRASH_CHECKPOINT_PORT".to_string(),
+                    checkpoint_port.to_string(),
+                ),
+                (
+                    "CRASH_CHECKPOINT_GATE_PORT".to_string(),
+                    checkpoint_gate_port.to_string(),
+                ),
+            ]),
+            Vec::new(),
+        )
+        .await?;
+    let invocation = executor.invoke_and_await_agent_as_principal(
+        &caller_component,
+        &agent_id,
+        oidc_principal("replay-principal"),
+        "middleware_probe_once",
+        data_value!("rate-limit-crash(first)"),
+    );
+    tokio::pin!(invocation);
+    let effect = tokio::select! {
+        effect = effects.recv() => effect.expect("rate-limit leaf effect"),
+        result = invocation.as_mut() => panic!("rate-limit call settled before its leaf checkpoint: {result:?}"),
+    };
+    assert_eq!(effect, "rate-limit-crash(first)");
+    let _original = tokio::select! {
+        checkpoint = next_crash_checkpoint(&mut arrivals, "rate-limit-leaf-after-effect") => checkpoint?,
+        result = invocation.as_mut() => panic!("rate-limit call settled before its leaf checkpoint: {result:?}"),
+    };
+
+    let backend_id = agent_id!("RateLimitBackend", "rate-3");
+    let before: RateLimitBackendStats = executor
+        .invoke_and_await_agent(&rate_limit_component, &backend_id, "stats", data_value!())
+        .await?
+        .into_typed()?;
+    assert_eq!(before.attempts, 1);
+    assert_eq!(before.committed_charges, 1);
+
+    executor.simulated_crash(&worker_id).await?;
+    let replay = next_crash_checkpoint(&mut arrivals, "rate-limit-leaf-after-effect").await?;
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(200), effects.recv())
+            .await
+            .is_err(),
+        "the committed leaf effect must not repeat during reconstruction"
+    );
+    replay.release.send(()).expect("release replayed leaf");
+    let result: String = invocation.await?.into_typed()?;
+    assert_eq!(result, "leaf(rate-limit-crash(first))");
+
+    let after_replay: RateLimitBackendStats = executor
+        .invoke_and_await_agent(&rate_limit_component, &backend_id, "stats", data_value!())
+        .await?
+        .into_typed()?;
+    assert_eq!(after_replay.attempts, 1);
+    assert_eq!(after_replay.committed_charges, 1);
+
+    let fresh: String = executor
+        .invoke_and_await_agent_as_principal(
+            &caller_component,
+            &agent_id,
+            oidc_principal("replay-principal"),
+            "middleware_probe_once",
+            data_value!("fresh"),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(fresh, "leaf(fresh)");
+    let after_fresh: RateLimitBackendStats = executor
+        .invoke_and_await_agent(&rate_limit_component, &backend_id, "stats", data_value!())
+        .await?
+        .into_typed()?;
+    assert_eq!(after_fresh.attempts, 2);
+    assert_eq!(after_fresh.committed_charges, 2);
+    assert_eq!(after_fresh.recorded_decisions, 2);
+
+    checkpoint_server.abort();
+    effect_server.abort();
     Ok(())
 }
 

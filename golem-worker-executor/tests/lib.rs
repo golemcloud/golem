@@ -237,6 +237,12 @@ test_component!(
     "golem-it:tool-streaming-rust-caller"
 );
 test_component!(
+    rate_limit_middleware,
+    "rate_limit_middleware",
+    "golem_rate_limit_middleware_release",
+    "golem:rate-limit-middleware"
+);
+test_component!(
     filesystem_tools,
     "filesystem_tools",
     "../builtin-tools/filesystem-tools",

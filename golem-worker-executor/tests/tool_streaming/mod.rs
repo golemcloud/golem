@@ -23,7 +23,7 @@ use golem_common::agent_id;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::extraction::extract_component_metadata;
 use golem_common::model::agent::{
-    AgentMode, AgentTypeName, GolemUserPrincipal, OwnerKind, Principal,
+    AgentMode, AgentTypeName, GolemUserPrincipal, OidcPrincipal, OwnerKind, Principal,
 };
 use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::deployment::DeploymentRevision;
@@ -95,6 +95,10 @@ inherit_test_dep!(
 );
 inherit_test_dep!(
     #[tagged_as("tool_streaming_rust_caller")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("rate_limit_middleware")]
     PrecompiledComponent
 );
 inherit_test_dep!(
