@@ -18,6 +18,7 @@ package example.integrationtests
 
 import golem.runtime.annotations.agentImplementation
 import golem.schema.AgentStream
+import zio.blocks.streams.Stream
 
 import scala.annotation.unused
 import scala.concurrent.Future
@@ -35,7 +36,7 @@ final class WeatherAgentImpl(@unused private val apiKey: String) extends Weather
     Future.successful(s"Report from tenant $tenantId: $data")
 
   override def reportStream(): Future[AgentStream[golem.UByte]] =
-    Future.successful(AgentStream.fromPull(() => Future.successful(None)))
+    Future.successful(AgentStream.fromStream(Stream.empty))
 
   override def greetWithPath(name: String, filePath: String): Future[String] =
     Future.successful(s"Hello $name, path: $filePath")

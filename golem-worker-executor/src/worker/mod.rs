@@ -160,6 +160,7 @@ use golem_common::model::{
 use golem_common::one_shot::OneShotEvent;
 use golem_common::read_only_lock;
 use golem_common::related_span;
+use golem_common::retries::get_delay;
 use golem_common::schema::TypedSchemaValue;
 use golem_common::tracing::TraceOrigin;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
@@ -168,7 +169,7 @@ use golem_service_base::model::GetFileSystemNodeResult;
 use golem_service_base::model::auth::AuthCtx;
 use prost::Message;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 use tokio::sync::broadcast::Receiver;
@@ -676,6 +677,8 @@ pub struct ResolvedWorkerData<Ctx: WorkerCtx> {
     /// Lifecycle request shared across resident worker generations. A terminal request is retained
     /// until the worker stops so permit reacquisition cannot lose it between `RunningWorker`s.
     interrupt_signal: Arc<async_lock::Mutex<WorkerInterruptState>>,
+    infrastructure_recovery_retry_config: RetryConfig,
+    infrastructure_recovery_attempt: AtomicU32,
     oom_retry_config: RetryConfig,
     snapshot_policy: SnapshotPolicy,
 
@@ -1155,6 +1158,7 @@ fn recovery_agent_error(error: &WorkerExecutorError) -> AgentError {
             AgentError::InternalError(error.to_string())
         }
         WorkerExecutorError::Runtime { .. }
+        | WorkerExecutorError::RecoveryRequired { .. }
         | WorkerExecutorError::Unknown { .. }
         | WorkerExecutorError::AgentCreationFailed { .. }
         | WorkerExecutorError::ComponentNotFound { .. }
@@ -1168,12 +1172,21 @@ fn recovery_agent_error(error: &WorkerExecutorError) -> AgentError {
     }
 }
 
+fn recovery_retry_from(error: &WorkerExecutorError) -> Option<OplogIndex> {
+    match error {
+        WorkerExecutorError::RecoveryRequired { retry_from, .. } => *retry_from,
+        WorkerExecutorError::FailedToResumeAgent { reason, .. } => recovery_retry_from(reason),
+        _ => None,
+    }
+}
+
 fn is_infrastructure_recovery_error(error: &WorkerExecutorError) -> bool {
     match error {
         WorkerExecutorError::FailedToResumeAgent { reason, .. } => {
             is_infrastructure_recovery_error(reason)
         }
         WorkerExecutorError::Runtime { .. }
+        | WorkerExecutorError::RecoveryRequired { .. }
         | WorkerExecutorError::Unknown { .. }
         | WorkerExecutorError::AgentCreationFailed { .. }
         | WorkerExecutorError::ComponentNotFound { .. }
@@ -2420,6 +2433,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             startup_attempt: StartupAttemptTracker::default(),
             linear_memory_grant: StdMutex::new(None),
             interrupt_signal: Arc::new(async_lock::Mutex::new(WorkerInterruptState::default())),
+            infrastructure_recovery_retry_config: deps.config().retry.clone(),
+            infrastructure_recovery_attempt: AtomicU32::new(0),
             execution_status,
             initial_worker_metadata,
             resource_entry,
@@ -2742,6 +2757,24 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     pub fn oom_retry_config(&self) -> &RetryConfig {
         &self.oom_retry_config
+    }
+
+    pub(crate) fn next_infrastructure_recovery_delay(&self) -> Duration {
+        let attempt = self
+            .infrastructure_recovery_attempt
+            .fetch_add(1, Ordering::AcqRel);
+        let capped_attempt = attempt.min(
+            self.infrastructure_recovery_retry_config
+                .max_attempts
+                .saturating_sub(1),
+        );
+        get_delay(&self.infrastructure_recovery_retry_config, capped_attempt)
+            .unwrap_or(self.infrastructure_recovery_retry_config.max_delay)
+    }
+
+    pub(crate) fn reset_infrastructure_recovery_backoff(&self) {
+        self.infrastructure_recovery_attempt
+            .store(0, Ordering::Release);
     }
 
     pub(crate) fn snapshot_policy(&self) -> &SnapshotPolicy {
@@ -3614,9 +3647,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         } else {
             None
         };
-        let retry_from = previous_error
-            .as_ref()
-            .map(|error| error.retry_from)
+        let retry_from = recovery_retry_from(error)
+            .or_else(|| previous_error.as_ref().map(|error| error.retry_from))
             .unwrap_or(self.oplog.current_oplog_index().await);
         let infrastructure_failure = is_infrastructure_recovery_error(error);
         let error = recovery_agent_error(error);
@@ -12161,6 +12193,9 @@ mod tests {
         let component_id = ComponentId::new();
         assert!(is_infrastructure_recovery_error(
             &WorkerExecutorError::ComponentNotFound { component_id }
+        ));
+        assert!(is_infrastructure_recovery_error(
+            &WorkerExecutorError::recovery_required("payload backend unavailable")
         ));
         assert!(!is_infrastructure_recovery_error(
             &WorkerExecutorError::ComponentParseFailed {

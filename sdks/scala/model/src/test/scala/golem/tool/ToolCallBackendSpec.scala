@@ -60,7 +60,10 @@ object ToolCallBackendSpec extends ZIOSpecDefault {
     )
   }
 
-  private final class EmptyStream extends ToolInputStream
+  private final class EmptyStream extends ToolInputStream {
+    val stream   = zio.blocks.streams.Stream.empty
+    def cancel() = Future.successful(())
+  }
 
   private final class FakeTransport(
     started: Either[ToolRpcFailure, ToolRpcStarted]

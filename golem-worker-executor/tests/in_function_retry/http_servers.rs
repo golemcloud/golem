@@ -20,6 +20,23 @@ use tokio::spawn;
 use tokio::sync::{Notify, mpsc};
 use tracing::Instrument;
 
+pub(crate) struct PartialResponseDropGate {
+    reached: tokio::sync::oneshot::Receiver<()>,
+    release: Arc<tokio::sync::Semaphore>,
+}
+
+impl PartialResponseDropGate {
+    pub(crate) async fn reached(&mut self) {
+        (&mut self.reached)
+            .await
+            .expect("partial response server stopped before reaching the drop gate");
+    }
+
+    pub(crate) fn release(&self) {
+        self.release.add_permits(1);
+    }
+}
+
 /// Parses the `Content-Length` header from raw HTTP request header text.
 /// Returns `Some(0)` if the header is present but malformed, mirroring the
 /// previous inline `unwrap_or(0)` behaviour, and `None` if it is absent.
@@ -505,15 +522,128 @@ pub(crate) async fn start_partial_response_http_server(
     resume_status: u16,
     resume_supports_range: bool,
 ) -> (u16, Arc<AtomicUsize>, Arc<AtomicUsize>) {
+    let (port, connection_counter, range_counter, _) = start_partial_response_http_server_inner(
+        fail_count,
+        prefix_len,
+        body_size,
+        initial_status,
+        resume_status,
+        resume_supports_range,
+        0,
+        false,
+    )
+    .await;
+    (port, connection_counter, range_counter)
+}
+
+pub(crate) async fn start_recovery_gated_partial_response_http_server(
+    fail_count: usize,
+    prefix_len: usize,
+    body_size: usize,
+    initial_status: u16,
+    resume_status: u16,
+    resume_supports_range: bool,
+) -> (
+    u16,
+    Arc<AtomicUsize>,
+    Arc<AtomicUsize>,
+    PartialResponseDropGate,
+) {
+    let (port, connection_counter, range_counter, gate) = start_partial_response_http_server_inner(
+        fail_count,
+        prefix_len,
+        body_size,
+        initial_status,
+        resume_status,
+        resume_supports_range,
+        0,
+        true,
+    )
+    .await;
+    (
+        port,
+        connection_counter,
+        range_counter,
+        gate.expect("requested partial response drop gate"),
+    )
+}
+
+pub(crate) async fn start_gated_partial_response_http_server_with_resume_send_failures(
+    fail_count: usize,
+    prefix_len: usize,
+    body_size: usize,
+    initial_status: u16,
+    resume_status: u16,
+    resume_supports_range: bool,
+    resume_send_failures: usize,
+) -> (
+    u16,
+    Arc<AtomicUsize>,
+    Arc<AtomicUsize>,
+    PartialResponseDropGate,
+) {
+    let (port, connection_counter, range_counter, gate) = start_partial_response_http_server_inner(
+        fail_count,
+        prefix_len,
+        body_size,
+        initial_status,
+        resume_status,
+        resume_supports_range,
+        resume_send_failures,
+        true,
+    )
+    .await;
+    (
+        port,
+        connection_counter,
+        range_counter,
+        gate.expect("requested partial response drop gate"),
+    )
+}
+
+async fn start_partial_response_http_server_inner(
+    fail_count: usize,
+    prefix_len: usize,
+    body_size: usize,
+    initial_status: u16,
+    resume_status: u16,
+    resume_supports_range: bool,
+    resume_send_failures: usize,
+    gated: bool,
+) -> (
+    u16,
+    Arc<AtomicUsize>,
+    Arc<AtomicUsize>,
+    Option<PartialResponseDropGate>,
+) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let counter = Arc::new(AtomicUsize::new(0));
     let counter_clone = counter.clone();
     let range_counter = Arc::new(AtomicUsize::new(0));
     let range_counter_clone = range_counter.clone();
+    let (reached_tx, reached_rx) = tokio::sync::oneshot::channel();
+    let release = Arc::new(tokio::sync::Semaphore::new(0));
+    let server_release = release.clone();
+    let mut reached_tx = gated.then_some(reached_tx);
 
-    // Generate the full body (deterministic pattern)
-    let full_body: Vec<u8> = (0..body_size).map(|i| (i % 256) as u8).collect();
+    // The gated fault fixture labels every eight-byte record with its absolute position. This
+    // keeps the body ASCII while ensuring equal-sized read chunks are not interchangeable.
+    let full_body: Vec<u8> = if gated {
+        (0..body_size)
+            .map(|offset| {
+                let record = offset / 8;
+                let column = offset % 8;
+                if column == 7 {
+                    b'\n'
+                } else {
+                    b"0123456789abcdef"[(record >> ((6 - column) * 4)) & 0xf]
+                }
+            })
+            .collect()
+    } else {
+        (0..body_size).map(|i| (i % 256) as u8).collect()
+    };
 
     spawn(
         async move {
@@ -557,8 +687,19 @@ pub(crate) async fn start_partial_response_http_server(
                     let _ = stream.write_all(headers.as_bytes()).await;
                     let _ = stream.write_all(&full_body[..prefix_len]).await;
                     let _ = stream.flush().await;
-                    // Wait for the client to receive the partial data before dropping
-                    tokio::time::sleep(Duration::from_millis(200)).await;
+                    if n == 0 && let Some(reached_tx) = reached_tx.take() {
+                        let _ = reached_tx.send(());
+                        let permit = server_release
+                            .acquire()
+                            .await
+                            .expect("partial response drop gate was closed");
+                        permit.forget();
+                    } else {
+                        // Wait for the client to receive the partial data before dropping
+                        tokio::time::sleep(Duration::from_millis(200)).await;
+                    }
+                    drop(stream);
+                } else if n < fail_count + resume_send_failures {
                     drop(stream);
                 } else {
                     // Read request headers to check for Range
@@ -619,6 +760,7 @@ pub(crate) async fn start_partial_response_http_server(
                         let resume_reason = match resume_status {
                             200 => "OK",
                             201 => "Created",
+                            416 => "Range Not Satisfiable",
                             _ => panic!("unsupported resume status: {resume_status}"),
                         };
                         let response = format!(
@@ -637,7 +779,11 @@ pub(crate) async fn start_partial_response_http_server(
         .in_current_span(),
     );
 
-    (port, counter, range_counter)
+    let gate = gated.then_some(PartialResponseDropGate {
+        reached: reached_rx,
+        release,
+    });
+    (port, counter, range_counter, gate)
 }
 
 pub(crate) async fn start_gated_partial_response_http_server(
