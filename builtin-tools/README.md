@@ -41,7 +41,9 @@ components must use the `optimized` TypeScript preset so Wizer pre-initializes t
 Provisioning is idempotent for identical bytes and an identical exact version. A published system
 release is protected and immutable: repeat startup with the same version only when the artifact and
 metadata are identical. For any changed artifact or metadata, publish a new version; do not replace
-the existing coordinate.
+the existing coordinate. New component artifacts start at `0.0.1`. Until an artifact defines a
+separate compatibility policy, increment its patch version for every byte-changing publication;
+artifact versions do not determine the versions of the tools or plugins exported by the component.
 
 Component-implemented built-ins are grantable registry releases, not ambient tools. A consuming
 manifest must select the exact release under `tools.<name>.release` **and** bind that logical name
