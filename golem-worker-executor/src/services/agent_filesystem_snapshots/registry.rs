@@ -84,11 +84,13 @@ pub(super) struct JobTicket {
     agent: AgentSnapshots,
     id: JobId,
     stop: CancellationToken,
+    retention_stop: CancellationToken,
 }
 
 impl JobTicket {
     /// Admits a job with `name` for `agent`. `stop` stops the job, and `room` tells whether the
-    /// volume has room for a capture.
+    /// volume has room for a capture. The stop of the deletes of the job is a child of `stop`,
+    /// and the state of the job holds the same token.
     pub(super) fn admit(
         registry: &Arc<Registry>,
         agent: &AgentSnapshots,
@@ -96,18 +98,27 @@ impl JobTicket {
         stop: CancellationToken,
         room: bool,
     ) -> Result<Self, Refusal> {
+        let retention_stop = stop.child_token();
         let id = registry.apply(Transition::Admit, |state| {
-            rules::admit(state, agent, name, stop.clone(), room)
+            rules::admit(
+                state,
+                agent,
+                name,
+                stop.clone(),
+                retention_stop.clone(),
+                room,
+            )
         })?;
         Ok(Self {
             registry: Arc::clone(registry),
             agent: agent.clone(),
             id,
             stop,
+            retention_stop,
         })
     }
 
-    /// The save of the job holds a slot of the uploads.
+    /// The job has started saving: it got a slot of the uploads.
     pub(super) fn saving(&self) {
         self.registry.apply(Transition::Saving, |state| {
             rules::saving(state, &self.agent, self.id)
@@ -124,6 +135,12 @@ impl JobTicket {
     /// The stop of the job. A delete of all snapshots of the agent and the shutdown cancel it.
     pub(super) fn stop(&self) -> &CancellationToken {
         &self.stop
+    }
+
+    /// The stop of the deletes of the job after its save. The stop of the job cancels it too, and
+    /// so does a manual update of the agent that finds the job running.
+    pub(super) fn retention_stop(&self) -> &CancellationToken {
+        &self.retention_stop
     }
 
     pub(super) fn agent(&self) -> &AgentSnapshots {

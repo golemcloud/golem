@@ -28,18 +28,45 @@ use golem_common::model::oplog::FilesystemSnapshotName;
 use std::future::Future;
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 use tokio::sync::{OwnedSemaphorePermit, watch};
 
 /// What the upload of a job gave.
 enum UploadOutcome {
-    /// The store holds the snapshot. The permit is the slot of the upload.
-    Saved(SnapshotInfo, OwnedSemaphorePermit),
+    /// The store holds the snapshot.
+    Saved(SnapshotInfo),
     /// The save failed, after the retries when the error allows them.
     Failed(SnapshotStoreError),
     /// A shutdown, a call of `delete_all_snapshots` for the agent, or the stop of the caller
     /// stopped the upload.
     Stopped,
+}
+
+/// A slot of the uploads that one store attempt of an upload holds. It counts the attempt in the
+/// gauge of the uploads in progress while it lives, so a stop that drops the attempt during its
+/// store call leaves the gauge right.
+struct UploadSlot {
+    _permit: OwnedSemaphorePermit,
+    attempts: Arc<AtomicUsize>,
+}
+
+impl UploadSlot {
+    fn new(permit: OwnedSemaphorePermit, attempts: &Arc<AtomicUsize>) -> Self {
+        attempts.fetch_add(1, Ordering::SeqCst);
+        crate::metrics::filesystem_snapshots::inc_uploads_in_progress();
+        Self {
+            _permit: permit,
+            attempts: Arc::clone(attempts),
+        }
+    }
+}
+
+impl Drop for UploadSlot {
+    fn drop(&mut self) {
+        self.attempts.fetch_sub(1, Ordering::SeqCst);
+        crate::metrics::filesystem_snapshots::dec_uploads_in_progress();
+    }
 }
 
 /// Saves the tree of `admission`, discards it, and confirms, as [`Admission::submit`] says.
@@ -66,8 +93,8 @@ pub(super) async fn run_job(
     )
     .await;
     tree.discard.await;
-    let (info, permit) = match saved {
-        UploadOutcome::Saved(info, permit) => (info, permit),
+    let info = match saved {
+        UploadOutcome::Saved(info) => info,
         UploadOutcome::Failed(error) => {
             ticket.decide(JobDecision::SaveFailed);
             tracing::warn!(
@@ -100,7 +127,7 @@ pub(super) async fn run_job(
     );
     match rules::follow_up(kind, outcome) {
         FollowUp::DeleteOlder => {
-            delete_older_snapshots(&core, &ticket, &name, kind, &info, None, Some(permit)).await
+            delete_older_snapshots(&core, &ticket, &name, kind, &info, None).await
         }
         FollowUp::DeleteSuperseded => {
             crate::metrics::filesystem_snapshots::record_dropped_confirmation(outcome.label());
@@ -141,7 +168,7 @@ impl Admission {
         .await;
         tree.discard.await;
         let result = match saved {
-            UploadOutcome::Saved(info, _slot) => Ok(info),
+            UploadOutcome::Saved(info) => Ok(info),
             UploadOutcome::Failed(error) => Err(UploadNowError::Store(error)),
             UploadOutcome::Stopped => Err(UploadNowError::Stopped),
         };
@@ -183,10 +210,12 @@ pub(super) async fn interrupt_raised(mut stop: watch::Receiver<bool>) {
     }
 }
 
-/// Uploads the tree of a job: waits for a slot of the uploads, then saves the tree under the own
-/// name of the job with retries. Each attempt is one store `save`; when [`rules::save_attempt`]
-/// asks for it, the attempt then asks the store with `stat` whether it holds the own name. `stop`,
-/// a shutdown, or a call of `delete_all_snapshots` for the agent ends the upload with `Stopped`.
+/// Uploads the tree of a job: saves the tree under the own name of the job with retries. Each
+/// attempt waits for a slot of the uploads and holds it for one store `save`, and for the `stat`
+/// of the own name when [`rules::save_attempt`] asks for it. The attempt gives the slot back
+/// before the wait for the next attempt. `stop`, a shutdown, or a call of `delete_all_snapshots`
+/// for the agent ends the upload with `Stopped`, and no store call starts after the attempt sees
+/// such a stop.
 async fn upload(
     core: &Core,
     ticket: &JobTicket,
@@ -210,50 +239,76 @@ async fn upload(
             });
         }
     };
-    let permit = tokio::select! {
-        permit = Arc::clone(&core.uploads).acquire_owned() => match permit {
-            Ok(permit) => permit,
-            Err(_) => return UploadOutcome::Stopped,
-        },
-        () = ticket.stop().cancelled() => return UploadOutcome::Stopped,
-        () = stop.clone() => return UploadOutcome::Stopped,
-    };
-    crate::metrics::filesystem_snapshots::inc_uploads_in_progress();
-    ticket.saving();
     let parent = parent.as_ref().map(|(name, detection)| (name, *detection));
     let agent = ticket.agent();
-    let saved = tokio::select! {
-        biased;
-        saved = retrying(core.settings.upload_retry(), || async {
-            match rules::save_attempt(core.store.save(agent, &name, tree, parent).await) {
-                SaveAttempt::Saved(info) => Ok(info),
-                SaveAttempt::StatOwn => core.store.stat(agent, &name).await?.ok_or_else(|| {
-                    SnapshotStoreError::Storage {
+    // The stops that the `select!` below watches. An attempt that sees one after its grant gives
+    // its slot back and waits for that `select!` to end the upload in the same poll.
+    let stopped =
+        || ticket.stop().is_cancelled() || futures::FutureExt::now_or_never(stop.clone()).is_some();
+    let attempt = || async {
+        let slot = match Arc::clone(&core.uploads).acquire_owned().await {
+            Ok(permit) => UploadSlot::new(permit, &core.upload_attempts),
+            Err(_) => {
+                // The slots are gone: the job stops, and the `select!` below ends the upload.
+                ticket.stop().cancel();
+                return std::future::pending().await;
+            }
+        };
+        ticket.saving();
+        if stopped() {
+            drop(slot);
+            return std::future::pending().await;
+        }
+        let saved = match rules::save_attempt(core.store.save(agent, &name, tree, parent).await) {
+            SaveAttempt::Saved(info) => Ok(info),
+            SaveAttempt::StatOwn => {
+                if stopped() {
+                    drop(slot);
+                    return std::future::pending().await;
+                }
+                core.store.stat(agent, &name).await.and_then(|found| {
+                    found.ok_or_else(|| SnapshotStoreError::Storage {
                         retryable: true,
                         source: anyhow::anyhow!(
                             "the filesystem snapshot {name} exists at the save and not after it"
                         ),
-                    }
-                }),
-                SaveAttempt::Failed(error) => Err(error),
+                    })
+                })
             }
-        }) => Some(saved),
+            SaveAttempt::Failed(error) => Err(error),
+        };
+        drop(slot);
+        saved
+    };
+    let saved = tokio::select! {
+        biased;
+        saved = retrying(core.settings.upload_retry(), attempt) => Some(saved),
         () = ticket.stop().cancelled() => None,
         () = stop.clone() => None,
     };
-    crate::metrics::filesystem_snapshots::dec_uploads_in_progress();
     match saved {
-        Some(Ok(info)) => UploadOutcome::Saved(info, permit),
+        Some(Ok(info)) => UploadOutcome::Saved(info),
         Some(Err(error)) => UploadOutcome::Failed(error),
         None => UploadOutcome::Stopped,
     }
 }
 
+/// Waits for a slot of the uploads for a delete of the job. Gives `None` when the stop of the
+/// deletes of the job ends the wait, is seen after the grant, or when the slots are gone.
+async fn delete_slot(core: &Core, ticket: &JobTicket) -> Option<OwnedSemaphorePermit> {
+    let slot = tokio::select! {
+        biased;
+        () = ticket.retention_stop().cancelled() => return None,
+        slot = Arc::clone(&core.uploads).acquire_owned() => slot.ok()?,
+    };
+    (!ticket.retention_stop().is_cancelled()).then_some(slot)
+}
+
 /// Keeps the own snapshot and the newest older snapshots of its kind, and deletes the rest of
-/// its kind that are older than it, under the slot of the uploads `slot`. Without a slot it
-/// first waits for one. `info` is the info of the own snapshot, and `kept` a snapshot that it
-/// never deletes. A stop ends it at once, and a later retention deletes what it left.
-#[allow(clippy::too_many_arguments)]
+/// its kind that are older than it, under its own slot of the uploads. `info` is the info of the
+/// own snapshot, and `kept` a snapshot that it never deletes. The stop of the deletes of the job
+/// ends it at once, also in its wait for the slot and between two attempts, and a later
+/// retention deletes what it left.
 pub(super) async fn delete_older_snapshots(
     core: &Core,
     ticket: &JobTicket,
@@ -261,17 +316,9 @@ pub(super) async fn delete_older_snapshots(
     kind: SnapshotKind,
     info: &SnapshotInfo,
     kept: Option<&SnapshotName>,
-    slot: Option<OwnedSemaphorePermit>,
 ) {
-    let _slot = match slot {
-        Some(slot) => slot,
-        None => tokio::select! {
-            slot = Arc::clone(&core.uploads).acquire_owned() => match slot {
-                Ok(slot) => slot,
-                Err(_) => return,
-            },
-            () = ticket.stop().cancelled() => return,
-        },
+    let Some(_slot) = delete_slot(core, ticket).await else {
+        return;
     };
     let agent = ticket.agent();
     let retention = async {
@@ -307,14 +354,19 @@ pub(super) async fn delete_older_snapshots(
             .await;
     };
     tokio::select! {
+        biased;
+        () = ticket.retention_stop().cancelled() => {}
         () = retention => {}
-        () = ticket.stop().cancelled() => {}
     }
 }
 
-/// Deletes the snapshot of the job, which no confirmation record names. A stop ends it at once,
-/// and the snapshot stays until a retention of its kind deletes it.
+/// Deletes the snapshot of the job, which no confirmation record names, under its own slot of
+/// the uploads. The stop of the deletes of the job ends it at once, and the snapshot stays until
+/// a retention of its kind deletes it.
 async fn delete_superseded(core: &Core, ticket: &JobTicket, name: &FilesystemSnapshotName) {
+    let Some(_slot) = delete_slot(core, ticket).await else {
+        return;
+    };
     let agent = ticket.agent();
     let delete = async {
         let Ok(name) = store_name(name) else {
@@ -334,8 +386,9 @@ async fn delete_superseded(core: &Core, ticket: &JobTicket, name: &FilesystemSna
         }
     };
     tokio::select! {
+        biased;
+        () = ticket.retention_stop().cancelled() => {}
         () = delete => {}
-        () = ticket.stop().cancelled() => {}
     }
 }
 

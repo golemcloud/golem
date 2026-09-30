@@ -452,7 +452,7 @@ pub(crate) trait UpdateSnapshotHost {
 /// The retention of a saved manual-update snapshot, with the snapshot that it keeps.
 #[must_use = "a dropped update retention deletes no older snapshot; delete them after the record commits"]
 pub(crate) struct UpdateRetention {
-    saved: SavedUpdate,
+    saved: Box<SavedUpdate>,
     kept: Option<FilesystemSnapshotName>,
 }
 
@@ -541,7 +541,7 @@ pub(crate) async fn update_snapshot<Host: UpdateSnapshotHost>(
             snapshot,
             name: Some(name),
             retention: Some(UpdateRetention {
-                saved,
+                saved: Box::new(saved),
                 kept: host.kept_baseline().await,
             }),
         },

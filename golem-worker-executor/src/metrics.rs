@@ -1818,7 +1818,7 @@ pub mod filesystem_snapshots {
         .unwrap();
         static ref UPLOADS_IN_PROGRESS: Gauge = register_gauge!(
             "filesystem_snapshot_uploads_in_progress",
-            "Number of uploads of filesystem snapshots that run now"
+            "Number of store attempts of uploads of filesystem snapshots that hold a slot now"
         )
         .unwrap();
         static ref RESTORE_SECONDS: HistogramVec = register_histogram_vec!(

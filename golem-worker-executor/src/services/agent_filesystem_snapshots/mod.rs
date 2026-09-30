@@ -317,6 +317,9 @@ struct Core {
     shutdown: CancellationToken,
     /// The upload jobs, so that a shutdown can wait for them.
     jobs: TaskTracker,
+    /// The store attempts of uploads that hold a slot now. The gauge of the metrics adds these of
+    /// every service.
+    upload_attempts: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl AgentFilesystemSnapshots {
@@ -388,6 +391,7 @@ impl AgentFilesystemSnapshots {
                 cleanup,
                 shutdown,
                 jobs,
+                upload_attempts: Arc::default(),
             })),
         }
     }
@@ -413,8 +417,9 @@ impl AgentFilesystemSnapshots {
     }
 
     /// Asks for an upload of a manual-update snapshot of the agent `agent`. When an upload of
-    /// the agent runs, the call waits once for its end, for at most `confirmation_wait`, and asks
-    /// again. A shutdown ends the wait like its limit does, and a terminal interrupt that
+    /// the agent runs, the call stops the deletes that the running job makes after its save, waits
+    /// once for the end of the job, for at most `confirmation_wait`, and asks again. The running
+    /// job still ends its save and its confirmation. A shutdown ends the wait like its limit does, and a terminal interrupt that
     /// `interrupt` reports ends it with [`UpdateRefusal::Interrupted`].
     pub(crate) async fn admit_update(
         &self,
@@ -429,11 +434,14 @@ impl AgentFilesystemSnapshots {
             Ok(admission) => return Ok(admission),
             Err(refusal) => refusal,
         };
-        let rules::UpdateAdmit::WaitForEnd(id) = rules::update_admission(refusal) else {
-            return Err(UpdateRefusal::Skip(refusal.skip));
+        let skip = refusal.skip;
+        let rules::UpdateAdmit::WaitForEnd(running) = rules::update_admission(refusal) else {
+            return Err(UpdateRefusal::Skip(skip));
         };
+        // The running job ends its save and its confirmation, and deletes nothing more.
+        running.retention_stop.cancel();
         tokio::select! {
-            () = core.registry.until_job_gone(agent, id) => {}
+            () = core.registry.until_job_gone(agent, running.id) => {}
             () = tokio::time::sleep(core.settings.confirmation_wait()) => {}
             () = core.shutdown.cancelled() => {}
             () = job::interrupt_raised(interrupt) => return Err(UpdateRefusal::Interrupted),
@@ -446,7 +454,7 @@ impl AgentFilesystemSnapshots {
     /// Tells whether the store holds the whole snapshot `name` of `agent`, before a start
     /// confirms it.
     ///
-    /// When an upload of the name runs on this executor and holds a slot of the uploads, the call
+    /// When an upload of the name runs on this executor and has started saving, the call
     /// first waits for its decision, for at most `confirmation_wait`. Then, unless the upload gave
     /// `Superseded` or a terminal interrupt waits, it asks the store once, for at most what is
     /// left of `confirmation_wait` after a wait, or at most `store_check_limit` without one. A
@@ -661,8 +669,8 @@ impl SavedUpdate {
     /// Applies retention in the background, under a slot of the uploads: it keeps the own snapshot
     /// and the newest older update snapshots, with the rules of periodic retention, and it never
     /// deletes `kept`, the snapshot of the last successful manual update, whose record a start
-    /// restores without a fallback. A shutdown, or a call of `delete_all_snapshots` for the agent,
-    /// stops it.
+    /// restores without a fallback. A shutdown, a call of `delete_all_snapshots` for the agent, or
+    /// a later manual update of the agent stops it.
     pub(crate) fn delete_older_snapshots(self, kept: Option<&FilesystemSnapshotName>) {
         let kept = kept.and_then(|name| store_name(name).ok());
         let Self {
@@ -680,7 +688,6 @@ impl SavedUpdate {
                 SnapshotKind::Update,
                 &info,
                 kept.as_ref(),
-                None,
             )
             .await;
         });

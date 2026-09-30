@@ -54,6 +54,9 @@ struct Job {
     phase: JobPhase,
     /// Stops the job. It is a child of the shutdown token.
     stop: CancellationToken,
+    /// Stops the deletes of the job after its save. It is a child of `stop`, and the ticket of
+    /// the job holds the same token.
+    retention_stop: CancellationToken,
     /// The number of starts that wait for the decision of the job.
     waiters: u32,
 }
@@ -69,9 +72,11 @@ struct Ended {
 /// Where a job is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum JobPhase {
-    /// The job has its admission and waits for its capture or for a slot of the uploads.
+    /// The job has its admission and waits for its capture or for its first slot of the
+    /// uploads.
     Admitted,
-    /// The save of the job holds a slot of the uploads.
+    /// The job has started saving: it got its first slot of the uploads. It stays here until it
+    /// decides, also while it waits between two attempts without a slot.
     Saving,
     /// The job knows how it ended its work on the snapshot.
     Decided(JobDecision),
@@ -106,32 +111,47 @@ pub(super) fn wakes(transition: Transition) -> bool {
 }
 
 /// Why an admission gives no job.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub(super) struct Refusal {
     pub(super) skip: SnapshotSkip,
     /// The job that runs for the agent, when one runs.
-    pub(super) running: Option<JobId>,
+    pub(super) running: Option<RunningJob>,
+}
+
+/// The job that runs for an agent, as a refused admission sees it.
+#[derive(Clone, Debug)]
+pub(super) struct RunningJob {
+    pub(super) id: JobId,
+    /// The stop of the deletes of the job after its save, read under the same lock as `id`.
+    pub(super) retention_stop: CancellationToken,
 }
 
 /// Admits a job with `name` for `agent`, in the order room, delete of all snapshots, running job.
-/// `stop` stops the job, and `room` tells whether the volume has room for a capture.
+/// `stop` stops the job, `retention_stop`, a child of `stop`, stops its deletes after its save,
+/// and `room` tells whether the volume has room for a capture.
 pub(super) fn admit(
     state: &mut State,
     agent: &AgentSnapshots,
     name: &FilesystemSnapshotName,
     stop: CancellationToken,
+    retention_stop: CancellationToken,
     room: bool,
 ) -> Result<JobId, Refusal> {
-    let running = state.jobs.get(agent).map(|job| job.id);
-    let refused = |skip| Err(Refusal { skip, running });
-    if !room {
-        return refused(SnapshotSkip::VolumeUnderPressure);
-    }
-    if state.deleting.contains_key(agent) {
-        return refused(SnapshotSkip::DeletingAllSnapshots);
-    }
-    if running.is_some() {
-        return refused(SnapshotSkip::UploadInFlight);
+    let running = state.jobs.get(agent).map(|job| RunningJob {
+        id: job.id,
+        retention_stop: job.retention_stop.clone(),
+    });
+    let skip = if !room {
+        Some(SnapshotSkip::VolumeUnderPressure)
+    } else if state.deleting.contains_key(agent) {
+        Some(SnapshotSkip::DeletingAllSnapshots)
+    } else if running.is_some() {
+        Some(SnapshotSkip::UploadInFlight)
+    } else {
+        None
+    };
+    if let Some(skip) = skip {
+        return Err(Refusal { skip, running });
     }
     state.last_job += 1;
     let id = state.last_job;
@@ -142,13 +162,14 @@ pub(super) fn admit(
             name: name.clone(),
             phase: JobPhase::Admitted,
             stop,
+            retention_stop,
             waiters: 0,
         },
     );
     Ok(id)
 }
 
-/// The save of the job `id` holds a slot of the uploads. The phase only moves forward.
+/// The job `id` has started saving: it got a slot of the uploads. The phase only moves forward.
 pub(super) fn saving(state: &mut State, agent: &AgentSnapshots, id: JobId) {
     if let Some(job) = live(state, agent, id)
         && job.phase == JobPhase::Admitted
@@ -225,8 +246,8 @@ pub(super) fn end(state: &mut State, agent: &AgentSnapshots, id: JobId) {
     }
 }
 
-/// A start waits only for a job of the agent with the name that holds a slot of the uploads and
-/// has not decided. It then registers as a waiter in the same transition and gets the job. A
+/// A start waits only for a job of the agent with the name that has started saving and has not
+/// decided. It then registers as a waiter in the same transition and gets the job. A
 /// start that does not wait gets the decision of the job with the name, when known.
 pub(super) fn start_wait(
     state: &mut State,
@@ -396,12 +417,13 @@ pub(super) fn store_check(
 }
 
 /// What a manual update does after a refused admission.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub(super) enum UpdateAdmit {
     /// It fails with the refusal.
     Refuse,
-    /// It waits for the end of the running job, then asks once more.
-    WaitForEnd(JobId),
+    /// It stops the deletes of the running job, waits for the end of the job, then asks once
+    /// more.
+    WaitForEnd(RunningJob),
 }
 
 /// What a manual update does after its first admission gave `refusal`. Only an upload that runs
@@ -409,7 +431,7 @@ pub(super) enum UpdateAdmit {
 /// most once.
 pub(super) fn update_admission(refusal: Refusal) -> UpdateAdmit {
     match (refusal.skip, refusal.running) {
-        (SnapshotSkip::UploadInFlight, Some(id)) => UpdateAdmit::WaitForEnd(id),
+        (SnapshotSkip::UploadInFlight, Some(running)) => UpdateAdmit::WaitForEnd(running),
         _ => UpdateAdmit::Refuse,
     }
 }
@@ -483,7 +505,9 @@ mod tests {
         name: &FilesystemSnapshotName,
         room: bool,
     ) -> Result<JobId, Refusal> {
-        admit(state, agent, name, CancellationToken::new(), room)
+        let stop = CancellationToken::new();
+        let retention_stop = stop.child_token();
+        admit(state, agent, name, stop, retention_stop, room)
     }
 
     fn admitted(state: &mut State, agent: &AgentSnapshots, name: &FilesystemSnapshotName) -> JobId {
@@ -491,7 +515,9 @@ mod tests {
     }
 
     fn refusal(result: Result<JobId, Refusal>) -> Option<(SnapshotSkip, Option<JobId>)> {
-        result.err().map(|refusal| (refusal.skip, refusal.running))
+        result
+            .err()
+            .map(|refusal| (refusal.skip, refusal.running.map(|running| running.id)))
     }
 
     fn end_job(state: &mut State, agent: &AgentSnapshots, id: JobId) {
@@ -852,37 +878,79 @@ mod tests {
     }
 
     #[test]
+    fn a_refused_admission_carries_the_retention_stop_of_the_running_job() {
+        let mut state = State::default();
+        let agent = agent_snapshots("retention-stop");
+        let name = FilesystemSnapshotName::periodic();
+        let stop = CancellationToken::new();
+        let retention_stop = stop.child_token();
+        let admitted = admit(
+            &mut state,
+            &agent,
+            &name,
+            stop.clone(),
+            retention_stop.clone(),
+            true,
+        );
+
+        let refusal = try_admit(&mut state, &agent, &name, true).err();
+        if let Some(running) = refusal
+            .as_ref()
+            .and_then(|refusal| refusal.running.as_ref())
+        {
+            running.retention_stop.cancel();
+        }
+
+        assert!(admitted.is_ok());
+        assert_eq!(
+            refusal.map(|refusal| refusal.skip),
+            Some(SnapshotSkip::UploadInFlight)
+        );
+        assert!(retention_stop.is_cancelled());
+        assert!(!stop.is_cancelled());
+    }
+
+    fn running(id: JobId) -> RunningJob {
+        RunningJob {
+            id,
+            retention_stop: CancellationToken::new(),
+        }
+    }
+
+    /// The job that an update with `refusal` waits for.
+    fn waits_for(refusal: Refusal) -> Option<JobId> {
+        match update_admission(refusal) {
+            UpdateAdmit::WaitForEnd(running) => Some(running.id),
+            UpdateAdmit::Refuse => None,
+        }
+    }
+
+    #[test]
     fn a_manual_update_waits_only_for_a_running_upload() {
         assert_eq!(
             [
-                update_admission(Refusal {
+                waits_for(Refusal {
                     skip: SnapshotSkip::UploadInFlight,
-                    running: Some(4)
+                    running: Some(running(4))
                 }),
-                update_admission(Refusal {
+                waits_for(Refusal {
                     skip: SnapshotSkip::DeletingAllSnapshots,
-                    running: Some(4)
+                    running: Some(running(4))
                 }),
-                update_admission(Refusal {
+                waits_for(Refusal {
                     skip: SnapshotSkip::VolumeUnderPressure,
-                    running: Some(4)
+                    running: Some(running(4))
                 }),
-                update_admission(Refusal {
+                waits_for(Refusal {
                     skip: SnapshotSkip::Disabled,
                     running: None
                 }),
-                update_admission(Refusal {
+                waits_for(Refusal {
                     skip: SnapshotSkip::UploadInFlight,
                     running: None
                 }),
             ],
-            [
-                UpdateAdmit::WaitForEnd(4),
-                UpdateAdmit::Refuse,
-                UpdateAdmit::Refuse,
-                UpdateAdmit::Refuse,
-                UpdateAdmit::Refuse,
-            ]
+            [Some(4), None, None, None, None,]
         );
     }
 
