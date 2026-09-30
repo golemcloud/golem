@@ -59,6 +59,15 @@ terminal retry state and report `Failed`.
 Otherwise `FallBackToTrap` calls `try_trigger_host_trap_retry`; if that finds no applicable
 policy, the failure is persisted as the call's result (`InternalRetryResult::Persist`).
 
+HTTP response-body resumption has an additional ownership rule. A terminal P2 body read retires
+the failed stream and parent `IncomingBody` in place before sending the Range request. Dropping
+that old parent releases its connection-pool permits (or its unpooled request worker) while the
+guest resource IDs and table parent/child relationship remain unchanged. On success, the
+replacement `IncomingBody` retains the replacement response's worker, worker-error receiver, and
+pool permits; swapping the replacement stream and body into the existing table slots therefore
+preserves ordinary body lifetime and replay semantics. Sending the replacement before retiring
+the old permit owner can self-wait until timeout when the per-host pool capacity is one.
+
 Spawned store tasks use the same decision but `FallBackToTrap` there means "stop inline retries
 and let the invocation loop's trap path take over" (`durability.rs`, spawned-task section).
 

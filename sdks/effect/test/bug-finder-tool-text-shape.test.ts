@@ -25,6 +25,7 @@ describe("tool input structural compatibility", () => {
         },
         undefined,
         undefined,
+        undefined,
         {},
       ),
     ).rejects.toMatchObject({ tag: "invalid-input" })

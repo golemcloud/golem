@@ -31,7 +31,8 @@ use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::json::NormalizedJsonValue;
 use golem_common::model::mcp_import::{McpImport, McpImportSource};
 use golem_common::model::oplog::payload::types::{
-    SerializableEntityBodyExecution, SerializableToolOperationTerminal, SerializableToolRpcError,
+    SerializableEntityBodyExecution, SerializableToolError, SerializableToolOperationTerminal,
+    SerializableToolRpcError,
 };
 use golem_common::model::oplog::{
     OplogIndex, PublicAgentEntityKind, PublicOplogEntry, PublicOplogEntryAttribution,
@@ -83,6 +84,7 @@ use tokio_stream::wrappers::ReceiverStream;
 
 mod middleware_acceptance;
 mod moonbit_exports;
+mod trapped_leaf_observers;
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
@@ -93,6 +95,10 @@ inherit_test_dep!(
 );
 inherit_test_dep!(
     #[tagged_as("tool_streaming_rust_caller")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("filesystem_tools")]
     PrecompiledComponent
 );
 inherit_test_dep!(
@@ -744,6 +750,13 @@ struct TsCompletionEvidence {
 }
 
 #[derive(Debug, FromSchema)]
+struct TsDualOutputEvidence {
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+    result_terminal: String,
+}
+
+#[derive(Debug, FromSchema)]
 struct ScalaStreamEvidence {
     output: String,
     bytes_read: i64,
@@ -760,6 +773,20 @@ struct ScalaCleanupEvidence {
 struct ScalaOutputEvidence {
     bytes: Vec<i32>,
     terminal: String,
+    result: String,
+}
+
+#[derive(Debug, FromSchema)]
+struct ScalaDualOutputEvidence {
+    stdout: Vec<i32>,
+    stderr: Vec<i32>,
+    result: String,
+}
+
+#[derive(Debug, FromSchema)]
+struct MoonBitDualOutputEvidence {
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
     result: String,
 }
 
@@ -864,6 +891,132 @@ fn deployment_state(
         tool_middleware_configuration: Default::default(),
         registered_tool_middlewares: BTreeMap::new(),
         tool_middleware_chains: BTreeMap::new(),
+    }
+}
+
+fn filesystem_tool_input(fields: Vec<(&str, SchemaType, SchemaValue)>) -> TypedSchemaValue {
+    TypedSchemaValue::new(
+        SchemaGraph::anonymous(SchemaType::record(
+            fields
+                .iter()
+                .map(|(name, body, _)| golem_common::schema::NamedFieldType {
+                    name: (*name).to_string(),
+                    body: body.clone(),
+                    metadata: Default::default(),
+                })
+                .collect(),
+        )),
+        SchemaValue::Record {
+            fields: fields.into_iter().map(|(_, _, value)| value).collect(),
+        },
+    )
+}
+
+fn filesystem_optional_line(line: Option<u64>) -> (SchemaType, SchemaValue) {
+    (
+        SchemaType::option(SchemaType::u64()),
+        SchemaValue::Option {
+            inner: line.map(|line| Box::new(SchemaValue::U64(line))),
+        },
+    )
+}
+
+fn filesystem_cursor_none() -> (SchemaType, SchemaValue) {
+    (
+        SchemaType::option(SchemaType::record(vec![
+            golem_common::schema::NamedFieldType {
+                name: "byte-offset".to_string(),
+                body: SchemaType::u64(),
+                metadata: Default::default(),
+            },
+            golem_common::schema::NamedFieldType {
+                name: "line".to_string(),
+                body: SchemaType::u64(),
+                metadata: Default::default(),
+            },
+        ])),
+        SchemaValue::Option { inner: None },
+    )
+}
+
+async fn invoke_filesystem_tool(
+    executor: &TestWorkerExecutor,
+    worker_id: &golem_common::model::AgentId,
+    fingerprint: golem_common::model::AgentFingerprint,
+    principal: Principal,
+    definitions: &BTreeMap<ToolName, golem_common::schema::tool::Tool>,
+    tool_name: &str,
+    input: TypedSchemaValue,
+) -> anyhow::Result<
+    Result<
+        Option<SchemaValue>,
+        golem_common::model::oplog::payload::types::SerializableToolRpcError,
+    >,
+> {
+    let tool_name = ToolName::try_from(tool_name).unwrap();
+    let definition = &definitions[&tool_name];
+    let command_index = definition
+        .command_index_by_path(&[])
+        .expect("filesystem tool command exists");
+    let input_schema = definition.canonical_input_record_schema(command_index)?;
+    let (_, input_value) = input.into_parts();
+    let output = executor
+        .invoke_external_tool(
+            worker_id,
+            fingerprint,
+            IdempotencyKey::fresh(),
+            tool_name,
+            Vec::new(),
+            TypedSchemaValue::new(input_schema, input_value),
+            InvocationContextStack::fresh(),
+            principal,
+            None,
+        )
+        .await?;
+    let AgentInvocationResult::ExternalTool { result } = output.result else {
+        anyhow::bail!("expected external tool result, got {output:?}");
+    };
+    Ok(result.map(|result| result.result.map(|value| value.into_parts().1)))
+}
+
+async fn invoke_filesystem_tool_success(
+    executor: &TestWorkerExecutor,
+    worker_id: &golem_common::model::AgentId,
+    fingerprint: golem_common::model::AgentFingerprint,
+    principal: Principal,
+    definitions: &BTreeMap<ToolName, golem_common::schema::tool::Tool>,
+    tool_name: &str,
+    input: TypedSchemaValue,
+) -> anyhow::Result<SchemaValue> {
+    match invoke_filesystem_tool(
+        executor,
+        worker_id,
+        fingerprint,
+        principal,
+        definitions,
+        tool_name,
+        input,
+    )
+    .await?
+    {
+        Ok(Some(value)) => Ok(value),
+        Ok(None) => anyhow::bail!("filesystem tool '{tool_name}' returned no value"),
+        Err(error) => anyhow::bail!("filesystem tool '{tool_name}' failed: {error:?}"),
+    }
+}
+
+fn assert_filesystem_tool_error(
+    result: Result<Option<SchemaValue>, SerializableToolRpcError>,
+    expected_name: &str,
+) -> anyhow::Result<()> {
+    match result {
+        Err(SerializableToolRpcError::RemoteToolError(error)) => match error.as_ref() {
+            SerializableToolError::CustomError(error) if error.name == expected_name => Ok(()),
+            other => {
+                anyhow::bail!("expected filesystem tool error '{expected_name}', got {other:?}")
+            }
+        },
+        other => anyhow::bail!("expected filesystem tool error '{expected_name}', got {other:?}"),
     }
 }
 
@@ -4840,10 +4993,45 @@ async fn guest_trap_fences_a_blocked_sibling_and_drains_the_owner_group(
         )),
     );
 
+    // Observe Store context destruction without re-entering a poisoned guest event loop.
+    let healthy_agent = agent_id!("ToolStreamingCaller", "settlement-eof-control");
+    let healthy_worker = executor
+        .start_agent(&caller_component.id, healthy_agent.clone())
+        .await?;
+    let mut healthy_probe = executor.probe_entity_store_disposal(&healthy_worker);
+    let healthy: StreamEvidence = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &healthy_agent,
+            "marker_before_eof",
+            data_value!(b"first".to_vec(), b"second".to_vec()),
+        )
+        .await?
+        .into_typed()?;
+    assert_evidence(&healthy, b"marker:firstsecond", 2, 11);
+    let healthy_start =
+        tokio::time::timeout(std::time::Duration::from_secs(30), healthy_probe.recv())
+            .await?
+            .expect("healthy Store context destruction receipt");
+    let healthy_oplog = executor
+        .get_oplog(&healthy_worker, OplogIndex::INITIAL)
+        .await?;
+    assert!(healthy_oplog.iter().any(|entry| {
+        entry.oplog_index == healthy_start
+            && matches!(&entry.entry, PublicOplogEntry::Start(params)
+                if params.function_name == "golem::entity::invoke")
+    }));
+    assert!(healthy_oplog.iter().any(|entry| {
+        matches!(&entry.entry, PublicOplogEntry::End(params)
+            if params.start_index == healthy_start)
+    }));
+    eprintln!("EOF control Start {healthy_start}: Store context destroyed");
+
     let agent_id = agent_id!("ToolStreamingCaller", "trap-with-blocked-sibling");
     let worker_id = executor
         .start_agent(&caller_component.id, agent_id.clone())
         .await?;
+    let mut disposal_probe = executor.probe_entity_store_disposal(&worker_id);
     let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(30),
@@ -4870,6 +5058,23 @@ async fn guest_trap_fences_a_blocked_sibling_and_drains_the_owner_group(
             .to_string()
             .contains("deterministic streaming tool trap"),
         "the original guest-trap provenance must survive owner-group fencing: {error:?}"
+    );
+
+    // Failure notification must follow destruction of both original contexts, not just fencing.
+    let mut destroyed = Vec::new();
+    for _ in 0..2 {
+        let start = disposal_probe
+            .try_recv()
+            .expect("entity Store context must be destroyed before owner failure is returned");
+        eprintln!(
+            "trap scenario Start {start}: Store context destroyed before failure notification"
+        );
+        destroyed.push(start);
+    }
+    destroyed.sort();
+    assert!(
+        disposal_probe.try_recv().is_err(),
+        "duplicate Store receipt"
     );
 
     let cleanup = tokio::time::timeout(std::time::Duration::from_secs(30), async {
@@ -4915,11 +5120,23 @@ async fn guest_trap_fences_a_blocked_sibling_and_drains_the_owner_group(
                         && params.function_name == "golem::entity::invoke"
             )
         })
-        .count();
+        .map(|entry| entry.oplog_index)
+        .collect::<Vec<_>>();
     assert_eq!(
-        entity_starts, 2,
+        entity_starts.len(),
+        2,
         "the trapped operation and its already-running blocked sibling must both be durable"
     );
+    assert!(
+        oplog.iter().all(|entry| {
+            !matches!(&entry.entry, PublicOplogEntry::End(params)
+            if entity_starts.contains(&params.start_index))
+                && !matches!(&entry.entry, PublicOplogEntry::Cancelled(params)
+                if entity_starts.contains(&params.start_index))
+        }),
+        "owner fencing must not fabricate entity terminals"
+    );
+    assert_eq!(destroyed, entity_starts);
     assert_eq!(
         oplog
             .iter()
@@ -5344,7 +5561,7 @@ async fn completed_tool_replay_bypasses_current_attachment_memory_pressure(
 ) -> anyhow::Result<()> {
     const SYSTEM_MEMORY_BYTES: u64 = 128 * 1024 * 1024;
     const ATTACHMENT_BYTES: usize = 2 * 1024 * 1024;
-    const DESIRED_REPLAY_HEADROOM_BYTES: u64 = 1024 * 1024;
+    const DESIRED_REPLAY_HEADROOM_BYTES: u64 = 3 * 1024 * 1024;
 
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
@@ -5463,7 +5680,7 @@ async fn completed_tool_replay_bypasses_current_attachment_memory_pressure(
                 .worker_memory_requirement(&pressure_owned)
                 .await
                 .expect("read pressure worker memory");
-            if memory + target_memory + ATTACHMENT_BYTES as u64 > SYSTEM_MEMORY_BYTES {
+            if memory + target_memory + 2 * ATTACHMENT_BYTES as u64 > SYSTEM_MEMORY_BYTES {
                 break memory;
             }
             tokio::task::yield_now().await;
@@ -5474,6 +5691,10 @@ async fn completed_tool_replay_bypasses_current_attachment_memory_pressure(
     assert!(
         pressure_memory + target_memory <= SYSTEM_MEMORY_BYTES,
         "pressure must still leave room to restart the owner: pressure={pressure_memory}, target={target_memory}, pool={SYSTEM_MEMORY_BYTES}"
+    );
+    assert!(
+        pressure_memory + target_memory + ATTACHMENT_BYTES as u64 <= SYSTEM_MEMORY_BYTES,
+        "either output must fit independently so combined dual-output attachment admission is decisive"
     );
 
     let mut reconstruction = executor.gate_next_completed_entity_reconstruction(&worker_id);
@@ -5532,7 +5753,7 @@ async fn incomplete_tool_replay_persists_attachment_upgrade_rejection(
 ) -> anyhow::Result<()> {
     const SYSTEM_MEMORY_BYTES: u64 = 128 * 1024 * 1024;
     const ATTACHMENT_BYTES: u64 = 8 * 1024 * 1024;
-    const DESIRED_REPLAY_HEADROOM_BYTES: u64 = 4 * 1024 * 1024;
+    const DESIRED_REPLAY_HEADROOM_BYTES: u64 = 12 * 1024 * 1024;
 
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
@@ -5618,7 +5839,10 @@ async fn incomplete_tool_replay_persists_attachment_upgrade_rejection(
         .await
         .expect("original incomplete-attachment checkpoint timed out")
         .expect("checkpoint server stopped");
-        assert_eq!(original_checkpoint.name, "after-large-eof-before-terminal");
+        assert_eq!(
+            original_checkpoint.name,
+            "after-dual-output-before-terminal"
+        );
         let operation = executor
             .active_entity_metadata(&owned_agent_id)
             .await
@@ -5628,6 +5852,9 @@ async fn incomplete_tool_replay_persists_attachment_upgrade_rejection(
         let stdout = operation.stdout.expect("incomplete tool stdout metadata");
         assert_eq!(stdout.buffered_bytes as u64, ATTACHMENT_BYTES);
         assert_eq!(stdout.delivered_bytes, 0);
+        let stderr = operation.stderr.expect("incomplete tool stderr metadata");
+        assert_eq!(stderr.buffered_bytes as u64, ATTACHMENT_BYTES);
+        assert_eq!(stderr.delivered_bytes, 0);
         let reconstructed_entity_memory = executor
             .active_entity_metadata(&owned_agent_id)
             .await
@@ -5689,7 +5916,7 @@ async fn incomplete_tool_replay_persists_attachment_upgrade_rejection(
                     .await
                     .expect("read pressure worker memory");
                 maximum_observed = maximum_observed.max(memory);
-                if memory + restart_memory + ATTACHMENT_BYTES > SYSTEM_MEMORY_BYTES {
+                if memory + restart_memory + 2 * ATTACHMENT_BYTES > SYSTEM_MEMORY_BYTES {
                     break memory;
                 }
                 anyhow::ensure!(
@@ -5703,6 +5930,10 @@ async fn incomplete_tool_replay_persists_attachment_upgrade_rejection(
             pressure_memory + restart_memory <= SYSTEM_MEMORY_BYTES,
             "pressure must fit beside the reconstructed owner and entity: pressure={pressure_memory}, owner={target_memory}, entity={reconstructed_entity_memory}, pool={SYSTEM_MEMORY_BYTES}"
         );
+        assert!(
+            pressure_memory + restart_memory + ATTACHMENT_BYTES <= SYSTEM_MEMORY_BYTES,
+            "either output upgrade must fit independently so combined dual-output attachment admission is decisive"
+        );
 
         reconstructed_body.release();
         Ok::<_, anyhow::Error>(original_start)
@@ -5712,14 +5943,19 @@ async fn incomplete_tool_replay_persists_attachment_upgrade_rejection(
     let original_start = original_start?;
     assert_eq!(
         evidence,
-        vec!["resource-exhausted", "stdout-resource-exhausted"]
+        vec![
+            "resource-exhausted",
+            "stdout-resource-exhausted",
+            "stderr-resource-exhausted"
+        ]
     );
-    assert_eq!(
-        executor
-            .get_file_contents(&worker_id, "/incomplete-attachment-upgrade-rejected")
-            .await?
-            .as_ref(),
-        b"durable".as_slice()
+    let durable_file = executor
+        .get_file_contents(&worker_id, "/incomplete-attachment-upgrade-rejected")
+        .await?;
+    assert!(
+        durable_file.iter().all(|byte| *byte == b'i')
+            && durable_file.len() as u64 == ATTACHMENT_BYTES,
+        "dual-pressure provider body effect must be preserved"
     );
 
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
@@ -5763,7 +5999,7 @@ async fn incomplete_tool_replay_persists_attachment_upgrade_rejection(
     let terminal = SerializableToolOperationTerminal::from_value(terminal_response.value())?;
     assert_eq!(
         terminal.body_execution,
-        SerializableEntityBodyExecution::Skipped
+        SerializableEntityBodyExecution::Executed
     );
     assert!(matches!(
         terminal.result,
@@ -5830,7 +6066,15 @@ async fn incomplete_tool_replay_persists_attachment_upgrade_rejection(
         )
         .await
         .is_err(),
-        "recorded skipped rejection must not reexecute the provider body"
+        "recorded rejection must reconstruct the body without repeating its live checkpoint"
+    );
+    let replayed_file = executor
+        .get_file_contents(&worker_id, "/incomplete-attachment-upgrade-rejected")
+        .await?;
+    assert!(
+        replayed_file.iter().all(|byte| *byte == b'i')
+            && replayed_file.len() as u64 == ATTACHMENT_BYTES,
+        "completed rejection replay must reconstruct the executed provider body prefix"
     );
     let replayed_oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     assert_eq!(
@@ -8248,6 +8492,194 @@ async fn deterministic_stream_crash_checkpoint_matrix(
 
 #[test]
 #[tracing::instrument]
+#[timeout("10m")]
+async fn dual_output_reconstruction_preserves_independent_history_and_effects(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state.clone()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let provider_path = deps
+        .component_directory
+        .join(format!("{}.wasm", provider.wasm_name));
+    let metadata = extract_component_metadata(&provider_path, false, true).await?;
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment_state(
+            context.account_id,
+            provider_component.id,
+            provider_component.revision,
+            "golem-it:tool-streaming-rust-provider",
+            "ToolStreamingCaller",
+            metadata.tools,
+        )),
+    );
+    let (checkpoint_port, checkpoint_gate_port, checkpoint_server, mut arrivals) =
+        start_crash_checkpoint_server().await;
+    let (effect_port, mut effects, effect_server) =
+        middleware_acceptance::start_probe_effect_server().await;
+
+    let cases = [
+        (
+            "before-either-output",
+            b"stdout-last".as_slice(),
+            b"stderr-last".as_slice(),
+        ),
+        (
+            "after-stdout-only",
+            b"stdout-firststdout-last".as_slice(),
+            b"stderr-last".as_slice(),
+        ),
+        (
+            "after-stderr-only",
+            b"stdout-last".as_slice(),
+            b"stderr-firststderr-last".as_slice(),
+        ),
+        (
+            "after-both-partial",
+            b"stdout-firststdout-last".as_slice(),
+            b"stderr-firststderr-last".as_slice(),
+        ),
+        (
+            "after-stdout-terminal",
+            b"stdout-first".as_slice(),
+            b"stderr-last".as_slice(),
+        ),
+    ];
+
+    for (checkpoint, expected_stdout, expected_stderr) in cases {
+        let agent_id = agent_id!(
+            "ToolStreamingCaller",
+            format!("dual-output-reconstruction-{checkpoint}")
+        );
+        let worker_id = executor
+            .start_agent_with(
+                &caller_component.id,
+                agent_id.clone(),
+                HashMap::from([
+                    (
+                        "CRASH_CHECKPOINT_PORT".to_string(),
+                        checkpoint_port.to_string(),
+                    ),
+                    (
+                        "CRASH_CHECKPOINT_GATE_PORT".to_string(),
+                        checkpoint_gate_port.to_string(),
+                    ),
+                    (
+                        "MIDDLEWARE_PROBE_EFFECT_PORT".to_string(),
+                        effect_port.to_string(),
+                    ),
+                ]),
+                Vec::new(),
+            )
+            .await?;
+        let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+        let invocation = executor.invoke_and_await_agent(
+            &caller_component,
+            &agent_id,
+            "hold_dual_reconstruction",
+            data_value!(checkpoint),
+        );
+        tokio::pin!(invocation);
+
+        let effect = tokio::select! {
+            effect = effects.recv() => effect.expect("dual-output effect server remains available"),
+            result = invocation.as_mut() => panic!("dual-output call settled before checkpoint: {result:?}"),
+        };
+        assert_eq!(effect, format!("dual-reconstruct-{checkpoint}"));
+        let original_checkpoint = tokio::select! {
+            checkpoint = next_crash_checkpoint(&mut arrivals, checkpoint) => checkpoint?,
+            result = invocation.as_mut() => panic!("dual-output call settled before checkpoint: {result:?}"),
+        };
+        let (start, original_stdout, original_stderr) =
+            tokio::time::timeout(std::time::Duration::from_secs(30), async {
+                loop {
+                    if let Some(active) = executor.active_entity_metadata(&owned_agent_id).await
+                        && let Some(operation) = active.tool_operations.operations.first()
+                        && let Some(start) = operation.start_index
+                        && operation.attachment_count == 2
+                        && let (Some(stdout), Some(stderr)) = (&operation.stdout, &operation.stderr)
+                    {
+                        break (start, stdout.clone(), stderr.clone());
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .map_err(|_| {
+                anyhow::anyhow!("dual-output operation metadata timed out at {checkpoint}")
+            })?;
+
+        executor.simulated_crash(&worker_id).await?;
+        drop(original_checkpoint.release);
+        let replayed_checkpoint = tokio::select! {
+            checkpoint = next_crash_checkpoint(&mut arrivals, checkpoint) => checkpoint?,
+            result = invocation.as_mut() => panic!("dual-output replay settled before checkpoint: {result:?}"),
+        };
+        tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            loop {
+                if executor
+                    .active_entity_metadata(&owned_agent_id)
+                    .await
+                    .and_then(|active| active.tool_operations.operations.first().cloned())
+                    .is_some_and(|operation| {
+                        operation.start_index == Some(start)
+                            && operation.attachment_count == 2
+                            && operation.stdout.as_ref() == Some(&original_stdout)
+                            && operation.stderr.as_ref() == Some(&original_stderr)
+                    })
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .map_err(|_| anyhow::anyhow!("dual-output replay metadata timed out at {checkpoint}"))?;
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(200), effects.recv())
+                .await
+                .is_err(),
+            "replay repeated the external effect at {checkpoint}"
+        );
+        replayed_checkpoint
+            .release
+            .send(())
+            .map_err(|_| anyhow::anyhow!("dual-output replay gate dropped at {checkpoint}"))?;
+        let outputs: Vec<Vec<u8>> = invocation.await?.into_typed()?;
+        assert_eq!(outputs, [expected_stdout, expected_stderr]);
+        executor.delete_worker(&worker_id).await?;
+    }
+
+    checkpoint_server.abort();
+    effect_server.abort();
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
 #[timeout("5m")]
 async fn capable_terminal_lane_return_and_delayed_publication_survive_crash(
     last_unique_id: &LastUniqueId,
@@ -8815,6 +9247,19 @@ async fn typescript_generated_client_streams_live(
     assert_eq!(declared.stdout_terminal, "finished");
     assert_eq!(declared.result_terminal, "declared-error");
 
+    let dual: TsDualOutputEvidence = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &agent_id,
+            "dualOutputDeclaredError",
+            data_value!(),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(dual.stdout, vec![0, 127, 128, 255]);
+    assert_eq!(dual.stderr, vec![255, 128, 1, 2]);
+    assert_eq!(dual.result_terminal, "declared-error");
+
     Ok(())
 }
 
@@ -8934,6 +9379,19 @@ async fn scala_generated_client_streams_live(
     assert_eq!(declared.terminal, "finished");
     assert_eq!(declared.result, "declared:expected");
 
+    let dual: ScalaDualOutputEvidence = executor
+        .invoke_and_await_agent(
+            &stored_component,
+            &agent_id,
+            "dualOutputDeclaredError",
+            data_value!(),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(dual.stdout, vec![0, 127, 255]);
+    assert_eq!(dual.stderr, vec![128, 1, 2]);
+    assert_eq!(dual.result, "declared:dual-expected");
+
     Ok(())
 }
 
@@ -9034,6 +9492,19 @@ async fn moonbit_generated_client_streams_live(
         .into_typed()?;
     assert_eq!(declared, "finished:declared:expected");
 
+    let dual: MoonBitDualOutputEvidence = executor
+        .invoke_and_await_agent(
+            &stored_component,
+            &agent_id,
+            "dual_output_declared_error",
+            data_value!(),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(dual.stdout, b"moon-out:\x00\xff");
+    assert_eq!(dual.stderr, b"moon-err:\x80!");
+    assert_eq!(dual.result, "declared:dual-expected");
+
     Ok(())
 }
 
@@ -9049,8 +9520,8 @@ async fn native_external_tool_session_delivers_stdout_before_input_eof(
 ) -> anyhow::Result<()> {
     use golem_api_grpc::proto::golem::worker::{
         ExternalToolInvocation, InputStreamEnd, InputStreamItem, InvocationRequest,
-        InvocationStart, ResumeAttach, ResumeOperation, StreamCursor, input_stream_item,
-        invocation_request, invocation_response, invocation_session_completion,
+        InvocationStart, ResumeAttach, ResumeOperation, StreamCursor, ToolByteStreamRole,
+        input_stream_item, invocation_request, invocation_response, invocation_session_completion,
         invocation_session_result,
     };
     let context = TestContext::new(last_unique_id);
@@ -9142,6 +9613,7 @@ async fn native_external_tool_session_delivers_stdout_before_input_eof(
                 input: Some(input.try_into().map_err(anyhow::Error::msg)?),
                 stdin: true,
                 stdout: true,
+                stderr: false,
                 fresh_owner: false,
                 expected_deployment_revision: None,
             }),
@@ -9165,17 +9637,13 @@ async fn native_external_tool_session_delivers_stdout_before_input_eof(
     let stdin_id = accepted
         .stream_mappings
         .iter()
-        .find(|mapping| {
-            mapping.role() == golem_api_grpc::proto::golem::worker::StreamMappingRole::Input
-        })
+        .find(|mapping| mapping.tool_byte_stream_role == Some(ToolByteStreamRole::Stdin as i32))
         .expect("stdin role")
         .transport_stream_id;
     let stdout_id = accepted
         .stream_mappings
         .iter()
-        .find(|mapping| {
-            mapping.role() == golem_api_grpc::proto::golem::worker::StreamMappingRole::Output
-        })
+        .find(|mapping| mapping.tool_byte_stream_role == Some(ToolByteStreamRole::Stdout as i32))
         .expect("stdout role")
         .transport_stream_id;
     assert_ne!(stdin_id, stdout_id);
@@ -9275,6 +9743,10 @@ async fn native_external_tool_session_delivers_stdout_before_input_eof(
             .unwrap();
         assert_eq!(resumed.handle, original.handle);
         assert_eq!(resumed.role, original.role);
+        assert_eq!(
+            resumed.tool_byte_stream_role,
+            original.tool_byte_stream_role
+        );
     }
     drop(responses);
     drop(sender);
@@ -9453,6 +9925,540 @@ async fn native_external_tool_session_delivers_stdout_before_input_eof(
         .await?
         .into_typed()?;
     assert_eq!(after, "R");
+    Ok(())
+}
+
+async fn exercise_filesystem_tools(
+    executor: &TestWorkerExecutor,
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    environment_state: &TestEnvironmentStateService,
+    caller_component: &golem_common::model::component::ComponentDto,
+    provider: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", provider.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    let definitions = metadata
+        .tools
+        .iter()
+        .map(|definition| {
+            let name = definition
+                .name()
+                .expect("filesystem tool has a root command");
+            (ToolName::try_from(name).unwrap(), definition.clone())
+        })
+        .collect::<BTreeMap<_, _>>();
+    let mut deployment = deployment_state(
+        context.account_id,
+        provider_component.id,
+        provider_component.revision,
+        "golem:filesystem-tools",
+        "ToolStreamingCaller",
+        metadata.tools,
+    );
+    for bindings in deployment.tool_bindings.values_mut() {
+        for binding in bindings.values_mut() {
+            binding.filesystem_access = ToolFilesystemAccess::Allowed;
+        }
+    }
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment),
+    );
+
+    let agent_id = agent_id!("ToolStreamingCaller", "filesystem-tools");
+    let worker_id = executor
+        .start_agent(&caller_component.id, agent_id.clone())
+        .await?;
+    let fingerprint = executor.get_worker_metadata(&worker_id).await?.fingerprint;
+    let principal = Principal::GolemUser(GolemUserPrincipal {
+        account_id: context.account_id,
+    });
+    let path = "workspace/filesystem-tools/notes.txt".to_string();
+
+    let write = invoke_filesystem_tool_success(
+        executor,
+        &worker_id,
+        fingerprint,
+        principal.clone(),
+        &definitions,
+        "write-file",
+        filesystem_tool_input(vec![
+            (
+                "path",
+                SchemaType::string(),
+                SchemaValue::String(path.clone()),
+            ),
+            (
+                "content",
+                SchemaType::string(),
+                SchemaValue::String("one\r\ntwo\nthree".to_string()),
+            ),
+            (
+                "create-parent-directories",
+                SchemaType::bool(),
+                SchemaValue::Bool(true),
+            ),
+        ]),
+    )
+    .await?;
+    assert_eq!(
+        write,
+        SchemaValue::Record {
+            fields: vec![SchemaValue::Enum { case: 0 }, SchemaValue::U64(14)]
+        }
+    );
+
+    let read = invoke_filesystem_tool_success(
+        executor,
+        &worker_id,
+        fingerprint,
+        principal.clone(),
+        &definitions,
+        "read-file",
+        filesystem_tool_input(vec![
+            (
+                "path",
+                SchemaType::string(),
+                SchemaValue::String(path.clone()),
+            ),
+            {
+                let (schema, value) = filesystem_optional_line(Some(2));
+                ("start-line", schema, value)
+            },
+            {
+                let (schema, value) = filesystem_optional_line(None);
+                ("end-line", schema, value)
+            },
+            {
+                let (schema, value) = filesystem_cursor_none();
+                ("cursor", schema, value)
+            },
+        ]),
+    )
+    .await?;
+    assert_eq!(
+        read,
+        SchemaValue::Record {
+            fields: vec![
+                SchemaValue::String("two\nthree".to_string()),
+                SchemaValue::Option {
+                    inner: Some(Box::new(SchemaValue::U64(2))),
+                },
+                SchemaValue::Option {
+                    inner: Some(Box::new(SchemaValue::U64(3))),
+                },
+                SchemaValue::Option { inner: None },
+            ]
+        }
+    );
+
+    let edit = invoke_filesystem_tool_success(
+        executor,
+        &worker_id,
+        fingerprint,
+        principal.clone(),
+        &definitions,
+        "edit-file",
+        filesystem_tool_input(vec![
+            (
+                "path",
+                SchemaType::string(),
+                SchemaValue::String(path.clone()),
+            ),
+            (
+                "old-text",
+                SchemaType::string(),
+                SchemaValue::String("two\n".to_string()),
+            ),
+            (
+                "new-text",
+                SchemaType::string(),
+                SchemaValue::String("TWO\r\n".to_string()),
+            ),
+        ]),
+    )
+    .await?;
+    assert_eq!(
+        edit,
+        SchemaValue::Record {
+            fields: vec![
+                SchemaValue::U64(1),
+                SchemaValue::U64(14),
+                SchemaValue::U64(15)
+            ]
+        }
+    );
+
+    let full_read = invoke_filesystem_tool_success(
+        executor,
+        &worker_id,
+        fingerprint,
+        principal.clone(),
+        &definitions,
+        "read-file",
+        filesystem_tool_input(vec![
+            (
+                "path",
+                SchemaType::string(),
+                SchemaValue::String(path.clone()),
+            ),
+            {
+                let (schema, value) = filesystem_optional_line(None);
+                ("start-line", schema, value)
+            },
+            {
+                let (schema, value) = filesystem_optional_line(None);
+                ("end-line", schema, value)
+            },
+            {
+                let (schema, value) = filesystem_cursor_none();
+                ("cursor", schema, value)
+            },
+        ]),
+    )
+    .await?;
+    assert_eq!(
+        full_read,
+        SchemaValue::Record {
+            fields: vec![
+                SchemaValue::String("one\r\nTWO\r\nthree".to_string()),
+                SchemaValue::Option {
+                    inner: Some(Box::new(SchemaValue::U64(1))),
+                },
+                SchemaValue::Option {
+                    inner: Some(Box::new(SchemaValue::U64(3))),
+                },
+                SchemaValue::Option { inner: None },
+            ]
+        }
+    );
+
+    let stale = invoke_filesystem_tool(
+        executor,
+        &worker_id,
+        fingerprint,
+        principal.clone(),
+        &definitions,
+        "edit-file",
+        filesystem_tool_input(vec![
+            (
+                "path",
+                SchemaType::string(),
+                SchemaValue::String(path.clone()),
+            ),
+            (
+                "old-text",
+                SchemaType::string(),
+                SchemaValue::String("outdated".to_string()),
+            ),
+            (
+                "new-text",
+                SchemaType::string(),
+                SchemaValue::String("replacement".to_string()),
+            ),
+        ]),
+    )
+    .await?;
+    assert_filesystem_tool_error(stale, "stale-edit")?;
+
+    let replace = invoke_filesystem_tool_success(
+        executor,
+        &worker_id,
+        fingerprint,
+        principal.clone(),
+        &definitions,
+        "write-file",
+        filesystem_tool_input(vec![
+            (
+                "path",
+                SchemaType::string(),
+                SchemaValue::String(path.clone()),
+            ),
+            (
+                "content",
+                SchemaType::string(),
+                SchemaValue::String("same same".to_string()),
+            ),
+            (
+                "create-parent-directories",
+                SchemaType::bool(),
+                SchemaValue::Bool(false),
+            ),
+        ]),
+    )
+    .await?;
+    assert_eq!(
+        replace,
+        SchemaValue::Record {
+            fields: vec![SchemaValue::Enum { case: 1 }, SchemaValue::U64(9)]
+        }
+    );
+
+    let ambiguous = invoke_filesystem_tool(
+        executor,
+        &worker_id,
+        fingerprint,
+        principal.clone(),
+        &definitions,
+        "edit-file",
+        filesystem_tool_input(vec![
+            ("path", SchemaType::string(), SchemaValue::String(path)),
+            (
+                "old-text",
+                SchemaType::string(),
+                SchemaValue::String("same".to_string()),
+            ),
+            (
+                "new-text",
+                SchemaType::string(),
+                SchemaValue::String("different".to_string()),
+            ),
+        ]),
+    )
+    .await?;
+    assert_filesystem_tool_error(ambiguous, "ambiguous-edit")?;
+
+    // "aa" occurs twice in "aaa" (at offsets 0 and 1), so the documented
+    // unambiguous-edit contract requires rejecting this edit.
+    let overlap_path = "workspace/filesystem-tools/overlap.txt".to_string();
+    invoke_filesystem_tool_success(
+        executor,
+        &worker_id,
+        fingerprint,
+        principal.clone(),
+        &definitions,
+        "write-file",
+        filesystem_tool_input(vec![
+            (
+                "path",
+                SchemaType::string(),
+                SchemaValue::String(overlap_path.clone()),
+            ),
+            (
+                "content",
+                SchemaType::string(),
+                SchemaValue::String("aaa".to_string()),
+            ),
+            (
+                "create-parent-directories",
+                SchemaType::bool(),
+                SchemaValue::Bool(true),
+            ),
+        ]),
+    )
+    .await?;
+    let overlapping = invoke_filesystem_tool(
+        executor,
+        &worker_id,
+        fingerprint,
+        principal.clone(),
+        &definitions,
+        "edit-file",
+        filesystem_tool_input(vec![
+            (
+                "path",
+                SchemaType::string(),
+                SchemaValue::String(overlap_path),
+            ),
+            (
+                "old-text",
+                SchemaType::string(),
+                SchemaValue::String("aa".to_string()),
+            ),
+            (
+                "new-text",
+                SchemaType::string(),
+                SchemaValue::String("x".to_string()),
+            ),
+        ]),
+    )
+    .await?;
+    assert_filesystem_tool_error(overlapping, "ambiguous-edit")?;
+
+    let traversal = invoke_filesystem_tool(
+        executor,
+        &worker_id,
+        fingerprint,
+        principal,
+        &definitions,
+        "read-file",
+        filesystem_tool_input(vec![
+            (
+                "path",
+                SchemaType::string(),
+                SchemaValue::String("../outside.txt".to_string()),
+            ),
+            {
+                let (schema, value) = filesystem_optional_line(None);
+                ("start-line", schema, value)
+            },
+            {
+                let (schema, value) = filesystem_optional_line(None);
+                ("end-line", schema, value)
+            },
+            {
+                let (schema, value) = filesystem_cursor_none();
+                ("cursor", schema, value)
+            },
+        ]),
+    )
+    .await?;
+    assert_filesystem_tool_error(traversal, "unsafe-path")?;
+    Ok(())
+}
+
+async fn exercise_guest_invoked_filesystem_tools(
+    executor: &TestWorkerExecutor,
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    environment_state: &TestEnvironmentStateService,
+    caller_component: &golem_common::model::component::ComponentDto,
+    provider: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", provider.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    let mut deployment = deployment_state(
+        context.account_id,
+        provider_component.id,
+        provider_component.revision,
+        "golem:filesystem-tools",
+        "ToolStreamingCaller",
+        metadata.tools,
+    );
+    for bindings in deployment.tool_bindings.values_mut() {
+        for binding in bindings.values_mut() {
+            binding.filesystem_access = ToolFilesystemAccess::Allowed;
+        }
+    }
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment),
+    );
+
+    let evidence: Vec<String> = executor
+        .invoke_and_await_agent(
+            caller_component,
+            &agent_id!("ToolStreamingCaller", "filesystem-tools-guest"),
+            "filesystem_tool_roundtrip",
+            data_value!(),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(
+        evidence,
+        vec![
+            "created",
+            "14",
+            "two\nthree",
+            "2",
+            "3",
+            "none",
+            "1",
+            "14",
+            "15",
+        ]
+    );
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn builtin_filesystem_tools_have_expected_behavior(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    #[tagged_as("filesystem_tools")] filesystem_tools: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state.clone()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+
+    exercise_filesystem_tools(
+        &executor,
+        deps,
+        &context,
+        &environment_state,
+        &caller_component,
+        filesystem_tools,
+    )
+    .await?;
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn filesystem_tools_work_through_guest_invocation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    #[tagged_as("filesystem_tools")] filesystem_tools: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state.clone()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+
+    exercise_guest_invoked_filesystem_tools(
+        &executor,
+        deps,
+        &context,
+        &environment_state,
+        &caller_component,
+        filesystem_tools,
+    )
+    .await?;
     Ok(())
 }
 

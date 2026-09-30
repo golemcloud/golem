@@ -80,6 +80,93 @@ fn counted_stream(drops : Ref[Int]) -> @async-core.Stream[Byte] {
 }
 
 ///|
+fn rejection_stream(drops : Ref[Int]) -> @async-core.Stream[Byte] {
+  @async-core.Stream::from_source(_ => None, () => drops.val += 1, () => {
+    drops.val += 1
+  })
+}
+
+///|
+test "scalar invocation rejects and closes every admitted output without observing the terminal" {
+  run_component_async(async fn() {
+    for channels in [1, 2, 3] {
+      let stdout_drops = Ref(0)
+      let stderr_drops = Ref(0)
+      let gets = Ref(0)
+      let underlying : UnderlyingTool = {
+        ownership: OwnershipContext::new(no_raw_drop),
+        invoke: async fn(_, _, _) {
+          {
+            get: async fn() {
+              gets.val += 1
+              Ok({ result: None, stdout: None, stderr: None, })
+            },
+            stdout: if (channels & 1) == 0 {
+              None
+            } else {
+              Some(rejection_stream(stdout_drops))
+            },
+            stderr: if (channels & 2) == 0 {
+              None
+            } else {
+              Some(rejection_stream(stderr_drops))
+            },
+            cancel: fn() {  },
+            drop: fn() {  },
+          }
+        },
+      }
+      let result = underlying.invoke(
+        [],
+        @schema.try_into_typed_schema_value(()),
+        None,
+      )
+      assert_true(result is Err(InvalidResult(_)))
+      assert_eq(gets.val, 0)
+      assert_eq(stdout_drops.val, if (channels & 1) == 0 { 0 } else { 1 })
+      assert_eq(stderr_drops.val, if (channels & 2) == 0 { 0 } else { 1 })
+
+      let raw_stdout_drops = Ref(0)
+      let raw_stderr_drops = Ref(0)
+      let raw_gets = Ref(0)
+      let raw_underlying : UnderlyingTool = {
+        ownership: OwnershipContext::new(no_raw_drop),
+        invoke: async fn(_, _, _) {
+          {
+            get: async fn() {
+              raw_gets.val += 1
+              Ok({ result: None, stdout: None, stderr: None, })
+            },
+            stdout: if (channels & 1) == 0 {
+              None
+            } else {
+              Some(rejection_stream(raw_stdout_drops))
+            },
+            stderr: if (channels & 2) == 0 {
+              None
+            } else {
+              Some(rejection_stream(raw_stderr_drops))
+            },
+            cancel: fn() {  },
+            drop: fn() {  },
+          }
+        },
+      }
+      let raw_input = raw_underlying.ownership.own_raw_typed_schema_value(
+        @model.typed_schema_value_to_wit(
+          @schema.try_into_typed_schema_value(()),
+        ),
+      )
+      let raw_result = raw_underlying.invoke_raw([], raw_input, None)
+      assert_true(raw_result is Err(InvalidResult(_)))
+      assert_eq(raw_gets.val, 0)
+      assert_eq(raw_stdout_drops.val, if (channels & 1) == 0 { 0 } else { 1 })
+      assert_eq(raw_stderr_drops.val, if (channels & 2) == 0 { 0 } else { 1 })
+    }
+  })
+}
+
+///|
 fn no_raw_drop() -> Unit {
   ()
 }
@@ -430,6 +517,7 @@ test "raw invocation results transfer result and stdout together once" {
   let result = context.own_raw_invocation_result({
     result: Some(raw_unit_value()),
     stdout: Some(counted_stream(stdout_drops)),
+    stderr: None,
   })
   let copy = result
   let transferred = result.take_for_final(context)
@@ -477,6 +565,7 @@ test "raw final lowering rejects foreign results and errors without consuming th
   let result = foreign_context.own_raw_invocation_result({
     result: Some(raw_secret_value(607)),
     stdout: Some(counted_stream(stdout_drops)),
+    stderr: None,
   })
   assert_true(result.take_for_final(expected_context) is Err(_))
   assert_resource_drop_counts(0, 0, 0)
@@ -533,6 +622,7 @@ test "failed raw result transfer retains nested resources and stdout for teardow
   let result = context.own_raw_invocation_result({
     result: Some(malformed),
     stdout: Some(counted_stream(stdout_drops)),
+    stderr: None,
   })
   assert_true(result.take_for_final(context) is Err(_))
   assert_resource_drop_counts(0, 0, 0)
@@ -553,7 +643,7 @@ test "raw invoke rejects foreign input without consuming it" {
     let underlying = new_underlying_tool(
       (_, _, _) => {
         backend_calls.val = backend_calls.val + 1
-        Ok({ result: None, stdout: None, })
+        Ok({ result: None, stdout: None, stderr: None, })
       },
       no_raw_drop,
     )
@@ -585,7 +675,7 @@ test "raw invoke preflights stdin before transferring input" {
     let underlying = new_underlying_tool(
       (_, _, _) => {
         backend_calls.val = backend_calls.val + 1
-        Ok({ result: None, stdout: None, })
+        Ok({ result: None, stdout: None, stderr: None, })
       },
       no_raw_drop,
     )
@@ -631,7 +721,7 @@ test "raw invoke supports sequential calls and raw backend errors" {
             }),
           )
         } else {
-          Ok({ result: Some(raw_unit_value()), stdout: None, })
+          Ok({ result: Some(raw_unit_value()), stdout: None, stderr: None, })
         }
       },
       no_raw_drop,
@@ -789,7 +879,7 @@ test "stale stdin is rejected before fresh input capabilities transfer" {
     let underlying = new_underlying_tool(
       (_, _, _) => {
         backend_calls.val = backend_calls.val + 1
-        Ok({ result: None, stdout: None, })
+        Ok({ result: None, stdout: None, stderr: None, })
       },
       no_raw_drop,
     )
@@ -826,7 +916,11 @@ test "abandoned and explicitly rejected results synchronously clean up" {
   let abandoned_drops = Ref(0)
   let context = OwnershipContext::new(no_raw_drop)
   let abandoned = context.own_result_with_cleanup(
-    { result: None, stdout: Some(counted_stream(abandoned_drops)), },
+    {
+      result: None,
+      stdout: Some(counted_stream(abandoned_drops)),
+      stderr: None,
+    },
     fn(result) {
       match result.stdout {
         Some(stdout) => stdout.drop_sync()
@@ -841,7 +935,11 @@ test "abandoned and explicitly rejected results synchronously clean up" {
   let rejected_drops = Ref(0)
   let rejected_context = OwnershipContext::new(no_raw_drop)
   let rejected = rejected_context.own_result_with_cleanup(
-    { result: None, stdout: Some(counted_stream(rejected_drops)), },
+    {
+      result: None,
+      stdout: Some(counted_stream(rejected_drops)),
+      stderr: None,
+    },
     fn(result) {
       match result.stdout {
         Some(stdout) => stdout.drop_sync()
@@ -862,6 +960,7 @@ test "projection rejection and malformed wire results release stdout" {
   let rejected = rejected_context.own_result({
     result: None,
     stdout: Some(counted_stream(rejected_drops)),
+    stderr: None,
   })
   let projected : Result[Int, ToolInvokeError[Unit]] = decode_result_value(
     rejected,
@@ -877,6 +976,7 @@ test "projection rejection and malformed wire results release stdout" {
   let decoded = @toolCore.decode_invocation_result({
     result: Some(malformed),
     stdout: Some(counted_stream(malformed_drops)),
+    stderr: None,
   })
   assert_true(decoded is Err(_))
   assert_eq(malformed_drops.val, 1)
@@ -889,6 +989,7 @@ test "projected stdout and resources remain owned until teardown" {
   let stdout_result = stdout_context.own_result({
     result: None,
     stdout: Some(counted_stream(stdout_drops)),
+    stderr: None,
   })
   let projected_stdout : Result[@async-core.Stream[Byte], ToolInvokeError[Unit]] = decode_result_stdout_only(
     stdout_result,
@@ -914,6 +1015,7 @@ test "projected stdout and resources remain owned until teardown" {
       ),
     }),
     stdout: None,
+    stderr: None,
   })
   let projected_resource = resource_result.take_for_projection()
   assert_true(projected_resource is Ok(_))
@@ -941,6 +1043,7 @@ test "projected resource transferred to final encoding is not double-dropped" {
       ),
     }),
     stdout: None,
+    stderr: None,
   })
   let projected = owned.take_for_projection()
   let transferred = match projected {
@@ -963,7 +1066,7 @@ test "final result transfer precedes revocation and preserves stdout" {
   let stdout_drops = Ref(0)
   let context = OwnershipContext::new(no_raw_drop)
   let owned = context.own_result_with_cleanup(
-    { result: None, stdout: Some(counted_stream(stdout_drops)), },
+    { result: None, stdout: Some(counted_stream(stdout_drops)), stderr: None, },
     fn(result) {
       match result.stdout {
         Some(stdout) => stdout.drop_sync()
@@ -993,7 +1096,7 @@ test "fake backend supports sequential calls and clears active state" {
     let underlying = new_underlying_tool(
       (_, _, _) => {
         calls.val = calls.val + 1
-        Ok({ result: None, stdout: None, })
+        Ok({ result: None, stdout: None, stderr: None, })
       },
       no_raw_drop,
     )
@@ -1028,7 +1131,7 @@ test "fake backend permits overlapping calls" {
           ignore(started_promise.complete(()))
           release.get()
         }
-        Ok({ result: None, stdout: None, })
+        Ok({ result: None, stdout: None, stderr: None, })
       },
       no_raw_drop,
     )
@@ -1071,9 +1174,10 @@ test "per-call observers complete in reverse order and isolate disposal and canc
         {
           get: async fn() {
             done.get()
-            Ok({ result: None, stdout: None, })
+            Ok({ result: None, stdout: None, stderr: None, })
           },
           stdout: Some(counted_stream(stdout_drops[index])),
+          stderr: None,
           cancel: fn() { cancels[index].val += 1 },
           drop: fn() { drops[index].val += 1 },
         }
@@ -1143,6 +1247,7 @@ test "dropping an observer with an in-flight get defers raw disposal through com
             Err(@underlying.UnderlyingError::InternalError("terminal"))
           },
           stdout: None,
+          stderr: None,
           cancel: fn() {  },
           drop: fn() { observer_drops.val += 1 },
         }
@@ -1193,6 +1298,7 @@ test "underlying terminals retain cancellation and resource exhaustion across co
               Err(error)
             },
             stdout: None,
+            stderr: None,
             cancel: fn() { cancellations.val += 1 },
             drop: fn() { drops.val += 1 },
           }
@@ -1259,12 +1365,13 @@ test "cancelling one waiter preserves shared typed and raw observation" {
                 ignore(entered_promise.complete(()))
                 release.get()
                 if successful {
-                  Ok({ result: None, stdout: None, })
+                  Ok({ result: None, stdout: None, stderr: None, })
                 } else {
                   Err(@underlying.UnderlyingError::ResourceExhausted("quota"))
                 }
               },
               stdout: None,
+              stderr: None,
               cancel: fn() { cancellations.val += 1 },
               drop: fn() { drops.val += 1 },
             }
@@ -1378,7 +1485,7 @@ test "revocation during an active call delays and deduplicates raw drop" {
       async fn(_, _, _) {
         ignore(started_promise.complete(()))
         release.get()
-        Ok({ result: None, stdout: None, })
+        Ok({ result: None, stdout: None, stderr: None, })
       },
       fn() { raw_drops.val = raw_drops.val + 1 },
     )
@@ -1436,7 +1543,7 @@ test "cancelling a suspended backend call clears active state" {
       async fn(_, _, _) {
         ignore(started_promise.complete(()))
         blocked.get()
-        Ok({ result: None, stdout: None, })
+        Ok({ result: None, stdout: None, stderr: None, })
       },
       no_raw_drop,
     )
@@ -1463,7 +1570,7 @@ test "scoped underlying teardown runs after normal and raised group exits" {
     let normal_drops = Ref(0)
     @async-core.with_task_group(async fn(group) {
       let _underlying = new_scoped_underlying_tool(
-        (_, _, _) => Ok({ result: None, stdout: None, }),
+        (_, _, _) => Ok({ result: None, stdout: None, stderr: None, }),
         fn() { normal_drops.val = normal_drops.val + 1 },
         group,
       )
@@ -1475,7 +1582,7 @@ test "scoped underlying teardown runs after normal and raised group exits" {
     try
       @async-core.with_task_group(async fn(group) {
         let _underlying = new_scoped_underlying_tool(
-          (_, _, _) => Ok({ result: None, stdout: None, }),
+          (_, _, _) => Ok({ result: None, stdout: None, stderr: None, }),
           fn() { raised_drops.val = raised_drops.val + 1 },
           group,
         )
@@ -1506,7 +1613,7 @@ test "enclosing group cancellation settles active call before scoped raw drop" {
             async fn(_, _, _) {
               ignore(started_promise.complete(()))
               blocked.get()
-              Ok({ result: None, stdout: None, })
+              Ok({ result: None, stdout: None, stderr: None, })
             },
             fn() {
               match underlying_holder.val {

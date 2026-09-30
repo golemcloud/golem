@@ -2,10 +2,13 @@ use super::*;
 use crate::repo::model::deployment::{CompiledMcpData, DeploymentCompiledMcpRecord};
 use golem_common::model::Empty;
 use golem_common::model::account::{AccountEmail, AccountId, AccountSummary};
-use golem_common::model::agent::{AgentMode, Snapshotting};
+use golem_common::model::agent::{AgentFileContentHash, AgentMode, Snapshotting};
 use golem_common::model::agent_secret::{AgentSecretId, AgentSecretPath, AgentSecretRevision};
 use golem_common::model::application::{ApplicationId, ApplicationName};
-use golem_common::model::component::{ComponentId, ComponentName, ComponentRevision};
+use golem_common::model::component::{
+    AgentFilePath, AgentFilePermissions, ComponentId, ComponentName, ComponentRevision,
+    InitialAgentFile,
+};
 use golem_common::model::component_metadata::{ComponentMetadata, KnownExports};
 use golem_common::model::environment::{EnvironmentId, EnvironmentName, EnvironmentRevision};
 use golem_common::model::json::NormalizedJsonValue;
@@ -13,7 +16,9 @@ use golem_common::model::mcp_deployment::{
     McpDeployment, McpDeploymentAgentOptions, McpDeploymentId, McpDeploymentRevision,
     McpDeploymentToolOptions,
 };
-use golem_common::model::tool::{RemoteToolDeployment, SecretKeyScope, ToolProvisionConfig};
+use golem_common::model::tool::{
+    RemoteToolDeployment, SecretKeyScope, ToolFilesystemAccess, ToolProvisionConfig,
+};
 use golem_common::model::tool_middleware::ToolMiddlewareMergeMode;
 use golem_common::model::tool_release::{
     ToolRelease, ToolReleaseById, ToolReleaseId, ToolReleaseLifecycle, ToolReleaseOrigin,
@@ -872,6 +877,7 @@ fn stored_agent_secret(
 fn test_tool(name: &str) -> Tool {
     Tool {
         version: "1.0.0".to_string(),
+        requires_filesystem: false,
         commands: CommandTree {
             nodes: vec![CommandNode {
                 name: name.to_string(),
@@ -902,12 +908,14 @@ fn executable_test_tool(root: &str, command: &str) -> Tool {
         constraints: Vec::new(),
         stdin: None,
         stdout: None,
+        stderr: None,
         result: None,
         errors: Vec::new(),
         annotations: None,
     };
     Tool {
         version: "1.0.0".to_string(),
+        requires_filesystem: false,
         commands: CommandTree {
             nodes: vec![
                 node(root, vec![CommandIndex(1)], None),
@@ -1750,6 +1758,164 @@ fn compile_tools_validates_remote_component_bindings_without_agent_bindings() {
 }
 
 #[test]
+fn compile_tools_enforces_filesystem_requirements_for_every_source_and_owner() {
+    #[derive(Clone, Copy, Debug)]
+    enum Source {
+        Local,
+        Remote,
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum Owner {
+        Agent,
+        ComponentBaseline,
+    }
+
+    let file = || InitialAgentFile {
+        content_hash: AgentFileContentHash(diff::Hash::empty()),
+        path: AgentFilePath::from_rel_str("fixture.txt").unwrap(),
+        permissions: AgentFilePermissions::ReadOnly,
+        size: 0,
+    };
+    let cases = [
+        ("allowed", ToolFilesystemAccess::Allowed, false, true, false),
+        (
+            "unset-with-files",
+            ToolFilesystemAccess::Unset,
+            true,
+            true,
+            false,
+        ),
+        (
+            "fileless-unset",
+            ToolFilesystemAccess::Unset,
+            false,
+            false,
+            false,
+        ),
+        (
+            "required-fileless-unset",
+            ToolFilesystemAccess::Unset,
+            false,
+            true,
+            true,
+        ),
+        (
+            "denied-fileless",
+            ToolFilesystemAccess::Denied,
+            false,
+            true,
+            true,
+        ),
+        (
+            "denied-with-files",
+            ToolFilesystemAccess::Denied,
+            true,
+            true,
+            true,
+        ),
+    ];
+
+    for source in [Source::Local, Source::Remote] {
+        for owner in [Owner::Agent, Owner::ComponentBaseline] {
+            for (case, access, with_files, requires_filesystem, rejected) in cases {
+                let (agent_name, agent) = test_registered_agent_type("AgentA");
+                let consumer = test_tool_component("consumer", BTreeMap::new());
+                let binding = ToolBindingInput {
+                    filesystem_access: access,
+                    ..ToolBindingInput::default()
+                };
+                let (agent_bindings, component_bindings) = match owner {
+                    Owner::Agent => (
+                        BTreeMap::from([(agent_name.clone(), binding)]),
+                        BTreeMap::new(),
+                    ),
+                    Owner::ComponentBaseline => (
+                        BTreeMap::new(),
+                        BTreeMap::from([(consumer.component_name.clone(), binding)]),
+                    ),
+                };
+                let context = DeploymentContext {
+                    environment: test_environment(),
+                    components: BTreeMap::from([(consumer.component_name.clone(), consumer)]),
+                    http_api_deployments: BTreeMap::new(),
+                    mcp_deployments: BTreeMap::new(),
+                    registered_agent_types: HashMap::from([(agent_name, agent)]),
+                };
+                let mut errors = Vec::new();
+
+                match source {
+                    Source::Local => {
+                        let tool_name = ToolName::try_from("grep").unwrap();
+                        let mut definition = test_tool(tool_name.as_str());
+                        definition.requires_filesystem = requires_filesystem;
+                        let provider = test_tool_component(
+                            "provider",
+                            BTreeMap::from([(
+                                tool_name,
+                                ToolDeploymentMetadata {
+                                    definition,
+                                    provision: ToolProvisionConfig {
+                                        files: with_files.then(file).into_iter().collect(),
+                                        ..ToolProvisionConfig::default()
+                                    },
+                                    environment_binding: None,
+                                    component_bindings,
+                                    agent_bindings,
+                                },
+                            )]),
+                        );
+                        let mut context = context;
+                        context
+                            .components
+                            .insert(provider.component_name.clone(), provider);
+                        context.compile_tools(
+                            golem_common::model::deployment::DeploymentRevision::INITIAL,
+                            &mut errors,
+                            &mut Vec::new(),
+                        );
+                    }
+                    Source::Remote => {
+                        let mut remote = test_remote_tool("grep", None, agent_bindings);
+                        remote.0.component_bindings = component_bindings;
+                        remote.0.provision.files = with_files.then(file).into_iter().collect();
+                        let release = &mut remote.1.as_mut().unwrap().release;
+                        release.definition.requires_filesystem = requires_filesystem;
+                        release.metadata_digest =
+                            golem_common::model::tool_release::tool_metadata_digest(
+                                &release.metadata_version,
+                                &release.definition,
+                            )
+                            .unwrap();
+                        context.compile_tools_with_remote(
+                            golem_common::model::deployment::DeploymentRevision::INITIAL,
+                            &[remote],
+                            &mut errors,
+                            &mut Vec::new(),
+                        );
+                    }
+                }
+
+                let filesystem_errors = errors
+                    .iter()
+                    .filter(|error| {
+                        matches!(
+                            error,
+                            DeployValidationError::ToolFilesystemRequirement { .. }
+                        )
+                    })
+                    .count();
+                assert_eq!(
+                    filesystem_errors,
+                    usize::from(rejected),
+                    "source={source:?}, owner={owner:?}, case={case}, errors={errors:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn zero_agent_remote_component_binding_hash_uses_effective_binding_and_matches_cli() {
     let component = test_tool_component("consumer", BTreeMap::new());
     let context = DeploymentContext {
@@ -1794,6 +1960,11 @@ fn zero_agent_remote_component_binding_hash_uses_effective_binding_and_matches_c
                 &[],
                 &[],
                 Default::default(),
+                &BTreeMap::from([(
+                    ToolName::try_from("grep").unwrap(),
+                    environment_binding.clone(),
+                )]),
+                &BTreeMap::new(),
                 &BTreeMap::new(),
                 &BTreeMap::new(),
             )
@@ -1826,6 +1997,12 @@ fn zero_agent_remote_component_binding_hash_uses_effective_binding_and_matches_c
                         effective,
                     )]),
                     bindings: BTreeMap::new(),
+                    environment_middleware_binding: Some((&environment_binding).into()),
+                    component_middleware_bindings: BTreeMap::from([(
+                        component.component_name.0.clone(),
+                        (&component_binding).into(),
+                    )]),
+                    agent_middleware_bindings: BTreeMap::new(),
                 }
                 .into(),
             )]),
@@ -2710,7 +2887,11 @@ fn optional_secret_default_creation_stores_plaintext_inner_schema_not_option_sch
         creations[0].secret_value,
         Some(SchemaValue::String("s3cr3t".to_string()))
     );
-    match resolve_schema_ref(&creations[0].secret_type, &creations[0].secret_type.root) {
+    match creations[0]
+        .secret_type
+        .resolve_ref(&creations[0].secret_type.root)
+        .unwrap()
+    {
         SchemaType::String { .. } => {}
         other => {
             panic!("deployment-created agent secrets must be stored as plaintext T, not {other:?}")

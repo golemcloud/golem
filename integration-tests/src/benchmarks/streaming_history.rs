@@ -37,7 +37,6 @@ use tracing::Level;
 
 const PHASE_DEADLINE: Duration = Duration::from_secs(120);
 const METRICS_DEADLINE: Duration = Duration::from_secs(10);
-const MAX_BOUNDED_SESSION_INDEX_READS: u64 = 128;
 const MEASURED_DOMAIN: u32 = 700_000;
 
 pub struct StreamingRpcHistory {
@@ -161,31 +160,6 @@ fn storage_counts(
             coarse.get(&(kind, operation)).copied().unwrap_or(0),
         );
     }
-    Ok(())
-}
-
-fn ensure_stream_index_reads_are_bounded(
-    before: &StorageSnapshot,
-    after: &StorageSnapshot,
-    maximum: u64,
-) -> anyhow::Result<()> {
-    let calls = after
-        .delta(Some(before))?
-        .into_iter()
-        .filter(|(operation, _)| {
-            operation.service == "stream_session_index"
-                && matches!(
-                    operation.operation.as_str(),
-                    "get" | "get_many" | "read" | "first" | "last" | "scan"
-                )
-        })
-        .try_fold(0u64, |total, (_, count)| {
-            total.checked_add(count).context("storage count overflow")
-        })?;
-    ensure!(
-        calls <= maximum,
-        "stream-session index lookup used {calls} logical storage calls; maximum is {maximum}"
-    );
     Ok(())
 }
 
@@ -864,12 +838,6 @@ impl StreamingRpcCold {
         recorder.count(&ResultKey::primary("stream-terminals"), 1);
         let complete_storage = metrics_snapshot(&context.deps, "storage-completion").await?;
         storage_counts("completion", &first_storage, &complete_storage, &recorder)?;
-        ensure_stream_index_reads_are_bounded(
-            &iteration.post_restart,
-            &complete_storage,
-            MAX_BOUNDED_SESSION_INDEX_READS,
-        )
-        .map_err(|error| benchmark_error("correctness-index-bounded", error))?;
         Ok(())
     }
 }

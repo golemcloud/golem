@@ -27,7 +27,7 @@ object ToolMiddlewareOwnershipSpec extends ZIOSpecDefault {
   private type Outcome = Either[ToolInvokeError[TypedSchemaValue], ToolMiddlewareResult]
 
   private val unitInput = ToolErrorSupport.unitPayload
-  private val empty     = ToolMiddlewareResult(None, None)
+  private val empty     = ToolMiddlewareResult(None, None, None)
 
   private final class ClosableInput extends ToolMiddlewareInputHandle {
     var closeCount = 0
@@ -38,7 +38,10 @@ object ToolMiddlewareOwnershipSpec extends ZIOSpecDefault {
     }
   }
 
-  private final class ClosableOutput(failClose: Boolean = false) extends ToolMiddlewareOutputHandle {
+  private final class ClosableOutput(
+    failClose: Boolean = false,
+    drain: Future[Unit] = Future.successful(())
+  ) extends ToolMiddlewareOutputHandle {
     var closeCount = 0
 
     override private[golem] def close(): Future[Unit] = {
@@ -46,6 +49,8 @@ object ToolMiddlewareOwnershipSpec extends ZIOSpecDefault {
       if (failClose) Future.failed(new RuntimeException("close failed"))
       else Future.successful(())
     }
+
+    override private[golem] def drained: Future[Unit] = drain
   }
 
   private final class FunctionRaw(
@@ -86,7 +91,7 @@ object ToolMiddlewareOwnershipSpec extends ZIOSpecDefault {
       test("underlying observers start one get lazily and retain its terminal") {
         var gets      = 0
         val terminal  = Promise[Either[ToolUnderlyingError[Nothing], String]]()
-        val admission = ToolUnderlyingAdmission(None, () => { gets += 1; terminal.future }, () => (), () => ())
+        val admission = ToolUnderlyingAdmission(None, None, () => { gets += 1; terminal.future }, () => (), () => ())
         val before    = gets
         val first     = admission.result
         val second    = admission.result
@@ -97,6 +102,142 @@ object ToolMiddlewareOwnershipSpec extends ZIOSpecDefault {
           c <- ZIO.fromFuture(_ => admission.result)
         } yield assertTrue(before == 0, gets == 1, first eq second, a == Right("terminal"), b == a, c == a)
       },
+      test("admission and await views share one child in both orders through completion mapping") {
+        ZIO
+          .foreach(for {
+            awaitFirst <- List(false, true)
+            mapped     <- List(false, true)
+          } yield (awaitFirst, mapped)) { case (awaitFirst, mapped) =>
+            var admissions = 0
+            var gets       = 0
+            var cancels    = 0
+            val admission  = ToolUnderlyingAdmission[Nothing, ToolMiddlewareResult](
+              None,
+              None,
+              () => { gets += 1; Future.successful(Right(empty)) },
+              () => cancels += 1,
+              () => ()
+            )
+            admissions += 1
+            val base = ToolUnderlyingInvocation(Future.successful(admission))
+            val call =
+              if mapped then
+                ToolUnderlyingRuntime
+                  .complete(base)(_ => Right("mapped"))
+                  .asInstanceOf[ToolUnderlyingInvocation[Nothing, Any]]
+              else base.asInstanceOf[ToolUnderlyingInvocation[Nothing, Any]]
+
+            val observed =
+              if awaitFirst then {
+                val awaited = call.toMiddlewareResult
+                call.admission
+                  .map(_.cancel())(ToolInvokerRuntime.executionContext)
+                  .flatMap(_ => awaited)(
+                    ToolInvokerRuntime.executionContext
+                  )
+              } else
+                call.admission.flatMap { admitted =>
+                  admitted.cancel()
+                  call.toMiddlewareResult
+                }(ToolInvokerRuntime.executionContext)
+
+            ZIO
+              .fromFuture(_ => observed)
+              .map(result =>
+                assertTrue(
+                  admissions == 1,
+                  gets == 1,
+                  cancels == 1,
+                  result == Right(if mapped then "mapped" else empty)
+                )
+              )
+          }
+          .map(results => results.reduce(_ && _))
+      },
+      test("ignored mapped typed invocation remains unobserved and drops without get") {
+        var gets  = 0
+        var drops = 0
+        val raw   = new RawToolUnderlying {
+          def invoke(
+            commandPath: List[String],
+            input: TypedSchemaValue,
+            stdin: Option[ToolMiddlewareInputHandle]
+          ): Future[Outcome] = Future.failed(new IllegalStateException("unexpected convenience invoke"))
+
+          override def start(
+            commandPath: List[String],
+            input: TypedSchemaValue,
+            stdin: Option[ToolMiddlewareInputHandle]
+          ): ToolUnderlyingInvocation[TypedSchemaValue, ToolMiddlewareResult] =
+            ToolUnderlyingInvocation(
+              Future.successful(
+                ToolUnderlyingAdmission(
+                  None,
+                  None,
+                  () => {
+                    gets += 1; Promise[Either[ToolUnderlyingError[TypedSchemaValue], ToolMiddlewareResult]]().future
+                  },
+                  () => (),
+                  () => drops += 1
+                )
+              )
+            )
+        }
+        val result = withUnderlying(raw) { underlying =>
+          ToolUnderlyingRuntime.complete(underlying.start(Nil, unitInput, None))(_ => Right("mapped"))
+          Future.successful(Right(empty))
+        }
+        ZIO.fromFuture(_ => result).map(outcome => assertTrue(outcome == Right(empty), gets == 0, drops == 1))
+      },
+      test("observed mapped typed invocation retains result and both drains before drop") {
+        var gets        = 0
+        var drops       = 0
+        val getStarted  = Promise[Unit]()
+        val terminal    = Promise[Either[ToolUnderlyingError[TypedSchemaValue], ToolMiddlewareResult]]()
+        val stdoutDrain = Promise[Unit]()
+        val stderrDrain = Promise[Unit]()
+        val stdout      = new ClosableOutput(drain = stdoutDrain.future)
+        val stderr      = new ClosableOutput(drain = stderrDrain.future)
+        val raw         = new RawToolUnderlying {
+          def invoke(
+            commandPath: List[String],
+            input: TypedSchemaValue,
+            stdin: Option[ToolMiddlewareInputHandle]
+          ): Future[Outcome] = Future.failed(new IllegalStateException("unexpected convenience invoke"))
+
+          override def start(
+            commandPath: List[String],
+            input: TypedSchemaValue,
+            stdin: Option[ToolMiddlewareInputHandle]
+          ): ToolUnderlyingInvocation[TypedSchemaValue, ToolMiddlewareResult] =
+            ToolUnderlyingInvocation(
+              Future.successful(
+                ToolUnderlyingAdmission(
+                  Some(stdout),
+                  Some(stderr),
+                  () => { gets += 1; getStarted.trySuccess(()); terminal.future },
+                  () => (),
+                  () => drops += 1
+                )
+              )
+            )
+        }
+        val result = withUnderlying(raw) { underlying =>
+          val mapped = ToolUnderlyingRuntime.complete(underlying.start(Nil, unitInput, None))(_ => Right("mapped"))
+          mapped.toMiddlewareResult
+          Future.successful(Right(empty))
+        }
+        for {
+          _            <- ZIO.fromFuture(_ => getStarted.future)
+          pendingResult = !result.isCompleted && gets == 1 && drops == 0
+          _             = terminal.success(Right(ToolMiddlewareResult(None, Some(stdout), Some(stderr))))
+          pendingDrains = !result.isCompleted && drops == 0
+          _             = stdoutDrain.success(())
+          pendingStderr = !result.isCompleted && drops == 0
+          _             = stderrDrain.success(())
+          outcome      <- ZIO.fromFuture(_ => result)
+        } yield assertTrue(pendingResult, pendingDrains, pendingStderr, outcome == Right(empty), gets == 1, drops == 1)
+      },
       test("underlying cancellation and resource exhaustion remain distinct until wire encoding") {
         ZIO
           .foreach(
@@ -106,6 +247,7 @@ object ToolMiddlewareOwnershipSpec extends ZIOSpecDefault {
             )
           ) { case (underlyingError, expected) =>
             val admission = ToolUnderlyingAdmission[Nothing, ToolMiddlewareResult](
+              None,
               None,
               () => Future.successful(Left(underlyingError)),
               () => (),
@@ -189,7 +331,7 @@ object ToolMiddlewareOwnershipSpec extends ZIOSpecDefault {
           raw.calls.isEmpty
         )
       },
-      test("revocation does not wait for a consumer-dependent underlying terminal") {
+      test("revocation retains an observed convenience call through its terminal") {
         val response              = Promise[Outcome]()
         val raw                   = new FunctionRaw((_, _, _) => response.future)
         var call: Future[Outcome] = null
@@ -197,9 +339,11 @@ object ToolMiddlewareOwnershipSpec extends ZIOSpecDefault {
           call = underlying.invoke(Nil, unitInput, None)
           Future.successful(Right(empty))
         }
+        val pending = !call.isCompleted && !result.isCompleted && raw.calls.size == 1
+        response.success(Right(empty))
         ZIO
           .fromFuture(_ => result)
-          .map(outcome => assertTrue(!call.isCompleted, outcome == Right(empty), raw.calls.size == 1))
+          .map(outcome => assertTrue(pending, call.isCompleted, outcome == Right(empty)))
       },
       test("closes unforwarded stdin on short-circuit and failed callback paths") {
         val shortInput  = new ClosableInput
@@ -250,8 +394,8 @@ object ToolMiddlewareOwnershipSpec extends ZIOSpecDefault {
         val selected  = new ClosableOutput
         val abandoned = new ClosableOutput
         val responses = mutable.Queue[Outcome](
-          Right(ToolMiddlewareResult(None, Some(selected))),
-          Right(ToolMiddlewareResult(None, Some(abandoned)))
+          Right(ToolMiddlewareResult(None, Some(selected), None)),
+          Right(ToolMiddlewareResult(None, Some(abandoned), None))
         )
         val raw = new FunctionRaw((_, _, _) => Future.successful(responses.dequeue()))
         for {
@@ -295,9 +439,9 @@ object ToolMiddlewareOwnershipSpec extends ZIOSpecDefault {
         val abandoned    = new ClosableOutput
         val selected     = new ClosableOutput
         val abandonedRaw =
-          new FunctionRaw((_, _, _) => Future.successful(Right(ToolMiddlewareResult(None, Some(abandoned)))))
+          new FunctionRaw((_, _, _) => Future.successful(Right(ToolMiddlewareResult(None, Some(abandoned), None))))
         val selectedRaw =
-          new FunctionRaw((_, _, _) => Future.successful(Right(ToolMiddlewareResult(None, Some(selected)))))
+          new FunctionRaw((_, _, _) => Future.successful(Right(ToolMiddlewareResult(None, Some(selected), None))))
         for {
           _ <- ZIO.fromFuture(_ =>
                  withUnderlying(abandonedRaw) { underlying =>
@@ -324,8 +468,8 @@ object ToolMiddlewareOwnershipSpec extends ZIOSpecDefault {
         val malformedOutput = new ClosableOutput
         val failedOutput    = new ClosableOutput
         val malformed       = IntoSchema[Boolean].toTyped(true).copy(value = IntoSchema[String].toValue("wrong"))
-        val malformedRaw    = rawSuccess(ToolMiddlewareResult(Some(malformed), Some(malformedOutput)))
-        val failedRaw       = rawSuccess(ToolMiddlewareResult(None, Some(failedOutput)))
+        val malformedRaw    = rawSuccess(ToolMiddlewareResult(Some(malformed), Some(malformedOutput), None))
+        val failedRaw       = rawSuccess(ToolMiddlewareResult(None, Some(failedOutput), None))
         val failure         = new RuntimeException("handler failed")
         for {
           invalid <- ZIO.fromFuture(_ => withUnderlying(malformedRaw)(_.invoke(Nil, unitInput, None)))
@@ -349,8 +493,8 @@ object ToolMiddlewareOwnershipSpec extends ZIOSpecDefault {
         val first     = new ClosableOutput(failClose = true)
         val second    = new ClosableOutput
         val responses = mutable.Queue[Outcome](
-          Right(ToolMiddlewareResult(None, Some(first))),
-          Right(ToolMiddlewareResult(None, Some(second)))
+          Right(ToolMiddlewareResult(None, Some(first), None)),
+          Right(ToolMiddlewareResult(None, Some(second), None))
         )
         val raw = new FunctionRaw((_, _, _) => Future.successful(responses.dequeue()))
         ZIO

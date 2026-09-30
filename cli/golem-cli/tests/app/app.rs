@@ -864,6 +864,7 @@ fn echo_tool() -> Tool {
     };
     Tool {
         version: "1.0.0".to_string(),
+        requires_filesystem: false,
         commands: CommandTree {
             nodes: vec![golem_common::schema::tool::CommandNode {
                 name: "echo".to_string(),
@@ -889,6 +890,7 @@ fn echo_tool() -> Tool {
                     constraints: vec![],
                     stdin: None,
                     stdout: None,
+                    stderr: None,
                     result: Some(ToolResultSpec {
                         type_: SchemaType::string(),
                         doc: doc("result"),
@@ -8600,6 +8602,7 @@ async fn deploy_reset_allows_incompatible_config_and_secret_changes(_tracing: &T
             secretDefaults:
               local:
                 secret: first
+                apiKey: stable
             "#,
             MANIFEST_VERSION = versions::sdk::MANIFEST
         },
@@ -8619,6 +8622,7 @@ async fn deploy_reset_allows_incompatible_config_and_secret_changes(_tracing: &T
                 config: {
                     value: z.boolean(),
                     secret: s.secret(z.string()),
+                    apiKey: s.secret(z.string()),
                 },
                 methods: {
                     increment: method({
@@ -8647,6 +8651,8 @@ async fn deploy_reset_allows_incompatible_config_and_secret_changes(_tracing: &T
     let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
     assert!(outputs.success_or_dump());
 
+    // apiKey keeps its compatible type and value, so its default must not be resolved,
+    // not even when the incompatible secret gets replaced.
     fs::write_str(
         ctx.cwd_path_join("golem.yaml"),
         formatdoc! {
@@ -8670,6 +8676,7 @@ async fn deploy_reset_allows_incompatible_config_and_secret_changes(_tracing: &T
             secretDefaults:
               local:
                 secret: 42
+                apiKey: "{{{{ GOLEM_TEST_RESET_UNSET_API_KEY }}}}"
             "#,
             MANIFEST_VERSION = versions::sdk::MANIFEST
         },
@@ -8689,6 +8696,7 @@ async fn deploy_reset_allows_incompatible_config_and_secret_changes(_tracing: &T
                 config: {
                     value: z.boolean(),
                     secret: s.secret(z.number()),
+                    apiKey: s.secret(z.string()),
                 },
                 methods: {
                     increment: method({

@@ -32,7 +32,8 @@ pub struct NativeToolInvocation {
     pub principal: Principal,
     pub cancellation: Option<tokio_util::sync::CancellationToken>,
     pub stdin: Option<NativeToolStdin>,
-    pub stdout: Option<NativeToolStdout>,
+    pub stdout: Option<NativeToolOutput>,
+    pub stderr: Option<NativeToolOutput>,
 }
 
 /// Safe native view of a tool input attachment.
@@ -52,11 +53,11 @@ impl NativeToolStdin {
 
 /// Safe native view of a tool output attachment.
 #[derive(Clone)]
-pub struct NativeToolStdout {
+pub struct NativeToolOutput {
     pub(crate) writer: AttachmentWriter,
 }
 
-impl NativeToolStdout {
+impl NativeToolOutput {
     pub async fn write(&self, bytes: Vec<u8>) -> Result<(), String> {
         self.writer
             .write(bytes)
@@ -118,16 +119,16 @@ impl golem_native_tool::NativeToolStdinHandle for NativeToolStdin {
     }
 }
 
-impl golem_native_tool::NativeToolStdoutHandle for NativeToolStdout {
+impl golem_native_tool::NativeToolOutputHandle for NativeToolOutput {
     fn write<'a>(
         &'a mut self,
         bytes: Vec<u8>,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send + 'a>> {
-        Box::pin(NativeToolStdout::write(self, bytes))
+        Box::pin(NativeToolOutput::write(self, bytes))
     }
 
     fn finish(&mut self) -> Result<(), String> {
-        NativeToolStdout::finish(self)
+        NativeToolOutput::finish(self)
     }
 }
 
@@ -153,6 +154,7 @@ where
                     cancellation: cancellation_handle(invocation.cancellation),
                     stdin: invocation.stdin.map(|input| Box::new(input) as _),
                     stdout: invocation.stdout.map(|output| Box::new(output) as _),
+                    stderr: invocation.stderr.map(|output| Box::new(output) as _),
                 },
             )
             .await

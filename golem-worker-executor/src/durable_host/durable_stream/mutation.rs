@@ -123,8 +123,14 @@ impl StreamWriteAdmission {
                 .await
                 .unwrap_or(Err(StreamStoreError::RecoveryRequired))
             {
-                self.producer.poison();
-                failure = Some(error);
+                match &error {
+                    StreamStoreError::Fenced(fence) => self.producer.poison_refused(fence),
+                    _ => self.producer.poison(),
+                }
+                // The fence is why the producer stopped, so a failure after it does not replace it.
+                if !matches!(failure, Some(StreamStoreError::Fenced(_))) {
+                    failure = Some(error);
+                }
             }
         }
         match failure {
@@ -270,7 +276,12 @@ impl DurableStreamStore {
     /// Rejects work after the resident producer has been poisoned or retired.
     pub(crate) fn ensure_healthy(&self) -> Result<(), StreamStoreError> {
         if self.poisoned.load(Ordering::Acquire) {
-            Err(StreamStoreError::RecoveryRequired)
+            // A refused write poisons the store and every later write would be refused too:
+            // report the fence so a caller reroutes instead of recovering locally.
+            match self.refused_by.get() {
+                Some(fence) => Err(StreamStoreError::Fenced(fence.clone())),
+                None => Err(StreamStoreError::RecoveryRequired),
+            }
         } else {
             Ok(())
         }
@@ -320,6 +331,12 @@ impl DurableStreamStore {
     }
 
     /// Prevents new work and cancels resident forwarded operations after failure or retirement.
+    /// Poisons the store because the storage refused one of its writes.
+    pub(crate) fn poison_refused(&self, fence: &OplogFence) {
+        let _ = self.refused_by.set(fence.clone());
+        self.poison();
+    }
+
     pub(crate) fn poison(&self) {
         self.poisoned.store(true, Ordering::Release);
         self.retirement.cancel();
@@ -632,7 +649,10 @@ impl DurableStreamStore {
         outcome
     }
 
-    pub(super) async fn commit(&self, context: &StreamWriteContext) {
+    pub(super) async fn commit(
+        &self,
+        context: &StreamWriteContext,
+    ) -> Result<(), StreamStoreError> {
         context.assert_owner(self);
         context.begin_durable_effect();
         let scope = &context.scope;
@@ -652,16 +672,21 @@ impl DurableStreamStore {
             .push(task);
         receipt
             .await
-            .expect("durable stream commit failed before durability receipt");
+            .expect("durable stream commit failed before durability receipt")
+            .map_err(|fence| {
+                self.poison_refused(&fence);
+                StreamStoreError::Fenced(fence)
+            })
     }
 
     pub(super) async fn commit_notifying(
         &self,
         context: &StreamWriteContext,
         committed: oneshot::Sender<()>,
-    ) {
-        self.commit(context).await;
+    ) -> Result<(), StreamStoreError> {
+        self.commit(context).await?;
         let _ = committed.send(());
+        Ok(())
     }
 }
 

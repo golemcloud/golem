@@ -457,6 +457,7 @@ impl TryFrom<&Tool> for wire::Tool {
         let schema = enc.finish();
         Ok(Self {
             version: tool.version.clone(),
+            requires_filesystem: tool.requires_filesystem,
             commands,
             schema,
         })
@@ -524,6 +525,7 @@ fn encode_command_body(
             .collect::<Result<Vec<_>, _>>()?,
         stdin: b.stdin.as_ref().map(wire::StreamSpec::from),
         stdout: b.stdout.as_ref().map(wire::StreamSpec::from),
+        stderr: b.stderr.as_ref().map(wire::StreamSpec::from),
         result: b
             .result
             .as_ref()
@@ -669,6 +671,7 @@ impl TryFrom<&wire::Tool> for Tool {
         let commands = decode_command_tree(&dec, &w.commands)?;
         Ok(Self {
             version: w.version.clone(),
+            requires_filesystem: w.requires_filesystem,
             commands,
             schema,
         })
@@ -736,6 +739,7 @@ fn decode_command_body(
             .collect::<Result<Vec<_>, _>>()?,
         stdin: b.stdin.as_ref().map(StreamSpec::from),
         stdout: b.stdout.as_ref().map(StreamSpec::from),
+        stderr: b.stderr.as_ref().map(StreamSpec::from),
         result: b
             .result
             .as_ref()

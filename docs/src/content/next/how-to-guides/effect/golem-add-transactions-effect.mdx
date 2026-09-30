@@ -190,7 +190,7 @@ processOrder: ({ input }) => processOrder(input),
 
 The handler must return that Effect, and every successful branch of the Effect must return a
 `ProcessOrderResult`. Do not declare `success: Schema.Void`, drop the result with `Effect.tap`, or
-yield the mapping Effect and then fall through. A void method omits `result_json` from CLI JSON
+yield the mapping Effect and then fall through. A void method omits `resultJson` from CLI JSON
 output.
 
 The CLI accepts one shell positional per top-level method parameter. With the single `input` record

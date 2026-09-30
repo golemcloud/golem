@@ -18,6 +18,7 @@ priv struct ToolByteStreamSource {
   mut pending : FixedArray[Byte]?
   mut pending_offset : Int
   mut closed : Bool
+  drive_result : () -> Unit
 }
 
 ///|
@@ -42,6 +43,7 @@ async fn ToolByteStreamSource::read(
   self : ToolByteStreamSource,
   count : Int,
 ) -> FixedArray[Byte]? {
+  (self.drive_result)()
   if self.closed {
     return None
   }
@@ -101,12 +103,14 @@ pub fn byte_stream(
   source : @async-core.Stream[
     Result[FixedArray[Byte], @toolStreams.ByteStreamFailure],
   ],
+  drive_result? : () -> Unit = fn() {  },
 ) -> @async-core.Stream[Byte] {
   let source = ToolByteStreamSource::{
     source,
     pending: None,
     pending_offset: 0,
     closed: false,
+    drive_result,
   }
   @async-core.Stream::from_source(
     count => source.read(count),
@@ -227,6 +231,7 @@ fn invocation_stdout(
   source : @async-core.Stream[
     Result[FixedArray[Byte], @toolStreams.ByteStreamFailure],
   ],
+  drive_result : () -> Unit,
 ) -> @async-core.Stream[Byte] {
-  byte_stream(source)
+  byte_stream(source, drive_result~)
 }

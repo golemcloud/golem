@@ -35,6 +35,20 @@ object FromSchema {
 
   def apply[A](implicit ev: FromSchema[A]): FromSchema[A] = ev
 
+  implicit val byteArray: FromSchema[Array[Byte]] = new FromSchema[Array[Byte]] {
+    override def fromValue(value: SchemaValue): Either[FromSchemaError, Array[Byte]] = value match {
+      case SchemaValue.ListValue(values) =>
+        values
+          .foldRight[Either[FromSchemaError, List[Byte]]](Right(Nil)) {
+            case (SchemaValue.U8Value(byte), tail) if byte >= 0 && byte <= 0xff =>
+              tail.map(byte.toByte :: _)
+            case _ => Left(FromSchemaError("expected u8 value in byte array"))
+          }
+          .map(_.toArray)
+      case _ => Left(FromSchemaError("expected list value for byte array"))
+    }
+  }
+
   implicit def derived[A](implicit schema: Schema[A]): FromSchema[A] =
     new FromSchema[A] {
       override def fromValue(value: SchemaValue): Either[FromSchemaError, A] =

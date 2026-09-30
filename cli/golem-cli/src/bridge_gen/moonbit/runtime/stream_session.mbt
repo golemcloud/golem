@@ -1448,8 +1448,12 @@ async fn dispatch_server_message(
       let kind = expect_string(get_field(result, "kind"))
       let value = match kind {
         "value" => {
-          validate_object_fields(result, ["kind", "value"], [])
-          let value = session.result_codec.decode(get_field(result, "value"))
+          validate_object_fields(result, ["graph", "kind", "value"], [])
+          let graph = get_field(result, "graph")
+          ignore(expect_object(graph))
+          let wire_codec = public_value_codec(graph.stringify())
+          let value = wire_codec.decode(get_field(result, "value"))
+          ignore(session.result_codec.encode(value))
           session.result_codec.stream_elements.each((token, codec) => {
             session.output_codecs[token] = codec
           })
@@ -1685,7 +1689,7 @@ pub async fn invoke_streaming_agent(
         resolved.config.map(entry => {
           obj([
             ("path", Json::array(entry.path.map(Json::string))),
-            ("value", entry.codec.encode(entry.value)),
+            ("value", entry.value),
           ])
         }),
       ),

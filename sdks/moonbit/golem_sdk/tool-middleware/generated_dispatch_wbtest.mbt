@@ -118,7 +118,7 @@ fn directly_counted_source_stream(
 fn projected_stdout_producer(
   source : @async-core.Stream[Byte],
 ) -> async (@async-core.Sink[Byte]) -> Unit {
-  match transfer_aware_stdout(source).take_producer() {
+  match transfer_aware_output(source).take_producer() {
     Some(producer) => producer
     None => abort("transfer-aware stdout did not expose its producer")
   }
@@ -139,7 +139,7 @@ test "generated monomorphic dispatch forwards, short-circuits, and retries" {
           forward_calls.val = forward_calls.val + 1
           assert_eq(path, ["value"])
           assert_true(stdin is None)
-          Ok({ result: Some(generated_result(5)), stdout: None, })
+          Ok({ result: Some(generated_result(5)), stdout: None, stderr: None, })
         },
         no_raw_drop,
         group,
@@ -168,7 +168,7 @@ test "generated monomorphic dispatch forwards, short-circuits, and retries" {
       let underlying = new_scoped_underlying_tool(
         async fn(_, _, _) {
           short_circuit_calls.val = short_circuit_calls.val + 1
-          Ok({ result: Some(generated_result(())), stdout: None, })
+          Ok({ result: Some(generated_result(())), stdout: None, stderr: None, })
         },
         no_raw_drop,
         group,
@@ -180,7 +180,7 @@ test "generated monomorphic dispatch forwards, short-circuits, and retries" {
         None,
         underlying,
       )
-      assert_true(result is Ok({ result: None, stdout: None, }))
+      assert_true(result is Ok({ result: None, stdout: None, stderr: None, }))
     })
     assert_eq(short_circuit_calls.val, 0)
 
@@ -191,7 +191,11 @@ test "generated monomorphic dispatch forwards, short-circuits, and retries" {
           adapter_calls.val = adapter_calls.val + 1
           assert_eq(path, ["fetch"])
           assert_true(stdin is None)
-          Ok({ result: Some(generated_result("stored")), stdout: None, })
+          Ok({
+            result: Some(generated_result("stored")),
+            stdout: None,
+            stderr: None,
+          })
         },
         no_raw_drop,
         group,
@@ -221,7 +225,11 @@ test "generated monomorphic dispatch forwards, short-circuits, and retries" {
         async fn(path, _, _) {
           retry_calls.val = retry_calls.val + 1
           assert_eq(path, ["retry"])
-          Ok({ result: Some(generated_result(retry_calls.val)), stdout: None, })
+          Ok({
+            result: Some(generated_result(retry_calls.val)),
+            stdout: None,
+            stderr: None,
+          })
         },
         no_raw_drop,
         group,
@@ -257,7 +265,7 @@ test "generated monomorphic dispatch rejects malformed input and result" {
       let underlying = new_scoped_underlying_tool(
         async fn(_, _, _) {
           malformed_input_calls.val = malformed_input_calls.val + 1
-          Ok({ result: Some(generated_result(1)), stdout: None, })
+          Ok({ result: Some(generated_result(1)), stdout: None, stderr: None, })
         },
         no_raw_drop,
         group,
@@ -278,7 +286,7 @@ test "generated monomorphic dispatch rejects malformed input and result" {
       let underlying = new_scoped_underlying_tool(
         async fn(_, _, _) {
           malformed_result_calls.val = malformed_result_calls.val + 1
-          Ok({ result: Some(generated_result(())), stdout: None, })
+          Ok({ result: Some(generated_result(())), stdout: None, stderr: None, })
         },
         no_raw_drop,
         group,
@@ -381,7 +389,11 @@ test "generated monomorphic dispatch cleans abandoned stdout and transfers retur
       let underlying = new_scoped_underlying_tool(
         async fn(path, _, _) {
           assert_eq(path, ["abandon-stdout"])
-          Ok({ result: None, stdout: Some(counted_stream(abandoned_drops)), })
+          Ok({
+            result: None,
+            stdout: Some(counted_stream(abandoned_drops)),
+            stderr: None,
+          })
         },
         no_raw_drop,
         group,
@@ -396,9 +408,9 @@ test "generated monomorphic dispatch cleans abandoned stdout and transfers retur
       assert_true(
         result is Err(@types.ToolError::InvalidResult("abandoned stdout")),
       )
-      assert_eq(abandoned_drops.val, 1)
+      assert_eq(abandoned_drops.val, 0)
     })
-    assert_eq(abandoned_drops.val, 1)
+    assert_eq(abandoned_drops.val, 0)
 
     let returned_drops = Ref(0)
     let transferred_producer : Ref[(async (@async-core.Sink[Byte]) -> Unit)?] = Ref(
@@ -408,7 +420,11 @@ test "generated monomorphic dispatch cleans abandoned stdout and transfers retur
       let underlying = new_scoped_underlying_tool(
         async fn(path, _, _) {
           assert_eq(path, ["stdout"])
-          Ok({ result: None, stdout: Some(counted_stream(returned_drops)), })
+          Ok({
+            result: None,
+            stdout: Some(counted_stream(returned_drops)),
+            stderr: None,
+          })
         },
         no_raw_drop,
         group,
@@ -461,6 +477,7 @@ test "generated monomorphic dispatch relays lifted stdout after group teardown" 
           Ok({
             result: None,
             stdout: Some(counted_source_stream(source_drops)),
+            stderr: None,
           })
         },
         no_raw_drop,
@@ -481,9 +498,9 @@ test "generated monomorphic dispatch relays lifted stdout after group teardown" 
           }
         Err(error) => fail("generated stdout dispatch failed: \{Repr(error)}")
       }
-      assert_eq(source_drops.val, 0)
+      assert_eq(source_drops.val, 1)
     })
-    assert_eq(source_drops.val, 0)
+    assert_eq(source_drops.val, 1)
     match transferred_producer.val {
       Some(producer) => {
         let (stream, sink) = @async-core.Stream::new(capacity=64)
@@ -579,7 +596,7 @@ test "transfer-aware stdout closes its source when its producer is cancelled" {
 test "transfer-aware stdout closes an unstarted source exactly once" {
   let close_attempts = Ref(0)
   run_component_async(async fn() {
-    let stdout = transfer_aware_stdout(
+    let stdout = transfer_aware_output(
       directly_counted_source_stream(
         async fn(_) { Some(([1, 2, 3] : FixedArray[Byte])) },
         close_attempts,

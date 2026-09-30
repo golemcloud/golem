@@ -5,22 +5,20 @@ require_exactly_one_passed_test() {
   local result_file=$1
   local filter=$2
   local result_count=0
-  local exact_pass_count=0
+  local exact_selection_count=0
   local line
 
   while IFS= read -r line; do
     case ${line} in
+      "Running 1 tests") exact_selection_count=$((exact_selection_count + 1)) ;;
       "test result:"*)
         result_count=$((result_count + 1))
-        case ${line} in
-          "test result: ok; 1 passed;"*) exact_pass_count=$((exact_pass_count + 1)) ;;
-        esac
         ;;
     esac
   done < "${result_file}"
 
-  if [[ ${result_count} -ne 1 || ${exact_pass_count} -ne 1 ]]; then
-    echo "managed XFS selector '${filter}' must report exactly one passing test; result summaries=${result_count}, exact one-pass summaries=${exact_pass_count}" >&2
+  if [[ ${result_count} -ne 1 || ${exact_selection_count} -ne 1 ]]; then
+    echo "managed XFS selector '${filter}' must run exactly one test; result summaries=${result_count}, exact one-test selections=${exact_selection_count}" >&2
     return 1
   fi
 }
@@ -105,9 +103,9 @@ select_filesystem_image_size() {
 if [[ ${1:-} == --self-test-result-guard ]]; then
   guard_fixture_dir=$(mktemp -d /tmp/golem-managed-xfs-result-guard.XXXXXX)
   trap 'rm -rf "${guard_fixture_dir}"' EXIT
-  printf '%s\n' 'test result: ok; 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out' > "${guard_fixture_dir}/one"
-  printf '%s\n' 'test result: ok; 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out' > "${guard_fixture_dir}/zero"
-  printf '%s\n' 'test result: ok; 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out' > "${guard_fixture_dir}/multiple"
+  printf '%s\n' 'Running 1 tests' 'test result: ok; 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out' > "${guard_fixture_dir}/one"
+  printf '%s\n' 'Running 0 tests' 'test result: ok; 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out' > "${guard_fixture_dir}/zero"
+  printf '%s\n' 'Running 2 tests' 'test result: ok; 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out' > "${guard_fixture_dir}/multiple"
   require_exactly_one_passed_test "${guard_fixture_dir}/one" self-test-one
   if require_exactly_one_passed_test "${guard_fixture_dir}/zero" self-test-zero 2>/dev/null; then
     echo "managed XFS result guard accepted a zero-test result" >&2

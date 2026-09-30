@@ -123,18 +123,20 @@ object ToolCallProjectionCodegen {
       val error               = errorType(leaf)
       val value               = valueType(leaf)
       val (family, operation) =
-        (leaf.codec.projectedOkType, leaf.codec.hasStdout) match {
-          case (_, false)      => (s"backend.StartedNoStdout[$error, $value]", "startNoStdout")
-          case (None, true)    => (s"backend.StartedStdoutOnly[$error]", "startStdoutOnly")
-          case (Some(_), true) => (s"backend.StartedValueStdout[$error, $value]", "startValueStdout")
-        }
+        if (!leaf.codec.hasStdout && !leaf.codec.hasStderr)
+          (s"backend.StartedNoStdout[$error, $value]", s"startNoStdout(${prepared(leaf)})")
+        else
+          (
+            s"backend.StartedOutputs[$error, $value]",
+            s"startOutputs(${prepared(leaf)}, stdout = ${leaf.codec.hasStdout}, stderr = ${leaf.codec.hasStderr})"
+          )
       s"""  def __start_${leaf.name}[B <: _root_.golem.tool.ToolCallBackend](
     backend: B,
     inheritedPrefix: _root_.scala.List[_root_.golem.tool.CanonicalInputValue],
     params: _root_.scala.Either[_root_.golem.tool.ToolInvokeError[_root_.scala.Nothing], _root_.scala.List[(_root_.scala.Predef.String, _root_.golem.schema.SchemaValue)]],
     stdin: _root_.scala.Option[backend.Stdin]
   ): $family =
-    backend.$operation(${prepared(leaf)})"""
+    backend.$operation"""
     }
 
     def render(): String = {

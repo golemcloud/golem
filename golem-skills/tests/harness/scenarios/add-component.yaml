@@ -8,6 +8,8 @@ steps:
       build: true
 
   - id: "add-template-to-existing-component"
+    skip_if:
+      language: "effect"
     prompt: >
       In the test-app project, add the human-in-the-loop agent template to the
       existing component. Use `golem new` with the `{{language}}/human-in-the-loop`

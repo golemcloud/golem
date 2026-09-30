@@ -18,6 +18,6 @@ echo.implement({
 ```
 
 The implementation key is the generated command name. Use the body builder for positional,
-option, flag, tail, stdin/stdout, result, and declared-error metadata; use Standard Schema values
+option, flag, tail, stdin/stdout/stderr, result, and declared-error metadata; use Standard Schema values
 such as Zod schemas for typed data. Provider handlers return `ok(result)` or a declared `err(...)`.
 Call `.implement(...)` only once per definition.

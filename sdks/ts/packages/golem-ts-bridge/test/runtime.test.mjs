@@ -8,11 +8,13 @@ import {
   agentStream,
   createAgent,
   createStreamingRemoteMethod,
+  encodeOption,
   encodeStreamSessionBinaryEnvelope,
   encodeStreamSessionTextFrame,
   invokeAgent,
   parseStreamSessionTextFrame,
   publicValueCodec,
+  schemaGraphFromWire,
   schemaType,
 } from '../dist/index.mjs';
 
@@ -21,6 +23,296 @@ const outputMapping = {
   direction: 'output',
   streamToken: 'output',
 };
+const u32Graph = { root: { kind: 'u32', value: {} } };
+const unitGraph = { root: { kind: 'tuple', value: { elements: [] } } };
+const outputStreamGraph = { root: { kind: 'stream', value: { inner: null } } };
+const u32ListGraph = {
+  root: { kind: 'list', value: { element: { kind: 'u32', value: {} } } },
+};
+const integerRecordGraph = {
+  root: {
+    kind: 'record',
+    value: {
+      fields: [
+        { name: 'unsigned', body: { kind: 'u64', value: {} } },
+        { name: 'signed', body: { kind: 's64', value: {} } },
+        {
+          name: 'nested',
+          body: {
+            kind: 'tuple',
+            value: {
+              elements: [
+                { kind: 's64', value: {} },
+                {
+                  kind: 'record',
+                  value: {
+                    fields: [
+                      { name: 'small', body: { kind: 'u64', value: {} } },
+                      { name: 'float', body: { kind: 'f64', value: {} } },
+                      { name: 'text', body: { kind: 'string', value: {} } },
+                    ],
+                  },
+                },
+              ],
+            },
+          },
+        },
+      ],
+    },
+  },
+};
+
+test('option-none uses an explicit native null payload', () => {
+  assert.deepEqual(
+    encodeOption(undefined, () => assert.fail('none must not encode an item')),
+    {
+      kind: 'option',
+      value: { inner: null },
+    },
+  );
+});
+
+test('config application JSON preserves ordinary reserved-looking fields and nested sums', () => {
+  const graph = schemaGraphFromWire({
+    root: {
+      kind: 'record',
+      value: {
+        fields: [
+          { name: 'kind', body: { kind: 'string', value: {} } },
+          {
+            name: 'value',
+            body: {
+              kind: 'option',
+              value: {
+                inner: {
+                  kind: 'result',
+                  value: { spec: { ok: { kind: 'string', value: {} } } },
+                },
+              },
+            },
+          },
+          { name: '$option', body: { kind: 'string', value: {} } },
+          { name: '$result', body: { kind: 'string', value: {} } },
+        ],
+      },
+    },
+  });
+  const value = {
+    kind: 'record',
+    value: {
+      fields: [
+        { kind: 'string', value: 'application-field' },
+        {
+          kind: 'option',
+          value: {
+            inner: {
+              kind: 'result',
+              value: { tag: 'ok', value: { kind: 'string', value: 'nested' } },
+            },
+          },
+        },
+        { kind: 'string', value: 'ordinary-option-field' },
+        { kind: 'string', value: 'ordinary-result-field' },
+      ],
+    },
+  };
+
+  assert.deepEqual(publicValueCodec(graph).application(value), {
+    kind: 'application-field',
+    value: { ok: 'nested' },
+    $option: 'ordinary-option-field',
+    $result: 'ordinary-result-field',
+  });
+});
+
+test('config application JSON canonicalizes f32 and datetime and rejects exceptional floats', () => {
+  assert.equal(
+    publicValueCodec(schemaGraphFromWire({ root: { kind: 'f32', value: {} } })).application({
+      kind: 'f32',
+      value: 0.1,
+    }),
+    Math.fround(0.1),
+  );
+  assert.equal(
+    publicValueCodec(schemaGraphFromWire({ root: { kind: 'datetime', value: {} } })).application({
+      kind: 'datetime',
+      value: { value: '2026-01-01T00:00:00.12Z' },
+    }),
+    '2026-01-01T00:00:00.120000000Z',
+  );
+  const exceptional = publicValueCodec(
+    schemaGraphFromWire({
+      root: {
+        kind: 'option',
+        value: { inner: { kind: 'f64', value: {} } },
+      },
+    }),
+  );
+  const value = {
+    kind: 'option',
+    value: { inner: { kind: 'f64', value: { $float: 'nan' } } },
+  };
+  assert.deepEqual(exceptional.validate(value, 'none'), value);
+  assert.throws(() => exceptional.application(value), /no application JSON representation/);
+});
+const numericFormsGraph = {
+  root: {
+    kind: 'record',
+    value: {
+      fields: ['u64', 's64', 'u64', 's64', 'u64', 'f64'].map((kind, index) => ({
+        name: `value${index}`,
+        body: { kind, value: {} },
+      })),
+    },
+  },
+};
+
+const fixtureType = (input) => {
+  const type = (body) => schemaType(body);
+  switch (input.kind) {
+    case 'ref':
+      return type({ tag: 'ref', id: input.name });
+    case 'bool':
+    case 'char':
+    case 'string':
+    case 'datetime':
+    case 'duration':
+      return type({ tag: input.kind });
+    case 's8':
+    case 's16':
+    case 's32':
+    case 's64':
+    case 'u8':
+    case 'u16':
+    case 'u32':
+    case 'u64':
+    case 'f32':
+    case 'f64':
+      return type({ tag: input.kind });
+    case 'text':
+      return type({ tag: 'text', restrictions: {} });
+    case 'binary':
+      return type({
+        tag: 'binary',
+        restrictions: {
+          ...(input.mimeTypes === undefined ? {} : { mimeTypes: input.mimeTypes }),
+          ...(input.minBytes === undefined ? {} : { minBytes: input.minBytes }),
+          ...(input.maxBytes === undefined ? {} : { maxBytes: input.maxBytes }),
+        },
+      });
+    case 'path':
+      return type({ tag: 'path', spec: { direction: 'input', kind: 'any' } });
+    case 'url':
+      return type({ tag: 'url', restrictions: {} });
+    case 'quantity':
+      return type({ tag: 'quantity', spec: { baseUnit: 'kg', allowedSuffixes: [] } });
+    case 'record':
+      return type({
+        tag: 'record',
+        fields: input.fields.map((field) => ({
+          name: field.name,
+          body: fixtureType(field.type),
+          metadata: { aliases: [], examples: [] },
+        })),
+      });
+    case 'tuple':
+      return type({ tag: 'tuple', elements: input.elements.map(fixtureType) });
+    case 'list':
+      return type({ tag: 'list', element: fixtureType(input.element) });
+    case 'fixed-list':
+      return type({
+        tag: 'fixed-list',
+        element: fixtureType(input.element),
+        length: input.length,
+      });
+    case 'map':
+      return type({ tag: 'map', key: fixtureType(input.key), value: fixtureType(input.value) });
+    case 'enum':
+      return type({ tag: 'enum', cases: input.cases });
+    case 'flags':
+      return type({ tag: 'flags', names: input.flags });
+    case 'variant':
+      return type({
+        tag: 'variant',
+        cases: input.cases.map((item) => ({
+          name: item.name,
+          ...(item.type === undefined ? {} : { payload: fixtureType(item.type) }),
+          metadata: { aliases: [], examples: [] },
+        })),
+      });
+    case 'option':
+      return type({ tag: 'option', element: fixtureType(input.inner) });
+    case 'result':
+      return type({
+        tag: 'result',
+        ...(input.ok == null ? {} : { ok: fixtureType(input.ok) }),
+        ...(input.err == null ? {} : { err: fixtureType(input.err) }),
+      });
+    case 'union':
+      return type({
+        tag: 'union',
+        branches: input.branches.map((branch) => ({
+          tag: branch.name,
+          body: fixtureType(branch.type),
+          discriminator: { tag: 'prefix', val: branch.discriminator.prefix },
+          metadata: { aliases: [], examples: [] },
+        })),
+      });
+    case 'stream':
+      return type({
+        tag: 'stream',
+        ...(input.inner == null ? {} : { element: fixtureType(input.inner) }),
+      });
+    default:
+      throw new Error(`Unknown fixture schema kind '${input.kind}'`);
+  }
+};
+
+const fixtureGraph = (vector) => ({
+  root: fixtureType(vector.schema),
+  defs: new Map(
+    Object.entries(vector.definitions ?? {}).map(([id, body]) => [
+      id,
+      { name: id, body: fixtureType(body) },
+    ]),
+  ),
+});
+
+const fixtureStreamPolicy = (text) =>
+  text.includes('provisionalRef')
+    ? 'provisional'
+    : text.includes('streamToken')
+      ? 'stable'
+      : 'none';
+
+test('native value codec matches every frozen shared schema-value fixture', async () => {
+  const fixture = JSON.parse(
+    await readFile('../../../../golem-client/tests/fixtures/stream-session-v1/schema-values.json'),
+  );
+  for (const vector of fixture.vectors) {
+    const value = parseStreamSessionTextFrame(vector.canonical);
+    const validated = publicValueCodec(fixtureGraph(vector)).validate(
+      value,
+      fixtureStreamPolicy(vector.canonical),
+    );
+    assert.equal(encodeStreamSessionTextFrame(validated), vector.canonical, vector.name);
+  }
+});
+
+test('native value codec rejects every frozen malformed schema-value fixture', async () => {
+  const fixture = JSON.parse(
+    await readFile('../../../../golem-client/tests/fixtures/stream-session-v1/malformed.json'),
+  );
+  for (const vector of fixture.vectors.filter(({ lane }) => lane === 'schema-value')) {
+    const value = parseStreamSessionTextFrame(vector.input);
+    assert.throws(
+      () =>
+        publicValueCodec(fixtureGraph(vector)).validate(value, fixtureStreamPolicy(vector.input)),
+      { code: vector.expectedCode },
+      vector.name,
+    );
+  }
+});
 
 test('binary envelope encoder matches the frozen shared fixtures', async () => {
   const fixture = JSON.parse(
@@ -70,6 +362,19 @@ test('strict WebSocket JSON parsing retains collection and depth budgets', () =>
   assert.throws(() => parseStreamSessionTextFrame(`[${'null,'.repeat(100_000)}null]`), {
     code: 'malformed-message',
   });
+  assert.doesNotThrow(() =>
+    parseStreamSessionTextFrame(
+      JSON.stringify({
+        kind: 'list',
+        value: {
+          elements: Array.from({ length: 40_000 }, (_, value) => ({
+            kind: 'u32',
+            value,
+          })),
+        },
+      }),
+    ),
+  );
   assert.throws(() => parseStreamSessionTextFrame(`${'['.repeat(64)}null${']'.repeat(64)}`), {
     code: 'malformed-message',
   });
@@ -85,7 +390,7 @@ test('AgentStream rejects a second iterator deterministically', async () => {
   assert.throws(() => stream[Symbol.asyncIterator](), /only be iterated once/);
 });
 
-test('REST request JSON preserves exact bigint values', async () => {
+test('REST request JSON preserves canonical string-form u64 values', async () => {
   let body = '';
   const http = createHttpServer((request, response) => {
     request.setEncoding('utf8');
@@ -109,13 +414,73 @@ test('REST request JSON preserves exact bigint values', async () => {
         appName: 'app',
         envName: 'env',
         agentTypeName: 'agent',
-        parameters: { kind: 'u64', value: 18_446_744_073_709_551_615n },
+        parameters: { kind: 'u64', value: '18446744073709551615' },
       },
     );
-    assert.match(body, /"value":18446744073709551615(?:[,}])/u);
-    assert.doesNotMatch(body, /"18446744073709551615"/u);
+    assert.match(body, /"value":"18446744073709551615"/u);
   } finally {
     await new Promise((resolve) => http.close(resolve));
+  }
+});
+
+test('REST request JSON preserves native f32 and f64 negative zero values', async () => {
+  const bodies = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (_url, init) => {
+    bodies.push(init.body);
+    return Response.json({
+      agentId: { agentId: 'agent', componentId: 'component' },
+      idempotencyKey: 'key',
+      componentRevision: 1,
+      result: {
+        kind: 'value',
+        graph: { root: { kind: 'record', value: { fields: [] } } },
+        value: { kind: 'record', value: { fields: [] } },
+      },
+    });
+  };
+  try {
+    await createAgent(
+      { type: 'custom', url: 'http://example.test', token: 'test' },
+      {
+        appName: 'app',
+        envName: 'env',
+        agentTypeName: 'agent',
+        parameters: { kind: 'f32', value: -0 },
+      },
+    );
+    await invokeAgent(
+      { type: 'custom', url: 'http://example.test', token: 'test' },
+      {
+        appName: 'app',
+        envName: 'env',
+        agentTypeName: 'agent',
+        parameters: { kind: 'record', value: { fields: [] } },
+        config: [{ path: ['float-shaped'], value: { kind: 'f32', value: -0 } }],
+        methodName: 'run',
+        methodParameters: {
+          kind: 'record',
+          value: {
+            fields: [
+              { kind: 'f64', value: -0 },
+              { kind: 'u32', value: -0 },
+            ],
+          },
+        },
+        mode: 'await',
+      },
+    );
+    assert.match(bodies[0], /"parameters":\{"kind":"f32","value":-0\}/u);
+    assert.match(
+      bodies[1],
+      /"config":\[\{"path":\["float-shaped"\],"value":\{"kind":"f32","value":0\}\}\]/u,
+    );
+    assert.match(
+      bodies[1],
+      /"methodParameters":\{"kind":"record","value":\{"fields":\[\{"kind":"f64","value":-0\},\{"kind":"u32","value":0\}\]\}\}/u,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
   }
 });
 
@@ -127,14 +492,14 @@ test('invokeAgent losslessly parses nested 64-bit schema integers', async () => 
       "idempotencyKey": "key",
       "componentRevision": 7,
       "result": {
-        "graph": { "ordinaryInteger": 9007199254740993, "float": 1.25, "literals": [true, false, null] },
+        "graph": ${JSON.stringify(integerRecordGraph)},
         "value": { "value": { "fields": [
-          { "value": 18446744073709551615, "kind": "u64" },
-          { "kind": "s64", "value": -9223372036854775808 },
-          { "kind": "list", "value": { "elements": [
-            { "value": 42, "kind": "s64" },
+          { "value": "18446744073709551615", "kind": "u64" },
+          { "kind": "s64", "value": "-9223372036854775808" },
+          { "kind": "tuple", "value": { "elements": [
+            { "value": "42", "kind": "s64" },
             { "kind": "record", "value": { "fields": [
-              { "kind": "u64", "value": 9 },
+              { "kind": "u64", "value": "9" },
               { "kind": "f64", "value": 3.5 },
               { "kind": "string", "value": "escaped: {\\\"kind\\\":\\\"u64\\\",\\\"value\\\":18446744073709551615}" }
             ] } }
@@ -157,37 +522,35 @@ test('invokeAgent losslessly parses nested 64-bit schema integers', async () => 
       },
     );
     const fields = response.result.value.value.fields;
-    assert.equal(fields[0].value, 18_446_744_073_709_551_615n);
-    assert.equal(fields[1].value, -9_223_372_036_854_775_808n);
-    assert.equal(fields[2].value.elements[0].value, 42n);
-    assert.equal(fields[2].value.elements[1].value.fields[0].value, 9n);
+    assert.equal(fields[0].value, '18446744073709551615');
+    assert.equal(fields[1].value, '-9223372036854775808');
+    assert.equal(fields[2].value.elements[0].value, '42');
+    assert.equal(fields[2].value.elements[1].value.fields[0].value, '9');
     assert.equal(fields[2].value.elements[1].value.fields[1].value, 3.5);
     assert.equal(
       fields[2].value.elements[1].value.fields[2].value,
       'escaped: {"kind":"u64","value":18446744073709551615}',
     );
     assert.equal(response.componentRevision, 7);
-    assert.equal(response.result.graph.float, 1.25);
-    assert.equal(typeof response.result.graph.ordinaryInteger, 'number');
-    assert.deepEqual(response.result.graph.literals, [true, false, null]);
+    assert.equal(response.result.graph.root.kind, 'record');
   } finally {
     globalThis.fetch = originalFetch;
   }
 });
 
-test('invokeAgent exactly restores decimal and exponent-form 64-bit integers', async () => {
+test('invokeAgent preserves canonical string-form 64-bit integers', async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async () =>
     new Response(`{
       "agentId": { "agentId": "agent", "componentId": "component" },
       "idempotencyKey": "key",
       "componentRevision": 1,
-      "result": { "kind": "value", "value": { "kind": "record", "value": { "fields": [
-        { "kind": "u64", "value": 1e3 },
-        { "kind": "s64", "value": -2E2 },
-        { "kind": "u64", "value": 1844674407370955161.5e1 },
-        { "kind": "s64", "value": -922337203685477580.8e1 },
-        { "kind": "u64", "value": 900719925474099300e-2 },
+      "result": { "kind": "value", "graph": ${JSON.stringify(numericFormsGraph)}, "value": { "kind": "record", "value": { "fields": [
+        { "kind": "u64", "value": "1000" },
+        { "kind": "s64", "value": "-200" },
+        { "kind": "u64", "value": "18446744073709551615" },
+        { "kind": "s64", "value": "-9223372036854775808" },
+        { "kind": "u64", "value": "9007199254740993" },
         { "kind": "f64", "value": -0 }
       ] } } }
     }`);
@@ -205,11 +568,11 @@ test('invokeAgent exactly restores decimal and exponent-form 64-bit integers', a
       },
     );
     const fields = response.result.value.value.fields;
-    assert.equal(fields[0].value, 1000n);
-    assert.equal(fields[1].value, -200n);
-    assert.equal(fields[2].value, 18_446_744_073_709_551_615n);
-    assert.equal(fields[3].value, -9_223_372_036_854_775_808n);
-    assert.equal(fields[4].value, 9_007_199_254_740_993n);
+    assert.equal(fields[0].value, '1000');
+    assert.equal(fields[1].value, '-200');
+    assert.equal(fields[2].value, '18446744073709551615');
+    assert.equal(fields[3].value, '-9223372036854775808');
+    assert.equal(fields[4].value, '9007199254740993');
     assert.equal(Object.is(fields[5].value, -0), true);
   } finally {
     globalThis.fetch = originalFetch;
@@ -241,7 +604,7 @@ test('invokeAgent rejects nonintegral and out-of-range 64-bit numeric forms', as
           "agentId": { "agentId": "agent", "componentId": "component" },
           "idempotencyKey": "key",
           "componentRevision": 1,
-          "result": { "kind": "value", "value": { "kind": "${kind}", "value": ${numericForm} } }
+          "result": { "kind": "value", "graph": { "root": { "kind": "${kind}", "value": {} } }, "value": { "kind": "${kind}", "value": ${numericForm} } }
         }`);
       await assert.rejects(
         invokeAgent({ type: 'custom', url: 'http://example.test', token: 'test' }, request),
@@ -262,7 +625,7 @@ test('invokeAgent accepts REST results exceeding WebSocket collection budgets', 
       agentId: { agentId: 'agent', componentId: 'component' },
       idempotencyKey: 'key',
       componentRevision: 1,
-      result: { kind: 'value', value: { kind: 'list', value: { elements } } },
+      result: { kind: 'value', graph: u32ListGraph, value: { kind: 'list', value: { elements } } },
     });
 
   try {
@@ -290,8 +653,13 @@ test('invokeAgent accepts REST results exceeding WebSocket collection budgets', 
 
 test('invokeAgent accepts REST results exceeding WebSocket depth budgets', async () => {
   const originalFetch = globalThis.fetch;
-  let graph = null;
-  for (let depth = 0; depth < 70; depth += 1) graph = { nested: graph };
+  let deepType = { kind: 'u32', value: {} };
+  for (let depth = 0; depth < 70; depth += 1)
+    deepType = { kind: 'list', value: { element: deepType } };
+  const graph = {
+    defs: [{ id: 'unused.deep', body: deepType }],
+    root: { kind: 'u32', value: {} },
+  };
   globalThis.fetch = async () =>
     Response.json({
       agentId: { agentId: 'agent', componentId: 'component' },
@@ -313,9 +681,9 @@ test('invokeAgent accepts REST results exceeding WebSocket depth budgets', async
         mode: 'await',
       },
     );
-    let nested = response.result.graph;
-    for (let depth = 0; depth < 70; depth += 1) nested = nested.nested;
-    assert.equal(nested, null);
+    let nested = response.result.graph.defs[0].body;
+    for (let depth = 0; depth < 70; depth += 1) nested = nested.value.element;
+    assert.equal(nested.kind, 'u32');
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -377,7 +745,7 @@ test('uncertain pre-acceptance close exact-retries the frozen start', async () =
             version: 1,
             type: 'invocationResult',
             mappings: [],
-            result: { kind: 'value', value: 42 },
+            result: { kind: 'value', graph: u32Graph, value: { kind: 'u32', value: 42 } },
           }),
         );
         socket.send(
@@ -395,7 +763,7 @@ test('uncertain pre-acceptance close exact-retries the frozen start', async () =
       () => local.endpoint,
       () => descriptor,
       () => ({}),
-      (value) => value,
+      (value) => value.value.value,
     );
     assert.equal(await method(), 42);
     assert.equal(starts.length, 2);
@@ -405,12 +773,12 @@ test('uncertain pre-acceptance close exact-retries the frozen start', async () =
   }
 });
 
-test('direct binary input uses a v1 binary envelope', async () => {
+test('packed u8 input uses native nodes and a v1 binary envelope', async () => {
   let binary;
   const local = await server((socket) => {
     socket.once('message', (data) => {
       const start = JSON.parse(data);
-      const provisionalRef = start.methodParameters.input.$stream.provisionalRef;
+      const provisionalRef = start.methodParameters.input.value.provisionalRef;
       socket.send(
         JSON.stringify(
           accepted(start, [
@@ -429,7 +797,11 @@ test('direct binary input uses a v1 binary envelope', async () => {
           version: 1,
           type: 'invocationResult',
           mappings: [],
-          result: { kind: 'none' },
+          result: {
+            kind: 'value',
+            graph: unitGraph,
+            value: { kind: 'tuple', value: { elements: [] } },
+          },
         }),
       );
       socket.once('message', (frame, isBinary) => {
@@ -454,7 +826,9 @@ test('direct binary input uses a v1 binary envelope', async () => {
     const method = createStreamingRemoteMethod(
       () => local.endpoint,
       () => descriptor,
-      ([input], register) => ({ input: register(input, (value) => value, 'u8') }),
+      ([input], register) => ({
+        input: register(input, (value) => ({ kind: 'u8', value }), 'u8'),
+      }),
       () => undefined,
     );
     await method(
@@ -475,12 +849,13 @@ test('direct binary input uses a v1 binary envelope', async () => {
   }
 });
 
-test('input ACK high-water replays the unaccepted range without pulling ahead', async () => {
-  const frames = [];
+test('binary input uses native record and binary nodes', async () => {
+  let received;
   const local = await server((socket) => {
     socket.once('message', (data) => {
       const start = JSON.parse(data);
-      const provisionalRef = start.methodParameters.input.$stream.provisionalRef;
+      const streamNode = start.methodParameters.value.fields[0];
+      const provisionalRef = streamNode.value.provisionalRef;
       socket.send(
         JSON.stringify(
           accepted(start, [
@@ -499,7 +874,101 @@ test('input ACK high-water replays the unaccepted range without pulling ahead', 
           version: 1,
           type: 'invocationResult',
           mappings: [],
-          result: { kind: 'none' },
+          result: {
+            kind: 'value',
+            graph: unitGraph,
+            value: { kind: 'tuple', value: { elements: [] } },
+          },
+        }),
+      );
+      socket.once('message', (frame, isBinary) => {
+        assert.equal(isBinary, true);
+        const length = frame.readUInt32BE(0);
+        received = {
+          metadata: JSON.parse(frame.subarray(4, 4 + length)),
+          payload: [...frame.subarray(4 + length)],
+        };
+        socket.send(
+          JSON.stringify({
+            version: 1,
+            type: 'invocationFinished',
+            outcome: { kind: 'success' },
+          }),
+        );
+      });
+    });
+  });
+  try {
+    const method = createStreamingRemoteMethod(
+      () => local.endpoint,
+      () => descriptor,
+      ([input], register) => ({
+        kind: 'record',
+        value: {
+          fields: [
+            register(
+              input,
+              ({ bytes, mimeType }) => ({ kind: 'binary', value: { bytes, mimeType } }),
+              'binary',
+            ),
+          ],
+        },
+      }),
+      () => undefined,
+    );
+    await method(
+      agentStream(
+        (async function* () {
+          yield { bytes: [0, 255], mimeType: 'application/octet-stream' };
+        })(),
+      ),
+    );
+    await waitFor(() => received !== undefined);
+    assert.deepEqual(received, {
+      metadata: {
+        version: 1,
+        kind: 'input-binary',
+        channel: 1,
+        sequence: '0',
+        itemCount: '1',
+        mimeType: 'application/octet-stream',
+      },
+      payload: [0, 255],
+    });
+  } finally {
+    await local.close();
+  }
+});
+
+test('input ACK high-water replays the unaccepted range without pulling ahead', async () => {
+  const frames = [];
+  const local = await server((socket) => {
+    socket.once('message', (data) => {
+      const start = JSON.parse(data);
+      const provisionalRef = start.methodParameters.input.value.provisionalRef;
+      socket.send(
+        JSON.stringify(
+          accepted(start, [
+            {
+              channel: 1,
+              direction: 'input',
+              streamToken: 'input',
+              provisionalRef,
+              inputHighWater: { sequence: '0', terminal: false },
+            },
+          ]),
+        ),
+      );
+      socket.send(
+        JSON.stringify({
+          version: 1,
+          type: 'invocationResult',
+          mappings: [],
+          result: {
+            kind: 'value',
+            graph: unitGraph,
+            value: { kind: 'tuple', value: { elements: [] } },
+          },
         }),
       );
       socket.on('message', (frame) => {
@@ -586,7 +1055,7 @@ test('resume remaps and trims a partially accepted packed u8 input batch', async
       const operation = JSON.parse(data);
       if (connection === 1) {
         idempotencyKey = operation.idempotencyKey;
-        provisionalRef = operation.methodParameters.input.$stream.provisionalRef;
+        provisionalRef = operation.methodParameters.input.value.provisionalRef;
         socket.send(
           JSON.stringify(
             accepted(operation, [
@@ -605,7 +1074,11 @@ test('resume remaps and trims a partially accepted packed u8 input batch', async
             version: 1,
             type: 'invocationResult',
             mappings: [],
-            result: { kind: 'none' },
+            result: {
+              kind: 'value',
+              graph: unitGraph,
+              value: { kind: 'tuple', value: { elements: [] } },
+            },
           }),
         );
         socket.once('message', (_frame, isBinary) => {
@@ -675,7 +1148,9 @@ test('resume remaps and trims a partially accepted packed u8 input batch', async
     const method = createStreamingRemoteMethod(
       () => local.endpoint,
       () => descriptor,
-      ([input], register) => ({ input: register(input, (value) => value, 'u8') }),
+      ([input], register) => ({
+        input: register(input, (value) => ({ kind: 'u8', value }), 'u8'),
+      }),
       () => undefined,
     );
     await method(
@@ -719,7 +1194,11 @@ test('resume checkpoints output only after language-level delivery', async () =>
             version: 1,
             type: 'invocationResult',
             mappings: [],
-            result: { kind: 'value', value: { $stream: { streamToken: 'output' } } },
+            result: {
+              kind: 'value',
+              graph: outputStreamGraph,
+              value: { kind: 'stream', value: { streamToken: 'output' } },
+            },
           }),
         );
         socket.send(
@@ -773,7 +1252,7 @@ test('resume checkpoints output only after language-level delivery', async () =>
       () => local.endpoint,
       () => descriptor,
       () => ({}),
-      (value, stream) => stream(value.$stream.streamToken, (item) => item, 'string'),
+      (value, stream) => stream(value.value.value.streamToken, (item) => item, 'string'),
     );
     const output = await method();
     for (let i = 0; i < 100 && !resume; i += 1) await new Promise((r) => setTimeout(r, 5));
@@ -804,7 +1283,11 @@ test('packed u8 cursor advances only after the final byte is delivered', async (
             version: 1,
             type: 'invocationResult',
             mappings: [],
-            result: { kind: 'value', value: { $stream: { streamToken: 'output' } } },
+            result: {
+              kind: 'value',
+              graph: outputStreamGraph,
+              value: { kind: 'stream', value: { streamToken: 'output' } },
+            },
           }),
         );
         socket.send(
@@ -848,7 +1331,7 @@ test('packed u8 cursor advances only after the final byte is delivered', async (
       () => local.endpoint,
       () => descriptor,
       () => ({}),
-      (value, stream) => stream(value.$stream.streamToken, (item) => item, 'u8', 'u8'),
+      (value, stream) => stream(value.value.value.streamToken, (item) => item.value, 'u8', 'u8'),
     );
     const output = await method();
     const iterator = output[Symbol.asyncIterator]();
@@ -877,6 +1360,43 @@ test('malformed server message is rejected with a stable protocol error', async 
       (value) => value,
     );
     await assert.rejects(method(), (error) => error.code === 'malformed-message');
+  } finally {
+    await local.close();
+  }
+});
+
+test('streaming invocation rejects a value inconsistent with its returned graph', async () => {
+  let locallyDecoded = false;
+  const local = await server((socket) => {
+    socket.once('message', (data) => {
+      const start = JSON.parse(data);
+      socket.send(JSON.stringify(accepted(start)));
+      socket.send(
+        JSON.stringify({
+          version: 1,
+          type: 'invocationResult',
+          mappings: [],
+          result: {
+            kind: 'value',
+            graph: u32Graph,
+            value: { kind: 'string', value: 'not a u32' },
+          },
+        }),
+      );
+    });
+  });
+  try {
+    const method = createStreamingRemoteMethod(
+      () => local.endpoint,
+      () => descriptor,
+      () => ({ kind: 'record', value: { fields: [] } }),
+      () => {
+        locallyDecoded = true;
+        return 0;
+      },
+    );
+    await assert.rejects(method(), { code: 'validation-error' });
+    assert.equal(locallyDecoded, false);
   } finally {
     await local.close();
   }
@@ -916,7 +1436,10 @@ test('public value codec enforces canonical values, restrictions, and strict sha
       max: { tag: 'unsigned', val: 18_446_744_073_709_551_615n },
     },
   });
-  assert.equal(u64.validate('18446744073709551615', 'none'), '18446744073709551615');
+  assert.deepEqual(u64.validate({ kind: 'u64', value: '18446744073709551615' }, 'none'), {
+    kind: 'u64',
+    value: '18446744073709551615',
+  });
   assert.throws(() => u64.validate(9_007_199_254_740_994, 'none'), {
     code: 'validation-error',
   });
@@ -937,8 +1460,12 @@ test('public value codec enforces canonical values, restrictions, and strict sha
       },
     ],
   });
-  assert.deepEqual(record.validate({ enabled: true }, 'none'), { enabled: true });
-  assert.throws(() => record.validate({ enabled: true, extra: false }, 'none'), {
+  const recordValue = {
+    kind: 'record',
+    value: { fields: [{ kind: 'bool', value: true }] },
+  };
+  assert.deepEqual(record.validate(recordValue, 'none'), recordValue);
+  assert.throws(() => record.validate({ enabled: true }, 'none'), {
     code: 'validation-error',
   });
 
@@ -951,19 +1478,24 @@ test('public value codec enforces canonical values, restrictions, and strict sha
     },
   });
   assert.deepEqual(
-    binary.validate({ bytes: '+/8=', mimeType: 'application/octet-stream' }, 'none'),
-    { bytes: '+/8=', mimeType: 'application/octet-stream' },
+    binary.validate(
+      { kind: 'binary', value: { bytes: [251, 255], mimeType: 'application/octet-stream' } },
+      'none',
+    ),
+    { kind: 'binary', value: { bytes: [251, 255], mimeType: 'application/octet-stream' } },
   );
-  assert.throws(
-    () => binary.validate({ bytes: '-_8=', mimeType: 'application/octet-stream' }, 'none'),
-    { code: 'malformed-message' },
-  );
+  assert.throws(() => binary.validate({ kind: 'binary', value: { bytes: [256] } }, 'none'), {
+    code: 'validation-error',
+  });
   assert.throws(() => binary.validate({ bytes: '+/8=', mimeType: 'image/png' }, 'none'), {
     code: 'validation-error',
   });
 
   const url = codec({ tag: 'url', restrictions: { allowedSchemes: ['mailto'] } });
-  assert.equal(url.validate('mailto:test@example.com', 'none'), 'mailto:test@example.com');
+  assert.deepEqual(
+    url.validate({ kind: 'url', value: { url: 'mailto:test@example.com' } }, 'none'),
+    { kind: 'url', value: { url: 'mailto:test@example.com' } },
+  );
 
   const quantity = codec({
     tag: 'quantity',
@@ -975,8 +1507,11 @@ test('public value codec enforces canonical values, restrictions, and strict sha
     },
   });
   assert.deepEqual(
-    quantity.validate({ mantissa: '9007199254740994', scale: 0, unit: 'kg' }, 'none'),
-    { mantissa: '9007199254740994', scale: 0, unit: 'kg' },
+    quantity.validate(
+      { kind: 'quantity', value: { mantissa: '9007199254740994', scale: 0, unit: 'kg' } },
+      'none',
+    ),
+    { kind: 'quantity', value: { mantissa: '9007199254740994', scale: 0, unit: 'kg' } },
   );
   assert.throws(
     () => quantity.validate({ mantissa: '9007199254740992', scale: 0, unit: 'kg' }, 'none'),
@@ -1008,32 +1543,103 @@ test('public value codec enforces union discriminators and affine stream policy'
       },
     ],
   });
-  assert.deepEqual(union.validate({ $union: 'event', value: { kind: 'event' } }, 'none'), {
-    $union: 'event',
-    value: { kind: 'event' },
-  });
-  assert.throws(() => union.validate({ $union: 'event', value: { kind: 'other' } }, 'none'), {
-    code: 'validation-error',
-  });
+  const event = {
+    kind: 'union',
+    value: {
+      tag: 'event',
+      body: { kind: 'record', value: { fields: [{ kind: 'string', value: 'event' }] } },
+    },
+  };
+  assert.deepEqual(union.validate(event, 'none'), event);
+  assert.throws(
+    () =>
+      union.validate(
+        {
+          kind: 'union',
+          value: {
+            tag: 'event',
+            body: { kind: 'record', value: { fields: [{ kind: 'string', value: 'other' }] } },
+          },
+        },
+        'none',
+      ),
+    {
+      code: 'validation-error',
+    },
+  );
 
   const streams = codec({
     tag: 'list',
     element: schemaType({ tag: 'stream', element: schemaType({ tag: 'u8' }) }),
   });
   const reference = {
-    $stream: { provisionalRef: '0dff1c71-f12f-4bb1-996c-23d693bdc825' },
+    kind: 'stream',
+    value: { provisionalRef: '0dff1c71-f12f-4bb1-996c-23d693bdc825' },
   };
-  assert.deepEqual(streams.validate([reference], 'provisional'), [reference]);
-  assert.throws(() => streams.validate([reference], 'none'), { code: 'unsupported-value' });
-  assert.throws(() => streams.validate([reference, reference], 'provisional'), {
-    code: 'stream-already-consumed',
-  });
-  assert.throws(() => streams.validate([{ $stream: { streamToken: 'stable' } }], 'provisional'), {
-    code: 'validation-error',
-  });
+  const one = { kind: 'list', value: { elements: [reference] } };
+  assert.deepEqual(streams.validate(one, 'provisional'), one);
+  assert.throws(() => streams.validate(one, 'none'), { code: 'unsupported-value' });
+  assert.throws(
+    () =>
+      streams.validate(
+        { kind: 'list', value: { elements: [reference, reference] } },
+        'provisional',
+      ),
+    {
+      code: 'stream-already-consumed',
+    },
+  );
+  assert.throws(
+    () =>
+      streams.validate(
+        {
+          kind: 'list',
+          value: { elements: [{ kind: 'stream', value: { streamToken: 'stable' } }] },
+        },
+        'provisional',
+      ),
+    {
+      code: 'validation-error',
+    },
+  );
   assert.throws(() => codec({ tag: 'future' }).validate(null, 'none'), {
     code: 'unsupported-value',
   });
+});
+
+test('wire schema graphs validate their own values before local decoding', () => {
+  const graph = schemaGraphFromWire({
+    defs: [
+      {
+        id: 'result',
+        body: {
+          kind: 'record',
+          value: {
+            fields: [{ name: 'count', body: { kind: 'u32', value: {} } }],
+          },
+        },
+      },
+    ],
+    root: { kind: 'ref', value: { id: 'result' } },
+  });
+  assert.doesNotThrow(() =>
+    publicValueCodec(graph).validate(
+      { kind: 'record', value: { fields: [{ kind: 'u32', value: 7 }] } },
+      'stable',
+    ),
+  );
+  assert.throws(
+    () =>
+      publicValueCodec(graph).validate(
+        { kind: 'record', value: { fields: [{ kind: 'string', value: 'wrong' }] } },
+        'stable',
+      ),
+    { code: 'validation-error' },
+  );
+  assert.throws(
+    () => schemaGraphFromWire({ root: { kind: 'ref', value: { id: 'missing' } } }),
+    /unresolved schema reference/u,
+  );
 });
 
 test('definitive WebSocket handshake failure does not retry', async () => {
@@ -1081,7 +1687,7 @@ test('normal close before invocation finish reconnects with a fresh resume', asy
             version: 1,
             type: 'invocationResult',
             mappings: [],
-            result: { kind: 'value', value: 42 },
+            result: { kind: 'value', graph: u32Graph, value: { kind: 'u32', value: 42 } },
           }),
           () => socket.close(1000),
         );
@@ -1102,7 +1708,7 @@ test('normal close before invocation finish reconnects with a fresh resume', asy
       () => local.endpoint,
       () => descriptor,
       () => ({}),
-      (value) => value,
+      (value) => value.value.value,
     );
     assert.equal(await method(), 42);
     await waitFor(() => operations.length === 2);
@@ -1129,7 +1735,7 @@ test('uncertain resume close exact-retries the frozen resume descriptor', async 
             version: 1,
             type: 'invocationResult',
             mappings: [],
-            result: { kind: 'value', value: 7 },
+            result: { kind: 'value', graph: u32Graph, value: { kind: 'u32', value: 7 } },
           }),
           () => socket.terminate(),
         );
@@ -1151,7 +1757,7 @@ test('uncertain resume close exact-retries the frozen resume descriptor', async 
       () => local.endpoint,
       () => descriptor,
       () => ({}),
-      (value) => value,
+      (value) => value.value.value,
     );
     assert.equal(await method(), 7);
     await waitFor(() => operations.length === 3);
@@ -1177,7 +1783,7 @@ test('retryable rejection after acceptance creates a fresh resume attempt', asyn
             version: 1,
             type: 'invocationResult',
             mappings: [],
-            result: { kind: 'value', value: 9 },
+            result: { kind: 'value', graph: u32Graph, value: { kind: 'u32', value: 9 } },
           }),
         );
         socket.send(
@@ -1207,7 +1813,7 @@ test('retryable rejection after acceptance creates a fresh resume attempt', asyn
       () => local.endpoint,
       () => descriptor,
       () => ({}),
-      (value) => value,
+      (value) => value.value.value,
     );
     assert.equal(await method(), 9);
     await waitFor(() => operations.length === 2);
@@ -1255,7 +1861,7 @@ test('input cancellation is replayed on the remapped channel after reconnect', a
       const operation = JSON.parse(data);
       if (connection === 1) {
         idempotencyKey = operation.idempotencyKey;
-        const provisionalRef = operation.methodParameters.input.$stream.provisionalRef;
+        const provisionalRef = operation.methodParameters.input.value.provisionalRef;
         socket.send(
           JSON.stringify(
             accepted(operation, [
@@ -1274,7 +1880,11 @@ test('input cancellation is replayed on the remapped channel after reconnect', a
             version: 1,
             type: 'invocationResult',
             mappings: [],
-            result: { kind: 'none' },
+            result: {
+              kind: 'value',
+              graph: unitGraph,
+              value: { kind: 'tuple', value: { elements: [] } },
+            },
           }),
         );
       } else {
@@ -1363,7 +1973,11 @@ test('consumer drop sends cancellation and remains distinct from protocol termin
           version: 1,
           type: 'invocationResult',
           mappings: [],
-          result: { kind: 'value', value: { $stream: { streamToken: 'output' } } },
+          result: {
+            kind: 'value',
+            graph: outputStreamGraph,
+            value: { kind: 'stream', value: { streamToken: 'output' } },
+          },
         }),
       );
       socket.send(
@@ -1406,7 +2020,7 @@ test('consumer drop sends cancellation and remains distinct from protocol termin
       () => local.endpoint,
       () => descriptor,
       () => ({}),
-      (value, stream) => stream(value.$stream.streamToken, (item) => item, 'string'),
+      (value, stream) => stream(value.value.value.streamToken, (item) => item, 'string'),
     );
     const output = await method();
     const iterator = output[Symbol.asyncIterator]();
@@ -1434,7 +2048,11 @@ test('generated output decode failure rejects delivery and terminates without cu
           version: 1,
           type: 'invocationResult',
           mappings: [],
-          result: { kind: 'value', value: { $stream: { streamToken: 'output' } } },
+          result: {
+            kind: 'value',
+            graph: outputStreamGraph,
+            value: { kind: 'stream', value: { streamToken: 'output' } },
+          },
         }),
       );
       socket.send(
@@ -1456,7 +2074,7 @@ test('generated output decode failure rejects delivery and terminates without cu
       () => descriptor,
       () => ({}),
       (value, stream) =>
-        stream(value.$stream.streamToken, () => {
+        stream(value.value.value.streamToken, () => {
           throw new Error('generated decode failed');
         }),
     );
@@ -1480,7 +2098,11 @@ test('packed u8 output larger than the queue item limit is delivered lazily', as
           version: 1,
           type: 'invocationResult',
           mappings: [],
-          result: { kind: 'value', value: { $stream: { streamToken: 'output' } } },
+          result: {
+            kind: 'value',
+            graph: outputStreamGraph,
+            value: { kind: 'stream', value: { streamToken: 'output' } },
+          },
         }),
       );
       socket.send(
@@ -1520,12 +2142,91 @@ test('packed u8 output larger than the queue item limit is delivered lazily', as
       () => local.endpoint,
       () => descriptor,
       () => ({}),
-      (value, stream) => stream(value.$stream.streamToken, (item) => item, 'u8', 'u8'),
+      (value, stream) => stream(value.value.value.streamToken, (item) => item.value, 'u8', 'u8'),
     );
     const output = await method();
     const actual = [];
     for await (const byte of output) actual.push(byte);
     assert.deepEqual(actual, [...payload]);
+  } finally {
+    await local.close();
+  }
+});
+
+test('binary output passes a native binary node to the generated decoder', async () => {
+  const local = await server((socket) => {
+    socket.once('message', (data) => {
+      const start = JSON.parse(data);
+      socket.send(JSON.stringify(accepted(start, [outputMapping])));
+      socket.send(
+        JSON.stringify({
+          version: 1,
+          type: 'invocationResult',
+          mappings: [],
+          result: {
+            kind: 'value',
+            graph: outputStreamGraph,
+            value: { kind: 'stream', value: { streamToken: 'output' } },
+          },
+        }),
+      );
+      socket.send(
+        encodeStreamSessionBinaryEnvelope(
+          {
+            version: 1,
+            kind: 'output-binary',
+            channel: 2,
+            sequence: '0',
+            itemCount: '1',
+            cursorToken: 'binary-cursor',
+            mimeType: 'application/octet-stream',
+          },
+          [0, 255],
+        ),
+      );
+      socket.send(
+        JSON.stringify({
+          version: 1,
+          type: 'outputStreamEnd',
+          channel: 2,
+          sequence: '1',
+          cursorToken: 'binary-end',
+          outcome: { kind: 'ok' },
+        }),
+      );
+      socket.send(
+        JSON.stringify({
+          version: 1,
+          type: 'invocationFinished',
+          outcome: { kind: 'success' },
+        }),
+      );
+    });
+  });
+  try {
+    const method = createStreamingRemoteMethod(
+      () => local.endpoint,
+      () => descriptor,
+      () => ({}),
+      (value, stream) =>
+        stream(
+          value.value.value.streamToken,
+          (item) => {
+            assert.deepEqual(item, {
+              kind: 'binary',
+              value: { bytes: [0, 255], mimeType: 'application/octet-stream' },
+            });
+            return item.value;
+          },
+          'binary',
+          'binary',
+        ),
+    );
+    const output = await method();
+    assert.deepEqual(await output[Symbol.asyncIterator]().next(), {
+      done: false,
+      value: { bytes: [0, 255], mimeType: 'application/octet-stream' },
+    });
   } finally {
     await local.close();
   }
@@ -1541,7 +2242,11 @@ test('invocation failure preserves an already-received output terminal', async (
           version: 1,
           type: 'invocationResult',
           mappings: [],
-          result: { kind: 'value', value: { $stream: { streamToken: 'output' } } },
+          result: {
+            kind: 'value',
+            graph: outputStreamGraph,
+            value: { kind: 'stream', value: { streamToken: 'output' } },
+          },
         }),
       );
       socket.send(
@@ -1572,7 +2277,7 @@ test('invocation failure preserves an already-received output terminal', async (
       () => local.endpoint,
       () => descriptor,
       () => ({}),
-      (value, stream) => stream(value.$stream.streamToken, (item) => item, 'string'),
+      (value, stream) => stream(value.value.value.streamToken, (item) => item, 'string'),
     );
     const output = await method();
     await new Promise((resolve) => setTimeout(resolve, 20));
@@ -1594,7 +2299,11 @@ test('concurrent output pulls each settle in stream order', async () => {
           version: 1,
           type: 'invocationResult',
           mappings: [],
-          result: { kind: 'value', value: { $stream: { streamToken: 'output' } } },
+          result: {
+            kind: 'value',
+            graph: outputStreamGraph,
+            value: { kind: 'stream', value: { streamToken: 'output' } },
+          },
         }),
       );
       setTimeout(() => {
@@ -1636,7 +2345,7 @@ test('concurrent output pulls each settle in stream order', async () => {
       () => local.endpoint,
       () => descriptor,
       () => ({}),
-      (value, stream) => stream(value.$stream.streamToken, (item) => item, 'string'),
+      (value, stream) => stream(value.value.value.streamToken, (item) => item, 'string'),
     );
     const output = await method();
     const iterator = output[Symbol.asyncIterator]();

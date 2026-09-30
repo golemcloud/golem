@@ -13,7 +13,7 @@ use golem_common::model::{AgentId, OplogIndex};
 use golem_test_framework::config::EnvBasedTestDependencies;
 use golem_test_framework::dsl::TestDsl;
 use pretty_assertions::assert_eq;
-use reqwest::header::{ALLOW, CACHE_CONTROL, CONTENT_TYPE, ETAG, IF_NONE_MATCH};
+use reqwest::header::{ALLOW, CACHE_CONTROL, CONTENT_TYPE, ETAG, IF_NONE_MATCH, RETRY_AFTER};
 use reqwest::{Method, StatusCode};
 use serde_json::Value;
 use std::time::{Duration, Instant};
@@ -83,6 +83,27 @@ fn stream_path(method: &str, session: &str, slot: &str, delay_ms: u64) -> String
     )
 }
 
+fn native_string(value: impl Into<String>) -> Value {
+    serde_json::json!({"kind": "string", "value": value.into()})
+}
+
+fn native_constructor_id(value: impl Into<String>) -> Value {
+    serde_json::json!({
+        "kind": "record",
+        "value": {"fields": [native_string(value)]}
+    })
+}
+
+fn native_input_stream(provisional_ref: Uuid) -> Value {
+    serde_json::json!({
+        "kind": "record",
+        "value": {"fields": [{
+            "kind": "stream",
+            "value": {"provisionalRef": provisional_ref}
+        }]}
+    })
+}
+
 fn header(response: &reqwest::Response, name: &str) -> String {
     response
         .headers()
@@ -95,6 +116,41 @@ fn header(response: &reqwest::Response, name: &str) -> String {
 
 async fn create(agent: &HttpTestContext, path: &str) -> anyhow::Result<reqwest::Response> {
     Ok(agent.client.put(agent.base_url.join(path)?).send().await?)
+}
+
+async fn get_with_transient_unavailable_retry(
+    agent: &HttpTestContext,
+    mode: &str,
+    path: &str,
+) -> anyhow::Result<reqwest::Response> {
+    let url = agent.base_url.join(path)?;
+    let mut attempts = 0;
+    let mut last_status = None;
+    match tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            attempts += 1;
+            let response = agent.client.get(url.clone()).send().await?;
+            last_status = Some(response.status());
+            if response.status() != StatusCode::SERVICE_UNAVAILABLE {
+                return Ok(response);
+            }
+            let retry_after = response
+                .headers()
+                .get(RETRY_AFTER)
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.parse::<u64>().ok())
+                .map(Duration::from_secs)
+                .unwrap_or(Duration::from_secs(1));
+            tokio::time::sleep(retry_after).await;
+        }
+    })
+    .await
+    {
+        Ok(result) => result,
+        Err(_) => anyhow::bail!(
+            "{mode} stream GET {url} timed out after {attempts} attempts; last status: {last_status:?}"
+        ),
+    }
 }
 
 async fn wait_for_closed(agent: &HttpTestContext, path: &str) -> anyhow::Result<()> {
@@ -2070,7 +2126,7 @@ async fn phantom_and_ephemeral_sessions_have_stable_distinct_identities(
             create(agent, &mismatch).await?.status(),
             StatusCode::CONFLICT
         );
-        let data = agent.client.get(agent.base_url.join(&path)?).send().await?;
+        let data = get_with_transient_unavailable_retry(agent, mode, &path).await?;
         assert_eq!(data.status(), StatusCode::OK);
         let first = data.json::<Vec<String>>().await?;
         assert_eq!(first.len(), 2);
@@ -2081,11 +2137,7 @@ async fn phantom_and_ephemeral_sessions_have_stable_distinct_identities(
         let generated = header(&created, "location");
         let generated_path = format!("{generated}/streams/$result");
         wait_for_closed(agent, &generated_path).await?;
-        let data = agent
-            .client
-            .get(agent.base_url.join(&generated_path)?)
-            .send()
-            .await?;
+        let data = get_with_transient_unavailable_retry(agent, mode, &generated_path).await?;
         assert_eq!(data.status(), StatusCode::OK);
         let second = data.json::<Vec<String>>().await?;
         assert_eq!(second.len(), 2);
@@ -2274,13 +2326,11 @@ async fn websocket_input_is_readable_through_http(
             attempt_id: Uuid::new_v4(),
             config: Vec::new(),
             idempotency_key: session.clone(),
-            method_parameters: serde_json::json!({
-                "input": { "$stream": { "provisionalRef": input_reference } }
-            }),
+            method_parameters: native_input_stream(input_reference),
             selector: Box::new(InvocationSelector {
                 agent_type: "DurableStreamAgent".into(),
                 application: agent.application_name.clone(),
-                constructor_parameters: serde_json::json!({"id": format!("ds3-{session}")}),
+                constructor_parameters: native_constructor_id(format!("ds3-{session}")),
                 environment: agent.environment_name.clone(),
                 method: "echo".into(),
                 phantom_id: None,
@@ -2305,7 +2355,7 @@ async fn websocket_input_is_readable_through_http(
         &PublicClientMessage::InputStreamItem {
             channel: input_channel,
             sequence: DecimalU64(0),
-            value: serde_json::json!("ws-first"),
+            value: native_string("ws-first"),
             version: INVOCATION_SESSION_VERSION,
         },
     )
@@ -2339,7 +2389,7 @@ async fn websocket_input_is_readable_through_http(
         &PublicClientMessage::InputStreamItem {
             channel: input_channel,
             sequence: DecimalU64(1),
-            value: serde_json::json!("ws-last"),
+            value: native_string("ws-last"),
             version: INVOCATION_SESSION_VERSION,
         },
     )
@@ -2366,8 +2416,13 @@ async fn websocket_input_is_readable_through_http(
             _ => {}
         }
     }
+    let public_values = serde_json::json!([
+        native_string("ws-first"),
+        native_string("post-middle"),
+        native_string("ws-last")
+    ]);
+    assert_eq!(serde_json::json!(output), public_values);
     let values = serde_json::json!(["ws-first", "post-middle", "ws-last"]);
-    assert_eq!(serde_json::json!(output), values);
     for slot in ["input", "output"] {
         let path = stream_path("echo", &session, slot, 0);
         wait_for_closed(agent, &path).await?;
@@ -2507,13 +2562,11 @@ async fn input_slot_delete_is_guest_observable_and_tombstoned(
             attempt_id: Uuid::new_v4(),
             config: Vec::new(),
             idempotency_key: session.clone(),
-            method_parameters: serde_json::json!({
-                "input": { "$stream": { "provisionalRef": input_reference } }
-            }),
+            method_parameters: native_input_stream(input_reference),
             selector: Box::new(InvocationSelector {
                 agent_type: "DurableStreamAgent".into(),
                 application: agent.application_name.clone(),
-                constructor_parameters: serde_json::json!({"id": id}),
+                constructor_parameters: native_constructor_id(id.clone()),
                 environment: agent.environment_name.clone(),
                 method: "echo".into(),
                 phantom_id: None,
@@ -2537,7 +2590,7 @@ async fn input_slot_delete_is_guest_observable_and_tombstoned(
         &PublicClientMessage::InputStreamItem {
             channel: input_channel,
             sequence: DecimalU64(0),
-            value: serde_json::json!("kept"),
+            value: native_string("kept"),
             version: INVOCATION_SESSION_VERSION,
         },
     )

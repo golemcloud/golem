@@ -23,7 +23,7 @@ pub mod walker;
 pub use error::RenderError;
 pub use json_schema::{
     JsonSchemaConfig, to_external_input_json_schema, to_external_output_json_schema,
-    to_json_schema, to_json_schema_with_config,
+    to_json_schema, to_json_schema_with_config, to_reflection_json_schema,
 };
 pub use json_value::{
     from_json_value, from_untrusted_json_value, to_json_value, to_json_value_redacted,

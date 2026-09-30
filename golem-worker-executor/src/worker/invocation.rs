@@ -773,6 +773,7 @@ async fn dispatch_call<Ctx: WorkerCtx>(
             input,
             stdin,
             stdout,
+            stderr,
             principal,
         } => {
             prepare_guest_call(store, display_name).await;
@@ -784,6 +785,7 @@ async fn dispatch_call<Ctx: WorkerCtx>(
                 *input,
                 stdin,
                 stdout,
+                stderr,
                 principal,
             )
             .await;
@@ -1315,6 +1317,7 @@ enum LoweredCall {
         input: Box<TypedSchemaValue>,
         stdin: bool,
         stdout: bool,
+        stderr: bool,
         principal: golem_common::model::agent::Principal,
     },
 }
@@ -1356,6 +1359,7 @@ enum PreparedCall {
         input: Box<TypedSchemaValue>,
         stdin: bool,
         stdout: bool,
+        stderr: bool,
         principal: golem_common::model::agent::Principal,
     },
 }
@@ -1452,6 +1456,7 @@ fn materialize_call<Ctx: WorkerCtx>(
             input,
             stdin,
             stdout,
+            stderr,
             principal,
         } => PreparedCall::ExternalTool {
             activation: std::sync::Arc::from(activation),
@@ -1460,6 +1465,7 @@ fn materialize_call<Ctx: WorkerCtx>(
             input,
             stdin,
             stdout,
+            stderr,
             principal,
         },
     })
@@ -1546,6 +1552,7 @@ pub fn lower_invocation(
             input,
             stdin,
             stdout,
+            stderr,
             activation,
             principal,
             ..
@@ -1559,6 +1566,7 @@ pub fn lower_invocation(
                 input,
                 stdin,
                 stdout,
+                stderr,
                 principal,
             },
         }),

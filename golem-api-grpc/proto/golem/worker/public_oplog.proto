@@ -756,6 +756,8 @@ message PublicToolInvocationOperation {
   bool has_stdin = 2;
   bool has_stdout = 3;
   bool declares_stdout = 4;
+  bool has_stderr = 5;
+  bool declares_stderr = 6;
 }
 
 message PublicEntityInvocationOperation {

@@ -395,7 +395,10 @@ object SchemaWireInteropSpec extends ZIOSpecDefault {
                                 for {
                                   first <- stream.pull()
                                   end   <- stream.pull()
-                                } yield assertTrue(first.contains(SchemaValue.StringValue("first")), end.isEmpty)
+                                } yield assertTrue(
+                                  first.contains(WitSchemaValueTree(Vector(StringValue("first")), 0)),
+                                  end.isEmpty
+                                )
                               }
                             case other =>
                               Future.successful(assertTrue(false).label(s"expected wrapped stream, got $other"))
@@ -501,6 +504,21 @@ object SchemaWireInteropSpec extends ZIOSpecDefault {
               finalizations == 2
             )
           }
+        }
+      },
+      test("generated output lowering disposes streams not reached after a failed wrap") {
+        ZIO.fromFuture { implicit ec =>
+          streamMock.reset()
+          streamMock.state.failWrapAt = 1
+          var closed             = Vector.empty[Int]
+          def source(index: Int) = AgentStream.fromPull[Int](
+            () => Future.successful(None),
+            () => { closed :+= index; Future.successful(()) }
+          )
+          val tree = golem.schema.wire.ConcreteCodec
+            .derived[(AgentStream[Int], AgentStream[Int])]
+            .encodeValue((source(1), source(2)))
+          SchemaWireInterop.ownedValueTreeToJsAsync(tree).failed.map(_ => assertTrue(closed.sorted == Vector(1, 2)))
         }
       },
       test("schema value stream: a failed first wrap finalizes its source") {

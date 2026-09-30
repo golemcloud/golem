@@ -471,6 +471,9 @@ impl DeploymentWriteService {
             );
         let (mut environment_tool_bindings, mut agent_tool_binding_inputs) =
             deployment_context.tool_middleware_binding_inputs(&data.remote_tools);
+        // Component and remote-tool hashes already cover their base bindings. Only explicit
+        // middleware overrides belong in the deployment-level identity; the merged maps below
+        // are used to compile the effective middleware chains.
         let registered_tool_names: BTreeSet<golem_common::model::tool::ToolName> = compiled_tools
             .registered_tools
             .iter()
@@ -710,6 +713,8 @@ impl DeploymentWriteService {
                 deployment_context.environment.tool_compatibility_mode,
                 &environment_tool_bindings,
                 &agent_tool_binding_inputs,
+                &data.environment_tool_middleware_bindings,
+                &data.agent_tool_middleware_bindings,
             )
             .map_err(anyhow::Error::new)?;
         if data.expected_deployment_hash != actual_hash {
