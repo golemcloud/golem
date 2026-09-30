@@ -49,6 +49,8 @@ struct Faults {
     /// The hold of the next save, when a test asked for one.
     hold: Mutex<Option<SaveHold>>,
     restored: Mutex<Vec<String>>,
+    /// The names of the restores that gave a tree, in the order of their ends.
+    completed_restores: Mutex<Vec<String>>,
     stats: AtomicUsize,
 }
 
@@ -207,6 +209,15 @@ impl TestFilesystemSnapshotStore {
             .clone()
     }
 
+    /// The names of the restores that gave a tree, in the order of their ends.
+    pub fn completed_restore_names(&self) -> Vec<String> {
+        self.faults
+            .completed_restores
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
     /// The number of stat calls.
     pub fn stat_count(&self) -> usize {
         self.faults.stats.load(Ordering::SeqCst)
@@ -331,7 +342,13 @@ impl FilesystemSnapshotStore for TestFilesystemSnapshotStore {
                 "an injected restore failure"
             )));
         }
-        self.inner.restore(agent, name, into).await
+        let restored = self.inner.restore(agent, name, into).await?;
+        self.faults
+            .completed_restores
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(name.as_str().to_string());
+        Ok(restored)
     }
 
     async fn stat(

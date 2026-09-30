@@ -1625,33 +1625,37 @@ impl Agent {
     }
 }
 
-/// What a run of a generated history gives.
-#[derive(Debug, PartialEq, Eq)]
-struct History {
-    /// The result of each step: before the restart, then after it.
-    results: Vec<String>,
-    /// The tree and the operation count before the restart.
-    live: Outcome,
-    /// The tree and the operation count right after the restart from the last usable snapshot.
-    restored: Outcome,
-    /// The tree and the operation count after the steps that follow the restart.
-    finished: Outcome,
-    /// The tree and the operation count after a replay without the periodic snapshots.
-    replayed: Outcome,
-    /// The number of restores of the restart.
-    restores: usize,
+/// How an agent of a generated history restarts.
+#[derive(Clone, Copy, Debug)]
+enum Restart {
+    /// From its last usable periodic snapshot.
+    FromSnapshot,
+    /// With a full replay: the agent loses its periodic snapshots before the restart, and the
+    /// executor restarts on an empty root without periodic snapshots.
+    FullReplay,
 }
 
-/// Runs `before` on an agent with snapshots, restarts the executor, and runs `after` on the
-/// agent that the restart restored from its last usable snapshot. Then replays the agent without
-/// the periodic snapshots.
+/// What a run of a generated history on one agent gives.
+#[derive(Debug, PartialEq, Eq)]
+struct HistoryRun {
+    /// The result of each step, before the restart and then after it.
+    results: Vec<String>,
+    /// The tree and the operation count right after the restart.
+    restarted: Outcome,
+    /// The tree and the operation count after the steps that follow the restart.
+    finished: Outcome,
+}
+
+/// Runs `before` on an agent with snapshots, restarts it as `restart` says, and runs `after`
+/// live. Gives the run and the names of the restores of the restart that gave a tree.
 async fn run_history(
     deps: &WorkerExecutorTestDependencies,
     last_unique_id: &LastUniqueId,
     component: &PrecompiledComponent,
     initial: usize,
     (before, after): (&[Step], &[Step]),
-) -> anyhow::Result<History> {
+    restart: Restart,
+) -> anyhow::Result<(HistoryRun, Vec<String>)> {
     let context = TestContext::new(last_unique_id);
     let store = TestFilesystemSnapshotStore::new();
     let executor =
@@ -1665,98 +1669,41 @@ async fn run_history(
     )
     .await?;
     let (agent, mut results) = agent.run_steps(&executor, before).await?;
-    let live = agent.outcome(&executor).await?;
     executor.release().await?;
-    let restores = store.restore_count();
-    let restarted =
-        start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
-    let restored = agent.outcome(&restarted).await?;
-    let restores = store.restore_count() - restores;
+    let root = tempfile::tempdir()?;
+    if let Restart::FullReplay = restart {
+        let owned = agent.owned(&context);
+        futures::stream::iter(store.snapshot_names(&owned).await)
+            .filter(|name| std::future::ready(name.starts_with("p-")))
+            .for_each(|name| {
+                let (store, owned) = (&store, &owned);
+                async move { store.lose(owned, &name).await }
+            })
+            .await;
+    }
+    let restores = store.completed_restore_names().len();
+    let restarted = match restart {
+        Restart::FromSnapshot => {
+            start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?
+        }
+        Restart::FullReplay => {
+            start_replaying_with(deps, &context, root.path(), Some(&store)).await?
+        }
+    };
+    let restarted_outcome = agent.outcome(&restarted).await?;
+    let restored = store.completed_restore_names()[restores..].to_vec();
     let (agent, after_results) = agent.run_steps(&restarted, after).await?;
     results.extend(after_results);
     let finished = agent.outcome(&restarted).await?;
     restarted.release().await?;
-    // Without the periodic snapshots, the start uses the snapshot of the last manual update, or
-    // replays the whole oplog.
-    let owned = agent.owned(&context);
-    futures::stream::iter(store.snapshot_names(&owned).await)
-        .filter(|name| std::future::ready(name.starts_with("p-")))
-        .for_each(|name| {
-            let (store, owned) = (&store, &owned);
-            async move { store.lose(owned, &name).await }
-        })
-        .await;
-    let root = tempfile::tempdir()?;
-    let replaying = start_replaying_with(deps, &context, root.path(), Some(&store)).await?;
-    let replayed = agent.outcome(&replaying).await?;
-    replaying.release().await?;
-    Ok(History {
-        results,
-        live,
+    Ok((
+        HistoryRun {
+            results,
+            restarted: restarted_outcome,
+            finished,
+        },
         restored,
-        finished,
-        replayed,
-        restores,
-    })
-}
-
-/// Runs all `steps` without a restart, on an executor with snapshots and its own store, and
-/// gives the result of each step and the final tree and operation count. A manual update keeps
-/// the files of the agent only with filesystem snapshots, so the run takes them too.
-async fn run_without_a_restart(
-    deps: &WorkerExecutorTestDependencies,
-    last_unique_id: &LastUniqueId,
-    component: &PrecompiledComponent,
-    initial: usize,
-    steps: &[Step],
-) -> anyhow::Result<(Vec<String>, Outcome)> {
-    let context = TestContext::new(last_unique_id);
-    let store = TestFilesystemSnapshotStore::new();
-    let executor =
-        start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
-    let agent = Agent::start(
-        &executor,
-        &context,
-        component,
-        "without-a-restart",
-        &declaration_set(initial),
-    )
-    .await?;
-    let (agent, results) = agent.run_steps(&executor, steps).await?;
-    let outcome = agent.outcome(&executor).await?;
-    executor.release().await?;
-    Ok((results, outcome))
-}
-
-/// Compares a run of a history with a restart against a run without one. The restart gives the
-/// tree before it, the steps after it give the results and the tree of the run without a
-/// restart, and a replay gives the same final tree. Gives the differences.
-fn compare_history(history: &History, results: &[String], outcome: &Outcome) -> Vec<String> {
-    [
-        (history.results != results).then(|| {
-            format!(
-                "results {:?}, without a restart {results:?}",
-                history.results
-            )
-        }),
-        (history.restored != history.live)
-            .then(|| format!("restored {:?}, live {:?}", history.restored, history.live)),
-        (&history.finished != outcome).then(|| {
-            format!(
-                "finished {:?}, without a restart {outcome:?}",
-                history.finished
-            )
-        }),
-        (history.replayed != history.finished).then(|| {
-            format!(
-                "replayed {:?}, finished {:?}",
-                history.replayed, history.finished
-            )
-        }),
-    ]
-    .into_iter()
-    .flatten()
-    .collect()
+    ))
 }
 
 #[test]
@@ -1786,22 +1733,27 @@ async fn generated_histories_restart_from_a_snapshot_with_the_tree_and_the_resul
     let outcomes = futures::stream::iter(cases)
         .then(|(initial, steps, restart_at)| async move {
             let (before, after) = steps.split_at(restart_at.min(steps.len()));
-            let history = run_history(
-                deps,
-                last_unique_id,
-                initial_file_system,
-                initial,
-                (before, after),
-            )
-            .await?;
-            let (results, outcome) =
-                run_without_a_restart(deps, last_unique_id, initial_file_system, initial, &steps)
-                    .await?;
-            let differences = compare_history(&history, &results, &outcome);
+            let run = |restart| {
+                run_history(
+                    deps,
+                    last_unique_id,
+                    initial_file_system,
+                    initial,
+                    (before, after),
+                    restart,
+                )
+            };
+            let (from_snapshot, snapshot_restores) = run(Restart::FromSnapshot).await?;
+            let (full_replay, replay_restores) = run(Restart::FullReplay).await?;
             Ok::<_, anyhow::Error>((
-                (!differences.is_empty())
-                    .then(|| format!("{initial} {before:?} | {after:?}: {differences:#?}")),
-                history.restores,
+                (from_snapshot != full_replay).then(|| {
+                    format!(
+                        "{initial} {before:?} | {after:?}: from a snapshot {from_snapshot:#?}, \
+                         with a full replay {full_replay:#?}"
+                    )
+                }),
+                snapshot_restores,
+                replay_restores,
             ))
         })
         .collect::<Vec<_>>()
@@ -1810,12 +1762,24 @@ async fn generated_histories_restart_from_a_snapshot_with_the_tree_and_the_resul
         .collect::<anyhow::Result<Vec<_>>>()?;
     let failures = outcomes
         .iter()
-        .filter_map(|(failure, _)| failure.clone())
+        .filter_map(|(failure, _, _)| failure.clone())
         .collect::<Vec<_>>();
-    let restores = outcomes.iter().map(|(_, restores)| restores).sum::<usize>();
+    let snapshot_restores = outcomes
+        .iter()
+        .map(|(_, restores, _)| restores.len())
+        .sum::<usize>();
+    let periodic_replay_restores = outcomes
+        .iter()
+        .flat_map(|(_, _, restores)| restores)
+        .filter(|name| name.starts_with("p-"))
+        .collect::<Vec<_>>();
 
     assert!(failures.is_empty(), "{failures:#?}");
-    assert!(restores > 0, "no restart restored a snapshot");
+    assert!(snapshot_restores > 0, "no restart restored a snapshot");
+    assert!(
+        periodic_replay_restores.is_empty(),
+        "a full replay restored the periodic snapshots {periodic_replay_restores:?}"
+    );
     Ok(())
 }
 
