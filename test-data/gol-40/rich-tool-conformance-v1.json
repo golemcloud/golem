@@ -231,7 +231,7 @@
               "doc": { "summary": "Inspect render status", "description": "", "examples": [] },
               "globals": { "options": [], "flags": [] },
               "body": {
-                "positionals": { "fixed": [{ "name": "artifactId", "valueName": "ID", "type": { "kind": "u64" }, "default": null, "required": true, "acceptsStdio": false, "doc": { "summary": "Artifact identifier", "description": "", "examples": [] } }], "tail": null },
+                "positionals": { "fixed": [{ "name": "artifact-id", "valueName": "ID", "type": { "kind": "u64" }, "default": null, "required": true, "acceptsStdio": false, "doc": { "summary": "Artifact identifier", "description": "", "examples": [] } }], "tail": null },
                 "options": [],
                 "flags": [],
                 "constraints": [],
@@ -291,7 +291,7 @@
         { "name": "region", "value": "eu-west-1", "origin": "inherited-root-global-default" },
         { "name": "trace", "value": false, "origin": "inherited-root-global-default" },
         { "name": "profile", "value": "release", "origin": "inherited-parent-global-default" },
-        { "name": "artifactId", "value": "9223372036854775809", "origin": "fixed-positional" }
+        { "name": "artifact-id", "value": "9223372036854775809", "origin": "fixed-positional" }
       ],
       "expected": {
         "providerObservedPrincipal": "principal:bob",
