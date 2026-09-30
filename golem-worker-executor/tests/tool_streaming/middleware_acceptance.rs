@@ -21,6 +21,10 @@ inherit_test_dep!(
     #[tagged_as("tool_streaming_rust_provider")]
     PrecompiledComponent
 );
+inherit_test_dep!(
+    #[tagged_as("audit_middleware")]
+    PrecompiledComponent
+);
 
 macro_rules! setup_probe_chain {
     ($last:expr, $deps:expr, $provider:expr, $caller:expr, $names:expr,
@@ -140,6 +144,67 @@ pub(super) async fn start_probe_effect_server() -> (
     (port, received, task)
 }
 
+#[derive(Clone, Default)]
+struct AuditSinkState {
+    attempts: Arc<std::sync::Mutex<Vec<(String, serde_json::Value)>>>,
+    committed: Arc<std::sync::Mutex<std::collections::BTreeMap<String, serde_json::Value>>>,
+    block_first_after_commit: Arc<std::sync::atomic::AtomicBool>,
+    committed_while_blocked: Arc<tokio::sync::Notify>,
+}
+
+async fn start_audit_sink(
+    block_first_after_commit: bool,
+) -> (String, AuditSinkState, tokio::task::JoinHandle<()>) {
+    async fn commit(
+        State(state): State<AuditSinkState>,
+        headers: axum::http::HeaderMap,
+        axum::Json(record): axum::Json<serde_json::Value>,
+    ) -> axum::http::StatusCode {
+        let key = headers
+            .get("idempotency-key")
+            .expect("audit request idempotency key")
+            .to_str()
+            .expect("ASCII audit idempotency key")
+            .to_string();
+        assert_eq!(record["policyInvocationKey"], key);
+        state
+            .attempts
+            .lock()
+            .unwrap()
+            .push((key.clone(), record.clone()));
+        state.committed.lock().unwrap().entry(key).or_insert(record);
+        if state
+            .block_first_after_commit
+            .swap(false, std::sync::atomic::Ordering::SeqCst)
+        {
+            state.committed_while_blocked.notify_one();
+            std::future::pending::<()>().await;
+        }
+        axum::http::StatusCode::NO_CONTENT
+    }
+
+    let state = AuditSinkState {
+        block_first_after_commit: Arc::new(std::sync::atomic::AtomicBool::new(
+            block_first_after_commit,
+        )),
+        ..Default::default()
+    };
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/records", listener.local_addr().unwrap());
+    let task_state = state.clone();
+    let task = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new()
+                .route("/records", post(commit))
+                .with_state(task_state),
+        )
+        .await
+        .expect("serve audit sink");
+    });
+    (url, state, task)
+}
+
 fn entity_starts<'a>(
     oplog: &'a [PublicOplogEntryWithIndex],
     kind: PublicAgentEntityKind,
@@ -228,6 +293,144 @@ fn assert_one_terminal_before_finished(
             Some(&parent_opening.span_id)
         );
     }
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn shipped_audit_records_payload_free_success_error_and_stream_summaries(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    #[tagged_as("audit_middleware")] audit: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let (sink_url, sink, sink_task) = start_audit_sink(false).await;
+    let context = TestContext::new(last_unique_id);
+    let environment = Arc::new(TestEnvironmentStateService::default());
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment.clone()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let audit_component = executor
+        .component_dep(&context.default_environment_id, audit)
+        .store()
+        .await?;
+    let provider_metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", provider.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    let audit_metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join("../builtin-tools/audit-middleware.wasm"),
+        false,
+        true,
+    )
+    .await?;
+    let definition = audit_metadata
+        .tool_middlewares
+        .iter()
+        .find(|definition| definition.name == "audit")
+        .expect("shipped audit middleware metadata");
+    let agent_type = AgentTypeName("ToolStreamingCaller".to_string());
+    let tool_name = ToolName::try_from("streaming").unwrap();
+    let mut deployment = deployment_state(
+        context.account_id,
+        provider_component.id,
+        provider_component.revision,
+        "golem-it:tool-streaming-rust-provider",
+        agent_type.0.as_str(),
+        provider_metadata.tools,
+    );
+    install_middleware_chain(
+        &mut deployment,
+        &agent_type,
+        &tool_name,
+        audit_component.id,
+        audit_component.revision,
+        "golem:audit-middleware",
+        &audit_metadata.tool_middlewares,
+        vec![(
+            definition.name.as_str(),
+            audit_middleware_parameters(definition, "summary-contract", &sink_url),
+        )],
+    );
+    environment.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment),
+    );
+
+    let agent_id = agent_id!("ToolStreamingCaller", "shipped-audit-summaries");
+    let sensitive_input = b"stream-payload-must-not-be-recorded".to_vec();
+    let success: StreamEvidence = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &agent_id,
+            "collect",
+            data_value!("echo", sensitive_input.clone(), 7_u32),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(success.output, sensitive_input);
+    assert_eq!(success.completion, "ok");
+    let error: StreamEvidence = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &agent_id,
+            "result_before_stdout",
+            data_value!("declared-error"),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(error.output, b"marker:");
+    assert!(error.completion.contains("Declared"));
+
+    let committed = sink.committed.lock().unwrap();
+    assert_eq!(committed.len(), 2);
+    let success_record = committed
+        .values()
+        .find(|record| record["outcome"]["kind"] == "success")
+        .expect("success audit record");
+    assert_eq!(success_record["toolName"], "streaming");
+    assert_eq!(success_record["stdout"]["declared"], true);
+    assert_eq!(success_record["stdout"]["bytes"], sensitive_input.len());
+    assert_eq!(success_record["stdout"]["terminal"], "finished");
+    assert_eq!(success_record["stderr"]["declared"], false);
+    let error_record = committed
+        .values()
+        .find(|record| record["outcome"]["kind"] == "error")
+        .expect("error audit record");
+    assert_eq!(error_record["outcome"]["errorKind"], "tool");
+    assert!(error_record["outcome"]["customName"].is_string());
+    assert_eq!(error_record["stdout"]["declared"], true);
+    assert_eq!(error_record["stdout"]["bytes"], 7);
+    let records = serde_json::to_string(&*committed)?;
+    assert!(!records.contains("stream-payload-must-not-be-recorded"));
+    assert!(!records.contains("bytes_read"));
+    drop(committed);
+    sink_task.abort();
+    Ok(())
 }
 
 #[test]
@@ -598,6 +801,362 @@ async fn duplicate_secret_policy_occurrences_are_isolated_from_leaf(
         "CLI-shaped oplog JSON must not contain secret plaintext"
     );
     promise_server.abort();
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn shipped_audit_duplicate_occurrences_pass_opaque_secret_and_record_safe_attribution(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    #[tagged_as("audit_middleware")] audit: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::model::agent_secret::{
+        AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
+    };
+    use golem_service_base::model::agent_secret::AgentSecret;
+
+    let (sink_url, sink, sink_task) = start_audit_sink(false).await;
+    let context = TestContext::new(last_unique_id);
+    let environment = Arc::new(TestEnvironmentStateService::default());
+    let plaintext = "audit-must-never-record-this-plaintext";
+    environment.set_agent_secret(AgentSecret {
+        id: AgentSecretId::new(),
+        environment_id: context.default_environment_id,
+        path: CanonicalAgentSecretPath(vec!["toolSecret".to_string()]),
+        revision: AgentSecretRevision::INITIAL,
+        secret_type: SchemaGraph::anonymous(SchemaType::string()),
+        secret_value: Some(SchemaValue::String(plaintext.to_string())),
+    });
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment.clone()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let audit_component = executor
+        .component_dep(&context.default_environment_id, audit)
+        .store()
+        .await?;
+    let provider_metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", provider.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    let audit_metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join("../builtin-tools/audit-middleware.wasm"),
+        false,
+        true,
+    )
+    .await?;
+    let definition = audit_metadata
+        .tool_middlewares
+        .iter()
+        .find(|definition| definition.name == "audit")
+        .expect("shipped audit middleware metadata");
+    let agent_type = AgentTypeName("ToolSecretCaller".to_string());
+    let tool_name = ToolName::try_from("secret-policy-probe").unwrap();
+    let mut deployment = deployment_state(
+        context.account_id,
+        provider_component.id,
+        provider_component.revision,
+        "golem-it:tool-streaming-rust-provider",
+        agent_type.0.as_str(),
+        provider_metadata.tools,
+    );
+    install_middleware_chain(
+        &mut deployment,
+        &agent_type,
+        &tool_name,
+        audit_component.id,
+        audit_component.revision,
+        "golem:audit-middleware",
+        &audit_metadata.tool_middlewares,
+        vec![
+            (
+                definition.name.as_str(),
+                audit_middleware_parameters(definition, "security", &sink_url),
+            ),
+            (
+                definition.name.as_str(),
+                audit_middleware_parameters(definition, "operations", &sink_url),
+            ),
+        ],
+    );
+    let occurrences = &mut deployment
+        .tool_middleware_chains
+        .get_mut(&ToolBindingOwner::AgentType {
+            agent_type_name: agent_type.clone(),
+        })
+        .unwrap()
+        .get_mut(&tool_name)
+        .unwrap()
+        .occurrences;
+    for occurrence in occurrences.iter_mut() {
+        occurrence.secret_keys_readable = SecretKeyScope::Keys(Default::default());
+        occurrence.secret_keys_revealable = SecretKeyScope::Keys(Default::default());
+    }
+    assert!(occurrences.iter().all(|occurrence| {
+        occurrence.secret_keys_readable == SecretKeyScope::Keys(Default::default())
+            && occurrence.secret_keys_revealable == SecretKeyScope::Keys(Default::default())
+    }));
+    environment.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment),
+    );
+
+    let agent_id = agent_id!("ToolSecretCaller", "shipped-audit-secret");
+    let evidence = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &agent_id,
+            "inspect_secret_policy",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<SecretPolicyEvidence>()?;
+    assert!(
+        evidence.leaf_revealed,
+        "leaf independently consumes the secret"
+    );
+    assert!(
+        evidence.middleware.is_empty(),
+        "audit does not alter the result"
+    );
+
+    let committed = sink.committed.lock().unwrap();
+    assert_eq!(committed.len(), 2, "each duplicate occurrence commits once");
+    let mut labels = committed
+        .values()
+        .map(|record| record["occurrenceLabel"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    labels.sort_unstable();
+    assert_eq!(labels, ["operations", "security"]);
+    for (key, record) in committed.iter() {
+        assert_eq!(record["version"], 1);
+        assert_eq!(record["policyInvocationKey"], key.as_str());
+        assert_eq!(record["toolName"], "secret-policy-probe");
+        assert_eq!(record["input"]["secretHandles"], 1);
+        assert_eq!(record["outcome"]["kind"], "success");
+        assert_eq!(record["principal"]["kind"], "anonymous");
+        assert!(
+            record["owner"]["agentId"]
+                .as_str()
+                .is_some_and(|owner| owner.contains("shipped-audit-secret"))
+        );
+        assert!(!record.to_string().contains(plaintext));
+    }
+    let keys = committed.keys().collect::<Vec<_>>();
+    assert_ne!(keys[0], keys[1], "occurrences have distinct logical keys");
+    drop(committed);
+    assert_eq!(sink.attempts.lock().unwrap().len(), 2);
+    sink_task.abort();
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn shipped_audit_sink_deduplicates_crash_after_commit_and_keeps_pinned_policy(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    #[tagged_as("audit_middleware")] audit: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let (sink_url, sink, sink_task) = start_audit_sink(true).await;
+    let context = TestContext::new(last_unique_id);
+    let environment = Arc::new(TestEnvironmentStateService::default());
+    let overrides = TestExecutorOverrides {
+        environment_state_service: Some(environment.clone()),
+        ..Default::default()
+    };
+    let mut executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let audit_component = executor
+        .component_dep(&context.default_environment_id, audit)
+        .store()
+        .await?;
+    let provider_metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", provider.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    let audit_metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join("../builtin-tools/audit-middleware.wasm"),
+        false,
+        true,
+    )
+    .await?;
+    let definition = audit_metadata
+        .tool_middlewares
+        .iter()
+        .find(|definition| definition.name == "audit")
+        .expect("shipped audit middleware metadata");
+    let agent_type = AgentTypeName("ToolStreamingCaller".to_string());
+    let tool_name = ToolName::try_from("middleware-probe").unwrap();
+    let mut deployment = deployment_state(
+        context.account_id,
+        provider_component.id,
+        provider_component.revision,
+        "golem-it:tool-streaming-rust-provider",
+        agent_type.0.as_str(),
+        provider_metadata.tools,
+    );
+    install_middleware_chain(
+        &mut deployment,
+        &agent_type,
+        &tool_name,
+        audit_component.id,
+        audit_component.revision,
+        "golem:audit-middleware",
+        &audit_metadata.tool_middlewares,
+        vec![(
+            definition.name.as_str(),
+            audit_middleware_parameters(definition, "pinned-before-crash", &sink_url),
+        )],
+    );
+    environment.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment.clone()),
+    );
+    let agent_id = agent_id!("ToolStreamingCaller", "audit-crash-window");
+    let worker_id = executor
+        .start_agent(&caller_component.id, agent_id.clone())
+        .await?;
+    let invocation_key = IdempotencyKey::fresh();
+    let invocation = {
+        let executor = executor.clone();
+        let caller_component = caller_component.clone();
+        let agent_id = agent_id.clone();
+        let invocation_key = invocation_key.clone();
+        tokio::spawn(async move {
+            executor
+                .invoke_and_await_agent_with_key(
+                    &caller_component,
+                    &agent_id,
+                    &invocation_key,
+                    "middleware_probe_once",
+                    data_value!("logical-call"),
+                )
+                .await
+        })
+    };
+    sink.committed_while_blocked.notified().await;
+    assert_eq!(sink.attempts.lock().unwrap().len(), 1);
+    assert_eq!(sink.committed.lock().unwrap().len(), 1);
+
+    let owner = ToolBindingOwner::AgentType {
+        agent_type_name: agent_type.clone(),
+    };
+    deployment
+        .tool_middleware_chains
+        .get_mut(&owner)
+        .unwrap()
+        .get_mut(&tool_name)
+        .unwrap()
+        .occurrences[0]
+        .parameters = audit_middleware_parameters(definition, "changed-after-crash", &sink_url);
+    environment.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment),
+    );
+    invocation.abort();
+    let _ = invocation.await;
+    drop(executor);
+    executor = start_with_overrides(deps, &context, overrides).await?;
+    let result: String = executor
+        .invoke_and_await_agent_with_key(
+            &caller_component,
+            &agent_id,
+            &invocation_key,
+            "middleware_probe_once",
+            data_value!("logical-call"),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(result, "leaf(logical-call)");
+
+    let attempts = sink.attempts.lock().unwrap();
+    assert_eq!(
+        attempts.len(),
+        2,
+        "delivery attempt repeats after the crash"
+    );
+    assert_eq!(attempts[0].0, attempts[1].0, "logical key is replay-stable");
+    assert_eq!(
+        attempts[1].1["occurrenceLabel"], "pinned-before-crash",
+        "reconstruction uses the admitted policy occurrence"
+    );
+    drop(attempts);
+    assert_eq!(
+        sink.committed.lock().unwrap().len(),
+        1,
+        "sink commits one logical record"
+    );
+
+    let duplicate: String = executor
+        .invoke_and_await_agent_with_key(
+            &caller_component,
+            &agent_id,
+            &invocation_key,
+            "middleware_probe_once",
+            data_value!("logical-call"),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(duplicate, "leaf(logical-call)");
+    assert_eq!(
+        sink.attempts.lock().unwrap().len(),
+        2,
+        "completed replay does not contact the sink"
+    );
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        entity_starts(&oplog, PublicAgentEntityKind::ToolMiddleware, "audit").len(),
+        1,
+        "one logical audit entity invocation"
+    );
+    sink_task.abort();
     Ok(())
 }
 

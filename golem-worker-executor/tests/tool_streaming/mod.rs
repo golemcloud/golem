@@ -102,6 +102,10 @@ inherit_test_dep!(
     PrecompiledComponent
 );
 inherit_test_dep!(
+    #[tagged_as("audit_middleware")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
     #[tagged_as("tool_streaming_ts_provider")]
     PrecompiledComponent
 );
@@ -1167,6 +1171,22 @@ fn secret_policy_middleware_parameters(
         definition.parameter_schema.clone(),
         SchemaValue::Record {
             fields: vec![SchemaValue::String(label.to_string())],
+        },
+    )
+}
+
+fn audit_middleware_parameters(
+    definition: &ToolMiddleware,
+    label: &str,
+    sink_url: &str,
+) -> TypedSchemaValue {
+    TypedSchemaValue::new(
+        definition.parameter_schema.clone(),
+        SchemaValue::Record {
+            fields: vec![
+                SchemaValue::String(label.to_string()),
+                SchemaValue::String(sink_url.to_string()),
+            ],
         },
     )
 }

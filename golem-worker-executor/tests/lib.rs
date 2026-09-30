@@ -241,6 +241,12 @@ test_component!(
     "golem:filesystem-tools"
 );
 test_component!(
+    audit_middleware,
+    "audit_middleware",
+    "../builtin-tools/audit-middleware",
+    "golem:audit-middleware"
+);
+test_component!(
     tool_streaming_ts_provider,
     "tool_streaming_ts_provider",
     "golem_it_tool_streaming_ts_provider",

@@ -1641,12 +1641,15 @@ cd ../..
 ## BUILT-IN TOOLS
 [tasks.build-builtin-tools]
 dependencies = ["wit"]
-description = "Builds the built-in filesystem tool component"
+description = "Builds the built-in tool and middleware components"
 script_runner = "@duckscript"
 script = '''
 exec --fail-on-error cargo build -p golem --bin golem
 golem = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/debug/golem"
 cd builtin-tools/filesystem-tools
+exec --fail-on-error ${golem} build -P release --force-build --yes
+exec --fail-on-error ${golem} exec -P release copy
+cd ../audit-middleware
 exec --fail-on-error ${golem} build -P release --force-build --yes
 exec --fail-on-error ${golem} exec -P release copy
 cd ../..

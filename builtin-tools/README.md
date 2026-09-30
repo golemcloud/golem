@@ -1,4 +1,4 @@
-# Built-in tools
+# Built-in tools and middleware
 
 Built-in tools are tool components shipped as bytes in the registry-service binary and provisioned
 at registry startup. `BUILTIN_TOOLS` in
@@ -7,6 +7,10 @@ at registry startup. `BUILTIN_TOOLS` in
 The filesystem tools are implemented in Rust under `builtin-tools/filesystem-tools/` and built
 into `builtin-tools/filesystem-tools.wasm`. The component provides the `read-file`, `write-file`, and
 `edit-file` tools.
+
+The reusable Audit policy is implemented under `builtin-tools/audit-middleware/` and built into
+`builtin-tools/audit-middleware.wasm`. Its package README defines the sink and idempotency contract
+and includes a runnable duplicate-occurrence binding.
 
 ## Adding a component-implemented built-in tool
 
