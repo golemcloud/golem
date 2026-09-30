@@ -21,7 +21,8 @@ use crate::sharding::error::ShardManagerError;
 use crate::sharding::etcd_connection::connect_for_election;
 use crate::sharding::etcd_retry::{RETRY_MAX, RETRY_MIN, retry_retriable_until};
 use etcd_client::{
-    Client, Compare, CompareOp, LeaderKey, LeaseClient, LeaseKeepAliveStream, LeaseKeeper,
+    Client, Compare, CompareOp, LeaderKey, LeaseClient, LeaseKeepAliveStream, LeaseKeeper, TxnOp,
+    TxnOpResponse, TxnResponse,
 };
 use golem_common::retriable_error::IsRetriableError;
 use std::collections::VecDeque;
@@ -95,6 +96,26 @@ impl LeaderFence {
     /// The compare that makes leadership a precondition of a transaction.
     pub fn compare(&self) -> Compare {
         Compare::create_revision(self.key.clone(), CompareOp::Equal, self.create_revision)
+    }
+
+    /// The operation a fenced transaction's else-branch starts with, so that a refusal can be
+    /// attributed by [`Self::held_after_refusal`].
+    pub fn read_back(&self) -> TxnOp {
+        TxnOp::get(self.key.clone(), None)
+    }
+
+    /// Whether a transaction carrying [`Self::compare`] was refused while this fence still held,
+    /// judged from its else-branch, which must start with [`Self::read_back`]. If it did, some
+    /// other precondition failed. Leadership that cannot be confirmed - a missing or recreated
+    /// leader key, or no else-response at all - is reported as not held, which is the safe answer.
+    pub fn held_after_refusal(&self, response: &TxnResponse) -> bool {
+        matches!(
+            response.op_responses().first(),
+            Some(TxnOpResponse::Get(get))
+                if get.kvs().first().is_some_and(|kv| {
+                    kv.create_revision() == self.create_revision
+                })
+        )
     }
 }
 

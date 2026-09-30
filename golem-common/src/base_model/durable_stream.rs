@@ -416,6 +416,38 @@ pub enum StreamSourceKind {
 pub enum SessionStreamRole {
     Input,
     Output,
+    ToolStdin,
+    ToolStdout,
+    ToolStderr,
+}
+
+impl SessionStreamRole {
+    pub fn direction(self) -> Self {
+        match self {
+            Self::ToolStdin => Self::Input,
+            Self::ToolStdout | Self::ToolStderr => Self::Output,
+            role => role,
+        }
+    }
+
+    pub fn tool_byte_stream_role(self) -> Option<ToolByteStreamRole> {
+        match self {
+            Self::ToolStdin => Some(ToolByteStreamRole::Stdin),
+            Self::ToolStdout => Some(ToolByteStreamRole::Stdout),
+            Self::ToolStderr => Some(ToolByteStreamRole::Stderr),
+            Self::Input | Self::Output => None,
+        }
+    }
+}
+
+#[derive(
+    Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema,
+)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+pub enum ToolByteStreamRole {
+    Stdin,
+    Stdout,
+    Stderr,
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema)]
@@ -1569,13 +1601,13 @@ impl StreamSessionRecord {
                     && record
                         .stream_mappings
                         .iter()
-                        .filter(|mapping| mapping.role == SessionStreamRole::Input)
+                        .filter(|mapping| mapping.role.direction() == SessionStreamRole::Input)
                         .count()
                         == record.attempt.invocation.stream_handles.len()
                     && record
                         .stream_mappings
                         .iter()
-                        .filter(|mapping| mapping.role == SessionStreamRole::Input)
+                        .filter(|mapping| mapping.role.direction() == SessionStreamRole::Input)
                         .zip(&record.attempt.invocation.stream_handles)
                         .all(|(binding, original)| match &binding.source {
                             StreamRecordReference::Local(_) => true,
@@ -1709,7 +1741,7 @@ impl StreamSessionRecord {
                     && record.stream_mappings.len() == unique_transport_ids.len()
                     && record.stream_mappings.len() == unique_mappings.len()
                     && record.stream_mappings.iter().all(|mapping| {
-                        mapping.role == SessionStreamRole::Output
+                        mapping.role.direction() == SessionStreamRole::Output
                             && mapping.source.has_supported_format()
                     })
             }
@@ -1817,7 +1849,8 @@ mod tests {
         PersistedInvocationTarget, PersistedStreamInvocationDescriptor, SessionStreamRole,
         StartAttemptDescriptor, StreamAttachmentKey, StreamBindingRecord,
         StreamConsumerItemValueRecord, StreamId, StreamInvocationId, StreamOffset,
-        StreamOffsetError, StreamRecordReference, StreamSessionExpiryPolicy,
+        StreamOffsetError, StreamRecordReference, StreamRegistrationInvocation,
+        StreamSessionExpiryPolicy, StreamSessionInvocationResultRecord,
         StreamSessionPreparedRecord, StreamSessionRecord,
     };
     use crate::base_model::component::{ComponentId, ComponentRevision};
@@ -2191,12 +2224,12 @@ mod tests {
                 StreamBindingRecord {
                     transport_stream_id: 10,
                     source: StreamRecordReference::Foreign(stdin),
-                    role: SessionStreamRole::Input,
+                    role: SessionStreamRole::ToolStdin,
                 },
                 StreamBindingRecord {
                     transport_stream_id: 11,
                     source: StreamRecordReference::Foreign(stdout),
-                    role: SessionStreamRole::Output,
+                    role: SessionStreamRole::ToolStdout,
                 },
                 StreamBindingRecord {
                     transport_stream_id: 12,
@@ -2207,10 +2240,24 @@ mod tests {
         };
 
         assert!(StreamSessionRecord::Prepared(prepared.clone()).has_supported_format());
+        let mut stderr_mapping = prepared.stream_mappings[1].clone();
+        stderr_mapping.transport_stream_id = 13;
+        stderr_mapping.role = SessionStreamRole::ToolStderr;
+        assert!(
+            StreamSessionRecord::InvocationResult(StreamSessionInvocationResultRecord {
+                format_version: 1,
+                session_key: StreamRegistrationInvocation::Remote(
+                    prepared.attempt.invocation.session_key.clone(),
+                ),
+                result: Vec::new(),
+                stream_mappings: vec![prepared.stream_mappings[1].clone(), stderr_mapping],
+            })
+            .has_supported_format()
+        );
 
         prepared.stream_mappings[0].role = SessionStreamRole::Output;
         assert!(!StreamSessionRecord::Prepared(prepared.clone()).has_supported_format());
-        prepared.stream_mappings[0].role = SessionStreamRole::Input;
+        prepared.stream_mappings[0].role = SessionStreamRole::ToolStdin;
         prepared.stream_mappings[1].transport_stream_id = 10;
         assert!(!StreamSessionRecord::Prepared(prepared.clone()).has_supported_format());
         prepared.stream_mappings[1].transport_stream_id = 11;

@@ -26,9 +26,10 @@ use crate::services::oplog::reader::{
 use crate::services::oplog::{
     CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, OpenOplogs, Oplog,
     OplogAddReceipt, OplogCloseCompletion, OplogConstructor, OplogError, OplogFence,
-    OplogLifecycleGuard, OplogService, OrderedOplogStart, PendingUpload, ReservedPayload,
-    ReservedRawStartBuilder, decode_scan_cursor, next_scan_cursor, record_owning_epoch,
-    refuse_if_fenced, retry_scan_storage_op, retry_storage_op_fenceable,
+    OplogLifecycleGuard, OplogService, OrderedOplogStart, PendingUpload,
+    RawOplogPayloadDownloadError, ReservedPayload, ReservedRawStartBuilder, decode_scan_cursor,
+    next_scan_cursor, record_owning_epoch, refuse_if_fenced, retry_scan_storage_op,
+    retry_storage_op_fenceable,
 };
 use crate::storage::indexed::{
     IndexedStorage, IndexedStorageError, IndexedStorageLabelledApi, IndexedStorageMetaNamespace,
@@ -566,19 +567,41 @@ impl PrimaryOplogService {
         payload_id: PayloadId,
         md5_hash: Vec<u8>,
     ) -> Result<Vec<u8>, String> {
-        blob_storage
-                    .with("oplog", "download_payload")
-                    .get_raw(
-                        BlobStorageNamespace::OplogPayload {
-                            environment_id: owned_agent_id.environment_id(),
-                            agent_id: owned_agent_id.agent_id(),
-                            agent_mode,
-                        },
-                        Path::new(&format!("{}/{}", hex::encode(&md5_hash), payload_id.0)),
-                    )
-                    .await
-                    .map_err(|e| format!("Failed downloading oplog data from the blob store {e}"))?
-                    .ok_or(format!("Payload not found (worker: {owned_agent_id}, payload_id: {payload_id}, md5 hash: {md5_hash:02X?})"))
+        Self::download_raw_payload_classified(
+            blob_storage,
+            owned_agent_id,
+            agent_mode,
+            payload_id,
+            md5_hash,
+        )
+        .await
+        .map_err(|error| error.to_string())
+    }
+
+    async fn download_raw_payload_classified(
+        blob_storage: Arc<dyn BlobStorage + Send + Sync>,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        payload_id: PayloadId,
+        md5_hash: Vec<u8>,
+    ) -> Result<Vec<u8>, RawOplogPayloadDownloadError> {
+        let result = blob_storage
+            .with("oplog", "download_payload")
+            .get_raw(
+                BlobStorageNamespace::OplogPayload {
+                    environment_id: owned_agent_id.environment_id(),
+                    agent_id: owned_agent_id.agent_id(),
+                    agent_mode,
+                },
+                Path::new(&format!("{}/{}", hex::encode(&md5_hash), payload_id.0)),
+            )
+            .await
+            .map_err(|error| {
+                RawOplogPayloadDownloadError::Backend(
+                    error.context("failed downloading oplog data from the blob store"),
+                )
+            })?;
+        result.ok_or(RawOplogPayloadDownloadError::Missing(payload_id))
     }
 }
 
@@ -1097,6 +1120,23 @@ impl OplogService for PrimaryOplogService {
         md5_hash: Vec<u8>,
     ) -> Result<Vec<u8>, String> {
         Self::download_raw_payload(
+            self.blob_storage.clone(),
+            owned_agent_id,
+            agent_mode,
+            payload_id,
+            md5_hash,
+        )
+        .await
+    }
+
+    async fn download_raw_payload_classified(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        payload_id: PayloadId,
+        md5_hash: Vec<u8>,
+    ) -> Result<Vec<u8>, RawOplogPayloadDownloadError> {
+        Self::download_raw_payload_classified(
             self.blob_storage.clone(),
             owned_agent_id,
             agent_mode,
@@ -2484,6 +2524,22 @@ impl Oplog for PrimaryOplog {
     ) -> Result<Vec<u8>, String> {
         let ctx = self.run_job(|done| OplogJob::BlobContext { done }).await;
         PrimaryOplogService::download_raw_payload(
+            ctx.blob_storage,
+            &ctx.owned_agent_id,
+            ctx.agent_mode,
+            payload_id,
+            md5_hash,
+        )
+        .await
+    }
+
+    async fn download_raw_payload_classified(
+        &self,
+        payload_id: PayloadId,
+        md5_hash: Vec<u8>,
+    ) -> Result<Vec<u8>, RawOplogPayloadDownloadError> {
+        let ctx = self.run_job(|done| OplogJob::BlobContext { done }).await;
+        PrimaryOplogService::download_raw_payload_classified(
             ctx.blob_storage,
             &ctx.owned_agent_id,
             ctx.agent_mode,

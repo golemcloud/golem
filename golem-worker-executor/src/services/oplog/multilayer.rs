@@ -25,8 +25,8 @@ use crate::services::oplog::reader::{OplogRead, OplogReadError, OplogReadSource,
 use crate::services::oplog::{
     CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, OpenOplogs, Oplog,
     OplogAddReceipt, OplogCloseCompletion, OplogConstructor, OplogError, OplogFence,
-    OplogLifecycleGuard, OplogService, OrderedOplogStart, ReservedRawStartBuilder,
-    decode_scan_cursor, downcast_oplog, first_scan_cursor,
+    OplogLifecycleGuard, OplogService, OrderedOplogStart, RawOplogPayloadDownloadError,
+    ReservedRawStartBuilder, decode_scan_cursor, downcast_oplog, first_scan_cursor,
 };
 use crate::storage::indexed::IndexedStorageMetaNamespace;
 use async_trait::async_trait;
@@ -1000,6 +1000,18 @@ impl OplogService for MultiLayerOplogService {
             .download_raw_payload(owned_agent_id, agent_mode, payload_id, md5_hash)
             .await
     }
+
+    async fn download_raw_payload_classified(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        payload_id: PayloadId,
+        md5_hash: Vec<u8>,
+    ) -> Result<Vec<u8>, RawOplogPayloadDownloadError> {
+        self.primary
+            .download_raw_payload_classified(owned_agent_id, agent_mode, payload_id, md5_hash)
+            .await
+    }
 }
 
 pub struct MultiLayerOplog {
@@ -1456,6 +1468,16 @@ impl Oplog for MultiLayerOplog {
     ) -> Result<Vec<u8>, String> {
         self.primary
             .download_raw_payload(payload_id, md5_hash)
+            .await
+    }
+
+    async fn download_raw_payload_classified(
+        &self,
+        payload_id: PayloadId,
+        md5_hash: Vec<u8>,
+    ) -> Result<Vec<u8>, RawOplogPayloadDownloadError> {
+        self.primary
+            .download_raw_payload_classified(payload_id, md5_hash)
             .await
     }
 

@@ -20,7 +20,7 @@ Golem Cloud is the hosted version of Golem. To deploy agents to Golem Cloud you 
 The CLI ships with a built-in `cloud` profile that points to `https://release.api.golem.cloud` with OAuth2 authentication. You can use it directly:
 
 ```shell
-golem -C profile get          # Show the built-in cloud profile
+golem profile get cloud       # Show the built-in cloud profile
 ```
 
 If you need a custom cloud profile (e.g., for a different cloud endpoint):
@@ -66,7 +66,7 @@ After authentication, you can manage your Golem Cloud account:
 
 ```shell
 golem -C account get                                                # View account info
-golem -C account update "My Name" "me@example.com"                  # Update name/email
+golem -C account update "My Name"                                   # Update name (email is immutable)
 golem -C account new "Team Account" "team@example.com"              # Create additional account
 ```
 
@@ -77,7 +77,7 @@ Create static API tokens:
 ```shell
 golem -C api-token list                                             # List existing tokens
 golem -C api-token new                                              # Create a new token (default: expires 2100-01-01)
-golem -C api-token new --expires-at 2025-12-31T00:00:00Z            # Create with custom expiry
+golem -C api-token new --expires-at 2027-12-31T00:00:00Z            # Create with custom expiry
 golem -C api-token delete <TOKEN_ID>                                # Delete a token
 ```
 
@@ -119,7 +119,7 @@ golem -C deploy               # Deploy to cloud using the cloud environment
 Or explicitly:
 
 ```shell
-golem -e cloud deploy         # Deploy using the named "cloud" environment
+golem -E cloud deploy         # Deploy using the named "cloud" environment
 ```
 
 ## Using the `-C` and `-L` Shortcuts

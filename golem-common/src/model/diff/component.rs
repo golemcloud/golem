@@ -268,6 +268,7 @@ mod tests {
     fn tool_config(environment_binding: Option<ToolBindingInput>) -> ToolDeploymentConfig {
         ToolDeploymentConfig {
             definition: Tool {
+                requires_filesystem: false,
                 version: "1.0.0".to_string(),
                 commands: CommandTree { nodes: Vec::new() },
                 schema: SchemaGraph::empty(),

@@ -1,0 +1,38 @@
+name: "add-turso-rust"
+steps:
+  - id: "create-project"
+    only_if:
+      language: "rust"
+    create_project:
+      name: test-app
+    verify:
+      build: true
+      deploy: true
+
+  - id: "add-turso-agent"
+    only_if:
+      language: "rust"
+    prompt: >
+      In test-app, add an ephemeral agent named TursoAgent whose constructor takes one string. Add
+      the exact proven prerelease Turso dependency with default features disabled. Implement an
+      async `round_trip` method taking and returning a string. For each invocation, create a local
+      :memory: Turso database with IoBackend::Memory, create a table, insert the input through a
+      bound parameter, query it, and return the decoded value. Make sure the project builds and
+      deploys.
+    expectedSkills:
+      - "golem-add-turso-rust"
+    verify:
+      build: true
+      deploy: true
+
+  - id: "verify-turso-round-trip"
+    only_if:
+      language: "rust"
+    invoke_json:
+      agent: 'TursoAgent("db-test")'
+      method: "round_trip"
+      args: '"turso-ok"'
+    expect:
+      result_json:
+        - path: "$"
+          equals: "turso-ok"

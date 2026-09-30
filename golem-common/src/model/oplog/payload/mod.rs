@@ -410,6 +410,7 @@ oplog_payload! {
             input_decode_failure: Option<ToolInputDecodeFailure>,
             has_stdin: bool,
             has_stdout: bool,
+            has_stderr: bool,
             call_mode: EntityCallMode,
             error: SerializableToolRpcError,
         },

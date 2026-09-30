@@ -29,6 +29,10 @@
 
 use crate::bindings::golem::quota::types;
 use crate::schema::wit::GuestQuotaTokenHandle;
+use crate::schema::wit::direct::{
+    FromWire, IntoWire, WireError, WirePreflight, WireReader, WireSchema, WireSchemaBuilder,
+    WireWriter,
+};
 use std::time::Duration;
 
 #[cfg(feature = "export_golem_agentic")]
@@ -195,6 +199,34 @@ impl QuotaToken {
 const TOKEN_CONSUMED: &str = "quota token has already been transferred and can no longer be used; split the token first if \
      you need to both keep and send a capability";
 
+impl WireSchema for QuotaToken {
+    fn wire_type_id() -> String {
+        "golem.core.QuotaToken".to_string()
+    }
+
+    fn append_schema(builder: &mut WireSchemaBuilder) -> i32 {
+        GuestQuotaTokenHandle::append_schema(builder)
+    }
+}
+
+impl FromWire for QuotaToken {
+    fn read_wire(reader: &mut WireReader, index: i32) -> Result<Self, WireError> {
+        Ok(Self {
+            handle: GuestQuotaTokenHandle::read_wire(reader, index)?,
+        })
+    }
+}
+
+impl IntoWire for QuotaToken {
+    fn preflight(&self, resources: &mut WirePreflight) -> Result<(), WireError> {
+        self.handle.preflight(resources)
+    }
+
+    fn write_wire(&self, writer: &mut WireWriter) -> Result<i32, WireError> {
+        self.handle.write_wire(writer)
+    }
+}
+
 #[cfg(feature = "export_golem_agentic")]
 impl IntoSchema for QuotaToken {
     fn type_id() -> TypeId {
@@ -253,4 +285,61 @@ where
     let (used, value) = f(&reservation);
     reservation.commit(used);
     Ok(value)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::schema::wit::{direct, wire};
+    use test_r::test;
+
+    #[test]
+    fn direct_quota_preflight_is_atomic_and_transfer_is_affine() {
+        let first = GuestQuotaTokenHandle::new(unsafe { types::QuotaToken::from_handle(17) });
+        let second = GuestQuotaTokenHandle::new(unsafe { types::QuotaToken::from_handle(29) });
+        let tokens = vec![
+            QuotaToken {
+                handle: first.clone(),
+            },
+            QuotaToken {
+                handle: second.clone(),
+            },
+            QuotaToken {
+                handle: second.clone(),
+            },
+        ];
+        assert!(matches!(
+            direct::encode(&tokens),
+            Err(WireError::AliasedResource(_))
+        ));
+        assert!(first.is_present());
+        assert!(second.is_present());
+
+        let tokens = (
+            QuotaToken {
+                handle: first.clone(),
+            },
+            QuotaToken {
+                handle: second.clone(),
+            },
+        );
+        let tree = direct::encode(&tokens).unwrap();
+        assert!(!first.is_present());
+        assert!(!second.is_present());
+        assert!(matches!(
+            direct::encode(&tokens),
+            Err(WireError::ConsumedResource(_))
+        ));
+        let decoded = direct::decode::<(QuotaToken, QuotaToken)>(tree).unwrap();
+        let forwarded = direct::encode(&decoded).unwrap();
+        let handles = forwarded
+            .value_nodes
+            .into_iter()
+            .filter_map(|node| match node {
+                wire::SchemaValueNode::QuotaTokenHandle(handle) => Some(handle.take_handle()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(handles, vec![17, 29]);
+    }
 }

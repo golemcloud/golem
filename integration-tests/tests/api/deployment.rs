@@ -29,7 +29,7 @@ use golem_common::model::deployment::{
 };
 use golem_common::model::diff::{
     Deployment as DiffDeployment, EffectiveToolBinding,
-    RemoteToolDeployment as DiffRemoteToolDeployment, tool_middleware_binding_inputs,
+    RemoteToolDeployment as DiffRemoteToolDeployment, ToolMiddlewareBindingInput,
 };
 use golem_common::model::diff::{Hash, Hashable};
 use golem_common::model::domain_registration::{Domain, DomainRegistrationCreation};
@@ -69,6 +69,7 @@ inherit_test_dep!(EnvBasedTestDependencies);
 fn cross_account_tool(version: &str) -> Tool {
     Tool {
         version: version.to_string(),
+        requires_filesystem: false,
         commands: CommandTree {
             nodes: vec![CommandNode {
                 name: "search".to_string(),
@@ -83,6 +84,7 @@ fn cross_account_tool(version: &str) -> Tool {
                     constraints: Vec::new(),
                     stdin: None,
                     stdout: None,
+                    stderr: None,
                     result: None,
                     errors: Vec::new(),
                     annotations: None,
@@ -171,6 +173,20 @@ fn remote_tool_hash_input(
     } else {
         BTreeMap::new()
     };
+    let agent_middleware_bindings = if bind_to_host_api {
+        BTreeMap::from([(
+            AgentTypeName("GolemHostApi".to_string()),
+            ToolMiddlewareBindingInput {
+                config_keys_readable: Default::default(),
+                secret_keys_readable: consumer_secret_scope(),
+                secret_keys_revealable: consumer_secret_scope(),
+                middleware: None,
+                middleware_merge_mode: None,
+            },
+        )])
+    } else {
+        BTreeMap::new()
+    };
     DiffRemoteToolDeployment {
         release_id: grant.release.id,
         version: grant.release.version.clone(),
@@ -187,6 +203,9 @@ fn remote_tool_hash_input(
         },
         component_bindings: BTreeMap::new(),
         bindings,
+        environment_middleware_binding: None,
+        component_middleware_bindings: BTreeMap::new(),
+        agent_middleware_bindings,
     }
 }
 
@@ -198,34 +217,6 @@ fn add_remote_tool_hash_input(
     deployment
         .remote_tools
         .insert(remote.name.to_string(), hash_input.into());
-
-    let environment_bindings = remote
-        .environment_binding
-        .iter()
-        .map(|binding| (remote.name.clone(), binding.clone()))
-        .collect();
-    let agent_bindings = remote
-        .agent_bindings
-        .iter()
-        .map(|(agent, binding)| {
-            (
-                agent.clone(),
-                BTreeMap::from([(remote.name.clone(), binding.clone())]),
-            )
-        })
-        .collect();
-    let (environment_bindings, agent_bindings) =
-        tool_middleware_binding_inputs(&environment_bindings, &agent_bindings);
-    deployment
-        .environment_tool_middleware_bindings
-        .extend(environment_bindings);
-    for (agent, bindings) in agent_bindings {
-        deployment
-            .agent_tool_middleware_bindings
-            .entry(agent)
-            .or_default()
-            .extend(bindings);
-    }
 }
 
 fn deployment_creation(
@@ -329,6 +320,29 @@ async fn deploy_environment(deps: &EnvBasedTestDependencies) -> anyhow::Result<(
         assert_eq!(fetched_deployment.deployment_hash, plan.deployment_hash);
         assert_eq!(fetched_deployment.components, plan.components);
     }
+
+    Ok(())
+}
+
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn deploys_newly_staged_provider_with_tool_binding(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let (_, env) = user.app_and_env().await?;
+
+    user.component(&env.id, "golem_it_tool_streaming_rust_caller_release")
+        .name("golem-it:tool-streaming-rust-caller")
+        .store()
+        .await?;
+
+    user.component(&env.id, "golem_it_tool_streaming_rust_provider_release")
+        .name("golem-it:tool-streaming-rust-provider")
+        .with_tool_agent_binding("streaming", "ToolStreamingCaller")?
+        .store()
+        .await?;
 
     Ok(())
 }

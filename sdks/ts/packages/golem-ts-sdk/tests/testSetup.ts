@@ -85,7 +85,7 @@ vi.mock('golem:tool/host@0.1.0', () => {
   }));
   return {
     createStdin: vi.fn(),
-    createStdout: vi.fn(),
+    createOutput: vi.fn(),
     ToolRpc: Object.assign(rpc, { create: rpc }),
   };
 });

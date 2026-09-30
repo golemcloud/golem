@@ -171,13 +171,20 @@ fn decode_public_agent_config(
                         ),
                     )
                 })?;
-            let value = decode_public_json_schema_value(
+            let value = golem_common::schema::render::from_json_value(
                 graph,
                 &declaration.value_type,
                 &entry.value,
-                PublicStreamReferencePolicy::None,
-                |_, _| unreachable!("configuration stream references are disabled by policy"),
-            )?;
+            )
+            .map_err(|error| {
+                PublicSchemaValueError::new(
+                    PublicErrorCode::ValidationError,
+                    format!(
+                        "config value for path {} does not match its schema: {error}",
+                        entry.path.join(".")
+                    ),
+                )
+            })?;
             let value =
                 golem_schema::schema::render::to_json_value(graph, &declaration.value_type, &value)
                     .map_err(|error| {
@@ -632,6 +639,7 @@ pub struct PublicToolSessionStart {
     pub input: PublicTypedValue,
     pub stdin: bool,
     pub stdout: bool,
+    pub stderr: bool,
     pub idempotency_key: String,
     pub attempt_id: uuid::Uuid,
     pub expected_deployment_revision: Option<DeploymentRevision>,
@@ -2491,7 +2499,7 @@ impl WorkerService {
             }
             Some(metadata.fingerprint.0.into())
         };
-        let input_schema = start.input.schema;
+        let input_schema = start.input.graph;
         let input = decode_public_json_schema_value(
             &input_schema,
             &input_schema.root,
@@ -2542,6 +2550,7 @@ impl WorkerService {
                 input: Some(input),
                 stdin: start.stdin,
                 stdout: start.stdout,
+                stderr: start.stderr,
                 fresh_owner,
                 expected_deployment_revision: start
                     .expected_deployment_revision
@@ -3117,6 +3126,7 @@ impl WorkerService {
                 input,
                 stdin: false,
                 stdout: false,
+                stderr: false,
                 fresh_owner,
                 expected_deployment_revision: None,
             }),
@@ -3702,19 +3712,19 @@ mod tests {
             vec![
                 PublicConfigEntry {
                     path: vec!["optional".to_string()],
-                    value: serde_json::json!({"$option": "some", "value": "west"}),
+                    value: serde_json::json!("west"),
                 },
                 PublicConfigEntry {
                     path: vec!["result".to_string()],
-                    value: serde_json::json!({"$result": "ok", "value": "ready"}),
+                    value: serde_json::json!({"ok": "ready"}),
                 },
                 PublicConfigEntry {
                     path: vec!["variant".to_string()],
-                    value: serde_json::json!({"$case": "payload", "value": "value"}),
+                    value: serde_json::json!({"payload": "value"}),
                 },
                 PublicConfigEntry {
                     path: vec!["union".to_string()],
-                    value: serde_json::json!({"$union": "command", "value": "cmd:run"}),
+                    value: serde_json::json!("cmd:run"),
                 },
             ],
         )
@@ -5003,12 +5013,18 @@ mod tests {
                     application: "weather-app".to_string(),
                     environment: "prod".to_string(),
                     agent_type: self.agent_type_name.0.clone(),
-                    constructor_parameters: serde_json::json!({}),
+                    constructor_parameters: serde_json::json!({
+                        "kind": "record",
+                        "value": {"fields": []}
+                    }),
                     method: "run".to_string(),
                     phantom_id: None,
                 },
                 config: vec![],
-                method_parameters: serde_json::json!({}),
+                method_parameters: serde_json::json!({
+                    "kind": "record",
+                    "value": {"fields": []}
+                }),
                 idempotency_key: idempotency_key.value,
                 attempt_id: Uuid::new_v4(),
             }
@@ -5881,7 +5897,11 @@ mod tests {
         let mut start = harness.public_invocation_start(IdempotencyKey::fresh());
         let provisional_ref = Uuid::new_v4();
         start.method_parameters = serde_json::json!({
-            "input": {"$stream": {"provisionalRef": provisional_ref}}
+            "kind": "record",
+            "value": {"fields": [{
+                "kind": "stream",
+                "value": {"provisionalRef": provisional_ref}
+            }]}
         });
 
         let _responses = harness
@@ -6713,6 +6733,7 @@ mod tests {
         let tool_name = ToolName::try_from("weather").unwrap();
         let definition = Tool {
             version: "1.0.0".into(),
+            requires_filesystem: false,
             schema: SchemaGraph::empty(),
             commands: CommandTree {
                 nodes: vec![CommandNode {

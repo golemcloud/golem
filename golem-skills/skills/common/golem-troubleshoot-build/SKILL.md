@@ -160,7 +160,7 @@ golem component manifest-trace my-app:main
 To see how the trace changes under a specific environment:
 
 ```shell
-golem component manifest-trace -e staging
+golem component manifest-trace -E staging
 ```
 
 This activates the `staging` environment's presets, letting you verify that environment-specific overrides are applied correctly.

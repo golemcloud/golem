@@ -86,6 +86,7 @@ describe("BridgeTool", () => {
           input,
           undefined,
           false,
+          false,
         )
         return yield* invocation.result
       }),
@@ -125,6 +126,7 @@ describe("BridgeTool", () => {
             },
             undefined,
             true,
+            false,
           )
           expect(invocation.stdout).toBeDefined()
           expect(yield* Stream.runCollect(invocation.stdout!)).toEqual([Uint8Array.of(1, 2)])
@@ -165,6 +167,7 @@ describe("BridgeTool", () => {
           { graph: { defs: new Map(), root: t.record([]) }, value: { tag: "record", fields: [] } },
           undefined,
           true,
+          false,
         ),
       ).pipe(
         Effect.provideService(ToolTransport, transport),

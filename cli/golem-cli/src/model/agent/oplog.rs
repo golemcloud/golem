@@ -92,6 +92,11 @@ fn render_oplog_attribution_lines(attribution: &PublicOplogEntryAttribution) -> 
                 lines.push(format!(
                     "{pad}stdout recording:  none (live attachment only)"
                 ));
+                lines.push(format!("{pad}stderr requested:  {}", tool.has_stderr));
+                lines.push(format!("{pad}stderr declared:   {}", tool.declares_stderr));
+                lines.push(format!(
+                    "{pad}stderr recording:  none (live attachment only)"
+                ));
             }
             lines
         }
@@ -1439,7 +1444,9 @@ mod tests {
                     command_path: vec!["files".to_string(), "lookup".to_string()],
                     has_stdin: true,
                     has_stdout: false,
+                    has_stderr: true,
                     declares_stdout: true,
+                    declares_stderr: true,
                 },
             )),
         };
@@ -1464,6 +1471,9 @@ mod tests {
                 "stdout requested:  false",
                 "stdout declared:   true",
                 "stdout recording:  none (live attachment only)",
+                "stderr requested:  true",
+                "stderr declared:   true",
+                "stderr recording:  none (live attachment only)",
             ],
         );
         assert!(

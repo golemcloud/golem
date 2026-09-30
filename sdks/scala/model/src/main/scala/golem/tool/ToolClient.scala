@@ -81,12 +81,14 @@ trait ToolRpcTransport {
     commandPath: List[String],
     input: TypedSchemaValue,
     stdin: Option[ToolInputStream],
-    stdout: Boolean
+    stdout: Boolean,
+    stderr: Boolean
   ): Either[ToolRpcFailure, ToolRpcStarted]
 }
 
 final case class ToolRpcStarted(
   stdout: Option[ToolInputStream],
+  stderr: Option[ToolInputStream],
   result: Future[Either[ToolRpcFailure, ToolInvokeResult]],
   cancel: () => Unit
 )
@@ -116,7 +118,7 @@ object ToolClientRuntime {
     decodeError: NamedToolError => Either[String, E]
   ): Future[Either[ToolError[E], ToolInvokeResult]] =
     rpc
-      .start(commandPath, input, stdin, stdout = false)
+      .start(commandPath, input, stdin, stdout = false, stderr = false)
       .fold(
         failure => Future.successful(Left(failure): Either[ToolRpcFailure, ToolInvokeResult]),
         _.result
@@ -149,7 +151,7 @@ object ToolClientRuntime {
     stdin: Option[ToolInputStream]
   ): Future[Either[ToolError[Nothing], ToolInvokeResult]] =
     rpc
-      .start(commandPath, input, stdin, stdout = false)
+      .start(commandPath, input, stdin, stdout = false, stderr = false)
       .fold(
         failure => Future.successful(Left(failure): Either[ToolRpcFailure, ToolInvokeResult]),
         _.result
@@ -431,21 +433,32 @@ object ToolClientRuntime {
     commandPath: List[String],
     input: Either[ToolError[Nothing], TypedSchemaValue],
     stdin: Option[ToolInputStream],
+    stdout: Boolean,
+    stderr: Boolean,
     decodeError: NamedToolError => Either[String, E]
   )(decode: ToolInvokeResult => Either[ToolError[E], T]): Either[ToolError[E], ToolInvocation[E, T]] =
     input.left.map(identity[ToolError[E]]).flatMap { record =>
-      rpc.start(commandPath, record, stdin, stdout = true).left.map(mapRpcFailure(_, decodeError)).flatMap { started =>
-        started.stdout.toRight {
-          started.cancel()
-          protocolError("tool invocation did not create declared stdout stream")
-        }.map { stream =>
-          ToolInvocation(
-            stream,
-            started.result.map(_.left.map(mapRpcFailure(_, decodeError)).flatMap(decode)),
-            started.cancel
-          )
+      rpc
+        .start(commandPath, record, stdin, stdout, stderr)
+        .left
+        .map(mapRpcFailure(_, decodeError))
+        .flatMap { started =>
+          if (stdout && started.stdout.isEmpty) {
+            started.cancel()
+            Left(protocolError("tool invocation did not create declared stdout stream"))
+          } else if (stderr && started.stderr.isEmpty) {
+            started.cancel()
+            Left(protocolError("tool invocation did not create declared stderr stream"))
+          } else
+            Right(
+              ToolInvocation(
+                started.stdout,
+                started.stderr,
+                started.result.map(_.left.map(mapRpcFailure(_, decodeError)).flatMap(decode)),
+                started.cancel
+              )
+            )
         }
-      }
     }
 
   /**

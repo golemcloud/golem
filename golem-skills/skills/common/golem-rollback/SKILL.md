@@ -79,7 +79,7 @@ If you do not know which revision to target, deploy with a non-existent revision
 ## Constraints
 
 - `--revision` and `--version` conflict with each other — use one or the other.
-- `--revision` and `--version` conflict with `--force-build`, `--stage`, and `--approve-staging-steps` — rollback does not trigger a build.
+- `--revision` and `--version` conflict with `--force-build` — rollback does not trigger a build.
 - The environment must already have at least one deployment (a current deployment must exist) before a rollback can be performed.
 - Rollback is an environment-level operation — it affects all components in the environment, not individual components.
 

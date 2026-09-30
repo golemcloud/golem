@@ -301,6 +301,18 @@ pub trait OplogService: Debug + Send + Sync {
         payload_id: PayloadId,
         md5_hash: Vec<u8>,
     ) -> Result<Vec<u8>, String>;
+
+    async fn download_raw_payload_classified(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        payload_id: PayloadId,
+        md5_hash: Vec<u8>,
+    ) -> Result<Vec<u8>, RawOplogPayloadDownloadError> {
+        self.download_raw_payload(owned_agent_id, agent_mode, payload_id, md5_hash)
+            .await
+            .map_err(|message| RawOplogPayloadDownloadError::Backend(anyhow::Error::msg(message)))
+    }
 }
 
 /// Level of commit guarantees
@@ -1010,6 +1022,16 @@ pub trait Oplog: Any + Debug + Send + Sync {
         md5_hash: Vec<u8>,
     ) -> Result<Vec<u8>, String>;
 
+    async fn download_raw_payload_classified(
+        &self,
+        payload_id: PayloadId,
+        md5_hash: Vec<u8>,
+    ) -> Result<Vec<u8>, RawOplogPayloadDownloadError> {
+        self.download_raw_payload(payload_id, md5_hash)
+            .await
+            .map_err(|message| RawOplogPayloadDownloadError::Backend(anyhow::Error::msg(message)))
+    }
+
     /// Reserves a reference for a (possibly large) `serialized_request` payload, builds the call's
     /// `Start` from that reference with the **synchronous** `build_start`, and appends it — all so
     /// that the `Start` is ordered (its index assigned) in initiation order *before* the
@@ -1134,14 +1156,63 @@ pub(crate) fn downcast_oplog<T: Oplog>(oplog: &Arc<dyn Oplog>) -> Option<Arc<T>>
 
 async fn deserialize_oplog_payload<T: BinaryCodec + Send + 'static>(
     bytes: Vec<u8>,
-) -> Result<T, String> {
+) -> Result<T, anyhow::Error> {
     tokio::task::spawn_blocking(move || {
-        golem_common::serialization::try_deserialize(&bytes)?.ok_or_else(|| {
-            "oplog payload has an unsupported or missing serialization version".into()
-        })
+        golem_common::serialization::try_deserialize(&bytes)
+            .map_err(anyhow::Error::msg)?
+            .ok_or_else(|| {
+                anyhow::anyhow!("oplog payload has an unsupported or missing serialization version")
+            })
     })
     .await
-    .map_err(|error| format!("oplog payload deserialization task failed: {error}"))?
+    .map_err(anyhow::Error::new)?
+}
+
+#[derive(Debug)]
+pub enum RawOplogPayloadDownloadError {
+    Backend(anyhow::Error),
+    Missing(PayloadId),
+}
+
+impl std::fmt::Display for RawOplogPayloadDownloadError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Backend(error) => write!(formatter, "payload backend failure: {error}"),
+            Self::Missing(payload_id) => write!(formatter, "payload {payload_id} is missing"),
+        }
+    }
+}
+
+impl std::error::Error for RawOplogPayloadDownloadError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Backend(error) => Some(error.as_ref()),
+            Self::Missing(_) => None,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum OplogPayloadDownloadError {
+    Backend(anyhow::Error),
+    Corrupt(anyhow::Error),
+}
+
+impl std::fmt::Display for OplogPayloadDownloadError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Backend(error) => write!(formatter, "payload backend failure: {error}"),
+            Self::Corrupt(error) => write!(formatter, "corrupt payload: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for OplogPayloadDownloadError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Backend(error) | Self::Corrupt(error) => Some(error.as_ref()),
+        }
+    }
 }
 
 #[async_trait]
@@ -1181,7 +1252,9 @@ pub trait OplogOps: Oplog {
             OplogPayload::SerializedInline {
                 cached: Some(v), ..
             } => Ok((*v).clone()),
-            OplogPayload::SerializedInline { bytes, .. } => deserialize_oplog_payload(bytes).await,
+            OplogPayload::SerializedInline { bytes, .. } => deserialize_oplog_payload(bytes)
+                .await
+                .map_err(|error| error.to_string()),
             OplogPayload::External {
                 cached: Some(v), ..
             } => Ok((*v).clone()),
@@ -1191,7 +1264,53 @@ pub trait OplogOps: Oplog {
                 ..
             } => {
                 let bytes = self.download_raw_payload(payload_id, md5_hash).await?;
-                deserialize_oplog_payload(bytes).await
+                deserialize_oplog_payload(bytes)
+                    .await
+                    .map_err(|error| error.to_string())
+            }
+        }
+    }
+
+    async fn download_payload_classified<
+        T: BinaryCodec + Debug + Clone + PartialEq + Send + Sync + 'static,
+    >(
+        &self,
+        payload: OplogPayload<T>,
+    ) -> Result<T, OplogPayloadDownloadError> {
+        match payload {
+            OplogPayload::Inline(value) => Ok(*value),
+            OplogPayload::SerializedInline {
+                cached: Some(value),
+                ..
+            }
+            | OplogPayload::External {
+                cached: Some(value),
+                ..
+            } => Ok((*value).clone()),
+            OplogPayload::SerializedInline { bytes, .. } => deserialize_oplog_payload(bytes)
+                .await
+                .map_err(OplogPayloadDownloadError::Corrupt),
+            OplogPayload::External {
+                payload_id,
+                md5_hash,
+                ..
+            } => {
+                let bytes = self
+                    .download_raw_payload_classified(payload_id, md5_hash)
+                    .await
+                    .map_err(|error| match error {
+                        RawOplogPayloadDownloadError::Backend(error) => {
+                            OplogPayloadDownloadError::Backend(error)
+                        }
+                        RawOplogPayloadDownloadError::Missing(payload_id) => {
+                            OplogPayloadDownloadError::Corrupt(anyhow::anyhow!(
+                                "referenced oplog payload {payload_id} is missing"
+                            ))
+                        }
+                    })?;
+                deserialize_oplog_payload(bytes)
+                    .await
+                    .map_err(OplogPayloadDownloadError::Corrupt)
             }
         }
     }
@@ -1447,7 +1566,9 @@ pub trait OplogServiceOps: OplogService {
             OplogPayload::SerializedInline {
                 cached: Some(v), ..
             } => Ok((*v).clone()),
-            OplogPayload::SerializedInline { bytes, .. } => deserialize_oplog_payload(bytes).await,
+            OplogPayload::SerializedInline { bytes, .. } => deserialize_oplog_payload(bytes)
+                .await
+                .map_err(|error| error.to_string()),
             OplogPayload::External {
                 cached: Some(v), ..
             } => Ok((*v).clone()),
@@ -1459,7 +1580,9 @@ pub trait OplogServiceOps: OplogService {
                 let bytes = self
                     .download_raw_payload(owned_agent_id, agent_mode, payload_id, md5_hash)
                     .await?;
-                deserialize_oplog_payload(bytes).await
+                deserialize_oplog_payload(bytes)
+                    .await
+                    .map_err(|error| error.to_string())
             }
         }
     }

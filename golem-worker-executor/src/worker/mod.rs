@@ -160,6 +160,7 @@ use golem_common::model::{
 use golem_common::one_shot::OneShotEvent;
 use golem_common::read_only_lock;
 use golem_common::related_span;
+use golem_common::retries::get_delay;
 use golem_common::schema::TypedSchemaValue;
 use golem_common::tracing::TraceOrigin;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
@@ -168,7 +169,7 @@ use golem_service_base::model::GetFileSystemNodeResult;
 use golem_service_base::model::auth::AuthCtx;
 use prost::Message;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 use tokio::sync::broadcast::Receiver;
@@ -676,6 +677,8 @@ pub struct ResolvedWorkerData<Ctx: WorkerCtx> {
     /// Lifecycle request shared across resident worker generations. A terminal request is retained
     /// until the worker stops so permit reacquisition cannot lose it between `RunningWorker`s.
     interrupt_signal: Arc<async_lock::Mutex<WorkerInterruptState>>,
+    infrastructure_recovery_retry_config: RetryConfig,
+    infrastructure_recovery_attempt: AtomicU32,
     oom_retry_config: RetryConfig,
     snapshot_policy: SnapshotPolicy,
 
@@ -1155,6 +1158,7 @@ fn recovery_agent_error(error: &WorkerExecutorError) -> AgentError {
             AgentError::InternalError(error.to_string())
         }
         WorkerExecutorError::Runtime { .. }
+        | WorkerExecutorError::RecoveryRequired { .. }
         | WorkerExecutorError::Unknown { .. }
         | WorkerExecutorError::AgentCreationFailed { .. }
         | WorkerExecutorError::ComponentNotFound { .. }
@@ -1168,12 +1172,21 @@ fn recovery_agent_error(error: &WorkerExecutorError) -> AgentError {
     }
 }
 
+fn recovery_retry_from(error: &WorkerExecutorError) -> Option<OplogIndex> {
+    match error {
+        WorkerExecutorError::RecoveryRequired { retry_from, .. } => *retry_from,
+        WorkerExecutorError::FailedToResumeAgent { reason, .. } => recovery_retry_from(reason),
+        _ => None,
+    }
+}
+
 fn is_infrastructure_recovery_error(error: &WorkerExecutorError) -> bool {
     match error {
         WorkerExecutorError::FailedToResumeAgent { reason, .. } => {
             is_infrastructure_recovery_error(reason)
         }
         WorkerExecutorError::Runtime { .. }
+        | WorkerExecutorError::RecoveryRequired { .. }
         | WorkerExecutorError::Unknown { .. }
         | WorkerExecutorError::AgentCreationFailed { .. }
         | WorkerExecutorError::ComponentNotFound { .. }
@@ -1511,6 +1524,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         if let WorkerInstance::CleanupFailed(error) = &*self.instance.lock().await {
             return Err(error.clone());
         }
+        self.owner_execution
+            .tool_operations()
+            .join_owner_failure_cleanup()
+            .await?;
         // A lost shard: the oplog is the new owner's. No terminal is claimed, written or cached,
         // and the waiters are sent to the owner (`fail_pending_invocations` maps the error).
         if self.retired_for_lost_shard() {
@@ -2416,6 +2433,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             startup_attempt: StartupAttemptTracker::default(),
             linear_memory_grant: StdMutex::new(None),
             interrupt_signal: Arc::new(async_lock::Mutex::new(WorkerInterruptState::default())),
+            infrastructure_recovery_retry_config: deps.config().retry.clone(),
+            infrastructure_recovery_attempt: AtomicU32::new(0),
             execution_status,
             initial_worker_metadata,
             resource_entry,
@@ -2738,6 +2757,24 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     pub fn oom_retry_config(&self) -> &RetryConfig {
         &self.oom_retry_config
+    }
+
+    pub(crate) fn next_infrastructure_recovery_delay(&self) -> Duration {
+        let attempt = self
+            .infrastructure_recovery_attempt
+            .fetch_add(1, Ordering::AcqRel);
+        let capped_attempt = attempt.min(
+            self.infrastructure_recovery_retry_config
+                .max_attempts
+                .saturating_sub(1),
+        );
+        get_delay(&self.infrastructure_recovery_retry_config, capped_attempt)
+            .unwrap_or(self.infrastructure_recovery_retry_config.max_delay)
+    }
+
+    pub(crate) fn reset_infrastructure_recovery_backoff(&self) {
+        self.infrastructure_recovery_attempt
+            .store(0, Ordering::Release);
     }
 
     pub(crate) fn snapshot_policy(&self) -> &SnapshotPolicy {
@@ -3478,15 +3515,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         )
     }
 
-    pub(crate) fn interrupt_current_execution(&self) {
-        let interrupt_signal = match &*self.execution_status.read().unwrap() {
+    pub(crate) fn current_execution_interrupt_signal(
+        &self,
+    ) -> Option<Arc<tokio::sync::broadcast::Sender<InterruptKind>>> {
+        match &*self.execution_status.read().unwrap() {
             ExecutionStatus::Running {
                 interrupt_signal, ..
             } => Some(interrupt_signal.clone()),
             _ => None,
-        };
-        if let Some(interrupt_signal) = interrupt_signal {
-            let _ = interrupt_signal.send(InterruptKind::Interrupt(Timestamp::now_utc()));
         }
     }
 
@@ -3611,9 +3647,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         } else {
             None
         };
-        let retry_from = previous_error
-            .as_ref()
-            .map(|error| error.retry_from)
+        let retry_from = recovery_retry_from(error)
+            .or_else(|| previous_error.as_ref().map(|error| error.retry_from))
             .unwrap_or(self.oplog.current_oplog_index().await);
         let infrastructure_failure = is_infrastructure_recovery_error(error);
         let error = recovery_agent_error(error);
@@ -4148,6 +4183,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 input,
                 false,
                 false,
+                false,
                 None,
                 invocation_context,
                 principal,
@@ -4165,6 +4201,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         input: TypedSchemaValue,
         stdin: bool,
         stdout: bool,
+        stderr: bool,
         expected_deployment_revision: Option<DeploymentRevision>,
         invocation_context: InvocationContextStack,
         principal: Principal,
@@ -4262,6 +4299,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             input: Box::new(input),
             stdin,
             stdout,
+            stderr,
             activation,
             invocation_context,
             principal,
@@ -6223,7 +6261,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     .registrations
                     .iter()
                     .zip(&requested_handles)
-                    .filter(|((id, _), _)| roles[id] == SessionStreamRole::Input)
+                    .filter(|((id, _), _)| roles[id].direction() == SessionStreamRole::Input)
                     .map(|(_, handle)| handle.clone())
                     .collect()
             } else {
@@ -6779,7 +6817,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         if matches!(binding.source, StreamRecordReference::Foreign(_))
                             && !producer.owns_handle_identity(&mapping.handle)
                         {
-                            if mapping.role == SessionStreamRole::Input
+                            if mapping.role.direction() == SessionStreamRole::Input
                                 && streams
                                     .has_journaled_consumer_terminal(mapping)
                                     .await
@@ -6888,7 +6926,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             if matches!(binding.source, StreamRecordReference::Foreign(_))
                 && !producer.owns_handle_identity(&mapping.handle)
             {
-                if mapping.role == SessionStreamRole::Input
+                if mapping.role.direction() == SessionStreamRole::Input
                     && streams
                         .has_journaled_consumer_terminal(mapping)
                         .await
@@ -7890,7 +7928,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 reason,
                 details,
             } => {
-                let role_matches = match mapping.role {
+                let role_matches = match mapping.role.direction() {
                     SessionStreamRole::Input => matches!(
                         role,
                         golem_common::model::durable_stream::StreamCancelRole::InputProducer
@@ -7901,6 +7939,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         golem_common::model::durable_stream::StreamCancelRole::OutputProducer
                             | golem_common::model::durable_stream::StreamCancelRole::OutputConsumer
                     ),
+                    SessionStreamRole::ToolStdin
+                    | SessionStreamRole::ToolStdout
+                    | SessionStreamRole::ToolStderr => unreachable!(),
                 };
                 if !role_matches {
                     return Err(WorkerExecutorError::invalid_request(
@@ -7921,6 +7962,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         .map_err(|error| {
                             error.into_worker_executor_error(WorkerExecutorError::runtime)
                         })?
+                        .direction()
                         == SessionStreamRole::Output
                     && let Some(prepared) = self
                         .prepared_stream_session(&source.idempotency_key)
@@ -12151,6 +12193,9 @@ mod tests {
         let component_id = ComponentId::new();
         assert!(is_infrastructure_recovery_error(
             &WorkerExecutorError::ComponentNotFound { component_id }
+        ));
+        assert!(is_infrastructure_recovery_error(
+            &WorkerExecutorError::recovery_required("payload backend unavailable")
         ));
         assert!(!is_infrastructure_recovery_error(
             &WorkerExecutorError::ComponentParseFailed {

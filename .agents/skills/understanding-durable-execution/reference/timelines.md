@@ -60,6 +60,37 @@ writes the session hard-errors and recovery falls to the enclosing durable scope
 Trap variant: if the guest trapped while the call was in flight, `abandon_for_trap` leaves the
 `Start` incomplete in exactly the same shape. A trap is never recorded as `Cancelled`.
 
+### 3a. Recovery data is temporarily unavailable during p2 HTTP body resumption
+
+The guest has received one response chunk and started the next read. The transport breaks, so
+inline HTTP resumption scans prior body-read results to calculate the Range offset. Downloading
+the recorded first chunk fails because Golem's payload backend is temporarily unavailable.
+
+```
+#19 Start { fn: incoming_body_stream/blocking_read }
+#20 End   { start_index: 19, response: first 256 bytes }
+#21 Start { fn: incoming_body_stream/blocking_read }
+     payload backend unavailable while counting delivered bytes
+#22 Error { kind: Recovery, retry_policy_state: None } (h)
+     ✕ Store and filesystem window are destroyed; #21 gets no terminal
+```
+
+This is not an HTTP response and not an application failure. The host abandons the non-cancellable
+durable session deliberately, preserving `Start#21` without inventing `End` or `Cancelled`.
+`RecoveryRequired` reaches the invocation loop before generic trap classification. The loop keeps
+the accepted invocation pending, records Recovery without changing semantic retry state, waits for
+infrastructure backoff, and creates a new physical runtime. Replay consumes the completed prefix
+and repairs the unfinished response-body operation. A second backend failure may leave another
+unfinished physical child and another Recovery hint; it still does not consume application retry
+budget. Once storage recovers, the original invocation key completes once with the exact assembled
+bytes.
+
+A missing or malformed payload is different: it is corrupt history, so it follows bounded ordinary
+failure handling rather than Recovery forever. A valid payload followed by an invalid HTTP resume
+response is a genuine HTTP/content failure and remains guest-visible. External HTTP effects retain
+their normal idempotency contract; reconstruction does not make a peer exactly-once unless it
+honours the request's idempotency key.
+
 ## 4. Guest drops a pending completion
 
 ```
@@ -234,7 +265,9 @@ successful preparation. A manual-update snapshot load failure is terminal and re
 #80 Suspend (h)         or   #80 Interrupted (h)   or   #80 Restart (h) / nothing at all (crash)
 ```
 
-In every case the `Store` is discarded. The next incarnation runs `prepare_instance` →
+In every case the `Store` is discarded. Infrastructure-owned `RecoveryRequired` follows the same
+physical path: it records a Recovery error, retains the accepted invocation, and schedules a new
+incarnation without touching semantic retry state. The next incarnation runs `prepare_instance` →
 `resume_replay` from the snapshot baseline to the tail and publishes Live. The hints annotate
 *why* the previous incarnation stopped and drive status/scheduling (`Interrupted` stays
 interrupted until resumed; `Suspend` resumes on demand; `Restart` recovers automatically), but the

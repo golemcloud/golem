@@ -1,11 +1,12 @@
 use golem_native_tool::{
-    HostResult, NativeToolCancellation, NativeToolInvocation, NativeToolInvoker,
-    NativeToolRpcError, NativeToolStdin, NativeToolStdinHandle, NativeToolStdout,
-    NativeToolStdoutHandle, Principal, SchemaValue, ToolError, TypedSchemaValue, tool_definition,
-    tool_implementation,
+    HostResult, IntoTypedSchemaValue, NativeToolCancellation, NativeToolInvocation,
+    NativeToolInvoker, NativeToolOutput, NativeToolOutputHandle, NativeToolRpcError,
+    NativeToolStdin, NativeToolStdinHandle, Principal, SchemaValue, ToolError, TypedSchemaValue,
+    tool_definition, tool_implementation,
 };
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::{Arc, Mutex};
 use test_r::test;
 
 test_r::enable!();
@@ -63,6 +64,7 @@ async fn metadata_and_send_invocation_share_sdk_authoring() {
                 cancellation: NativeToolCancellation::unavailable(),
                 stdin: None,
                 stdout: None,
+                stderr: None,
             },
         )
         .await
@@ -145,6 +147,7 @@ fn invocation(
         cancellation: NativeToolCancellation::unavailable(),
         stdin: None,
         stdout: None,
+        stderr: None,
     }
 }
 
@@ -242,7 +245,7 @@ trait NativeChild {
         principal: golem_native_tool::Principal,
         cancellation: NativeToolCancellation,
         stdin: NativeToolStdin,
-        stdout: Option<NativeToolStdout>,
+        stdout: Option<NativeToolOutput>,
     ) -> String;
 }
 
@@ -258,7 +261,7 @@ impl NativeChild for NativeChildImpl {
         principal: Principal,
         cancellation: NativeToolCancellation,
         mut stdin: NativeToolStdin,
-        mut stdout: Option<NativeToolStdout>,
+        mut stdout: Option<NativeToolOutput>,
     ) -> String {
         let bytes = stdin.read().await.unwrap().unwrap();
         if let Some(stdout) = &mut stdout {
@@ -322,7 +325,7 @@ impl NativeToolStdinHandle for Input {
 }
 
 struct Output;
-impl NativeToolStdoutHandle for Output {
+impl NativeToolOutputHandle for Output {
     fn write<'a>(
         &'a mut self,
         _bytes: Vec<u8>,
@@ -332,6 +335,78 @@ impl NativeToolStdoutHandle for Output {
     fn finish(&mut self) -> Result<(), String> {
         Ok(())
     }
+}
+
+struct RecordingOutput {
+    bytes: Arc<Mutex<Vec<u8>>>,
+}
+
+impl NativeToolOutputHandle for RecordingOutput {
+    fn write<'a>(
+        &'a mut self,
+        bytes: Vec<u8>,
+    ) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>> {
+        self.bytes.lock().unwrap().extend(bytes);
+        Box::pin(async { Ok(()) })
+    }
+
+    fn finish(&mut self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+struct DualOutputInvoker;
+
+impl NativeToolInvoker<()> for DualOutputInvoker {
+    fn metadata(&self) -> golem_native_tool::Tool {
+        CounterImpl.native_tool_invoker().metadata()
+    }
+
+    fn invoke<'a>(
+        &'a self,
+        _context: &'a mut (),
+        mut invocation: NativeToolInvocation,
+    ) -> golem_native_tool::NativeToolFuture<'a, std::convert::Infallible> {
+        Box::pin(async move {
+            let mut stdout = invocation.stdout.take().expect("stdout requested");
+            let mut stderr = invocation.stderr.take().expect("stderr requested");
+            stdout.write(vec![0, 1, 2]).await.unwrap();
+            stderr.write(vec![9, 8]).await.unwrap();
+            stdout.finish().unwrap();
+            stderr.finish().unwrap();
+            Ok(Ok(golem_native_tool::NativeToolStructuredResult {
+                result: None,
+            }))
+        })
+    }
+}
+
+#[test]
+async fn native_invocation_delivers_distinct_stdout_and_stderr_handles() {
+    let stdout = Arc::new(Mutex::new(Vec::new()));
+    let stderr = Arc::new(Mutex::new(Vec::new()));
+    let invocation = NativeToolInvocation {
+        command_path: Vec::new(),
+        input: ().into_typed_schema_value().unwrap(),
+        principal: Principal::anonymous(),
+        cancellation: NativeToolCancellation::unavailable(),
+        stdin: None,
+        stdout: Some(Box::new(RecordingOutput {
+            bytes: stdout.clone(),
+        })),
+        stderr: Some(Box::new(RecordingOutput {
+            bytes: stderr.clone(),
+        })),
+    };
+
+    DualOutputInvoker
+        .invoke(&mut (), invocation)
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(*stdout.lock().unwrap(), [0, 1, 2]);
+    assert_eq!(*stderr.lock().unwrap(), [9, 8]);
 }
 
 #[test]
@@ -372,6 +447,7 @@ async fn subtree_routes_to_explicit_child_instance_with_inherited_globals_aliase
                 cancellation: NativeToolCancellation::from_observer(Cancelled),
                 stdin: Some(Box::new(Input(Some(b"hello".to_vec())))),
                 stdout: Some(Box::new(Output)),
+                stderr: None,
             },
         )
         .await

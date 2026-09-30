@@ -18,7 +18,9 @@ use anyhow::anyhow;
 use camino::{Utf8Path, Utf8PathBuf};
 use colored::{ColoredString, Colorize};
 use std::borrow::Cow;
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock, OnceLock, RwLock};
 
 use terminal_size::terminal_size;
@@ -27,6 +29,9 @@ use tracing::debug;
 
 static LOG_STATE: LazyLock<RwLock<LogState>> = LazyLock::new(RwLock::default);
 static LOG_STATE_BUFFER: LazyLock<RwLock<Vec<String>>> = LazyLock::new(RwLock::default);
+static TRACING_SUPPRESSIONS: AtomicUsize = AtomicUsize::new(0);
+static STDOUT_RESERVATIONS: AtomicUsize = AtomicUsize::new(0);
+static STDERR_RESERVATIONS: AtomicUsize = AtomicUsize::new(0);
 static TERMINAL_WIDTH: OnceLock<Option<usize>> = OnceLock::new();
 /// Columns kept free at the right edge when wrapping logged text. Callers that
 /// pre-format multi-line output must reserve it too, else their lines re-wrap.
@@ -117,7 +122,11 @@ impl LogState {
         if switching_from_buffered_to_err {
             let mut buffer = LOG_STATE_BUFFER.write().unwrap();
             for line in buffer.iter() {
-                eprintln!("{}", line);
+                match reservation_aware_output(Output::Stderr) {
+                    Output::Stdout => println!("{}", line),
+                    Output::Stderr => eprintln!("{}", line),
+                    _ => {}
+                }
             }
             buffer.clear();
         }
@@ -183,6 +192,96 @@ impl LogOutput {
 impl Drop for LogOutput {
     fn drop(&mut self) {
         LOG_STATE.write().unwrap().set_output(self.prev_output);
+    }
+}
+
+pub struct RawOutputReservation {
+    stdout: bool,
+    stderr: bool,
+}
+
+impl RawOutputReservation {
+    pub fn new(stdout: bool, stderr: bool) -> Self {
+        if stdout {
+            STDOUT_RESERVATIONS.fetch_add(1, Ordering::Relaxed);
+        }
+        if stderr {
+            STDERR_RESERVATIONS.fetch_add(1, Ordering::Relaxed);
+        }
+        Self { stdout, stderr }
+    }
+}
+
+impl Drop for RawOutputReservation {
+    fn drop(&mut self) {
+        if self.stdout {
+            STDOUT_RESERVATIONS.fetch_sub(1, Ordering::Relaxed);
+        }
+        if self.stderr {
+            STDERR_RESERVATIONS.fetch_sub(1, Ordering::Relaxed);
+        }
+    }
+}
+
+pub(crate) fn reservation_aware_output(output: Output) -> Output {
+    let stdout_reserved = STDOUT_RESERVATIONS.load(Ordering::Relaxed) != 0;
+    let stderr_reserved = STDERR_RESERVATIONS.load(Ordering::Relaxed) != 0;
+    match output {
+        Output::Stdout if stdout_reserved && !stderr_reserved => Output::Stderr,
+        Output::Stderr if stderr_reserved && !stdout_reserved => Output::Stdout,
+        Output::Stdout if stdout_reserved => Output::None,
+        Output::Stderr if stderr_reserved => Output::None,
+        output => output,
+    }
+}
+
+pub struct TracingSuppression;
+
+impl TracingSuppression {
+    pub fn new() -> Self {
+        TRACING_SUPPRESSIONS.fetch_add(1, Ordering::Relaxed);
+        Self
+    }
+}
+
+impl Default for TracingSuppression {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Drop for TracingSuppression {
+    fn drop(&mut self) {
+        TRACING_SUPPRESSIONS.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+pub enum TracingWriter {
+    Stderr(std::io::Stderr),
+    Sink(std::io::Sink),
+}
+
+impl Write for TracingWriter {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        match self {
+            Self::Stderr(writer) => writer.write(buffer),
+            Self::Sink(writer) => writer.write(buffer),
+        }
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        match self {
+            Self::Stderr(writer) => writer.flush(),
+            Self::Sink(writer) => writer.flush(),
+        }
+    }
+}
+
+pub fn tracing_writer() -> TracingWriter {
+    if TRACING_SUPPRESSIONS.load(Ordering::Relaxed) == 0 {
+        TracingWriter::Stderr(std::io::stderr())
+    } else {
+        TracingWriter::Sink(std::io::sink())
     }
 }
 
@@ -329,7 +428,7 @@ fn log_preformatted_internal(text: &str) {
     let state = LOG_STATE.read().unwrap();
     let indent = &state.calculated_indent;
     for line in text.lines() {
-        match state.output {
+        match reservation_aware_output(state.output) {
             Output::Stdout => println!("{indent}{line}"),
             Output::Stderr => eprintln!("{indent}{line}"),
             Output::None => {}
@@ -370,7 +469,7 @@ pub fn logln_internal(message: &str) {
     };
 
     for line in lines {
-        match state.output {
+        match reservation_aware_output(state.output) {
             Output::Stdout => {
                 println!("{}{}", state.calculated_indent, line)
             }

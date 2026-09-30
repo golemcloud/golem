@@ -304,6 +304,7 @@ fn rejected_tool_reconstruction_start(
             input_decode_failure: None,
             has_stdin: false,
             has_stdout: false,
+            has_stderr: false,
             call_mode: EntityCallMode::Synchronous,
         },
     };
@@ -316,6 +317,7 @@ fn rejected_tool_reconstruction_start(
             input_decode_failure: None,
             has_stdin: false,
             has_stdout: false,
+            has_stderr: false,
             call_mode: EntityCallMode::Synchronous,
             error: SerializableToolRpcError::Denied("recorded rejection".to_string()),
         });
