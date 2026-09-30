@@ -1200,22 +1200,49 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self.agent_filesystem_snapshots().is_enabled()
     }
 
-    /// The selection of a start of `status` under the exclusions of the agent now.
+    /// The selection of a start of `status` under the exclusions that this incarnation holds
+    /// now. It reads no storage, so it does not see the rejections that another executor stored
+    /// since the last [`Worker::select_start`].
     fn start_selection(&self, status: &AgentStatusRecord) -> StartSelection {
         let enabled = self.filesystem_snapshots_enabled();
         StartSelection::of(status, &self.snapshot_exclusions(), enabled)
     }
 
-    /// Adds `persisted`, the rejected entries that storage keeps for the incarnation, to the
-    /// exclusions, and gives the selection of a start of `status` under them.
-    fn select_start_with_persisted(
+    /// Selects the start of `status`: it loads the rejected entries that storage keeps for the
+    /// incarnation, adds them to the exclusions of the agent, and selects under them.
+    async fn select_start(
         &self,
         status: &AgentStatusRecord,
-        persisted: HashSet<OplogIndex>,
-    ) -> StartSelection {
+    ) -> Result<StartSelection, WorkerExecutorError> {
+        let persisted = self
+            .worker_service()
+            .get_rejected_periodic_snapshots(
+                &self.owned_agent_id,
+                self.initial_worker_metadata.fingerprint,
+            )
+            .await?;
         let enabled = self.filesystem_snapshots_enabled();
         let exclusions = self.update_exclusions(|exclusions| exclusions.with_persisted(persisted));
-        StartSelection::of(status, &exclusions, enabled)
+        Ok(StartSelection::of(status, &exclusions, enabled))
+    }
+
+    /// Settles the exclusions after the agent prepared with success: it stores the rejected
+    /// entries for the incarnation, when there are any, and ends the skips of unavailable
+    /// entries.
+    pub(crate) async fn settle_exclusions_after_prepare(&self) -> Result<(), WorkerExecutorError> {
+        if let Some(rejected) = self.snapshot_exclusions().persisted_rejections() {
+            let status = self.get_non_detached_last_known_status().await;
+            self.worker_service()
+                .reject_periodic_snapshots(
+                    &self.owned_agent_id,
+                    self.initial_worker_metadata.fingerprint,
+                    &status,
+                    &rejected,
+                )
+                .await?;
+        }
+        self.clear_unavailable_periodic();
+        Ok(())
     }
 
     /// Rejects the automatic snapshot entry at `index` for the starts of this incarnation: its
@@ -1231,13 +1258,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     /// Ends the skips of unavailable automatic snapshot entries.
-    pub(crate) fn clear_unavailable_periodic(&self) {
+    fn clear_unavailable_periodic(&self) {
         self.update_exclusions(SnapshotExclusions::without_unavailable);
-    }
-
-    /// The rejected automatic snapshot entries to persist, or `None` when none is rejected.
-    pub(crate) fn periodic_rejections(&self) -> Option<HashSet<OplogIndex>> {
-        self.snapshot_exclusions().persisted_rejections()
     }
 
     /// A copy of the exclusions of the agent now.
@@ -9040,15 +9062,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             )
             .await?;
 
-        let rejected = self
-            .worker_service()
-            .get_rejected_periodic_snapshots(
-                &self.owned_agent_id,
-                self.initial_worker_metadata.fingerprint,
-            )
-            .await?;
         let replay_revision = self
-            .select_start_with_persisted(status, rejected)
+            .select_start(status)
+            .await?
             .replay_revision_without_unavailable;
         let replay_component = if active_component.revision == replay_revision {
             active_component.clone()
@@ -10890,22 +10906,16 @@ struct StartFilesystemFailure {
 }
 
 impl StartFilesystem {
-    /// Selects the baseline of a start of `status` with the pending update `pending_update`: it
-    /// adds the rejected entries that storage keeps for the incarnation to the exclusions,
-    /// selects under them, and plans the restore of the selected record.
-    async fn plan<Ctx: WorkerCtx>(
+    /// Selects the baseline of a start of `status` with the pending update `pending_update`, as
+    /// [`Worker::select_start`] does, and loads what the restore of the selected record needs.
+    /// It reads storage and the oplog; the decisions are the pure plans of
+    /// [`filesystem_snapshots`].
+    async fn load_and_plan<Ctx: WorkerCtx>(
         parent: &Arc<Worker<Ctx>>,
         status: &AgentStatusRecord,
         pending_update: Option<&TimestampedUpdateDescription>,
     ) -> Result<Self, WorkerExecutorError> {
-        let rejected = parent
-            .worker_service()
-            .get_rejected_periodic_snapshots(
-                &parent.owned_agent_id,
-                parent.initial_worker_metadata.fingerprint,
-            )
-            .await?;
-        let selection = parent.select_start_with_persisted(status, rejected);
+        let selection = parent.select_start(status).await?;
         let baseline = RunningWorker::start_baseline(
             parent,
             status,
@@ -11422,7 +11432,7 @@ impl RunningWorker {
             .current_component
             .store(Arc::new(component_metadata.clone()));
 
-        let start_filesystem = StartFilesystem::plan(
+        let start_filesystem = StartFilesystem::load_and_plan(
             &parent,
             &worker_metadata.last_known_status,
             pending_update.as_ref(),

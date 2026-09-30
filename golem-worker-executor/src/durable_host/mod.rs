@@ -6563,21 +6563,13 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
         };
         match prepare_result {
             Ok(None) => {
-                let worker = store.as_context().data().get_public_state().worker();
-                if let Some(rejected) = worker.periodic_rejections() {
-                    let metadata = worker.get_initial_worker_metadata();
-                    let status = worker.get_non_detached_last_known_status().await;
-                    worker
-                        .worker_service()
-                        .reject_periodic_snapshots(
-                            &metadata.owned_agent_id(),
-                            metadata.fingerprint,
-                            &status,
-                            &rejected,
-                        )
-                        .await?;
-                }
-                worker.clear_unavailable_periodic();
+                store
+                    .as_context()
+                    .data()
+                    .get_public_state()
+                    .worker()
+                    .settle_exclusions_after_prepare()
+                    .await?;
                 store.as_context_mut().data_mut().set_suspended();
                 Ok(None)
             }
