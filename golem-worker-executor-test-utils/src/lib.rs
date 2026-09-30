@@ -700,6 +700,19 @@ impl TestWorkerExecutor {
         Ok(())
     }
 
+    /// The number of captures of agent filesystems on this executor with the metric label
+    /// `outcome`, such as `unchanged`. The metric counts the captures of every executor of the
+    /// process; this counts this executor only.
+    pub fn filesystem_captures(&self, outcome: &str) -> u64 {
+        use golem_worker_executor::services::HasAgentFilesystemSnapshots;
+
+        self.services
+            .as_ref()
+            .expect("test service graph is captured")
+            .agent_filesystem_snapshots()
+            .captures(outcome)
+    }
+
     /// Reads the stored oplog of the durable agent from the oplog service. It does not ask the
     /// executor, so it works when the shard of the agent is no longer assigned here.
     pub async fn stored_oplog(&self, agent_id: &AgentId) -> Vec<OplogEntry> {

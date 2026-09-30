@@ -300,6 +300,10 @@ impl StoreSource {
 /// [`SnapshotsDisabled`] and each start with [`StartCheck::NotStored`].
 pub struct AgentFilesystemSnapshots {
     core: Option<Arc<Core>>,
+    /// The captures of the agent filesystems of this executor by outcome: a count of the same
+    /// captures as the metric, which all executors of the process share. Only tests read it.
+    #[cfg(any(test, feature = "test-utils"))]
+    captures: std::sync::Mutex<std::collections::HashMap<&'static str, u64>>,
 }
 
 /// What an enabled service holds.
@@ -362,7 +366,11 @@ impl AgentFilesystemSnapshots {
 
     /// Makes a service that keeps no filesystem snapshots.
     fn disabled() -> Self {
-        Self { core: None }
+        Self {
+            core: None,
+            #[cfg(any(test, feature = "test-utils"))]
+            captures: std::sync::Mutex::default(),
+        }
     }
 
     /// Makes a service over `store` with `settings`.
@@ -395,12 +403,42 @@ impl AgentFilesystemSnapshots {
                 #[cfg(test)]
                 upload_attempts: Arc::default(),
             })),
+            #[cfg(any(test, feature = "test-utils"))]
+            captures: std::sync::Mutex::default(),
         }
     }
 
     /// Whether this executor keeps filesystem snapshots.
     pub(crate) fn is_enabled(&self) -> bool {
         self.core.is_some()
+    }
+
+    /// Records a capture of an agent filesystem with the metric label `outcome`, which stopped
+    /// the file calls for `elapsed`, in the metric. A test build also counts it for this
+    /// executor.
+    pub(crate) fn record_capture(&self, outcome: &'static str, elapsed: Duration) {
+        crate::metrics::filesystem_snapshots::record_capture(outcome, elapsed);
+        #[cfg(any(test, feature = "test-utils"))]
+        {
+            *self
+                .captures
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .entry(outcome)
+                .or_default() += 1;
+        }
+    }
+
+    /// The number of captures of agent filesystems on this executor with the metric label
+    /// `outcome`.
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn captures(&self, outcome: &str) -> u64 {
+        self.captures
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(outcome)
+            .copied()
+            .unwrap_or_default()
     }
 
     /// Asks for an upload of a periodic snapshot of the agent `agent`, before the guest saves.

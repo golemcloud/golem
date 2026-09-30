@@ -3617,18 +3617,20 @@ fn snapshot_action_at(
     }
 }
 
-/// Waits for a capture of the agent filesystem and counts its outcome with the label `label`
-/// gives, or with the label of its error. Gives `None` when the capture failed.
+/// Waits for a capture of the agent filesystem and gives `record` its outcome with the label
+/// `label` gives, or with the label of its error, and the time it took. Gives `None` when the
+/// capture failed.
 async fn measured_capture<Outcome, Capturing>(
     capture: impl FnOnce() -> Capturing,
     label: fn(&Outcome) -> &'static str,
+    record: impl FnOnce(&'static str, std::time::Duration),
 ) -> Option<Outcome>
 where
     Capturing: Future<Output = Result<Outcome, CaptureError>>,
 {
     let started = std::time::Instant::now();
     let result = capture().await;
-    crate::metrics::filesystem_snapshots::record_capture(
+    record(
         result.as_ref().map_or_else(CaptureError::label, label),
         started.elapsed(),
     );
@@ -3678,9 +3680,11 @@ impl<Ctx: WorkerCtx> PeriodicSnapshotHost for PeriodicHost<'_, '_, Ctx> {
         wait: std::time::Duration,
         since: Option<TreeMark>,
     ) -> Option<CaptureOutcome> {
+        let snapshots = self.0.parent.agent_filesystem_snapshots();
         measured_capture(
             || capture(self.0.filesystem, wait, since),
             CaptureOutcome::label,
+            |outcome, elapsed| snapshots.record_capture(outcome, elapsed),
         )
         .await
     }
@@ -3777,9 +3781,11 @@ impl<Ctx: WorkerCtx> UpdateSnapshotHost for UpdateHost<'_, '_, Ctx> {
     }
 
     async fn capture_whole(&self, wait: std::time::Duration) -> Option<WholeCapture> {
+        let snapshots = self.invocation.parent.agent_filesystem_snapshots();
         measured_capture(
             || capture_whole(self.invocation.filesystem, wait),
             WholeCapture::label,
+            |outcome, elapsed| snapshots.record_capture(outcome, elapsed),
         )
         .await
     }
@@ -3840,14 +3846,18 @@ mod tests {
     #[test]
     async fn a_measured_capture_gives_the_outcome_of_a_capture_and_nothing_for_a_failed_one() {
         let label = |_: &u8| "captured";
-        let captured = measured_capture(|| async { Ok(7) }, label).await;
+        let recorded = Mutex::new(Vec::new());
+        let record = |outcome, _| recorded.lock().unwrap().push(outcome);
+        let captured = measured_capture(|| async { Ok(7) }, label, record).await;
         let failed = measured_capture(
             || async { Err(crate::services::agent_filesystem::CaptureError::Busy) },
             label,
+            record,
         )
         .await;
 
         assert_eq!((captured, failed), (Some(7), None));
+        assert_eq!(recorded.into_inner().unwrap(), ["captured", "busy"]);
     }
 
     #[test]
