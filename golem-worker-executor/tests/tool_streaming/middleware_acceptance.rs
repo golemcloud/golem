@@ -25,16 +25,22 @@ inherit_test_dep!(
 macro_rules! setup_probe_chain {
     ($last:expr, $deps:expr, $provider:expr, $caller:expr, $names:expr,
      $context:ident, $environment:ident, $executor:ident, $provider_component:ident,
-     $caller_component:ident, $middleware_metadata:ident, $agent_type:ident, $deployment:ident) => {
+     $caller_component:ident, $middleware_metadata:ident, $agent_type:ident, $deployment:ident
+     $(, configure = $configure:expr)?) => {
         let $context = TestContext::new($last);
         let $environment = Arc::new(TestEnvironmentStateService::default());
+        let overrides = TestExecutorOverrides {
+            environment_state_service: Some($environment.clone()),
+            ..Default::default()
+        };
+        $(let overrides = TestExecutorOverrides {
+            configure: Some($configure),
+            ..overrides
+        };)?
         let $executor = start_with_overrides(
             $deps,
             &$context,
-            TestExecutorOverrides {
-                environment_state_service: Some($environment.clone()),
-                ..Default::default()
-            },
+            overrides,
         )
         .await?;
         let $provider_component = $executor
@@ -1130,6 +1136,499 @@ async fn incapable_middleware_preserves_capable_streaming_staging_and_reconstruc
     {
         assert_one_terminal_before_finished(&oplog, start.oplog_index, finished);
     }
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
+async fn mixed_chain_owner_eviction_reconstructs_durable_state_with_fresh_sidecars(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    setup_probe_chain!(
+        last_unique_id,
+        deps,
+        provider,
+        caller,
+        &["streaming-universal-pass-through", "streaming-lifecycle"],
+        context,
+        environment_state,
+        executor,
+        _provider_component,
+        caller_component,
+        _middleware_metadata,
+        agent_type,
+        deployment
+    );
+    let tool_name = ToolName::try_from("middleware-probe").unwrap();
+    deployment
+        .tool_middleware_chains
+        .get_mut(&ToolBindingOwner::AgentType {
+            agent_type_name: agent_type,
+        })
+        .unwrap()
+        .get_mut(&tool_name)
+        .unwrap()
+        .occurrences[1]
+        .filesystem_access = ToolFilesystemAccess::Allowed;
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment),
+    );
+    let (effect_port, mut effects, effect_server) = start_probe_effect_server().await;
+    let agent_id = agent_id!("ToolStreamingCaller", "middleware-owner-eviction");
+    let worker_id = executor
+        .start_agent_with(
+            &caller_component.id,
+            agent_id.clone(),
+            HashMap::from([(
+                "MIDDLEWARE_PROBE_EFFECT_PORT".to_string(),
+                effect_port.to_string(),
+            )]),
+            Vec::new(),
+        )
+        .await?;
+    let owner = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let fingerprint = executor.get_worker_metadata(&worker_id).await?.fingerprint;
+    let mut disposals = executor.probe_entity_store_disposal(&worker_id);
+
+    for (input, expected_loads) in [("evict(first)", 1), ("evict(second)", 2)] {
+        let result: String = executor
+            .invoke_and_await_agent(
+                &caller_component,
+                &agent_id,
+                "middleware_probe_once",
+                data_value!(input),
+            )
+            .await?
+            .into_typed()?;
+        assert_eq!(result, format!("leaf(lifecycle-effect({input}))"));
+        let expected_effect = format!("lifecycle-effect({input})");
+        assert_eq!(
+            effects.recv().await.as_deref(),
+            Some(expected_effect.as_str())
+        );
+        for _ in 0..3 {
+            tokio::time::timeout(std::time::Duration::from_secs(30), disposals.recv())
+                .await?
+                .expect("universal, monomorphic, and leaf Stores are physically disposed");
+        }
+        assert_eq!(executor.instance_load_count(&worker_id), expected_loads);
+
+        if input == "evict(first)" {
+            executor
+                .wait_for_status(
+                    &worker_id,
+                    AgentStatus::Idle,
+                    std::time::Duration::from_secs(30),
+                )
+                .await?;
+            tokio::time::timeout(std::time::Duration::from_secs(30), async {
+                while executor.worker_eviction_class(&owner).await
+                    != Some(golem_worker_executor::worker::EvictionClass::LoadedIdle)
+                {
+                    tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+                }
+            })
+            .await
+            .map_err(|_| anyhow::anyhow!("owner did not become loaded-idle after settlement"))?;
+            assert!(executor.stop_worker_if_idle(&owner).await?);
+            assert!(!executor.worker_is_loaded(&owner).await);
+            executor.retire_unloaded_worker(&owner).await?;
+            assert!(!executor.worker_is_cached(&owner).await);
+        }
+    }
+
+    assert_eq!(
+        executor.get_worker_metadata(&worker_id).await?.fingerprint,
+        fingerprint
+    );
+    assert_eq!(
+        executor
+            .get_file_contents(&worker_id, "/middleware-lifecycle.log")
+            .await?,
+        b"PP".as_slice(),
+        "owner-backed state survives eviction while each sidecar Store is disposable"
+    );
+    assert!(matches!(
+        effects.try_recv(),
+        Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+    ));
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        oplog
+            .iter()
+            .filter(|entry| matches!(&entry.entry, PublicOplogEntry::Error(_)))
+            .count(),
+        0,
+        "reconstruction must not use stale sidecar resources"
+    );
+    let entity_starts = oplog
+        .iter()
+        .filter(|entry| {
+            matches!(&entry.entry, PublicOplogEntry::Start(start) if start.function_name == "golem::entity::invoke")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        entity_starts.len(),
+        6,
+        "three fresh sidecars per invocation"
+    );
+    let finished = oplog
+        .iter()
+        .rfind(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
+        .unwrap()
+        .oplog_index;
+    for start in entity_starts {
+        assert_one_terminal_before_finished(&oplog, start.oplog_index, finished);
+    }
+    effect_server.abort();
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
+async fn mixed_chain_suspends_before_leaf_and_after_effect_without_repeating_dispatch(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    setup_probe_chain!(
+        last_unique_id,
+        deps,
+        provider,
+        caller,
+        &["streaming-universal-pass-through", "streaming-lifecycle"],
+        context,
+        environment_state,
+        executor,
+        _provider_component,
+        caller_component,
+        middleware_metadata,
+        agent_type,
+        deployment
+    );
+    let original_deployment = deployment.clone();
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment),
+    );
+    let (effect_port, mut effects, effect_server) = start_probe_effect_server().await;
+    let (promise_port, promise_server, mut arrivals) = start_promise_checkpoint_server().await;
+    let agent_id = agent_id!("ToolStreamingCaller", "middleware-mixed-suspension");
+    let worker_id = executor
+        .start_agent_with(
+            &caller_component.id,
+            agent_id.clone(),
+            HashMap::from([
+                (
+                    "MIDDLEWARE_PROBE_EFFECT_PORT".to_string(),
+                    effect_port.to_string(),
+                ),
+                (
+                    "MIDDLEWARE_PROMISE_CHECKPOINT_PORT".to_string(),
+                    promise_port.to_string(),
+                ),
+            ]),
+            Vec::new(),
+        )
+        .await?;
+    let invocation = executor.invoke_and_await_agent(
+        &caller_component,
+        &agent_id,
+        "middleware_probe_once",
+        data_value!("suspend(asymmetric-61)"),
+    );
+    tokio::pin!(invocation);
+    let before_leaf = tokio::select! {
+        result = invocation.as_mut() => panic!("mixed chain settled before leaf dispatch: {result:?}"),
+        checkpoint = next_promise_checkpoint(&mut arrivals, "lifecycle-before-leaf") => checkpoint?,
+    };
+    executor
+        .wait_for_status(
+            &worker_id,
+            AgentStatus::Suspended,
+            std::time::Duration::from_secs(30),
+        )
+        .await?;
+    let before_oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert!(
+        entity_starts(
+            &before_oplog,
+            PublicAgentEntityKind::Tool,
+            "middleware-probe"
+        )
+        .is_empty()
+    );
+    assert!(matches!(
+        effects.try_recv(),
+        Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+    ));
+
+    let short = middleware_metadata
+        .tool_middlewares
+        .iter()
+        .find(|definition| definition.name == "streaming-short-circuit")
+        .unwrap();
+    let tool_name = ToolName::try_from("middleware-probe").unwrap();
+    let chain = &original_deployment.tool_middleware_chains[&ToolBindingOwner::AgentType {
+        agent_type_name: agent_type.clone(),
+    }][&tool_name];
+    let (middleware_component_id, middleware_component_revision) =
+        match &chain.occurrences[0].middleware.source {
+            ToolMiddlewareSource::Component {
+                component_id,
+                component_revision,
+                ..
+            } => (*component_id, *component_revision),
+        };
+    let mut changed = original_deployment;
+    install_middleware_chain(
+        &mut changed,
+        &agent_type,
+        &tool_name,
+        middleware_component_id,
+        middleware_component_revision,
+        "golem-it:tool-streaming-rust-middleware",
+        &middleware_metadata.tool_middlewares,
+        vec![(short.name.as_str(), empty_middleware_parameters(short))],
+    );
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(changed),
+    );
+    executor.simulated_crash(&worker_id).await?;
+    executor
+        .complete_promise(
+            &PromiseId {
+                agent_id: worker_id.clone(),
+                oplog_idx: before_leaf.oplog_idx,
+            },
+            vec![],
+        )
+        .await?;
+    assert_eq!(
+        effects.recv().await.as_deref(),
+        Some("lifecycle-effect(suspend(asymmetric-61))")
+    );
+    let after_leaf = next_promise_checkpoint(&mut arrivals, "lifecycle-after-leaf").await?;
+    executor
+        .wait_for_status(
+            &worker_id,
+            AgentStatus::Suspended,
+            std::time::Duration::from_secs(30),
+        )
+        .await?;
+    let after_effect_oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let leaf_starts = entity_starts(
+        &after_effect_oplog,
+        PublicAgentEntityKind::Tool,
+        "middleware-probe",
+    );
+    assert_eq!(leaf_starts.len(), 1);
+    assert!(after_effect_oplog.iter().any(
+        |entry| matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == leaf_starts[0].oplog_index)
+    ));
+
+    executor.simulated_crash(&worker_id).await?;
+    executor
+        .complete_promise(
+            &PromiseId {
+                agent_id: worker_id.clone(),
+                oplog_idx: after_leaf.oplog_idx,
+            },
+            vec![],
+        )
+        .await?;
+    let result: String = invocation.await?.into_typed()?;
+    assert_eq!(
+        result, "lifecycle(leaf(lifecycle-effect(suspend(asymmetric-61))))",
+        "both reconstruction windows retain the pinned U/P/leaf plan"
+    );
+    assert!(matches!(
+        effects.try_recv(),
+        Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+    ));
+    let fresh: String = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &agent_id,
+            "middleware_probe_once",
+            data_value!("fresh"),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(fresh, "short(fresh)");
+    effect_server.abort();
+    promise_server.abort();
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
+async fn mixed_chain_trap_cascades_through_detached_leaf_and_all_ancestor_stores(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    setup_probe_chain!(
+        last_unique_id,
+        deps,
+        provider,
+        caller,
+        &["streaming-universal-pass-through", "streaming-lifecycle"],
+        context,
+        environment_state,
+        executor,
+        _provider_component,
+        caller_component,
+        _middleware_metadata,
+        _agent_type,
+        deployment,
+        configure = Arc::new(|config| {
+            config.retry = RetryConfig {
+                max_attempts: 1,
+                min_delay: std::time::Duration::from_millis(1),
+                max_delay: std::time::Duration::from_millis(1),
+                multiplier: 1.0,
+                max_jitter_factor: None,
+            };
+        })
+    );
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment),
+    );
+    let (checkpoint_port, checkpoint_gate_port, checkpoint_server, mut checkpoints) =
+        start_crash_checkpoint_server().await;
+    let (promise_port, promise_server, mut promises) = start_promise_checkpoint_server().await;
+    let agent_id = agent_id!("ToolStreamingCaller", "middleware-mixed-cascade");
+    let worker_id = executor
+        .start_agent_with(
+            &caller_component.id,
+            agent_id.clone(),
+            HashMap::from([
+                (
+                    "CRASH_CHECKPOINT_PORT".to_string(),
+                    checkpoint_port.to_string(),
+                ),
+                (
+                    "CRASH_CHECKPOINT_GATE_PORT".to_string(),
+                    checkpoint_gate_port.to_string(),
+                ),
+                (
+                    "MIDDLEWARE_PROMISE_CHECKPOINT_PORT".to_string(),
+                    promise_port.to_string(),
+                ),
+            ]),
+            Vec::new(),
+        )
+        .await?;
+    let owner = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let mut disposals = executor.probe_entity_store_disposal(&worker_id);
+    let invocation = executor.invoke_and_await_agent(
+        &caller_component,
+        &agent_id,
+        "middleware_probe_once",
+        data_value!("cascade(smoke-73)"),
+    );
+    tokio::pin!(invocation);
+    let _blocked = tokio::select! {
+        result = invocation.as_mut() => panic!("mixed cascade settled before its child blocked: {result:?}"),
+        checkpoint = next_crash_checkpoint(&mut checkpoints, "cascade-blocked-leaf") => checkpoint?,
+    };
+    let admitted = next_promise_checkpoint(&mut promises, "cascade-child-admitted").await?;
+    executor
+        .complete_promise(
+            &PromiseId {
+                agent_id: worker_id.clone(),
+                oplog_idx: admitted.oplog_idx,
+            },
+            vec![],
+        )
+        .await?;
+    let error = invocation
+        .await
+        .expect_err("the mixed leaf trap must fail its owner invocation");
+    assert!(
+        error.to_string().contains("mixed lifecycle cascade trap"),
+        "the selected leaf trap must reach the owner boundary: {error:?}"
+    );
+
+    let mut destroyed = Vec::new();
+    for _ in 0..4 {
+        destroyed.push(
+            disposals
+                .try_recv()
+                .expect("all admitted U/P/leaf Stores are destroyed before failure notification"),
+        );
+    }
+    destroyed.sort();
+    assert!(disposals.try_recv().is_err());
+    if let Some(active) = executor.active_entity_metadata(&owner).await {
+        assert!(active.tool_operations.operations.is_empty());
+        assert!(active.lane.holder.is_none());
+        assert_eq!(active.lane.active_invocation_count, 0);
+        assert!(active.slots.iter().all(|slot| slot.invocations.is_empty()));
+    }
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let invocation_start = oplog
+        .iter()
+        .rfind(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationStarted(_)))
+        .unwrap()
+        .oplog_index;
+    let starts = oplog
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(start)
+                if start.function_name == "golem::entity::invoke"
+                    && entry.oplog_index > invocation_start =>
+            {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        starts.len(),
+        4,
+        "U, P, detached leaf, and trapping leaf are admitted"
+    );
+    let mut sorted_starts = starts.clone();
+    sorted_starts.sort();
+    assert_eq!(destroyed, sorted_starts);
+    assert!(oplog.iter().all(|entry| {
+        !matches!(&entry.entry, PublicOplogEntry::End(end) if starts.contains(&end.start_index))
+            && !matches!(&entry.entry, PublicOplogEntry::Cancelled(cancelled) if starts.contains(&cancelled.start_index))
+    }), "owner fencing must not fabricate a normal entity terminal");
+    assert_eq!(
+        oplog
+            .iter()
+            .filter(|entry| entry.oplog_index > invocation_start
+                && matches!(entry.entry, PublicOplogEntry::Error(_)))
+            .count(),
+        1
+    );
+    checkpoint_server.abort();
+    promise_server.abort();
     Ok(())
 }
 

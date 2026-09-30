@@ -306,6 +306,7 @@ pub trait ToolStreamingCaller {
     async fn collect_capable_dual(&self, path: String, output_size: u64) -> Vec<Vec<u8>>;
     async fn clean_stdout_then_trap(&self);
     async fn trap_with_blocked_sibling(&self);
+    async fn trap_with_sibling_lifecycle(&self, lifecycle: String);
     async fn drop_trapping_result(&self);
     async fn fire_and_forget_trap(&self);
     async fn hold_incapable_checkpoint(&self, checkpoint: String);
@@ -2500,6 +2501,53 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             .result()
             .await
             .expect("owner trap must abort the primary while its sibling remains blocked");
+    }
+
+    async fn trap_with_sibling_lifecycle(&self, lifecycle: String) {
+        let (blocked_source, blocked_stdin) =
+            golem_rust::golem_agentic::wit_stream::new::<Result<Vec<u8>, ByteStreamFailure>>();
+        let mut blocked = StreamingClient::default()
+            .run("marker-echo".to_string(), blocked_stdin)
+            .await
+            .expect("start sibling tool");
+        assert_eq!(first_chunk(&mut blocked).await, b"marker:");
+
+        match lifecycle.as_str() {
+            "blocked-attachment" => {
+                let mut trapped = StreamingClient::default()
+                    .run("trap".to_string(), input_stream(Vec::new()))
+                    .await
+                    .expect("start trapping tool");
+                assert_eq!(first_chunk(&mut trapped).await, b"marker:");
+                trapped
+                    .result()
+                    .await
+                    .expect("owner trap must abort the blocked attachment");
+            }
+            "detached-child" => {
+                drop(blocked);
+                StreamingClient::default()
+                    .run("trap".to_string(), input_stream(Vec::new()))
+                    .await
+                    .expect("start trapping tool")
+                    .result()
+                    .await
+                    .expect("owner trap must abort after detaching the child observer");
+            }
+            "observed-future" => {
+                let observed = blocked.result();
+                let trapped = StreamingClient::default()
+                    .run("trap".to_string(), input_stream(Vec::new()))
+                    .await
+                    .expect("start trapping tool");
+                let (blocked, trapped) = (observed, trapped.result()).join().await;
+                blocked.expect("owner trap must wake the observed sibling future");
+                trapped.expect("owner trap must abort the trapping future");
+            }
+            other => panic!("unknown sibling lifecycle {other}"),
+        }
+
+        let _keep_blocked_source_open = blocked_source;
     }
 
     async fn drop_trapping_result(&self) {

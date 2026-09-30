@@ -240,12 +240,18 @@
     },
     {
       "id": "LIFECYCLE-1",
-      "status": "new integration boundary",
-      "remaining": "Evict/reconstruct a mixed owner and distinguish fresh physical sidecars from preserved owner-backed durable state."
+      "status": "covered",
+      "existingCoverage": [
+        {
+          "test": "mixed_chain_owner_eviction_reconstructs_durable_state_with_fresh_sidecars",
+          "file": "golem-worker-executor/tests/tool_streaming/middleware_acceptance.rs",
+          "oracle": "Worker load count, stable owner fingerprint, owner filesystem markers, external effect records, entity Store disposal receipts, and oplog terminals independently distinguish owner reconstruction from transient U/P/leaf Stores."
+        }
+      ]
     },
     {
       "id": "LIFECYCLE-2",
-      "status": "new integration boundary",
+      "status": "covered",
       "existingCoverage": [
         {
           "test": "partial_fanout_restart_replays_completed_child_repairs_pending_and_keeps_pinned_plan",
@@ -256,21 +262,44 @@
           "test": "duplicate_secret_policy_occurrences_are_isolated_from_leaf",
           "file": "golem-worker-executor/tests/tool_streaming/middleware_acceptance.rs",
           "oracle": "Policy evidence and public-oplog host-call counts prove secret-policy replay across two crashes."
+        },
+        {
+          "test": "mixed_chain_suspends_before_leaf_and_after_effect_without_repeating_dispatch",
+          "file": "golem-worker-executor/tests/tool_streaming/middleware_acceptance.rs",
+          "oracle": "Promise checkpoints isolate the pre-dispatch and post-effect windows; an external effect record, leaf Start/End, changed deployment, and final value prove exactly one leaf effect under the pinned U/P/leaf plan."
         }
-      ],
-      "remaining": "Add a full universal/monomorphic/leaf chain paused before dispatch and after effect/before propagation."
+      ]
     },
     {
       "id": "LIFECYCLE-3A/B/C",
-      "status": "new assertion",
+      "status": "covered",
       "existingCoverage": [
         {
           "test": "early_return_parent_end_survives_restart_while_detached_child_is_pending",
           "file": "golem-worker-executor/tests/tool_streaming/middleware_acceptance.rs",
           "oracle": "Promise gate, parent oplog terminal, and final result independently identify detached-child recovery."
+        },
+        {
+          "test": "guest_trap_fences_a_blocked_sibling_and_drains_the_owner_group",
+          "file": "golem-worker-executor/tests/tool_streaming/mod.rs",
+          "oracle": "GOL-671 Store-disposal receipts, drained active metadata, exact trap provenance, and an unchanged incomplete entity prefix prove physical blocked-attachment retirement without fabricated terminals."
+        },
+        {
+          "test": "guest_trap_retires_a_detached_child_before_waking_the_owner_waiter",
+          "file": "golem-worker-executor/tests/tool_streaming/mod.rs",
+          "oracle": "Disposal receipts and stable per-invocation entity Starts prove the detached child is retired before the owner waiter receives the selected trap, with no post-fence dispatch or normal terminal."
+        },
+        {
+          "test": "guest_trap_wakes_an_observed_sibling_future_and_retires_its_store",
+          "file": "golem-worker-executor/tests/tool_streaming/mod.rs",
+          "oracle": "The bounded owner waiter, Store-disposal receipts, drained metadata, and stable incomplete entity prefix prove the observed future wakes through owner failure and its Store is retired."
+        },
+        {
+          "test": "mixed_chain_trap_cascades_through_detached_leaf_and_all_ancestor_stores",
+          "file": "golem-worker-executor/tests/tool_streaming/middleware_acceptance.rs",
+          "oracle": "Named child-admission gates, four U/P/leaf disposal receipts, exact trap provenance, drained metadata, and the incomplete oplog prefix prove cascade termination across mixed ancestry."
         }
-      ],
-      "remaining": "Separate blocked attachment, detached child, and observed future termination cases and add one mixed-chain smoke case."
+      ]
     },
     {
       "id": "SOURCE-NATIVE",

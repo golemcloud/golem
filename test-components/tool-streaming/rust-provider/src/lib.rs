@@ -95,6 +95,15 @@ impl MiddlewareProbe for MiddlewareProbeImpl {
                 wait_at_crash_checkpoint(&value, "middleware-partial-pending").await;
             }
         }
+        if value.starts_with("lifecycle-effect(") {
+            announce_middleware_probe_effect(&value).await;
+        }
+        if value.starts_with("cascade-blocked(") {
+            wait_at_crash_checkpoint(&value, "cascade-blocked-leaf").await;
+        }
+        if value.starts_with("cascade-trap(") {
+            panic!("mixed lifecycle cascade trap");
+        }
         format!("leaf({value})")
     }
 }

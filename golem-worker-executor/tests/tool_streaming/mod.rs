@@ -5152,6 +5152,192 @@ async fn guest_trap_fences_a_blocked_sibling_and_drains_the_owner_group(
     Ok(())
 }
 
+async fn run_owner_trap_sibling_lifecycle_case(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    provider: &PrecompiledComponent,
+    caller: &PrecompiledComponent,
+    lifecycle: &str,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state.clone()),
+            configure: Some(Arc::new(|config| {
+                config.retry = RetryConfig {
+                    max_attempts: 1,
+                    min_delay: std::time::Duration::from_millis(1),
+                    max_delay: std::time::Duration::from_millis(1),
+                    multiplier: 1.0,
+                    max_jitter_factor: None,
+                };
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", provider.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment_state(
+            context.account_id,
+            provider_component.id,
+            provider_component.revision,
+            "golem-it:tool-streaming-rust-provider",
+            "ToolStreamingCaller",
+            metadata.tools,
+        )),
+    );
+
+    let agent_id = agent_id!("ToolStreamingCaller", format!("trap-{lifecycle}"));
+    let worker_id = executor
+        .start_agent(&caller_component.id, agent_id.clone())
+        .await?;
+    let owner = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let mut disposals = executor.probe_entity_store_disposal(&worker_id);
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        executor.invoke_and_await_agent(
+            &caller_component,
+            &agent_id,
+            "trap_with_sibling_lifecycle",
+            data_value!(lifecycle),
+        ),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("{lifecycle} waiter did not wake after owner trap"))?;
+    let error = result.expect_err("the exact guest trap must fail the owner invocation");
+    assert!(
+        error
+            .to_string()
+            .contains("deterministic streaming tool trap"),
+        "the original trap must reach the {lifecycle} waiter: {error:?}"
+    );
+
+    let mut destroyed = Vec::new();
+    for _ in 0..2 {
+        destroyed.push(
+            disposals
+                .try_recv()
+                .expect("both sibling Stores are destroyed before failure notification"),
+        );
+    }
+    destroyed.sort();
+    assert!(disposals.try_recv().is_err());
+    if let Some(active) = executor.active_entity_metadata(&owner).await {
+        assert!(active.tool_operations.operations.is_empty());
+        assert!(active.lane.holder.is_none());
+        assert_eq!(active.lane.active_invocation_count, 0);
+        assert!(active.slots.iter().all(|slot| slot.invocations.is_empty()));
+    }
+
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let invocation_start = oplog
+        .iter()
+        .rfind(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationStarted(_)))
+        .expect("failed invocation has an AgentInvocationStarted entry")
+        .oplog_index;
+    let entity_starts = oplog
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(start)
+                if start.parent_start_index == Some(invocation_start)
+                    && start.function_name == "golem::entity::invoke" =>
+            {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        entity_starts.len(),
+        2,
+        "the sibling and trap are both admitted"
+    );
+    let mut sorted_starts = entity_starts.clone();
+    sorted_starts.sort();
+    assert_eq!(destroyed, sorted_starts);
+    assert!(
+        oplog.iter().all(|entry| {
+            !matches!(&entry.entry, PublicOplogEntry::End(end) if entity_starts.contains(&end.start_index))
+                && !matches!(&entry.entry, PublicOplogEntry::Cancelled(cancelled) if entity_starts.contains(&cancelled.start_index))
+        }),
+        "owner fencing must not fabricate normal terminals for {lifecycle}"
+    );
+    assert_eq!(
+        oplog
+            .iter()
+            .filter(|entry| entry.oplog_index > invocation_start
+                && matches!(entry.entry, PublicOplogEntry::Error(_)))
+            .count(),
+        1
+    );
+
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    let settled = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        settled
+            .iter()
+            .filter(|entry| {
+                matches!(&entry.entry, PublicOplogEntry::Start(start)
+                    if start.parent_start_index == Some(invocation_start)
+                        && start.function_name == "golem::entity::invoke")
+            })
+            .count(),
+        2,
+        "the owner fence must prevent post-termination dispatch"
+    );
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn guest_trap_retires_a_detached_child_before_waking_the_owner_waiter(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    run_owner_trap_sibling_lifecycle_case(last_unique_id, deps, provider, caller, "detached-child")
+        .await
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn guest_trap_wakes_an_observed_sibling_future_and_retires_its_store(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    run_owner_trap_sibling_lifecycle_case(last_unique_id, deps, provider, caller, "observed-future")
+        .await
+}
+
 #[test]
 #[tracing::instrument]
 #[timeout("3m")]

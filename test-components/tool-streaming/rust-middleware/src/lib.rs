@@ -703,6 +703,44 @@ streaming_middleware!(
     }
 );
 
+streaming_middleware!(
+    Lifecycle,
+    [name = "streaming-lifecycle"],
+    |underlying, value| {
+        if value.starts_with("evict(") {
+            append_lifecycle_marker();
+            return underlying.apply(format!("lifecycle-effect({value})")).await;
+        }
+        if value.starts_with("suspend(") {
+            wait_at_middleware_promise_checkpoint("lifecycle-before-leaf").await;
+            let result = underlying
+                .apply(format!("lifecycle-effect({value})"))
+                .await?;
+            wait_at_middleware_promise_checkpoint("lifecycle-after-leaf").await;
+            return Ok(format!("lifecycle({result})"));
+        }
+        if value.starts_with("cascade(") {
+            let detached = underlying
+                .start_apply(format!("cascade-blocked({value})"))
+                .await?;
+            drop(detached);
+            wait_at_middleware_promise_checkpoint("cascade-child-admitted").await;
+            return underlying.apply(format!("cascade-trap({value})")).await;
+        }
+        underlying.apply(value).await
+    }
+);
+
+fn append_lifecycle_marker() {
+    use std::io::Write;
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/middleware-lifecycle.log")
+        .and_then(|mut file| file.write_all(b"P"))
+        .expect("filesystem-capable lifecycle middleware has the owner filesystem");
+}
+
 #[derive(IntoSchema, FromSchema)]
 struct PrefixParameters {
     prefix: String,
