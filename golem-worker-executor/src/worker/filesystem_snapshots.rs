@@ -677,27 +677,55 @@ pub(crate) enum BaselineStep {
     Disabled { kind: BaselineKind },
 }
 
-/// Plans the baseline of a start from the selected automatic snapshot record, else from the
-/// manual-update record with whether it is still pending, else from the initial files. `enabled`
-/// tells whether this executor keeps filesystem snapshots.
+/// What a start plans first.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum StartPlan {
+    /// The selected automatic snapshot record gives the baseline.
+    Automatic(BaselineStep),
+    /// No automatic snapshot record is selected: the start reads the manual-update record and
+    /// plans with [`plan_manual_baseline`].
+    ManualUpdate,
+}
+
+/// Plans the baseline of a start from the selected automatic snapshot record. Without one, the
+/// start needs the manual-update record. `enabled` tells whether this executor keeps filesystem
+/// snapshots.
 pub(crate) fn plan_start_baseline(
     automatic: Option<&UsableAutomaticSnapshot>,
-    manual: Option<(TimestampedUpdateDescription, bool)>,
     enabled: bool,
-) -> BaselineStep {
-    let named = |kind: BaselineKind, name: Option<FilesystemSnapshotName>| match name {
-        Some(_) if !enabled => BaselineStep::Disabled { kind },
-        restore => BaselineStep::Ready { kind, restore },
-    };
-    if let Some(snapshot) = automatic {
-        return named(
+) -> StartPlan {
+    match automatic {
+        Some(snapshot) => StartPlan::Automatic(named_baseline(
             BaselineKind::Periodic {
                 index: snapshot.index,
                 name: snapshot.filesystem_snapshot.clone(),
             },
             snapshot.filesystem_snapshot.clone(),
-        );
+            enabled,
+        )),
+        None => StartPlan::ManualUpdate,
     }
+}
+
+/// The baseline `kind`, which restores the filesystem snapshot `name` when it has one.
+fn named_baseline(
+    kind: BaselineKind,
+    name: Option<FilesystemSnapshotName>,
+    enabled: bool,
+) -> BaselineStep {
+    match name {
+        Some(_) if !enabled => BaselineStep::Disabled { kind },
+        restore => BaselineStep::Ready { kind, restore },
+    }
+}
+
+/// Plans the baseline of a start without an automatic snapshot record: from the manual-update
+/// record with whether it is still pending, else from the initial files. `enabled` tells whether
+/// this executor keeps filesystem snapshots.
+pub(crate) fn plan_manual_baseline(
+    manual: Option<(TimestampedUpdateDescription, bool)>,
+    enabled: bool,
+) -> BaselineStep {
     match manual {
         Some((
             TimestampedUpdateDescription {
@@ -719,7 +747,7 @@ pub(crate) fn plan_start_baseline(
                 name: filesystem_snapshot.clone(),
             };
             match filesystem_snapshot {
-                Some(name) => named(kind, Some(name)),
+                Some(name) => named_baseline(kind, Some(name), enabled),
                 None => BaselineStep::NeedsSourceFiles {
                     kind,
                     source: if pending {
@@ -1149,31 +1177,39 @@ mod tests {
 
         assert_eq!(
             [
-                plan_start_baseline(Some(&automatic), Some(manual(Some(&update), true)), true),
-                plan_start_baseline(Some(&automatic), None, false),
-                plan_start_baseline(Some(&automatic_without_name), None, false),
-                plan_start_baseline(None, Some(manual(Some(&update), false)), true),
-                plan_start_baseline(None, Some(manual(Some(&update), true)), false),
-                plan_start_baseline(None, Some(manual(None, true)), false),
-                plan_start_baseline(None, Some(manual(None, false)), true),
-                plan_start_baseline(None, Some(not_snapshot_based), true),
-                plan_start_baseline(None, None, true),
+                plan_start_baseline(Some(&automatic), true),
+                plan_start_baseline(Some(&automatic), false),
+                plan_start_baseline(Some(&automatic_without_name), false),
+                plan_start_baseline(None, true),
             ],
             [
-                BaselineStep::Ready {
+                StartPlan::Automatic(BaselineStep::Ready {
                     kind: periodic.clone(),
                     restore: Some(name.clone()),
-                },
-                BaselineStep::Disabled {
+                }),
+                StartPlan::Automatic(BaselineStep::Disabled {
                     kind: automatic_kind
-                },
-                BaselineStep::Ready {
+                }),
+                StartPlan::Automatic(BaselineStep::Ready {
                     kind: BaselineKind::Periodic {
                         index: OplogIndex::from_u64(10),
                         name: None
                     },
                     restore: None,
-                },
+                }),
+                StartPlan::ManualUpdate,
+            ]
+        );
+        assert_eq!(
+            [
+                plan_manual_baseline(Some(manual(Some(&update), false)), true),
+                plan_manual_baseline(Some(manual(Some(&update), true)), false),
+                plan_manual_baseline(Some(manual(None, true)), false),
+                plan_manual_baseline(Some(manual(None, false)), true),
+                plan_manual_baseline(Some(not_snapshot_based), true),
+                plan_manual_baseline(None, true),
+            ],
+            [
                 BaselineStep::Ready {
                     kind: manual_kind(Some(&update), false),
                     restore: Some(update.clone()),

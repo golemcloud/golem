@@ -11088,9 +11088,11 @@ impl RunningWorker {
         self.handle.take().unwrap()
     }
 
-    /// Gives the baseline of a start, as [`filesystem_snapshots::plan_start_baseline`] plans it:
-    /// the restore of the selected automatic snapshot record, or of the manual-update record,
-    /// when the record names a filesystem snapshot. A manual-update record without a name
+    /// Gives the baseline of a start, as [`filesystem_snapshots::plan_start_baseline`] and
+    /// [`filesystem_snapshots::plan_manual_baseline`] plan it: the restore of the selected
+    /// automatic snapshot record, or of the manual-update record, when the record names a
+    /// filesystem snapshot. The start reads the manual-update record only when no automatic
+    /// snapshot record is selected. A manual-update record without a name
     /// restores the initial files of its source revision when they are all read-only. A record
     /// that names a filesystem snapshot on an executor without filesystem snapshots fails the
     /// start with a visible cause.
@@ -11100,35 +11102,20 @@ impl RunningWorker {
         automatic_snapshot: Option<&golem_common::model::UsableAutomaticSnapshot>,
         pending_update: Option<&TimestampedUpdateDescription>,
     ) -> Result<filesystem_snapshots::StartBaseline, WorkerExecutorError> {
-        let manual_update = match pending_update.filter(|pending| {
-            matches!(pending.description, UpdateDescription::SnapshotBased { .. })
-        }) {
-            Some(pending) => Some((pending.clone(), true)),
-            None => match status.last_manual_update_snapshot_index {
-                Some(index) => match parent.oplog.read(index).await {
-                    OplogEntry::PendingUpdate {
-                        timestamp,
-                        description,
-                        ..
-                    } => Some((
-                        TimestampedUpdateDescription {
-                            timestamp,
-                            oplog_index: index,
-                            description,
-                        },
-                        false,
-                    )),
-                    _ => None,
-                },
-                None => None,
-            },
-        };
         let snapshots = parent.agent_filesystem_snapshots();
-        match filesystem_snapshots::plan_start_baseline(
+        let step = match filesystem_snapshots::plan_start_baseline(
             automatic_snapshot,
-            manual_update,
             snapshots.is_enabled(),
         ) {
+            filesystem_snapshots::StartPlan::Automatic(step) => step,
+            filesystem_snapshots::StartPlan::ManualUpdate => {
+                filesystem_snapshots::plan_manual_baseline(
+                    Self::manual_update_record(parent, status, pending_update).await,
+                    snapshots.is_enabled(),
+                )
+            }
+        };
+        match step {
             filesystem_snapshots::BaselineStep::Ready { kind, restore } => {
                 let agent_snapshots =
                     crate::filesystem_snapshot::AgentSnapshots::agent(&parent.owned_agent_id);
@@ -11167,6 +11154,39 @@ impl RunningWorker {
                     .map(filesystem_snapshots::StartRestore::InitialFiles),
                 })
             }
+        }
+    }
+
+    /// The snapshot-based manual update that a start without an automatic snapshot record uses,
+    /// with whether it is still pending: the pending update, else the record of the last
+    /// successful manual update, which the start reads from the oplog.
+    async fn manual_update_record<Ctx: WorkerCtx>(
+        parent: &Arc<Worker<Ctx>>,
+        status: &AgentStatusRecord,
+        pending_update: Option<&TimestampedUpdateDescription>,
+    ) -> Option<(TimestampedUpdateDescription, bool)> {
+        match pending_update.filter(|pending| {
+            matches!(pending.description, UpdateDescription::SnapshotBased { .. })
+        }) {
+            Some(pending) => Some((pending.clone(), true)),
+            None => match status.last_manual_update_snapshot_index {
+                Some(index) => match parent.oplog.read(index).await {
+                    OplogEntry::PendingUpdate {
+                        timestamp,
+                        description,
+                        ..
+                    } => Some((
+                        TimestampedUpdateDescription {
+                            timestamp,
+                            oplog_index: index,
+                            description,
+                        },
+                        false,
+                    )),
+                    _ => None,
+                },
+                None => None,
+            },
         }
     }
 
