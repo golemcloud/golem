@@ -3976,6 +3976,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "golem-human-approval"
+version = "0.0.0"
+dependencies = [
+ "axum",
+ "reqwest 0.13.4",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "golem-mcp-import"
 version = "0.0.0"
 dependencies = [
@@ -4409,6 +4422,7 @@ dependencies = [
  "goldenfile",
  "golem-api-grpc",
  "golem-common",
+ "golem-human-approval",
  "golem-mcp-import",
  "golem-native-tool",
  "golem-schema",

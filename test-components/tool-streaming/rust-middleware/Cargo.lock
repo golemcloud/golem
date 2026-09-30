@@ -435,6 +435,8 @@ version = "0.0.1"
 dependencies = [
  "futures-concurrency",
  "golem-rust",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

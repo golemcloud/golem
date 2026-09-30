@@ -1241,6 +1241,22 @@ fn output_redaction_parameters(
     )
 }
 
+fn human_approval_middleware_parameters(
+    definition: &ToolMiddleware,
+    request_url: &str,
+    policy: &str,
+) -> TypedSchemaValue {
+    TypedSchemaValue::new(
+        definition.parameter_schema.clone(),
+        SchemaValue::Record {
+            fields: vec![
+                SchemaValue::String(request_url.to_string()),
+                SchemaValue::String(policy.to_string()),
+            ],
+        },
+    )
+}
+
 fn native_deployment_state(
     owner_account_id: AccountId,
     caller_agent_type: &str,

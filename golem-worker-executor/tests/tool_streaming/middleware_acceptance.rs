@@ -8,6 +8,10 @@
 
 use super::*;
 use golem_common::model::oplog::PublicOplogEntryWithIndex;
+use golem_human_approval::{
+    ApprovalDecision, ApprovalOwner, ApprovalRecord, ApprovalServiceConfig, ApprovalState,
+    ApprovalStore,
+};
 use test_r::test;
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
@@ -328,6 +332,179 @@ async fn start_audit_sink(
         .expect("serve audit sink");
     });
     (url, state, task)
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PromiseCompletion {
+    oplog_idx: u64,
+    data: Vec<u8>,
+}
+
+struct ApprovalHarness {
+    request_url: String,
+    service_url: String,
+    completions: tokio::sync::mpsc::UnboundedReceiver<PromiseCompletion>,
+    client: reqwest::Client,
+    _store_dir: tempfile::TempDir,
+    service_task: tokio::task::JoinHandle<()>,
+    callback_task: tokio::task::JoinHandle<()>,
+}
+
+impl ApprovalHarness {
+    async fn start() -> Self {
+        async fn complete(
+            headers: axum::http::HeaderMap,
+            State(completions): State<tokio::sync::mpsc::UnboundedSender<PromiseCompletion>>,
+            axum::Json(completion): axum::Json<PromiseCompletion>,
+        ) -> Result<axum::Json<bool>, axum::http::StatusCode> {
+            if headers
+                .get("authorization")
+                .and_then(|value| value.to_str().ok())
+                != Some("Bearer golem-token")
+            {
+                return Err(axum::http::StatusCode::UNAUTHORIZED);
+            }
+            completions.send(completion).unwrap();
+            Ok(axum::Json(true))
+        }
+
+        let callback_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let callback_port = callback_listener.local_addr().unwrap().port();
+        let (completion_tx, completions) = tokio::sync::mpsc::unbounded_channel();
+        let callback_task = tokio::spawn(async move {
+            axum::serve(
+                callback_listener,
+                Router::new()
+                    .route(
+                        "/v1/components/{component}/workers/{agent}/complete",
+                        post(complete),
+                    )
+                    .with_state(completion_tx),
+            )
+            .await
+            .unwrap();
+        });
+
+        let service_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let service_port = service_listener.local_addr().unwrap().port();
+        let store_dir = tempfile::tempdir().unwrap();
+        let store = ApprovalStore::open(store_dir.path().join("approvals.json")).unwrap();
+        let app = golem_human_approval::router(
+            store,
+            ApprovalServiceConfig {
+                request_token: "request-token".to_string(),
+                decision_token: "decision-token".to_string(),
+                golem_api_url: format!("http://127.0.0.1:{callback_port}"),
+                golem_api_token: "golem-token".to_string(),
+            },
+        );
+        let service_task = tokio::spawn(async move {
+            axum::serve(service_listener, app).await.unwrap();
+        });
+        Self {
+            request_url: format!("http://127.0.0.1:{service_port}/v1/requests"),
+            service_url: format!("http://127.0.0.1:{service_port}"),
+            completions,
+            client: reqwest::Client::new(),
+            _store_dir: store_dir,
+            service_task,
+            callback_task,
+        }
+    }
+
+    async fn pending(&self, expected: usize) -> anyhow::Result<Vec<ApprovalRecord>> {
+        tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            loop {
+                let response = self
+                    .client
+                    .get(format!("{}/v1/requests", self.service_url))
+                    .bearer_auth("decision-token")
+                    .send()
+                    .await?;
+                let records = response
+                    .error_for_status()?
+                    .json::<Vec<ApprovalRecord>>()
+                    .await?;
+                if records.len() >= expected {
+                    return Ok::<_, reqwest::Error>(records);
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .map_err(|_| anyhow::anyhow!("timed out waiting for approval request"))?
+        .map_err(Into::into)
+    }
+
+    async fn decide(
+        &self,
+        record: &ApprovalRecord,
+        owner: ApprovalOwner,
+        state: ApprovalState,
+        token: &str,
+    ) -> reqwest::Response {
+        self.client
+            .post(format!(
+                "{}/v1/requests/{}/decision",
+                self.service_url, record.request.request_id
+            ))
+            .bearer_auth(token)
+            .json(&ApprovalDecision {
+                owner,
+                state,
+                decided_by: "operator-7".to_string(),
+            })
+            .send()
+            .await
+            .unwrap()
+    }
+
+    async fn abandon(&self, record: &ApprovalRecord) -> reqwest::Response {
+        self.client
+            .post(format!(
+                "{}/v1/requests/{}/abandon",
+                self.service_url, record.request.request_id
+            ))
+            .bearer_auth("decision-token")
+            .json(&record.request.owner)
+            .send()
+            .await
+            .unwrap()
+    }
+
+    async fn completion(&mut self) -> anyhow::Result<PromiseCompletion> {
+        tokio::time::timeout(std::time::Duration::from_secs(30), self.completions.recv())
+            .await
+            .map_err(|_| anyhow::anyhow!("timed out waiting for approval callback"))?
+            .ok_or_else(|| anyhow::anyhow!("approval callback server stopped"))
+    }
+}
+
+impl Drop for ApprovalHarness {
+    fn drop(&mut self) {
+        self.service_task.abort();
+        self.callback_task.abort();
+    }
+}
+
+fn configure_approval_parameters(
+    deployment: &mut ToolDeploymentState,
+    agent_type: &AgentTypeName,
+    definition: &ToolMiddleware,
+    request_url: &str,
+) {
+    deployment
+        .tool_middleware_chains
+        .get_mut(&ToolBindingOwner::AgentType {
+            agent_type_name: agent_type.clone(),
+        })
+        .unwrap()
+        .get_mut(&ToolName::try_from("middleware-probe").unwrap())
+        .unwrap()
+        .occurrences[0]
+        .parameters =
+        human_approval_middleware_parameters(definition, request_url, "production-change");
 }
 
 fn entity_starts<'a>(
@@ -3138,5 +3315,503 @@ async fn early_return_parent_end_survives_restart_while_detached_child_is_pendin
         assert_one_terminal_before_finished(&oplog, start.oplog_index, finished);
     }
     promise_server.abort();
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
+async fn approval_pending_blocks_dispatch_survives_restart_and_approves_once(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let mut approval = ApprovalHarness::start().await;
+    setup_probe_chain!(
+        last_unique_id,
+        deps,
+        provider,
+        caller,
+        &["human-approval"],
+        context,
+        environment_state,
+        executor,
+        provider_component,
+        caller_component,
+        middleware_metadata,
+        agent_type,
+        deployment
+    );
+    let definition = middleware_metadata
+        .tool_middlewares
+        .iter()
+        .find(|definition| definition.name == "human-approval")
+        .unwrap();
+    configure_approval_parameters(
+        &mut deployment,
+        &agent_type,
+        definition,
+        &approval.request_url,
+    );
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment),
+    );
+    let (effect_port, mut effects, effect_server) = start_probe_effect_server().await;
+    let agent_id = agent_id!("ToolStreamingCaller", "human-approval-restart");
+    let worker_id = executor
+        .start_agent_with(
+            &caller_component.id,
+            agent_id.clone(),
+            HashMap::from([
+                (
+                    "GOLEM_HUMAN_APPROVAL_REQUEST_TOKEN".to_string(),
+                    "request-token".to_string(),
+                ),
+                (
+                    "MIDDLEWARE_PROBE_EFFECT_PORT".to_string(),
+                    effect_port.to_string(),
+                ),
+            ]),
+            Vec::new(),
+        )
+        .await?;
+    let invocation = executor.invoke_and_await_agent(
+        &caller_component,
+        &agent_id,
+        "middleware_probe_once",
+        data_value!("approval-restart"),
+    );
+    tokio::pin!(invocation);
+    let requests = tokio::select! {
+        requests = approval.pending(1) => requests?,
+        result = invocation.as_mut() => anyhow::bail!("approval did not block dispatch: {result:?}"),
+    };
+    assert_eq!(requests.len(), 1);
+    let request = &requests[0];
+    assert_eq!(request.state, ApprovalState::Pending);
+    assert_eq!(request.request.policy, "production-change");
+    assert_eq!(request.request.tool_name, "middleware-probe");
+    assert!(
+        ["anonymous", "oidc", "agent", "golem-user",].contains(&request.request.principal.as_str())
+    );
+    assert!(matches!(
+        effects.try_recv(),
+        Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+    ));
+
+    executor
+        .wait_for_status(
+            &worker_id,
+            AgentStatus::Suspended,
+            std::time::Duration::from_secs(30),
+        )
+        .await?;
+    executor.simulated_crash(&worker_id).await?;
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(200), invocation.as_mut())
+            .await
+            .is_err()
+    );
+    assert_eq!(approval.pending(1).await?.len(), 1);
+    assert!(
+        approval
+            .decide(
+                request,
+                request.request.owner.clone(),
+                ApprovalState::Approved,
+                "decision-token",
+            )
+            .await
+            .status()
+            .is_success()
+    );
+    let completion = approval.completion().await?;
+    executor
+        .complete_promise(
+            &PromiseId {
+                agent_id: worker_id.clone(),
+                oplog_idx: OplogIndex::from_u64(completion.oplog_idx),
+            },
+            completion.data,
+        )
+        .await?;
+    let result: String = invocation.await?.into_typed()?;
+    assert_eq!(result, "leaf(approval-restart)");
+    assert_eq!(effects.recv().await.as_deref(), Some("approval-restart"));
+
+    assert!(
+        approval
+            .decide(
+                request,
+                request.request.owner.clone(),
+                ApprovalState::Approved,
+                "decision-token",
+            )
+            .await
+            .status()
+            .is_success()
+    );
+    assert!(
+        tokio::time::timeout(
+            std::time::Duration::from_millis(200),
+            approval.completions.recv()
+        )
+        .await
+        .is_err()
+    );
+    assert!(matches!(
+        effects.try_recv(),
+        Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+    ));
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        entity_starts(&oplog, PublicAgentEntityKind::Tool, "middleware-probe").len(),
+        1
+    );
+    effect_server.abort();
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
+async fn approval_decisions_are_authenticated_owner_bound_and_denial_never_dispatches(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let mut approval = ApprovalHarness::start().await;
+    setup_probe_chain!(
+        last_unique_id,
+        deps,
+        provider,
+        caller,
+        &["human-approval"],
+        context,
+        environment_state,
+        executor,
+        provider_component,
+        caller_component,
+        middleware_metadata,
+        agent_type,
+        deployment
+    );
+    let definition = middleware_metadata
+        .tool_middlewares
+        .iter()
+        .find(|definition| definition.name == "human-approval")
+        .unwrap();
+    configure_approval_parameters(
+        &mut deployment,
+        &agent_type,
+        definition,
+        &approval.request_url,
+    );
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment),
+    );
+    let (effect_port, mut effects, effect_server) = start_probe_effect_server().await;
+    let agent_id = agent_id!("ToolStreamingCaller", "human-approval-denied");
+    let worker_id = executor
+        .start_agent_with(
+            &caller_component.id,
+            agent_id.clone(),
+            HashMap::from([
+                (
+                    "GOLEM_HUMAN_APPROVAL_REQUEST_TOKEN".to_string(),
+                    "request-token".to_string(),
+                ),
+                (
+                    "MIDDLEWARE_PROBE_EFFECT_PORT".to_string(),
+                    effect_port.to_string(),
+                ),
+            ]),
+            Vec::new(),
+        )
+        .await?;
+    let invocation = executor.invoke_and_await_agent(
+        &caller_component,
+        &agent_id,
+        "middleware_probe_once",
+        data_value!("approval-denied"),
+    );
+    tokio::pin!(invocation);
+    let requests = tokio::select! {
+        requests = approval.pending(1) => requests?,
+        result = invocation.as_mut() => anyhow::bail!("approval did not block dispatch: {result:?}"),
+    };
+    let request = &requests[0];
+    assert_eq!(
+        approval
+            .decide(
+                request,
+                request.request.owner.clone(),
+                ApprovalState::Approved,
+                "wrong-token",
+            )
+            .await
+            .status(),
+        reqwest::StatusCode::UNAUTHORIZED
+    );
+    let mut wrong_owner = request.request.owner.clone();
+    wrong_owner.component_id = uuid::Uuid::from_u128(99);
+    assert_eq!(
+        approval
+            .decide(
+                request,
+                wrong_owner,
+                ApprovalState::Approved,
+                "decision-token",
+            )
+            .await
+            .status(),
+        reqwest::StatusCode::CONFLICT
+    );
+    assert!(
+        approval
+            .decide(
+                request,
+                request.request.owner.clone(),
+                ApprovalState::Denied,
+                "decision-token",
+            )
+            .await
+            .status()
+            .is_success()
+    );
+    let completion = approval.completion().await?;
+    executor
+        .complete_promise(
+            &PromiseId {
+                agent_id: worker_id,
+                oplog_idx: OplogIndex::from_u64(completion.oplog_idx),
+            },
+            completion.data,
+        )
+        .await?;
+    let error = invocation
+        .await
+        .expect_err("denial must fail the invocation");
+    assert!(format!("{error:?}").contains("human approval was denied"));
+    assert!(matches!(
+        effects.try_recv(),
+        Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+    ));
+    assert_eq!(
+        approval
+            .decide(
+                request,
+                request.request.owner.clone(),
+                ApprovalState::Approved,
+                "decision-token",
+            )
+            .await
+            .status(),
+        reqwest::StatusCode::CONFLICT
+    );
+    effect_server.abort();
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
+async fn approval_detach_cancel_and_owner_termination_have_distinct_terminals(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let mut approval = ApprovalHarness::start().await;
+    setup_probe_chain!(
+        last_unique_id,
+        deps,
+        provider,
+        caller,
+        &["human-approval"],
+        context,
+        environment_state,
+        executor,
+        provider_component,
+        caller_component,
+        middleware_metadata,
+        agent_type,
+        deployment
+    );
+    let definition = middleware_metadata
+        .tool_middlewares
+        .iter()
+        .find(|definition| definition.name == "human-approval")
+        .unwrap();
+    configure_approval_parameters(
+        &mut deployment,
+        &agent_type,
+        definition,
+        &approval.request_url,
+    );
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment),
+    );
+    let (effect_port, mut effects, effect_server) = start_probe_effect_server().await;
+    let env = HashMap::from([
+        (
+            "GOLEM_HUMAN_APPROVAL_REQUEST_TOKEN".to_string(),
+            "request-token".to_string(),
+        ),
+        (
+            "MIDDLEWARE_PROBE_EFFECT_PORT".to_string(),
+            effect_port.to_string(),
+        ),
+    ]);
+
+    let detached_id = agent_id!("ToolStreamingCaller", "human-approval-detached");
+    let detached_worker = executor
+        .start_agent_with(
+            &caller_component.id,
+            detached_id.clone(),
+            env.clone(),
+            Vec::new(),
+        )
+        .await?;
+    executor
+        .invoke_agent(
+            &caller_component,
+            &detached_id,
+            "middleware_probe_once",
+            data_value!("approval-detached"),
+        )
+        .await?;
+    let requests = approval.pending(1).await?;
+    let detached = &requests[0];
+    let detached_request_id = detached.request.request_id;
+    assert!(
+        approval
+            .decide(
+                detached,
+                detached.request.owner.clone(),
+                ApprovalState::Approved,
+                "decision-token",
+            )
+            .await
+            .status()
+            .is_success()
+    );
+    let completion = approval.completion().await?;
+    executor
+        .complete_promise(
+            &PromiseId {
+                agent_id: detached_worker,
+                oplog_idx: OplogIndex::from_u64(completion.oplog_idx),
+            },
+            completion.data,
+        )
+        .await?;
+    assert_eq!(effects.recv().await.as_deref(), Some("approval-detached"));
+
+    let cancelled_id = agent_id!("ToolStreamingCaller", "human-approval-cancelled");
+    let cancelled_worker = executor
+        .start_agent_with(
+            &caller_component.id,
+            cancelled_id.clone(),
+            env.clone(),
+            Vec::new(),
+        )
+        .await?;
+    let cancelled_invocation = executor.invoke_and_await_agent(
+        &caller_component,
+        &cancelled_id,
+        "middleware_probe_once",
+        data_value!("approval-cancelled"),
+    );
+    tokio::pin!(cancelled_invocation);
+    let requests = tokio::select! {
+        requests = approval.pending(2) => requests?,
+        result = cancelled_invocation.as_mut() => anyhow::bail!("cancellation request did not remain pending: {result:?}"),
+    };
+    let cancelled = requests
+        .iter()
+        .find(|record| record.request.request_id != detached_request_id)
+        .unwrap();
+    let cancelled_request_id = cancelled.request.request_id;
+    assert!(
+        approval
+            .decide(
+                cancelled,
+                cancelled.request.owner.clone(),
+                ApprovalState::Cancelled,
+                "decision-token",
+            )
+            .await
+            .status()
+            .is_success()
+    );
+    let completion = approval.completion().await?;
+    executor
+        .complete_promise(
+            &PromiseId {
+                agent_id: cancelled_worker,
+                oplog_idx: OplogIndex::from_u64(completion.oplog_idx),
+            },
+            completion.data,
+        )
+        .await?;
+    assert!(cancelled_invocation.await.is_err());
+
+    let terminated_id = agent_id!("ToolStreamingCaller", "human-approval-terminated");
+    let terminated_worker = executor
+        .start_agent_with(&caller_component.id, terminated_id.clone(), env, Vec::new())
+        .await?;
+    let terminated_invocation = executor.invoke_and_await_agent(
+        &caller_component,
+        &terminated_id,
+        "middleware_probe_once",
+        data_value!("approval-terminated"),
+    );
+    tokio::pin!(terminated_invocation);
+    let requests = tokio::select! {
+        requests = approval.pending(3) => requests?,
+        result = terminated_invocation.as_mut() => anyhow::bail!("termination request did not remain pending: {result:?}"),
+    };
+    let terminated = requests
+        .iter()
+        .find(|record| {
+            record.request.request_id != detached_request_id
+                && record.request.request_id != cancelled_request_id
+        })
+        .unwrap();
+    executor.delete_worker(&terminated_worker).await?;
+    assert!(terminated_invocation.await.is_err());
+    assert!(approval.abandon(terminated).await.status().is_success());
+    assert_eq!(
+        approval
+            .decide(
+                terminated,
+                terminated.request.owner.clone(),
+                ApprovalState::Approved,
+                "decision-token",
+            )
+            .await
+            .status(),
+        reqwest::StatusCode::CONFLICT
+    );
+    assert!(matches!(
+        effects.try_recv(),
+        Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+    ));
+    effect_server.abort();
     Ok(())
 }

@@ -149,7 +149,10 @@ impl MiddlewareProbe for MiddlewareProbeImpl {
                 panic!("nested middleware child trap after parent return");
             }
         }
-        if value.starts_with("partial-completed(") || value.starts_with("partial-pending(") {
+        if value.starts_with("partial-completed(")
+            || value.starts_with("partial-pending(")
+            || value.starts_with("approval-")
+        {
             announce_middleware_probe_effect(&value).await;
             if value.starts_with("partial-pending(") {
                 wait_at_crash_checkpoint(&value, "middleware-partial-pending").await;
