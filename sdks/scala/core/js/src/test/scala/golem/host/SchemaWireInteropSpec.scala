@@ -136,6 +136,7 @@ object SchemaWireInteropSpec extends ZIOSpecDefault {
     PathType(pathOut),
     UrlType(urlFull),
     UrlType(urlNone),
+    UuidType,
     DatetimeType,
     DurationType,
     QuantityType(quantFull),
@@ -168,6 +169,7 @@ object SchemaWireInteropSpec extends ZIOSpecDefault {
   // --- value nodes: one (or more) per WitSchemaValueNode case ---------------
 
   private val datetime = Datetime(1_700_000_000L, 123_456_789)
+  private val uuid     = golem.Uuid(BigInt("1311768465173141112"), BigInt("1311768465173141112"))
 
   // Quota-token handle nodes are intentionally excluded from this structural
   // round-trip vector: an owned `quota-token` handle is affine, so encoding
@@ -208,6 +210,7 @@ object SchemaWireInteropSpec extends ZIOSpecDefault {
     BinaryValue(WitBinaryValuePayload(Vector.empty, None)),
     PathValue("/tmp/x"),
     UrlValue("https://example.com"),
+    UuidValue(uuid),
     DatetimeValue(datetime),
     DurationValue(WitDurationValuePayload(987654321L)),
     QuantityValueNode(qvalue),
@@ -1016,6 +1019,16 @@ object SchemaWireInteropSpec extends ZIOSpecDefault {
       },
       test("raw JS shape: quantity value node tag is `quantity-value-node`") {
         assertTrue(singleValueNodeJs(QuantityValueNode(qvalue)).tag == "quantity-value-node")
+      },
+      test("raw JS shape: UUID uses first-class type and value tags") {
+        val node = singleValueNodeJs(UuidValue(uuid))
+        val raw  = rawVal(node).asInstanceOf[golem.host.js.schema.JsUuid]
+        assertTrue(
+          singleTypeBodyJs(UuidType).tag == "uuid-type",
+          node.tag == "uuid-value",
+          BigInt(raw.highBits.toString) == uuid.highBits,
+          BigInt(raw.lowBits.toString) == uuid.lowBits
+        )
       },
       test("raw JS shape: result value tags are `ok-value` / `err-value`") {
         val ok  = valDict(singleValueNodeJs(ResultValue(WitResultValuePayload.OkValue(Some(9)))))

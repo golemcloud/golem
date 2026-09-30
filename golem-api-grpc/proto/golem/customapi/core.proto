@@ -54,6 +54,7 @@ message PathSegmentType {
     U8   = 11;
     S8   = 12;
     BOOL = 13;
+    UUID = 14;
   }
 
   message Enum {

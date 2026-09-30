@@ -326,25 +326,7 @@ impl FromWire for url::Url {
 
 impl WireSchema for uuid::Uuid {
     fn append_schema(builder: &mut WireSchemaBuilder) -> wire::TypeNodeIndex {
-        let (definition, fresh) = builder.reserve("uuid.Uuid".into(), Some("uuid".into()));
-        if fresh {
-            let high = u64::append_schema(builder);
-            let low = u64::append_schema(builder);
-            let body = builder.push(wire::SchemaTypeBody::RecordType(vec![
-                wire::NamedFieldType {
-                    name: "high-bits".into(),
-                    body: high,
-                    metadata: empty_metadata(),
-                },
-                wire::NamedFieldType {
-                    name: "low-bits".into(),
-                    body: low,
-                    metadata: empty_metadata(),
-                },
-            ]));
-            builder.commit(definition, body);
-        }
-        builder.reference(definition)
+        builder.push(wire::SchemaTypeBody::UuidType)
     }
 
     fn wire_type_id() -> String {
@@ -354,25 +336,20 @@ impl WireSchema for uuid::Uuid {
 
 impl IntoWire for uuid::Uuid {
     fn write_wire(&self, writer: &mut WireWriter) -> Result<ValueNodeIndex, WireError> {
-        let (high, low) = self.as_u64_pair();
-        let high = high.write_wire(writer)?;
-        let low = low.write_wire(writer)?;
-        Ok(writer.push(wire::SchemaValueNode::RecordValue(vec![high, low])))
+        let (high_bits, low_bits) = self.as_u64_pair();
+        Ok(writer.push(wire::SchemaValueNode::UuidValue(wire::Uuid {
+            high_bits,
+            low_bits,
+        })))
     }
 }
 
 impl FromWire for uuid::Uuid {
     fn read_wire(reader: &mut WireReader, index: ValueNodeIndex) -> Result<Self, WireError> {
-        let wire::SchemaValueNode::RecordValue(fields) = reader.take(index)? else {
-            return Err(WireError::Shape("uuid record"));
+        let wire::SchemaValueNode::UuidValue(value) = reader.take(index)? else {
+            return Err(WireError::Shape("uuid"));
         };
-        let [high, low] = fields.as_slice() else {
-            return Err(WireError::Shape("two uuid fields"));
-        };
-        Ok(Self::from_u64_pair(
-            u64::read_wire(reader, *high)?,
-            u64::read_wire(reader, *low)?,
-        ))
+        Ok(Self::from_u64_pair(value.high_bits, value.low_bits))
     }
 }
 
@@ -924,6 +901,7 @@ fn clone_value_node(node: &wire::SchemaValueNode) -> wire::SchemaValueNode {
         wire::SchemaValueNode::BinaryValue(v) => wire::SchemaValueNode::BinaryValue(v.clone()),
         wire::SchemaValueNode::PathValue(v) => wire::SchemaValueNode::PathValue(v.clone()),
         wire::SchemaValueNode::UrlValue(v) => wire::SchemaValueNode::UrlValue(v.clone()),
+        wire::SchemaValueNode::UuidValue(v) => wire::SchemaValueNode::UuidValue(*v),
         wire::SchemaValueNode::DatetimeValue(v) => wire::SchemaValueNode::DatetimeValue(*v),
         wire::SchemaValueNode::DurationValue(v) => wire::SchemaValueNode::DurationValue(*v),
         wire::SchemaValueNode::QuantityValueNode(v) => {

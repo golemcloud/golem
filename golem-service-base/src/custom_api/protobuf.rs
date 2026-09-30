@@ -1039,6 +1039,7 @@ impl TryFrom<proto::golem::customapi::PathSegmentType> for PathSegmentType {
                 Primitive::U8 => Ok(PathSegmentType::U8),
                 Primitive::S8 => Ok(PathSegmentType::S8),
                 Primitive::Bool => Ok(PathSegmentType::Bool),
+                Primitive::Uuid => Ok(PathSegmentType::Uuid),
                 Primitive::Unspecified => Err("Invalid PathSegmentType::Primitive".to_string()),
             },
 
@@ -1069,6 +1070,7 @@ impl From<PathSegmentType> for proto::golem::customapi::PathSegmentType {
             PathSegmentType::U8 => Kind::Primitive(Primitive::U8.into()),
             PathSegmentType::S8 => Kind::Primitive(Primitive::S8.into()),
             PathSegmentType::Bool => Kind::Primitive(Primitive::Bool.into()),
+            PathSegmentType::Uuid => Kind::Primitive(Primitive::Uuid.into()),
 
             PathSegmentType::Enum(inner) => {
                 Kind::EnumType(proto::golem::customapi::path_segment_type::Enum {

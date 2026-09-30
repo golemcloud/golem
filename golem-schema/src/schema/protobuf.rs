@@ -255,6 +255,7 @@ impl From<SchemaType> for proto::SchemaType {
             SchemaType::Binary { restrictions, .. } => Body::BinaryType(restrictions.into()),
             SchemaType::Path { spec, .. } => Body::PathType(spec.into()),
             SchemaType::Url { restrictions, .. } => Body::UrlType(restrictions.into()),
+            SchemaType::Uuid { .. } => Body::UuidType(ProtoEmpty {}),
             SchemaType::Datetime { .. } => Body::DatetimeType(ProtoEmpty {}),
             SchemaType::Duration { .. } => Body::DurationType(ProtoEmpty {}),
             SchemaType::Quantity { spec, .. } => Body::QuantityType(spec.into()),
@@ -405,6 +406,7 @@ impl TryFrom<proto::SchemaType> for SchemaType {
                 restrictions: u.into(),
                 metadata,
             },
+            Body::UuidType(_) => SchemaType::Uuid { metadata },
             Body::DatetimeType(_) => SchemaType::Datetime { metadata },
             Body::DurationType(_) => SchemaType::Duration { metadata },
             Body::QuantityType(q) => SchemaType::Quantity {
@@ -1020,6 +1022,7 @@ fn schema_value_to_proto(
         }),
         SchemaValue::Path { path } => ValueBody::PathValue(path),
         SchemaValue::Url { url } => ValueBody::UrlValue(url),
+        SchemaValue::Uuid(value) => ValueBody::UuidValue(value.into()),
         SchemaValue::Datetime { value } => ValueBody::DatetimeValue(datetime_to_proto(value)),
         SchemaValue::Duration(d) => ValueBody::DurationValue(proto::DurationValue {
             nanoseconds: d.nanoseconds,
@@ -1180,6 +1183,7 @@ impl TryFrom<proto::SchemaValue> for SchemaValue {
             }),
             ValueBody::PathValue(p) => SchemaValue::Path { path: p },
             ValueBody::UrlValue(u) => SchemaValue::Url { url: u },
+            ValueBody::UuidValue(value) => SchemaValue::Uuid(value.into()),
             ValueBody::DatetimeValue(d) => SchemaValue::Datetime {
                 value: datetime_from_proto(d)?,
             },
@@ -1316,6 +1320,23 @@ mod tests {
         assert_eq!(
             error,
             "live schema value stream reference 42 cannot be decoded outside its session"
+        );
+    }
+
+    #[test]
+    fn uuid_type_and_value_round_trip() {
+        let uuid = uuid::Uuid::parse_str("dd00721b-3329-4621-a01d-c71f02cd78c6").unwrap();
+
+        let encoded_type = proto::SchemaType::from(SchemaType::uuid());
+        assert_eq!(
+            SchemaType::try_from(encoded_type).unwrap(),
+            SchemaType::uuid()
+        );
+
+        let encoded_value = proto::SchemaValue::try_from(SchemaValue::Uuid(uuid)).unwrap();
+        assert_eq!(
+            SchemaValue::try_from(encoded_value).unwrap(),
+            SchemaValue::Uuid(uuid)
         );
     }
 
