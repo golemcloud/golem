@@ -1,9 +1,10 @@
 package toolstreaming
 
 import golem.{BaseAgent, UInt}
+import golem.config.{AgentConfig, Config}
 import golem.runtime.annotations.*
 import golem.runtime.tool.client.ToolRpcClient
-import golem.schema.IntoSchema
+import golem.schema.{AgentStream, IntoSchema}
 import golem.tool.{ByteStreamFailure, ToolError, ToolInputStream, ToolInvokeError, ToolOutputStream, ToolRpcFailure}
 import zio.blocks.async.*
 import zio.blocks.schema.Schema
@@ -121,10 +122,11 @@ object ScalaDualOutputEvidence {
 }
 
 @agentDefinition()
-trait ScalaToolStreamingCaller extends BaseAgent {
+trait ScalaToolStreamingCaller extends BaseAgent with AgentConfig[MatrixResourceConfig] {
   class Id(val name: String)
   def markerBeforeEof(payload: String): Future[ScalaStreamEvidence]
   def matrix_core_observation(): Future[MatrixCoreObservation]
+  def matrix_resource_observation(): Future[MatrixResourceObservation]
   def invalidCommandPathCleanup(): Future[ScalaCleanupEvidence]
   def outputEvidence(mode: String): Future[ScalaOutputEvidence]
   def declaredErrorCompletion(): Future[ScalaOutputEvidence]
@@ -132,8 +134,43 @@ trait ScalaToolStreamingCaller extends BaseAgent {
 }
 
 @agentImplementation()
-final class ScalaToolStreamingCallerImpl(name: String) extends ScalaToolStreamingCaller {
+final class ScalaToolStreamingCallerImpl(name: String, config: Config[MatrixResourceConfig])
+    extends ScalaToolStreamingCaller {
   private implicit val ec: ExecutionContext = ExecutionContext.global
+
+  override def matrix_resource_observation(): Future[MatrixResourceObservation] = {
+    val _ = config.value.secret
+    val values = Iterator(UInt(2), UInt(5), UInt(9))
+    val input = AgentStream.fromPull(() => Future.successful(if (values.hasNext) Some(values.next()) else None))
+
+    MatrixResourceToolClient().typed().transform(input).flatMap {
+      case Left(error) => Future.failed(new IllegalStateException(s"matrix-resource typed transform failed: $error"))
+      case Right(output) =>
+        drainAgentStream(output, Nil).map { typedValues =>
+          MatrixResourceObservation(
+            secretFirstProvider = "",
+            secretSecondProvider = "",
+            secretFirstRevealed = false,
+            secretSecondRevealed = false,
+            secretPrincipal = "",
+            secretOwnerAgentId = "",
+            quotaProvider = "",
+            quotaReserved = false,
+            quotaReturnedUsable = false,
+            quotaOriginalConsumed = false,
+            quotaPrincipal = "",
+            quotaOwnerAgentId = "",
+            permissionSupported = false,
+            permissionProvider = "",
+            permissionSameIdentity = false,
+            permissionOriginalConsumed = false,
+            permissionPrincipal = "",
+            permissionOwnerAgentId = "",
+            typedValues = typedValues
+          )
+        }
+    }
+  }
 
   override def matrix_core_observation(): Future[MatrixCoreObservation] = {
     val successRequest = MatrixRequest(
@@ -317,6 +354,12 @@ final class ScalaToolStreamingCallerImpl(name: String) extends ScalaToolStreamin
   }
 
   private object End
+
+  private def drainAgentStream(stream: AgentStream[UInt], values: List[UInt]): Future[List[UInt]] =
+    stream.pull().flatMap {
+      case Some(value) => drainAgentStream(stream, values :+ value)
+      case None        => Future.successful(values)
+    }
 
   private def drain(stream: ToolInputStream): Future[(List[Int], String)] =
     stream.stream.startAsync.toFuture.flatMap(reader => drain(reader, Nil))

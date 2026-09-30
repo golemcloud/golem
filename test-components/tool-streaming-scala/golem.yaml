@@ -35,12 +35,14 @@ components:
 tools:
   scala-streaming: {}
   matrix-core: {}
+  matrix-resource: {}
 
 agents:
   ScalaToolStreamingCaller:
     tools:
       scala-streaming: {}
       matrix-core: {}
+      matrix-resource: {}
 
 environments:
   local:
