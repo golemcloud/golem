@@ -2828,7 +2828,7 @@ async fn authorize_policy_target<Adapter: SandboxFilesystemAdapter>(
     generation: &FilesystemGeneration<Adapter>,
     target: &SandboxTargetIdentity,
 ) -> Result<(), Error> {
-    let read_only_paths = generation
+    let mut read_only_paths = generation
         .initial_files
         .lock()
         .unwrap()
@@ -2836,6 +2836,15 @@ async fn authorize_policy_target<Adapter: SandboxFilesystemAdapter>(
         .filter(|(_, file)| file.permissions == AgentFilePermissions::ReadOnly)
         .map(|(path, _)| path.clone())
         .collect::<Vec<_>>();
+    read_only_paths.extend(
+        generation
+            .entity_provisioned_files
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, file)| file.permissions == AgentFilePermissions::ReadOnly)
+            .map(|(path, _)| path.clone()),
+    );
     for path in read_only_paths {
         let policy = resolve_namespace_target(generation, SandboxPath::at_root(path)).await?;
         let policy = resolved_policy_target(generation, &policy, SandboxFollow::Yes)?;

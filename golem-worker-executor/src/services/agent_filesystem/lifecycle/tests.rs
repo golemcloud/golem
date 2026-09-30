@@ -2956,20 +2956,31 @@ async fn namespace_authorization_and_expected_kind_reject_before_sandbox_mutatio
     delete(seal(filesystem)).await.unwrap();
 }
 
-#[test]
-async fn semantic_initial_file_policy_covers_root_descriptor_and_alias_targets() {
+async fn semantic_initial_file_policy_covers_root_descriptor_and_alias_targets_case(
+    entity_provisioned: bool,
+) {
     let (filesystem, control, window) = metered_resident().await;
     let generation_handle = resident_generation_handle(&filesystem);
     let generation = generation_handle.generation.upgrade().unwrap();
-    generation.initial_files.lock().unwrap().insert(
-        PathBuf::from("logical/read-only"),
-        InitialAgentFile {
-            content_hash: AgentFileContentHash(golem_common::model::diff::Hash::empty()),
-            path: AgentFilePath::from_abs_str("/logical/read-only").unwrap(),
-            permissions: AgentFilePermissions::ReadOnly,
-            size: 0,
-        },
-    );
+    let file = InitialAgentFile {
+        content_hash: AgentFileContentHash(golem_common::model::diff::Hash::empty()),
+        path: AgentFilePath::from_abs_str("/logical/read-only").unwrap(),
+        permissions: AgentFilePermissions::ReadOnly,
+        size: 0,
+    };
+    if entity_provisioned {
+        generation
+            .entity_provisioned_files
+            .lock()
+            .unwrap()
+            .insert(PathBuf::from("logical/read-only"), file);
+    } else {
+        generation
+            .initial_files
+            .lock()
+            .unwrap()
+            .insert(PathBuf::from("logical/read-only"), file);
+    }
     let parent = open_directory_at(
         &generation_handle,
         &control,
@@ -3110,6 +3121,16 @@ async fn semantic_initial_file_policy_covers_root_descriptor_and_alias_targets()
     close(OpenNode::Directory(parent)).await.unwrap();
     control.push_delete_and_verify(Ok(()));
     delete(seal(filesystem)).await.unwrap();
+}
+
+#[test]
+async fn semantic_initial_file_policy_covers_root_descriptor_and_alias_targets() {
+    semantic_initial_file_policy_covers_root_descriptor_and_alias_targets_case(false).await;
+}
+
+#[test]
+async fn semantic_entity_provisioned_file_policy_covers_root_descriptor_and_alias_targets() {
+    semantic_initial_file_policy_covers_root_descriptor_and_alias_targets_case(true).await;
 }
 
 #[test]
