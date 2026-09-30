@@ -267,6 +267,321 @@ async fn exported_native_tool_roundtrips_through_import_middleware_and_replays_o
 
 #[test]
 #[timeout("15 minutes")]
+async fn typescript_mcp_client_projects_contract_and_runs_imported_middleware() {
+    let calls = Arc::new(Mutex::new(Vec::<Value>::new()));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let handler = axum::routing::post({
+        let calls = calls.clone();
+        move |headers: HeaderMap, axum::Json(body): axum::Json<Value>| {
+            let calls = calls.clone();
+            async move {
+                if headers
+                    .get("authorization")
+                    .and_then(|value| value.to_str().ok())
+                    != Some("Bearer typescript-mcp-token")
+                {
+                    return StatusCode::UNAUTHORIZED.into_response();
+                }
+                let result = match body["method"].as_str() {
+                    Some("tools/list") => json!({"tools":[{
+                        "name":"catalog.lookup",
+                        "title":"Catalog lookup",
+                        "description":"Lookup one catalog entry.",
+                        "inputSchema":{
+                            "type":"object",
+                            "properties":{
+                                "item-id":{"type":"string","minLength":3},
+                                "includeHistory":{"type":"boolean","default":false}
+                            },
+                            "required":["item-id"],
+                            "additionalProperties":false
+                        },
+                        "outputSchema":{
+                            "type":"object",
+                            "properties":{
+                                "id":{"type":"string"},
+                                "revision":{"type":"integer","minimum":0}
+                            },
+                            "required":["id","revision"],
+                            "additionalProperties":false
+                        }
+                    }]}),
+                    Some("tools/call") => {
+                        if body["params"]["name"] != "catalog.lookup"
+                            || headers
+                                .get("mcp-name")
+                                .and_then(|value| value.to_str().ok())
+                                != Some("catalog.lookup")
+                        {
+                            return StatusCode::BAD_REQUEST.into_response();
+                        }
+                        let arguments = body["params"]["arguments"].clone();
+                        let Some(item_id) = arguments["item-id"].as_str().map(str::to_owned) else {
+                            return StatusCode::BAD_REQUEST.into_response();
+                        };
+                        calls.lock().unwrap().push(arguments);
+                        if item_id == "error" {
+                            json!({
+                                "isError":true,
+                                "content":[{"type":"text","text":"upstream denied"}]
+                            })
+                        } else {
+                            let content = match item_id.as_str() {
+                                "none" => json!([]),
+                                "blocks" => json!([
+                                    {"type":"text","text":"left"},
+                                    {"type":"text","text":"right"}
+                                ]),
+                                "resource" => json!([{
+                                    "type":"resource",
+                                    "resource":{
+                                        "uri":"file:///exact.bin",
+                                        "blob":"ECAw",
+                                        "mimeType":"application/x-exact"
+                                    }
+                                }]),
+                                _ => json!([{"type":"text","text":format!("stdout:{item_id}")}]),
+                            };
+                            json!({
+                                "structuredContent":{"id":item_id,"revision":7},
+                                "content":content
+                            })
+                        }
+                    }
+                    _ => return StatusCode::BAD_REQUEST.into_response(),
+                };
+                axum::Json(json!({"jsonrpc":"2.0","id":body["id"],"result":result})).into_response()
+            }
+        }
+    });
+    let mut upstream = tokio::task::JoinSet::new();
+    upstream.spawn(async move {
+        axum::serve(listener, axum::Router::new().route("/mcp", handler))
+            .await
+            .unwrap();
+    });
+
+    let mut ctx = TestContext::new();
+    ctx.start_server().await;
+    fs::create_dir_all(ctx.cwd_path_join("typescript-mcp-client")).unwrap();
+    ctx.cd("typescript-mcp-client");
+    for component in ["consumer", "middleware"] {
+        let output = ctx
+            .cli([
+                flag::YES,
+                cmd::NEW,
+                ".",
+                flag::TEMPLATE,
+                "ts",
+                flag::COMPONENT_NAME,
+                &format!("typescript-mcp-client:{component}"),
+            ])
+            .await;
+        assert!(output.success_or_dump());
+    }
+    fs::write_str(
+        ctx.cwd_path_join("golem.yaml"),
+        formatdoc! {r#"
+        manifestVersion: {version}
+        app: typescript-mcp-client
+        environments:
+          local:
+            server: local
+            componentPresets: quick
+            tools:
+              middleware: [typescript-mcp-audit]
+        components:
+          typescript-mcp-client:consumer:
+            dir: consumer
+            templates: ts
+            dependencies:
+              tools: [catalog-lookup]
+          typescript-mcp-client:middleware:
+            dir: middleware
+            templates: ts
+        mcp:
+          imports:
+            local:
+              - url: http://127.0.0.1:{port}/mcp
+                auth:
+                  bearer: typescript-mcp-token
+        tools:
+          middleware:
+            typescript-mcp-audit:
+              component: typescript-mcp-client:middleware
+        agents:
+          TypeScriptMcpConsumer:
+            tools:
+              catalog-lookup: {{}}
+        bridge:
+          ts:
+            internal:
+              tools: [catalog-lookup]
+    "#, version = versions::sdk::MANIFEST},
+    )
+    .unwrap();
+    add_typescript_tool_client_source(
+        &ctx,
+        "catalog-lookup-tool-guest-client",
+        "catalog-lookup-tool-guest-client.ts",
+    );
+    fs::write_str(
+        ctx.cwd_path_join("consumer/src/counter-agent.ts"),
+        indoc! {r#"
+        import { z } from 'zod';
+        import { defineAgent, method } from '@golemcloud/golem-ts-sdk';
+        import { CatalogLookupClient } from 'catalog-lookup-tool-guest-client';
+
+        const TypeScriptMcpConsumer = defineAgent({
+          name: 'TypeScriptMcpConsumer',
+          id: { name: z.string() },
+          methods: {
+            call: method({ input: { itemId: z.string(), includeHistory: z.boolean() }, returns: z.array(z.string()) }),
+          },
+        });
+
+        TypeScriptMcpConsumer.implement({
+          init: () => ({}),
+          methods: {
+            async call({ itemId, includeHistory }) {
+              try {
+                const invocation = CatalogLookupClient.newClient().catalog_lookup(includeHistory, itemId);
+                const collected = await invocation.collect();
+                const projected = JSON.stringify(collected.result, (_key, value) =>
+                  typeof value === 'bigint' ? value.toString() : value,
+                );
+                return [projected, collected.stdout === undefined ? '' : new TextDecoder().decode(collected.stdout)];
+              } catch (error) {
+                const failure = error as {
+                  tag?: string;
+                  error?: { tag?: string; value?: string };
+                };
+                if (
+                  failure.tag === 'tool' &&
+                  failure.error?.tag === 'McpToolError'
+                ) {
+                  return [`tool:mcp-tool-error:${failure.error.value}`, ''];
+                }
+                throw error;
+              }
+            },
+          },
+        });
+    "#},
+    )
+    .unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("middleware/src/counter-agent.ts"),
+        indoc! {r#"
+        import { universalToolMiddleware } from '@golemcloud/golem-ts-sdk';
+
+        universalToolMiddleware({
+          name: 'typescript-mcp-audit',
+          invoke: async (request, { underlying }) => {
+            const result = await underlying.invokeAndAwait(request.commandPath, request.input, request.stdin);
+            const upstream = result.stdout;
+            if (upstream === undefined) return result;
+            return {
+              ...result,
+              stdout: (async function* () {
+                yield* new TextEncoder().encode('middleware:');
+                yield* upstream;
+              })(),
+            };
+          },
+        });
+    "#},
+    )
+    .unwrap();
+
+    let built = ctx.cli([flag::YES, cmd::BUILD]).await;
+    assert!(built.success_or_dump());
+    let generated_root =
+        ctx.cwd_path_join("golem-temp/bridge-sdk/ts/internal/catalog-lookup-tool-guest-client");
+    let generated = generated_source_text(&generated_root);
+    assert!(generated.contains("catalog-lookup"));
+    assert!(!generated.contains("typescript-mcp-token"));
+    assert!(!generated.contains(&format!("127.0.0.1:{port}")));
+
+    let deployed = ctx.cli([flag::YES, cmd::DEPLOY]).await;
+    assert!(deployed.success_or_dump());
+    for (item_id, include_history, expected) in [
+        (
+            "text",
+            false,
+            vec![
+                "\"structured\":{\"id\":\"text\",\"revision\":\"7\"}",
+                "\"tag\":\"streamed\"",
+                "stdout:text",
+            ],
+        ),
+        (
+            "none",
+            false,
+            vec![
+                "\"structured\":{\"id\":\"none\",\"revision\":\"7\"}",
+                "\"tag\":\"none\"",
+            ],
+        ),
+        ("blocks", true, vec!["\"tag\":\"blocks\"", "left", "right"]),
+        (
+            "resource",
+            false,
+            vec!["file:///exact.bin", "application/x-exact"],
+        ),
+        ("error", false, vec!["tool:mcp-tool-error:upstream denied"]),
+        ("middleware", true, vec!["middleware:stdout:middleware"]),
+    ] {
+        let output = ctx
+            .cli([
+                flag::FORMAT,
+                "json",
+                flag::YES,
+                cmd::AGENT,
+                cmd::INVOKE,
+                "TypeScriptMcpConsumer(\"contract-2\")",
+                "call",
+                &serde_json::to_string(item_id).unwrap(),
+                if include_history { "true" } else { "false" },
+            ])
+            .await;
+        assert!(output.success_or_dump());
+        let result = output
+            .stdout_json::<Value>()
+            .into_iter()
+            .find(|event| event["$type"] == "agent.invoke")
+            .expect("TypeScript MCP consumer returned an invocation result");
+        let observed = result["resultJson"]["value"]["value"]["elements"]
+            .as_array()
+            .expect("TypeScript MCP consumer returned a string list")
+            .iter()
+            .map(|value| value["value"].as_str().unwrap())
+            .collect::<Vec<_>>()
+            .join("\n");
+        for fragment in expected {
+            assert!(
+                observed.contains(fragment),
+                "missing {fragment} for {item_id}: {observed}"
+            );
+        }
+    }
+    assert_eq!(
+        *calls.lock().unwrap(),
+        vec![
+            json!({"item-id":"text","includeHistory":false}),
+            json!({"item-id":"none","includeHistory":false}),
+            json!({"item-id":"blocks","includeHistory":true}),
+            json!({"item-id":"resource","includeHistory":false}),
+            json!({"item-id":"error","includeHistory":false}),
+            json!({"item-id":"middleware","includeHistory":true}),
+        ]
+    );
+    upstream.shutdown().await;
+}
+
+#[test]
+#[timeout("15 minutes")]
 async fn rust_mcp_clients_use_registry_credentials_and_replay_offline() {
     let calls = Arc::new(Mutex::new(Vec::<(String, Value, String)>::new()));
     let listings = Arc::new(Mutex::new(Vec::<String>::new()));
@@ -1240,4 +1555,28 @@ fn bridge_marker_bytes(root: &std::path::Path) -> Vec<Vec<u8>> {
         .collect::<Vec<_>>();
     markers.sort();
     markers
+}
+
+fn add_typescript_tool_client_source(
+    ctx: &TestContext,
+    package_name: &str,
+    generated_source_name: &str,
+) {
+    let tsconfig_path = ctx.cwd_path_join("consumer/tsconfig.json");
+    let mut tsconfig: Value =
+        serde_json::from_str(&fs::read_to_string(&tsconfig_path).unwrap()).unwrap();
+    tsconfig["compilerOptions"]["paths"][package_name] = json!([format!(
+        "../golem-temp/bridge-sdk/ts/internal/{package_name}/{generated_source_name}"
+    )]);
+    tsconfig["include"].as_array_mut().unwrap().extend([
+        json!("src/**/*.ts"),
+        json!(format!(
+            "../golem-temp/bridge-sdk/ts/internal/{package_name}/*.ts"
+        )),
+    ]);
+    fs::write_str(
+        tsconfig_path,
+        serde_json::to_string_pretty(&tsconfig).unwrap() + "\n",
+    )
+    .unwrap();
 }
