@@ -9,6 +9,262 @@ use std::sync::{Arc, Mutex};
 use test_r::{test, timeout};
 
 #[test]
+#[timeout("20 minutes")]
+async fn exported_native_tool_roundtrips_through_import_middleware_and_replays_offline() {
+    let effects = Arc::new(Mutex::new(Vec::<String>::new()));
+    let effect_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let effect_port = effect_listener.local_addr().unwrap().port();
+    let effect_handler = axum::routing::post({
+        let effects = effects.clone();
+        move |uri: Uri| {
+            let effects = effects.clone();
+            async move {
+                effects.lock().unwrap().push(uri.path().to_string());
+                StatusCode::NO_CONTENT
+            }
+        }
+    });
+    let mut effect_server = tokio::task::JoinSet::new();
+    effect_server.spawn(async move {
+        axum::serve(
+            effect_listener,
+            axum::Router::new().fallback(effect_handler),
+        )
+        .await
+        .unwrap();
+    });
+    let projected_tools = Arc::new(Mutex::new(None::<Value>));
+    let mcp_fixture_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mcp_fixture_port = mcp_fixture_listener.local_addr().unwrap().port();
+    let mcp_fixture_handler = axum::routing::post({
+        let projected_tools = projected_tools.clone();
+        let effects = effects.clone();
+        move |axum::Json(body): axum::Json<Value>| {
+            let projected_tools = projected_tools.clone();
+            let effects = effects.clone();
+            async move {
+                let result = match body["method"].as_str() {
+                    Some("tools/list") => projected_tools.lock().unwrap().clone().unwrap(),
+                    Some("tools/call") => {
+                        let item_id = body["params"]["arguments"]["item-id"]
+                            .as_str()
+                            .unwrap()
+                            .to_string();
+                        effects
+                            .lock()
+                            .unwrap()
+                            .push(format!("/provider/{item_id}/anonymous"));
+                        if item_id == "reject" {
+                            json!({
+                                "isError":true,
+                                "content":[{"type":"text","text":"{\"name\":\"rejected\",\"payload\":\"reject\"}"}]
+                            })
+                        } else {
+                            json!({
+                                "structuredContent":{"value":{"id":item_id,"revision":"23","principal":"anonymous"}},
+                                "content":[]
+                            })
+                        }
+                    }
+                    _ => return StatusCode::BAD_REQUEST.into_response(),
+                };
+                axum::Json(json!({"jsonrpc":"2.0","id":body["id"],"result":result})).into_response()
+            }
+        }
+    });
+    let mut mcp_fixture = tokio::task::JoinSet::new();
+    mcp_fixture.spawn(async move {
+        axum::serve(
+            mcp_fixture_listener,
+            axum::Router::new().fallback(mcp_fixture_handler),
+        )
+        .await
+        .unwrap();
+    });
+
+    let mut ctx = TestContext::new();
+    ctx.start_server().await;
+    let mcp_port = ctx.mcp_port();
+    fs::create_dir_all(ctx.cwd_path_join("mcp-roundtrip")).unwrap();
+    ctx.cd("mcp-roundtrip");
+    for component in [
+        "mcp-roundtrip:provider",
+        "mcp-roundtrip:export-owner",
+        "mcp-roundtrip:middleware",
+        "mcp-roundtrip:consumer",
+    ] {
+        let output = ctx
+            .cli([
+                flag::YES,
+                cmd::NEW,
+                ".",
+                flag::TEMPLATE,
+                "rust",
+                flag::COMPONENT_NAME,
+                component,
+            ])
+            .await;
+        assert!(output.success_or_dump());
+    }
+
+    write_roundtrip_manifest(&ctx, mcp_port, mcp_fixture_port, true, false);
+    write_roundtrip_provider(&ctx, effect_port);
+    write_roundtrip_middleware(&ctx, effect_port);
+    write_roundtrip_consumer(&ctx);
+
+    let built = ctx
+        .cli([flag::YES, "--environment", "export", cmd::BUILD])
+        .await;
+    assert!(built.success_or_dump());
+    let deployed = ctx
+        .cli([flag::YES, "--environment", "export", cmd::DEPLOY])
+        .await;
+    assert!(deployed.success_or_dump());
+
+    let mcp_url = format!("http://localhost:{mcp_port}/mcp");
+    let client = reqwest::Client::new();
+    let listed = mcp_request(&client, &mcp_url, "tools/list", json!({})).await;
+    *projected_tools.lock().unwrap() = Some(listed.clone());
+    let tools = listed["tools"].as_array().unwrap();
+    assert_eq!(
+        tools
+            .iter()
+            .map(|tool| tool["name"].as_str().unwrap())
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["artifact_build", "artifact_render", "artifact_touch"])
+    );
+    let render = tools
+        .iter()
+        .find(|tool| tool["name"] == "artifact_render")
+        .unwrap();
+    assert_eq!(
+        render["inputSchema"]["properties"]["item-id"]["type"],
+        "string"
+    );
+    assert_eq!(
+        render["inputSchema"]["properties"]["_stdin"]["type"],
+        "string"
+    );
+    assert!(render["inputSchema"]["properties"]["_stdin"]["contentEncoding"].is_null());
+    assert_eq!(render["outputSchema"]["type"], "object");
+    assert!(render["outputSchema"]["properties"]["value"]["$ref"].is_string());
+    assert!(
+        render["description"]
+            .as_str()
+            .unwrap()
+            .contains("finite buffered data (16 MiB per direction)")
+    );
+
+    let direct = mcp_request(
+        &client,
+        &mcp_url,
+        "tools/call",
+        json!({"name":"artifact_render","arguments":{"item-id":"direct","_stdin":"AAEC/w=="}}),
+    )
+    .await;
+    assert_exported_result(&direct, "direct", "AAEC/w==");
+    let rejected = mcp_request(
+        &client,
+        &mcp_url,
+        "tools/call",
+        json!({"name":"artifact_render","arguments":{"item-id":"reject","_stdin":""}}),
+    )
+    .await;
+    assert_eq!(rejected["isError"], true);
+    let mapped: Value =
+        serde_json::from_str(rejected["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(mapped["name"], "rejected");
+    assert_eq!(mapped["payload"], "reject");
+
+    write_roundtrip_manifest(&ctx, mcp_port, mcp_fixture_port, true, true);
+    let built = ctx
+        .cli([flag::YES, "--environment", "import", cmd::BUILD])
+        .await;
+    assert!(built.success_or_dump());
+    let deployed = ctx
+        .cli([flag::YES, "--environment", "import", cmd::DEPLOY])
+        .await;
+    assert!(deployed.success_or_dump());
+    let agent = "RoundtripConsumer(\"identity-boundary\")";
+    let output = ctx
+        .cli([
+            flag::YES,
+            "--environment",
+            "import",
+            cmd::AGENT,
+            cmd::INVOKE,
+            agent,
+            "run",
+        ])
+        .await;
+    assert!(output.success_or_dump());
+    assert!(output.stdout_contains("roundtrip:projected:23:anonymous"));
+    assert!(output.stdout_contains("error:rejected:projected-error"));
+
+    assert_eq!(
+        effects
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|path| path.starts_with("/provider/"))
+            .count(),
+        4,
+        "direct and round-trip success/error calls must each dispatch once"
+    );
+    assert_eq!(
+        effects
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|path| path.starts_with("/middleware/artifact-touch/"))
+            .count(),
+        2,
+        "the imported-side universal middleware observes success and declared error"
+    );
+    assert!(
+        effects
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|path| path.starts_with("/middleware/"))
+            .all(|path| !path.ends_with("/anonymous")),
+        "the importing environment retains its authenticated principal until the MCP boundary"
+    );
+
+    mcp_fixture.shutdown().await;
+    write_roundtrip_manifest(&ctx, mcp_port, mcp_fixture_port, false, false);
+    let removed = ctx
+        .cli([flag::YES, "--environment", "export", cmd::DEPLOY])
+        .await;
+    assert!(removed.success_or_dump());
+    write_roundtrip_manifest(&ctx, mcp_port, mcp_fixture_port, false, true);
+    ctx.server_process.take().unwrap().kill().await.unwrap();
+    ctx.startup_ports = None;
+    ctx.start_server().await;
+
+    let replayed = ctx
+        .cli([
+            flag::YES,
+            "--environment",
+            "import",
+            cmd::AGENT,
+            cmd::INVOKE,
+            agent,
+            "status",
+        ])
+        .await;
+    assert!(replayed.success_or_dump());
+    assert!(replayed.stdout_contains("roundtrip:projected:23:anonymous"));
+    assert_eq!(
+        effects.lock().unwrap().len(),
+        6,
+        "completed replay must not repeat upstream or middleware effects"
+    );
+
+    effect_server.shutdown().await;
+}
+
+#[test]
 #[timeout("15 minutes")]
 async fn rust_mcp_clients_use_registry_credentials_and_replay_offline() {
     let calls = Arc::new(Mutex::new(Vec::<(String, Value, String)>::new()));
@@ -361,6 +617,428 @@ async fn rust_mcp_clients_use_registry_credentials_and_replay_offline() {
         );
     }
     assert_eq!(calls.lock().unwrap().len(), 10);
+}
+
+fn write_roundtrip_manifest(
+    ctx: &TestContext,
+    mcp_port: u16,
+    mcp_fixture_port: u16,
+    export_enabled: bool,
+    import_enabled: bool,
+) {
+    let deployment = if export_enabled {
+        format!(
+            "  deployments:\n    export:\n      - domain: localhost:{mcp_port}\n        tools:\n          artifact:\n            ownerComponent: mcp-roundtrip:export-owner\n            include: [render, touch]\n"
+        )
+    } else {
+        "  deployments:\n    export: []\n".to_string()
+    };
+    let import_environment = if import_enabled {
+        "  import:\n    server: local\n    componentPresets: debug\n    tools:\n      middleware: [roundtrip-audit]\n"
+    } else {
+        ""
+    };
+    let import_components = if import_enabled {
+        "  mcp-roundtrip:middleware:\n    dir: middleware\n    templates: rust\n  mcp-roundtrip:consumer:\n    dir: consumer\n    templates: rust\n    dependencies:\n      tools: [artifact-touch]\n"
+    } else {
+        ""
+    };
+    let import_tools = if import_enabled {
+        "  middleware:\n    roundtrip-audit:\n      component: mcp-roundtrip:middleware\n"
+    } else {
+        ""
+    };
+    let import_agent = if import_enabled {
+        "agents:\n  RoundtripConsumer:\n    tools:\n      artifact-touch: {}\n"
+    } else {
+        ""
+    };
+    let import_source = if import_enabled {
+        format!("  imports:\n    import:\n      - url: http://127.0.0.1:{mcp_fixture_port}/mcp\n")
+    } else {
+        String::new()
+    };
+    let bridge = if import_enabled {
+        "bridge:\n  rust:\n    internal:\n      tools: [artifact-touch]\n"
+    } else {
+        ""
+    };
+    fs::write_str(
+        ctx.cwd_path_join("golem.yaml"),
+        formatdoc! {r#"
+            manifestVersion: {version}
+            app: mcp-roundtrip
+            environments:
+              export:
+                server: local
+                componentPresets: debug
+            {import_environment}
+            components:
+              mcp-roundtrip:provider:
+                dir: provider
+                templates: rust
+              mcp-roundtrip:export-owner:
+                dir: export-owner
+                templates: rust
+                dependencies:
+                  tools: [mcp-roundtrip:provider/artifact]
+                tools:
+                  artifact: {{}}
+            {import_components}
+            tools:
+              artifact:
+                component: mcp-roundtrip:provider
+            {import_tools}
+            {import_agent}
+            mcp:
+            {deployment}{import_source}
+            {bridge}
+        "#, version = versions::sdk::MANIFEST},
+    )
+    .unwrap();
+}
+
+fn write_roundtrip_provider(ctx: &TestContext, effect_port: u16) {
+    fs::write_str(
+        ctx.cwd_path_join("provider/src/counter_agent.rs"),
+        formatdoc! {r#"
+            use futures_concurrency::prelude::*;
+            use golem_rust::agentic::{{InputStream, OutputStream}};
+            use golem_rust::{{FromSchema, FromWire, IntoSchema, IntoWire, ToolError, WireSchema, tool_definition, tool_implementation}};
+
+            #[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
+            pub struct Rendered {{
+                pub id: String,
+                pub revision: u64,
+                pub principal: String,
+            }}
+
+            #[derive(Debug, Clone, ToolError)]
+            pub enum RenderError {{
+                #[tool_error(kind = "usage-error", exit_code = 23)]
+                Rejected {{ item_id: String }},
+            }}
+
+            #[tool_definition(version = "1.0.0")]
+            pub trait Artifact {{
+                /// Render one artifact into finite output channels.
+                #[command(aliases = ["build"], annotations(idempotent = true))]
+                #[arg(item_id = "option", required = true)]
+                #[arg(diagnostics, channel = "stderr")]
+                async fn render(
+                    &self,
+                    item_id: String,
+                    stdin: InputStream,
+                    stdout: OutputStream,
+                    diagnostics: OutputStream,
+                    principal: golem_rust::tool::Principal,
+                ) -> Result<Rendered, RenderError>;
+
+                /// Record one projectable non-streaming effect.
+                #[arg(item_id = "option", required = true)]
+                async fn touch(
+                    &self,
+                    item_id: String,
+                    principal: golem_rust::tool::Principal,
+                ) -> Result<Rendered, RenderError>;
+            }}
+
+            struct ArtifactImpl;
+
+            #[tool_implementation]
+            impl Artifact for ArtifactImpl {{
+                async fn render(
+                    &self,
+                    item_id: String,
+                    mut stdin: InputStream,
+                    mut stdout: OutputStream,
+                    mut diagnostics: OutputStream,
+                    principal: golem_rust::tool::Principal,
+                ) -> Result<Rendered, RenderError> {{
+                    record_effect(&format!("/provider/{{item_id}}/{{}}", principal_class(&principal))).await;
+                    let mut bytes = Vec::new();
+                    while let Some(chunk) = stdin.next().await {{
+                        bytes.extend(chunk.expect("MCP stdin is readable"));
+                    }}
+                    stdout.write(bytes).await.expect("write stdout");
+                    stdout.finish().await.expect("finish stdout");
+                    diagnostics
+                        .write(format!("warning:{{item_id}}").into_bytes())
+                        .await
+                        .expect("write stderr");
+                    diagnostics.finish().await.expect("finish stderr");
+                    if item_id == "reject" {{
+                        Err(RenderError::Rejected {{ item_id }})
+                    }} else {{
+                        Ok(Rendered {{
+                            id: item_id,
+                            revision: 23,
+                            principal: principal_class(&principal).to_string(),
+                        }})
+                    }}
+                }}
+
+                async fn touch(
+                    &self,
+                    item_id: String,
+                    principal: golem_rust::tool::Principal,
+                ) -> Result<Rendered, RenderError> {{
+                    record_effect(&format!("/provider/{{item_id}}/{{}}", principal_class(&principal))).await;
+                    if item_id == "reject" {{
+                        Err(RenderError::Rejected {{ item_id }})
+                    }} else {{
+                        Ok(Rendered {{
+                            id: item_id,
+                            revision: 23,
+                            principal: principal_class(&principal).to_string(),
+                        }})
+                    }}
+                }}
+            }}
+
+            fn principal_class(principal: &golem_rust::tool::Principal) -> &'static str {{
+                match principal {{
+                    golem_rust::tool::Principal::Anonymous => "anonymous",
+                    golem_rust::tool::Principal::Oidc(_) => "oidc",
+                    golem_rust::tool::Principal::Agent(_) => "agent",
+                    golem_rust::tool::Principal::GolemUser(_) => "golem-user",
+                }}
+            }}
+
+            async fn record_effect(path: &str) {{
+                use golem_rust::wasip3::http::{{client, types}};
+                use golem_rust::wasip3::wit_future;
+                let headers = types::Fields::from_list(&[]).unwrap();
+                let (trailers_tx, trailers_rx) = wit_future::new(|| Ok(None));
+                let (request, transmit) = types::Request::new(headers, None, trailers_rx, None);
+                request.set_method(&types::Method::Post).unwrap();
+                request.set_scheme(Some(&types::Scheme::Http)).unwrap();
+                request.set_authority(Some("127.0.0.1:{effect_port}")).unwrap();
+                request.set_path_with_query(Some(path)).unwrap();
+                let send = async move {{ client::send(request).await.unwrap() }};
+                let finish = async move {{
+                    trailers_tx.write(Ok(None)).await.unwrap();
+                    transmit.await.unwrap();
+                }};
+                let (response, ()) = (send, finish).join().await;
+                assert_eq!(response.get_status_code(), 204);
+            }}
+        "#},
+    )
+    .unwrap();
+    add_dependency(
+        &ctx.cwd_path_join("provider/Cargo.toml"),
+        "futures-concurrency = \"7.6.3\"",
+    );
+}
+
+fn write_roundtrip_middleware(ctx: &TestContext, effect_port: u16) {
+    fs::write_str(
+        ctx.cwd_path_join("middleware/src/counter_agent.rs"),
+        formatdoc! {r#"
+            use futures_concurrency::prelude::*;
+            use golem_rust::tool::{{InputStream, InvocationResult, OutputStream, Principal, RawCustomToolError, Tool, ToolInvokeError, UnderlyingTool}};
+            use golem_rust::{{TypedSchemaValue, universal_tool_middleware}};
+
+            #[universal_tool_middleware(name = "roundtrip-audit")]
+            async fn audit(
+                tool_name: String,
+                _tool_metadata: Tool,
+                command_path: Vec<String>,
+                input: TypedSchemaValue,
+                stdin: Option<InputStream>,
+                stdout: Option<OutputStream>,
+                stderr: Option<OutputStream>,
+                principal: Principal,
+                underlying: UnderlyingTool,
+            ) -> Result<InvocationResult, ToolInvokeError<RawCustomToolError>> {{
+                record_effect(&format!("/middleware/{{tool_name}}/{{}}", principal_class(&principal))).await;
+                underlying.invoke_forwarding_outputs(command_path, input, stdin, stdout, stderr).await
+            }}
+
+            fn principal_class(principal: &Principal) -> &'static str {{
+                match principal {{
+                    Principal::Anonymous => "anonymous",
+                    Principal::Oidc(_) => "oidc",
+                    Principal::Agent(_) => "agent",
+                    Principal::GolemUser(_) => "golem-user",
+                }}
+            }}
+
+            async fn record_effect(path: &str) {{
+                use golem_rust::wasip3::http::{{client, types}};
+                use golem_rust::wasip3::wit_future;
+                let headers = types::Fields::from_list(&[]).unwrap();
+                let (trailers_tx, trailers_rx) = wit_future::new(|| Ok(None));
+                let (request, transmit) = types::Request::new(headers, None, trailers_rx, None);
+                request.set_method(&types::Method::Post).unwrap();
+                request.set_scheme(Some(&types::Scheme::Http)).unwrap();
+                request.set_authority(Some("127.0.0.1:{effect_port}")).unwrap();
+                request.set_path_with_query(Some(path)).unwrap();
+                let send = async move {{ client::send(request).await.unwrap() }};
+                let finish = async move {{
+                    trailers_tx.write(Ok(None)).await.unwrap();
+                    transmit.await.unwrap();
+                }};
+                let (response, ()) = (send, finish).join().await;
+                assert_eq!(response.get_status_code(), 204);
+            }}
+        "#},
+    )
+    .unwrap();
+    add_dependency(
+        &ctx.cwd_path_join("middleware/Cargo.toml"),
+        "futures-concurrency = \"7.6.3\"",
+    );
+}
+
+fn write_roundtrip_consumer(ctx: &TestContext) {
+    fs::write_str(
+        ctx.cwd_path_join("consumer/src/counter_agent.rs"),
+        indoc! {r#"
+            use artifact_touch_tool_guest_client::ArtifactTouchClient;
+            use golem_rust::{agent_definition, agent_implementation};
+
+            #[agent_definition]
+            pub trait RoundtripConsumer {
+                fn new(name: String) -> Self;
+                async fn run(&mut self) -> Vec<String>;
+                fn status(&self) -> Vec<String>;
+            }
+
+            struct Consumer { results: Vec<String> }
+
+            #[agent_implementation]
+            impl RoundtripConsumer for Consumer {
+                fn new(_name: String) -> Self { Self { results: Vec::new() } }
+
+                async fn run(&mut self) -> Vec<String> {
+                    let result = ArtifactTouchClient::new()
+                        .artifact_touch("projected".into())
+                        .await
+                        .unwrap()
+                        .collect()
+                        .await
+                        .unwrap()
+                        .result;
+                    self.results.push(format!(
+                        "roundtrip:{}:{}:{}",
+                        result.structured.value.id,
+                        result.structured.value.revision,
+                        result.structured.value.principal,
+                    ));
+                    let rejected = ArtifactTouchClient::new()
+                        .artifact_touch("reject".into())
+                        .await
+                        .unwrap();
+                    match rejected.collect().await {
+                            Ok(_) => panic!("rejected render unexpectedly succeeded"),
+                            Err(_) => {}
+                    }
+                    self.results.push("error:rejected:projected-error".into());
+                    self.results.clone()
+                }
+
+                fn status(&self) -> Vec<String> { self.results.clone() }
+            }
+        "#},
+    )
+    .unwrap();
+    let manifest = ctx.cwd_path_join("consumer/Cargo.toml");
+    let source = fs::read_to_string(&manifest).unwrap();
+    fs::write_str(
+        &manifest,
+        source.replace(
+            "[dependencies]",
+            indoc! {r#"
+                [dependencies]
+                artifact-touch-tool-guest-client = { path = "../golem-temp/bridge-sdk/rust/internal/artifact-touch-tool-guest-client" }
+            "#}
+            .trim_end(),
+        ),
+    )
+    .unwrap();
+}
+
+fn add_dependency(manifest: &std::path::Path, dependency: &str) {
+    let source = fs::read_to_string(manifest).unwrap();
+    fs::write_str(
+        manifest,
+        source.replace("[dependencies]", &format!("[dependencies]\n{dependency}")),
+    )
+    .unwrap();
+}
+
+fn parse_mcp_sse(body: &str) -> Value {
+    body.lines()
+        .filter_map(|line| line.strip_prefix("data:"))
+        .map(str::trim)
+        .find(|data| !data.is_empty())
+        .map(|data| serde_json::from_str(data).unwrap())
+        .unwrap_or_else(|| panic!("MCP response has no SSE data: {body}"))
+}
+
+async fn mcp_request(client: &reqwest::Client, url: &str, method: &str, params: Value) -> Value {
+    let initialize = client
+        .post(url)
+        .header("Accept", "application/json, text/event-stream")
+        .json(&json!({
+            "jsonrpc":"2.0", "id":1, "method":"initialize",
+            "params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"chunk-j","version":"1"}}
+        }))
+        .send()
+        .await
+        .unwrap();
+    let session = initialize
+        .headers()
+        .get("mcp-session-id")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(initialize.status().is_success());
+    parse_mcp_sse(&initialize.text().await.unwrap());
+    let initialized = client
+        .post(url)
+        .header("Accept", "application/json, text/event-stream")
+        .header("mcp-session-id", &session)
+        .json(&json!({"jsonrpc":"2.0","method":"notifications/initialized"}))
+        .send()
+        .await
+        .unwrap();
+    assert!(initialized.status().is_success());
+    let response = client
+        .post(url)
+        .header("Accept", "application/json, text/event-stream")
+        .header("mcp-session-id", session)
+        .json(&json!({"jsonrpc":"2.0","id":2,"method":method,"params":params}))
+        .send()
+        .await
+        .unwrap();
+    assert!(response.status().is_success());
+    parse_mcp_sse(&response.text().await.unwrap())["result"].clone()
+}
+
+fn assert_exported_result(result: &Value, item_id: &str, stdout: &str) {
+    assert_eq!(result["isError"], false);
+    assert_eq!(result["structuredContent"]["value"]["id"], item_id);
+    assert_eq!(result["structuredContent"]["value"]["revision"], "23");
+    assert_eq!(
+        result["structuredContent"]["value"]["principal"],
+        "anonymous"
+    );
+    assert_eq!(result["content"][1]["type"], "text");
+    assert_eq!(result["content"][1]["text"], stdout);
+    assert_eq!(
+        result["content"][1]["_meta"]["golem.cloud/tool-channel"],
+        "stdout"
+    );
+    assert_eq!(result["content"][2]["type"], "text");
+    assert_eq!(result["content"][2]["text"], format!("warning:{item_id}"));
+    assert_eq!(
+        result["content"][2]["_meta"]["golem.cloud/tool-channel"],
+        "stderr"
+    );
 }
 
 fn generated_source_text(root: &std::path::Path) -> String {

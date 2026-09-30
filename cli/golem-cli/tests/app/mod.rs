@@ -539,6 +539,13 @@ impl TestContext {
             .router_port
     }
 
+    fn mcp_port(&self) -> u16 {
+        self.startup_ports
+            .as_ref()
+            .expect("start_server must be called before mcp_port")
+            .mcp_port
+    }
+
     /// Base URL of the local worker service (the external invocation REST API),
     /// as discovered from the test server's random router port.
     #[allow(dead_code)]
