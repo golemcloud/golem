@@ -3667,10 +3667,10 @@ impl<Ctx: WorkerCtx> PeriodicSnapshotHost for PeriodicHost<'_, '_, Ctx> {
     }
 
     fn since(&self) -> Option<ConfirmedFilesystemSnapshot> {
-        let (selected, last_manual_update) = self.0.parent.baseline_selected_now();
+        let baselines = self.0.parent.start_baselines_now();
         self.0
             .filesystem_snapshot_slot
-            .since(selected.as_ref(), last_manual_update)
+            .since(baselines.automatic.as_ref(), baselines.manual_update)
     }
 
     async fn capture(

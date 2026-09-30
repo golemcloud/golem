@@ -1200,10 +1200,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self.agent_filesystem_snapshots().is_enabled()
     }
 
-    /// The selection of a start of `status` under the exclusions that this incarnation holds
-    /// now. It reads no storage, so it does not see the rejections that another executor stored
-    /// since the last [`Worker::select_start`].
-    fn start_selection(&self, status: &AgentStatusRecord) -> StartSelection {
+    /// The selection of a start of `status` under the exclusions that this incarnation holds in
+    /// memory now. It reads no storage, so it does not see the rejections that another executor
+    /// stored since the last [`Worker::select_start`]. A start selects with
+    /// [`Worker::select_start`].
+    fn selection_in_memory(&self, status: &AgentStatusRecord) -> StartSelection {
         let enabled = self.filesystem_snapshots_enabled();
         StartSelection::of(status, &self.snapshot_exclusions(), enabled)
     }
@@ -5435,7 +5436,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// shard admits the agent. This start holds no slot, no memory and no lock while it waits.
     async fn confirm_filesystem_snapshot_before_start(self: &Arc<Self>, start_attempt: Uuid) {
         let status = self.last_known_status.load_full();
-        let Some(name) = self.start_selection(&status).candidate else {
+        let Some(name) = self.selection_in_memory(&status).candidate else {
             return;
         };
         let agent_snapshots =
@@ -5454,20 +5455,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         debug!(?outcome, "Confirmed a filesystem snapshot before a start");
     }
 
-    /// The automatic snapshot record that a start selects now, under the exclusions of this
-    /// incarnation, and the index of the manual-update baseline. A periodic capture compares
-    /// with the confirmed snapshot of its slot only while a start would restore it.
-    pub(crate) fn baseline_selected_now(
-        &self,
-    ) -> (
-        Option<golem_common::model::UsableAutomaticSnapshot>,
-        Option<OplogIndex>,
-    ) {
+    /// The baselines of a start now: the automatic snapshot record that it selects under the
+    /// exclusions of this incarnation in memory, and the index of the manual-update record of
+    /// the status.
+    pub(crate) fn start_baselines_now(&self) -> filesystem_snapshots::StartBaselines {
         let status = self.last_known_status.load();
-        (
-            self.start_selection(&status).automatic,
-            status.last_manual_update_snapshot_index,
-        )
+        filesystem_snapshots::StartBaselines {
+            automatic: self.selection_in_memory(&status).automatic,
+            manual_update: status.last_manual_update_snapshot_index,
+        }
     }
 
     /// Classifies the worker for eviction ordering under memory pressure.

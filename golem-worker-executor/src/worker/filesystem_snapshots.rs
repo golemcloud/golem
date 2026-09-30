@@ -130,6 +130,15 @@ impl SnapshotSlot {
     }
 }
 
+/// The baselines that a start of a worker has now: the automatic snapshot record that it
+/// selects, and the index of the manual-update record of the status. A periodic capture
+/// compares with the confirmed snapshot of its slot only while one of them restores it.
+#[derive(Clone, Debug)]
+pub(crate) struct StartBaselines {
+    pub(crate) automatic: Option<UsableAutomaticSnapshot>,
+    pub(crate) manual_update: Option<OplogIndex>,
+}
+
 /// What a worker knows about the filesystem snapshots of its current generation.
 #[derive(Clone, Debug)]
 struct FilesystemSnapshotSlot {
