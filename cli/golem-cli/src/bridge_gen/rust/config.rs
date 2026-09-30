@@ -355,12 +355,12 @@ fn normalize_dependency(
 }
 
 pub(crate) fn dependency_item(dependency: &RustDependency) -> Item {
-    if dependency.version.is_some()
+    if let Some(version) = &dependency.version
         && dependency.package.is_none()
         && dependency.features.is_empty()
         && dependency.default_features.is_none()
     {
-        return toml_edit::value(dependency.version.as_ref().unwrap());
+        return toml_edit::value(version);
     }
     let mut table = toml_edit::InlineTable::new();
     for (key, value) in [
