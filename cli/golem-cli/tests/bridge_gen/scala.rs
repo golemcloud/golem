@@ -2455,10 +2455,7 @@ def start(
     ] = invocation.result
     invocation.cancel()
     val collected: _root_.scala.concurrent.Future[
-      _root_.scala.Either[
-        _root_.golem.tool.ToolError[GrepError],
-        _root_.golem.tool.CollectedToolInvocation[_root_.scala.Predef.String]
-      ]
+      _root_.golem.tool.CollectedToolInvocation[GrepError, _root_.scala.Predef.String]
     ] = invocation.collect()(_root_.scala.concurrent.ExecutionContext.parasitic)
   }
 }
