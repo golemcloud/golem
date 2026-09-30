@@ -112,9 +112,6 @@ async function collect(
 const Caller = defineAgent({
   name: "TsToolStreamingCaller",
   id: { name: z.string() },
-  config: {
-    secret: s.secret(z.string()),
-  },
   methods: {
     markerBeforeEof: method({
       input: { payload: s.bytes() },
@@ -136,6 +133,16 @@ const Caller = defineAgent({
       input: {},
       returns: MatrixCoreObservation,
     }),
+  },
+});
+
+const ResourceCaller = defineAgent({
+  name: "TsResourceToolStreamingCaller",
+  id: { name: z.string() },
+  config: {
+    secret: s.secret(z.string()),
+  },
+  methods: {
     matrix_resource_observation: method({
       input: {},
       returns: MatrixResourceObservation,
@@ -143,7 +150,7 @@ const Caller = defineAgent({
   },
 });
 
-Caller.implement({
+ResourceCaller.implement({
   init: () => ({}),
   methods: {
     async matrix_resource_observation() {
@@ -195,6 +202,12 @@ Caller.implement({
         typedValues,
       };
     },
+  },
+});
+
+Caller.implement({
+  init: () => ({}),
+  methods: {
     async matrix_core_observation() {
       const client = MatrixCoreClient.newClient();
       const success = await client.artifact().inspect(

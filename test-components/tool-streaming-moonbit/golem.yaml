@@ -38,6 +38,8 @@ agents:
     tools:
       moonbit-streaming: {}
       matrix-core: {}
+  MoonBitResourceToolStreamingCaller:
+    tools:
       matrix-resource: {}
 
 environments:

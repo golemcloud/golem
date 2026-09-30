@@ -42,6 +42,8 @@ agents:
     tools:
       scala-streaming: {}
       matrix-core: {}
+  ScalaResourceToolStreamingCaller:
+    tools:
       matrix-resource: {}
 
 environments:

@@ -427,6 +427,21 @@ struct MatrixResourceConfig {
 }
 
 ///|
+#derive.agent
+struct MoonBitResourceToolStreamingCaller {
+  name : String
+  secret : @config.Secret[String]
+}
+
+///|
+fn MoonBitResourceToolStreamingCaller::new(
+  name : String,
+  config : @config.Config[MatrixResourceConfig],
+) -> MoonBitResourceToolStreamingCaller {
+  { name, secret: config.value.secret, }
+}
+
+///|
 #derive.golem_schema
 struct MatrixResourceObservation {
   secretFirstProvider : String
@@ -451,7 +466,7 @@ struct MatrixResourceObservation {
 }
 
 ///|
-pub async fn MoonBitToolStreamingCaller::matrix_resource_observation(
+pub async fn MoonBitResourceToolStreamingCaller::matrix_resource_observation(
   self : Self,
 ) -> MatrixResourceObservation {
   let client = MatrixResourceClient::new()

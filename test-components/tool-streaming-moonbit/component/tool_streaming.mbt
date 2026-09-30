@@ -213,15 +213,11 @@ struct MatrixCoreObservation {
 #derive.agent
 struct MoonBitToolStreamingCaller {
   name : String
-  secret : @config.Secret[String]
 }
 
 ///|
-fn MoonBitToolStreamingCaller::new(
-  name : String,
-  config : @config.Config[MatrixResourceConfig],
-) -> MoonBitToolStreamingCaller {
-  { name, secret: config.value.secret, }
+fn MoonBitToolStreamingCaller::new(name : String) -> MoonBitToolStreamingCaller {
+  { name, }
 }
 
 ///|
