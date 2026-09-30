@@ -8,6 +8,7 @@ use golem_rust::durability::{Durability, DurableFunctionType};
 use golem_rust::golem_agentic::golem::tool::host::{
     self as tool_host, ByteStreamFailure, ToolRpc, ToolRpcError,
 };
+use golem_rust::schema::wit::wire::ToolError as WireToolError;
 use golem_rust::{
     ConfigSchema, FromSchema, FromWire, IntoSchema, IntoTypedSchemaValue, IntoWire, SchemaGraph,
     SchemaType, SchemaValue, TypedSchemaValue, WireSchema, agent_definition, agent_implementation,
@@ -109,6 +110,24 @@ struct RawReadFileResult {
     start_line: Option<u64>,
     end_line: Option<u64>,
     next_cursor: Option<RawReadFileCursor>,
+}
+
+#[derive(FromSchema)]
+#[schema(rename_all = "snake_case")]
+enum RawPathPolicyOperation {
+    Read,
+    Write,
+    Delete,
+}
+
+#[derive(FromSchema)]
+struct RawPathPolicyDenied {
+    operation: RawPathPolicyOperation,
+    argument: String,
+    supplied_path: String,
+    resolved_path: Option<String>,
+    allowed_roots: Vec<String>,
+    reason: String,
 }
 
 #[derive(FromSchema)]
@@ -421,6 +440,12 @@ pub trait ToolStreamingCaller {
         cwd: String,
         args: Vec<String>,
     ) -> CliToolEvidence;
+    async fn filesystem_policy_write_read(
+        &self,
+        path: String,
+        content: String,
+    ) -> Result<Vec<String>, String>;
+    async fn filesystem_policy_read(&self, path: String) -> Result<String, String>;
     async fn consume_typed_output(&self, decorated: bool, tag: String) -> Vec<TypedOutputEvidence>;
     async fn produce_typed_input(&self, decorated: bool) -> Vec<TypedInputEvidence>;
     async fn native_modes_stream_cancel_overlap(&self) -> Vec<String>;
@@ -704,19 +729,63 @@ async fn invoke_filesystem_tool<T: FromSchema>(
     name: String,
     input: golem_rust::schema::wit::wire::TypedSchemaValue,
 ) -> T {
+    try_invoke_filesystem_tool(name.clone(), input)
+        .await
+        .unwrap_or_else(|error| panic!("invoke guest-side filesystem tool '{name}': {error}"))
+}
+
+async fn try_invoke_filesystem_tool<T: FromSchema>(
+    name: String,
+    input: golem_rust::schema::wit::wire::TypedSchemaValue,
+) -> Result<T, String> {
     let result = ToolRpc::create(&name)
-        .expect("tool RPC creation failed")
+        .map_err(|error| format!("{error:?}"))?
         .invoke_and_await(Vec::new(), input, None, None, None)
         .await
-        .unwrap_or_else(|error| panic!("invoke guest-side filesystem tool '{name}': {error:?}"));
+        .map_err(describe_filesystem_error)?;
     let value = decode_typed_schema_value_owned(
         result
             .result
-            .unwrap_or_else(|| panic!("filesystem tool '{name}' returned no result")),
+            .ok_or_else(|| format!("filesystem tool '{name}' returned no result"))?,
     )
-    .unwrap_or_else(|error| panic!("decode filesystem tool '{name}' result: {error}"));
+    .map_err(|error| format!("decode filesystem tool '{name}' result: {error}"))?;
     T::from_value(value.value())
-        .unwrap_or_else(|error| panic!("convert filesystem tool '{name}' result: {error}"))
+        .map_err(|error| format!("convert filesystem tool '{name}' result: {error}"))
+}
+
+fn describe_filesystem_error(error: ToolRpcError) -> String {
+    match error {
+        ToolRpcError::RemoteToolError(WireToolError::CustomError(error))
+            if error.name == "path-policy-denied" =>
+        {
+            let value =
+                decode_typed_schema_value_owned(error.payload).unwrap_or_else(|decode_error| {
+                    panic!("decode path-policy payload: {decode_error}")
+                });
+            let payload =
+                RawPathPolicyDenied::from_value(value.value()).unwrap_or_else(|decode_error| {
+                    panic!("convert path-policy payload: {decode_error}")
+                });
+            let operation = match payload.operation {
+                RawPathPolicyOperation::Read => "read",
+                RawPathPolicyOperation::Write => "write",
+                RawPathPolicyOperation::Delete => "delete",
+            };
+            format!(
+                "{}|{operation}|{}|{}|{}|{}|{}",
+                error.name,
+                payload.argument,
+                payload.supplied_path,
+                payload.resolved_path.as_deref().unwrap_or("none"),
+                payload.allowed_roots.join(","),
+                payload.reason,
+            )
+        }
+        ToolRpcError::RemoteToolError(WireToolError::CustomError(error)) => {
+            format!("custom-tool-error:{}", error.name)
+        }
+        other => format!("unexpected-tool-rpc-error:{other:?}"),
+    }
 }
 
 async fn write_filesystem_file(path: String, content: String) -> RawWriteFileResult {
@@ -1979,6 +2048,86 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             stdout,
             stderr,
         }
+    }
+
+    async fn filesystem_policy_write_read(
+        &self,
+        path: String,
+        content: String,
+    ) -> Result<Vec<String>, String> {
+        let write: RawWriteFileResult = try_invoke_filesystem_tool(
+            "write-file".to_string(),
+            raw_filesystem_input(vec![
+                (
+                    "path",
+                    SchemaType::string(),
+                    SchemaValue::String(path.clone()),
+                ),
+                (
+                    "content",
+                    SchemaType::string(),
+                    SchemaValue::String(content.clone()),
+                ),
+                (
+                    "create-parent-directories",
+                    SchemaType::bool(),
+                    SchemaValue::Bool(true),
+                ),
+            ]),
+        )
+        .await?;
+        let read: RawReadFileResult = try_invoke_filesystem_tool(
+            "read-file".to_string(),
+            golem_rust::encode_typed_schema_value(
+                &RawReadFileInput {
+                    path,
+                    start_line: None,
+                    end_line: None,
+                    cursor: None,
+                }
+                .into_typed_schema_value()
+                .map_err(|error| format!("{error:?}"))?,
+            )
+            .map_err(|error| format!("{error:?}"))?,
+        )
+        .await?;
+
+        Ok(vec![
+            match write.disposition {
+                RawWriteDisposition::Created => "created",
+                RawWriteDisposition::Replaced => "replaced",
+            }
+            .to_string(),
+            write.bytes_written.to_string(),
+            read.content,
+            read.start_line
+                .map_or_else(|| "none".to_string(), |line| line.to_string()),
+            read.end_line
+                .map_or_else(|| "none".to_string(), |line| line.to_string()),
+            read.next_cursor.map_or_else(
+                || "none".to_string(),
+                |cursor| format!("{}:{}", cursor.byte_offset, cursor.line),
+            ),
+        ])
+    }
+
+    async fn filesystem_policy_read(&self, path: String) -> Result<String, String> {
+        let read: RawReadFileResult = try_invoke_filesystem_tool(
+            "read-file".to_string(),
+            golem_rust::encode_typed_schema_value(
+                &RawReadFileInput {
+                    path,
+                    start_line: None,
+                    end_line: None,
+                    cursor: None,
+                }
+                .into_typed_schema_value()
+                .map_err(|error| format!("{error:?}"))?,
+            )
+            .map_err(|error| format!("{error:?}"))?,
+        )
+        .await?;
+        Ok(read.content)
     }
 
     async fn consume_typed_output(&self, decorated: bool, tag: String) -> Vec<TypedOutputEvidence> {

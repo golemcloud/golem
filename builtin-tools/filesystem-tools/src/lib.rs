@@ -6,6 +6,7 @@ mod discovery;
 mod edit_file;
 mod grep;
 mod ls;
+mod path_policy;
 mod read_file;
 mod write_file;
 
