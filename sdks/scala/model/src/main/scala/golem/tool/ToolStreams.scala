@@ -16,6 +16,9 @@
 
 package golem.tool
 
+import zio.blocks.async.*
+import zio.blocks.streams.Stream
+
 import scala.concurrent.{ExecutionContext, Future}
 import scala.util.Success
 
@@ -27,12 +30,13 @@ import scala.util.Success
  */
 trait ToolInputStream {
 
-  /** Reads the next chunk. `Right(None)` is clean EOF. */
-  def read(): Future[Either[ByteStreamFailure, Option[Array[Byte]]]] =
-    Future.failed(new UnsupportedOperationException("tool input stream is not readable"))
+  /**
+   * The invocation-scoped byte stream. It must be materialized at most once.
+   */
+  def stream: Stream[ByteStreamFailure, Byte]
 
   /** Stops further consumption and releases any blocked read. */
-  def cancel(): Future[Unit]               = close()
+  def cancel(): Future[Unit]
   private[golem] def close(): Future[Unit] = Future.successful(())
 }
 
@@ -112,19 +116,10 @@ final case class ToolInvocation[+E, +A](
 
   /** Drains both outputs concurrently with the structured result. */
   def collect()(implicit ec: ExecutionContext): Future[CollectedToolInvocation[E, A]] = {
-    def drain(
-      stream: ToolInputStream,
-      chunks: Vector[Array[Byte]]
-    ): Future[Either[ByteStreamFailure, Array[Byte]]] =
-      stream.read().flatMap {
-        case Right(Some(chunk)) => drain(stream, chunks :+ chunk)
-        case Right(None)        => Future.successful(Right(chunks.flatten.toArray))
-        case Left(failure)      => Future.successful(Left(failure))
-      }
     def collectOutput(stream: Option[ToolInputStream]): Future[Either[ByteStreamFailure, Option[Array[Byte]]]] =
       stream
         .fold(Future.successful(Right(Option.empty[Array[Byte]]): Either[ByteStreamFailure, Option[Array[Byte]]]))(
-          value => drain(value, Vector.empty).map(_.map(Some(_)))
+          value => value.stream.runCollectAsync.toFuture.map(_.map(bytes => Some(bytes.toArray)))
         )
 
     result.transform(Success(_)).zip(collectOutput(stdout)).zip(collectOutput(stderr)).map {

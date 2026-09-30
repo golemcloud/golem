@@ -20,7 +20,7 @@ use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::AgentError;
 use golem_common::model::quota::ResourceName;
-use golem_common::model::{AgentId, PromiseId, ShardId, Timestamp};
+use golem_common::model::{AgentId, OplogIndex, PromiseId, ShardId, Timestamp};
 use prost::Message;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -91,6 +91,12 @@ pub enum WorkerExecutorError {
     /// The golem runtime encountered an error while exeucting the user error. Difference to ComponentTrapped is that the user component did not directly error here.
     Runtime {
         details: String,
+    },
+    /// Durable recovery data was temporarily unavailable. The worker must discard the current
+    /// runtime and reconstruct the same invocation without consuming its semantic retry budget.
+    RecoveryRequired {
+        details: String,
+        retry_from: Option<OplogIndex>,
     },
     InvalidShardId {
         shard_id: ShardId,
@@ -216,6 +222,20 @@ impl WorkerExecutorError {
         }
     }
 
+    pub fn recovery_required(details: impl Into<String>) -> Self {
+        Self::RecoveryRequired {
+            details: details.into(),
+            retry_from: None,
+        }
+    }
+
+    pub fn recovery_required_from(details: impl Into<String>, retry_from: OplogIndex) -> Self {
+        Self::RecoveryRequired {
+            details: details.into(),
+            retry_from: Some(retry_from),
+        }
+    }
+
     pub fn unexpected_oplog_entry(expected: impl Into<String>, got: impl Into<String>) -> Self {
         Self::UnexpectedOplogEntry {
             expected: expected.into(),
@@ -313,6 +333,9 @@ impl Display for WorkerExecutorError {
             Self::Runtime { details } => {
                 write!(f, "Runtime error: {details}")
             }
+            Self::RecoveryRequired { details, .. } => {
+                write!(f, "Runtime reconstruction required: {details}")
+            }
             Self::InvalidShardId {
                 shard_id,
                 shard_ids,
@@ -407,6 +430,7 @@ impl Error for WorkerExecutorError {
             Self::InvalidShardId { .. } => "Invalid shard",
             Self::InvalidAccount => "Invalid account",
             Self::Runtime { .. } => "Runtime error",
+            Self::RecoveryRequired { .. } => "Runtime reconstruction required",
             Self::InvocationFailed { .. } => "The invoked function failed",
             Self::PreviousInvocationFailed { .. } => "The previously invoked function failed",
             Self::PreviousInvocationExited => "The previously invoked function exited",
@@ -444,6 +468,7 @@ impl ApiErrorDetails for WorkerExecutorError {
             Self::InvalidShardId { .. } => "InvalidShardId",
             Self::InvalidAccount => "InvalidAccount",
             Self::Runtime { .. } => "Runtime",
+            Self::RecoveryRequired { .. } => "RecoveryRequired",
             Self::InvocationFailed { .. } => "InvocationFailed",
             Self::PreviousInvocationFailed { .. } => "PreviousInvocationFailed",
             Self::PreviousInvocationExited => "PreviousInvocationExited",
@@ -480,6 +505,7 @@ impl ApiErrorDetails for WorkerExecutorError {
             | Self::UnexpectedOplogEntry { .. }
             | Self::InvalidAccount
             | Self::Runtime { .. }
+            | Self::RecoveryRequired { .. }
             | Self::InvocationFailed { .. }
             | Self::PreviousInvocationFailed { .. }
             | Self::PreviousInvocationExited
@@ -753,6 +779,11 @@ impl From<WorkerExecutorError> for golem::worker::v1::WorkerExecutionError {
                     ),
                 },
             WorkerExecutorError::Runtime { details } => Self {
+                error: Some(golem::worker::v1::worker_execution_error::Error::RuntimeError(
+                    golem::worker::v1::RuntimeError { details },
+                )),
+            },
+            WorkerExecutorError::RecoveryRequired { details, .. } => Self {
                 error: Some(golem::worker::v1::worker_execution_error::Error::RuntimeError(
                     golem::worker::v1::RuntimeError { details },
                 )),

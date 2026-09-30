@@ -80,6 +80,7 @@ pub enum PathSegmentType {
     U8,
     S8,
     Bool,
+    Uuid,
     Enum(Vec<String>),
 }
 
@@ -130,6 +131,7 @@ impl From<&PathSegmentType> for SchemaType {
                 metadata,
             },
             PathSegmentType::Bool => SchemaType::Bool { metadata },
+            PathSegmentType::Uuid => SchemaType::Uuid { metadata },
             PathSegmentType::Enum(cases) => SchemaType::Enum {
                 cases: cases.clone(),
                 metadata,
@@ -156,6 +158,7 @@ impl TryFrom<SchemaType> for PathSegmentType {
             SchemaType::U8 { .. } => Ok(PathSegmentType::U8),
             SchemaType::S8 { .. } => Ok(PathSegmentType::S8),
             SchemaType::Bool { .. } => Ok(PathSegmentType::Bool),
+            SchemaType::Uuid { .. } => Ok(PathSegmentType::Uuid),
             SchemaType::Enum { cases, .. } => Ok(PathSegmentType::Enum(cases)),
             _ => Err("Unsupported schema type for path segment".into()),
         }

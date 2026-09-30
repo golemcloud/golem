@@ -21,6 +21,8 @@ import zio.ZIO
 import zio.test._
 
 import scala.concurrent.{ExecutionContext, Future, Promise}
+import zio.blocks.async.*
+import zio.blocks.streams.{JvmType, Stream}
 
 /**
  * The Scala port of the Rust SDK's `tool_client.rs` unit tests: custom-error
@@ -45,11 +47,10 @@ object ToolClientSpec extends ZIOSpecDefault {
 
   private final class ChunkStream(initial: List[Either[ByteStreamFailure, Option[Array[Byte]]]])
       extends ToolInputStream {
-    private var remaining                                                       = initial
-    override def read(): Future[Either[ByteStreamFailure, Option[Array[Byte]]]] = {
-      val next = remaining.head
-      remaining = remaining.tail
-      Future.successful(next)
+    override val stream: Stream[ByteStreamFailure, Byte] = initial.foldRight(Stream.empty) {
+      case (Left(error), _)           => Stream.fail(error)
+      case (Right(None), _)           => Stream.empty
+      case (Right(Some(chunk)), tail) => Stream.fromArray(chunk) ++ tail
     }
     override def cancel(): Future[Unit] = Future.successful(())
   }
@@ -153,10 +154,14 @@ object ToolClientSpec extends ZIOSpecDefault {
       }
     },
     test("started invocation collect waits for stdout after an observer failure") {
-      val eof    = Promise[Either[ByteStreamFailure, Option[Array[Byte]]]]()
+      val eof    = Promise[Unit]()
       val stream = new ToolInputStream {
-        override def read(): Future[Either[ByteStreamFailure, Option[Array[Byte]]]] = eof.future
-        override def cancel(): Future[Unit]                                         = Future.successful(())
+        override val stream: Stream[ByteStreamFailure, Byte] = Stream
+          .unfoldAsync(false) { emitted =>
+            if (emitted) Async.succeed(None)
+            else Async.fromFuture(eof.future).map(_ => None)
+          }(using JvmType.Infer.byte)
+        override def cancel(): Future[Unit] = Future.successful(())
       }
       val failure    = new RuntimeException("observer failed")
       val invocation = ToolInvocation[Nothing, Unit](Some(stream), None, Future.failed(failure), () => ())
@@ -164,7 +169,7 @@ object ToolClientSpec extends ZIOSpecDefault {
       for {
         _     <- ZIO.yieldNow
         before = !collected.isCompleted
-        _      = eof.success(Right(None))
+        _      = eof.success(())
         error <- ZIO.fromFuture(_ => collected.failed)
       } yield assertTrue(before, error eq failure)
     },

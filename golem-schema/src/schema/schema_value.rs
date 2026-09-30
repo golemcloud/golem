@@ -143,6 +143,7 @@ pub enum SchemaValue {
     Url {
         url: String,
     },
+    Uuid(uuid::Uuid),
     Datetime {
         value: DateTime<Utc>,
     },

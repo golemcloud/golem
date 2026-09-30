@@ -2402,6 +2402,61 @@ mod tests {
     }
 
     #[test]
+    // A shard manager that lost its leadership refuses the renewal, but the lease itself is safe:
+    // the elected leader restored it from the store. Treating the refusal like `LeaseNotFound`
+    // would drop the lease and re-acquire it, handing the allocation back and forth on every
+    // failover.
+    async fn renewal_refused_by_a_deposed_shard_manager_keeps_the_lease() {
+        let rid = test_resource_definition_id();
+        let renewals = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let renewals_seen = renewals.clone();
+        let mock = Arc::new(
+            MockShardManager::new()
+                .with_acquire(Ok(bounded_lease(rid, 1, 50)))
+                .with_renew_fn(move |_, _, _| {
+                    renewals_seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    Err(QuotaError::LeadershipLost(
+                        "no longer the leader".to_string(),
+                    ))
+                }),
+        );
+        let svc = GrpcQuotaService::new_inner(
+            mock.clone(),
+            9093,
+            Duration::from_millis(200),
+            Duration::from_secs(60),
+        );
+
+        let interest = svc
+            .acquire(test_env_id(), test_resource_name(), 100, 0, None)
+            .await;
+        // The first pass acquires the lease; the second renews it, and is refused.
+        svc.renew_all().await;
+        svc.renew_all().await;
+        assert_eq!(
+            renewals.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "the lease was never renewed, so the refusal was never seen"
+        );
+
+        let key: ResourceKey = (interest.environment_id, interest.resource_name.clone());
+        let slot_mutex = svc.get_slot(&key).await.unwrap();
+        let slot = slot_mutex.inner.lock().await;
+        assert_matches!(
+            &slot.lease,
+            TrackedLease::Bounded(BoundedLease {
+                epoch: LeaseEpoch(1),
+                ..
+            })
+        );
+        assert_eq!(
+            mock.acquire_calls.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "the lease was re-acquired instead of kept"
+        );
+    }
+
+    #[test]
     async fn commit_on_lost_lease_is_noop() {
         // Configure so that renewal fails (LeaseNotFound) but re-acquire also
         // fails, keeping the lease in Lost state through the commit.

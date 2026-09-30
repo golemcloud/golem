@@ -618,6 +618,7 @@ impl<'a> GraphCtx<'a> {
                 },
                 metadata,
             },
+            wire::SchemaTypeBody::UuidType => SchemaType::Uuid { metadata },
             wire::SchemaTypeBody::DatetimeType => SchemaType::Datetime { metadata },
             wire::SchemaTypeBody::DurationType => SchemaType::Duration { metadata },
             wire::SchemaTypeBody::QuantityType(q) => SchemaType::Quantity {
@@ -807,6 +808,7 @@ fn decode_value_node(
         }),
         wire::SchemaValueNode::PathValue(p) => SchemaValue::Path { path: p.clone() },
         wire::SchemaValueNode::UrlValue(u) => SchemaValue::Url { url: u.clone() },
+        wire::SchemaValueNode::UuidValue(value) => SchemaValue::Uuid((*value).into()),
         wire::SchemaValueNode::DatetimeValue(d) => SchemaValue::Datetime {
             value: datetime_from_wire(d)?,
         },
@@ -1443,6 +1445,7 @@ fn decode_owned_at(
         }),
         wire::SchemaValueNode::PathValue(p) => SchemaValue::Path { path: p },
         wire::SchemaValueNode::UrlValue(u) => SchemaValue::Url { url: u },
+        wire::SchemaValueNode::UuidValue(u) => SchemaValue::Uuid(u.into()),
         wire::SchemaValueNode::DatetimeValue(d) => SchemaValue::Datetime {
             value: datetime_from_wire(&d)?,
         },

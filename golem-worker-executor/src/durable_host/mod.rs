@@ -3321,44 +3321,71 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         }
                         OplogEntryLookupResult::NotFound {
                             violates_for_all: false,
-                        } if self.state.assume_idempotence => {
-                            let pending = match self.begin_switch_to_live().await? {
-                                BeginReplayToLive::ReplayResumed => {
-                                    return Err(WorkerExecutorError::runtime(
-                                        "replay target grew while a batched write was settling",
-                                    ));
-                                }
-                                BeginReplayToLive::Pending(pending) => pending,
-                            };
+                        } => {
+                            let recovery_failure = self
+                                .state
+                                .replay_state
+                                .lookup_oplog_entry_with_condition_and_state(
+                                    begin_index,
+                                    |entry, _, state: &ScopeScanState| {
+                                        matches!(
+                                            entry,
+                                            OplogEntry::Error {
+                                                kind: OplogErrorKind::Recovery,
+                                                retry_from,
+                                                ..
+                                            } if *retry_from == begin_index
+                                                || state.descendants.contains(retry_from)
+                                        )
+                                    },
+                                    OplogEntry::no_concurrent_side_effect,
+                                    ScopeScanState::new(begin_index),
+                                    OplogEntry::track_scope_membership,
+                                )
+                                .await;
+                            if matches!(recovery_failure, OplogEntryLookupResult::Found { .. }) {
+                                scope_replay_handle = Some(scope_handle);
+                                Ok(begin_index)
+                            } else if self.state.assume_idempotence {
+                                let pending = match self.begin_switch_to_live().await? {
+                                    BeginReplayToLive::ReplayResumed => {
+                                        return Err(WorkerExecutorError::runtime(
+                                            "replay target grew while a batched write was settling",
+                                        ));
+                                    }
+                                    BeginReplayToLive::Pending(pending) => pending,
+                                };
 
-                            // But this is not enough, because if the retried batched write operation succeeds,
-                            // and later we replay it, we need to skip the first attempt and only replay the second.
-                            // Se we add a Jump entry to the oplog that registers a deleted region.
-                            let deleted_region = OplogRegion {
-                                start: begin_index.next(), // keep the durable scope `Start` at `begin_index`
-                                end: pending.replay_target().next(), // skipping the Jump entry too
-                            };
-                            commit_replay_jumps(
-                                &self.public_state.worker(),
-                                &self.state.replay_state,
-                                self.entity_parent_start_index(),
-                                vec![deleted_region],
-                            )
-                            .await?;
+                                // But this is not enough, because if the retried batched write operation succeeds,
+                                // and later we replay it, we need to skip the first attempt and only replay the second.
+                                // Se we add a Jump entry to the oplog that registers a deleted region.
+                                let deleted_region = OplogRegion {
+                                    start: begin_index.next(), // keep the durable scope `Start` at `begin_index`
+                                    end: pending.replay_target().next(), // skipping the Jump entry too
+                                };
+                                commit_replay_jumps(
+                                    &self.public_state.worker(),
+                                    &self.state.replay_state,
+                                    self.entity_parent_start_index(),
+                                    vec![deleted_region],
+                                )
+                                .await?;
 
-                            self.finish_switch_to_live(pending).await?.require_live()?;
-                            // Switched to live and re-running the body: the scope `End` will be
-                            // appended live by `end_function`, so do not store the (now incomplete)
-                            // replay handle.
-                            Ok(begin_index)
-                        }
-                        OplogEntryLookupResult::NotFound { .. } => {
-                            // assume_idempotence is false and the operation was not completed —
-                            // we cannot safely retry a non-idempotent batched write.
-                            self.switch_to_live().await?;
-                            Err(WorkerExecutorError::runtime(
-                                "Non-idempotent remote write operation was not completed, cannot retry",
-                            ))
+                                self.finish_switch_to_live(pending).await?.require_live()?;
+                                // Switched to live and re-running the body: the scope `End` will be
+                                // appended live by `end_function`, so do not store the (now incomplete)
+                                // replay handle.
+                                Ok(begin_index)
+                            } else {
+                                // Recovery retains the original HTTP scope so method-level repair
+                                // can decide whether resending is safe. Without Recovery, an
+                                // incomplete batched write still requires the worker-level
+                                // idempotence override before the whole scope may be reexecuted.
+                                self.switch_to_live().await?;
+                                Err(WorkerExecutorError::runtime(
+                                    "Non-idempotent remote write operation was not completed, cannot retry",
+                                ))
+                            }
                         }
                     }
                 } else {
@@ -6206,10 +6233,25 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                         break Err(error);
                                     }
                                 }
+                                if store.as_context().data().durable_ctx().is_live() {
+                                    worker.reset_infrastructure_recovery_backoff();
+                                }
                                 number_of_replayed_functions += 1;
                                 continue;
                             }
                             _ => {
+                                if let Some(error) = selected_replay_recovery_error(
+                                    store
+                                        .as_context()
+                                        .data()
+                                        .durable_ctx()
+                                        .selected_tool_owner_failure()
+                                        .is_some(),
+                                    store.as_context().data().agent_mode(),
+                                    &invoke_result,
+                                ) {
+                                    break Err(error.clone());
+                                }
                                 let details = format!("{invoke_result:?}");
                                 let snapshot_divergence = match &invoke_result {
                                     Ok(result) => result.is_snapshot_replay_divergence(),
@@ -6482,6 +6524,9 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                             .await;
 
                             match replay_result {
+                                Err(error @ WorkerExecutorError::RecoveryRequired { .. }) => {
+                                    Err(error)
+                                }
                                 Err(error) => {
                                     // replay failed. There are two cases here:
                                     // 1. We failed before the update has succeeded. In this case we fail the update and retry the replay.
@@ -7357,6 +7402,20 @@ async fn begin_local_live_continuation<Ctx: WorkerCtx>(
     })
 }
 
+fn selected_replay_recovery_error(
+    owner_failure_selected: bool,
+    agent_mode: AgentMode,
+    result: &Result<InvokeResult, WorkerExecutorError>,
+) -> Option<&WorkerExecutorError> {
+    if owner_failure_selected || agent_mode != AgentMode::Durable {
+        return None;
+    }
+    match result {
+        Err(error @ WorkerExecutorError::RecoveryRequired { .. }) => Some(error),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -7379,6 +7438,22 @@ mod tests {
     use std::pin::Pin;
     use std::task::{Context, Poll, Waker};
     use test_r::test;
+
+    #[test]
+    fn replay_recovery_branch_preserves_owner_and_ephemeral_priority() {
+        let result = Err(WorkerExecutorError::recovery_required(
+            "payload backend unavailable",
+        ));
+        assert!(selected_replay_recovery_error(false, AgentMode::Durable, &result).is_some());
+        assert!(selected_replay_recovery_error(true, AgentMode::Durable, &result).is_none());
+        assert!(selected_replay_recovery_error(false, AgentMode::Ephemeral, &result).is_none());
+    }
+
+    #[test]
+    fn replay_recovery_branch_rejects_ordinary_host_failure() {
+        let result = Err(WorkerExecutorError::runtime("host task failed"));
+        assert!(selected_replay_recovery_error(false, AgentMode::Durable, &result).is_none());
+    }
 
     #[test]
     fn ephemeral_replay_is_only_for_typed_owner_initialization() {

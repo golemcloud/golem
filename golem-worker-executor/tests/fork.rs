@@ -36,7 +36,7 @@ use golem_common::schema::{FromSchema, SchemaValue};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
 use golem_worker_executor::services::rpc::{
-    DurableRpcInvocationResult, DurableStreamReadError, RemoteInvocationRpc, Rpc, RpcDemand,
+    DurableRpcInvocationResult, DurableStreamRemoteError, RemoteInvocationRpc, Rpc, RpcDemand,
     RpcError,
 };
 use golem_worker_executor::services::shard::ShardService;
@@ -252,7 +252,7 @@ impl Rpc for StreamingRemoteRpc {
         &self,
         request: StreamAttachmentControlRequest,
         auth: &AuthCtx,
-    ) -> Result<bool, RpcError> {
+    ) -> Result<bool, DurableStreamRemoteError<RpcError>> {
         self.inner
             .control_durable_stream_attachment(request, auth)
             .await
@@ -262,7 +262,7 @@ impl Rpc for StreamingRemoteRpc {
         &self,
         request: DurableStreamReadRequest,
         auth: &AuthCtx,
-    ) -> Result<Vec<u8>, DurableStreamReadError<RpcError>> {
+    ) -> Result<Vec<u8>, DurableStreamRemoteError<RpcError>> {
         self.inner.read_durable_stream_segment(request, auth).await
     }
 
@@ -495,7 +495,7 @@ impl WorkerProxy for LocalResumeProxy {
         &self,
         request: golem_common::model::durable_stream::StreamAttachmentControlRequest,
         auth: &AuthCtx,
-    ) -> Result<bool, WorkerProxyError> {
+    ) -> Result<bool, DurableStreamRemoteError<WorkerProxyError>> {
         self.inner
             .control_durable_stream_attachment(request, auth)
             .await
@@ -507,7 +507,7 @@ impl WorkerProxy for LocalResumeProxy {
         auth: &AuthCtx,
     ) -> Result<
         Vec<u8>,
-        golem_worker_executor::services::rpc::DurableStreamReadError<WorkerProxyError>,
+        golem_worker_executor::services::rpc::DurableStreamRemoteError<WorkerProxyError>,
     > {
         self.inner.read_durable_stream_segment(request, auth).await
     }

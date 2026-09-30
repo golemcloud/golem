@@ -388,6 +388,43 @@ pub enum HostFailureKind {
     Permanent,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DurableRecoveryFailureKind {
+    Retryable,
+    Permanent,
+}
+
+#[derive(Debug)]
+pub struct DurableRecoveryFailure {
+    pub kind: DurableRecoveryFailureKind,
+    pub inner: anyhow::Error,
+}
+
+impl DurableRecoveryFailure {
+    pub fn new(kind: DurableRecoveryFailureKind, inner: impl Into<anyhow::Error>) -> Self {
+        Self {
+            kind,
+            inner: inner.into(),
+        }
+    }
+}
+
+impl std::fmt::Display for DurableRecoveryFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "durable runtime reconstruction failed: {}",
+            self.inner
+        )
+    }
+}
+
+impl std::error::Error for DurableRecoveryFailure {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(AsRef::<dyn std::error::Error + Send + Sync + 'static>::as_ref(&self.inner))
+    }
+}
+
 /// A wrapper error that carries semantic classification of a host function failure.
 /// This is detected during error chain traversal in TrapType::from_error to produce
 /// the appropriate AgentError variant.

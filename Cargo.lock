@@ -4258,6 +4258,7 @@ dependencies = [
  "tonic-tracing-opentelemetry",
  "tower 0.5.3",
  "tracing",
+ "typed-path",
  "url",
  "uuid",
  "wasmtime",

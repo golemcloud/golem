@@ -131,6 +131,7 @@ pub(crate) fn encode_external_schema_value(value: &SchemaValue) -> Result<Value,
         SchemaValue::F64(value) => ("f64", encode_float(*value)?),
         SchemaValue::Char(value) => ("char", Value::String(value.to_string())),
         SchemaValue::String(value) => ("string", Value::String(value.clone())),
+        SchemaValue::Uuid(value) => ("uuid", Value::String(value.hyphenated().to_string())),
         SchemaValue::Record { fields } => (
             "record",
             serde_json::json!({
@@ -348,6 +349,19 @@ pub(crate) fn decode_external_schema_value(value: &Value) -> Result<SchemaValue,
             .as_str()
             .map(|value| SchemaValue::String(value.to_string()))
             .ok_or_else(|| "string value must be a string".to_string()),
+        "uuid" => {
+            let encoded = value
+                .as_str()
+                .ok_or_else(|| "uuid value must be a string".to_string())?;
+            let uuid = encoded
+                .parse::<uuid::Uuid>()
+                .map_err(|error| format!("invalid uuid: {error}"))?;
+            if uuid.hyphenated().to_string() != encoded {
+                Err("uuid must be a canonical lowercase hyphenated string".to_string())
+            } else {
+                Ok(SchemaValue::Uuid(uuid))
+            }
+        }
         "record" => {
             let object = exact_object(value, &["fields"])?;
             Ok(SchemaValue::Record {
@@ -826,6 +840,7 @@ mod poem_impl {
             F64(ExternalFloat),
             Char(char),
             String(String),
+            Uuid(uuid::Uuid),
             Record {
                 fields: Vec<ExternalSchemaValue>,
             },
@@ -1048,6 +1063,10 @@ mod tests {
                 json!({"kind":"string","value":"Golem"}),
             ),
             (
+                SchemaValue::Uuid("DD00721B-3329-4621-A01D-C71F02CD78C6".parse().unwrap()),
+                json!({"kind":"uuid","value":"dd00721b-3329-4621-a01d-c71f02cd78c6"}),
+            ),
+            (
                 SchemaValue::Record {
                     fields: vec![SchemaValue::U8(1), SchemaValue::String("x".to_string())],
                 },
@@ -1268,6 +1287,9 @@ mod tests {
             json!({"kind":"u64","value":"18446744073709551616"}),
             json!({"kind":"s64","value":"-0"}),
             json!({"kind":"s64","value":"9223372036854775808"}),
+            json!({"kind":"uuid","value":"DD00721B-3329-4621-A01D-C71F02CD78C6"}),
+            json!({"kind":"uuid","value":"dd00721b33294621a01dc71f02cd78c6"}),
+            json!({"kind":"uuid","value":"not-a-uuid"}),
             json!({"kind":"f64","value":{"$float":"infinity"}}),
             json!({"kind":"f32","value":3.5e38}),
             json!({"kind":"u8","value":1,"extra":true}),

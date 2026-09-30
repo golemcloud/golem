@@ -215,6 +215,14 @@ pub trait OplogService: Debug + Send + Sync {
         agent_mode: AgentMode,
     ) -> OplogIndex;
 
+    async fn try_get_last_index(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+    ) -> Result<OplogIndex, String> {
+        Ok(self.get_last_index(owned_agent_id, agent_mode).await)
+    }
+
     /// Deletes the agent's oplog, in every layer. With `expected_epoch` - the epoch the caller's
     /// own handle asserts - only while that is still the epoch recorded for the oplog and this
     /// executor recorded it: otherwise nothing is deleted and the delete is refused with
@@ -265,6 +273,14 @@ pub trait OplogService: Debug + Send + Sync {
     /// Checks whether the oplog exists in the oplog, without opening it
     async fn exists(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) -> bool;
 
+    async fn try_exists(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+    ) -> Result<bool, String> {
+        Ok(self.exists(owned_agent_id, agent_mode).await)
+    }
+
     /// Scans the oplog for all workers belonging to the given component, in a paginated way.
     ///
     /// `modes` selects which agent modes to scan. `Some(mode)` scans only that mode;
@@ -298,6 +314,18 @@ pub trait OplogService: Debug + Send + Sync {
         payload_id: PayloadId,
         md5_hash: Vec<u8>,
     ) -> Result<Vec<u8>, String>;
+
+    async fn download_raw_payload_classified(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        payload_id: PayloadId,
+        md5_hash: Vec<u8>,
+    ) -> Result<Vec<u8>, RawOplogPayloadDownloadError> {
+        self.download_raw_payload(owned_agent_id, agent_mode, payload_id, md5_hash)
+            .await
+            .map_err(|message| RawOplogPayloadDownloadError::Backend(anyhow::Error::msg(message)))
+    }
 }
 
 /// Level of commit guarantees
@@ -660,18 +688,19 @@ pub struct OplogFence {
     pub actual_epoch: Option<ShardEpoch>,
 }
 
-/// Why an oplog write failed without taking the executor down.
+/// Why an oplog operation failed without taking the executor down.
 ///
 /// A `Fenced` write is not a storage failure - the storage is healthy and refused the write on
 /// purpose - so it is returned rather than retried or panicked on, and the worker that hit it is
-/// stopped and left to the shard's new owner. A storage failure never reaches this type: it keeps
-/// its fail-stop semantics inside the oplog implementation. `Payload` is an entry whose payload the
-/// caller-supplied builder could not produce - it failed to serialize, or was too large - and the
-/// add failures tests inject.
+/// stopped and left to the shard's new owner. Storage failures on execution-critical reads and
+/// writes keep their fail-stop semantics inside the oplog implementation. Fallible archive
+/// maintenance returns `Maintenance`, allowing the fenced cleanup to be retried without stopping
+/// the executor. `Payload` is an entry whose payload the caller-supplied builder could not produce.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum OplogError {
     Fenced(OplogFence),
     Payload(String),
+    Maintenance(String),
 }
 
 impl From<String> for OplogError {
@@ -689,6 +718,7 @@ impl From<OplogError> for WorkerExecutorError {
                 fence.actual_epoch.map(|epoch| epoch.0),
             ),
             OplogError::Payload(details) => WorkerExecutorError::runtime(details),
+            OplogError::Maintenance(details) => WorkerExecutorError::runtime(details),
         }
     }
 }
@@ -707,6 +737,7 @@ impl Display for OplogError {
                     .unwrap_or_else(|| "none".to_string())
             ),
             OplogError::Payload(details) => write!(f, "oplog payload error: {details}"),
+            OplogError::Maintenance(details) => write!(f, "oplog maintenance error: {details}"),
         }
     }
 }
@@ -818,6 +849,10 @@ pub trait Oplog: Any + Debug + Send + Sync {
     /// Returns the number of dropped entries.
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> u64;
 
+    async fn try_drop_prefix(&self, last_dropped_id: OplogIndex) -> Result<u64, String> {
+        Ok(self.drop_prefix(last_dropped_id).await)
+    }
+
     /// Commits the buffered entries to the oplog
     async fn commit(
         &self,
@@ -826,6 +861,10 @@ pub trait Oplog: Any + Debug + Send + Sync {
 
     /// Returns the current oplog index
     async fn current_oplog_index(&self) -> OplogIndex;
+
+    async fn try_current_oplog_index(&self) -> Result<OplogIndex, String> {
+        Ok(self.current_oplog_index().await)
+    }
 
     /// Returns actor-ordered lifecycle metadata including buffered raw appends. Absence is proven
     /// through the returned watermark; storage failures must not be reported as absence.
@@ -862,6 +901,14 @@ pub trait Oplog: Any + Debug + Send + Sync {
         self.read_exact(oplog_index, n).await
     }
 
+    async fn try_read_source(
+        &self,
+        oplog_index: OplogIndex,
+        n: u64,
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, String> {
+        Ok(self.read_source(oplog_index, n).await)
+    }
+
     /// Reads the entry at the given oplog index.
     async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
         self.read_exact(oplog_index, 1)
@@ -874,6 +921,10 @@ pub trait Oplog: Any + Debug + Send + Sync {
 
     /// Gets the total number of entries in the oplog
     async fn length(&self) -> u64;
+
+    async fn try_length(&self) -> Result<u64, String> {
+        Ok(self.length().await)
+    }
 
     /// Adds an entry to the oplog and immediately commits it
     async fn add_and_commit(&self, entry: OplogEntry) -> Result<OplogIndex, OplogError> {
@@ -891,6 +942,16 @@ pub trait Oplog: Any + Debug + Send + Sync {
         payload_id: PayloadId,
         md5_hash: Vec<u8>,
     ) -> Result<Vec<u8>, String>;
+
+    async fn download_raw_payload_classified(
+        &self,
+        payload_id: PayloadId,
+        md5_hash: Vec<u8>,
+    ) -> Result<Vec<u8>, RawOplogPayloadDownloadError> {
+        self.download_raw_payload(payload_id, md5_hash)
+            .await
+            .map_err(|message| RawOplogPayloadDownloadError::Backend(anyhow::Error::msg(message)))
+    }
 
     /// Reserves a reference for a (possibly large) `serialized_request` payload, builds the call's
     /// `Start` from that reference with the **synchronous** `build_start`, and appends it — all so
@@ -1015,14 +1076,63 @@ pub(crate) fn downcast_oplog<T: Oplog>(oplog: &Arc<dyn Oplog>) -> Option<Arc<T>>
 
 async fn deserialize_oplog_payload<T: BinaryCodec + Send + 'static>(
     bytes: Vec<u8>,
-) -> Result<T, String> {
+) -> Result<T, anyhow::Error> {
     tokio::task::spawn_blocking(move || {
-        golem_common::serialization::try_deserialize(&bytes)?.ok_or_else(|| {
-            "oplog payload has an unsupported or missing serialization version".into()
-        })
+        golem_common::serialization::try_deserialize(&bytes)
+            .map_err(anyhow::Error::msg)?
+            .ok_or_else(|| {
+                anyhow::anyhow!("oplog payload has an unsupported or missing serialization version")
+            })
     })
     .await
-    .map_err(|error| format!("oplog payload deserialization task failed: {error}"))?
+    .map_err(anyhow::Error::new)?
+}
+
+#[derive(Debug)]
+pub enum RawOplogPayloadDownloadError {
+    Backend(anyhow::Error),
+    Missing(PayloadId),
+}
+
+impl std::fmt::Display for RawOplogPayloadDownloadError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Backend(error) => write!(formatter, "payload backend failure: {error}"),
+            Self::Missing(payload_id) => write!(formatter, "payload {payload_id} is missing"),
+        }
+    }
+}
+
+impl std::error::Error for RawOplogPayloadDownloadError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Backend(error) => Some(error.as_ref()),
+            Self::Missing(_) => None,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum OplogPayloadDownloadError {
+    Backend(anyhow::Error),
+    Corrupt(anyhow::Error),
+}
+
+impl std::fmt::Display for OplogPayloadDownloadError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Backend(error) => write!(formatter, "payload backend failure: {error}"),
+            Self::Corrupt(error) => write!(formatter, "corrupt payload: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for OplogPayloadDownloadError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Backend(error) | Self::Corrupt(error) => Some(error.as_ref()),
+        }
+    }
 }
 
 #[async_trait]
@@ -1062,7 +1172,9 @@ pub trait OplogOps: Oplog {
             OplogPayload::SerializedInline {
                 cached: Some(v), ..
             } => Ok((*v).clone()),
-            OplogPayload::SerializedInline { bytes, .. } => deserialize_oplog_payload(bytes).await,
+            OplogPayload::SerializedInline { bytes, .. } => deserialize_oplog_payload(bytes)
+                .await
+                .map_err(|error| error.to_string()),
             OplogPayload::External {
                 cached: Some(v), ..
             } => Ok((*v).clone()),
@@ -1072,7 +1184,53 @@ pub trait OplogOps: Oplog {
                 ..
             } => {
                 let bytes = self.download_raw_payload(payload_id, md5_hash).await?;
-                deserialize_oplog_payload(bytes).await
+                deserialize_oplog_payload(bytes)
+                    .await
+                    .map_err(|error| error.to_string())
+            }
+        }
+    }
+
+    async fn download_payload_classified<
+        T: BinaryCodec + Debug + Clone + PartialEq + Send + Sync + 'static,
+    >(
+        &self,
+        payload: OplogPayload<T>,
+    ) -> Result<T, OplogPayloadDownloadError> {
+        match payload {
+            OplogPayload::Inline(value) => Ok(*value),
+            OplogPayload::SerializedInline {
+                cached: Some(value),
+                ..
+            }
+            | OplogPayload::External {
+                cached: Some(value),
+                ..
+            } => Ok((*value).clone()),
+            OplogPayload::SerializedInline { bytes, .. } => deserialize_oplog_payload(bytes)
+                .await
+                .map_err(OplogPayloadDownloadError::Corrupt),
+            OplogPayload::External {
+                payload_id,
+                md5_hash,
+                ..
+            } => {
+                let bytes = self
+                    .download_raw_payload_classified(payload_id, md5_hash)
+                    .await
+                    .map_err(|error| match error {
+                        RawOplogPayloadDownloadError::Backend(error) => {
+                            OplogPayloadDownloadError::Backend(error)
+                        }
+                        RawOplogPayloadDownloadError::Missing(payload_id) => {
+                            OplogPayloadDownloadError::Corrupt(anyhow::anyhow!(
+                                "referenced oplog payload {payload_id} is missing"
+                            ))
+                        }
+                    })?;
+                deserialize_oplog_payload(bytes)
+                    .await
+                    .map_err(OplogPayloadDownloadError::Corrupt)
             }
         }
     }
@@ -1328,7 +1486,9 @@ pub trait OplogServiceOps: OplogService {
             OplogPayload::SerializedInline {
                 cached: Some(v), ..
             } => Ok((*v).clone()),
-            OplogPayload::SerializedInline { bytes, .. } => deserialize_oplog_payload(bytes).await,
+            OplogPayload::SerializedInline { bytes, .. } => deserialize_oplog_payload(bytes)
+                .await
+                .map_err(|error| error.to_string()),
             OplogPayload::External {
                 cached: Some(v), ..
             } => Ok((*v).clone()),
@@ -1340,7 +1500,9 @@ pub trait OplogServiceOps: OplogService {
                 let bytes = self
                     .download_raw_payload(owned_agent_id, agent_mode, payload_id, md5_hash)
                     .await?;
-                deserialize_oplog_payload(bytes).await
+                deserialize_oplog_payload(bytes)
+                    .await
+                    .map_err(|error| error.to_string())
             }
         }
     }

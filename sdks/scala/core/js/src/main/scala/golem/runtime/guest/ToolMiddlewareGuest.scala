@@ -36,6 +36,7 @@ import golem.FutureInterop
 import scala.concurrent.Future
 import scala.scalajs.js
 import scala.scalajs.js.JSConverters._
+import zio.blocks.async.*
 
 object ToolMiddlewareGuest {
   private implicit val ec: scala.concurrent.ExecutionContext =
@@ -343,32 +344,36 @@ object ToolMiddlewareGuest {
     case None =>
       target.fold(Future.successful(()))(_.finishInvocation())
     case Some(stream: JsMiddlewareOutputStream) =>
-      val source               = new JsToolInputStream(stream.underlying.asInstanceOf[ToolHostApi.RawByteStream])
-      def loop(): Future[Unit] = source.read().flatMap {
-        case Right(Some(bytes)) =>
+      val source = new JsToolInputStream(stream.underlying.asInstanceOf[ToolHostApi.RawByteStream])
+      source.chunks
+        .runForeachAsync(bytes =>
           target match {
-            case None         => loop()
+            case None         => Async.succeed(())
             case Some(writer) =>
-              writer.write(bytes).flatMap {
-                case Right(_)    => loop()
-                case Left(error) =>
-                  Future.failed(new IllegalStateException(s"middleware $channel write failed: $error"))
-              }
+              Async.fromFuture(
+                writer.write(bytes).flatMap {
+                  case Right(_)    => Future.successful(())
+                  case Left(error) =>
+                    Future.failed(new IllegalStateException(s"middleware $channel write failed: $error"))
+                }
+              )
           }
-        case Right(None) =>
-          target.fold(Future.successful(()))(_.finishInvocation())
-        case Left(failure) =>
-          target match {
-            case None         => Future.successful(())
-            case Some(writer) =>
-              writer.fail(failure).flatMap {
-                case Right(_)    => Future.successful(())
-                case Left(error) =>
-                  Future.failed(new IllegalStateException(s"middleware $channel failure forwarding failed: $error"))
-              }
-          }
-      }
-      loop()
+        )
+        .toFuture
+        .flatMap {
+          case Right(_) =>
+            target.fold(Future.successful(()))(_.finishInvocation())
+          case Left(failure) =>
+            target match {
+              case None         => Future.successful(())
+              case Some(writer) =>
+                writer.fail(failure).flatMap {
+                  case Right(_)    => Future.successful(())
+                  case Left(error) =>
+                    Future.failed(new IllegalStateException(s"middleware $channel failure forwarding failed: $error"))
+                }
+            }
+        }
     case Some(other) =>
       Future.failed(new IllegalStateException(s"unexpected middleware $channel: ${other.getClass.getName}"))
   }

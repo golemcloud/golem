@@ -603,19 +603,21 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
                 "consumer probe has no route for a source-unavailable overlay".to_string(),
             )
         })?;
-        rpc.control_durable_stream_attachment(
-            StreamAttachmentControlRequest {
-                format_version: DURABLE_STREAM_FORMAT_VERSION,
-                mapping: None,
-                operation: StreamAttachmentControlOperation::SourceUnavailable {
-                    key: key.clone(),
-                    reader_id,
-                    source_offset,
-                    consumer_read_ordinal,
+        DurableStreamRemoteError::retry_while_unavailable(|| {
+            rpc.control_durable_stream_attachment(
+                StreamAttachmentControlRequest {
+                    format_version: DURABLE_STREAM_FORMAT_VERSION,
+                    mapping: None,
+                    operation: StreamAttachmentControlOperation::SourceUnavailable {
+                        key: key.clone(),
+                        reader_id,
+                        source_offset,
+                        consumer_read_ordinal,
+                    },
                 },
-            },
-            &AuthCtx::System,
-        )
+                &AuthCtx::System,
+            )
+        })
         .await
         .map_err(|error| StreamStoreError::Oplog(error.to_string()))?;
         Ok(())
