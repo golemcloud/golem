@@ -19,6 +19,8 @@ use golem_common::model::ShardId;
 use golem_service_base::migration::{IncludedMigrationsDir, Migrations};
 use golem_service_base::repo::{Blob, SqlDateTime};
 use golem_shard_manager::config::EtcdConfig;
+use golem_shard_manager::quota::quota_repo::QUOTA_KEY_PREFIX;
+use golem_shard_manager::quota::{DbQuotaRepo, EtcdQuotaRepo, QuotaRepo};
 use golem_shard_manager::{
     DbRoutingTablePersistence, EtcdRoutingTablePersistence, ExecutorAddr, ExecutorId,
     ExternalRevision, LeaderFence, NO_REVISION, RoutingTablePersistence, STATE_KEY,
@@ -149,6 +151,11 @@ pub(crate) trait PersistenceStore: std::fmt::Debug + Send + Sync {
 
     /// The local-mode mirror tables, or `None` for a backend that has none.
     async fn mirror_snapshot(&self) -> Option<MirrorSnapshot>;
+
+    /// A quota repository over the same store, as the shard manager wires it in this mode. On
+    /// etcd every call mints its own leader key, so two repositories are two writers that each
+    /// pass their own fence, and what a conflict between them exercises is the revision check.
+    async fn quota_repo(&self) -> Arc<dyn QuotaRepo>;
 }
 
 /// Creates isolated stores: two stores never see each other's data.
@@ -232,6 +239,14 @@ impl PersistenceStore for PostgresStore {
             .await
             .expect("Cannot commit the read transaction");
         Some(MirrorSnapshot::from_rows(leases, assignments))
+    }
+
+    async fn quota_repo(&self) -> Arc<dyn QuotaRepo> {
+        let pool = golem_service_base::db::postgres::PostgresPool::configured(&self.config)
+            .await
+            .expect("Cannot create postgres pool");
+
+        Arc::new(DbQuotaRepo::new(pool))
     }
 }
 
@@ -346,6 +361,14 @@ impl PersistenceStore for SqliteStore {
             .expect("Cannot commit the read transaction");
         Some(MirrorSnapshot::from_rows(leases, assignments))
     }
+
+    async fn quota_repo(&self) -> Arc<dyn QuotaRepo> {
+        let pool = golem_service_base::db::sqlite::SqlitePool::configured(&self.config)
+            .await
+            .expect("Cannot create sqlite pool");
+
+        Arc::new(DbQuotaRepo::new(pool))
+    }
 }
 
 #[async_trait]
@@ -377,8 +400,8 @@ impl GetRoutingTablePersistence for SqliteRoutingTablePersistence {
 
 // -- etcd: isolated by one server per test worker, plus a wipe per store -----------------------
 
-struct EtcdRoutingTablePersistenceFactory {
-    etcd: Arc<DockerEtcd>,
+pub(crate) struct EtcdRoutingTablePersistenceFactory {
+    pub(crate) etcd: Arc<DockerEtcd>,
 }
 
 impl std::fmt::Debug for EtcdRoutingTablePersistenceFactory {
@@ -388,12 +411,12 @@ impl std::fmt::Debug for EtcdRoutingTablePersistenceFactory {
 }
 
 #[derive(Debug)]
-struct EtcdStore {
+pub(crate) struct EtcdStore {
     config: EtcdConfig,
 }
 
 impl EtcdStore {
-    async fn kv(&self) -> etcd_client::KvClient {
+    pub(crate) async fn kv(&self) -> etcd_client::KvClient {
         etcd_client::Client::connect(&self.config.endpoints, None)
             .await
             .expect("Cannot connect to etcd")
@@ -404,7 +427,7 @@ impl EtcdStore {
     ///
     /// The key is real and the fence carries its real creation revision: `for_test(key, 0)` would
     /// compare `create_revision == 0` - "this key must not exist" - inverting the fence.
-    async fn mint_leader_key(&self) -> (String, LeaderFence) {
+    pub(crate) async fn mint_leader_key(&self) -> (String, LeaderFence) {
         let key = format!("/golem/test/leader/{}", Uuid::new_v4());
         let mut kv = self.kv().await;
         kv.put(key.clone(), "test-leader", None)
@@ -428,6 +451,16 @@ impl EtcdStore {
                 .await
                 .expect("Cannot connect to etcd"),
         )
+    }
+
+    pub(crate) async fn client(&self) -> etcd_client::Client {
+        etcd_client::Client::connect(&self.config.endpoints, None)
+            .await
+            .expect("Cannot connect to etcd")
+    }
+
+    pub(crate) async fn quota_repo_with(&self, fence: LeaderFence) -> Arc<dyn QuotaRepo> {
+        Arc::new(EtcdQuotaRepo::new(self.client().await, fence))
     }
 }
 
@@ -456,26 +489,35 @@ impl PersistenceStore for EtcdStore {
         // Mirror tables are a local-mode feature; distributed mode holds only the blob.
         None
     }
+
+    async fn quota_repo(&self) -> Arc<dyn QuotaRepo> {
+        let (_, fence) = self.mint_leader_key().await;
+        self.quota_repo_with(fence).await
+    }
 }
 
 impl EtcdRoutingTablePersistenceFactory {
     /// The concrete store, for the etcd-only tests that tamper with the leader key.
-    async fn new_etcd_store(&self) -> EtcdStore {
-        // The state key is fixed, so stores on one etcd server cannot be isolated from each other
-        // the way postgres stores are by database. Instead the server is per test worker - tests
-        // on a worker run one at a time - and every new store starts by wiping the key.
+    pub(crate) async fn new_etcd_store(&self) -> EtcdStore {
+        // The state and quota keys are fixed, so stores on one etcd server cannot be isolated
+        // from each other the way postgres stores are by database. Instead the server is per test
+        // worker - tests on a worker run one at a time - and every new store starts by wiping them.
         let store = EtcdStore {
             config: EtcdConfig {
                 endpoints: vec![self.etcd.client_url()],
                 ..EtcdConfig::default()
             },
         };
-        store
-            .kv()
-            .await
-            .delete(STATE_KEY, None)
+        let mut kv = store.kv().await;
+        kv.delete(STATE_KEY, None)
             .await
             .expect("Cannot wipe the etcd state key");
+        kv.delete(
+            QUOTA_KEY_PREFIX,
+            Some(etcd_client::DeleteOptions::new().with_prefix()),
+        )
+        .await
+        .expect("Cannot wipe the etcd quota keys");
         store
     }
 }

@@ -16,7 +16,7 @@ pub mod config;
 pub mod error;
 mod grpc;
 mod metrics;
-mod quota;
+pub mod quota;
 mod registry_event_subscriber;
 pub(crate) mod sharding;
 
@@ -24,9 +24,7 @@ use self::grpc::ShardManagerServiceImpl;
 #[cfg(feature = "kubernetes")]
 use crate::config::HealthCheckK8sConfig;
 use crate::config::{EtcdConfig, HealthCheckMode, PersistenceConfig};
-use crate::quota::{
-    DbQuotaRepo, GrpcResourceDefinitionFetcher, QuotaService, UnavailableQuotaRepo,
-};
+use crate::quota::{DbQuotaRepo, EtcdQuotaRepo, GrpcResourceDefinitionFetcher, QuotaService};
 use crate::registry_event_subscriber::ShardManagerRegistryInvalidationHandler;
 use crate::sharding::etcd_connection::connect_for_requests;
 use crate::sharding::etcd_retry::{is_retriable_read, retry_retriable};
@@ -463,17 +461,16 @@ pub async fn run(
                 )
                 .await?;
 
-                // Distributed mode. The shard lease state is durable in etcd, but the quota
-                // tables have not moved there and there is no SQL pool here to hold them, so
-                // quota operations fail rather than silently succeeding against nothing.
+                // Distributed mode: the shard lease state and the quota state both live in etcd,
+                // over one connection, and every write to either carries the leadership fence.
                 (
                     Arc::new(EtcdRoutingTablePersistence::with_client(
-                        kv,
+                        kv.clone(),
                         shard_manager_config.number_of_shards,
-                        fence,
+                        fence.clone(),
                         etcd.compaction_retention_revisions,
                     )),
-                    Arc::new(UnavailableQuotaRepo),
+                    Arc::new(EtcdQuotaRepo::logged(kv, fence)),
                     Some(leadership),
                 )
             }

@@ -24,7 +24,7 @@ use crate::sharding::leader_election::LeaderFence;
 use crate::sharding::model::ShardLeaseState;
 use crate::sharding::shard_management::STATE_READ_TIMEOUT;
 use async_trait::async_trait;
-use etcd_client::{Client, Compare, CompareOp, Txn, TxnOp, TxnOpResponse, TxnResponse};
+use etcd_client::{Client, Compare, CompareOp, Txn, TxnOp, TxnResponse};
 use golem_common::serialization::serialize;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::Duration;
@@ -167,7 +167,7 @@ impl RoutingTablePersistence for EtcdRoutingTablePersistence {
             ])
             .and_then([TxnOp::put(STATE_KEY, encoded, None)])
             // So a rejected write can say which precondition failed.
-            .or_else([TxnOp::get(self.fence.key(), None)]);
+            .or_else([self.fence.read_back()]);
 
         let mut kv = self.client.kv_client();
         let response = kv.txn(txn).await?;
@@ -219,19 +219,9 @@ impl RoutingTablePersistence for EtcdRoutingTablePersistence {
 impl EtcdRoutingTablePersistence {
     /// Tells the two rejection causes apart using the transaction's else-branch read.
     fn classify_failure(&self, response: &TxnResponse) -> ShardManagerError {
-        let still_leader = matches!(
-            response.op_responses().first(),
-            Some(TxnOpResponse::Get(get))
-                if get.kvs().first().is_some_and(|kv| {
-                    kv.create_revision() == self.fence.create_revision()
-                })
-        );
-
-        if still_leader {
+        if self.fence.held_after_refusal(response) {
             ShardManagerError::ConcurrentModification
         } else {
-            // Leadership that cannot be confirmed, including a missing else-response, is
-            // safer reported as lost.
             ShardManagerError::LeadershipLost {
                 leader_key: self.fence.key_str(),
                 create_revision: self.fence.create_revision(),
