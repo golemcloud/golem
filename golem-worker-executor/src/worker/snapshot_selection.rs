@@ -23,7 +23,9 @@
 
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::oplog::{FilesystemSnapshotName, OplogIndex};
-use golem_common::model::{AgentStatusRecord, PendingUpdateKind, UsableAutomaticSnapshot};
+use golem_common::model::{
+    AgentStatusRecord, AutomaticSnapshot, PendingUpdateKind, UsableAutomaticSnapshot,
+};
 use std::collections::HashSet;
 
 /// The automatic snapshot entries that the starts of one agent exclude.
@@ -138,13 +140,6 @@ struct AutomaticSnapshotFilter<'a> {
 
 /// Whether an automatic snapshot entry with the filesystem snapshot `filesystem_snapshot` can be
 /// a baseline: a `SnapshotConfirmed` entry confirms its filesystem snapshot, or it has none.
-pub(crate) fn usable(
-    filesystem_snapshot: Option<&FilesystemSnapshotName>,
-    confirmed: bool,
-) -> bool {
-    confirmed || filesystem_snapshot.is_none()
-}
-
 /// Gives the automatic snapshot entry that a start uses as its baseline, or `None` when the start
 /// uses the manual-update baseline or a full replay.
 fn select_automatic_snapshot(
@@ -152,19 +147,9 @@ fn select_automatic_snapshot(
     filter: AutomaticSnapshotFilter<'_>,
 ) -> Option<UsableAutomaticSnapshot> {
     let last = status
-        .last_automatic_snapshot_index
-        .zip(status.last_automatic_snapshot_component_revision)
-        .filter(|_| {
-            usable(
-                status.last_automatic_snapshot_filesystem_snapshot.as_ref(),
-                status.last_automatic_snapshot_confirmed,
-            )
-        })
-        .map(|(index, component_revision)| UsableAutomaticSnapshot {
-            index,
-            component_revision,
-            filesystem_snapshot: status.last_automatic_snapshot_filesystem_snapshot.clone(),
-        });
+        .last_automatic_snapshot
+        .as_ref()
+        .and_then(AutomaticSnapshot::usable);
     last.into_iter()
         .chain(status.previous_usable_automatic_snapshot.clone())
         .find(|snapshot| {
@@ -186,12 +171,11 @@ fn start_candidate(
     filter: AutomaticSnapshotFilter<'_>,
 ) -> Option<FilesystemSnapshotName> {
     status
-        .last_automatic_snapshot_filesystem_snapshot
-        .clone()
-        .filter(|_| {
-            !status.last_automatic_snapshot_confirmed
-                && selects_the_last_record_once_confirmed(status, filter)
-        })
+        .last_automatic_snapshot
+        .as_ref()
+        .filter(|last| !last.confirmed)
+        .filter(|_| selects_the_last_record_once_confirmed(status, filter))
+        .and_then(|last| last.filesystem_snapshot.clone())
 }
 
 /// Whether a start would select the last automatic snapshot record if a confirmation record
@@ -200,18 +184,15 @@ fn selects_the_last_record_once_confirmed(
     status: &AgentStatusRecord,
     filter: AutomaticSnapshotFilter<'_>,
 ) -> bool {
-    status
-        .last_automatic_snapshot_index
-        .zip(status.last_automatic_snapshot_component_revision)
-        .is_some_and(|(index, component_revision)| {
-            passes(
-                status,
-                filter,
-                index,
-                component_revision,
-                status.last_automatic_snapshot_filesystem_snapshot.is_some(),
-            )
-        })
+    status.last_automatic_snapshot.as_ref().is_some_and(|last| {
+        passes(
+            status,
+            filter,
+            last.index,
+            last.component_revision,
+            last.filesystem_snapshot.is_some(),
+        )
+    })
 }
 
 /// Whether the usable record at `index` passes `filter` for a start of `status`.
@@ -275,10 +256,13 @@ mod tests {
         AgentStatusRecord {
             component_revision: revision(2),
             component_revision_for_replay: revision(1),
-            last_automatic_snapshot_index: Some(OplogIndex::from_u64(10)),
-            last_automatic_snapshot_component_revision: Some(revision(2)),
-            last_automatic_snapshot_filesystem_snapshot: last,
-            last_automatic_snapshot_confirmed: confirmed,
+            last_automatic_snapshot: Some(AutomaticSnapshot {
+                index: OplogIndex::from_u64(10),
+                timestamp: Timestamp::from(1_000),
+                component_revision: revision(2),
+                filesystem_snapshot: last,
+                confirmed,
+            }),
             previous_usable_automatic_snapshot: previous.map(|filesystem_snapshot| {
                 UsableAutomaticSnapshot {
                     index: OplogIndex::from_u64(5),
@@ -314,10 +298,10 @@ mod tests {
     fn an_unconfirmed_last_entry_is_selected_once_confirmed_only_when_it_passes_the_filter() {
         let status = status(Some(FilesystemSnapshotName::periodic()), false, Some(None));
         let unavailable = HashSet::from([OplogIndex::from_u64(10)]);
-        let older_revision = AgentStatusRecord {
-            last_automatic_snapshot_component_revision: Some(revision(1)),
-            ..status.clone()
-        };
+        let mut older_revision = status.clone();
+        if let Some(last) = older_revision.last_automatic_snapshot.as_mut() {
+            last.component_revision = revision(1);
+        }
 
         let cases = (
             selects_the_last_record_once_confirmed(&status, filter(&HashSet::new())),
@@ -517,20 +501,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn an_entry_is_usable_when_confirmed_or_without_a_name() {
-        let name = FilesystemSnapshotName::periodic();
-        assert_eq!(
-            [
-                usable(None, false),
-                usable(None, true),
-                usable(Some(&name), true),
-                usable(Some(&name), false),
-            ],
-            [true, true, true, false]
-        );
-    }
-
     fn selection_index(selection: &StartSelection) -> Option<u64> {
         selection
             .automatic
@@ -545,7 +515,6 @@ mod tests {
             true,
             Some(Some(FilesystemSnapshotName::periodic())),
         );
-        status.last_automatic_snapshot_component_revision = Some(revision(2));
         status.previous_usable_automatic_snapshot = Some(UsableAutomaticSnapshot {
             index: OplogIndex::from_u64(5),
             component_revision: revision(2),

@@ -1334,7 +1334,39 @@ impl Default for InvocationResultMembership {
     }
 }
 
-/// An automatic snapshot entry that a start can use as its baseline.
+/// The newest automatic snapshot entry in the oplog, with whether a `SnapshotConfirmed` entry
+/// confirmed its filesystem snapshot.
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
+pub struct AutomaticSnapshot {
+    /// The index of the `Snapshot` entry.
+    pub index: OplogIndex,
+    /// The time of the `Snapshot` entry.
+    pub timestamp: Timestamp,
+    /// The component revision that made the entry.
+    pub component_revision: ComponentRevision,
+    /// The filesystem snapshot name of the entry. `None` when the entry has no filesystem
+    /// capture.
+    pub filesystem_snapshot: Option<FilesystemSnapshotName>,
+    /// True when a `SnapshotConfirmed` entry with the same name follows the entry. The filesystem
+    /// snapshot is a usable baseline only when this is true.
+    pub confirmed: bool,
+}
+
+impl AutomaticSnapshot {
+    /// The entry as a baseline of a start, when it is usable: its filesystem snapshot is
+    /// confirmed, or it has no filesystem snapshot name.
+    pub fn usable(&self) -> Option<UsableAutomaticSnapshot> {
+        (self.confirmed || self.filesystem_snapshot.is_none()).then(|| UsableAutomaticSnapshot {
+            index: self.index,
+            component_revision: self.component_revision,
+            filesystem_snapshot: self.filesystem_snapshot.clone(),
+        })
+    }
+}
+
+/// An automatic snapshot entry that a start can use as its baseline: its filesystem snapshot is
+/// confirmed, or it has no filesystem snapshot name.
 #[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
 #[desert(evolution())]
 pub struct UsableAutomaticSnapshot {
@@ -1391,20 +1423,10 @@ pub struct AgentStatusRecord {
     /// Index of the last manual update snapshot index. Agent will call load_snapshot
     /// on this payload before starting replay.
     pub last_manual_update_snapshot_index: Option<OplogIndex>,
-    /// Index of the last automatic snapshot index. Must be >= last_manual_snapshot_index.
-    /// Agent will call load_snapshot on this payload before starting replay. If the load_snapshot
-    /// fails this will be ignored and a full replay from last_manual_snapshot_index will performed.
-    pub last_automatic_snapshot_index: Option<OplogIndex>,
-    /// Timestamp of the last automatic snapshot entry in the oplog.
-    pub last_automatic_snapshot_timestamp: Option<Timestamp>,
-    /// Component revision that created the last automatic snapshot.
-    pub last_automatic_snapshot_component_revision: Option<ComponentRevision>,
-    /// The filesystem snapshot name that the last automatic snapshot entry holds. `None` when
-    /// that entry has no filesystem capture.
-    pub last_automatic_snapshot_filesystem_snapshot: Option<FilesystemSnapshotName>,
-    /// True when a `SnapshotConfirmed` entry with the same name follows the last automatic
-    /// snapshot entry. The filesystem snapshot is a usable baseline only when this is true.
-    pub last_automatic_snapshot_confirmed: bool,
+    /// The last automatic snapshot entry. Its index is after `last_manual_update_snapshot_index`.
+    /// The agent calls load_snapshot on its payload before it starts the replay. If the
+    /// load_snapshot fails, the start ignores it and replays from the last manual update snapshot.
+    pub last_automatic_snapshot: Option<AutomaticSnapshot>,
     /// The newest automatic snapshot entry before the last one that was usable when the last one
     /// came: an entry with a confirmed filesystem snapshot, or an entry without a filesystem
     /// snapshot name. A start uses it when the last automatic snapshot entry is not usable, or
@@ -1451,11 +1473,7 @@ impl Default for AgentStatusRecord {
             component_revision_for_replay: ComponentRevision::INITIAL,
             current_retry_state: HashMap::new(),
             last_manual_update_snapshot_index: None,
-            last_automatic_snapshot_index: None,
-            last_automatic_snapshot_timestamp: None,
-            last_automatic_snapshot_component_revision: None,
-            last_automatic_snapshot_filesystem_snapshot: None,
-            last_automatic_snapshot_confirmed: false,
+            last_automatic_snapshot: None,
             previous_usable_automatic_snapshot: None,
             agent_mode: AgentMode::Durable,
         }

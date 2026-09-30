@@ -714,9 +714,10 @@ oplog entries (`DurableCallSession` created with `persisted: false`; `durability
 is exactly `snapshotting_mode`).
 
 Which history the new instance replays is decided in `Worker` construction (`worker/mod.rs`,
-`create_instance`, with `worker/snapshot_selection.rs::select_automatic_snapshot`). The status
-keeps two automatic snapshot records: the last one, and `previous_usable_automatic_snapshot`, the
-newest usable one before it. A record is usable when it has no filesystem snapshot name, or when a
+`create_instance`, with `worker/snapshot_selection.rs::StartSelection::of`). The status keeps two
+automatic snapshot records: the last one, `last_automatic_snapshot` (an `AutomaticSnapshot` with
+its index, time, revision, filesystem snapshot name and confirmation), and
+`previous_usable_automatic_snapshot`, the newest usable one before it. A record is usable when it has no filesystem snapshot name, or when a
 `SnapshotConfirmed` entry confirms its name. A start takes the first of the two that is usable, has
 the current revision, is not in the rejected set, is not unavailable for this start, and has no
 name when filesystem snapshots are disabled. It skips `INITIAL+1..=snapshot_idx`. No automatic

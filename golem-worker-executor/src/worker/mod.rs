@@ -12686,8 +12686,13 @@ mod tests {
         let status = AgentStatusRecord {
             component_revision: active_revision,
             component_revision_for_replay: replay_revision,
-            last_automatic_snapshot_index: Some(snapshot_index),
-            last_automatic_snapshot_component_revision: Some(active_revision),
+            last_automatic_snapshot: Some(golem_common::model::AutomaticSnapshot {
+                index: snapshot_index,
+                timestamp: Timestamp::from(1_000),
+                component_revision: active_revision,
+                filesystem_snapshot: None,
+                confirmed: false,
+            }),
             ..Default::default()
         };
 

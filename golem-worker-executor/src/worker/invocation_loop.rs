@@ -2167,8 +2167,13 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
         };
 
         let created_at = self.parent.get_initial_worker_metadata().created_at;
-        let last_snapshot_timestamp =
-            snapshot_baseline_timestamp(status.last_automatic_snapshot_timestamp, created_at);
+        let last_snapshot_timestamp = snapshot_baseline_timestamp(
+            status
+                .last_automatic_snapshot
+                .as_ref()
+                .map(|last| last.timestamp),
+            created_at,
+        );
 
         snapshot_action_at(last_snapshot_timestamp, *period, Timestamp::now_utc())
     }

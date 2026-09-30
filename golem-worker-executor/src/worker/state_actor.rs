@@ -902,8 +902,10 @@ impl OwnerCommitController {
 
 /// Whether the last automatic snapshot record of `status` has `name` and its confirmation.
 fn confirmed_with_name(status: &AgentStatusRecord, name: &FilesystemSnapshotName) -> bool {
-    status.last_automatic_snapshot_filesystem_snapshot.as_ref() == Some(name)
-        && status.last_automatic_snapshot_confirmed
+    status
+        .last_automatic_snapshot
+        .as_ref()
+        .is_some_and(|last| last.confirmed && last.filesystem_snapshot.as_ref() == Some(name))
 }
 
 /// Decides a confirmation job before its append, after its first commit. Gives the reply of a job
@@ -919,7 +921,12 @@ fn confirmation_before_append(
         Some(ConfirmOutcome::Deferred)
     } else if confirmed_with_name(status, name) {
         Some(ConfirmOutcome::Confirmed)
-    } else if status.last_automatic_snapshot_filesystem_snapshot.as_ref() != Some(name) {
+    } else if status
+        .last_automatic_snapshot
+        .as_ref()
+        .and_then(|last| last.filesystem_snapshot.as_ref())
+        != Some(name)
+    {
         Some(ConfirmOutcome::Superseded)
     } else if !admitted() {
         Some(ConfirmOutcome::Deferred)
@@ -1536,9 +1543,13 @@ mod tests {
         confirmed: bool,
     ) -> AgentStatusRecord {
         AgentStatusRecord {
-            last_automatic_snapshot_index: Some(OplogIndex::from_u64(10)),
-            last_automatic_snapshot_filesystem_snapshot: name.cloned(),
-            last_automatic_snapshot_confirmed: confirmed,
+            last_automatic_snapshot: Some(golem_common::model::AutomaticSnapshot {
+                index: OplogIndex::from_u64(10),
+                timestamp: golem_common::model::Timestamp::from(1_000),
+                component_revision: golem_common::model::component::ComponentRevision::INITIAL,
+                filesystem_snapshot: name.cloned(),
+                confirmed,
+            }),
             ..AgentStatusRecord::default()
         }
     }

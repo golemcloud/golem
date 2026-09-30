@@ -181,14 +181,7 @@ fn status_core(status: &AgentStatusRecord) -> AgentStatusRecord {
         component_revision_for_replay: status.component_revision_for_replay,
         current_retry_state: status.current_retry_state.clone(),
         last_manual_update_snapshot_index: status.last_manual_update_snapshot_index,
-        last_automatic_snapshot_index: status.last_automatic_snapshot_index,
-        last_automatic_snapshot_timestamp: status.last_automatic_snapshot_timestamp,
-        last_automatic_snapshot_component_revision: status
-            .last_automatic_snapshot_component_revision,
-        last_automatic_snapshot_filesystem_snapshot: status
-            .last_automatic_snapshot_filesystem_snapshot
-            .clone(),
-        last_automatic_snapshot_confirmed: status.last_automatic_snapshot_confirmed,
+        last_automatic_snapshot: status.last_automatic_snapshot.clone(),
         previous_usable_automatic_snapshot: status.previous_usable_automatic_snapshot.clone(),
         agent_mode: status.agent_mode,
         export_fork_admissions: status.export_fork_admissions.clone(),

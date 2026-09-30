@@ -1377,6 +1377,13 @@ fn agent_status_record_agent_mode_is_not_serialized() {
         component_revision: ComponentRevision::new(7).unwrap(),
         component_size: 1234,
         received_card_transfers,
+        last_automatic_snapshot: Some(crate::model::AutomaticSnapshot {
+            index: crate::model::oplog::OplogIndex::from_u64(9),
+            timestamp: crate::model::Timestamp::from(1_000),
+            component_revision: ComponentRevision::new(7).unwrap(),
+            filesystem_snapshot: Some(crate::model::oplog::FilesystemSnapshotName::periodic()),
+            confirmed: true,
+        }),
         previous_usable_automatic_snapshot: Some(crate::model::UsableAutomaticSnapshot {
             index: crate::model::oplog::OplogIndex::from_u64(5),
             component_revision: ComponentRevision::new(7).unwrap(),
@@ -1603,4 +1610,33 @@ fn durable_stream_session_index_rejects_malformed_inline_payload() {
         .apply_oplog_entry(OplogIndex::from_u64(1), &entry)
         .unwrap_err();
     assert!(error.contains("failed to decode"));
+}
+
+#[test]
+fn an_automatic_snapshot_is_usable_when_confirmed_or_without_a_name() {
+    let snapshot = |filesystem_snapshot: Option<crate::model::oplog::FilesystemSnapshotName>,
+                    confirmed: bool| crate::model::AutomaticSnapshot {
+        index: crate::model::oplog::OplogIndex::from_u64(10),
+        timestamp: crate::model::Timestamp::from(1_000),
+        component_revision: ComponentRevision::new(2).unwrap(),
+        filesystem_snapshot,
+        confirmed,
+    };
+    let name = crate::model::oplog::FilesystemSnapshotName::periodic();
+    let usable = |filesystem_snapshot: Option<crate::model::oplog::FilesystemSnapshotName>,
+                  confirmed: bool| {
+        snapshot(filesystem_snapshot, confirmed)
+            .usable()
+            .map(|usable| usable.filesystem_snapshot)
+    };
+
+    assert_eq!(
+        [
+            usable(None, false),
+            usable(None, true),
+            usable(Some(name.clone()), true),
+            usable(Some(name.clone()), false),
+        ],
+        [Some(None), Some(None), Some(Some(name)), None]
+    );
 }
