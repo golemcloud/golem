@@ -23,9 +23,11 @@ use golem_cli::fs;
 use golem_cli::log::{LogColorize, log_warn_action};
 use golem_cli::model::app::ResolvedLocalServer;
 use golem_worker_executor::services::golem_config::ResourceUsageMeteringConfig;
+use golem_worker_executor::services::shutdown::{SHUTDOWN_GRACE, Shutdown};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tracing::{debug, info};
+use tokio::task::JoinSet;
+use tracing::{debug, info, warn};
 
 use crate::compat::map_local_server_startup_error;
 use crate::launch::{LaunchArgs, StartupPorts, launch_golem_services};
@@ -71,7 +73,7 @@ impl CommandHandlerHooks for ServerCommandHandler {
                     return Ok(());
                 };
 
-                let (mut join_set, startup_ports) =
+                let (mut join_set, startup_ports, worker_shutdown) =
                     launch_result.map_err(|err| map_local_server_startup_error(err, &data_dir))?;
 
                 // Subdomains of the manifest's built-in local environments are expanded from
@@ -96,10 +98,7 @@ impl CommandHandlerHooks for ServerCommandHandler {
                     Some(res) => res,
                     None => {
                         info!("Received shutdown signal, stopping Golem server");
-                        // Aborting the tasks drops the router task, which owns the worker
-                        // executor's RunDetails; its Drop cancels the graph-wide shutdown
-                        // token and stops the epoch thread.
-                        join_set.shutdown().await;
+                        shutdown_golem_services(&mut join_set, &worker_shutdown).await;
                         Ok(())
                     }
                 }
@@ -115,7 +114,7 @@ impl CommandHandlerHooks for ServerCommandHandler {
         let args = RunArgs::default().with_env_overrides()?;
         let data_dir = default_data_dir()?;
 
-        let (mut join_set, _) = launch_golem_services(&LaunchArgs {
+        let (mut join_set, _, _) = launch_golem_services(&LaunchArgs {
             system_memory_override: args.system_memory_override,
             router_addr: args.router_addr().to_string(),
             router_port: args.router_port(),
@@ -149,6 +148,20 @@ impl CommandHandlerHooks for ServerCommandHandler {
     fn override_pretty_mode() -> bool {
         true
     }
+}
+
+async fn shutdown_golem_services(
+    join_set: &mut JoinSet<anyhow::Result<()>>,
+    worker_shutdown: &Shutdown,
+) {
+    worker_shutdown.cancel();
+    if !worker_shutdown.wait_for_tracked(SHUTDOWN_GRACE).await {
+        warn!(
+            grace = ?SHUTDOWN_GRACE,
+            "Background tasks did not finish within the shutdown grace period"
+        );
+    }
+    join_set.shutdown().await;
 }
 
 fn default_data_dir() -> anyhow::Result<PathBuf> {
@@ -395,10 +408,28 @@ async fn shutdown_signal() {
 mod tests {
     use super::*;
     use golem_cli::model::app_raw::LocalServer;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use test_r::test;
 
     fn local_server(value: LocalServer) -> ResolvedLocalServer {
         ResolvedLocalServer::from_raw_with_base_dir(&value, Path::new("/tmp/test-app"))
+    }
+
+    #[test]
+    async fn server_shutdown_waits_for_tracked_cleanup() {
+        let shutdown = Shutdown::new();
+        let cleanup_finished = Arc::new(AtomicBool::new(false));
+        let cleanup_finished_clone = cleanup_finished.clone();
+        let shutdown_token = shutdown.token();
+        shutdown.spawn(async move {
+            shutdown_token.cancelled().await;
+            tokio::task::yield_now().await;
+            cleanup_finished_clone.store(true, Ordering::Release);
+        });
+
+        shutdown_golem_services(&mut JoinSet::new(), &shutdown).await;
+
+        assert!(cleanup_finished.load(Ordering::Acquire));
     }
 
     #[test]

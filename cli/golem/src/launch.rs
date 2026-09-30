@@ -44,6 +44,7 @@ use golem_worker_executor::services::golem_config::{
     KeyValueStorageMultiSqliteConfig, ResourceLimitsConfig, ResourceUsageMeteringConfig,
     SchedulerStorageConfig, WorkerServiceGrpcConfig,
 };
+use golem_worker_executor::services::shutdown::Shutdown;
 use golem_worker_service::WorkerService;
 use golem_worker_service::config::{
     RouteResolverConfig, SqliteSessionStoreConfig, WorkerServiceConfig,
@@ -95,7 +96,7 @@ pub struct StartupPorts {
 
 pub async fn launch_golem_services(
     args: &LaunchArgs,
-) -> anyhow::Result<(JoinSet<anyhow::Result<()>>, StartupPorts)> {
+) -> anyhow::Result<(JoinSet<anyhow::Result<()>>, StartupPorts, Shutdown)> {
     rustls::crypto::ring::default_provider()
         .install_default()
         .expect("Failed to install crypto provider");
@@ -130,6 +131,7 @@ pub async fn launch_golem_services(
     write_registry_db_compat(&args.data_dir).await?;
     let custom_request_port = started_components.worker_service.custom_request_port;
     let mcp_port = started_components.worker_service.mcp_port;
+    let worker_shutdown = started_components.worker_executor.shutdown.clone();
 
     let router_port = start_router(
         &args.router_addr,
@@ -153,7 +155,7 @@ pub async fn launch_golem_services(
         custom_request_port, mcp_port, "Started Golem services"
     );
 
-    Ok((join_set, startup_ports))
+    Ok((join_set, startup_ports, worker_shutdown))
 }
 
 async fn write_startup_ports_file(path: &PathBuf, ports: &StartupPorts) -> anyhow::Result<()> {
