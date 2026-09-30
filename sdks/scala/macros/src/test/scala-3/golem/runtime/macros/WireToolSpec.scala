@@ -47,8 +47,19 @@ object WireToolSpec extends ZIOSpecDefault {
     def echo(value: Array[Byte], scalar: Byte): Array[Byte] = value
   }
 
-  private val uuidTool      = WireToolMacro.handle[UuidTool, UuidToolImpl]
-  private val byteArrayTool = WireToolMacro.handle[ByteArrayTool, ByteArrayToolImpl]
+  @golem.runtime.annotations.toolDefinition(version = "1.0.0")
+  trait DualOutputTool {
+    @golem.runtime.annotations.arg("stderr", channel = "stderr")
+    def run(stdout: ToolOutputStream, stderr: ToolOutputStream): Unit
+  }
+
+  final class DualOutputToolImpl extends DualOutputTool {
+    def run(stdout: ToolOutputStream, stderr: ToolOutputStream): Unit = ()
+  }
+
+  private val uuidTool       = WireToolMacro.handle[UuidTool, UuidToolImpl]
+  private val byteArrayTool  = WireToolMacro.handle[ByteArrayTool, ByteArrayToolImpl]
+  private val dualOutputTool = WireToolMacro.handle[DualOutputTool, DualOutputToolImpl]
 
   private def rootBody(graph: SchemaGraph): SchemaTypeBody =
     RefResolution.resolveRef(graph, graph.root).toOption.get.body
@@ -72,7 +83,9 @@ object WireToolSpec extends ZIOSpecDefault {
     test("compiled wire descriptor exactly matches the dynamic reflection descriptor") {
       assertTrue(
         echo.descriptor == ToolDefinitionMacro.metadata[ToolInvokerSpec.Echo].tryToTool.toOption.get,
-        git.descriptor == ToolDefinitionMacro.metadata[ToolInvokerSpec.Git].tryToTool.toOption.get
+        git.descriptor == ToolDefinitionMacro.metadata[ToolInvokerSpec.Git].tryToTool.toOption.get,
+        dualOutputTool.descriptor == ToolDefinitionMacro.metadata[DualOutputTool].tryToTool.toOption.get,
+        dualOutputTool.bindings.exists(binding => binding.stdout.isDefined && binding.stderr.isDefined)
       )
     },
     test("generated methods decode direct canonical positions and encode results") {

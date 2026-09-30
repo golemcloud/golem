@@ -698,7 +698,7 @@ fn guest_tool_mode_generates_schema_complete_buildable_consumer_module() {
         "@tool.TypedToolInvocation[String, NewError]",
         "@tool.TypedToolInvocation[Unit, @tool.NoToolError]",
         ".client.start(",
-        "@tool.typed_invocation(invocation, fn(result)",
+        "@tool.typed_invocation(invocation, true, false, fn(result)",
         "stdin : @asyncCore.Stream[Byte]?",
         "stdin : @asyncCore.Stream[Byte]",
         "pub(all) enum NewError",
