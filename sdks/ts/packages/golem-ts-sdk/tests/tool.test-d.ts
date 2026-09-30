@@ -869,6 +869,7 @@ const grepMiddlewareImplementation: ToolMiddlewareImplementation<typeof grepDef>
     void principal;
     // @ts-expect-error middleware stdout is returned by the caller-side projection
     void context.stdout;
+    // @ts-expect-error output-bearing underlying commands must use start
     return context.underlying.grep({ ...args, stdin });
   },
   replace: async (args, { underlying }) => underlying.replace(args),
@@ -896,6 +897,7 @@ const inferredGrepMiddleware = grepDef.middleware({
       void context.stdout;
       // @ts-expect-error typed underlying calls enforce presented command arguments
       void context.underlying.replace({ pattern: args.pattern });
+      // @ts-expect-error output-bearing underlying commands must use start
       return context.underlying.grep({ ...args, stdin });
     },
     replace: async (args, { underlying }) => underlying.replace(args),

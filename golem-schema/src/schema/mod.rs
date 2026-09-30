@@ -50,7 +50,7 @@ pub use fingerprint::{
     schema_fingerprint_v1,
 };
 #[cfg(feature = "derive")]
-pub use golem_schema_derive::{FromSchema, IntoSchema, Schema};
+pub use golem_schema_derive::{FromSchema, FromWire, IntoSchema, IntoWire, Schema, WireSchema};
 pub use graph::{SchemaGraph, SchemaTypeDef, TypedSchemaValue};
 pub use host_managed::{
     HostManagedKind, HostManagedOccurrence, HostManagedTraversalError, RedactedSchemaValue,

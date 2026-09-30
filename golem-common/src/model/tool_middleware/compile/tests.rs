@@ -50,6 +50,7 @@ fn error(name: &str, kind: ErrorKind, exit_code: u8, payload: SchemaType) -> Err
 fn tool(name: &str, error: ErrorCase, schema: SchemaGraph) -> Tool {
     Tool {
         version: "1.0.0".to_string(),
+        requires_filesystem: false,
         commands: CommandTree {
             nodes: vec![CommandNode {
                 name: name.to_string(),
@@ -64,6 +65,7 @@ fn tool(name: &str, error: ErrorCase, schema: SchemaGraph) -> Tool {
                     constraints: Vec::new(),
                     stdin: None,
                     stdout: None,
+                    stderr: None,
                     result: None,
                     errors: vec![error],
                     annotations: None,
@@ -113,6 +115,7 @@ fn command(name: &str, errors: Vec<ErrorCase>) -> CommandNode {
             constraints: Vec::new(),
             stdin: None,
             stdout: None,
+            stderr: None,
             result: None,
             errors,
             annotations: None,
@@ -123,6 +126,7 @@ fn command(name: &str, errors: Vec<ErrorCase>) -> CommandNode {
 fn simple_tool(name: &str) -> Tool {
     Tool {
         version: "1.0.0".to_string(),
+        requires_filesystem: false,
         commands: CommandTree {
             nodes: vec![command(name, Vec::new())],
         },
@@ -315,6 +319,7 @@ fn different_ref_ids_with_equivalent_recursive_schemas_are_accepted() {
 fn registry_is_validated_without_bindings() {
     let invalid = Tool {
         version: "1.0.0".to_string(),
+        requires_filesystem: false,
         commands: CommandTree { nodes: Vec::new() },
         schema: SchemaGraph::empty(),
     };

@@ -1790,6 +1790,41 @@ async fn staged_oplog_is_hidden_through_flush_and_published_without_cache_or_blo
 }
 
 #[test]
+async fn missing_external_payload_is_classified_as_corrupt_history(_tracing: &Tracing) {
+    let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
+    let service = PrimaryOplogService::new(
+        indexed_storage,
+        Arc::new(InMemoryBlobStorage::new()),
+        1,
+        1,
+        16,
+        RetryConfig::default(),
+    )
+    .await;
+    let agent = AgentId {
+        component_id: ComponentId::new(),
+        agent_id: "missing-payload".into(),
+    };
+    let owned = OwnedAgentId::new(EnvironmentId::new(), &agent);
+    let payload_id = PayloadId::new();
+
+    let error = service
+        .download_raw_payload_classified(
+            &owned,
+            AgentMode::Durable,
+            payload_id.clone(),
+            vec![0; 16],
+        )
+        .await
+        .expect_err("a referenced but absent payload must not be treated as a backend outage");
+
+    assert!(matches!(
+        error,
+        RawOplogPayloadDownloadError::Missing(missing) if missing == payload_id
+    ));
+}
+
+#[test]
 async fn primary_uses_agent_mode_commit_threshold(_tracing: &Tracing) {
     let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
     let service = PrimaryOplogService::new(

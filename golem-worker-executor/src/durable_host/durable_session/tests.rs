@@ -2663,13 +2663,13 @@ async fn native_tool_results_bind_early_output_after_reconstruction_and_reject_c
                 &identity.invocation.idempotency_key,
             )
             .unwrap(),
-            role: SessionStreamRole::Output,
+            role: SessionStreamRole::ToolStdout,
         });
         let handle = producer.register(None, request).await.unwrap().value;
         let mapping = StreamSessionMappingRecord {
             transport_stream_id: 47,
             handle: handle.clone(),
-            role: SessionStreamRole::Output,
+            role: SessionStreamRole::ToolStdout,
         };
         producer
             .write_items(
@@ -2696,7 +2696,7 @@ async fn native_tool_results_bind_early_output_after_reconstruction_and_reject_c
         .await
         .unwrap();
         let binding = producer
-            .local_binding(47, &handle, SessionStreamRole::Output)
+            .local_binding(47, &handle, SessionStreamRole::ToolStdout)
             .await
             .unwrap();
         let streams = StreamSession::open(
@@ -2714,8 +2714,10 @@ async fn native_tool_results_bind_early_output_after_reconstruction_and_reject_c
                 stdout: Some(SchemaValueStream::from_host_endpoint(
                     RegisteredOutputStream {
                         transport_stream_id: 47,
+                        role: SessionStreamRole::ToolStdout,
                     },
                 )),
+                stderr: None,
             }
             .into_typed_schema_value()
             .unwrap()
@@ -7294,7 +7296,7 @@ async fn detach_resume_and_takeover_advance_authority_and_fence_old_epochs() {
     let mapping = StreamSessionMappingRecord {
         transport_stream_id: 7,
         handle: handle.clone(),
-        role: SessionStreamRole::Input,
+        role: SessionStreamRole::ToolStdin,
     };
     let output_handle = producer
         .register(
@@ -7381,12 +7383,12 @@ async fn detach_resume_and_takeover_advance_authority_and_fence_old_epochs() {
                 StreamSessionMappingRecord {
                     transport_stream_id: 7,
                     handle: handle.clone(),
-                    role: SessionStreamRole::Input,
+                    role: SessionStreamRole::ToolStdin,
                 },
                 StreamSessionMappingRecord {
                     transport_stream_id: 8,
                     handle: output_handle.clone(),
-                    role: SessionStreamRole::Output,
+                    role: SessionStreamRole::ToolStderr,
                 },
             ],
         )
@@ -7535,6 +7537,26 @@ async fn detach_resume_and_takeover_advance_authority_and_fence_old_epochs() {
     epoch3
         .cancel_stream(
             7,
+            StreamCancelRole::OutputConsumer,
+            StreamCancelReason::Cancelled,
+            None,
+            Some(3),
+        )
+        .await
+        .expect_err("tool stdin must reject output cancellation");
+    epoch3
+        .cancel_stream(
+            8,
+            StreamCancelRole::InputProducer,
+            StreamCancelReason::Cancelled,
+            None,
+            Some(3),
+        )
+        .await
+        .expect_err("tool stderr must reject input cancellation");
+    epoch3
+        .cancel_stream(
+            7,
             StreamCancelRole::InputProducer,
             StreamCancelReason::Cancelled,
             Some("explicit input cancellation".to_string()),
@@ -7602,14 +7624,14 @@ async fn detach_resume_and_takeover_advance_authority_and_fence_old_epochs() {
         (
             &handle,
             7,
-            SessionStreamRole::Input,
+            SessionStreamRole::ToolStdin,
             StreamCancelRole::InputProducer,
             StreamCancelReason::Cancelled,
         ),
         (
             &output_handle,
             8,
-            SessionStreamRole::Output,
+            SessionStreamRole::ToolStderr,
             StreamCancelRole::OutputConsumer,
             StreamCancelReason::GuestDrop,
         ),
@@ -7658,9 +7680,12 @@ async fn nested_consumer_mappings_preserve_the_parent_input_or_output_role() {
                 root_kind,
                 recursive_value_path: Vec::new(),
             },
-            match role {
+            match role.direction() {
                 SessionStreamRole::Input => StreamSourceKind::AgentHostedInput,
                 SessionStreamRole::Output => StreamSourceKind::InvocationOutput,
+                SessionStreamRole::ToolStdin
+                | SessionStreamRole::ToolStdout
+                | SessionStreamRole::ToolStderr => unreachable!(),
             },
         );
         root_request.session_mapping = Some(StreamSessionMapping {
@@ -7819,9 +7844,12 @@ async fn nested_consumer_mappings_preserve_the_parent_input_or_output_role() {
             restarted
                 .mapping_for_handle(
                     &nested,
-                    match role {
+                    match role.direction() {
                         SessionStreamRole::Input => SessionStreamRole::Output,
                         SessionStreamRole::Output => SessionStreamRole::Input,
+                        SessionStreamRole::ToolStdin
+                        | SessionStreamRole::ToolStdout
+                        | SessionStreamRole::ToolStderr => unreachable!(),
                     },
                 )
                 .is_none()

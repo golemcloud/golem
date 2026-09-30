@@ -1,12 +1,105 @@
-// Runtime helpers for generated agent dispatch (`golem_agents.mbt`) and RPC
-// clients (`golem_clients.mbt`). They centralize the wire <-> schema-value
-// conversions and the error mapping to `@common.AgentError`, so the generated
-// code stays small and only ever raises `AgentError`.
-//
-// Invocation/constructor inputs are encoded as a `SchemaValue::Record` whose
-// fields are the ordered parameter values (matching the Rust/TS SDKs). A
-// method's output is `None` for a unit return and `Some(value)` for a single
-// returned value.
+// Direct wire codecs for generated dispatch and clients. Model-based helpers
+// remain available to dynamic callers. Invocation records contain ordered
+// parameter fields; unit results omit the return value.
+
+///|
+pub struct WireInput {
+  reader : @schema.WireReader
+  fields : Array[Int]
+}
+
+///|
+/// Validates the direct wire record envelope used by generated dispatch.
+pub fn decode_wire_input(
+  input : @types.SchemaValueTree,
+  arity : Int,
+  context : String,
+) -> WireInput raise @common.AgentError {
+  let reader = @schema.WireReader::new(input)
+  errdefer reader.abort()
+  let fields = @schema.wire_record(reader, input.root, arity, context) catch {
+    error =>
+      raise @common.AgentError::InvalidInput("\{context}: \{repr(error)}")
+  }
+  { reader, fields, }
+}
+
+///|
+pub fn WireInput::abort(self : WireInput) -> Unit {
+  self.reader.abort()
+}
+
+///|
+pub fn WireInput::finish(self : WireInput) -> Unit raise @common.AgentError {
+  self.reader.finish() catch {
+    error => raise @common.AgentError::InvalidInput(repr(error))
+  }
+}
+
+///|
+pub fn[T : @schema.FromWire] decode_wire_param(
+  input : WireInput,
+  index : Int,
+  context : String,
+) -> T raise @common.AgentError {
+  errdefer input.abort()
+  match input.fields.get(index) {
+    None =>
+      raise @common.AgentError::InvalidInput(
+        "\{context}: missing parameter \{index}",
+      )
+    Some(node) =>
+      @schema.FromWire::read_wire(input.reader, node) catch {
+        error =>
+          raise @common.AgentError::InvalidInput(
+            "\{context}: failed decoding parameter \{index}: \{repr(error)}",
+          )
+      }
+  }
+}
+
+///|
+pub async fn[T : @schema.IntoWire] encode_wire_output(
+  value : T,
+) -> @types.SchemaValueTree {
+  errdefer @schema.release_wire(value)
+  @schema.into_wire_async(value) catch {
+    @async-core.Cancelled::Cancelled as error => raise error
+    error =>
+      raise @common.AgentError::InvalidType(
+        "failed serializing return value: \{repr(error)}",
+      )
+  }
+}
+
+///|
+pub fn encode_wire_input(
+  values : Array[&@schema.IntoWire],
+) -> @types.SchemaValueTree raise @common.AgentError {
+  @schema.into_wire_record(values) catch {
+    error => raise @common.AgentError::InvalidInput(repr(error))
+  }
+}
+
+///|
+pub async fn encode_wire_input_async(
+  values : Array[&@schema.IntoWire],
+) -> @types.SchemaValueTree {
+  @schema.into_wire_record_async(values) catch {
+    @async-core.Cancelled::Cancelled as error => raise error
+    error => raise @common.AgentError::InvalidInput(repr(error))
+  }
+}
+
+///|
+pub fn[T : @schema.FromWire] decode_wire_output(
+  output : @types.SchemaValueTree,
+  context : String,
+) -> T raise @common.AgentError {
+  @schema.from_wire(output) catch {
+    error => raise @common.AgentError::InvalidType("\{context}: \{repr(error)}")
+  }
+}
 
 ///|
 /// Decodes a wire input record into its ordered fields.
@@ -55,12 +148,65 @@ pub async fn decode_invocation_input(
 }
 
 ///|
-/// Decodes the identity record from a parsed agent ID for snapshot restoration.
-#warnings("-unused_async")
-pub async fn decode_snapshot_identity(
+/// Owns the direct wire identity record throughout snapshot restoration.
+pub struct SnapshotIdentity {
+  reader : @schema.WireReader
+  fields : Array[Int]
+}
+
+///|
+/// Validates and retains the identity record from a parsed agent ID.
+pub fn decode_snapshot_identity(
   input : @types.SchemaValueTree,
-) -> Array[@model.SchemaValue] raise @common.AgentError {
-  decode_input_record(input, "snapshot restoration")
+) -> SnapshotIdentity raise @common.AgentError {
+  let reader = @schema.WireReader::new(input)
+  errdefer reader.abort()
+  let root = @schema.wire_node(reader, input.root) catch {
+    error =>
+      raise @common.AgentError::InvalidInput(
+        "snapshot restoration: \{repr(error)}",
+      )
+  }
+  let fields = match root {
+    @types.RecordValue(fields) => fields
+    _ =>
+      raise @common.AgentError::InvalidInput(
+        "snapshot restoration: expected record value",
+      )
+  }
+  { reader, fields, }
+}
+
+///|
+pub fn[T : @schema.FromWire] decode_snapshot_identity_field(
+  identity : SnapshotIdentity,
+  index : Int,
+) -> T raise @common.AgentError {
+  match identity.fields.get(index) {
+    None =>
+      raise @common.AgentError::InvalidInput(
+        "snapshot restoration: missing identity field \{index}",
+      )
+    Some(node) =>
+      T::read_wire(identity.reader, node) catch {
+        error =>
+          raise @common.AgentError::InvalidInput(
+            "snapshot restoration: failed decoding identity field \{index}: \{repr(error)}",
+          )
+      }
+  }
+}
+
+///|
+fn SnapshotIdentity::finish(
+  self : SnapshotIdentity,
+) -> Unit raise @schema.WireError {
+  self.reader.finish()
+}
+
+///|
+fn SnapshotIdentity::abort(self : SnapshotIdentity) -> Unit {
+  self.reader.abort()
 }
 
 ///|
@@ -193,12 +339,7 @@ pub async fn[T : @schema.FromSchema] decode_output(
 ///|
 /// Releases a wire value that cannot be delivered to an agent method.
 pub fn discard_wire_value(value : @types.SchemaValueTree) -> Unit {
-  let drops = @model_host.resource_drops()
-  try @model_host.schema_value_from_wit(value) catch {
-    _ => ()
-  } noraise {
-    decoded => decoded.release_resources(drops)
-  }
+  @schema.WireReader::new(value).abort()
 }
 
 ///|

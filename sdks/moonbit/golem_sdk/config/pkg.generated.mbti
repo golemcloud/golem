@@ -9,11 +9,13 @@ import {
 }
 
 // Values
+pub fn[T : WireConfigField] append_wire_entries_with(@schema.WireTypeEncoder, @schema.TypeTag[T], Array[String]) -> Array[@common.AgentConfigDeclaration]
+
 pub fn[T : ConfigField] collect_entries_of(@schema.TypeTag[T], Array[String]) -> Array[@agents.AgentConfigDef] raise @common.AgentError
 
 pub fn[T : ConfigField] load_config(@schema.TypeTag[T]) -> Config[T] raise @common.AgentError
 
-pub fn[T : @schema.IntoSchema + @schema.FromSchema] load_config_value(Array[String]) -> T raise @common.AgentError
+pub fn[T : @schema.WireSchema + @schema.FromWire] load_config_value(Array[String]) -> T raise @common.AgentError
 
 pub fn[T : ConfigField] load_field(@schema.TypeTag[T], Array[String]) -> T raise @common.AgentError
 
@@ -29,9 +31,10 @@ pub(all) struct Config[T] {
 pub(all) struct Secret[T] {
   key : Array[String]
 }
-pub fn[T : @schema.IntoSchema + @schema.FromSchema] Secret::get(Self[T]) -> T raise @common.AgentError
-pub fn[T : @schema.IntoSchema, R] Secret::with_handle(Self[T], (@types.Secret) -> R raise) -> R raise
+pub fn[T : @schema.WireSchema + @schema.FromWire] Secret::get(Self[T]) -> T raise @common.AgentError
+pub fn[T : @schema.WireSchema, R] Secret::with_handle(Self[T], (@types.Secret) -> R raise) -> R raise
 pub impl[T : @schema.IntoSchema] ConfigField for Secret[T]
+pub impl[T : @schema.WireSchema] WireConfigField for Secret[T]
 
 // Type aliases
 
@@ -50,7 +53,25 @@ pub impl ConfigField for UInt64
 pub impl ConfigField for Float
 pub impl ConfigField for Double
 pub impl ConfigField for String
-pub impl[T : @schema.IntoSchema + @schema.FromSchema] ConfigField for T?
-pub impl[T : @schema.IntoSchema + @schema.FromSchema, E : @schema.IntoSchema + @schema.FromSchema] ConfigField for Result[T, E]
+pub impl[T : @schema.IntoSchema + @schema.WireSchema + @schema.FromWire] ConfigField for T?
+pub impl[T : @schema.IntoSchema + @schema.WireSchema + @schema.FromWire, E : @schema.IntoSchema + @schema.WireSchema + @schema.FromWire] ConfigField for Result[T, E]
 pub impl ConfigField for Bytes
-pub impl[T : @schema.IntoSchema + @schema.FromSchema] ConfigField for Array[T]
+pub impl[T : @schema.IntoSchema + @schema.WireSchema + @schema.FromWire] ConfigField for Array[T]
+
+pub(open) trait WireConfigField {
+  fn append_wire_entries(@schema.WireTypeEncoder, Array[String]) -> Array[@common.AgentConfigDeclaration]
+}
+pub impl WireConfigField for Bool
+pub impl WireConfigField for Byte
+pub impl WireConfigField for Char
+pub impl WireConfigField for Int
+pub impl WireConfigField for Int64
+pub impl WireConfigField for UInt
+pub impl WireConfigField for UInt64
+pub impl WireConfigField for Float
+pub impl WireConfigField for Double
+pub impl WireConfigField for String
+pub impl[T : @schema.WireSchema] WireConfigField for T?
+pub impl[T : @schema.WireSchema, E : @schema.WireSchema] WireConfigField for Result[T, E]
+pub impl WireConfigField for Bytes
+pub impl[T : @schema.WireSchema] WireConfigField for Array[T]

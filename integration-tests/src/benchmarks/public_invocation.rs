@@ -263,7 +263,10 @@ impl PublicInvocationSession {
         let [SchemaValue::String(name)] = fields.as_slice() else {
             anyhow::bail!("benchmark agent constructor is not a single name")
         };
-        let constructor_parameters = serde_json::json!({ "name": name });
+        let constructor_parameters = serde_json::json!({
+            "kind": "record",
+            "value": {"fields": [{"kind": "string", "value": name}]}
+        });
         let key = IdempotencyKey::fresh();
         let start = PublicClientMessage::InvocationStart {
             attempt_id: uuid::Uuid::new_v4(),
@@ -285,6 +288,7 @@ impl PublicInvocationSession {
             token,
             InvocationSessionStateSnapshot {
                 delivered_output_cursors: BTreeMap::new(),
+                stable_stream_bindings: BTreeMap::new(),
                 pending_operation: Some(start),
                 session_token: None,
             },

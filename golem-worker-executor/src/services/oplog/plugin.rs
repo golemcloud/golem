@@ -19,7 +19,8 @@ use crate::services::component::ComponentService;
 use crate::services::oplog::{
     CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, OpenOplogs, Oplog,
     OplogAddReceipt, OplogCloseCompletion, OplogConstructor, OplogError, OplogFence,
-    OplogLifecycleGuard, OplogService, OrderedOplogStart, ReservedRawStartBuilder,
+    OplogLifecycleGuard, OplogService, OrderedOplogStart, RawOplogPayloadDownloadError,
+    ReservedRawStartBuilder,
 };
 use crate::services::shard::ShardService;
 use crate::services::worker_activator::WorkerActivator;
@@ -951,6 +952,18 @@ impl OplogService for ForwardingOplogService {
             .download_raw_payload(owned_agent_id, agent_mode, payload_id, md5_hash)
             .await
     }
+
+    async fn download_raw_payload_classified(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        payload_id: PayloadId,
+        md5_hash: Vec<u8>,
+    ) -> Result<Vec<u8>, RawOplogPayloadDownloadError> {
+        self.inner
+            .download_raw_payload_classified(owned_agent_id, agent_mode, payload_id, md5_hash)
+            .await
+    }
 }
 
 /// A wrapper for `Oplog` that periodically sends buffered oplog entries to oplog processor plugins
@@ -1533,6 +1546,16 @@ impl Oplog for ForwardingOplog {
         md5_hash: Vec<u8>,
     ) -> Result<Vec<u8>, String> {
         self.inner.download_raw_payload(payload_id, md5_hash).await
+    }
+
+    async fn download_raw_payload_classified(
+        &self,
+        payload_id: PayloadId,
+        md5_hash: Vec<u8>,
+    ) -> Result<Vec<u8>, RawOplogPayloadDownloadError> {
+        self.inner
+            .download_raw_payload_classified(payload_id, md5_hash)
+            .await
     }
 
     fn enqueue_add_pair(

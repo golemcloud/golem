@@ -23,7 +23,8 @@ try {
 }
 ```
 
-Commands without declared stdout return a Promise of their result. Commands with required or
-optional stdout return a `StartedToolInvocation`; consume its `stdout` and await its `result`, or
-use `.collect()` to collect both. `ToolCallError.cause.tag` is `tool`, `rpc`, or `unknown-error`.
+Commands without declared stdout or stderr return a Promise of their result. Commands with either
+output return a `StartedToolInvocation`; consume its independent `stdout` and `stderr` streams and
+await its `result`, or use `.collect()` to drain every declared output concurrently. Stderr bytes do
+not imply failure. `ToolCallError.cause.tag` is `tool`, `rpc`, or `unknown-error`.
 Protocol errors use `rpc` with `cause.error.tag === 'protocol-error'`.

@@ -176,6 +176,7 @@ struct PanicComponentService;
 fn test_tool_definition() -> Tool {
     Tool {
         version: "1.0.0".to_string(),
+        requires_filesystem: false,
         commands: CommandTree { nodes: Vec::new() },
         schema: SchemaGraph::empty(),
     }
@@ -359,6 +360,8 @@ fn test_entity_request(
                 has_stdin: false,
                 has_stdout: false,
                 declares_stdout: false,
+                has_stderr: false,
+                declares_stderr: false,
                 output_contract: golem_common::model::entity::ToolOutputContract {
                     result: None,
                     errors: Vec::new(),
@@ -568,6 +571,8 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
             has_stdin: true,
             has_stdout: true,
             declares_stdout: true,
+            has_stderr: true,
+            declares_stderr: true,
             output_contract: golem_common::model::entity::ToolOutputContract {
                 result: None,
                 errors: Vec::new(),
@@ -775,6 +780,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
         input_decode_failure: None,
         has_stdin: false,
         has_stdout: false,
+        has_stderr: false,
         call_mode: EntityCallMode::Synchronous,
         error: SerializableToolRpcError::Denied("not allowed".to_string()),
     }

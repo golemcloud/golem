@@ -87,7 +87,9 @@ Public REST, CLI and native invocation sessions address either an exact, already
 owner or a component target for which the executor creates an ephemeral virtual owner. They never
 silently create a named real owner. The typed input and success/custom-error result carry
 materialized scalar schemas and values only: streams cannot be nested recursively in those values.
-The only streaming tool attachments are optional byte `stdin` and byte `stdout` roots.
+The only streaming tool attachments are optional byte `stdin`, byte `stdout`, and byte `stderr`
+roots. Stdout and stderr have independent stream identities, cursors, terminals, cancellation, and
+reconstruction; stderr bytes do not imply that the structured result failed.
 
 MCP exports use the same native session path, always with a fresh component-backed ephemeral
 owner. The authenticated compiled MCP definition supplies an expected deployment revision;
@@ -95,8 +97,8 @@ owner. The authenticated compiled MCP definition supplies an expected deployment
 The check also applies to an already accepted activation and scalar scheduling. A stale listing
 cannot select historical activation state or reinterpret its input against a newer deployment.
 MCP authenticates before dispatch and grants only Invoke on the exact fresh owner, not System
-authority. Its finite stream adapter buffers at most 16 MiB per direction while draining stdout
-concurrently with stdin.
+authority. Its finite stream adapter buffers at most 16 MiB independently for stdin, stdout, and
+stderr while draining both outputs concurrently with stdin.
 
 `worker/invocation.rs` drives `invoke_external_tool` through a registered `NativeToolTask` under
 the same invocation start, deadline, principal/scope, tail settlement and committed completion as
@@ -105,12 +107,12 @@ idle-store deadlock. Native dispatch uses the same entity boundary without an ou
 `Start`; its root result is delivered directly, with no guest completion marker. Replay runs the
 dispatcher again using the activation pinned when the invocation was accepted and reconstructs
 completed bodies before checking the invocation result. Internal input/result envelopes carry
-stdin/stdout as ordinary schema-value streams. The Prepared Output mapping starts generic pumping
-before the result exists; `materialize_result` later binds the same handle, without re-registering
-or starting a second pump. The shared byte drain compares historical bytes and terminals rather
-than republishing them. Execution and draining run together with `try_join!`; only after both
-complete is the structured outcome recorded inside the result envelope in the session journal.
-Replaying changed bytes, terminals or structured results is rejected.
+stdin/stdout/stderr as ordinary schema-value streams. Each Prepared Output mapping starts generic
+pumping before the result exists; `materialize_result` later binds the same handles, without
+re-registering or starting second pumps. The shared byte drains compare each channel's historical
+bytes and terminal rather than republishing them. Execution and both drains run concurrently; only
+after all complete is the structured outcome recorded inside the result envelope in the session
+journal. Replaying changed bytes, terminals, channel identities, or structured results is rejected.
 An `ExternalTool` result invalidates read-only method caches even when it contains a tool error:
 the body may have mutated owner state before returning that error.
 

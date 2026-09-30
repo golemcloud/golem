@@ -1072,6 +1072,51 @@ async fn recovery_failure_remains_failed_until_recovery_succeeds() {
 }
 
 #[test]
+async fn infrastructure_recovery_ignores_existing_semantic_retry_count() {
+    let retry_from = OplogIndex::from_u64(1);
+    let exhausted = RetryPolicyState::Counter(100);
+    let test_case = TestCase::builder(0)
+        .add(
+            OplogEntry::error(
+                None,
+                OplogErrorKind::Invocation,
+                AgentError::TransientError("semantic failure".to_string()),
+                retry_from,
+                false,
+                Some(exhausted.clone()),
+            ),
+            {
+                let exhausted = exhausted.clone();
+                move |mut status| {
+                    status.status = AgentStatus::Failed;
+                    status.last_error_kind = Some(OplogErrorKind::Invocation);
+                    status.current_retry_state.insert(retry_from, exhausted);
+                    status
+                }
+            },
+        )
+        .add(
+            OplogEntry::error(
+                None,
+                OplogErrorKind::Recovery,
+                AgentError::Unknown("payload backend unavailable".to_string()),
+                retry_from,
+                false,
+                None,
+            ),
+            move |mut status| {
+                status.status = AgentStatus::Retrying;
+                status.last_error_kind = Some(OplogErrorKind::Recovery);
+                status.current_retry_state.insert(retry_from, exhausted);
+                status
+            },
+        )
+        .build();
+
+    run_test_case(test_case).await;
+}
+
+#[test]
 async fn incomplete_invocation_replay_does_not_hide_recovery_failure() {
     let retry_from = OplogIndex::from_u64(1);
     let idempotency_key = IdempotencyKey::fresh();

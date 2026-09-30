@@ -126,6 +126,7 @@ fn registered_tool(name: &str, deployment_revision: DeploymentRevision) -> Regis
         release_id: None,
         definition: Tool {
             version: "1.0.0".to_string(),
+            requires_filesystem: false,
             commands: CommandTree {
                 nodes: vec![CommandNode {
                     name: name.to_string(),
@@ -909,6 +910,84 @@ fn activation_lookup_uses_explicit_filesystem_verdict() {
     let activation = ready_activation(&deployment, &agent_a, &alpha);
 
     assert_eq!(activation.filesystem(), FilesystemCapability::Capable);
+}
+
+#[test]
+fn activation_enforces_requirement_and_propagates_capability_for_every_owner() {
+    let file = || InitialAgentFile {
+        content_hash: AgentFileContentHash(golem_common::model::diff::Hash::empty()),
+        path: AgentFilePath::from_rel_str("fixture").unwrap(),
+        permissions: AgentFilePermissions::ReadOnly,
+        size: 0,
+    };
+    let cases = [
+        (
+            ToolFilesystemAccess::Allowed,
+            false,
+            true,
+            Some(FilesystemCapability::Capable),
+        ),
+        (
+            ToolFilesystemAccess::Unset,
+            true,
+            true,
+            Some(FilesystemCapability::Capable),
+        ),
+        (
+            ToolFilesystemAccess::Unset,
+            false,
+            false,
+            Some(FilesystemCapability::Incapable),
+        ),
+        (ToolFilesystemAccess::Unset, false, true, None),
+        (ToolFilesystemAccess::Denied, false, true, None),
+        (ToolFilesystemAccess::Denied, true, true, None),
+    ];
+
+    for baseline in [false, true] {
+        for (access, with_files, requires_filesystem, expected) in cases {
+            let (mut deployment, agent_a, _) = deployment_state();
+            let alpha = ToolName::try_from("alpha").unwrap();
+            let owner = if baseline {
+                ToolBindingOwner::ComponentBaseline {
+                    component_id: ComponentId::new(),
+                }
+            } else {
+                agent_owner(&agent_a)
+            };
+            let mut compiled_binding =
+                deployment.tool_bindings[&agent_owner(&agent_a)][&alpha].clone();
+            compiled_binding.owner = owner.clone();
+            compiled_binding.filesystem_access = access;
+            deployment.tool_bindings.insert(
+                owner.clone(),
+                BTreeMap::from([(alpha.clone(), compiled_binding)]),
+            );
+            let registered = deployment.registered_tools.get_mut(&alpha).unwrap();
+            registered.definition.requires_filesystem = requires_filesystem;
+            registered.provision.files = with_files.then(file).into_iter().collect();
+
+            let result = get_tool_activation_from_deployment(Some(&deployment), &owner, &alpha);
+            match expected {
+                Some(expected) => {
+                    let ToolActivationOutcome::Ready(activation) = result.unwrap() else {
+                        panic!("expected ready activation")
+                    };
+                    assert_eq!(activation.filesystem(), expected);
+                    let plan = activation.runtime_plan().unwrap();
+                    let EntityInvocationPlanLayer::Tool { activation } = plan.layer(0).unwrap()
+                    else {
+                        panic!("expected tool leaf")
+                    };
+                    assert_eq!(activation.filesystem(), expected);
+                }
+                None => assert!(matches!(
+                    result,
+                    Err(ToolDiscoveryError::InconsistentSnapshot { .. })
+                )),
+            }
+        }
+    }
 }
 
 #[test]

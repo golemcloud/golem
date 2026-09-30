@@ -556,13 +556,13 @@ impl ToolReleaseService {
         definition: &Tool,
         component_name: &golem_common::model::component::ComponentName,
         wasm_hash: diff::Hash,
-    ) -> Result<(), ToolReleaseError> {
+    ) -> Result<bool, ToolReleaseError> {
         let Some(existing) = self
             .tool_release_repo
             .get_by_coordinates(self.builtin_tool_owner_account_id.0, name.as_str(), version)
             .await?
         else {
-            return Ok(());
+            return Ok(false);
         };
         let release: ToolRelease = existing.release.try_into()?;
         let ToolSource::Component {
@@ -605,7 +605,7 @@ impl ToolReleaseService {
         {
             return Err(ToolReleaseError::ImmutableReleaseConflict);
         }
-        Ok(())
+        Ok(true)
     }
 
     async fn authorize_management(

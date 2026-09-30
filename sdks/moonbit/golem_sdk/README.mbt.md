@@ -218,12 +218,14 @@ let current : Result[String, @tool.ToolError[WeatherError]] =
 client.drop()
 ```
 
-Parameters typed as `@tool.Principal`, `@asyncCore.Stream[Byte]`, or `@tool.ProviderStdout` are
-provided by the runtime and omitted from typed client inputs. An input stream becomes a client
-parameter. A declared provider stdout becomes part of the generated result type. Providers can
-write with `write_all`/`write_all_bytes`, select successful completion with `finish`, or select a
-typed `@tool.ToolStreamError` terminal with `fail`. Returning normally also finishes an open
-stdout; dropping it while still open selects `Abandoned`. See the
+Parameters typed as `@tool.Principal` or `@tool.ProviderOutput` are provided by the runtime and
+omitted from typed client inputs; select stderr with `#derive.arg("parameter-name", channel="stderr")`.
+An `@asyncCore.Stream[Byte]` input becomes a client parameter. Either declared output selects the
+started-invocation result shape, with independent optional stdout/stderr streams, structured result,
+collection, and cancellation. Providers can write with `write_all`/`write_all_bytes`, select
+successful completion with `finish`, or select a typed `@tool.ToolStreamError` terminal with
+`fail`. Returning normally also finishes open outputs; dropping one while still open selects
+`Abandoned` for that channel. See the
 [`golem_sdk_tools` documentation](https://mooncakes.io/docs/#/golemcloud/golem_sdk_tools/) and the
 canonical `grep`/`git` examples for the complete annotation surface.
 
@@ -242,9 +244,10 @@ schema-native value and create the self-contained graph required by a fully dyna
 Use `command.pack_json(input)` and `command.invoke_json(input)` for canonical JSON, or
 `command.invoke_value(input)` for schema-native values. The command validates inputs locally before
 opening RPC and validates declared results after invocation. `start_value` returns an invocation
-whose `stdout`, `collect`, `get`, and `cancel` methods handle pending and streaming calls. A command
-with required stdout must use `start_value`; `collect` drains stdout while awaiting its result.
-`trigger_value` is available only when the command does not require caller-readable stdout.
+whose `stdout`, `stderr`, `collect`, `get`, and `cancel` methods handle pending and streaming calls.
+A command with either required output must use `start_value`; `collect` drains both outputs
+concurrently while awaiting its result. `trigger_value` is available only when the command does not
+require caller-readable stdout or stderr.
 
 `@reflection.DynamicToolClient::new(name)` accepts a caller-packed `TypedSchemaValue` and a
 command path when no descriptor is available. It cannot validate the input or output against a

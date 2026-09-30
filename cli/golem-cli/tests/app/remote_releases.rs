@@ -134,6 +134,7 @@ async fn create_app_and_environment(
 fn remote_release_tool(version: &str) -> Tool {
     Tool {
         version: version.to_string(),
+        requires_filesystem: false,
         commands: CommandTree {
             nodes: vec![CommandNode {
                 name: "search".to_string(),
@@ -148,6 +149,7 @@ fn remote_release_tool(version: &str) -> Tool {
                     constraints: Vec::new(),
                     stdin: None,
                     stdout: None,
+                    stderr: None,
                     result: None,
                     errors: Vec::new(),
                     annotations: None,

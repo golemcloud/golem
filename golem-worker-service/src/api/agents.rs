@@ -141,7 +141,7 @@ impl AgentsApi {
 
     /// Invoke a tool on an existing agent or a fresh ephemeral component owner
     ///
-    /// Uses normal invocation permissions, queueing and idempotency. Byte stdin and stdout
+    /// Uses normal invocation permissions, queueing and idempotency. Byte stdin, stdout and stderr
     /// require an attached invocation session rather than this scalar endpoint.
     #[oai(path = "/invoke-tool", method = "post", operation_id = "invoke_tool")]
     async fn invoke_tool(

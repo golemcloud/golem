@@ -171,17 +171,24 @@ export type AgentClient<
   F extends ConfigFields = never,
 > = "ephemeral" extends Mode ? EphemeralClient<C, Methods, F> : DurableClient<C, Methods, F>
 
-interface CompiledClient<C extends MethodParams = MethodParams> {
-  readonly constructorCodec: CompiledInputCodec<C>
-  readonly methods: ReadonlyMap<string, MethodCodec<MethodParams, MethodSuccess, Schema.Top>>
+interface WireMethod {
+  readonly name: string
+  readonly inputCodec: Pick<CompiledInputCodec, "encodeAsync">
+  readonly decodeOutput?: (tree: CoreTypes.SchemaValueTree) => Effect.Effect<unknown, unknown, any>
+  readonly streaming: boolean
+  readonly errorWrapped: boolean
+  readonly successVoid: boolean
 }
 
-/** A caller-owned, lifecycle-free method-only client. @since 1.6.0 @category models */
+interface CompiledClient<C extends MethodParams = MethodParams> {
+  readonly constructorCodec: CompiledInputCodec<C>
+  readonly methods: ReadonlyMap<string, WireMethod>
+}
+
 export interface MethodOnlyClient<
   Methods extends Record<string, AnyMethodSpec>,
 > extends IdentityBinding<RemoteAgent<Methods>> {
   readonly methods: Methods
-  /** Raw typed entries are forwarded when this binding creates a worker. */
   readonly bindWithEntries: (
     identity: Identity,
     entries: ReadonlyArray<AgentCommon.TypedAgentConfigValue>,
@@ -192,7 +199,6 @@ export interface MethodOnlyClient<
   >
 }
 
-/** Fully defined caller-owned client definition with typed identity and lifecycle factories. @since 1.6.0 @category models */
 export type FullClient<
   C extends MethodParams,
   Methods extends Record<string, AnyMethodSpec>,
@@ -218,7 +224,6 @@ export type FullClient<
         AgentHostClient
       >
 } & IdentityBinding<RemoteAgent<Methods>> & {
-    /** Declared overrides apply only when this binding creates a worker. */
     readonly bindWithConfig: (
       identity: Identity,
       options?: GetOptions<F>,
@@ -229,7 +234,6 @@ export type FullClient<
     >
   }
 
-/** Full caller-defined static client; name and id are inseparable. @since 1.6.0 @category models */
 export interface ClientDefinition<
   C extends MethodParams,
   Methods extends Record<string, AnyMethodSpec>,
@@ -243,7 +247,6 @@ export interface ClientDefinition<
   readonly config?: AgentMetadata<C, Methods, Mode, F>["config"]
 }
 
-/** Identity-only caller definition with no factories or identity construction. @since 1.6.0 @category models */
 export interface MethodOnlyDefinition<Methods extends Record<string, AnyMethodSpec>> {
   readonly methods: Methods
   readonly name?: never
@@ -252,16 +255,13 @@ export interface MethodOnlyDefinition<Methods extends Record<string, AnyMethodSp
   readonly config?: never
 }
 
-/** Local identity/client validation failed before an RPC connection was opened. @since 1.6.0 @category errors */
 export class ClientBindingError {
   readonly _tag = "ClientBindingError"
   constructor(readonly reason: string) {}
 }
 
-/** @internal Shared protocol implemented by method-only, full, definition-owned, and reflected clients. */
 export const bindIdentity: unique symbol = Symbol.for("effect-golem/client/bind-identity")
 
-/** A value that can bind a parsed identity without discovery. @since 1.6.0 @category models */
 export interface IdentityBinding<
   Client,
   Error = RemoteCallError | UnsupportedSchemaError | ClientBindingError,
@@ -270,22 +270,19 @@ export interface IdentityBinding<
   readonly [bindIdentity]: (identity: Identity) => Effect.Effect<Client, Error, Requirements>
 }
 
-const decodeOutput = (
-  mc: MethodCodec<MethodParams, MethodSuccess, Schema.Top>,
-  tree: CoreTypes.SchemaValueTree | undefined,
-) => {
-  if (mc.outputCodec === undefined) {
+const decodeOutput = (mc: WireMethod, tree: CoreTypes.SchemaValueTree | undefined) => {
+  if (mc.decodeOutput === undefined) {
     return tree === undefined
       ? Effect.succeed(undefined)
       : Effect.fail(responseError(`${mc.name}: expected unit output`))
   }
   if (tree === undefined) return Effect.fail(responseError(`${mc.name}: expected a result value`))
-  return Effect.mapError(decodeFromWire(mc.outputCodec.codec, tree), (error) =>
+  return Effect.mapError(mc.decodeOutput(tree), (error) =>
     responseError(`${mc.name}: failed to decode output: ${String(error)}`),
   )
 }
 
-const finishOutput = (mc: MethodCodec<MethodParams, MethodSuccess, Schema.Top>, value: unknown) => {
+const finishOutput = (mc: WireMethod, value: unknown) => {
   if (!mc.errorWrapped) return Effect.succeed(value)
   const result = value as Result.Result<unknown, unknown>
   return Result.isSuccess(result)
@@ -340,9 +337,7 @@ const buildRemote = (
 ) => {
   const remote: Record<string, unknown> = {}
   for (const [name, mc] of compiled.methods) {
-    const streaming =
-      graphUsesStreams(mc.inputCodec.graph) ||
-      (mc.outputCodec !== undefined && graphUsesStreams(mc.outputCodec.graph))
+    const streaming = mc.streaming
     const rejectNonAwaitedStream = () =>
       Effect.fail(responseError(`${name}: live streams require invoke-and-await`))
     const encode = (input: Record<string, unknown>) =>
@@ -401,15 +396,29 @@ const bindingForDefinition = <Methods extends Record<string, AnyMethodSpec>>(def
     RpcClient | Scope.Scope
   >
 } => {
-  let cachedMethods:
-    | ReadonlyMap<string, MethodCodec<MethodParams, MethodSuccess, Schema.Top>>
-    | undefined
+  let cachedMethods: ReadonlyMap<string, WireMethod> | undefined
   let cachedConstructor: CompiledInputCodec | undefined
   const compile = Effect.gen(function* () {
     if (cachedMethods === undefined) {
-      const methods = new Map<string, MethodCodec<MethodParams, MethodSuccess, Schema.Top>>()
-      for (const [name, spec] of Object.entries(definition.methods))
-        methods.set(name, (yield* compileMethodSpec(name, spec)) as never)
+      const methods = new Map<string, WireMethod>()
+      for (const [name, spec] of Object.entries(definition.methods)) {
+        const mc = (yield* compileMethodSpec(name, spec)) as MethodCodec<
+          MethodParams,
+          MethodSuccess,
+          Schema.Top
+        >
+        const output = mc.outputCodec
+        methods.set(name, {
+          name,
+          inputCodec: mc.inputCodec,
+          decodeOutput: output ? (tree) => decodeFromWire(output.codec, tree) : undefined,
+          streaming:
+            graphUsesStreams(mc.inputCodec.graph) ||
+            (output !== undefined && graphUsesStreams(output.graph)),
+          errorWrapped: mc.errorWrapped,
+          successVoid: mc.successVoid,
+        })
+      }
       cachedMethods = methods
     }
     if (definition.id !== undefined && cachedConstructor === undefined)
@@ -624,9 +633,21 @@ export const clientFor = <
             `${def.name} constructor`,
             def.id,
           )
-          const methods = new Map<string, MethodCodec<MethodParams, MethodSuccess, Schema.Top>>()
-          for (const [name, spec] of Object.entries(def.methods))
-            methods.set(name, (yield* compileMethodSpec(name, spec)) as never)
+          const methods = new Map<string, WireMethod>()
+          for (const [name, spec] of Object.entries(def.methods)) {
+            const mc = yield* compileMethodSpec(name, spec)
+            const output = mc.outputCodec
+            methods.set(name, {
+              name,
+              inputCodec: mc.inputCodec,
+              decodeOutput: output ? (tree) => decodeFromWire(output.codec, tree) : undefined,
+              streaming:
+                graphUsesStreams(mc.inputCodec.graph) ||
+                (output !== undefined && graphUsesStreams(output.graph)),
+              errorWrapped: mc.errorWrapped,
+              successVoid: mc.successVoid,
+            })
+          }
           return (cached = { constructorCodec, methods })
         }),
   )
@@ -655,6 +676,34 @@ export const clientFor = <
       }
       return values
     })
+  return clientForCompiled(def, compile, config)
+}
+
+/** @internal RPC transport shared by generated and reflective clients. */
+export const clientForCompiled = <
+  C extends MethodParams,
+  Methods extends Record<string, AnyMethodSpec>,
+  Mode extends AgentCommon.AgentMode,
+  F extends ConfigFields = never,
+>(
+  def: AgentMetadata<C, Methods, Mode, F>,
+  compile: Effect.Effect<CompiledClient<C>, UnsupportedSchemaError>,
+  config: (
+    options?: GetOptions<F>,
+  ) => Effect.Effect<
+    AgentCommon.TypedAgentConfigValue[],
+    UnsupportedSchemaError | ConfigError | RemoteCallError,
+    any
+  > = (options) =>
+    options?.overrides === undefined
+      ? Effect.succeed([])
+      : Effect.fail(
+          new ConfigError([], {
+            _tag: "Unsupported",
+            reason: `agent '${def.name}' has no config; cannot apply overrides`,
+          }),
+        ),
+): AgentClient<C, Methods, Mode, F> => {
   const construct = (
     input: CallerInput<C>,
     phantom: CoreTypes.Uuid | undefined,

@@ -769,6 +769,22 @@ impl DeploymentContext {
             }
         }
 
+        for binding in &agent_tool_bindings {
+            if let Some(tool) = registered_tools.iter().find(|tool| {
+                tool.definition.name() == Some(binding.tool_name.as_str())
+                    && tool.deployment_revision == binding.deployment_revision
+            }) && let Err(error) = golem_common::model::tool::filesystem_capability(
+                binding.filesystem_access,
+                &tool.provision,
+                tool.definition.requires_filesystem,
+            ) {
+                errors.push(DeployValidationError::ToolFilesystemRequirement {
+                    tool_name: binding.tool_name.clone(),
+                    error,
+                });
+            }
+        }
+
         CompiledTools {
             registered_tools,
             agent_tool_bindings,

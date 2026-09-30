@@ -8,6 +8,7 @@ import golem.runtime.*
 import golem.runtime.http.*
 import golem.schema.*
 import golem.schema.SchemaValue.*
+import golem.schema.wire.SchemaWire
 import scala.concurrent.{Future, Promise}
 import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
 import zio.ZIO
@@ -140,6 +141,46 @@ object HttpDispatchSpec extends ZIOSpecDefault {
           response = SchemaPayload.decode[HttpResponse](result.get).toOption.get
           end     <- response.body.pull()
         } yield assertTrue(decoded == 1, finalized == 1, end.isEmpty)
+      }
+    },
+    test("wire-native HEAD responses dispose their body before crossing the component bridge") {
+      var pulls     = 0
+      var finalized = 0
+      val response  = HttpResponse(
+        UShort(200),
+        Nil,
+        AgentStream.fromPull[Array[Byte]](
+          () => { pulls += 1; Future.failed(new IllegalStateException("must not pull")) },
+          () => { finalized += 1; Future.successful(()) }
+        )
+      )
+      val method = new WireImplementationMethod[Unit] {
+        val name = "arbitrary"
+        def invoke(
+          instance: Unit,
+          input: golem.schema.wire.WitSchemaValueTree,
+          principal: Principal
+        ): Future[Option[golem.schema.wire.WitSchemaValueTree]] =
+          Future.successful(Some(SchemaWire.schemaValueToWit(HttpResponse.intoSchema.toValue(response))))
+      }
+      val descriptor = WireAgentMetadata.fromModel(
+        AgentMetadata(
+          "router",
+          AgentTypeKind.HttpRouter,
+          None,
+          None,
+          List(metadata(true)),
+          ConstructorMetadata(None, "router", None)
+        )
+      )
+      val binding = MethodBinding.wire(descriptor, method)
+      ZIO.fromFuture { _ =>
+        for {
+          wire    <- SchemaPayload.encodeAsync(request("HEAD"))(input)
+          result  <- FutureInterop.fromPromise(binding.invoke((), wire, Principal.Anonymous))
+          response = SchemaPayload.decode[HttpResponse](result.get).toOption.get
+          end     <- response.body.pull()
+        } yield assertTrue(pulls == 0, finalized == 1, end.isEmpty)
       }
     },
     test("suppressed producer cleanup failure fails the invocation") {

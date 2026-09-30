@@ -27,11 +27,11 @@ pub(all) enum ByteStreamFailure {
   Failed(String)
 } derive(Eq, @debug.Debug)
 
-pub(all) struct ToolStdoutWriter(Int) derive(Eq, @debug.Debug)
-pub fn ToolStdoutWriter::drop(Self) -> Unit
-pub async fn ToolStdoutWriter::fail(Self, ByteStreamFailure) -> Result[Unit, StreamWriteError]
-pub async fn ToolStdoutWriter::finish(Self) -> Result[Unit, StreamWriteError]
-pub async fn ToolStdoutWriter::write(Self, FixedArray[Byte]) -> Result[Unit, StreamWriteError]
+pub(all) struct ToolOutputWriter(Int) derive(Eq, @debug.Debug)
+pub fn ToolOutputWriter::drop(Self) -> Unit
+pub async fn ToolOutputWriter::fail(Self, ByteStreamFailure) -> Result[Unit, StreamWriteError]
+pub async fn ToolOutputWriter::finish(Self) -> Result[Unit, StreamWriteError]
+pub async fn ToolOutputWriter::write(Self, FixedArray[Byte]) -> Result[Unit, StreamWriteError]
 
 // Type aliases
 

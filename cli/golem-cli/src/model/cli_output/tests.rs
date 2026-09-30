@@ -995,6 +995,7 @@ fn sample_component_view() -> crate::model::component::ComponentView {
             golem_common::model::tool::ToolDeploymentMetadata {
                 definition: golem_common::schema::tool::Tool {
                     version: "1.0.0".to_string(),
+                    requires_filesystem: false,
                     commands: golem_common::schema::tool::CommandTree {
                         nodes: vec![golem_common::schema::tool::CommandNode {
                             name: "grep".to_string(),
@@ -1357,7 +1358,9 @@ fn agent_oplog_structured_output_exposes_secret_metadata_without_stdout_bytes() 
                         command_path: vec!["files".to_string(), "lookup".to_string()],
                         has_stdin: false,
                         has_stdout: true,
+                        has_stderr: false,
                         declares_stdout: true,
+                        declares_stderr: false,
                     },
                 )),
             },
@@ -3171,17 +3174,40 @@ fn arb_tool_invoke_result() -> OutputDocumentStrategy {
 fn arb_tool_invoke_session_result() -> OutputDocumentStrategy {
     use golem_common::model::IdempotencyKey;
     use golem_common::model::invocation_session_public::{
-        PublicInvocationResult, PublicNativeToolTarget,
+        PublicInvocationResult, PublicNativeToolTarget, PublicTypedValue,
     };
+    use golem_common::schema::{SchemaGraph, SchemaType};
 
-    arb_small_string()
-        .prop_map(|key| {
+    (arb_small_string(), any::<bool>())
+        .prop_map(|(key, success)| {
+            let typed = PublicTypedValue {
+                graph: SchemaGraph::anonymous(if success {
+                    SchemaType::string()
+                } else {
+                    SchemaType::u8()
+                }),
+                value: if success {
+                    serde_json::json!({"kind": "string", "value": "done"})
+                } else {
+                    serde_json::json!({"kind": "u8", "value": 7})
+                },
+            };
             to_structured_output_value(crate::model::tool_invoke::ToolInvocationSessionView {
                 target: PublicNativeToolTarget::Component {
                     component_id: uuid::Uuid::nil(),
                 },
                 idempotency_key: IdempotencyKey::new(key),
-                result: PublicInvocationResult::ToolSuccess { result: None },
+                result: if success {
+                    PublicInvocationResult::ToolSuccess {
+                        result: Some(typed),
+                    }
+                } else {
+                    PublicInvocationResult::ToolFailure {
+                        code: "custom-error".to_string(),
+                        message: Some("tool failed".to_string()),
+                        custom_error: Some(typed),
+                    }
+                },
             })
             .expect("generated tool invocation session result should serialize")
         })
@@ -3266,14 +3292,25 @@ fn arb_public_oplog_entry_attribution()
                     any::<bool>(),
                     any::<bool>(),
                     any::<bool>(),
+                    any::<bool>(),
+                    any::<bool>(),
                 )
                     .prop_map(
-                        |(command_path, has_stdin, has_stdout, declares_stdout)| {
+                        |(
+                            command_path,
+                            has_stdin,
+                            has_stdout,
+                            has_stderr,
+                            declares_stdout,
+                            declares_stderr,
+                        )| {
                             PublicEntityInvocationOperation::Tool(PublicToolInvocationOperation {
                                 command_path,
                                 has_stdin,
                                 has_stdout,
+                                has_stderr,
                                 declares_stdout,
+                                declares_stderr,
                             })
                         },
                     ),
@@ -5839,7 +5876,30 @@ fn arb_environment_tool_grant_restore_result() -> OutputDocumentStrategy {
 
 fn sample_tool_release() -> golem_common::model::tool_release::ToolRelease {
     use golem_common::model::tool_release::{ToolReleaseLifecycle, ToolReleaseOrigin};
-    use golem_common::schema::tool::{CommandNode, CommandTree, Doc, Globals, Tool};
+    use golem_common::schema::tool::{
+        CommandBody, CommandNode, CommandTree, Doc, Globals, Positionals, StreamSpec, Tool,
+    };
+
+    let stream = || StreamSpec {
+        doc: Doc::default(),
+        mime: vec!["application/octet-stream".to_string()],
+        required: false,
+    };
+    let body = |stdout: bool, stderr: bool| CommandBody {
+        positionals: Positionals {
+            fixed: Vec::new(),
+            tail: None,
+        },
+        options: Vec::new(),
+        flags: Vec::new(),
+        constraints: Vec::new(),
+        stdin: None,
+        stdout: stdout.then(stream),
+        stderr: stderr.then(stream),
+        result: None,
+        errors: Vec::new(),
+        annotations: None,
+    };
 
     let owner_account_id = golem_common::model::account::AccountId::new();
     golem_common::model::tool_release::ToolRelease {
@@ -5854,15 +5914,24 @@ fn sample_tool_release() -> golem_common::model::tool_release::ToolRelease {
         },
         definition: Tool {
             version: "1.0.0".to_string(),
+            requires_filesystem: false,
             commands: CommandTree {
-                nodes: vec![CommandNode {
-                    name: "search".to_string(),
+                nodes: [
+                    ("neither", false, false),
+                    ("stdout", true, false),
+                    ("stderr", false, true),
+                    ("both", true, true),
+                ]
+                .into_iter()
+                .map(|(name, stdout, stderr)| CommandNode {
+                    name: name.to_string(),
                     aliases: Vec::new(),
                     doc: Doc::default(),
                     globals: Globals::default(),
                     subcommands: Vec::new(),
-                    body: None,
-                }],
+                    body: Some(body(stdout, stderr)),
+                })
+                .collect(),
             },
             schema: golem_common::schema::SchemaGraph::empty(),
         },
