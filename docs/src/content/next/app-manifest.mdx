@@ -304,7 +304,32 @@ Ambient tool names must not collide with application tools or selected account-o
 
 Both kinds use the normal effective binding policy. In particular, `configKeysReadable` is narrowing-only: the effective scope is the intersection of the system or environment binding and the agent binding. Calls made by a native implementation through Golem's config host helper are checked against that effective scope; running in the host does not grant unrestricted config access.
 
-Golem currently ships no production built-in or native tool inventory. A deployment can only refer to system-provided tool names advertised by the Golem installation it targets.
+Golem currently ships these component-implemented built-ins:
+
+- `read-file@0.3.0`, `write-file@0.3.0`, and `edit-file@0.3.0` provide filesystem operations. Their agent bindings must grant `filesystemAccess: allowed`.
+- `web-fetch@0.1.0` performs read-only HTTP and HTTPS GET requests. It requires no filesystem grant and is marked open-world because it contacts external services.
+
+For example, select and bind `web-fetch` as follows:
+
+```yaml
+tools:
+  web-fetch:
+    release:
+      account: builtin-tool-owner@golem.cloud
+      name: web-fetch
+      version: 0.1.0
+
+agents:
+  ResearchAgent:
+    tools:
+      web-fetch: {}
+```
+
+The tool requires a URL on each call. It also accepts `--timeout-ms` (default `10000`, allowed range `1`–`30000`), `--max-response-bytes` (default `2097152`, allowed range `1`–`5242880`), `--max-redirects` (default `5`, allowed range `0`–`10`), and `--convert-html-to-text` (default `false`) as optional **invocation arguments**. These are not manifest parameters or deployment configuration, and the safety limits' hard ceilings cannot be overridden. A zero redirect limit disables redirect following.
+
+`web-fetch` returns the final URL, HTTP status, original content type when present, textual content, and whether the result was truncated. Non-success HTTP statuses are returned normally with supported textual bodies. HTML is returned as decoded source unless `--convert-html-to-text` is enabled. Binary responses, invalid text encodings, unsafe redirects, redirect cycles, and elapsed deadlines return typed errors.
+
+Completed results and typed errors are durable and replay without another HTTP request. If execution is interrupted before the result is recorded, recovery may retry the GET request; endpoints should therefore tolerate repeated GETs.
 
 ### Bridge generation
 

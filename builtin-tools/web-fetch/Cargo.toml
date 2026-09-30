@@ -1,0 +1,24 @@
+[workspace]
+resolver = "2"
+members = ["."]
+
+[package]
+name = "golem_web_fetch"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = "symbols"
+
+[dependencies]
+encoding_rs = "0.8.35"
+futures = "0.3.31"
+golem-rust = { path = "../../sdks/rust/golem-rust", features = ["export_golem_agentic"] }
+html2text = "0.17.1"
+mime = "0.3.17"
+url = "2.5.7"

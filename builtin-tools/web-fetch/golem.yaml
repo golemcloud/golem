@@ -1,10 +1,10 @@
 # Schema for IDEA:
 # $schema: https://schema.golem.cloud/app/golem/1.6.0-dev.9/golem.schema.json
 manifestVersion: 1.6.0
-app: filesystem-tools
+app: web-fetch
 
 components:
-  golem:filesystem-tools:
+  golem:web-fetch:
     dir: "."
     templates: rust
 
