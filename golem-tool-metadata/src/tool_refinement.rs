@@ -65,6 +65,7 @@ pub fn refine_path(
     direction: Option<PathDirection>,
     kind: Option<PathKind>,
     mime: Option<Vec<String>>,
+    extensions: Option<Vec<String>>,
 ) -> Result<SchemaType, ToolBuildError> {
     let metadata = base.metadata().clone();
     let mut spec = match base {
@@ -84,6 +85,9 @@ pub fn refine_path(
     }
     if mime.is_some() {
         spec.allowed_mime_types = mime;
+    }
+    if extensions.is_some() {
+        spec.allowed_extensions = extensions;
     }
     Ok(SchemaType::Path { spec, metadata })
 }

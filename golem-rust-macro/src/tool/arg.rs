@@ -85,6 +85,7 @@ pub fn parse_arg(attr: &Attribute) -> Result<ArgIr, Error> {
             "max_length" => ir.max_length = Some(expr_u32(value, "max_length")?),
             "direction" => ir.direction = Some(parse_direction(value)?),
             "mime" => ir.mime = Some(expr_str_array(value, "mime")?),
+            "extensions" => ir.extensions = Some(expr_str_array(value, "extensions")?),
             "channel" => {
                 ir.output_channel = Some(match expr_str(value, "channel")?.as_str() {
                     "stdout" => OutputChannelIr::Stdout,
@@ -101,6 +102,7 @@ pub fn parse_arg(attr: &Attribute) -> Result<ArgIr, Error> {
             "unit" => ir.unit = Some(expr_str(value, "unit")?),
             "bounds" => ir.bounds = Some(parse_bounds(value)?),
             "doc" => ir.doc = Some(expr_str(value, "doc")?),
+            "description" => ir.description = Some(expr_str(value, "description")?),
             "value_name" => ir.value_name = Some(expr_str(value, "value_name")?),
             // `min`/`max` are kept raw; their meaning (tail occurrence count,
             // count-flag max, or numeric bound) depends on the final placement
@@ -147,6 +149,7 @@ fn parse_head(expr: &Expr) -> Result<(syn::Ident, Option<ArgPlacement>), Error> 
 
 fn parse_placement(value: &str, span: proc_macro2::Span) -> Result<ArgPlacement, Error> {
     match value {
+        "root-global" => Ok(ArgPlacement::RootGlobal),
         "global" => Ok(ArgPlacement::Global),
         "positional" => Ok(ArgPlacement::Positional),
         "option" => Ok(ArgPlacement::Option),
@@ -155,7 +158,7 @@ fn parse_placement(value: &str, span: proc_macro2::Span) -> Result<ArgPlacement,
         other => Err(Error::new(
             span,
             format!(
-                "invalid arg placement `{other}`; expected one of: global, positional, option, flag, tail"
+                "invalid arg placement `{other}`; expected one of: root-global, global, positional, option, flag, tail"
             ),
         )),
     }
