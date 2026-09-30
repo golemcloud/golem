@@ -11665,6 +11665,23 @@ async fn builtin_web_fetch_has_expected_behavior_and_replays_after_restart(
     .await?;
     assert_web_fetch_error(header_timeout, "timeout")?;
 
+    let replay_key = IdempotencyKey::fresh();
+    let replay_input = web_fetch_input(source_url("/cross-host"), None, None, None, None);
+    let first = expect_web_fetch_success(
+        invoke_web_fetch(
+            &executor,
+            &worker_id,
+            fingerprint,
+            principal.clone(),
+            &definition,
+            replay_key.clone(),
+            replay_input.clone(),
+        )
+        .await?,
+    )?;
+    let target_requests_before_restart = target_requests.load(Ordering::SeqCst);
+    assert_eq!(target_requests_before_restart, 2);
+
     let interrupted_key = IdempotencyKey::fresh();
     let interrupted_input =
         web_fetch_input(source_url("/interrupted"), Some(10_000), None, None, None);
@@ -11692,6 +11709,7 @@ async fn builtin_web_fetch_has_expected_behavior_and_replays_after_restart(
         .expect("interrupted response body did not start")?;
     }
     assert_eq!(interrupted_requests.load(Ordering::SeqCst), 1);
+    let source_requests_before_restart = source_requests.load(Ordering::SeqCst);
 
     executor.shutdown_and_wait_for_invocation_loops().await?;
     drop(executor);
@@ -11706,6 +11724,16 @@ async fn builtin_web_fetch_has_expected_behavior_and_replays_after_restart(
         2,
         "an interrupted incomplete fetch must retry its GET during recovery"
     );
+    assert_eq!(
+        source_requests.load(Ordering::SeqCst),
+        source_requests_before_restart + 1,
+        "component reconstruction must replay completed source requests without repeating HTTP"
+    );
+    assert_eq!(
+        target_requests.load(Ordering::SeqCst),
+        target_requests_before_restart,
+        "component reconstruction must replay completed redirected requests without repeating HTTP"
+    );
     let interrupted_result = expect_web_fetch_success(
         invoke_web_fetch(
             &executor,
@@ -11719,43 +11747,6 @@ async fn builtin_web_fetch_has_expected_behavior_and_replays_after_restart(
         .await?,
     )?;
     assert_eq!(interrupted_result.3, "retried after interruption");
-
-    let replay_key = IdempotencyKey::fresh();
-    let replay_input = web_fetch_input(source_url("/cross-host"), None, None, None, None);
-    let first = expect_web_fetch_success(
-        invoke_web_fetch(
-            &executor,
-            &worker_id,
-            fingerprint,
-            principal.clone(),
-            &definition,
-            replay_key.clone(),
-            replay_input.clone(),
-        )
-        .await?,
-    )?;
-    let source_requests_before_restart = source_requests.load(Ordering::SeqCst);
-    let target_requests_before_restart = target_requests.load(Ordering::SeqCst);
-    assert_eq!(target_requests_before_restart, 2);
-
-    executor.shutdown_and_wait_for_invocation_loops().await?;
-    drop(executor);
-    let executor = start_with_overrides(deps, &context, overrides).await?;
-    let replay_probe: String = executor
-        .invoke_and_await_agent(&caller_component, &agent_id, "replay_probe", data_value!())
-        .await?
-        .into_typed()?;
-    assert_eq!(replay_probe, "replayed");
-    assert_eq!(
-        source_requests.load(Ordering::SeqCst),
-        source_requests_before_restart,
-        "component reconstruction must replay source requests without repeating HTTP"
-    );
-    assert_eq!(
-        target_requests.load(Ordering::SeqCst),
-        target_requests_before_restart,
-        "component reconstruction must replay redirected target requests without repeating HTTP"
-    );
 
     let replayed = expect_web_fetch_success(
         invoke_web_fetch(
@@ -11774,6 +11765,16 @@ async fn builtin_web_fetch_has_expected_behavior_and_replays_after_restart(
         target_requests.load(Ordering::SeqCst),
         target_requests_before_restart,
         "completed fetch must replay after executor restart without repeating HTTP"
+    );
+    assert_eq!(
+        interrupted_requests.load(Ordering::SeqCst),
+        2,
+        "retrying a recovered incomplete fetch must not repeat its GET"
+    );
+    assert_eq!(
+        source_requests.load(Ordering::SeqCst),
+        source_requests_before_restart + 1,
+        "retrying recovered and completed fetches must not repeat HTTP"
     );
 
     source_server.abort();
