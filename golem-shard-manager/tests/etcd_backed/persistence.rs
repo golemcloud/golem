@@ -23,7 +23,7 @@ use golem_shard_manager::quota::quota_repo::QUOTA_KEY_PREFIX;
 use golem_shard_manager::quota::{DbQuotaRepo, EtcdQuotaRepo, QuotaRepo};
 use golem_shard_manager::{
     DbRoutingTablePersistence, EtcdRoutingTablePersistence, ExecutorAddr, ExecutorId,
-    ExternalRevision, LeaderFence, NO_REVISION, RoutingTablePersistence, STATE_KEY,
+    ExternalRevision, LeaderFence, NO_REVISION, ReadRetry, RoutingTablePersistence, STATE_KEY,
     ShardAssignmentEntry, ShardEpoch, ShardLeaseRevision, ShardLeaseState, ShardManagerError,
 };
 use golem_test_framework::components::etcd::docker_etcd::DockerEtcd;
@@ -459,8 +459,16 @@ impl EtcdStore {
             .expect("Cannot connect to etcd")
     }
 
+    pub(crate) fn read_retry(&self) -> ReadRetry {
+        ReadRetry::from_config(&self.config)
+    }
+
     pub(crate) async fn quota_repo_with(&self, fence: LeaderFence) -> Arc<dyn QuotaRepo> {
-        Arc::new(EtcdQuotaRepo::new(self.client().await, fence))
+        Arc::new(EtcdQuotaRepo::new(
+            self.client().await,
+            fence,
+            self.read_retry(),
+        ))
     }
 }
 
