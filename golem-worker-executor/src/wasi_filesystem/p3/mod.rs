@@ -1949,9 +1949,14 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
             descriptor_path_from_accessor::<Ctx, U>(store, &fd).map_err(FilesystemError::trap)?;
         let fd_rep = fd.rep();
 
-        if immutable_initial_file
-            && let Ok(stat) = run_local_stat::<Ctx, U>(store, Resource::new_borrow(fd_rep)).await
-        {
+        if immutable_initial_file {
+            let stat = run_local_stat::<Ctx, U>(store, Resource::new_borrow(fd_rep))
+                .await
+                .map_err(|error| {
+                    FilesystemError::trap(wasmtime::Error::msg(format!(
+                        "immutable initial-file stat failed: {error:?}"
+                    )))
+                })?;
             store.with(|mut access| {
                 observe_function_call_store::<Ctx, U>(
                     access.data_mut(),
@@ -2007,15 +2012,19 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
             .map_err(FilesystemError::trap)?;
         let fd_rep = fd.rep();
 
-        if immutable_initial_file
-            && let Ok(stat) = run_local_stat_at::<Ctx, U>(
+        if immutable_initial_file {
+            let stat = run_local_stat_at::<Ctx, U>(
                 store,
                 Resource::new_borrow(fd_rep),
                 path_flags,
                 path.clone(),
             )
             .await
-        {
+            .map_err(|error| {
+                FilesystemError::trap(wasmtime::Error::msg(format!(
+                    "immutable initial-file stat-at failed: {error:?}"
+                )))
+            })?;
             store.with(|mut access| {
                 observe_function_call_store::<Ctx, U>(
                     access.data_mut(),
