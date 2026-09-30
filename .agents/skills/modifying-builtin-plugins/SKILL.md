@@ -5,7 +5,7 @@ description: Builds and modifies built-in plugins and their descriptor-driven re
 
 # Modifying Built-in Plugins
 
-Built-in plugin sources are standalone Golem applications under `plugins/`. Generated WASMs are published as immutable releases in `golemcloud/golem-builtins`; the registry downloads the URL and SHA-256 pinned in `builtin-artifacts.json`. Never commit a generated plugin WASM or add `include_bytes!` for one.
+Built-in plugin sources are standalone Golem applications under `plugins/`. Generated WASMs are published as immutable releases in `golemcloud/golem-builtins`; `builtin-artifacts.lock.json` pins their independent component versions and SHA-256 values, and the registry derives the canonical release URLs. Never commit a generated plugin WASM or add `include_bytes!` for one.
 
 ## Source and SDK Changes
 
@@ -32,11 +32,11 @@ wasm-tools validate --features all plugins/otlp-exporter.wasm
 
 ## Provisioning Changes
 
-`BuiltinPluginsConfig` is only the tagged `Enabled`/`Disabled` switch. Plugin metadata and artifact IDs belong in `BuiltinPluginDescriptor`/`BUILTIN_PLUGINS`; URLs and optional SHA-256 values belong in the shared artifact config. Do not add per-plugin path fields or embed bytes.
+`BuiltinPluginsConfig` is only the tagged `Enabled`/`Disabled` switch. Plugin metadata and artifact IDs belong in `BuiltinPluginDescriptor`/`BUILTIN_PLUGINS`; production component versions and SHA-256 values belong in the shared release lock. `BuiltinArtifactsConfig` contains only the cache directory and explicit source overrides. Do not add per-plugin path fields or embed bytes.
 
 When enabled, startup creates/finds the built-in owner's system app/environment, hash-updates descriptor components, deploys the environment once, then idempotently registers each descriptor. New environments transactionally receive grants for all plugins owned by the built-in-plugin owner; those grants cannot be deleted. Provisioning does not backfill by iterating existing environments.
 
-Bump the descriptor version when publishing a distinct plugin version. Bump the independent artifact patch version whenever the built bytes change, publish the release first, and then update `builtin-artifacts.json`. If only provisioning changes, the WASM need not be rebuilt.
+Bump the descriptor version when publishing a distinct plugin version. Bump the independent artifact patch version whenever the built bytes change, publish the release first, and then update `builtin-artifacts.lock.json`. If only provisioning changes, the WASM need not be rebuilt.
 
 ## Verification
 

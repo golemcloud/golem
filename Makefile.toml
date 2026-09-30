@@ -1668,6 +1668,7 @@ exec --fail-on-error npm ci --ignore-scripts --no-audit --no-fund
 exec --fail-on-error npm run verify:release
 exec --fail-on-error npm run build:upstream
 exec --fail-on-error npm run smoke:embedded
+exec --fail-on-error npm run test:runtime
 exec --fail-on-error npm run typecheck
 exec --fail-on-error ${golem} build -P optimized --force-build --yes
 exec --fail-on-error ${golem} exec -P optimized copy
@@ -1688,17 +1689,221 @@ description = "Builds all built-in tool components"
 
 [tasks.publish-builtin-artifact]
 description = "Locally builds and manually publishes one immutable built-in component release"
-command = "node"
-args = [
-    "scripts/publish-builtin-artifact.mjs",
-    "${BUILTIN_COMPONENT}",
-    "${BUILTIN_VERSION}",
-]
+script_runner = "@duckscript"
+script = '''
+repository = set "golemcloud/golem-builtins"
+component = get_env BUILTIN_COMPONENT
+version = get_env BUILTIN_VERSION
+ci = get_env CI
+if not is_empty ${ci}
+    trigger_error "built-in artifacts must be published manually from a local checkout, never from CI"
+end
+if is_empty ${component}
+    trigger_error "BUILTIN_COMPONENT is required"
+end
+if is_empty ${version}
+    trigger_error "BUILTIN_VERSION is required and must not include a leading v"
+end
+if starts_with ${version} v
+    trigger_error "BUILTIN_VERSION must not include a leading v"
+end
+
+if equals ${component} otlp-exporter
+    build_task = set build-otlp-exporter
+    wasm = set plugins/otlp-exporter.wasm
+    artifact_id = set otlp_exporter
+    exports_json = set "{\"plugin\":\"golem-otlp-exporter\",\"version\":\"1.5.3\"}"
+    licenses = set LICENSE
+    sbom = set ""
+elif equals ${component} filesystem-tools
+    build_task = set build-filesystem-tools
+    wasm = set builtin-tools/filesystem-tools.wasm
+    artifact_id = set filesystem_tools
+    exports_json = set "{\"tools\":[\"read-file@0.3.0\",\"write-file@0.3.0\",\"edit-file@0.3.0\"]}"
+    licenses = set LICENSE
+    sbom = set ""
+elif equals ${component} javascript-tools
+    build_task = set build-javascript-tools
+    wasm = set builtin-tools/javascript-tools.wasm
+    artifact_id = set javascript_tools
+    exports_json = set "{\"tools\":[\"node@0.1.0\",\"npm@10.9.9\",\"npx@10.9.9\"]}"
+    licenses = set builtin-tools/js-ts-tools/licenses/npm
+    source_notice = set builtin-tools/js-ts-tools/licenses/SOURCE.md
+    sbom = set builtin-tools/js-ts-tools/licenses/npm/sbom.spdx.json
+elif equals ${component} typescript-tools
+    build_task = set build-typescript-tools
+    wasm = set builtin-tools/typescript-tools.wasm
+    artifact_id = set typescript_tools
+    exports_json = set "{\"tools\":[\"tsc@5.9.2\"]}"
+    licenses = set builtin-tools/js-ts-tools/licenses/typescript
+    source_notice = set builtin-tools/js-ts-tools/licenses/SOURCE.md
+    sbom = set builtin-tools/js-ts-tools/licenses/typescript/sbom.spdx.json
+else
+    trigger_error "BUILTIN_COMPONENT must be one of: otlp-exporter, filesystem-tools, javascript-tools, typescript-tools"
+end
+
+skip_build = get_env BUILTIN_SKIP_BUILD
+if not equals ${skip_build} 1
+    exec --fail-on-error cargo make ${build_task}
+end
+exists = is_path_exists ${wasm}
+if not ${exists}
+    trigger_error "built artifact does not exist: ${wasm}"
+end
+exec --fail-on-error wasm-tools validate --features all ${wasm}
+
+sha256 = sha256sum ${wasm}
+size = get_file_size ${wasm}
+lock_text = readfile builtin-artifacts.lock.json
+lock = json_parse --collection ${lock_text}
+locked_artifacts = map_get ${lock} artifacts
+locked_entry = map_get ${locked_artifacts} ${artifact_id}
+locked_version = map_get ${locked_entry} version
+locked_sha256 = map_get ${locked_entry} sha256
+same_version = equals ${version} ${locked_version}
+same_bytes = equals ${sha256} ${locked_sha256}
+if ${same_version}
+    if not ${same_bytes}
+        trigger_error "artifact bytes changed; bump ${component} from ${locked_version} before publishing"
+    end
+else
+    if ${same_bytes}
+        trigger_error "artifact bytes are unchanged; keep ${component} at ${locked_version}"
+    end
+end
+release --recursive ${lock}
+tag = set "${component}-v${version}"
+asset_name = set "${component}.wasm"
+staging = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/builtin-artifact-release/${tag}"
+if is_path_exists ${staging}
+    rm -r ${staging}
+end
+mkdir ${staging}
+staged_wasm = set "${staging}/${asset_name}"
+cp ${wasm} ${staged_wasm}
+writefile "${staged_wasm}.sha256" "${sha256}  ${asset_name}\n"
+
+source_commit_result = exec git rev-parse HEAD
+source_commit = trim ${source_commit_result.stdout}
+source_ref_result = exec git rev-parse --abbrev-ref HEAD
+source_ref = trim ${source_ref_result.stdout}
+source_status_result = exec git status --porcelain
+source_status = trim ${source_status_result.stdout}
+provenance = set "{\n  \"schemaVersion\": 1,\n  \"artifact\": {\"component\": \"${component}\", \"version\": \"${version}\", \"asset\": \"${asset_name}\", \"sha256\": \"${sha256}\", \"size\": ${size}, \"exports\": ${exports_json}},\n  \"source\": {\"repository\": \"https://github.com/golemcloud/golem\", \"commit\": \"${source_commit}\", \"ref\": \"${source_ref}\"},\n  \"build\": {\"task\": \"cargo make ${build_task}\"}\n}\n"
+writefile "${staging}/provenance.json" ${provenance}
+
+license_dir = set "${staging}/licenses"
+if equals ${licenses} LICENSE
+    mkdir ${license_dir}
+    cp LICENSE "${license_dir}/LICENSE"
+else
+    cp ${licenses} ${license_dir}
+    cp ${source_notice} "${license_dir}/SOURCE.md"
+end
+exec --fail-on-error tar -czf "${staging}/${component}-licenses.tar.gz" -C ${license_dir} .
+if not is_empty ${sbom}
+    cp ${sbom} "${staging}/${component}.spdx.json"
+end
+
+echo "artifact: ${component} ${version}"
+echo "source:   ${source_commit} (${source_ref})"
+echo "asset:    ${staged_wasm} (${size} bytes)"
+echo "sha256:   ${sha256}"
+echo "lock:     \"${artifact_id}\": { \"component\": \"${component}\", \"version\": \"${version}\", \"sha256\": \"${sha256}\" }"
+
+dry_run = get_env BUILTIN_DRY_RUN
+if equals ${dry_run} 1
+    echo "dry run: release was not published"
+    exit 0
+end
+if not is_empty ${source_status}
+    trigger_error "refusing to publish from a dirty source tree; commit the exact source first"
+end
+existing = exec gh release view ${tag} --repo ${repository}
+if equals ${existing.code} 0
+    trigger_error "immutable built-in release already exists: ${repository}@${tag}"
+end
+notes = set "Built from [golem@${source_commit}](https://github.com/golemcloud/golem/commit/${source_commit}).\n\nSHA-256: `${sha256}`\n\nThe source and build tooling for this artifact live in the golem repository.\n"
+notes_path = set "${staging}/release-notes.md"
+writefile ${notes_path} ${notes}
+if is_empty ${sbom}
+    exec --fail-on-error gh release create ${tag} --repo ${repository} --title ${tag} --notes-file ${notes_path} ${staged_wasm} "${staged_wasm}.sha256" "${staging}/provenance.json" "${staging}/${component}-licenses.tar.gz"
+else
+    exec --fail-on-error gh release create ${tag} --repo ${repository} --title ${tag} --notes-file ${notes_path} ${staged_wasm} "${staged_wasm}.sha256" "${staging}/provenance.json" "${staging}/${component}-licenses.tar.gz" "${staging}/${component}.spdx.json"
+end
+'''
 
 [tasks.check-builtin-artifacts]
-description = "Checks built-in artifact pins and rejects committed generated WASMs"
-command = "node"
-args = ["scripts/check-builtin-artifacts.mjs"]
+description = "Checks the built-in artifact release lock and rejects committed generated WASMs"
+script_runner = "@duckscript"
+script = '''
+lock_text = readfile builtin-artifacts.lock.json
+lock = json_parse --collection ${lock_text}
+schema_version = map_get ${lock} schemaVersion
+if not equals ${schema_version} 1
+    trigger_error "builtin-artifacts.lock.json must use schemaVersion 1"
+end
+repository = map_get ${lock} repository
+if not equals ${repository} golemcloud/golem-builtins
+    trigger_error "builtin-artifacts.lock.json must use golemcloud/golem-builtins"
+end
+artifacts = map_get ${lock} artifacts
+artifact_ids = map_keys ${artifacts}
+artifact_count = array_length ${artifact_ids}
+if equals ${artifact_count} 0
+    trigger_error "builtin-artifacts.lock.json must contain artifacts"
+end
+for artifact_id in ${artifact_ids}
+    canonical_artifact_id = snakecase ${artifact_id}
+    if not equals ${artifact_id} ${canonical_artifact_id}
+        trigger_error "invalid built-in artifact ID '${artifact_id}'"
+    end
+    entry = map_get ${artifacts} ${artifact_id}
+    component = map_get ${entry} component
+    version = map_get ${entry} version
+    sha256 = map_get ${entry} sha256
+    if is_empty ${component}
+        trigger_error "built-in artifact '${artifact_id}' has no component"
+    end
+    canonical_component = kebabcase ${component}
+    if not equals ${component} ${canonical_component}
+        trigger_error "built-in artifact '${artifact_id}' has invalid component '${component}'"
+    end
+    if is_empty ${version}
+        trigger_error "built-in artifact '${artifact_id}' has no version"
+    end
+    sha_length = strlen ${sha256}
+    if not equals ${sha_length} 64
+        trigger_error "built-in artifact '${artifact_id}' has an invalid SHA-256"
+    end
+    lowercase_sha256 = lowercase ${sha256}
+    if not equals ${sha256} ${lowercase_sha256}
+        trigger_error "built-in artifact '${artifact_id}' has a non-lowercase SHA-256"
+    end
+    non_hex = set ${sha256}
+    hex_digits = array 0 1 2 3 4 5 6 7 8 9 a b c d e f
+    for digit in ${hex_digits}
+        non_hex = replace ${non_hex} ${digit} ""
+    end
+    release ${hex_digits}
+    if not is_empty ${non_hex}
+        trigger_error "built-in artifact '${artifact_id}' has a non-hex SHA-256"
+    end
+end
+release --recursive ${lock}
+
+tracked = exec git ls-files -- builtin-tools/*.wasm plugins/*.wasm
+if not equals ${tracked.code} 0
+    echo ${tracked.stderr}
+    trigger_error "git ls-files failed while checking generated built-in WASMs"
+end
+tracked_wasms = trim ${tracked.stdout}
+if not is_empty ${tracked_wasms}
+    echo ${tracked_wasms}
+    trigger_error "generated built-in WASMs must not be tracked"
+end
+echo "validated ${artifact_count} external built-in artifacts"
+'''
 
 [tasks.component-size-report]
 description = "Builds representative components and assembles a local size and retention report"

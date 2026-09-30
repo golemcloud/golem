@@ -158,13 +158,13 @@ impl SpawnedRegistryService {
 
 fn prepopulate_builtin_artifact_cache(repository_root: &Path, cache_dir: &Path) {
     let manifest: serde_json::Value = serde_json::from_slice(
-        &std::fs::read(repository_root.join("builtin-artifacts.json"))
-            .expect("failed to read builtin-artifacts.json"),
+        &std::fs::read(repository_root.join("builtin-artifacts.lock.json"))
+            .expect("failed to read builtin-artifacts.lock.json"),
     )
-    .expect("failed to parse builtin-artifacts.json");
+    .expect("failed to parse builtin-artifacts.lock.json");
     let artifacts = manifest["artifacts"]
         .as_object()
-        .expect("builtin-artifacts.json must contain an artifacts object");
+        .expect("builtin-artifacts.lock.json must contain an artifacts object");
     let local_artifacts = [
         ("filesystem_tools", "builtin-tools/filesystem-tools.wasm"),
         ("javascript_tools", "builtin-tools/javascript-tools.wasm"),
@@ -192,7 +192,7 @@ fn prepopulate_builtin_artifact_cache(repository_root: &Path, cache_dir: &Path) 
         assert_eq!(
             actual,
             expected,
-            "locally built artifact '{}' does not match builtin-artifacts.json",
+            "locally built artifact '{}' does not match builtin-artifacts.lock.json",
             source.display()
         );
         let mut temporary = tempfile::NamedTempFile::new_in(cache_dir)

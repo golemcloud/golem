@@ -10,21 +10,7 @@ type = "LocalFileSystem"
 [blob_storage.config]
 root = "../data/blob_storage"
 
-[builtin_artifacts.artifacts.filesystem_tools]
-sha256 = "c6721b82e5a237a68cf9d65f611a9502b50cc450aad0fa345038523d3bf20e7f"
-url = "https://github.com/golemcloud/golem-builtins/releases/download/filesystem-tools-v0.3.0/filesystem-tools.wasm"
-
-[builtin_artifacts.artifacts.javascript_tools]
-sha256 = "44b3fd4881e20fb4527b7c35ebd95b590ca03700696a06d9baa4e59d7d98de31"
-url = "https://github.com/golemcloud/golem-builtins/releases/download/javascript-tools-v0.1.0/javascript-tools.wasm"
-
-[builtin_artifacts.artifacts.otlp_exporter]
-sha256 = "270616e75963892b6464811b5a4fc89b3564620d65568fdbb15926c91c8ff913"
-url = "https://github.com/golemcloud/golem-builtins/releases/download/otlp-exporter-v1.5.3/otlp-exporter.wasm"
-
-[builtin_artifacts.artifacts.typescript_tools]
-sha256 = "ee9552c4d15dcf2927f71fe525636504d016aaee040efa47c25ee4e481d969dc"
-url = "https://github.com/golemcloud/golem-builtins/releases/download/typescript-tools-v0.1.0/typescript-tools.wasm"
+[builtin_artifacts.source_overrides]
 
 [builtin_plugins]
 type = "Disabled"

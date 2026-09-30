@@ -4,7 +4,10 @@ Built-in tools are component sources built from this repository, published as im
 [`golemcloud/golem-builtins`](https://github.com/golemcloud/golem-builtins), downloaded into the
 registry-service artifact cache, and provisioned at registry startup. `BUILTIN_TOOLS` in
 `golem-registry-service/src/services/builtin_tool_provisioner.rs` is the production inventory;
-`builtin-artifacts.json` pins its release URLs and SHA-256 values.
+`builtin-artifacts.lock.json` pins each component artifact's independent version and SHA-256. The
+registry derives the canonical GitHub release URL from that lock. Server configuration is only for
+deployment-specific cache placement and source overrides; it does not duplicate the production
+release catalog.
 
 The filesystem tools are implemented in Rust under `builtin-tools/filesystem-tools/` and built
 into `builtin-tools/filesystem-tools.wasm`. The component provides the `read-file`, `write-file`, and
@@ -12,7 +15,8 @@ into `builtin-tools/filesystem-tools.wasm`. The component provides the `read-fil
 
 The JavaScript and TypeScript tools are implemented under `builtin-tools/js-ts-tools/`. The
 `javascript-tools` component provides `node`, `npm`, and `npx`; the `typescript-tools` component
-provides `tsc`. `node` is Golem's QuickJS-based Node-compatible runner, not a Node.js distribution.
+provides `tsc`. `node` provides JavaScript execution through Golem's QuickJS-based Node-compatible
+runtime.
 The upstream npm and tsc executable graphs are Rollup-bundled and embedded in their components;
 they do not provision an npm or TypeScript package tree into the invoking agent. TypeScript's
 standard-library declarations and npm's manual pages are embedded as private read-only data. Both
@@ -23,14 +27,16 @@ components must use the `optimized` TypeScript preset so Wizer pre-initializes t
 1. Add a standalone tool component source and build it through its Golem application manifest. Do
    not invoke its language compiler directly.
 2. Add its logical artifact ID to `BuiltinToolDescriptor`; keep tool metadata in the descriptor and
-   add only the release URL and checksum to `builtin-artifacts.json`.
+   add the component name, independent artifact version, and checksum to
+   `builtin-artifacts.lock.json`.
 3. Set `component_name`, `tool_name`, and `release_version` to the artifact's exported metadata.
    Provisioning validates these values before writing anything.
 4. Add an independent build task and include it in `build-builtin-tools`. Validate the generated
    WASM and run the registry provisioning tests.
 5. Commit the exact source and build inputs, then manually publish an immutable component release
    from that clean local checkout with `cargo make publish-builtin-artifact`. Commit the resulting
-   URL/checksum update to `builtin-artifacts.json` separately. Generated WASMs are never committed.
+   version/checksum update to `builtin-artifacts.lock.json` separately. Generated WASMs are never
+   committed.
 
 Provisioning is idempotent for identical bytes and an identical exact version. A published system
 release is protected and immutable: repeat startup with the same version only when the artifact and

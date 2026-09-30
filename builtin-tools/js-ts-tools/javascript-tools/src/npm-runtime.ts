@@ -1,4 +1,8 @@
 import type { Dirent } from 'node:fs';
+import { validatedCwd } from '../../shared/cli-runtime.js';
+
+export const NPM_VERSION = '10.9.9';
+export const DEFAULT_REGISTRY = 'https://registry.npmjs.org/';
 
 type FsPromisesWithRm = {
   rm: (path: string, options?: { force?: boolean; recursive?: boolean }) => Promise<void>;
@@ -10,6 +14,40 @@ type SyncRemovalFs = {
   unlinkSync(path: string): void;
 };
 
+export function normalizedRegistry(value: string): string {
+  const url = new URL(value);
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new Error('registry must use HTTP or HTTPS');
+  }
+  if (url.username || url.password) throw new Error('registry must not contain credentials');
+  url.hash = '';
+  url.search = '';
+  if (!url.pathname.endsWith('/')) url.pathname += '/';
+  return url.toString();
+}
+
+export function npmInvocation(cwdValue: string, registryValue: string) {
+  const cwd = validatedCwd(cwdValue);
+  const home = `${cwd}/.golem-home`;
+  const cache = `${cwd}/.golem-npm-cache`;
+  const prefix = `${cwd}/.golem-npm-prefix`;
+  return {
+    environment: {
+      HOME: home,
+      NODE: process.execPath,
+      NPM: '/toolchain/npm/node_modules/npm/bin/npm-cli.js',
+      NPM_CONFIG_AUDIT: 'false',
+      NPM_CONFIG_CACHE: cache,
+      NPM_CONFIG_FUND: 'false',
+      NPM_CONFIG_PREFIX: prefix,
+      NPM_CONFIG_REGISTRY: normalizedRegistry(registryValue),
+      NPM_CONFIG_UPDATE_NOTIFIER: 'false',
+      PATH: `${cwd}/node_modules/.bin:/usr/local/bin:/usr/bin:/bin`,
+    },
+    directories: [home, cache, prefix],
+  };
+}
+
 export function installNpmRecursiveRmPatch(
   packageVersion: string,
   expectedVersion: string,
@@ -19,9 +57,7 @@ export function installNpmRecursiveRmPatch(
 ) {
   const id = 'npm-recursive-rm-symlink-eacces';
   if (packageVersion !== expectedVersion) {
-    throw new Error(
-      `${id} only supports npm ${expectedVersion}; received npm ${packageVersion}`,
-    );
+    throw new Error(`${id} only supports npm ${expectedVersion}; received npm ${packageVersion}`);
   }
   const originalRm = promises.rm;
   const boundRm = originalRm.bind(promises);

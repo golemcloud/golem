@@ -1,6 +1,6 @@
 ---
 name: publishing-builtin-artifacts
-description: Builds, validates, publishes, or updates immutable Golem built-in tool and plugin release assets. Use for golem-builtins releases, artifact versions, checksums, provenance, licenses, or builtin-artifacts.json.
+description: Builds, validates, publishes, or updates immutable Golem built-in tool and plugin release assets. Use for golem-builtins releases, artifact versions, checksums, provenance, licenses, or builtin-artifacts.lock.json.
 ---
 
 # Publishing Built-in Artifacts
@@ -28,6 +28,6 @@ Publishing is a manual local operation. Never add a publishing workflow, invoke 
 
 4. Review the reported size, SHA-256, source commit, exports, licenses, SBOM, tag, and URL.
 5. Publish locally with the same command without `BUILTIN_DRY_RUN` after approval.
-6. Update the matching entry in `builtin-artifacts.json`, verify the public URL and checksum, and commit the pin. Registry defaults must always include SHA-256; omit it only for explicit experiments.
+6. Update the matching component/version/SHA-256 entry in `builtin-artifacts.lock.json`, verify the public URL and checksum, and commit the lock. The component artifact version is independent from the versions of tools it exports and changes whenever the component bytes change.
 
 The publisher must run from the source commit recorded in provenance. Do not publish from an uncommitted tree and claim the previous commit as its source.

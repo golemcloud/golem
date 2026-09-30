@@ -49,6 +49,13 @@ pub struct ClockedStreamEvidence {
     pub stream: StreamEvidence,
 }
 
+#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
+pub struct CliToolEvidence {
+    pub exit_code: i32,
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
+}
+
 #[derive(IntoSchema)]
 struct RawRunInput {
     mode: String,
@@ -253,6 +260,7 @@ pub trait ToolStreamingCaller {
     async fn dynamic_mcp_chain_probe(&self, value: String) -> Vec<String>;
     async fn dynamic_mcp_stdout_probe(&self, value: String) -> String;
     async fn filesystem_tool_roundtrip(&self) -> Vec<String>;
+    async fn builtin_cli_version(&self, tool: String) -> CliToolEvidence;
     async fn consume_typed_output(&self, decorated: bool, tag: String) -> Vec<TypedOutputEvidence>;
     async fn produce_typed_input(&self, decorated: bool) -> Vec<TypedInputEvidence>;
     async fn native_modes_stream_cancel_overlap(&self) -> Vec<String>;
@@ -363,6 +371,17 @@ async fn read_all(mut stdout: InputStream) -> Vec<u8> {
         }
     }
     output
+}
+
+async fn read_output(mut output: InputStream) -> Result<Vec<u8>, String> {
+    let mut bytes = Vec::new();
+    while let Some(item) = output.next().await {
+        match item {
+            Ok(chunk) => bytes.extend(chunk),
+            Err(failure) => return Err(format!("{failure:?}")),
+        }
+    }
+    Ok(bytes)
 }
 
 async fn read_tool_stdout(mut stdout: ToolInvocationOutput) -> Vec<u8> {
@@ -480,6 +499,31 @@ fn raw_filesystem_input(
         },
     );
     golem_rust::encode_typed_schema_value(&value).expect("encode filesystem tool wire input")
+}
+
+fn raw_cli_input(tool: &str) -> golem_rust::schema::wit::wire::TypedSchemaValue {
+    let mut fields = vec![
+        (
+            "args",
+            SchemaType::list(SchemaType::string()),
+            SchemaValue::List {
+                elements: vec![SchemaValue::String("--version".to_string())],
+            },
+        ),
+        (
+            "cwd",
+            SchemaType::string(),
+            SchemaValue::String("/workspace".to_string()),
+        ),
+    ];
+    if matches!(tool, "npm" | "npx") {
+        fields.push((
+            "registry",
+            SchemaType::string(),
+            SchemaValue::String("https://registry.npmjs.org/".to_string()),
+        ));
+    }
+    raw_filesystem_input(fields)
 }
 
 async fn invoke_filesystem_tool<T: FromSchema>(
@@ -1421,6 +1465,42 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             edit.bytes_before.to_string(),
             edit.bytes_after.to_string(),
         ]
+    }
+
+    async fn builtin_cli_version(&self, tool: String) -> CliToolEvidence {
+        let rpc = ToolRpc::create(&tool).expect("built-in CLI tool RPC creation failed");
+        let (stdout_target, stdout) = tool_host::create_output();
+        let (stderr_target, stderr) = tool_host::create_output();
+        let invoke = rpc.invoke_and_await(
+            Vec::new(),
+            raw_cli_input(&tool),
+            None,
+            Some(stdout_target),
+            Some(stderr_target),
+        );
+        let (result, stdout, stderr) = (invoke, read_output(stdout), read_output(stderr))
+            .join()
+            .await;
+        let result = result.unwrap_or_else(|error| {
+            panic!(
+                "invoke built-in CLI tool '{tool}': {error:?}; stdout={stdout:?}; stderr={stderr:?}"
+            )
+        });
+        let stdout = stdout.unwrap_or_else(|error| panic!("read '{tool}' stdout: {error}"));
+        let stderr = stderr.unwrap_or_else(|error| panic!("read '{tool}' stderr: {error}"));
+        let value = decode_typed_schema_value_owned(
+            result
+                .result
+                .unwrap_or_else(|| panic!("built-in CLI tool '{tool}' returned no result")),
+        )
+        .unwrap_or_else(|error| panic!("decode built-in CLI tool '{tool}' result: {error}"));
+        let exit_code = i32::from_value(value.value())
+            .unwrap_or_else(|error| panic!("convert built-in CLI tool '{tool}' result: {error}"));
+        CliToolEvidence {
+            exit_code,
+            stdout,
+            stderr,
+        }
     }
 
     async fn consume_typed_output(&self, decorated: bool, tag: String) -> Vec<TypedOutputEvidence> {

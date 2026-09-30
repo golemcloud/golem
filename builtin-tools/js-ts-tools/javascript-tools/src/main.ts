@@ -1,21 +1,20 @@
 import { readFileSync, readdirSync, rmdirSync, unlinkSync } from 'node:fs';
 import fsPromises from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import { ok, toolDefinition } from '@golemcloud/golem-ts-sdk';
+import { ok, s, toolDefinition } from '@golemcloud/golem-ts-sdk';
 import { z } from 'zod/v4';
-import {
-  DEFAULT_CWD,
-  DEFAULT_MAX_OUTPUT_BYTES,
-  DEFAULT_REGISTRY,
-  NPM_VERSION,
-  ToolExecutionResultSchema,
-} from '../../shared/contracts.js';
-import { runInDirectRuntime } from '../../shared/direct-runtime.js';
-import { installNpmRecursiveRmPatch } from '../../shared/npm-compat.js';
-import { rewriteNpxArguments } from '../../shared/npx-args.js';
+import { runCli, validatedCwd } from '../../shared/cli-runtime.js';
 import { evaluateCommonJs, installPrivateReadOnlyFiles } from '../../shared/private-vfs.js';
 import { npmBundleSource, npmPrivateFiles } from '../../generated/npm-assets.js';
+import {
+  DEFAULT_REGISTRY,
+  installNpmRecursiveRmPatch,
+  NPM_VERSION,
+  npmInvocation,
+} from './npm-runtime.js';
+import { rewriteNpxArguments } from './npx-args.js';
 
+const DEFAULT_CWD = '/workspace';
 const NPM_ROOT = '/toolchain/npm/node_modules/npm';
 const NPM_BUNDLED = '/toolchain/private/npm-cli.cjs';
 
@@ -27,73 +26,70 @@ type NpmBundle = {
 
 const nodeTool = toolDefinition('node', { requiresFilesystem: true })
   .version('0.1.0')
-  .doc(
-    "Golem's QuickJS-based Node-compatible JavaScript runner. This is not a Node.js distribution.",
-  )
+  .doc("Run a JavaScript file or inline expression with Golem's Node-compatible runtime.")
   .annotations({ openWorld: false })
   .body((body) =>
     body
-      .option('cwd', z.string(), { default: DEFAULT_CWD, doc: 'Absolute working directory.' })
-      .option('registry', z.string(), {
-        default: DEFAULT_REGISTRY,
-        doc: 'Credential-free HTTP(S) npm registry URL.',
-      })
-      .option('max-output-bytes', z.number().int(), {
-        default: DEFAULT_MAX_OUTPUT_BYTES,
-        doc: 'Combined stdout/stderr capture limit.',
+      .option('cwd', z.string(), {
+        default: DEFAULT_CWD,
+        doc: 'Directory used to resolve files and relative paths.',
       })
       .tail('args', z.string(), {
         separator: '--',
         verbatim: true,
-        doc: 'Arguments passed unchanged to the command.',
+        doc: 'A script path and its arguments, an inline expression with -e, or a Node option.',
       })
-      .returns(ToolExecutionResultSchema),
+      .stdout({ required: true, doc: 'Output written by the JavaScript program.' })
+      .stderr({ required: true, doc: 'Diagnostics written by the JavaScript program.' })
+      .returns(s.s32(), { doc: 'Process exit code; zero indicates success.' }),
   );
 
 const npmTool = toolDefinition('npm', { requiresFilesystem: true })
   .version(NPM_VERSION)
-  .doc('Run the pinned upstream npm CLI in an isolated Golem tool sidecar.')
+  .doc('Install and manage JavaScript packages and run package scripts with npm.')
   .annotations({ openWorld: false })
   .body((body) =>
     body
-      .option('cwd', z.string(), { default: DEFAULT_CWD, doc: 'Absolute working directory.' })
+      .option('cwd', z.string(), {
+        default: DEFAULT_CWD,
+        doc: 'Project directory in which npm runs.',
+      })
       .option('registry', z.string(), {
         default: DEFAULT_REGISTRY,
-        doc: 'Credential-free HTTP(S) npm registry URL.',
-      })
-      .option('max-output-bytes', z.number().int(), {
-        default: DEFAULT_MAX_OUTPUT_BYTES,
-        doc: 'Combined stdout/stderr capture limit.',
+        doc: 'Package registry used to resolve dependencies.',
       })
       .tail('args', z.string(), {
         separator: '--',
         verbatim: true,
-        doc: 'Arguments passed unchanged to the command.',
+        doc: 'An npm command followed by its arguments.',
       })
-      .returns(ToolExecutionResultSchema),
+      .stdout({ required: true, doc: 'Normal npm command output.' })
+      .stderr({ required: true, doc: 'npm warnings and diagnostics.' })
+      .returns(s.s32(), { doc: 'Process exit code; zero indicates success.' }),
   );
 
 const npxTool = toolDefinition('npx', { requiresFilesystem: true })
   .version(NPM_VERSION)
-  .doc('Run npm exec with the argument rewriting of the pinned upstream npx CLI.')
+  .doc('Run a command provided by a local or downloaded npm package.')
   .annotations({ openWorld: false })
   .body((body) =>
     body
-      .option('cwd', z.string(), { default: DEFAULT_CWD, doc: 'Absolute working directory.' })
+      .option('cwd', z.string(), {
+        default: DEFAULT_CWD,
+        doc: 'Project directory in which the package command runs.',
+      })
       .option('registry', z.string(), {
         default: DEFAULT_REGISTRY,
-        doc: 'Credential-free HTTP(S) npm registry URL.',
-      })
-      .option('max-output-bytes', z.number().int(), {
-        default: DEFAULT_MAX_OUTPUT_BYTES,
-        doc: 'Combined stdout/stderr capture limit.',
+        doc: 'Package registry used to resolve packages.',
       })
       .tail('args', z.string(), {
         separator: '--',
         verbatim: true,
-        doc: 'Arguments passed unchanged to the command.',
+        doc: 'A package command followed by its arguments.',
       })
-      .returns(ToolExecutionResultSchema),
+      .stdout({ required: true, doc: 'Output written by the package command.' })
+      .stderr({ required: true, doc: 'Warnings and diagnostics from npx or the package command.' })
+      .returns(s.s32(), { doc: 'Process exit code; zero indicates success.' }),
   );
 
 async function loadNpm(): Promise<NpmBundle> {
@@ -102,12 +98,8 @@ async function loadNpm(): Promise<NpmBundle> {
 
 async function runNpm(
   name: 'npm' | 'npx',
-  input: {
-    cwd: string;
-    registry: string;
-    maxOutputBytes: number;
-    args: string[];
-  },
+  input: { cwd: string; registry: string; args: string[] },
+  streams: { stdout: WritableStream<Uint8Array>; stderr: WritableStream<Uint8Array> },
 ) {
   const argv = [
     'node',
@@ -124,15 +116,11 @@ async function runNpm(
     join,
   );
   const restorePrivateFiles = installPrivateReadOnlyFiles(NPM_ROOT, npmPrivateFiles);
+  const invocation = npmInvocation(input.cwd, input.registry);
   try {
-    return await runInDirectRuntime(
-      {
-        argv,
-        cwd: input.cwd,
-        registry: input.registry,
-        maxOutputBytes: input.maxOutputBytes,
-        version: NPM_VERSION,
-      },
+    return await runCli(
+      { argv, cwd: input.cwd, ...invocation },
+      streams,
       async (processFacade) => {
         const loaded = await loadNpm();
         if (name === 'npx') {
@@ -166,39 +154,43 @@ function parseNodeArguments(args: string[]): { source?: string; entry?: string; 
   return { entry: args[0], argv: ['node', args[0], ...args.slice(1)] };
 }
 
-async function runNode(input: {
-  cwd: string;
-  registry: string;
-  maxOutputBytes: number;
-  args: string[];
-}) {
-  const parsed = parseNodeArguments(input.args);
-  const version = process.version;
-  if (input.args[0] === '--version' || input.args[0] === '-v') {
-    return {
-      exitCode: 0,
-      version,
-      overflowed: false,
-      stdout: `${version}\n`,
-      stderr: '',
-    };
+async function runNode(
+  input: { cwd: string; args: string[] },
+  streams: { stdout: WritableStream<Uint8Array>; stderr: WritableStream<Uint8Array> },
+) {
+  let parsed: ReturnType<typeof parseNodeArguments> | undefined;
+  let parseError: unknown;
+  try {
+    parsed = parseNodeArguments(input.args);
+  } catch (error) {
+    parseError = error;
   }
-  const entry = parsed.entry ? resolve(input.cwd, parsed.entry) : undefined;
-  return runInDirectRuntime(
+  const cwd = validatedCwd(input.cwd);
+  const home = `${cwd}/.golem-home`;
+  return runCli(
     {
-      argv: parsed.argv,
-      cwd: input.cwd,
-      registry: input.registry,
-      maxOutputBytes: input.maxOutputBytes,
-      version,
+      argv: parsed?.argv ?? ['node', ...input.args],
+      cwd,
+      environment: {
+        HOME: home,
+        PATH: `${cwd}/node_modules/.bin:/usr/local/bin:/usr/bin:/bin`,
+      },
+      directories: [home],
       stopOnExit: true,
     },
+    streams,
     async () => {
-      if (parsed.source !== undefined) {
+      if (parseError !== undefined) throw parseError;
+      if (input.args[0] === '--version' || input.args[0] === '-v') {
+        process.stdout.write(`${process.version}\n`);
+        return;
+      }
+      const entry = parsed!.entry ? resolve(cwd, parsed!.entry) : undefined;
+      if (parsed!.source !== undefined) {
         const AsyncFunction = Object.getPrototypeOf(async () => undefined).constructor as new (
           ...args: string[]
         ) => () => Promise<unknown>;
-        await new AsyncFunction(parsed.source)();
+        await new AsyncFunction(parsed!.source)();
       } else {
         readFileSync(entry!);
         await import(entry!);
@@ -208,13 +200,13 @@ async function runNode(input: {
 }
 
 nodeTool.implement({
-  node: async (input) => ok(await runNode(input)),
+  node: async (input, context) => ok(await runNode(input, context)),
 });
 
 npmTool.implement({
-  npm: async (input) => ok(await runNpm('npm', input)),
+  npm: async (input, context) => ok(await runNpm('npm', input, context)),
 });
 
 npxTool.implement({
-  npx: async (input) => ok(await runNpm('npx', input)),
+  npx: async (input, context) => ok(await runNpm('npx', input, context)),
 });

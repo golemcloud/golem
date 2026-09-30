@@ -47,7 +47,7 @@ impl BuiltinArtifactResolver {
 
         Ok(Self {
             cache_dir: config.resolved_cache_dir()?,
-            sources: config.artifacts.clone(),
+            sources: config.resolved_artifacts()?,
             client,
             in_process_locks: Arc::new(Mutex::new(HashMap::new())),
         })
@@ -336,7 +336,7 @@ mod tests {
         let cache = tempfile::tempdir().unwrap();
         let config = BuiltinArtifactsConfig {
             cache_dir: Some(cache.path().to_path_buf()),
-            artifacts: BTreeMap::from([(
+            source_overrides: BTreeMap::from([(
                 "test".to_string(),
                 BuiltinArtifactSource {
                     url: format!("http://127.0.0.1:{port}/artifact.wasm"),
@@ -353,7 +353,7 @@ mod tests {
         server.abort();
         let offline_config = BuiltinArtifactsConfig {
             cache_dir: config.cache_dir,
-            artifacts: BTreeMap::from([(
+            source_overrides: BTreeMap::from([(
                 "test".to_string(),
                 BuiltinArtifactSource {
                     url: "http://127.0.0.1:1/unreachable.wasm".to_string(),
@@ -387,7 +387,7 @@ mod tests {
         let expected = hex::encode([0; 32]);
         let resolver = BuiltinArtifactResolver::new(&BuiltinArtifactsConfig {
             cache_dir: Some(cache.path().to_path_buf()),
-            artifacts: BTreeMap::from([(
+            source_overrides: BTreeMap::from([(
                 "test".to_string(),
                 BuiltinArtifactSource {
                     url: format!("http://127.0.0.1:{port}/artifact.wasm"),

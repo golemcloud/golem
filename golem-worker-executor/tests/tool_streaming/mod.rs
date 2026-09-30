@@ -732,6 +732,13 @@ struct ClockedStreamEvidence {
     stream: StreamEvidence,
 }
 
+#[derive(Debug, FromSchema)]
+struct CliToolEvidence {
+    exit_code: i32,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+}
+
 #[derive(Debug, PartialEq, Eq, FromSchema)]
 struct TypedOutputEvidence {
     label: String,
@@ -1065,63 +1072,6 @@ async fn invoke_filesystem_tool_success(
     }
 }
 
-fn cli_tool_input(args: &[&str]) -> TypedSchemaValue {
-    filesystem_tool_input(vec![
-        (
-            "cwd",
-            SchemaType::string(),
-            SchemaValue::String("/workspace".to_string()),
-        ),
-        (
-            "registry",
-            SchemaType::string(),
-            SchemaValue::String("https://registry.npmjs.org/".to_string()),
-        ),
-        (
-            "max-output-bytes",
-            SchemaType::f64(),
-            SchemaValue::F64(1_048_576.0),
-        ),
-        (
-            "args",
-            SchemaType::list(SchemaType::string()),
-            SchemaValue::List {
-                elements: args
-                    .iter()
-                    .map(|arg| SchemaValue::String((*arg).to_string()))
-                    .collect(),
-            },
-        ),
-    ])
-}
-
-fn assert_cli_result(
-    value: SchemaValue,
-    expected_version: &str,
-    expected_stdout: &str,
-) -> anyhow::Result<()> {
-    let SchemaValue::Record { fields } = value else {
-        anyhow::bail!("expected CLI result record, got {value:?}");
-    };
-    let [exit_code, version, overflowed, stdout, stderr] = fields.as_slice() else {
-        anyhow::bail!("expected five CLI result fields, got {fields:?}");
-    };
-    assert_eq!(exit_code, &SchemaValue::F64(0.0));
-    assert_eq!(overflowed, &SchemaValue::Bool(false));
-    assert_eq!(stderr, &SchemaValue::String(String::new()));
-    if expected_version.is_empty() {
-        let SchemaValue::String(actual_version) = version else {
-            anyhow::bail!("expected CLI version string, got {version:?}");
-        };
-        assert!(actual_version.starts_with('v'));
-        assert_eq!(stdout, &SchemaValue::String(format!("{actual_version}\n")));
-    } else {
-        assert_eq!(version, &SchemaValue::String(expected_version.to_string()));
-        assert_eq!(stdout, &SchemaValue::String(expected_stdout.to_string()));
-    }
-    Ok(())
-}
-
 async fn invoke_cli_tool_version(
     executor: &TestWorkerExecutor,
     deps: &WorkerExecutorTestDependencies,
@@ -1146,14 +1096,6 @@ async fn invoke_cli_tool_version(
         true,
     )
     .await?;
-    let definitions = metadata
-        .tools
-        .iter()
-        .map(|definition| {
-            let name = definition.name().expect("CLI tool has a root command");
-            (ToolName::try_from(name).unwrap(), definition.clone())
-        })
-        .collect::<BTreeMap<_, _>>();
     let mut deployment = deployment_state(
         context.account_id,
         provider_component.id,
@@ -1174,23 +1116,25 @@ async fn invoke_cli_tool_version(
         Some(deployment),
     );
 
-    let agent_id = agent_id!("ToolStreamingCaller", format!("{tool_name}-version"));
-    let worker_id = executor.start_agent(&caller_component.id, agent_id).await?;
-    let fingerprint = executor.get_worker_metadata(&worker_id).await?.fingerprint;
-    let principal = Principal::GolemUser(GolemUserPrincipal {
-        account_id: context.account_id,
-    });
-    let result = invoke_filesystem_tool_success(
-        executor,
-        &worker_id,
-        fingerprint,
-        principal,
-        &definitions,
-        tool_name,
-        cli_tool_input(&["--version"]),
-    )
-    .await?;
-    assert_cli_result(result, expected_version, expected_stdout)
+    let evidence: CliToolEvidence = executor
+        .invoke_and_await_agent(
+            caller_component,
+            &agent_id!("ToolStreamingCaller", format!("{tool_name}-version")),
+            "builtin_cli_version",
+            data_value!(tool_name),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(evidence.exit_code, 0);
+    assert!(evidence.stderr.is_empty());
+    let stdout = String::from_utf8(evidence.stdout)?;
+    if expected_version.is_empty() {
+        assert!(stdout.starts_with('v'));
+        assert!(stdout.ends_with('\n'));
+    } else {
+        assert_eq!(stdout, expected_stdout);
+    }
+    Ok(())
 }
 
 fn assert_filesystem_tool_error(
@@ -10645,6 +10589,13 @@ async fn builtin_javascript_and_typescript_tools_run_in_sidecars(
             javascript_tools,
             "golem:javascript-tools",
             "npm",
+            "10.9.9",
+            "10.9.9\n",
+        ),
+        (
+            javascript_tools,
+            "golem:javascript-tools",
+            "npx",
             "10.9.9",
             "10.9.9\n",
         ),
