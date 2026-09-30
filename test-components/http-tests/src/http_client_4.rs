@@ -1,5 +1,6 @@
 use golem_rust::retry::{NamedPolicy, Policy, Predicate, Props, with_named_policy_async};
 use golem_rust::{agent_definition, agent_implementation, with_idempotence_mode_async};
+use std::time::Duration;
 
 #[agent_definition]
 pub trait HttpClient4 {
@@ -34,6 +35,24 @@ pub trait HttpClient4 {
 
     /// Sends a raw P2 GET, reads one byte, then blocking-reads the rest.
     fn get_and_read_body_p2_blocking(&mut self, authority: String) -> String;
+
+    /// Sends a raw WASI HTTP 0.2 GET and reads the response with blocking-read.
+    async fn get_and_blocking_read_body_p2(&self) -> String;
+
+    /// Sends the same GET with a guest-supplied Range header.
+    async fn get_and_blocking_read_body_p2_with_range(&self) -> String;
+
+    /// Sends the same GET while disabling the worker idempotence override.
+    async fn get_and_blocking_read_body_p2_without_idempotence_override(&self) -> String;
+
+    /// Sends the same request under an unbounded immediate retry policy.
+    async fn get_and_blocking_read_body_p2_with_unbounded_retry(&self) -> String;
+
+    /// Sends the same request under a periodic policy whose delay requires trap-based retry.
+    async fn get_and_blocking_read_body_p2_with_delayed_retry(&self) -> String;
+
+    /// Sends a raw WASI HTTP 0.2 GET and reads the response with non-blocking read.
+    async fn get_and_read_body_p2(&self) -> String;
 
     /// Sends a buffered POST with a body composed of: 4 bytes "HEAD", then 1024
     /// zero bytes, then 1024 bytes of 0xAB. The name is historical (the body was
@@ -200,6 +219,39 @@ impl HttpClient4 for HttpClient4Impl {
         let response = do_get_and_read_body_p2_blocking(authority);
         self.last_full_response = Some(response.clone());
         response
+    }
+
+    async fn get_and_blocking_read_body_p2(&self) -> String {
+        do_get_and_blocking_read_body_p2()
+    }
+
+    async fn get_and_blocking_read_body_p2_with_range(&self) -> String {
+        do_get_and_blocking_read_body_p2_impl(true)
+    }
+
+    async fn get_and_blocking_read_body_p2_without_idempotence_override(&self) -> String {
+        with_idempotence_mode_async(false, || async { do_get_and_blocking_read_body_p2() }).await
+    }
+
+    async fn get_and_blocking_read_body_p2_with_unbounded_retry(&self) -> String {
+        let policy = NamedPolicy::named("unbounded-http-recovery-test", Policy::immediate());
+        with_named_policy_async(&policy, || async { do_get_and_blocking_read_body_p2() })
+            .await
+            .unwrap()
+    }
+
+    async fn get_and_blocking_read_body_p2_with_delayed_retry(&self) -> String {
+        let policy = NamedPolicy::named(
+            "delayed-http-recovery-test",
+            Policy::periodic(Duration::from_secs(2)).max_retries(2),
+        );
+        with_named_policy_async(&policy, || async { do_get_and_blocking_read_body_p2() })
+            .await
+            .unwrap()
+    }
+
+    async fn get_and_read_body_p2(&self) -> String {
+        do_get_and_read_body_p2()
     }
 
     async fn post_with_write_zeroes(&self) -> String {
@@ -1319,6 +1371,95 @@ fn do_get_and_read_body_p2_blocking(authority: String) -> String {
         }
     }
     format!("{status} {}", String::from_utf8_lossy(&bytes))
+}
+
+fn do_get_and_blocking_read_body_p2() -> String {
+    do_get_and_blocking_read_body_p2_impl(false)
+}
+
+fn do_get_and_blocking_read_body_p2_impl(with_range: bool) -> String {
+    let port = std::env::var("PORT").unwrap_or("9999".to_string());
+    let headers = if with_range {
+        wasi::http::types::Fields::from_list(&[("range".to_string(), b"bytes=0-1023".to_vec())])
+            .unwrap()
+    } else {
+        wasi::http::types::Fields::new()
+    };
+    let request = wasi::http::types::OutgoingRequest::new(headers);
+    request.set_method(&wasi::http::types::Method::Get).unwrap();
+    request.set_path_with_query(Some("/")).unwrap();
+    request
+        .set_scheme(Some(&wasi::http::types::Scheme::Http))
+        .unwrap();
+    request
+        .set_authority(Some(&format!("localhost:{port}")))
+        .unwrap();
+    wasi::http::types::OutgoingBody::finish(request.body().unwrap(), None).unwrap();
+
+    let future = wasi::http::outgoing_handler::handle(request, None).unwrap();
+    let response = get_incoming_response_p2(&future);
+    let status = response.status();
+    assert_eq!(status, 200, "unexpected HTTP status");
+    let incoming_body = response.consume().unwrap();
+    let stream = incoming_body.stream().unwrap();
+    let mut bytes = Vec::new();
+    loop {
+        match stream.blocking_read(256) {
+            Ok(mut chunk) => bytes.append(&mut chunk),
+            Err(wasi::io::streams::StreamError::Closed) => break,
+            Err(error) => panic!("Error: {error:?}"),
+        }
+    }
+    format!("{status} {}", String::from_utf8_lossy(&bytes))
+}
+
+fn do_get_and_read_body_p2() -> String {
+    let port = std::env::var("PORT").unwrap_or("9999".to_string());
+    let request = wasi::http::types::OutgoingRequest::new(wasi::http::types::Fields::new());
+    request.set_method(&wasi::http::types::Method::Get).unwrap();
+    request.set_path_with_query(Some("/")).unwrap();
+    request
+        .set_scheme(Some(&wasi::http::types::Scheme::Http))
+        .unwrap();
+    request
+        .set_authority(Some(&format!("localhost:{port}")))
+        .unwrap();
+    wasi::http::types::OutgoingBody::finish(request.body().unwrap(), None).unwrap();
+
+    let future = wasi::http::outgoing_handler::handle(request, None).unwrap();
+    let response = get_incoming_response_p2(&future);
+    let status = response.status();
+    assert_eq!(status, 200, "unexpected HTTP status");
+    let incoming_body = response.consume().unwrap();
+    let stream = incoming_body.stream().unwrap();
+    let mut bytes = Vec::new();
+    loop {
+        match stream.read(256) {
+            Ok(mut chunk) if !chunk.is_empty() => bytes.append(&mut chunk),
+            Ok(_) => {
+                let pollable = stream.subscribe();
+                let _ = wasi::io::poll::poll(&[&pollable]);
+            }
+            Err(wasi::io::streams::StreamError::Closed) => break,
+            Err(error) => panic!("Error: {error:?}"),
+        }
+    }
+    format!("{status} {}", String::from_utf8_lossy(&bytes))
+}
+
+fn get_incoming_response_p2(
+    future: &wasi::http::types::FutureIncomingResponse,
+) -> wasi::http::types::IncomingResponse {
+    match future.get() {
+        Some(Ok(Ok(response))) => response,
+        Some(Ok(Err(error))) => panic!("Error: {error:?}"),
+        Some(Err(error)) => panic!("Error: {error:?}"),
+        None => {
+            let pollable = future.subscribe();
+            let _ = wasi::io::poll::poll(&[&pollable]);
+            get_incoming_response_p2(future)
+        }
+    }
 }
 
 async fn do_get_chunked_read_with_range() -> String {

@@ -25,6 +25,9 @@ golem-worker-executor --test <file> -- <filter>`); build the required WASM fixtu
   - `TestExecutorOverrides::wrap_shard_service` — fake ownership changes.
   - `executor.oplog_service_call_count(&worker_id, "read_exact")` — prove a path did not scan
     the oplog.
+  - `probe_http_body_read_starts`, `external_end_payload_id`, the exact-payload download outage,
+    and `probe_runtime_disposal` — target an uncached p2 response-body recovery payload and prove
+    that each failed physical runtime is destroyed before replacement.
 - `golem-test-framework/src/dsl/mod.rs`
   - `simulated_crash(&agent_id)` — `InterruptKind::Restart`; the resident worker reconstructs
     immediately, or on its next wakeup if already unloaded.
@@ -97,6 +100,12 @@ as stream-session completion may follow), expected `CompletionDelivered` markers
 component
 revision, plugins or metadata matter, the restart must go through instance creation
 (`recovering_an_old_worker_after_updating_a_component`).
+
+For infrastructure reconstruction, also assert the accepted invocation remains pending while the
+fault is active, `Error.kind` is `Recovery`, the complete semantic retry-state map is unchanged,
+each failed body-read `Start` has no invented `End`/`Cancelled`, and clearing the fault completes
+the original idempotency key with exact asymmetric output. Repeated failures must cross distinct
+runtime-disposal generations; rewinding only the replay cursor is not recovery.
 
 Copy: `tests/api.rs::p3_promise_suspend_survives_executor_restart`,
 `tests/rpc.rs::ts_cancel_survives_executor_restart`,

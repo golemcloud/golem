@@ -78,6 +78,7 @@ table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: .94re
 th, td { overflow-wrap: break-word; }
 @media (max-width: 700px) { .table-wrap table { min-width: 640px; } }
 code { overflow-wrap: anywhere; }
+.retry-matrix code { overflow-wrap: normal; word-break: normal; }
 main { min-width: 0; }
 th, td { text-align: left; vertical-align: top; padding: .5rem .6rem; border-bottom: 1px solid var(--border); }
 th { background: var(--bg-sunken); font-weight: 600; }
@@ -1361,17 +1362,18 @@ fn charge_card(order: &amp;Order) -&gt; Result&lt;Receipt, PaymentError&gt; {
 <p>Spawned store tasks may park across invocation settlement at guest-driven waits or passive markerless-completion replay-tail waits after durable finalization (<code>tail_work.rs</code>). Cursor operations and recorded-marker waits remain active; durable <code>Start</code>/<code>End</code> work must finish before <code>AgentInvocationFinished</code>.</p>
 
 <!-- ===================== 11. RETRIES ===================== -->
-<h2 id="s-retries"><span class="num">11</span>Retries: in-function versus trap-based</h2>
-<p>A durable host call that fails with a retryable error has two recovery paths, sharing one budget (<code>durable_host/durability.rs</code>).</p>
+<h2 id="s-retries"><span class="num">11</span>Application retries &amp; infrastructure reconstruction</h2>
+<p>A durable host call with an application failure has two retry paths that share one semantic budget. Failure to read Golem's own recovery data is a third, separate path: it reconstructs the runtime without spending that budget (<code>durable_host/durability.rs</code>, <code>worker/invocation_loop.rs</code>).</p>
 
 <div class="table-wrap">
-<table>
-  <thead><tr><th scope="col"></th><th scope="col">In-function (inline) retry</th><th scope="col">Trap-based retry</th></tr></thead>
+<table class="retry-matrix">
+  <thead><tr><th scope="col"></th><th scope="col">In-function (inline) retry</th><th scope="col">Trap-based application retry</th><th scope="col">Infrastructure reconstruction</th></tr></thead>
   <tbody>
-    <tr><th scope="row">Where</th><td>Inside the same host function, under the <strong>same</strong> <code>Start</code></td><td>The invocation traps; the worker is torn down and reconstructed</td></tr>
-    <tr><th scope="row">Oplog</th><td>One <code>Error { retry_from, … }</code> hint appended and committed per attempt</td><td><code>Error</code> appended in <code>on_invocation_failure</code>, then the outer loop replays to <code>retry_from</code></td></tr>
-    <tr><th scope="row">Cost</th><td>A sleep and a second live action</td><td>Full Store teardown, instance creation, replay of all history since the last baseline</td></tr>
-    <tr><th scope="row">Decided by</th><td><code>InFunctionRetryState::decide_retry_with_properties</code> → <code>AsyncRetryDecision::{Retry, FallBackToTrap, Exhausted}</code></td><td><code>try_trigger_host_trap_retry</code> → <code>on_invocation_failure</code> → <code>RetryDecision</code></td></tr>
+    <tr><th scope="row">Where</th><td>Inside the same host function, under the <strong>same</strong> <code>Start</code></td><td>The invocation traps; the worker is torn down and reconstructed</td><td>Golem cannot temporarily read recovery data; the damaged runtime is discarded and the same invocation is reconstructed</td></tr>
+    <tr><th scope="row">Oplog</th><td>One <code>Error { kind: Invocation, retry_from, … }</code> hint appended and committed per attempt</td><td><code>Error { kind: Invocation, … }</code> appended in <code>on_invocation_failure</code>, then the outer loop replays to <code>retry_from</code></td><td><code>Error { kind: Recovery, retry_policy_state: None }</code>; the affected durable <code>Start</code> gets neither <code>End</code> nor <code>Cancelled</code></td></tr>
+    <tr><th scope="row">Budget</th><td colspan="2">Reads and advances the semantic invocation retry state</td><td>Neither advances nor resets semantic retry state; uses separate infrastructure backoff</td></tr>
+    <tr><th scope="row">Cost</th><td>A sleep and a second live action</td><td>Full Store teardown, instance creation, replay of all history since the last baseline</td><td>Full Store and filesystem-window retirement, backoff, instance creation, replay and ordinary repair of the incomplete operation</td></tr>
+    <tr><th scope="row">Decided by</th><td><code>InFunctionRetryState::<wbr>decide_retry_with_properties</code> → <code>AsyncRetryDecision::<wbr>{Retry, <wbr>FallBackToTrap, <wbr>Exhausted}</code></td><td><code>try_trigger_host_trap_retry</code> → <code>on_invocation_failure</code> → <code>RetryDecision</code></td><td>Typed <code>DurableRecoveryFailure::<wbr>Retryable</code> → <code>RecoveryRequired</code> before generic trap handling</td></tr>
   </tbody>
 </table>
 </div>
@@ -1379,6 +1381,8 @@ fn charge_card(order: &amp;Order) -&gt; Result&lt;Receipt, PaymentError&gt; {
 <p><strong>One budget.</strong> The attempt count is the in-memory <code>retry_count</code> of this host call <em>plus</em> the number of recorded <code>Error</code> entries with the same <code>retry_from</code> (<code>count_oplog_errors_for</code>, <code>current_retry_state_for</code>). After a trap and replay the in-memory count resets but the oplog count does not, so a policy exhausted inline stays exhausted.</p>
 
 <p><strong>HTTP response-body resumption retires before it replaces.</strong> After a terminal P2 body-read failure, the executor swaps failing placeholders into the existing stream and <code>IncomingBody</code> table slots and drops the old transport before sending the Range request. This preserves the guest's resource IDs and parent/child table relationship while releasing the failed response's connection-pool permit (or unpooled request worker), avoiding a timeout-bounded self-wait when the pool capacity is one. The replacement body then retains the new response's worker, worker-error receiver and pool permits, so they live until the guest consumes or drops that same body resource. Replay still follows the recorded body-read progress and does not issue a new external request for a completed read.</p>
+
+<div class="callout"><span class="label">Recovery is not an HTTP result</span>During p2 response-body resumption, a temporary payload-backend failure while counting already delivered bytes leaves the body-read <code>Start</code> unfinished, retires the physical runtime, and keeps the accepted invocation pending. Reconstruction repairs it after storage recovers. A missing or malformed recorded payload is permanent and must not loop; an invalid resume response remains a guest-visible HTTP/content failure. Explicit interruption, quota suspension and shard loss retain priority, and ephemeral agents remain fail-stop.</div>
 
 <div class="widget" id="retry-widget">
   <h4>Retry decision tool <span class="pill js-only">interactive</span></h4>
@@ -1996,6 +2000,7 @@ Fork input:   [A, B] ── cut ── [X, Y]
     <tr><td><strong>Interrupt</strong> (API)</td><td><code>Worker::set_interrupting(InterruptKind::Interrupt(ts))</code>; the running invocation is aborted at the next host-call boundary</td><td><code>Interrupted</code> (h)</td><td>An explicit resume; status stays <code>Interrupted</code> until then</td></tr>
     <tr><td><strong>Resume interrupted invocation</strong></td><td><code>start_if_needed_internal</code>, after memory-requirement lookup succeeds and while the unloaded instance remains locked</td><td><code>Resumed</code> (h), timestamp only; committed before <code>WaitingForPermit</code></td><td>Status folds to <code>Running</code> immediately; reconstruction continues the existing invocation after admission</td></tr>
     <tr><td><strong>Restart</strong> (simulated crash, API)</td><td><code>InterruptKind::Restart</code></td><td><code>Restart</code> (h) — or nothing at all for a real crash</td><td>The resident loop reconstructs immediately; an already-unloaded worker reconstructs on its next wakeup</td></tr>
+    <tr><td><strong>Infrastructure recovery</strong></td><td>A typed <code>RecoveryRequired</code>, such as temporary unavailability of an oplog payload needed for p2 HTTP response-body resumption</td><td><code>Error { kind: Recovery, retry_policy_state: None }</code> (h); no terminal is invented for the affected durable call</td><td>After infrastructure backoff. The accepted invocation stays pending, the old runtime is destroyed, and a new runtime replays and repairs the incomplete operation</td></tr>
     <tr><td><strong>Suspend</strong></td><td><code>InterruptKind::Suspend(ts)</code>, used when the guest sleeps, waits for a promise, or has a pending durable RPC long enough to unload. RPC waits check after 30s and retry every 10s while other live work defers voluntary yielding.</td><td><code>Suspend</code> (h)</td><td>On demand: a new invocation, a promise completion, or a durable <code>ScheduledAction::Resume</code> (RPC default: 5s later; mixed waits choose the earliest wakeup)</td></tr>
     <tr><td><strong>Jump</strong></td><td><code>InterruptKind::Jump</code> ("jumping back in time"): atomic-region rollback or <code>set-oplog-index</code>. Entity-local rollback instead appends Jumps at the live tail during reconstruction, preserving interleaved sibling history.</td><td><code>Jump { region }</code> (hint)</td><td>Immediately, with the region skipped; entity-local continuation need not restart the owner</td></tr>
     <tr><td><strong>Eviction</strong> (memory / filesystem pressure)</td><td><code>EvictionClass</code> ordering: <code>LoadedIdle</code> first (cheapest), then <code>WarmRunnable</code> (has durable pending invocations). Executing workers and workers with non-durable in-memory work (internal queue, <code>ResumeReplay</code>, interrupt) are <em>never</em> evicted.</td><td>none</td><td>On the next invocation or scheduled action</td></tr>
