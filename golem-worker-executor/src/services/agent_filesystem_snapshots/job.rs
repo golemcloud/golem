@@ -444,3 +444,31 @@ where
         })
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+    use test_r::test;
+
+    #[test]
+    fn a_jitter_is_drawn_below_a_positive_factor_and_is_zero_otherwise() {
+        let retry = |max_jitter_factor| RetryConfig {
+            max_attempts: 3,
+            min_delay: Duration::from_secs(2),
+            max_delay: Duration::from_secs(120),
+            multiplier: 4.0,
+            max_jitter_factor,
+        };
+        let drawn = (0..200)
+            .map(|_| jitter(&retry(Some(0.5))))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            (jitter(&retry(None)), jitter(&retry(Some(0.0)))),
+            (0.0, 0.0)
+        );
+        assert!(drawn.iter().all(|factor| (0.0..0.5).contains(factor)));
+        assert!(drawn.iter().any(|factor| *factor > 0.0));
+    }
+}

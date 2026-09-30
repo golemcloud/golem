@@ -890,6 +890,20 @@ fn retention_never_deletes_the_kept_snapshot() {
 }
 
 #[test]
+fn each_recorded_capture_counts_once_under_its_outcome() {
+    let snapshots = AgentFilesystemSnapshots::disabled();
+
+    snapshots.record_capture("captured", Duration::ZERO);
+    snapshots.record_capture("captured", Duration::ZERO);
+    snapshots.record_capture("unchanged", Duration::ZERO);
+
+    assert_eq!(
+        ["captured", "unchanged", "initial_files"].map(|outcome| snapshots.captures(outcome)),
+        [2, 1, 0]
+    );
+}
+
+#[test]
 fn retention_neither_counts_nor_deletes_a_snapshot_within_the_clock_skew_margin() {
     let before_own = |seconds: u64| SnapshotInfo {
         created_at: golem_common::model::Timestamp::from(

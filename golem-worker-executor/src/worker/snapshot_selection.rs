@@ -696,6 +696,25 @@ mod tests {
     }
 
     #[test]
+    fn clearing_the_unavailable_entries_keeps_the_rejected_ones() {
+        let status = status(
+            Some(FilesystemSnapshotName::periodic()),
+            true,
+            Some(Some(FilesystemSnapshotName::periodic())),
+        );
+
+        let exclusions = SnapshotExclusions::default()
+            .rejecting(OplogIndex::from_u64(10), &status)
+            .with_unavailable(OplogIndex::from_u64(5))
+            .without_unavailable();
+
+        assert_eq!(
+            exclusions.persisted_rejections(),
+            Some(HashSet::from([OplogIndex::from_u64(10)]))
+        );
+    }
+
+    #[test]
     fn a_start_selection_follows_a_pending_update_and_the_enabled_flag() {
         let name = FilesystemSnapshotName::periodic();
         let confirmed = status(Some(name.clone()), true, None);
