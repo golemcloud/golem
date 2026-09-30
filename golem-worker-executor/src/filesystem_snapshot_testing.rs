@@ -15,8 +15,8 @@
 //! A filesystem snapshot store for the tests of the executor.
 //!
 //! The store keeps the snapshots in memory. A clone shares the snapshots, so a test keeps its
-//! store across a restart of the executor. A test can make saves fail or slow, make restores
-//! fail, and count the calls.
+//! store across a restart of the executor. A test can make saves fail, slow or held, make
+//! restores fail, and count the calls.
 
 use crate::filesystem_snapshot::{
     AgentSnapshots, ChangeDetection, FilesystemSnapshotStore, InMemorySnapshotStore, SnapshotInfo,
@@ -30,6 +30,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
+use tokio::sync::watch;
 
 /// The faults and the counts of a test store.
 #[derive(Default)]
@@ -45,8 +46,44 @@ struct Faults {
     /// The time of each saved name, with the offset of its save.
     times: Mutex<std::collections::HashMap<String, golem_common::model::Timestamp>>,
     saves: AtomicUsize,
+    /// The hold of the next save, when a test asked for one.
+    hold: Mutex<Option<SaveHold>>,
     restored: Mutex<Vec<String>>,
     stats: AtomicUsize,
+}
+
+/// The store side of a held save: the save reports its name, then waits for the release.
+struct SaveHold {
+    started: watch::Sender<Option<String>>,
+    released: watch::Receiver<bool>,
+}
+
+impl SaveHold {
+    /// Reports `name` as the held save, and waits until the test releases the save or drops its
+    /// [`HeldSave`].
+    async fn hold(mut self, name: &SnapshotName) {
+        self.started.send_replace(Some(name.as_str().to_string()));
+        let _ = self.released.wait_for(|released| *released).await;
+    }
+}
+
+/// The test side of a held save, which [`TestFilesystemSnapshotStore::hold_next_save`] gives.
+/// The save stays held until [`HeldSave::release`] or a drop of this value.
+pub struct HeldSave {
+    started: watch::Receiver<Option<String>>,
+    released: watch::Sender<bool>,
+}
+
+impl HeldSave {
+    /// The name of the held save, once it started.
+    pub fn name(&self) -> Option<String> {
+        self.started.borrow().clone()
+    }
+
+    /// Lets the held save go on.
+    pub fn release(self) {
+        self.released.send_replace(true);
+    }
 }
 
 /// A filesystem snapshot store in memory, with faults and counts for tests.
@@ -83,6 +120,26 @@ impl TestFilesystemSnapshotStore {
             .save_delay
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = delay;
+    }
+
+    /// Holds the next save that starts: it reports its name, then waits before it stores
+    /// anything, until the test releases it or drops the [`HeldSave`]. A save that is stopped
+    /// while it is held stores nothing.
+    pub fn hold_next_save(&self) -> HeldSave {
+        let (started, started_receiver) = watch::channel(None);
+        let (released, released_receiver) = watch::channel(false);
+        *self
+            .faults
+            .hold
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(SaveHold {
+            started,
+            released: released_receiver,
+        });
+        HeldSave {
+            started: started_receiver,
+            released,
+        }
     }
 
     /// Makes each restore fail with an error that allows no retry, or not.
@@ -201,6 +258,15 @@ impl FilesystemSnapshotStore for TestFilesystemSnapshotStore {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .push(tree.to_path_buf());
+        let hold = self
+            .faults
+            .hold
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        if let Some(hold) = hold {
+            hold.hold(name).await;
+        }
         let delay = *self
             .faults
             .save_delay

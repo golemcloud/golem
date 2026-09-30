@@ -876,13 +876,33 @@ async fn a_crash_during_an_upload_restarts_with_the_tree_of_a_run_without_a_cras
 
     let context = TestContext::new(last_unique_id);
     let store = TestFilesystemSnapshotStore::new();
-    store.set_save_delay(Duration::from_secs(1));
     let executor =
         start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
     let agent = Agent::start(&executor, &context, initial_file_system, "crashing", &[]).await?;
-    agent.apply_all(&executor, &operations).await?;
+    let (before, last) = operations.split_at(operations.len() - 1);
+    agent.apply_all(&executor, before).await?;
+    let confirmed = agent.confirmed(&executor).await?;
+    let held = store.hold_next_save();
+    agent.apply_all(&executor, last).await?;
+    // The snapshot of the last operation is skipped while the upload before it still deletes
+    // older snapshots. A `describe` changes no file and takes the snapshot then.
+    let blocked = eventually(Duration::from_secs(30), || async {
+        match held.name() {
+            Some(name) => Ok(Some(name)),
+            None => agent.describe(&executor).await.map(|_| None),
+        }
+    })
+    .await?;
+    let newest = agent
+        .records(&executor)
+        .await?
+        .snapshots
+        .into_iter()
+        .flatten()
+        .next_back();
+    // The crash: the executor goes away while the upload of the last snapshot is held.
     executor.release().await?;
-    store.set_save_delay(Duration::ZERO);
+    drop(held);
     let restores = store.restore_count();
 
     let restarted =
@@ -891,14 +911,13 @@ async fn a_crash_during_an_upload_restarts_with_the_tree_of_a_run_without_a_cras
     let restored = store.restored_names()[restores..].to_vec();
     let records = agent.records(&restarted).await?;
 
-    assert_eq!(tree, expected);
-    // A start restores only a snapshot that a confirmation record names.
+    assert_eq!(newest.as_ref(), Some(&blocked));
     assert!(
-        restored
-            .iter()
-            .all(|name| records.confirmations.contains(name)),
-        "restored {restored:?}, {records:?}"
+        !records.confirmations.contains(&blocked),
+        "the held snapshot {blocked} was confirmed: {records:?}"
     );
+    assert_eq!(restored, [confirmed]);
+    assert_eq!(tree, expected);
     Ok(())
 }
 
