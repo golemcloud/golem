@@ -1063,6 +1063,29 @@ fn invocation_shape(oplog: &[OplogEntry]) -> InvocationShape {
     }
 }
 
+/// The number of captures of agent filesystems with the metric label `outcome` that this process
+/// measured.
+fn captures(outcome: &str) -> u64 {
+    prometheus::default_registry()
+        .gather()
+        .into_iter()
+        .filter(|family| family.name() == "filesystem_snapshot_capture_seconds")
+        .flat_map(|family| family.get_metric().to_vec())
+        .filter(|metric| {
+            metric
+                .get_label()
+                .iter()
+                .any(|label| label.name() == "outcome" && label.value() == outcome)
+        })
+        .filter_map(|metric| {
+            metric
+                .get_histogram()
+                .as_ref()
+                .map(|histogram| histogram.get_sample_count())
+        })
+        .sum()
+}
+
 #[test]
 #[timeout("4m")]
 async fn a_tree_of_initial_files_writes_records_without_a_name_and_uses_no_store(
@@ -1075,6 +1098,7 @@ async fn a_tree_of_initial_files_writes_records_without_a_name_and_uses_no_store
     let store = TestFilesystemSnapshotStore::new();
     let executor =
         start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+    let unchanged_before = captures("unchanged");
     let files = [
         entry("foo.txt", "/ro-top.txt", AgentFilePermissions::ReadOnly),
         entry(
@@ -1100,6 +1124,7 @@ async fn a_tree_of_initial_files_writes_records_without_a_name_and_uses_no_store
     })
     .await?;
     let records = agent.records(&executor).await?;
+    let unchanged = captures("unchanged") - unchanged_before;
     executor.release().await?;
     let executor =
         start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
@@ -1136,6 +1161,9 @@ async fn a_tree_of_initial_files_writes_records_without_a_name_and_uses_no_store
     assert!(records.snapshots.iter().all(Option::is_none), "{records:?}");
     assert!(records.confirmations.is_empty());
     assert_eq!(store.save_count(), 0);
+    // The boundary after the first record without a name finds the tree unchanged against the
+    // mark of that record, and checks no declaration and no directory.
+    assert!(unchanged >= 1, "{unchanged} unchanged captures");
     assert_eq!(
         live,
         [
