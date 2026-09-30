@@ -149,8 +149,13 @@ export function installPrivateReadOnlyFiles(rootValue: string, files: PrivateFil
     fallback('readFileSync', args, () => privateRead(args[0], args[1]));
   mutableFs.readdirSync = (...args: unknown[]) =>
     fallback('readdirSync', args, () => privateList(args[0], args[1]));
-  mutableFs.realpathSync = (...args: unknown[]) =>
+  const realpathSync = (...args: unknown[]) =>
     fallback('realpathSync', args, () => privateRealpath(args[0]));
+  realpathSync.native = (...args: unknown[]) =>
+    relative(args[0]) === undefined
+      ? (originalFs.realpathSync.native ?? originalFs.realpathSync).apply(fs, args)
+      : privateRealpath(args[0]);
+  mutableFs.realpathSync = realpathSync;
   mutableFs.accessSync = (...args: unknown[]) => fallback('accessSync', args, () => kind(args[0]));
   mutableFs.openSync = (...args: unknown[]) =>
     fallback('openSync', args, () => {
@@ -159,9 +164,13 @@ export function installPrivateReadOnlyFiles(rootValue: string, files: PrivateFil
   mutableFs.createReadStream = (...args: unknown[]) =>
     fallback('createReadStream', args, () => Readable.from([privateRead(args[0])]));
 
-  const callbackOperation = (name: string, load: (args: unknown[]) => unknown) =>
+  const callbackOperation = (
+    name: string,
+    load: (args: unknown[]) => unknown,
+    original = originalFs[name],
+  ) =>
     (...args: unknown[]) => {
-      if (relative(args[0]) === undefined) return originalFs[name].apply(fs, args);
+      if (relative(args[0]) === undefined) return original.apply(fs, args);
       const candidate = args[args.length - 1];
       const done = (typeof candidate === 'function' ? candidate : undefined) as
         | ((error: unknown, value?: unknown) => void)
@@ -178,7 +187,15 @@ export function installPrivateReadOnlyFiles(rootValue: string, files: PrivateFil
   mutableFs.lstat = callbackOperation('lstat', (args) => privateStat(args[0]));
   mutableFs.readFile = callbackOperation('readFile', (args) => privateRead(args[0], args[1]));
   mutableFs.readdir = callbackOperation('readdir', (args) => privateList(args[0], args[1]));
-  mutableFs.realpath = callbackOperation('realpath', (args) => privateRealpath(args[0]));
+  const realpath = callbackOperation('realpath', (args) => privateRealpath(args[0])) as ReturnType<
+    typeof callbackOperation
+  > & { native: ReturnType<typeof callbackOperation> };
+  realpath.native = callbackOperation(
+    'realpath.native',
+    (args) => privateRealpath(args[0]),
+    originalFs.realpath.native ?? originalFs.realpath,
+  );
+  mutableFs.realpath = realpath;
   mutableFs.access = callbackOperation('access', (args) => kind(args[0]));
   mutableFs.open = callbackOperation('open', (args) => {
     throw fsError('ENOSYS', 'open', String(args[0]));

@@ -7,7 +7,7 @@
     "compliance:generate": "node scripts/generate-compliance.mjs",
     "compliance:check": "node scripts/generate-compliance.mjs --check",
     "smoke:embedded": "node --experimental-strip-types scripts/smoke-embedded.mts npm && node --experimental-strip-types scripts/smoke-embedded.mts tsc",
-    "test:runtime": "node --experimental-strip-types scripts/cli-runtime.test.mts && tsc -p javascript-tools/tsconfig.json --noEmit false --outDir golem-temp/runtime-tests && node --experimental-strip-types scripts/npm-runtime.test.mts",
+    "test:runtime": "node --experimental-strip-types scripts/cli-runtime.test.mts && tsc -p javascript-tools/tsconfig.json --noEmit false --outDir golem-temp/runtime-tests && node --experimental-strip-types scripts/npm-runtime.test.mts && node --experimental-strip-types scripts/private-vfs.test.mts",
     "typecheck": "tsc -p javascript-tools/tsconfig.json && tsc -p typescript-tools/tsconfig.json",
     "verify:provenance": "node scripts/verify-provenance.mjs",
     "verify:release": "npm run verify:provenance && npm run compliance:check"
