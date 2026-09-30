@@ -113,34 +113,47 @@ async fn snapshot_recovery_fell_back(
     expected_error: &str,
 ) -> (OplogIndex, OplogIndex) {
     tokio::time::timeout(Duration::from_secs(10), async {
-        let mut rejected = None;
-        while let Some(event) = events.recv().await {
-            match AgentEvent::try_from(event) {
-                Ok(AgentEvent::SnapshotRecoveryFailed {
-                    snapshot_index,
-                    error,
-                    ..
-                }) => {
-                    assert!(
-                        rejected.is_none(),
-                        "Snapshot recovery from {snapshot_index} failed after an earlier failure: {error}"
-                    );
-                    assert!(
-                        error.contains(expected_error),
-                        "Snapshot recovery failed with unexpected error: {error}"
-                    );
-                    rejected = Some(snapshot_index);
-                }
-                Ok(AgentEvent::SnapshotRecoverySucceeded { snapshot_index, .. }) => {
-                    let rejected = rejected.unwrap_or_else(|| {
-                        panic!("Snapshot recovery from {snapshot_index} succeeded before a failure")
-                    });
-                    return (rejected, snapshot_index);
-                }
-                _ => {}
-            }
-        }
-        panic!("Worker event stream ended before the snapshot recovery events");
+        use futures::StreamExt as _;
+        // The stream pulls one event at a time, and `next` stops at the first success, so it
+        // consumes the events up to that success and no more.
+        let fell_back = futures::stream::poll_fn(|context| events.poll_recv(context))
+            .scan(None, |rejected: &mut Option<OplogIndex>, event| {
+                let found = match AgentEvent::try_from(event) {
+                    Ok(AgentEvent::SnapshotRecoveryFailed {
+                        snapshot_index,
+                        error,
+                        ..
+                    }) => {
+                        assert!(
+                            rejected.is_none(),
+                            "Snapshot recovery from {snapshot_index} failed after an earlier failure: {error}"
+                        );
+                        assert!(
+                            error.contains(expected_error),
+                            "Snapshot recovery failed with unexpected error: {error}"
+                        );
+                        *rejected = Some(snapshot_index);
+                        None
+                    }
+                    Ok(AgentEvent::SnapshotRecoverySucceeded { snapshot_index, .. }) => {
+                        let rejected = rejected.unwrap_or_else(|| {
+                            panic!(
+                                "Snapshot recovery from {snapshot_index} succeeded before a failure"
+                            )
+                        });
+                        Some((rejected, snapshot_index))
+                    }
+                    _ => None,
+                };
+                std::future::ready(Some(found))
+            })
+            .filter_map(std::future::ready);
+        std::pin::pin!(fell_back)
+            .next()
+            .await
+            .unwrap_or_else(|| {
+                panic!("Worker event stream ended before the snapshot recovery events")
+            })
     })
     .await
     .expect("Timed out waiting for the snapshot recovery events")
