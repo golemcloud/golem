@@ -14,7 +14,7 @@
 
 //! The rules of the service, as pure functions over plain values: the transitions of the jobs and
 //! the deletes of all snapshots, the decisions of a job, the plan of a start, and the admission of
-//! a manual update. Nothing here waits, reads a clock or calls the store.
+//! a manual update. Nothing here waits, reads a clock, draws a random number or calls the store.
 
 use super::{ConfirmOutcome, JobDecision, SnapshotKind, SnapshotSkip};
 use crate::filesystem_snapshot::{AgentSnapshots, SnapshotInfo, SnapshotStoreError};
@@ -85,7 +85,7 @@ pub(super) enum JobPhase {
 /// A transition of [`State`]. The registry wakes its waiters after a transition when
 /// [`wakes`] says so.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Transition {
+enum Transition {
     Admit,
     Saving,
     Decide,
@@ -98,7 +98,7 @@ pub(super) enum Transition {
 
 /// Whether the waiters of the registry must see `transition`. A waiter waits for a decision, for
 /// the end of a job, or for the end of a delete of all snapshots.
-pub(super) fn wakes(transition: Transition) -> bool {
+fn wakes(transition: Transition) -> bool {
     match transition {
         Transition::Decide
         | Transition::End
@@ -107,6 +107,35 @@ pub(super) fn wakes(transition: Transition) -> bool {
         Transition::Admit | Transition::Saving | Transition::StartWait | Transition::Unwatch => {
             false
         }
+    }
+}
+
+/// The next state that a transition gives, with its answer. Each rule names its own transition
+/// here, so the registry cannot pair a rule with the wake of another.
+#[must_use]
+pub(super) struct Next<T> {
+    state: State,
+    answer: T,
+    transition: Transition,
+}
+
+impl<T> Next<T> {
+    fn of(transition: Transition, state: State, answer: T) -> Self {
+        Self {
+            state,
+            answer,
+            transition,
+        }
+    }
+
+    /// Whether the waiters of the registry must see the transition.
+    pub(super) fn wakes(&self) -> bool {
+        wakes(self.transition)
+    }
+
+    /// The next state and the answer.
+    pub(super) fn into_parts(self) -> (State, T) {
+        (self.state, self.answer)
     }
 }
 
@@ -136,7 +165,7 @@ pub(super) fn admit(
     stop: CancellationToken,
     retention_stop: CancellationToken,
     room: bool,
-) -> (State, Result<JobId, Refusal>) {
+) -> Next<Result<JobId, Refusal>> {
     let running = state.jobs.get(agent).map(|job| RunningJob {
         id: job.id,
         retention_stop: job.retention_stop.clone(),
@@ -151,7 +180,7 @@ pub(super) fn admit(
         None
     };
     if let Some(skip) = skip {
-        return (state, Err(Refusal { skip, running }));
+        return Next::of(Transition::Admit, state, Err(Refusal { skip, running }));
     }
     state.last_job += 1;
     let id = state.last_job;
@@ -166,17 +195,17 @@ pub(super) fn admit(
             waiters: 0,
         },
     );
-    (state, Ok(id))
+    Next::of(Transition::Admit, state, Ok(id))
 }
 
 /// The job `id` has started saving: it got a slot of the uploads. The phase only moves forward.
-pub(super) fn saving(mut state: State, agent: &AgentSnapshots, id: JobId) -> State {
+pub(super) fn saving(mut state: State, agent: &AgentSnapshots, id: JobId) -> Next<()> {
     if let Some(job) = live(&mut state, agent, id)
         && job.phase == JobPhase::Admitted
     {
         job.phase = JobPhase::Saving;
     }
-    state
+    Next::of(Transition::Saving, state, ())
 }
 
 /// The job `id` decided. The first decision stays.
@@ -185,13 +214,13 @@ pub(super) fn decide(
     agent: &AgentSnapshots,
     id: JobId,
     decision: JobDecision,
-) -> State {
+) -> Next<()> {
     if let Some(job) = live(&mut state, agent, id)
         && !matches!(job.phase, JobPhase::Decided(_))
     {
         job.phase = JobPhase::Decided(decision);
     }
-    state
+    Next::of(Transition::Decide, state, ())
 }
 
 /// A delete of all snapshots of `agent` is queued. Gives the next state and the stop of the job
@@ -199,19 +228,19 @@ pub(super) fn decide(
 pub(super) fn delete_all_snapshots(
     mut state: State,
     agent: &AgentSnapshots,
-) -> (State, Option<CancellationToken>) {
+) -> Next<Option<CancellationToken>> {
     let stop = state.jobs.get(agent).map(|job| job.stop.clone());
     state
         .deleting
         .entry(agent.clone())
         .and_modify(|count| *count = count.saturating_add(1))
         .or_insert(NonZeroU32::MIN);
-    (state, stop)
+    Next::of(Transition::DeleteAllSnapshots, state, stop)
 }
 
 /// A delete of all snapshots of `agent` ended. The last one frees the agent and the ended decision
 /// of the agent.
-pub(super) fn all_snapshots_deleted(mut state: State, agent: &AgentSnapshots) -> State {
+pub(super) fn all_snapshots_deleted(mut state: State, agent: &AgentSnapshots) -> Next<()> {
     let left = state
         .deleting
         .get(agent)
@@ -225,7 +254,7 @@ pub(super) fn all_snapshots_deleted(mut state: State, agent: &AgentSnapshots) ->
         }
     }
     state.ended.remove(agent);
-    state
+    Next::of(Transition::AllSnapshotsDeleted, state, ())
 }
 
 /// The live job `id` of `agent` in a state that a rule owns.
@@ -234,7 +263,7 @@ fn live<'a>(state: &'a mut State, agent: &AgentSnapshots, id: JobId) -> Option<&
 }
 
 /// Frees the agent of the job `id`, and keeps its decision while starts wait for it.
-pub(super) fn end(mut state: State, agent: &AgentSnapshots, id: JobId) -> State {
+pub(super) fn end(mut state: State, agent: &AgentSnapshots, id: JobId) -> Next<()> {
     if state.jobs.get(agent).is_some_and(|job| job.id == id)
         && let Some(job) = state.jobs.remove(agent)
         && let Some(waiters) = NonZeroU32::new(job.waiters)
@@ -252,7 +281,7 @@ pub(super) fn end(mut state: State, agent: &AgentSnapshots, id: JobId) -> State 
             },
         );
     }
-    state
+    Next::of(Transition::End, state, ())
 }
 
 /// A start waits only for a job of the agent with the name that has started saving and has not
@@ -263,7 +292,7 @@ pub(super) fn start_wait(
     mut state: State,
     agent: &AgentSnapshots,
     name: &FilesystemSnapshotName,
-) -> (State, Result<JobId, Option<JobDecision>>) {
+) -> Next<Result<JobId, Option<JobDecision>>> {
     let answer = match state.jobs.get_mut(agent).filter(|job| &job.name == name) {
         Some(job) => match job.phase {
             JobPhase::Saving => {
@@ -275,14 +304,14 @@ pub(super) fn start_wait(
         },
         None => Err(None),
     };
-    (state, answer)
+    Next::of(Transition::StartWait, state, answer)
 }
 
 /// Takes one waiter from the job `id`, live or ended.
-pub(super) fn unwatch(mut state: State, agent: &AgentSnapshots, id: JobId) -> State {
+pub(super) fn unwatch(mut state: State, agent: &AgentSnapshots, id: JobId) -> Next<()> {
     if let Some(job) = live(&mut state, agent, id) {
         job.waiters = job.waiters.saturating_sub(1);
-        return state;
+        return Next::of(Transition::Unwatch, state, ());
     }
     let left = state
         .ended
@@ -300,7 +329,7 @@ pub(super) fn unwatch(mut state: State, agent: &AgentSnapshots, id: JobId) -> St
         }
         None => {}
     }
-    state
+    Next::of(Transition::Unwatch, state, ())
 }
 
 /// The decision of the job `id` of `agent`, or `None` while it runs undecided. A job that ended
@@ -353,21 +382,28 @@ pub(super) fn save_attempt(result: Result<SnapshotInfo, SnapshotStoreError>) -> 
 }
 
 /// The delay before the next attempt after attempt number `attempt` failed with `error`, or
-/// `None` when no attempt follows.
+/// `None` when no attempt follows. `jitter` is the jitter factor that the caller drew below the
+/// `max_jitter_factor` of `retry`: the delay grows by that part of itself, and stays at most the
+/// `max_delay` of `retry`, as [`get_delay`] gives it.
 pub(super) fn retry_delay(
     retry: &RetryConfig,
     attempt: u32,
     error: &SnapshotStoreError,
+    jitter: f64,
 ) -> Option<Duration> {
-    matches!(
+    let retryable = matches!(
         error,
         SnapshotStoreError::Storage {
             retryable: true,
             ..
         }
-    )
-    .then(|| get_delay(retry, attempt))
-    .flatten()
+    );
+    let without_jitter = RetryConfig {
+        max_jitter_factor: None,
+        ..retry.clone()
+    };
+    let base = get_delay(&without_jitter, attempt).filter(|_| retryable)?;
+    Some(base.mul_f64(1.0 + jitter).min(retry.max_delay))
 }
 
 /// What a job does after its confirmation.
@@ -513,20 +549,18 @@ mod tests {
 
     /// Runs the rule `rule` on the state in `state`, puts its next state back, and gives its
     /// answer, as the registry does.
-    fn step<T>(state: &mut State, rule: impl FnOnce(State) -> (State, T)) -> T {
-        let (next, answer) = rule(std::mem::take(state));
+    fn step<T>(state: &mut State, rule: impl FnOnce(State) -> Next<T>) -> T {
+        let (next, answer) = rule(std::mem::take(state)).into_parts();
         *state = next;
         answer
     }
 
     fn saving(state: &mut State, agent: &AgentSnapshots, id: JobId) {
-        step(state, |state| (super::saving(state, agent, id), ()))
+        step(state, |state| super::saving(state, agent, id))
     }
 
     fn decide(state: &mut State, agent: &AgentSnapshots, id: JobId, decision: JobDecision) {
-        step(state, |state| {
-            (super::decide(state, agent, id, decision), ())
-        })
+        step(state, |state| super::decide(state, agent, id, decision))
     }
 
     fn delete_all_snapshots(
@@ -537,13 +571,11 @@ mod tests {
     }
 
     fn all_snapshots_deleted(state: &mut State, agent: &AgentSnapshots) {
-        step(state, |state| {
-            (super::all_snapshots_deleted(state, agent), ())
-        })
+        step(state, |state| super::all_snapshots_deleted(state, agent))
     }
 
     fn unwatch(state: &mut State, agent: &AgentSnapshots, id: JobId) {
-        step(state, |state| (super::unwatch(state, agent, id), ()))
+        step(state, |state| super::unwatch(state, agent, id))
     }
 
     fn admit(
@@ -586,7 +618,7 @@ mod tests {
     }
 
     fn end_job(state: &mut State, agent: &AgentSnapshots, id: JobId) {
-        step(state, |state| (end(state, agent, id), ()))
+        step(state, |state| end(state, agent, id))
     }
 
     fn wait(
@@ -819,18 +851,29 @@ mod tests {
 
     #[test]
     fn only_decisions_ends_and_deletes_of_all_snapshots_wake_the_waiters() {
+        let agent = agent_snapshots("wakes");
+        let name = FilesystemSnapshotName::periodic();
+        let fresh = State::default;
+
         assert_eq!(
             [
-                Transition::Admit,
-                Transition::Saving,
-                Transition::Decide,
-                Transition::End,
-                Transition::StartWait,
-                Transition::Unwatch,
-                Transition::DeleteAllSnapshots,
-                Transition::AllSnapshotsDeleted,
-            ]
-            .map(wakes),
+                super::admit(
+                    fresh(),
+                    &agent,
+                    &name,
+                    CancellationToken::new(),
+                    CancellationToken::new(),
+                    true
+                )
+                .wakes(),
+                super::saving(fresh(), &agent, 1).wakes(),
+                super::decide(fresh(), &agent, 1, JobDecision::Stopped).wakes(),
+                end(fresh(), &agent, 1).wakes(),
+                start_wait(fresh(), &agent, &name).wakes(),
+                super::unwatch(fresh(), &agent, 1).wakes(),
+                super::delete_all_snapshots(fresh(), &agent).wakes(),
+                super::all_snapshots_deleted(fresh(), &agent).wakes(),
+            ],
             [false, false, true, true, false, false, true, true]
         );
     }
@@ -871,11 +914,11 @@ mod tests {
         };
         assert_eq!(
             [
-                retry_delay(&retry, 1, &storage(true)),
-                retry_delay(&retry, 2, &storage(true)),
-                retry_delay(&retry, 3, &storage(true)),
-                retry_delay(&retry, 1, &storage(false)),
-                retry_delay(&retry, 1, &SnapshotStoreError::AlreadyExists),
+                retry_delay(&retry, 1, &storage(true), 0.0),
+                retry_delay(&retry, 2, &storage(true), 0.0),
+                retry_delay(&retry, 3, &storage(true), 0.0),
+                retry_delay(&retry, 1, &storage(false), 0.0),
+                retry_delay(&retry, 1, &SnapshotStoreError::AlreadyExists, 0.0),
             ],
             [
                 Some(Duration::from_secs(2)),
@@ -883,6 +926,30 @@ mod tests {
                 None,
                 None,
                 None
+            ]
+        );
+    }
+
+    #[test]
+    fn the_drawn_jitter_grows_the_delay_up_to_the_largest_delay() {
+        let retry = RetryConfig {
+            max_attempts: 5,
+            min_delay: Duration::from_secs(2),
+            max_delay: Duration::from_secs(20),
+            multiplier: 4.0,
+            max_jitter_factor: Some(0.5),
+        };
+
+        assert_eq!(
+            [
+                retry_delay(&retry, 1, &storage(true), 0.25),
+                retry_delay(&retry, 2, &storage(true), 0.5),
+                retry_delay(&retry, 3, &storage(true), 0.1),
+            ],
+            [
+                Some(Duration::from_millis(2500)),
+                Some(Duration::from_secs(12)),
+                Some(Duration::from_secs(20)),
             ]
         );
     }

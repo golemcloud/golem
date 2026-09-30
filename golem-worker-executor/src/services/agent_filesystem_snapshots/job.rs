@@ -25,6 +25,7 @@ use crate::filesystem_snapshot::{ChangeDetection, SnapshotInfo, SnapshotName, Sn
 use futures::StreamExt as _;
 use golem_common::model::RetryConfig;
 use golem_common::model::oplog::FilesystemSnapshotName;
+use rand::Rng as _;
 use std::future::Future;
 use std::path::Path;
 use std::sync::Arc;
@@ -119,12 +120,12 @@ pub(super) async fn run_job(
         UploadOutcome::Stopped => return,
     };
     crate::metrics::filesystem_snapshots::record_uploaded_bytes(kind.label(), info.bytes);
-    if ticket.stop().is_cancelled() {
+    if ticket.is_stopped() {
         return;
     }
     let outcome = tokio::select! {
         outcome = confirm(name.clone()) => outcome,
-        () = ticket.stop().cancelled() => return,
+        () = ticket.stopped() => return,
     };
     ticket.decide(JobDecision::Confirmed(outcome));
     crate::metrics::filesystem_snapshots::record_upload(
@@ -251,13 +252,13 @@ async fn upload(
     // The stops that the `select!` below watches. An attempt that sees one after its grant gives
     // its slot back and waits for that `select!` to end the upload in the same poll.
     let stopped =
-        || ticket.stop().is_cancelled() || futures::FutureExt::now_or_never(stop.clone()).is_some();
+        || ticket.is_stopped() || futures::FutureExt::now_or_never(stop.clone()).is_some();
     let attempt = || async {
         let slot = match Arc::clone(&core.uploads).acquire_owned().await {
             Ok(permit) => UploadSlot::new(permit, core),
             Err(_) => {
                 // The slots are gone: the job stops, and the `select!` below ends the upload.
-                ticket.stop().cancel();
+                ticket.stop_job();
                 return std::future::pending().await;
             }
         };
@@ -290,7 +291,7 @@ async fn upload(
     let saved = tokio::select! {
         biased;
         saved = retrying(core.settings.upload_retry(), attempt) => Some(saved),
-        () = ticket.stop().cancelled() => None,
+        () = ticket.stopped() => None,
         () = stop.clone() => None,
     };
     match saved {
@@ -305,10 +306,10 @@ async fn upload(
 async fn delete_slot(core: &Core, ticket: &JobTicket) -> Option<OwnedSemaphorePermit> {
     let slot = tokio::select! {
         biased;
-        () = ticket.retention_stop().cancelled() => return None,
+        () = ticket.deletes_stopped() => return None,
         slot = Arc::clone(&core.uploads).acquire_owned() => slot.ok()?,
     };
-    (!ticket.retention_stop().is_cancelled()).then_some(slot)
+    (!ticket.are_deletes_stopped()).then_some(slot)
 }
 
 /// Keeps the own snapshot and the newest older snapshots of its kind, and deletes the rest of
@@ -362,7 +363,7 @@ pub(super) async fn delete_older_snapshots(
     };
     tokio::select! {
         biased;
-        () = ticket.retention_stop().cancelled() => {}
+        () = ticket.deletes_stopped() => {}
         () = retention => {}
     }
 }
@@ -394,9 +395,17 @@ async fn delete_superseded(core: &Core, ticket: &JobTicket, name: &FilesystemSna
     };
     tokio::select! {
         biased;
-        () = ticket.retention_stop().cancelled() => {}
+        () = ticket.deletes_stopped() => {}
         () = delete => {}
     }
+}
+
+/// Draws the jitter factor of a retry delay below the `max_jitter_factor` of `retry`.
+fn jitter(retry: &RetryConfig) -> f64 {
+    retry
+        .max_jitter_factor
+        .filter(|factor| *factor > 0.0)
+        .map_or(0.0, |factor| rand::rng().random_range(0.0..factor))
 }
 
 /// Runs `operation`, and runs it again after the delay that [`rules::retry_delay`] gives while
@@ -414,7 +423,7 @@ where
         let attempt = attempt?;
         let result = operation().await;
         let next = match &result {
-            Err(error) => match rules::retry_delay(retry, attempt, error) {
+            Err(error) => match rules::retry_delay(retry, attempt, error, jitter(retry)) {
                 Some(delay) => {
                     tokio::time::sleep(delay).await;
                     Some(attempt + 1)

@@ -19,12 +19,12 @@
 //! its `Drop` only reports the end of what it holds.
 
 use super::JobDecision;
-use super::rules::{self, JobId, Refusal, State, Transition};
+use super::rules::{self, JobId, Next, Refusal, State};
 use crate::filesystem_snapshot::AgentSnapshots;
 use golem_common::model::oplog::FilesystemSnapshotName;
 use std::sync::{Arc, Mutex, PoisonError};
 use tokio::sync::watch;
-use tokio_util::sync::CancellationToken;
+use tokio_util::sync::{CancellationToken, WaitForCancellationFuture};
 
 /// The state of the agents of the service, and the signal that wakes its waiters.
 ///
@@ -42,18 +42,21 @@ pub(super) struct Registry {
 }
 
 impl Registry {
-    /// Runs `rule`, the rule of the transition `transition` of [`rules`], on the state: the state
-    /// moves out of the lock into the rule, and the next state that the rule gives moves back.
-    /// Then it wakes the waiters when [`rules::wakes`] says so. No lock is held across an await,
-    /// so the state of a poisoned lock is used as it is.
-    fn apply<T>(&self, transition: Transition, rule: impl FnOnce(State) -> (State, T)) -> T {
-        let answer = {
+    /// Runs `rule`, a transition of [`rules`], on the state: the state moves out of the lock into
+    /// the rule, and the next state that the rule gives moves back. Then it wakes the waiters
+    /// when the transition says so. The rules have no path that panics, and the executor builds
+    /// with `panic = "abort"`, so the lock is never poisoned with the state moved out; a rule
+    /// that panicked would leave `State::default()` behind.
+    fn apply<T>(&self, rule: impl FnOnce(State) -> Next<T>) -> T {
+        let (answer, wakes) = {
             let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-            let (next, answer) = rule(std::mem::take(&mut *state));
+            let next = rule(std::mem::take(&mut *state));
+            let wakes = next.wakes();
+            let (next, answer) = next.into_parts();
             *state = next;
-            answer
+            (answer, wakes)
         };
-        if rules::wakes(transition) {
+        if wakes {
             self.changed.send_modify(|()| {});
         }
         answer
@@ -113,7 +116,7 @@ impl JobTicket {
         room: bool,
     ) -> Result<Self, Refusal> {
         let retention_stop = stop.child_token();
-        let id = registry.apply(Transition::Admit, |state| {
+        let id = registry.apply(|state| {
             rules::admit(
                 state,
                 agent,
@@ -134,29 +137,44 @@ impl JobTicket {
 
     /// The job has started saving: it got a slot of the uploads.
     pub(super) fn saving(&self) {
-        self.registry.apply(Transition::Saving, |state| {
-            (rules::saving(state, &self.agent, self.id), ())
-        });
+        self.registry
+            .apply(|state| rules::saving(state, &self.agent, self.id));
     }
 
     /// Records the decision of the job. The first decision stays.
     pub(super) fn decide(&self, decision: JobDecision) {
-        self.registry.apply(Transition::Decide, |state| {
-            (rules::decide(state, &self.agent, self.id, decision), ())
-        });
+        self.registry
+            .apply(|state| rules::decide(state, &self.agent, self.id, decision));
     }
 
-    /// The stop of the job. A delete of all snapshots of the agent and the shutdown cancel it.
-    pub(super) fn stop(&self) -> &CancellationToken {
-        &self.stop
+    /// Completes when the job is stopped: by a delete of all snapshots of the agent, by the
+    /// shutdown, or by [`JobTicket::stop_job`].
+    pub(super) fn stopped(&self) -> WaitForCancellationFuture<'_> {
+        self.stop.cancelled()
     }
 
-    /// The stop of the deletes of the job after its save. The stop of the job cancels it too, and
-    /// so does a manual update of the agent that finds the job running.
-    pub(super) fn retention_stop(&self) -> &CancellationToken {
-        &self.retention_stop
+    /// Whether the job is stopped.
+    pub(super) fn is_stopped(&self) -> bool {
+        self.stop.is_cancelled()
     }
 
+    /// Stops the job, when the slots of the uploads are gone.
+    pub(super) fn stop_job(&self) {
+        self.stop.cancel();
+    }
+
+    /// Completes when the deletes of the job after its save are stopped. The stop of the job
+    /// stops them too, and so does a manual update of the agent that finds the job running.
+    pub(super) fn deletes_stopped(&self) -> WaitForCancellationFuture<'_> {
+        self.retention_stop.cancelled()
+    }
+
+    /// Whether the deletes of the job after its save are stopped.
+    pub(super) fn are_deletes_stopped(&self) -> bool {
+        self.retention_stop.is_cancelled()
+    }
+
+    /// The agent of the job.
     pub(super) fn agent(&self) -> &AgentSnapshots {
         &self.agent
     }
@@ -164,9 +182,8 @@ impl JobTicket {
 
 impl Drop for JobTicket {
     fn drop(&mut self) {
-        self.registry.apply(Transition::End, |state| {
-            (rules::end(state, &self.agent, self.id), ())
-        });
+        self.registry
+            .apply(|state| rules::end(state, &self.agent, self.id));
     }
 }
 
@@ -183,9 +200,7 @@ impl DeleteAllTicket {
         registry: &Arc<Registry>,
         agent: &AgentSnapshots,
     ) -> (Self, Option<CancellationToken>) {
-        let stop = registry.apply(Transition::DeleteAllSnapshots, |state| {
-            rules::delete_all_snapshots(state, agent)
-        });
+        let stop = registry.apply(|state| rules::delete_all_snapshots(state, agent));
         (
             Self {
                 registry: Arc::clone(registry),
@@ -204,9 +219,7 @@ impl DeleteAllTicket {
 impl Drop for DeleteAllTicket {
     fn drop(&mut self) {
         self.registry
-            .apply(Transition::AllSnapshotsDeleted, |state| {
-                (rules::all_snapshots_deleted(state, &self.agent), ())
-            });
+            .apply(|state| rules::all_snapshots_deleted(state, &self.agent));
     }
 }
 
@@ -225,9 +238,7 @@ impl WaitTicket {
         agent: &AgentSnapshots,
         name: &FilesystemSnapshotName,
     ) -> Result<Self, Option<JobDecision>> {
-        let id = registry.apply(Transition::StartWait, |state| {
-            rules::start_wait(state, agent, name)
-        })?;
+        let id = registry.apply(|state| rules::start_wait(state, agent, name))?;
         Ok(Self {
             registry: Arc::clone(registry),
             agent: agent.clone(),
@@ -247,9 +258,8 @@ impl WaitTicket {
 
 impl Drop for WaitTicket {
     fn drop(&mut self) {
-        self.registry.apply(Transition::Unwatch, |state| {
-            (rules::unwatch(state, &self.agent, self.id), ())
-        });
+        self.registry
+            .apply(|state| rules::unwatch(state, &self.agent, self.id));
     }
 }
 
@@ -315,7 +325,7 @@ mod tests {
 
         stop.cancel();
 
-        assert!(job.retention_stop().is_cancelled());
+        assert!(job.are_deletes_stopped());
         assert!(refused.is_some_and(|running| running.retention_stop.is_cancelled()));
     }
 }
