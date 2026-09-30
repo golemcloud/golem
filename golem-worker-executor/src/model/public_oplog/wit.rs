@@ -1443,9 +1443,21 @@ impl TryFrom<oplog::RawUpdateDescription> for golem_common::model::oplog::Update
                         update.target_revision,
                     )
                     .map_err(|e| e.to_string())?,
-                    snapshot_exclusion_through: golem_common::model::oplog::OplogIndex::from_u64(
-                        update.snapshot_exclusion_through,
+                    source_component_revision:
+                        golem_common::model::component::ComponentRevision::try_from(
+                            update.source_component_revision,
+                        )
+                        .map_err(|e| e.to_string())?,
+                    source_revision_start_index: golem_common::model::oplog::OplogIndex::from_u64(
+                        update.source_revision_start_index,
                     ),
+                    snapshot_index: golem_common::model::oplog::OplogIndex::from_u64(
+                        update.snapshot_index,
+                    ),
+                    snapshot_revision: golem_common::model::component::ComponentRevision::try_from(
+                        update.snapshot_revision,
+                    )
+                    .map_err(|e| e.to_string())?,
                 })
             }
             oplog::RawUpdateDescription::SnapshotBased(sbu) => Ok(Self::SnapshotBased {
@@ -2261,11 +2273,17 @@ impl TryFrom<golem_common::model::oplog::UpdateDescription> for oplog::RawUpdate
             }
             UpdateDescription::SnapshotAssistedAutomatic {
                 target_revision,
-                snapshot_exclusion_through,
+                source_component_revision,
+                source_revision_start_index,
+                snapshot_index,
+                snapshot_revision,
             } => Ok(Self::SnapshotAssistedAutomatic(
                 oplog::RawSnapshotAssistedAutomaticUpdate {
                     target_revision: target_revision.into(),
-                    snapshot_exclusion_through: snapshot_exclusion_through.into(),
+                    source_component_revision: source_component_revision.into(),
+                    source_revision_start_index: source_revision_start_index.into(),
+                    snapshot_index: snapshot_index.into(),
+                    snapshot_revision: snapshot_revision.into(),
                 },
             )),
             UpdateDescription::SnapshotBased {

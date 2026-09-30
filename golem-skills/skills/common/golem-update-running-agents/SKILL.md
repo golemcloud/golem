@@ -15,7 +15,7 @@ Golem supports two update modes:
 
 | Mode | CLI Value | Description |
 |------|-----------|-------------|
-| **Automatic** | `auto` (default) | Uses the newest eligible periodic snapshot recorded before the request and replays its surviving suffix when one is available; otherwise replays retained history from the authoritative recovery baseline. Fails if the selected replay diverges. |
+| **Automatic** | `auto` (default) | When the request reaches the queue head, uses the newest eligible periodic snapshot from the active source revision and replays its surviving suffix; otherwise replays retained history from the authoritative recovery baseline. Fails if the selected replay diverges. |
 | **Manual** | `manual` | Uses user-defined `save-snapshot` and `load-snapshot` functions to serialize the agent's state from the old version and restore it in the new version. Required when the new component is incompatible with the old one (changed function signatures, removed functions, restructured state). |
 
 ### When to Use Each Mode
@@ -153,8 +153,8 @@ This is exposed in each SDK's host bindings. The function returns immediately â€
 
 ## How Automatic Update Works
 
-1. Admission records the target and the current periodic-snapshot exclusion watermark.
-2. While folding that request, Golem selects the newest eligible periodic snapshot that precedes it and follows the oplog entry establishing the active source revision. If none is eligible, Golem selects full replay from the authoritative recovery baseline.
+1. Admission records the target and an exact attempt identity.
+2. When that request reaches the queue head, Golem selects the newest eligible periodic snapshot in the then-active source revision. A snapshot committed after admission but before activation is eligible. Golem durably records either that exact snapshot provenance or full replay from the authoritative recovery baseline before executing the strategy, so restart reconstruction does not recompute the choice.
 3. The worker is restarted promptly, including when an invocation is in flight.
 4. The target loads the selected snapshot, if any, and replays the surviving committed history. The replay can extend beyond the request entry because source work may finish while execution is stopping.
 5. Success is recorded only after replay validation and before target live effects continue. An assisted snapshot then becomes the authoritative recovery baseline.

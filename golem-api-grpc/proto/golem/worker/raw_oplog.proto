@@ -130,7 +130,10 @@ message RawUpdateDescription {
 
 message RawSnapshotAssistedAutomaticUpdate {
   uint64 target_revision = 1;
-  uint64 snapshot_exclusion_through = 2;
+  uint64 source_component_revision = 2;
+  uint64 source_revision_start_index = 3;
+  uint64 snapshot_index = 4;
+  uint64 snapshot_revision = 5;
 }
 
 message RawSnapshotBasedUpdate {

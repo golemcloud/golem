@@ -8,7 +8,7 @@ As described in the general [Agents](/next/concepts/agents) page, each agent run
 
 The **automatic update** mode works as described in the general [Agents](/next/concepts/agents) page.
 
-It promptly restarts the agent. If a periodic snapshot is eligible, Golem loads the newest one recorded before the request since the operation-log entry that established the active source revision and validates the target by replaying the surviving suffix. If no snapshot is eligible, Golem replays all retained history from the authoritative recovery baseline instead. Selection is frozen while the request is folded from the operation log, so a snapshot taken after the request cannot replace it.
+It promptly restarts the agent. When the request reaches the head of the update queue, Golem selects the newest eligible periodic snapshot for the then-current source revision and authoritative recovery baseline. This can include a snapshot recorded after the request was admitted. Golem persists that exact selection before executing the update, so reconstruction and retries use the same strategy. If no snapshot is eligible at selection time, Golem instead persists full replay from the authoritative recovery baseline.
 
 ```shell copy
 golem agent update <AGENT_ID> auto --await

@@ -707,7 +707,7 @@ pub(all) struct RawPendingAgentInvocationParameters {
 } derive(Debug, Eq)
 ///|
 pub(all) struct RawSnapshotAssistedAutomaticUpdate {
-      target_revision : UInt64; snapshot_exclusion_through : UInt64
+      target_revision : UInt64; source_component_revision : UInt64; source_revision_start_index : UInt64; snapshot_index : UInt64; snapshot_revision : UInt64
 } derive(Debug, Eq)
 ///|
 pub(all) struct RawSnapshotBasedUpdate {
@@ -2603,7 +2603,10 @@ pub fn enrich_oplog_entries(environment_id : @host.EnvironmentId, agent_id : @ty
                               SnapshotAssistedAutomatic(payload277) => {
                                     mbt_ffi_store8((iter_base) + 32, (1))
                                     mbt_ffi_store64((iter_base) + 40, ((payload277).target_revision).reinterpret_as_int64())
-                                    mbt_ffi_store64((iter_base) + 48, ((payload277).snapshot_exclusion_through).reinterpret_as_int64())
+                                    mbt_ffi_store64((iter_base) + 48, ((payload277).source_component_revision).reinterpret_as_int64())
+                                    mbt_ffi_store64((iter_base) + 56, ((payload277).source_revision_start_index).reinterpret_as_int64())
+                                    mbt_ffi_store64((iter_base) + 64, ((payload277).snapshot_index).reinterpret_as_int64())
+                                    mbt_ffi_store64((iter_base) + 72, ((payload277).snapshot_revision).reinterpret_as_int64())
 
                                     ()
                               }

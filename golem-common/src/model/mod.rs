@@ -2769,7 +2769,8 @@ pub struct PendingUpdateRef {
     /// Index of the `PendingUpdate` oplog entry holding the full description.
     pub oplog_index: OplogIndex,
     /// Durable admission identity returned to the caller. For manual updates this is the
-    /// originating `PendingAgentInvocation` index; otherwise it equals `oplog_index`.
+    /// originating `PendingAgentInvocation` index. For automatic updates it identifies the first
+    /// `PendingUpdate`, while `oplog_index` can identify the later strategy-selection entry.
     pub admission_index: OplogIndex,
     pub target_revision: ComponentRevision,
     pub kind: PendingUpdateKind,

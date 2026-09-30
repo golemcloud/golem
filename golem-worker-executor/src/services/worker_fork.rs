@@ -65,7 +65,7 @@ use golem_common::model::card::{AgentCardHolder, CardHolder};
 use golem_common::model::durable_stream::StreamSessionRecord;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{
-    DurableStreamEventSummary, OplogEntry, OplogIndex, OplogIndexRange,
+    DurableStreamEventSummary, OplogEntry, OplogIndex, OplogIndexRange, UpdateDescription,
 };
 use golem_common::model::{AgentFingerprint, AgentMetadata, Timestamp};
 use golem_common::model::{AgentId, IdempotencyKey, OwnedAgentId};
@@ -876,10 +876,19 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                     update_attempt_index,
                     ..
                 } => {
-                    pending_updates.push((
-                        *description.target_revision(),
-                        update_attempt_index.unwrap_or(oplog_index),
-                    ));
+                    let target_revision = *description.target_revision();
+                    let admission_index = update_attempt_index.unwrap_or(oplog_index);
+                    let refines_automatic_admission = update_attempt_index.is_some()
+                        && !matches!(description, UpdateDescription::SnapshotBased { .. })
+                        && pending_updates.first().is_some_and(
+                            |(pending_target, pending_admission)| {
+                                *pending_target == target_revision
+                                    && *pending_admission == admission_index
+                            },
+                        );
+                    if !refines_automatic_admission {
+                        pending_updates.push((target_revision, admission_index));
+                    }
                 }
                 OplogEntry::SuccessfulUpdate { .. } if !pending_updates.is_empty() => {
                     pending_updates.remove(0);

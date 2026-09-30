@@ -18,6 +18,7 @@ use async_lock::Mutex;
 use axum::Router;
 use axum::routing::post;
 use bytes::Bytes;
+use golem_common::base_model::oplog::PublicUpdateDescription;
 use golem_common::model::component::{ComponentDto, ComponentRevision};
 use golem_common::model::oplog::{
     OplogErrorKind, OplogIndex, PublicAgentInvocation, PublicOplogEntry,
@@ -37,7 +38,7 @@ use golem_worker_executor_test_utils::{
 use http::StatusCode;
 use log::info;
 use pretty_assertions::{assert_eq, assert_ne};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
@@ -1559,6 +1560,124 @@ async fn snapshot_assisted_restart_before_attempt_and_later_update_modes_succeed
 
 #[test]
 #[timeout("120s")]
+async fn queued_automatic_targets_select_strategy_when_each_reaches_queue_head(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_snapshot_policy(
+        deps,
+        &context,
+        SnapshotPolicy::EveryNInvocation { count: 1 },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_update_v1)
+        .store()
+        .await?;
+    let agent_id = agent_id!("SnapshotUpdateTest");
+    let mut http_server = TestHttpServer::start().await;
+    let worker_id = executor
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            HashMap::from([("PORT".to_string(), http_server.port().to_string())]),
+            Vec::new(),
+        )
+        .await?;
+
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "stable_value", data_value!())
+        .await?;
+    wait_for_snapshot_after(&executor, &worker_id, OplogIndex::INITIAL).await?;
+    let mut control = http_server.f1_control(902).await;
+    let executor_clone = executor.clone();
+    let component_clone = component.clone();
+    let agent_id_clone = agent_id.clone();
+    let invocation = spawn(async move {
+        executor_clone
+            .invoke_and_await_agent(
+                &component_clone,
+                &agent_id_clone,
+                "blocking_stable",
+                data_value!(902u64),
+            )
+            .await
+    });
+    control.await_reached().await;
+    let executor_clone = executor.clone();
+    let worker_id_clone = worker_id.clone();
+    let interrupt = spawn(async move { executor_clone.interrupt(&worker_id_clone).await });
+    control.resume();
+    interrupt.await??;
+    let _ = invocation.await?;
+    executor
+        .wait_for_status(
+            &worker_id,
+            AgentStatus::Interrupted,
+            Duration::from_secs(10),
+        )
+        .await?;
+
+    let revision_two = executor
+        .update_component(&component.id, "it_agent_update_v2_release")
+        .await?;
+    let revision_three = executor
+        .update_component(&component.id, "it_agent_update_v2_release")
+        .await?;
+    executor
+        .auto_update_worker(&worker_id, revision_two.revision, true)
+        .await?;
+    executor
+        .auto_update_worker(&worker_id, revision_three.revision, true)
+        .await?;
+
+    let pending = wait_for_update_counts(&executor, &worker_id, (2, 0, 0)).await?;
+    assert_eq!(pending.component_revision, component.revision);
+    let pending_attempts = pending
+        .updates
+        .iter()
+        .filter_map(|record| match record {
+            UpdateRecord::PendingUpdate(update) => update.pending_update_index,
+            _ => None,
+        })
+        .collect::<HashSet<_>>();
+    assert_eq!(pending_attempts.len(), 2);
+
+    executor.resume(&worker_id, true).await?;
+    executor
+        .wait_for_component_revision(&worker_id, revision_three.revision, Duration::from_secs(30))
+        .await?;
+    let completed = wait_for_update_counts(&executor, &worker_id, (0, 2, 0)).await?;
+    assert_eq!(completed.component_revision, revision_three.revision);
+    let successes = completed
+        .updates
+        .iter()
+        .filter_map(|record| match record {
+            UpdateRecord::SuccessfulUpdate(update) => Some(update),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(successes.len(), 2);
+    assert_eq!(successes[0].target_revision, revision_two.revision);
+    assert_eq!(successes[1].target_revision, revision_three.revision);
+    assert!(successes[0].snapshot_assisted_details.is_some());
+    assert!(successes[1].snapshot_assisted_details.is_none());
+    assert_eq!(
+        successes
+            .iter()
+            .filter_map(|update| update.pending_update_index)
+            .collect::<HashSet<_>>(),
+        pending_attempts,
+    );
+    http_server.abort();
+    Ok(())
+}
+
+#[test]
+#[timeout("120s")]
 async fn snapshot_assisted_revert_retries_retained_successful_and_failed_requests(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -1599,21 +1718,60 @@ async fn snapshot_assisted_revert_retries_retained_successful_and_failed_request
             .auto_update_worker(&worker_id, target.revision, false)
             .await?;
         let expected = if succeeds { (0, 1, 0) } else { (0, 0, 1) };
-        wait_for_update_counts(&executor, &worker_id, expected).await?;
-        let pending_index = executor
+        let first_terminal = wait_for_update_counts(&executor, &worker_id, expected).await?;
+        let (attempt_index, assisted_details) = first_terminal
+            .updates
+            .iter()
+            .find_map(|record| match record {
+                UpdateRecord::SuccessfulUpdate(update) => Some((
+                    update.pending_update_index,
+                    update.snapshot_assisted_details.as_ref(),
+                )),
+                UpdateRecord::FailedUpdate(update) => Some((
+                    update.pending_update_index,
+                    update.snapshot_assisted_details.as_ref(),
+                )),
+                UpdateRecord::PendingUpdate(_) => None,
+            })
+            .map(|(attempt, details)| {
+                (
+                    attempt.expect("terminal update must retain its admission identity"),
+                    details
+                        .expect("terminal update must retain assisted provenance")
+                        .clone(),
+                )
+            })
+            .expect("update must have a terminal record");
+        let pending_entries = executor
             .get_oplog(&worker_id, OplogIndex::INITIAL)
             .await?
             .iter()
-            .find_map(|entry| {
-                matches!(entry.entry, PublicOplogEntry::PendingUpdate(_))
-                    .then_some(entry.oplog_index)
+            .filter_map(|entry| match &entry.entry {
+                PublicOplogEntry::PendingUpdate(params) => Some((
+                    entry.oplog_index,
+                    params.update_attempt_index,
+                    params.description.clone(),
+                )),
+                _ => None,
             })
-            .unwrap();
+            .collect::<Vec<_>>();
+        assert_eq!(pending_entries.len(), 2);
+        assert!(matches!(
+            pending_entries[0].2,
+            PublicUpdateDescription::Automatic(_)
+        ));
+        assert!(matches!(
+            pending_entries[1].2,
+            PublicUpdateDescription::SnapshotAssistedAutomatic(_)
+        ));
+        assert_eq!(pending_entries[0].1, attempt_index);
+        assert_eq!(pending_entries[1].1, attempt_index);
+        let selection_index = pending_entries[1].0;
         executor
             .revert(
                 &worker_id,
                 RevertWorkerTarget::RevertToOplogIndex(RevertToOplogIndex {
-                    last_oplog_index: pending_index,
+                    last_oplog_index: selection_index,
                 }),
             )
             .await?;
@@ -1627,7 +1785,32 @@ async fn snapshot_assisted_revert_retries_retained_successful_and_failed_request
                 component.revision
             }
         );
+        let (retried_attempt, retried_details) = retried
+            .updates
+            .iter()
+            .find_map(|record| match record {
+                UpdateRecord::SuccessfulUpdate(update) => Some((
+                    update.pending_update_index,
+                    update.snapshot_assisted_details.as_ref(),
+                )),
+                UpdateRecord::FailedUpdate(update) => Some((
+                    update.pending_update_index,
+                    update.snapshot_assisted_details.as_ref(),
+                )),
+                UpdateRecord::PendingUpdate(_) => None,
+            })
+            .expect("retried update must have a terminal record");
+        assert_eq!(retried_attempt, Some(attempt_index));
+        assert_eq!(retried_details, Some(&assisted_details));
         let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+        assert_eq!(
+            oplog
+                .iter()
+                .filter(|entry| matches!(entry.entry, PublicOplogEntry::PendingUpdate(_)))
+                .count(),
+            2,
+            "outcome-only revert must reuse the persisted strategy"
+        );
         assert_eq!(
             oplog
                 .iter()

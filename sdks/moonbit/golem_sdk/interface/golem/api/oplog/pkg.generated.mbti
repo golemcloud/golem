@@ -754,7 +754,10 @@ pub(all) struct RawPendingUpdateParameters {
 
 pub(all) struct RawSnapshotAssistedAutomaticUpdate {
   target_revision : UInt64
-  snapshot_exclusion_through : UInt64
+  source_component_revision : UInt64
+  source_revision_start_index : UInt64
+  snapshot_index : UInt64
+  snapshot_revision : UInt64
 } derive(Eq, @debug.Debug)
 
 pub(all) struct RawSnapshotBasedUpdate {

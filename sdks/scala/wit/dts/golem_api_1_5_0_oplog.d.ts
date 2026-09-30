@@ -910,7 +910,10 @@ declare module 'golem:api/oplog@1.5.0' {
   };
   export type RawSnapshotAssistedAutomaticUpdate = {
     targetRevision: ComponentRevision;
-    snapshotExclusionThrough: OplogIndex;
+    sourceComponentRevision: ComponentRevision;
+    sourceRevisionStartIndex: OplogIndex;
+    snapshotIndex: OplogIndex;
+    snapshotRevision: ComponentRevision;
   };
   export type RawSnapshotBasedUpdate = {
     targetRevision: ComponentRevision;

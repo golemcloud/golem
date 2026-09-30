@@ -114,6 +114,19 @@ fn is_selected_update_attempt(
     pending_update_index == Some(selected_update_attempt_index)
 }
 
+fn pending_update_progress(
+    target_revision: ComponentRevision,
+    selected_update_attempt_index: OplogIndex,
+) -> String {
+    format!(
+        "to revision {} for attempt index {} is still pending",
+        target_revision.to_string().log_color_highlight(),
+        selected_update_attempt_index
+            .to_string()
+            .log_color_highlight(),
+    )
+}
+
 pub struct AgentCommandHandler {
     ctx: Arc<Context>,
 }
@@ -1968,7 +1981,7 @@ impl AgentCommandHandler {
                 None,
                 None,
                 None,
-                false,
+                true,
             )
             .await?;
 
@@ -2186,7 +2199,10 @@ impl AgentCommandHandler {
             });
 
             if pending {
-                log_action("Agent update", "is still pending");
+                log_action(
+                    "Agent update",
+                    pending_update_progress(target_revision, selected_update_attempt_index),
+                );
                 tokio::time::sleep(Duration::from_secs(2)).await;
             } else {
                 // An agent can be re-updated to the same revision, so a success and a failure can both
@@ -3431,8 +3447,8 @@ mod tests {
     use super::{
         AgentListMode, AgentUpdateMode, apply_list_mode_filter, build_repl_agent_id,
         is_selected_update_attempt, normalize_public_agent_id, parse_method_argument_schema_value,
-        render_revert_command, split_agent_id, validate_ordinary_agent_type,
-        validate_public_invocation_agent_id,
+        pending_update_progress, render_revert_command, split_agent_id,
+        validate_ordinary_agent_type, validate_public_invocation_agent_id,
     };
     use crate::agent_id_display::SourceLanguage;
     use crate::context::GlobalEnvironmentSelector;
@@ -3440,6 +3456,7 @@ mod tests {
     use crate::model::environment::EnvironmentReference;
     use golem_common::model::agent::{AgentMode, AgentTypeName, ParsedAgentId, Snapshotting};
     use golem_common::model::application::ApplicationName;
+    use golem_common::model::component::ComponentRevision;
     use golem_common::model::environment::EnvironmentName;
     use golem_common::model::{Empty, IdempotencyKey, OplogIndex};
     use golem_common::schema::agent::{
@@ -3468,6 +3485,16 @@ mod tests {
             selected,
         ));
         assert!(!is_selected_update_attempt(None, selected));
+    }
+
+    #[test]
+    fn pending_update_progress_identifies_exact_attempt() {
+        let progress =
+            pending_update_progress(ComponentRevision::new(3).unwrap(), OplogIndex::from_u64(17));
+        assert_eq!(
+            strip_ansi_escapes::strip_str(progress),
+            "to revision 3 for attempt index 17 is still pending"
+        );
     }
 
     #[test]

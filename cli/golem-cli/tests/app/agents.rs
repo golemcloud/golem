@@ -4526,7 +4526,6 @@ async fn test_naming_extremes() {
         ])
         .await;
     assert!(outputs.success_or_dump());
-
     let outputs = ctx
         .cli([
             cmd::AGENT,
@@ -5157,6 +5156,13 @@ async fn test_agent_update_await_correlates_exact_admitted_attempts() {
         ])
         .await;
     assert!(outputs.success_or_dump());
+    let automatic_attempts_before_bulk = get_update_await_metadata(&ctx, automatic_agent)
+        .await
+        .updates
+        .into_iter()
+        .filter(|update| update.target_revision == 1 && update.mode == "automatic")
+        .count();
+    assert_eq!(automatic_attempts_before_bulk, 1);
 
     let outputs = ctx
         .cli([
@@ -5181,6 +5187,8 @@ async fn test_agent_update_await_correlates_exact_admitted_attempts() {
         .collect::<std::collections::HashSet<_>>();
     assert!(bulk_agent_ids.contains("UpdateAwaitAgent(\"bulk\")"));
     assert!(bulk_agent_ids.contains("UpdateAwaitAgent(\"queued\")"));
+    assert!(!bulk_agent_ids.contains("UpdateAwaitAgent(\"automatic\")"));
+    assert_eq!(bulk_agent_ids.len(), 2);
     assert_eq!(bulk_result.errors.len(), 1);
     assert_eq!(
         bulk_result.errors[0].agent_id,
@@ -5196,6 +5204,16 @@ async fn test_agent_update_await_correlates_exact_admitted_attempts() {
     assert!(bulk_metadata.updates.iter().any(|update| {
         update.kind == "SuccessfulUpdate" && update.target_revision == 1 && update.mode == "manual"
     }));
+    let automatic_attempts_after_bulk = get_update_await_metadata(&ctx, automatic_agent)
+        .await
+        .updates
+        .into_iter()
+        .filter(|update| update.target_revision == 1 && update.mode == "automatic")
+        .count();
+    assert_eq!(
+        automatic_attempts_after_bulk,
+        automatic_attempts_before_bulk
+    );
 
     build_and_deploy_update_await_agent(&ctx, component_name, 2, "stable", false).await;
 

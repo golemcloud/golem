@@ -726,10 +726,13 @@ watermark. `prepare_instance`
 
 - `SnapshotBased` — the save hook already ran and the payload is already recorded; the store must
   already be live, and `finalize_pending_snapshot_update` loads it into the new revision.
-- Public `Automatic` admission records an internal snapshot-assisted candidate plus the current
-  rejection/unavailability watermark. While folding that exact `PendingUpdate` (`P`), the reducer
-  selects the newest eligible periodic snapshot `S` strictly before `P` in the active source
-  revision `R`, after the oplog entry `E` that established that revision. If none is eligible, the derived pending kind is
+- Public `Automatic` admission `P` records only the requested target and its exact attempt identity.
+  When that request reaches the queue head, the invocation loop selects the newest eligible
+  periodic snapshot `S` in the then-active source revision `R`, after the oplog entry `E` that
+  established that revision and beyond the rejection/unavailability watermarks. This means a
+  snapshot committed after admission but before activation can be selected. A second correlated
+  `PendingUpdate` durably freezes either that exact assisted provenance or the full-replay strategy,
+  so reconstruction never recomputes the choice. If none is eligible, the pending kind remains
   `Automatic`: `try_load_snapshot` loads the authoritative baseline, then `resume_replay` replays
   the remaining old history against the new component. If `S` is eligible, the derived internal
   kind is `SnapshotAssistedAutomatic`: the target loads required `S`, skips only through `S`, and replays the surviving

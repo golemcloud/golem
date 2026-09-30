@@ -359,10 +359,13 @@ pub enum UpdateDescription {
     /// Automatic update by replaying the oplog on the new version
     Automatic { target_revision: ComponentRevision },
 
-    /// Automatic update assisted by the latest eligible periodic snapshot preceding this entry.
+    /// Automatic update using a periodic snapshot selected when the update reached the queue head.
     SnapshotAssistedAutomatic {
         target_revision: ComponentRevision,
-        snapshot_exclusion_through: OplogIndex,
+        source_component_revision: ComponentRevision,
+        source_revision_start_index: OplogIndex,
+        snapshot_index: OplogIndex,
+        snapshot_revision: ComponentRevision,
     },
 
     /// Custom update by loading a given snapshot on the new version

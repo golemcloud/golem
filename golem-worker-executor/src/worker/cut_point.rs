@@ -66,12 +66,32 @@ pub fn validate_snapshot_update_boundaries(
         }
 
         match entry {
-            OplogEntry::PendingUpdate { description, .. } => pending_updates.push_back((
-                *idx,
-                matches!(description, UpdateDescription::SnapshotBased { .. }),
-            )),
+            OplogEntry::PendingUpdate {
+                description,
+                update_attempt_index,
+                ..
+            } => {
+                let target_revision = *description.target_revision();
+                let admission_index = update_attempt_index.unwrap_or(*idx);
+                let refines_automatic_admission = update_attempt_index.is_some()
+                    && !matches!(description, UpdateDescription::SnapshotBased { .. })
+                    && pending_updates.front().is_some_and(
+                        |(pending_target, pending_admission, _, _)| {
+                            *pending_target == target_revision
+                                && *pending_admission == admission_index
+                        },
+                    );
+                if !refines_automatic_admission {
+                    pending_updates.push_back((
+                        target_revision,
+                        admission_index,
+                        *idx,
+                        matches!(description, UpdateDescription::SnapshotBased { .. }),
+                    ));
+                }
+            }
             OplogEntry::SuccessfulUpdate { .. } => {
-                if let Some((pending_index, true)) = pending_updates.pop_front()
+                if let Some((_, _, pending_index, true)) = pending_updates.pop_front()
                     && pending_index <= cut_point
                     && cut_point < *idx
                 {
@@ -82,7 +102,7 @@ pub fn validate_snapshot_update_boundaries(
                 }
             }
             OplogEntry::FailedUpdate { .. } => {
-                if let Some((pending_index, true)) = pending_updates.pop_front()
+                if let Some((_, _, pending_index, true)) = pending_updates.pop_front()
                     && pending_index <= cut_point
                     && cut_point < *idx
                 {
@@ -450,7 +470,10 @@ mod tests {
     fn snapshot_assisted_update(revision: u64) -> UpdateDescription {
         UpdateDescription::SnapshotAssistedAutomatic {
             target_revision: ComponentRevision::new(revision).unwrap(),
-            snapshot_exclusion_through: OplogIndex::NONE,
+            source_component_revision: ComponentRevision::new(revision - 1).unwrap(),
+            source_revision_start_index: OplogIndex::INITIAL,
+            snapshot_index: idx(2),
+            snapshot_revision: ComponentRevision::new(revision - 1).unwrap(),
         }
     }
 

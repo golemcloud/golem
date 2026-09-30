@@ -4601,12 +4601,18 @@ fn update_description_to_proto(
         }),
         UpdateDescription::SnapshotAssistedAutomatic {
             target_revision,
-            snapshot_exclusion_through,
+            source_component_revision,
+            source_revision_start_index,
+            snapshot_index,
+            snapshot_revision,
         } => Ok(RawUpdateDescription {
             description: Some(Description::SnapshotAssistedAutomatic(
                 RawSnapshotAssistedAutomaticUpdate {
                     target_revision: target_revision.into(),
-                    snapshot_exclusion_through: snapshot_exclusion_through.into(),
+                    source_component_revision: source_component_revision.into(),
+                    source_revision_start_index: source_revision_start_index.into(),
+                    snapshot_index: snapshot_index.into(),
+                    snapshot_revision: snapshot_revision.into(),
                 },
             )),
         }),
@@ -4639,7 +4645,15 @@ fn update_description_from_proto(
         Description::SnapshotAssistedAutomatic(update) => {
             Ok(UpdateDescription::SnapshotAssistedAutomatic {
                 target_revision: update.target_revision.try_into().map_err(|e: String| e)?,
-                snapshot_exclusion_through: OplogIndex::from_u64(update.snapshot_exclusion_through),
+                source_component_revision: update
+                    .source_component_revision
+                    .try_into()
+                    .map_err(|e: String| e)?,
+                source_revision_start_index: OplogIndex::from_u64(
+                    update.source_revision_start_index,
+                ),
+                snapshot_index: OplogIndex::from_u64(update.snapshot_index),
+                snapshot_revision: update.snapshot_revision.try_into().map_err(|e: String| e)?,
             })
         }
         Description::SnapshotBased(snap) => Ok(UpdateDescription::SnapshotBased {

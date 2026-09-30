@@ -1288,7 +1288,17 @@ fn calculate_pending_invocations(
             } => {
                 let target_revision = *description.target_revision();
                 let admission_index = update_attempt_index.unwrap_or(*oplog_idx);
-                pending_update_attempts.push_back((target_revision, admission_index));
+                let refines_automatic_admission = update_attempt_index.is_some()
+                    && !matches!(description, UpdateDescription::SnapshotBased { .. })
+                    && pending_update_attempts.front().is_some_and(
+                        |(pending_target, pending_admission)| {
+                            *pending_target == target_revision
+                                && *pending_admission == admission_index
+                        },
+                    );
+                if !refines_automatic_admission {
+                    pending_update_attempts.push_back((target_revision, admission_index));
+                }
                 if matches!(description, UpdateDescription::SnapshotBased { .. })
                     && let Some(position) = result
                         .iter()
@@ -1678,51 +1688,48 @@ fn calculate_update_fields(
                 let kind = match description {
                     UpdateDescription::Automatic { .. } => PendingUpdateKind::Automatic,
                     UpdateDescription::SnapshotAssistedAutomatic {
-                        target_revision,
-                        snapshot_exclusion_through,
-                    } => {
-                        let selected_snapshot = match (
-                            last_automatic_snapshot_index,
-                            last_automatic_snapshot_component_revision,
-                        ) {
-                            _ if *target_revision <= revision => None,
-                            (Some(_snapshot_index), Some(snapshot_revision))
-                                if snapshot_revision != revision =>
-                            {
-                                None
-                            }
-                            (Some(snapshot_index), Some(_snapshot_revision))
-                                if snapshot_index <= *snapshot_exclusion_through =>
-                            {
-                                None
-                            }
-                            (Some(snapshot_index), Some(snapshot_revision)) => {
-                                Some(SnapshotAssistedUpdateSelection::Selected {
-                                    snapshot_index,
-                                    snapshot_revision,
-                                })
-                            }
-                            _ => None,
-                        };
-                        match selected_snapshot {
-                            Some(selection) => PendingUpdateKind::SnapshotAssistedAutomatic {
-                                source_component_revision: revision,
-                                source_revision_start_index: component_revision_start_index,
-                                selection,
-                            },
-                            None => PendingUpdateKind::Automatic,
-                        }
-                    }
+                        source_component_revision,
+                        source_revision_start_index,
+                        snapshot_index,
+                        snapshot_revision,
+                        ..
+                    } => PendingUpdateKind::SnapshotAssistedAutomatic {
+                        source_component_revision: *source_component_revision,
+                        source_revision_start_index: *source_revision_start_index,
+                        selection: SnapshotAssistedUpdateSelection::Selected {
+                            snapshot_index: *snapshot_index,
+                            snapshot_revision: *snapshot_revision,
+                        },
+                    },
                     UpdateDescription::SnapshotBased { .. } => PendingUpdateKind::SnapshotBased,
                 };
                 let admission_index = update_attempt_index.unwrap_or(*oplog_idx);
-                pending_updates.push_back(PendingUpdateRef {
-                    timestamp: *timestamp,
-                    oplog_index: *oplog_idx,
-                    admission_index,
-                    target_revision: *description.target_revision(),
-                    kind,
-                });
+                let target_revision = *description.target_revision();
+                let refines_automatic_admission = update_attempt_index.is_some()
+                    && !matches!(description, UpdateDescription::SnapshotBased { .. })
+                    && pending_updates.front().is_some_and(|pending| {
+                        pending.admission_index == admission_index
+                            && pending.target_revision == target_revision
+                            && pending.oplog_index == pending.admission_index
+                            && pending.kind == PendingUpdateKind::Automatic
+                    });
+                if refines_automatic_admission {
+                    let pending = pending_updates
+                        .front_mut()
+                        .expect("refining an existing queue-head admission");
+                    pending.oplog_index = *oplog_idx;
+                    pending.kind = kind;
+                } else if update_attempt_index.is_none()
+                    || matches!(description, UpdateDescription::SnapshotBased { .. })
+                {
+                    pending_updates.push_back(PendingUpdateRef {
+                        timestamp: *timestamp,
+                        oplog_index: *oplog_idx,
+                        admission_index,
+                        target_revision,
+                        kind,
+                    });
+                }
             }
             OplogEntry::FailedUpdate {
                 timestamp,

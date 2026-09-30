@@ -17,7 +17,7 @@ use crate::services::{HasAll, HasOplogService, HasWorkerService};
 use crate::workerctx::WorkerCtx;
 use golem_common::model::agent::{AgentMode, ParsedAgentId, Principal};
 use golem_common::model::component::{ComponentRevision, PluginPriority};
-use golem_common::model::oplog::{OplogEntry, OplogErrorKind, OplogIndex, UpdateDescription};
+use golem_common::model::oplog::{OplogEntry, OplogErrorKind, OplogIndex};
 use golem_common::model::worker::{ResolvedRevert, RevertWorkerTarget};
 use golem_common::model::{AgentStatus, OwnedAgentId, PendingUpdateKind, Timestamp};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
@@ -116,7 +116,7 @@ fn update_decision(status: &AgentStatus, mode: UpdateMode, disable_wakeup: bool)
     }
 }
 
-fn has_duplicate_pending_update(
+pub(super) fn has_duplicate_pending_update(
     status: &golem_common::model::AgentStatusRecord,
     target_revision: ComponentRevision,
 ) -> bool {
@@ -329,7 +329,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         // A worker's durable agent mode selects its oplog namespace and cannot change across
         // component revisions. Unknown revisions are still queued so the update loop records the
         // canonical FailedUpdate entry. Automatic updates defer every target lookup until their
-        // reducer-selected replay strategy has passed queue-head validation.
+        // replay strategy has been durably selected at the queue head and validated.
         if mode != UpdateMode::Automatic
             && let Ok(target_component_metadata) = deps
                 .component_service()
@@ -390,13 +390,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ),
             (UpdateMode::Automatic, decision) => {
                 debug!("Enqueuing update");
-                let description = UpdateDescription::SnapshotAssistedAutomatic {
-                    target_revision,
-                    snapshot_exclusion_through: worker
-                        .snapshot_exclusion_through_at_admission()
-                        .await?,
-                };
-                let update_attempt_index = worker.enqueue_update(description).await?;
+                let update_attempt_index = worker.enqueue_automatic_update(target_revision).await?;
 
                 match decision {
                     UpdateDecision::Queue => {

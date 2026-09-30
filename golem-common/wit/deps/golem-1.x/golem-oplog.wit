@@ -830,7 +830,10 @@ interface oplog {
 
     record raw-snapshot-assisted-automatic-update {
         target-revision: component-revision,
-        snapshot-exclusion-through: oplog-index
+        source-component-revision: component-revision,
+        source-revision-start-index: oplog-index,
+        snapshot-index: oplog-index,
+        snapshot-revision: component-revision
     }
 
     record raw-snapshot-based-update {

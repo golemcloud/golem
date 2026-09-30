@@ -4780,12 +4780,34 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ///
     /// The update itself is not performed by the invocation queue's processing loop,
     /// it is going to affect how the worker is recovered next time.
-    pub async fn enqueue_update(
+    pub async fn enqueue_automatic_update(
         &self,
-        update_description: UpdateDescription,
+        target_revision: ComponentRevision,
     ) -> Result<OplogIndex, WorkerExecutorError> {
-        self.enqueue_update_for_attempt(update_description, None)
-            .await
+        // Admission identity and execution strategy are separate. The first PendingUpdate only
+        // admits the request; the invocation loop durably selects full or snapshot-assisted replay
+        // when this request reaches the queue head.
+        let instance_guard = self.lock_non_stopping_worker().await;
+        instance_guard.ensure_not_deleting()?;
+        let status = self.state_actor.attached_status().await;
+        if lifecycle::has_duplicate_pending_update(&status, target_revision) {
+            return Err(WorkerExecutorError::invalid_request(
+                "The same update is already in progress",
+            ));
+        }
+
+        self.bump_read_only_cache_epoch();
+        let entry =
+            OplogEntry::pending_update(UpdateDescription::Automatic { target_revision }, None);
+        let oplog_index = self
+            .add_and_commit_oplog_internal(
+                &instance_guard,
+                entry,
+                Some(WorkerCommand::WorkAvailable),
+            )
+            .await?;
+        drop(instance_guard);
+        Ok(oplog_index)
     }
 
     async fn enqueue_update_for_attempt(
@@ -4807,26 +4829,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .await?;
         drop(instance_guard);
         Ok(oplog_index)
-    }
-
-    pub(crate) async fn snapshot_exclusion_through_at_admission(
-        &self,
-    ) -> Result<OplogIndex, WorkerExecutorError> {
-        if let Some(rejected) = self
-            .worker_service()
-            .get_rejected_periodic_snapshot_through(
-                &self.owned_agent_id,
-                self.initial_worker_metadata.fingerprint,
-            )
-            .await?
-        {
-            self.rejected_periodic_snapshot_through
-                .fetch_max(rejected.into(), Ordering::AcqRel);
-        }
-        Ok(OplogIndex::from_u64(
-            self.rejected_periodic_snapshot_through
-                .load(Ordering::Acquire),
-        ))
     }
 
     /// Enqueues a manual update.
@@ -4909,30 +4911,52 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         match entry {
             OplogEntry::PendingUpdate {
                 timestamp,
-                mut description,
+                description,
                 ..
-            } => {
-                if pending.kind == PendingUpdateKind::Automatic
-                    && matches!(
-                        description,
-                        UpdateDescription::SnapshotAssistedAutomatic { .. }
-                    )
-                {
-                    description = UpdateDescription::Automatic {
-                        target_revision: pending.target_revision,
-                    };
-                }
-                Ok(TimestampedUpdateDescription {
-                    timestamp,
-                    oplog_index: pending.oplog_index,
-                    description,
-                })
-            }
+            } => Ok(TimestampedUpdateDescription {
+                timestamp,
+                oplog_index: pending.oplog_index,
+                description,
+            }),
             other => Err(WorkerExecutorError::unknown(format!(
                 "Expected a PendingUpdate oplog entry at index {}, but found {other:?}",
                 pending.oplog_index
             ))),
         }
+    }
+
+    async fn persist_automatic_update_strategy(
+        &self,
+        status: &AgentStatusRecord,
+        pending: &PendingUpdateRef,
+    ) -> Result<(), WorkerExecutorError> {
+        if let Some(rejected) = self
+            .worker_service()
+            .get_rejected_periodic_snapshot_through(
+                &self.owned_agent_id,
+                self.initial_worker_metadata.fingerprint,
+            )
+            .await?
+        {
+            self.rejected_periodic_snapshot_through
+                .fetch_max(rejected.into(), Ordering::AcqRel);
+        }
+
+        let excluded_through = self
+            .rejected_periodic_snapshot_through
+            .load(Ordering::Acquire)
+            .max(
+                self.unavailable_periodic_snapshot_through
+                    .load(Ordering::Acquire),
+            );
+        let description = select_automatic_update_strategy(status, pending, excluded_through);
+
+        self.add_and_commit_oplog(OplogEntry::pending_update(
+            description,
+            Some(pending.admission_index),
+        ))
+        .await?;
+        Ok(())
     }
 
     // should only be called from invocation loop
@@ -8897,7 +8921,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ) -> Result<golem_service_base::model::component::Component, WorkerExecutorError> {
         let pending_update = status.pending_updates.front();
         let active_revision = pending_update
-            .filter(|update| snapshot_assisted_head_failure(status, update).is_none())
+            .filter(|update| {
+                !is_unselected_automatic_update(update)
+                    && snapshot_assisted_head_failure(status, update).is_none()
+            })
             .map(|update| update.target_revision)
             .unwrap_or(status.component_revision);
         let (_, active_component) = self
@@ -10940,6 +10967,17 @@ impl RunningWorker {
         parent.reattach_worker_status().await;
 
         let worker_metadata = parent.get_latest_worker_metadata().await;
+        let worker_metadata = if let Some(pending) =
+            worker_metadata.last_known_status.pending_updates.front()
+            && is_unselected_automatic_update(pending)
+        {
+            parent
+                .persist_automatic_update_strategy(&worker_metadata.last_known_status, pending)
+                .await?;
+            parent.get_latest_worker_metadata().await
+        } else {
+            worker_metadata
+        };
         debug!("Creating instance with parent metadata {worker_metadata:?}");
 
         let (pending_update, component, component_metadata) = {
@@ -12131,6 +12169,39 @@ fn lookup_result_from_cached_result(
     }
 }
 
+fn is_unselected_automatic_update(pending_update: &PendingUpdateRef) -> bool {
+    pending_update.kind == PendingUpdateKind::Automatic
+        && pending_update.oplog_index == pending_update.admission_index
+}
+
+fn select_automatic_update_strategy(
+    status: &AgentStatusRecord,
+    pending: &PendingUpdateRef,
+    excluded_through: u64,
+) -> UpdateDescription {
+    let selected_snapshot = status
+        .last_automatic_snapshot_index
+        .zip(status.last_automatic_snapshot_component_revision)
+        .filter(|_| pending.target_revision > status.component_revision)
+        .filter(|(snapshot_index, snapshot_revision)| {
+            *snapshot_revision == status.component_revision
+                && *snapshot_index > status.component_revision_start_index
+                && u64::from(*snapshot_index) > excluded_through
+        });
+    match selected_snapshot {
+        Some((snapshot_index, snapshot_revision)) => UpdateDescription::SnapshotAssistedAutomatic {
+            target_revision: pending.target_revision,
+            source_component_revision: status.component_revision,
+            source_revision_start_index: status.component_revision_start_index,
+            snapshot_index,
+            snapshot_revision,
+        },
+        None => UpdateDescription::Automatic {
+            target_revision: pending.target_revision,
+        },
+    }
+}
+
 fn snapshot_assisted_head_failure(
     status: &AgentStatusRecord,
     pending_update: &PendingUpdateRef,
@@ -12334,6 +12405,40 @@ mod tests {
 
         status.component_revision = source_revision;
         assert!(snapshot_assisted_head_failure(&status, &valid).is_some());
+    }
+
+    #[test]
+    fn automatic_strategy_can_select_snapshot_committed_after_admission() {
+        let source_revision = ComponentRevision::new(2).unwrap();
+        let target_revision = ComponentRevision::new(3).unwrap();
+        let admission_index = OplogIndex::from_u64(6);
+        let snapshot_index = OplogIndex::from_u64(8);
+        let status = AgentStatusRecord {
+            component_revision: source_revision,
+            component_revision_start_index: OplogIndex::from_u64(4),
+            last_automatic_snapshot_index: Some(snapshot_index),
+            last_automatic_snapshot_component_revision: Some(source_revision),
+            ..Default::default()
+        };
+        let pending = PendingUpdateRef {
+            timestamp: Timestamp::now_utc(),
+            oplog_index: admission_index,
+            admission_index,
+            target_revision,
+            kind: PendingUpdateKind::Automatic,
+        };
+
+        assert!(snapshot_index > admission_index);
+        assert_eq!(
+            select_automatic_update_strategy(&status, &pending, 0),
+            UpdateDescription::SnapshotAssistedAutomatic {
+                target_revision,
+                source_component_revision: source_revision,
+                source_revision_start_index: OplogIndex::from_u64(4),
+                snapshot_index,
+                snapshot_revision: source_revision,
+            }
+        );
     }
 
     #[test]
